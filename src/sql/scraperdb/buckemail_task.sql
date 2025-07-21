@@ -1,0 +1,8 @@
+CREATE TABLE IF NOT EXISTS buckemail_task(
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+type INTEGER,
+record_time TEXT NULL,
+log_file TEXT NULL,
+error_file TEXT NULL,
+status INTEGER
+)

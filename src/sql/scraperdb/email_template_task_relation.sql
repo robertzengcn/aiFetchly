@@ -1,0 +1,11 @@
+CREATE TABLE IF NOT EXISTS email_template_task_relation(
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+emailTemplateId INTEGER NOT NULL,
+buckemailTaskId INTEGER NOT NULL,
+status INTEGER DEFAULT 1,
+createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+FOREIGN KEY (emailTemplateId) REFERENCES email_template(id) ON DELETE CASCADE,
+FOREIGN KEY (buckemailTaskId) REFERENCES buckemail_task(id) ON DELETE CASCADE,
+UNIQUE(emailTemplateId, buckemailTaskId)
+) 

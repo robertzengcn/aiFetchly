@@ -1,0 +1,27 @@
+{
+  "appName": "aiFetchly",
+  "appVersion": "1.0.11",
+  "appDescription": "AI-powered marketing agent (aiFetchly)",
+  "appAuthor": "Robert Zeng",
+  "appPublisher": "aiFetchly",
+  "appWebsite": "https://github.com/robertzengcn/aiFetchly",
+  "appIcon": "./src/assets/images/icon.ico",
+  "appBanner": "./src/assets/images/banner.png",
+  "appDialog": "./src/assets/images/dialog.png",
+  "setupExe": "aiFetchlySetup.exe",
+  "appId": "com.aifetchly.app",
+  "appProtocol": "aifetchly",
+  "defaultInstallLocation": "%LOCALAPPDATA%\\aiFetchly",
+  "installForAllUsers": false,
+  "createDesktopShortcut": true,
+  "createStartMenuShortcut": true,
+  "registry": {
+    "key": "Software\\aiFetchly",
+    "name": "InstallLocation"
+  },
+  "uninstaller": {
+    "name": "aiFetchlyUninstall.exe",
+    "installDir": "C:\\Program Files\\aiFetchly",
+    "registryKey": "Software\\aiFetchly"
+  }
+} 

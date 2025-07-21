@@ -1,0 +1,5 @@
+CREATE TABLE IF NOT EXISTS emailsearch_result_detail(
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+result_id INTEGER,
+email TEXT NULL
+)

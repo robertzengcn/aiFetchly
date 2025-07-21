@@ -1,0 +1,5 @@
+CREATE TABLE IF NOT EXISTS video_download_task_proxy (
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+task_id INTEGER,
+proxy_id INTEGER
+)

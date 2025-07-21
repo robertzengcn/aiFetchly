@@ -1,0 +1,11 @@
+// @use 'vuetify' with (
+//   $utilities: false,
+//   $color-pack: false,
+// );
+@use "./var.scss";
+@use "./reset.scss";
+@use "./common.scss";
+@use "./layout.scss";
+@use "./mobile.scss";
+@use "./low-code.scss";
+@use "./vue-draggable-resizable.scss";

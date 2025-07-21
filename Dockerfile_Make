@@ -1,0 +1,36 @@
+# Use the official Node.js image with version 18.19.1 as the base image
+FROM node:18.19.1-buster
+
+# Set the working directory
+WORKDIR /app
+
+# Copy package.json and yarn.lock to the working directory
+COPY package.json yarn.lock ./
+
+# Install Yarn globally
+RUN npm install -g yarn
+
+# Install dependencies using Yarn
+RUN yarn install
+
+# Copy the rest of the application code to the working directory
+COPY . .
+
+# Install Chromium for Puppeteer
+RUN apt-get update && apt-get install -y \
+    chromium \
+    --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set environment variables for Puppeteer
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+
+# Install Electron Forge globally
+RUN yarn global add @electron-forge/cli
+
+# Expose the port the app runs on (adjust if necessary)
+EXPOSE 3000
+
+# Command to build and package the application
+CMD ["yarn", "make"]

@@ -1,0 +1,5 @@
+CREATE TABLE IF NOT EXISTS emailmarketing_task(
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+status INTEGER,
+record_time TEXT
+)

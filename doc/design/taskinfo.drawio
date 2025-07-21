@@ -1,0 +1,56 @@
+<mxfile host="65bd71144e">
+    <diagram id="vXoxJsi5xvhNtC46JEDb" name="Page-1">
+        <mxGraphModel dx="1242" dy="455" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="27" value="Social Task Name" style="fillColor=none;strokeColor=none;align=left;fontSize=14;" parent="1" vertex="1">
+                    <mxGeometry x="20" y="40" width="260" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="28" value="" style="html=1;shadow=0;dashed=0;shape=mxgraph.bootstrap.rrect;rSize=5;fillColor=none;strokeColor=#999999;align=left;spacing=15;fontSize=14;fontColor=#6C767D;" parent="1" vertex="1">
+                    <mxGeometry width="800" height="30" relative="1" as="geometry">
+                        <mxPoint x="14" y="90" as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="29" value="Types" style="fillColor=none;strokeColor=none;align=left;fontSize=14;" parent="1" vertex="1">
+                    <mxGeometry width="260" height="40" relative="1" as="geometry">
+                        <mxPoint x="20" y="150" as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="43" value="Bibil download" style="html=1;shadow=0;dashed=0;shape=mxgraph.bootstrap.rrect;rSize=5;strokeColor=#505050;strokeWidth=1;fillColor=#ffffff;fontColor=#777777;whiteSpace=wrap;align=left;verticalAlign=middle;fontStyle=0;fontSize=14;spacingRight=0;spacing=17;" parent="1" vertex="1">
+                    <mxGeometry x="14" y="190" width="800" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="44" value="" style="shape=triangle;direction=south;fillColor=#495057;strokeColor=none;perimeter=none;" parent="43" vertex="1">
+                    <mxGeometry x="1" y="0.5" width="10" height="5" relative="1" as="geometry">
+                        <mxPoint x="-17" y="-2.5" as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="45" value="Open this select menu" style="html=1;shadow=0;dashed=0;shape=mxgraph.bootstrap.rrect;rSize=5;fillColor=#ffffff;strokeColor=#CED4DA;align=left;spacing=15;fontSize=14;fontColor=#6C767D;" parent="1" vertex="1">
+                    <mxGeometry x="14" y="300" width="800" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="46" value="" style="shape=triangle;direction=south;fillColor=#343A40;strokeColor=none;perimeter=none;" parent="45" vertex="1">
+                    <mxGeometry x="1" y="0.5" width="7" height="3" relative="1" as="geometry">
+                        <mxPoint x="-17" y="1" as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="47" value="" style="shape=triangle;direction=north;fillColor=#343A40;strokeColor=none;perimeter=none;" parent="45" vertex="1">
+                    <mxGeometry x="1" y="0.5" width="7" height="3" relative="1" as="geometry">
+                        <mxPoint x="-17" y="-4" as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="48" value="Keywords" style="fillColor=none;strokeColor=none;align=left;fontSize=14;" parent="1" vertex="1">
+                    <mxGeometry x="20" y="240" width="260" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="49" value="Disabled switch element" style="html=1;shadow=0;dashed=0;shape=mxgraph.bootstrap.switch;strokeColor=#ADB6BD;strokeWidth=1;fillColor=#E9ECEF;fontColor=#7D868C;onStrokeColor=#ffffff;onFillColor=#0085FC;align=left;verticalAlign=middle;spacingLeft=10;labelPosition=right;verticalLabelPosition=middle;buttonState=0;sketch=0;" parent="1" vertex="1">
+                    <mxGeometry x="160" y="390" width="20" height="10" as="geometry"/>
+                </mxCell>
+                <mxCell id="50" value="Status:" style="fillColor=none;strokeColor=none;align=left;fontSize=14;" parent="1" vertex="1">
+                    <mxGeometry x="20" y="375" width="260" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="63" value="Save" style="html=1;shadow=0;dashed=0;shape=mxgraph.bootstrap.rrect;rSize=5;strokeColor=none;strokeWidth=1;fillColor=#33A64C;fontColor=#FFFFFF;whiteSpace=wrap;align=left;verticalAlign=middle;spacingLeft=0;fontStyle=1;fontSize=14;spacing=5;" vertex="1" parent="1">
+                    <mxGeometry x="680" y="470" width="65" height="20" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+</mxfile>

@@ -1,0 +1,6 @@
+CREATE TABLE IF NOT EXISTS extra_modules(
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+name TEXT UNIQUE,
+version TEXT,
+record_time TEXT NULL
+)

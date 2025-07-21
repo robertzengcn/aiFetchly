@@ -1,0 +1,7 @@
+export const USERSDBPATH='user_dbpath'
+export const TOKENNAME='user_social-market-token'
+export const USERSERVICE='user_service'
+export const USERLOGPATH='user_log'
+export const USEREMAIL='user_email'
+export const USERNAME='user_name'
+export const USERTOKEN='user_token'

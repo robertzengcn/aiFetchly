@@ -1,0 +1,262 @@
+name: Build Electron App
+
+on:
+  push:
+    branches:
+      - test
+  pull_request:
+    branches:
+      - test
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+ 
+    steps:      
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 20.18.3
+      - name: Calculate version
+        id: calculate_version
+        run: |
+          # Extract current version from package.json
+          CURRENT_VERSION=$(node -e "console.log(require('./package.json').version)")
+          echo "Current version: $CURRENT_VERSION"
+          
+          # Generate build number based on GitHub run number
+          BUILD_NUMBER=${{ github.run_number }}
+          
+          # Create new version with build number
+          NEW_VERSION="${CURRENT_VERSION%.*}.$BUILD_NUMBER"
+          echo "New version: $NEW_VERSION"
+          
+          # Update package.json with new version
+          node -e "const pkg = require('./package.json'); pkg.version = '$NEW_VERSION'; require('fs').writeFileSync('./package.json', JSON.stringify(pkg, null, 2))"
+          
+          # Set as output variable
+          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+        shell: bash
+
+      - name: Create .env file
+        run: |
+          touch .env
+          echo "NODE_ENV=test" >> .env
+          cat .env    
+      - name: Create .env file 
+        run: |
+          touch .env
+          echo "VITE_REMOTEADD=${{ secrets.VITE_REMOTEADD_TEST }}" >> .env 
+          echo "VITE_LOGIN_URL=${{ secrets.VITE_LOGIN_URL_TEST }}" >> .env
+          echo "UPDATESERVER=${{ secrets.UPDATESERVER }}" >> .env
+          cat .env       
+      - name: Install dependencies
+        run: yarn install
+      - name: Rebuild electron
+        run: yarn electron-rebuild --force --types prod,dev,optional --module-dir .         
+      - name: Rebuild sqlite3
+        run: yarn rebuild-sqlite3
+      - name: Rebuild better sqlite
+        run: yarn rebuild-better-sqlite
+      - name: Install WiX Toolset
+        run: |
+          Invoke-WebRequest -Uri https://github.com/wixtoolset/wix3/releases/download/wix3112rtm/wix311-binaries.zip -OutFile wix.zip
+          Expand-Archive -Path wix.zip -DestinationPath "$env:ProgramFiles\WiX Toolset"
+          Remove-Item -Force wix.zip
+        shell: pwsh
+
+      - name: Build application
+        run: yarn make-win:test
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: electron-app-windows-v${{ steps.calculate_version.outputs.version }}
+          path: out/make
+
+  build-macos:
+    runs-on: macos-latest
+
+    steps:
+      - name: Set up C++20 environment
+        run: |
+          echo "CXXFLAGS=-std=c++20" >> $GITHUB_ENV
+          echo "CFLAGS=-std=c11" >> $GITHUB_ENV
+          echo "CXX=clang++" >> $GITHUB_ENV
+          echo "CC=clang" >> $GITHUB_ENV
+          echo "LDFLAGS=-std=c++20" >> $GITHUB_ENV
+          echo "npm_config_target_platform=darwin" >> $GITHUB_ENV
+          echo "npm_config_target_arch=x64" >> $GITHUB_ENV
+
+      # Make sure to use a recent Xcode version
+      - name: List available Xcode versions
+        run: ls -la /Applications/ | grep Xcode
+    
+      - name: Select available Xcode version
+        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+      
+      - name: Verify Xcode setup
+        run: |
+          xcode-select --print-path
+          clang++ --version
+          echo "C++ standard library version:"
+          clang++ -E -x c++ - -o - <<< '#include <version>' | grep -i "c++" || echo "C++ version info not available"
+
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 20.18.3
+      - name: Calculate version
+        id: calculate_version
+        run: |
+          # Extract current version from package.json
+          CURRENT_VERSION=$(node -e "console.log(require('./package.json').version)")
+          echo "Current version: $CURRENT_VERSION"
+          
+          # Generate build number based on GitHub run number
+          BUILD_NUMBER=${{ github.run_number }}
+          
+          # Create new version with build number
+          NEW_VERSION="${CURRENT_VERSION%.*}.$BUILD_NUMBER"
+          echo "New version: $NEW_VERSION"
+          
+          # Update package.json with new version
+          node -e "const pkg = require('./package.json'); pkg.version = '$NEW_VERSION'; require('fs').writeFileSync('./package.json', JSON.stringify(pkg, null, 2))"
+          
+          # Set as output variable
+          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+        shell: bash
+
+      - name: Create .env file
+        run: |
+            touch .env
+            echo "NODE_ENV=test" >> .env
+            cat .env               
+      - name: Create .env file 
+        run: |
+            touch .env  
+            echo VITE_REMOTEADD=${{ secrets.VITE_REMOTEADD_TEST }} >> .env
+            echo "VITE_LOGIN_URL=${{ secrets.VITE_LOGIN_URL_TEST }}" >> .env
+            echo "UPDATESERVER=${{ secrets.UPDATESERVER }}" >> .env
+            cat .env
+      - name: Install setuptools
+        run: |
+            brew install python-setuptools           
+              
+      - name: Install dependencies
+        run: yarn install
+      - name: Install DMG maker
+        run: yarn add --dev @electron-forge/maker-dmg
+      - name: Clean previous builds
+        run: |
+          rm -rf node_modules/.cache
+          rm -rf out/
+          rm -rf .vite/
+          yarn clean || echo "Clean command not available"
+      - name: Configure npm for C++20
+        run: |
+          echo "npm config list:"
+          npm config list
+      - name: Verify environment setup
+        run: |
+          echo "=== Verifying environment setup ==="
+          echo "CXXFLAGS: $CXXFLAGS"
+          echo "CXX: $CXX"
+          echo "CC: $CC"
+          echo "CFLAGS: $CFLAGS"
+          echo "LDFLAGS: $LDFLAGS"
+          echo "npm_config_target_platform: $npm_config_target_platform"
+          echo "npm_config_target_arch: $npm_config_target_arch"
+          echo "Platform: $(uname -s)"
+          echo "Architecture: $(uname -m)"
+      - name: Update native modules to latest versions
+        run: |
+          echo "=== Updating native modules ==="
+          yarn add better-sqlite3@latest sqlite3@latest bufferutil@latest utf-8-validate@latest --exact || echo "Failed to update some modules"
+      - name: Set C++20 environment for build
+        run: |
+          echo "=== Setting C++20 environment ==="
+          export CXXFLAGS="-std=c++20"
+          export CFLAGS="-std=c11"
+          export CXX="clang++"
+          export CC="clang"
+          export LDFLAGS="-std=c++20"
+          export npm_config_target_platform="darwin"
+          export npm_config_target_arch="x64"
+          echo "Environment variables set:"
+          echo "CXXFLAGS: $CXXFLAGS"
+          echo "CFLAGS: $CFLAGS"
+          echo "CXX: $CXX"
+          echo "CC: $CC"
+          echo "npm_config_target_platform: $npm_config_target_platform"
+          echo "npm_config_target_arch: $npm_config_target_arch"
+      - name: Download Electron headers
+        run: |
+          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" npx electron-rebuild --force --types prod,dev,optional --module-dir .
+      - name: Rebuild native modules
+        run: |
+          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" npx electron-rebuild
+      - name: Rebuild sqlite3
+        run: |
+          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" yarn rebuild-sqlite3
+      - name: Rebuild better sqlite
+        run: |
+          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" yarn rebuild-better-sqlite    
+      - name: yarn electron-rebuild
+        run: |
+          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" yarn electron-rebuild
+      - name: Rebuild with verbose output
+        run: |
+          echo "=== Rebuilding with verbose output ==="
+          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" DEBUG=* npx electron-rebuild --force --verbose || echo "Verbose rebuild failed, continuing..."
+      - name: Rebuild C modules specifically
+        run: |
+          echo "=== Rebuilding C modules specifically ==="
+          # Rebuild bufferutil and utf-8-validate which are C modules
+          CFLAGS="-std=c11" yarn electron-rebuild -f -w bufferutil || echo "bufferutil rebuild failed"
+          CFLAGS="-std=c11" yarn electron-rebuild -f -w utf-8-validate || echo "utf-8-validate rebuild failed"
+      - name: Debug - Check native modules
+        run: |
+          echo "=== Checking native modules ==="
+          ls -la node_modules/ | grep -E "(better-sqlite3|sqlite3|bufferutil|utf-8-validate)" || echo "Native modules not found"
+          echo "=== Checking for build artifacts ==="
+          find node_modules/ -name "*.node" -path "*/better-sqlite3/*" -o -path "*/sqlite3/*" -o -path "*/bufferutil/*" -o -path "*/utf-8-validate/*" || echo "No .node files found"
+          echo "=== Searching for volume.cc file ==="
+          find node_modules/ -name "volume.cc" -type f || echo "volume.cc file not found"
+          echo "=== Identifying C vs C++ modules ==="
+          echo "C modules (should use CFLAGS):"
+          find node_modules/ -name "*.c" -path "*/bufferutil/*" -o -path "*/utf-8-validate/*" || echo "No C files found in C modules"
+          echo "C++ modules (should use CXXFLAGS):"
+          find node_modules/ -name "*.cc" -o -name "*.cpp" -path "*/better-sqlite3/*" -o -path "*/sqlite3/*" || echo "No C++ files found in C++ modules"
+      - name: Build application
+        run: yarn make-mac:test
+      - name: Fallback build if main build fails
+        if: failure()
+        run: |
+          echo "=== Trying fallback build approach ==="
+          # Try building without some problematic native modules
+          yarn package || echo "Package command failed"
+          # Try building with different flags
+          CXXFLAGS="-std=c++17" CFLAGS="-std=c11" yarn make-mac:test || echo "Fallback build also failed"
+  
+      - name: Debug - List out directory contents
+        run: |
+          echo "=== Contents of out directory ==="
+          ls -la out/
+          echo "=== Contents of out/make directory ==="
+          ls -la out/make/ || echo "out/make directory does not exist"
+          echo "=== Contents of out directory recursively ==="
+          find out/ -type f -name "*.dmg" -o -name "*.zip" -o -name "*.app" || echo "No DMG, ZIP, or APP files found"
+  
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: electron-app-macos-v${{ steps.calculate_version.outputs.version }}
+          path: out/make

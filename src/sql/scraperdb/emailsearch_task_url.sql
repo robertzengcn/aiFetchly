@@ -1,0 +1,14 @@
+CREATE TABLE IF NOT EXISTS emailsearch_task_url(
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+email_search_task_id INTEGER NOT NULL,
+url TEXT NOT NULL,
+title TEXT NULL,
+description TEXT NULL,
+status INTEGER DEFAULT 0,
+error_message TEXT NULL,
+retry_count INTEGER NULL,
+processed_at DATETIME NULL,
+created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+FOREIGN KEY (email_search_task_id) REFERENCES emailsearch_task(id) ON DELETE CASCADE
+) 

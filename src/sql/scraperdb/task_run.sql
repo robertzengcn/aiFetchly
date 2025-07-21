@@ -1,0 +1,7 @@
+CREATE TABLE IF NOT EXISTS task_run(
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ task_id INTEGER,
+ taskrun_num TEXT NULL,
+ log_path TEXT NULL,
+ record_time TEXT NULL
+)

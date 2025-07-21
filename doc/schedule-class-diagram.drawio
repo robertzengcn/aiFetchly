@@ -1,0 +1,255 @@
+<mxfile host="65bd71144e">
+    <diagram id="scheduleClassDiagram" name="Schedule-Class-Diagram">
+        <mxGraphModel dx="636" dy="911" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1200" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="baseDb" value="BaseDb" style="swimlane;fontStyle=1;childLayout=stackLayout;horizontal=1;startSize=30;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" parent="1" vertex="1">
+                    <mxGeometry x="50" y="50" width="140" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="baseDbMethods" value="+ constructor(filepath: string)&#xa;+ log(message: string): void" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;rotatable=0;whiteSpace=wrap;html=1;" parent="baseDb" vertex="1">
+                    <mxGeometry y="30" width="140" height="30" as="geometry"/>
+                </mxCell>
+                <mxCell id="auditableEntity" value="AuditableEntity" style="swimlane;fontStyle=1;childLayout=stackLayout;horizontal=1;startSize=30;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1">
+                    <mxGeometry x="250" y="50" width="140" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="auditableEntityFields" value="+ created_at: Date&#xa;+ updated_at: Date" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;rotatable=0;whiteSpace=wrap;html=1;" parent="auditableEntity" vertex="1">
+                    <mxGeometry y="30" width="140" height="30" as="geometry"/>
+                </mxCell>
+                <mxCell id="searchTaskModel" value="SearchTaskModel" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=30;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" parent="1" vertex="1">
+                    <mxGeometry x="50" y="200" width="140" height="120" as="geometry"/>
+                </mxCell>
+                <mxCell id="searchTaskModelMethods" value="+ saveSearchTask(enginerId: number): Promise&lt;number&gt;&#xa;+ updateTaskStatus(taskId: number, status: SearchTaskStatus): Promise&lt;void&gt;&#xa;+ listTask(page: number, size: number, sort?: SortBy): Promise&lt;SearchtaskdbEntity[]&gt;&#xa;+ getTaskTotal(): Promise&lt;number&gt;&#xa;+ getTaskEntity(taskId: number): Promise&lt;SearchTaskEntity | null&gt;" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;rotatable=0;whiteSpace=wrap;html=1;" parent="searchTaskModel" vertex="1">
+                    <mxGeometry y="30" width="140" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="emailMarketingTaskModel" value="EmailMarketingTaskModel" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=30;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" parent="1" vertex="1">
+                    <mxGeometry x="250" y="200" width="140" height="120" as="geometry"/>
+                </mxCell>
+                <mxCell id="emailMarketingTaskModelMethods" value="+ createTask(task: EmailMarketingTaskdbEntity): Promise&lt;number&gt;&#xa;+ updateTask(task: EmailMarketingTaskdbEntity): Promise&lt;void&gt;&#xa;+ getTaskById(id: number): Promise&lt;EmailMarketingTaskEntity | null&gt;&#xa;+ listTasks(page: number, size: number): Promise&lt;EmailMarketingTaskEntity[]&gt;" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;rotatable=0;whiteSpace=wrap;html=1;" parent="emailMarketingTaskModel" vertex="1">
+                    <mxGeometry y="30" width="140" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="buckEmailTaskModel" value="BuckEmailTaskModel" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=30;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" parent="1" vertex="1">
+                    <mxGeometry x="450" y="200" width="140" height="120" as="geometry"/>
+                </mxCell>
+                <mxCell id="buckEmailTaskModelMethods" value="+ createTask(task: BuckemailEntity): Promise&lt;number&gt;&#xa;+ updateTask(id: number, task: BuckemailEntity): Promise&lt;void&gt;&#xa;+ getTaskById(id: number): Promise&lt;BuckemailTaskEntity | null&gt;&#xa;+ listTasks(page: number, size: number): Promise&lt;BuckemailTaskEntity[]&gt;" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;rotatable=0;whiteSpace=wrap;html=1;" parent="buckEmailTaskModel" vertex="1">
+                    <mxGeometry y="30" width="140" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="videoDownloadTaskModel" value="VideoDownloadTaskModel" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=30;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" parent="1" vertex="1">
+                    <mxGeometry x="650" y="200" width="140" height="120" as="geometry"/>
+                </mxCell>
+                <mxCell id="videoDownloadTaskModelMethods" value="+ createTask(task: VideoDownloadTaskEntity): Promise&lt;number&gt;&#xa;+ updateTask(task: VideoDownloadTaskEntity): Promise&lt;void&gt;&#xa;+ getTaskById(id: number): Promise&lt;VideoDownloadTaskEntity | null&gt;&#xa;+ listTasks(page: number, size: number): Promise&lt;VideoDownloadTaskEntity[]&gt;" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;rotatable=0;whiteSpace=wrap;html=1;" parent="videoDownloadTaskModel" vertex="1">
+                    <mxGeometry y="30" width="140" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="scheduleTaskModel" value="ScheduleTaskModel" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=30;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" parent="1" vertex="1">
+                    <mxGeometry x="50" y="400" width="140" height="150" as="geometry"/>
+                </mxCell>
+                <mxCell id="scheduleTaskModelMethods" value="+ createSchedule(scheduleData: ScheduleCreateRequest): Promise&lt;number&gt;&#xa;+ updateSchedule(id: number, scheduleData: ScheduleUpdateRequest): Promise&lt;void&gt;&#xa;+ deleteSchedule(id: number): Promise&lt;void&gt;&#xa;+ getScheduleById(id: number): Promise&lt;ScheduleTaskEntity | null&gt;&#xa;+ listSchedules(page: number, size: number, sort?: SortBy): Promise&lt;ScheduleTaskEntity[]&gt;&#xa;+ getActiveSchedules(): Promise&lt;ScheduleTaskEntity[]&gt;&#xa;+ updateNextRunTime(id: number, nextRunTime: Date): Promise&lt;void&gt;&#xa;+ updateLastRunTime(id: number, lastRunTime: Date): Promise&lt;void&gt;" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;rotatable=0;whiteSpace=wrap;html=1;" parent="scheduleTaskModel" vertex="1">
+                    <mxGeometry y="30" width="140" height="120" as="geometry"/>
+                </mxCell>
+                <mxCell id="scheduleExecutionLogModel" value="ScheduleExecutionLogModel" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=30;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" parent="1" vertex="1">
+                    <mxGeometry x="250" y="400" width="140" height="120" as="geometry"/>
+                </mxCell>
+                <mxCell id="scheduleExecutionLogModelMethods" value="+ logExecution(scheduleId: number, status: ExecutionStatus, message: string, duration: number): Promise&lt;number&gt;&#xa;+ getExecutionHistory(scheduleId: number, page: number, size: number): Promise&lt;ScheduleExecutionLogEntity[]&gt;&#xa;+ getRecentExecutions(limit: number): Promise&lt;ScheduleExecutionLogEntity[]&gt;" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;rotatable=0;whiteSpace=wrap;html=1;" parent="scheduleExecutionLogModel" vertex="1">
+                    <mxGeometry y="30" width="140" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="scheduleManager" value="ScheduleManager" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=30;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" parent="1" vertex="1">
+                    <mxGeometry x="460" y="400" width="140" height="150" as="geometry"/>
+                </mxCell>
+                <mxCell id="scheduleManagerMethods" value="+ initializeSchedules(): Promise&lt;void&gt;&#xa;+ addSchedule(schedule: ScheduleTaskEntity): Promise&lt;void&gt;&#xa;+ removeSchedule(scheduleId: number): Promise&lt;void&gt;&#xa;+ updateSchedule(schedule: ScheduleTaskEntity): Promise&lt;void&gt;&#xa;+ executeSchedule(scheduleId: number): Promise&lt;void&gt;&#xa;+ validateCronExpression(expression: string): boolean&#xa;+ calculateNextRunTime(cronExpression: string): Date" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;rotatable=0;whiteSpace=wrap;html=1;" parent="scheduleManager" vertex="1">
+                    <mxGeometry y="30" width="140" height="120" as="geometry"/>
+                </mxCell>
+                <mxCell id="taskExecutorService" value="TaskExecutorService" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=30;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" parent="1" vertex="1">
+                    <mxGeometry x="650" y="400" width="140" height="150" as="geometry"/>
+                </mxCell>
+                <mxCell id="taskExecutorServiceMethods" value="+ executeScheduledTask(schedule: ScheduleTaskEntity): Promise&lt;number&gt;&#xa;+ executeSearchTask(taskId: number): Promise&lt;number&gt;&#xa;+ executeEmailMarketingTask(taskId: number): Promise&lt;number&gt;&#xa;+ executeVideoDownloadTask(taskId: number): Promise&lt;number&gt;&#xa;+ executeSocialTask(taskId: number): Promise&lt;number&gt;&#xa;+ getTaskStatus(taskId: number, taskType: TaskType): Promise&lt;TaskStatus&gt;&#xa;+ cancelTask(taskId: number, taskType: TaskType): Promise&lt;void&gt;" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;rotatable=0;whiteSpace=wrap;html=1;" parent="taskExecutorService" vertex="1">
+                    <mxGeometry y="30" width="140" height="120" as="geometry"/>
+                </mxCell>
+                <mxCell id="scheduleController" value="ScheduleController" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=30;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" parent="1" vertex="1">
+                    <mxGeometry x="850" y="400" width="140" height="150" as="geometry"/>
+                </mxCell>
+                <mxCell id="scheduleControllerMethods" value="+ createSchedule(scheduleData: ScheduleCreateRequest): Promise&lt;number&gt;&#xa;+ updateSchedule(id: number, scheduleData: ScheduleUpdateRequest): Promise&lt;void&gt;&#xa;+ deleteSchedule(id: number): Promise&lt;void&gt;&#xa;+ enableSchedule(id: number): Promise&lt;void&gt;&#xa;+ disableSchedule(id: number): Promise&lt;void&gt;&#xa;+ runScheduleNow(id: number): Promise&lt;void&gt;&#xa;+ getScheduleList(page: number, size: number, sort?: SortBy): Promise&lt;ScheduleListResponse&gt;&#xa;+ getExecutionHistory(scheduleId: number, page: number, size: number): Promise&lt;ExecutionHistoryResponse&gt;" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;rotatable=0;whiteSpace=wrap;html=1;" parent="scheduleController" vertex="1">
+                    <mxGeometry y="30" width="140" height="120" as="geometry"/>
+                </mxCell>
+                <mxCell id="scheduleTaskEntity" value="ScheduleTaskEntity" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=30;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1">
+                    <mxGeometry x="50" y="600" width="140" height="290" as="geometry"/>
+                </mxCell>
+                <mxCell id="scheduleTaskEntityFields" value="+ id: number&#xa;+ name: string&#xa;+ description: string&#xa;+ task_type: TaskType&#xa;+ task_id: number&#xa;+ cron_expression: string&#xa;+ is_active: boolean&#xa;+ last_run_time: Date&#xa;+ next_run_time: Date&#xa;+ created_time: Date&#xa;+ updated_time: Date" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;rotatable=0;whiteSpace=wrap;html=1;" parent="scheduleTaskEntity" vertex="1">
+                    <mxGeometry y="30" width="140" height="260" as="geometry"/>
+                </mxCell>
+                <mxCell id="scheduleExecutionLogEntity" value="ScheduleExecutionLogEntity" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=30;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1">
+                    <mxGeometry x="250" y="600" width="140" height="120" as="geometry"/>
+                </mxCell>
+                <mxCell id="scheduleExecutionLogEntityFields" value="+ id: number&#xa;+ schedule_id: number&#xa;+ execution_time: Date&#xa;+ status: ExecutionStatus&#xa;+ result_message: string&#xa;+ execution_duration: number&#xa;+ task_output_id: number&#xa;+ created_time: Date" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;rotatable=0;whiteSpace=wrap;html=1;" parent="scheduleExecutionLogEntity" vertex="1">
+                    <mxGeometry y="30" width="140" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="backgroundScheduler" value="BackgroundScheduler" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=30;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" parent="1" vertex="1">
+                    <mxGeometry x="450" y="600" width="140" height="120" as="geometry"/>
+                </mxCell>
+                <mxCell id="backgroundSchedulerMethods" value="+ initialize(): Promise&lt;void&gt;&#xa;+ start(): Promise&lt;void&gt;&#xa;+ stop(): Promise&lt;void&gt;&#xa;+ reloadSchedules(): Promise&lt;void&gt;&#xa;+ getSchedulerStatus(): SchedulerStatus&#xa;+ handleAppShutdown(): Promise&lt;void&gt;" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;rotatable=0;whiteSpace=wrap;html=1;" parent="backgroundScheduler" vertex="1">
+                    <mxGeometry y="30" width="140" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="inheritance1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" parent="1" source="searchTaskModel" target="baseDb" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="inheritance2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" parent="1" source="emailMarketingTaskModel" target="baseDb" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="inheritance3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" parent="1" source="buckEmailTaskModel" target="baseDb" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="inheritance4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" parent="1" source="videoDownloadTaskModel" target="baseDb" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="inheritance5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" parent="1" source="scheduleTaskModel" target="baseDb" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="inheritance6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" parent="1" source="scheduleExecutionLogModel" target="baseDb" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="inheritance7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" parent="1" source="scheduleTaskEntity" target="auditableEntity" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="inheritance8" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" parent="1" source="scheduleExecutionLogEntity" target="auditableEntity" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="association1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="scheduleController" target="scheduleTaskModel" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="association1Label" value="uses" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" parent="association1" vertex="1" connectable="0">
+                    <mxGeometry x="-0.2" y="1" relative="1" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="association2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="scheduleController" target="scheduleExecutionLogModel" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="association2Label" value="uses" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" parent="association2" vertex="1" connectable="0">
+                    <mxGeometry x="-0.2" y="1" relative="1" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="association3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="scheduleController" target="taskExecutorService" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="association3Label" value="uses" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" parent="association3" vertex="1" connectable="0">
+                    <mxGeometry x="-0.2" y="1" relative="1" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="association4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="scheduleManager" target="scheduleTaskModel" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="association4Label" value="manages" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" parent="association4" vertex="1" connectable="0">
+                    <mxGeometry x="-0.2" y="1" relative="1" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="association5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="scheduleManager" target="scheduleExecutionLogModel" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="association5Label" value="logs" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" parent="association5" vertex="1" connectable="0">
+                    <mxGeometry x="-0.2" y="1" relative="1" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="association6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="scheduleManager" target="taskExecutorService" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="association6Label" value="executes" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" parent="association6" vertex="1" connectable="0">
+                    <mxGeometry x="-0.2" y="1" relative="1" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="association7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="backgroundScheduler" target="scheduleManager" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="association7Label" value="controls" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" parent="association7" vertex="1" connectable="0">
+                    <mxGeometry x="-0.2" y="1" relative="1" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="association8" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="taskExecutorService" target="searchTaskModel" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="association8Label" value="executes" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" parent="association8" vertex="1" connectable="0">
+                    <mxGeometry x="-0.2" y="1" relative="1" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="association9" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="taskExecutorService" target="emailMarketingTaskModel" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="association9Label" value="executes" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" parent="association9" vertex="1" connectable="0">
+                    <mxGeometry x="-0.2" y="1" relative="1" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="association10" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="taskExecutorService" target="buckEmailTaskModel" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="association10Label" value="executes" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" parent="association10" vertex="1" connectable="0">
+                    <mxGeometry x="-0.2" y="1" relative="1" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="association11" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="taskExecutorService" target="videoDownloadTaskModel" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="association11Label" value="executes" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" parent="association11" vertex="1" connectable="0">
+                    <mxGeometry x="-0.2" y="1" relative="1" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="entityRelation1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="scheduleExecutionLogEntity" target="scheduleTaskEntity" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="entityRelation1Label" value="1..*" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" parent="entityRelation1" vertex="1" connectable="0">
+                    <mxGeometry x="-0.2" y="1" relative="1" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="fkRelation1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;dashed=1;" edge="1" parent="1" source="scheduleTaskEntity" target="searchTaskModel">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="fkRelation1Label" value="task_id" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" connectable="0" vertex="1" parent="fkRelation1">
+                    <mxGeometry x="-0.2" y="1" relative="1" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="fkRelation2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;dashed=1;" edge="1" parent="1" source="scheduleTaskEntity" target="emailMarketingTaskModel">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="fkRelation2Label" value="task_id" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" connectable="0" vertex="1" parent="fkRelation2">
+                    <mxGeometry x="-0.2" y="1" relative="1" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="fkRelation3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;dashed=1;" edge="1" parent="1" source="scheduleTaskEntity" target="buckEmailTaskModel">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="fkRelation3Label" value="task_id" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" connectable="0" vertex="1" parent="fkRelation3">
+                    <mxGeometry x="-0.2" y="1" relative="1" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="fkRelation4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;dashed=1;" edge="1" parent="1" source="scheduleTaskEntity" target="videoDownloadTaskModel">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="fkRelation4Label" value="task_id" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" connectable="0" vertex="1" parent="fkRelation4">
+                    <mxGeometry x="-0.2" y="1" relative="1" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="legend" value="Legend" style="swimlane;fontStyle=1;childLayout=stackLayout;horizontal=1;startSize=30;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="1">
+                    <mxGeometry x="1050" y="50" width="200" height="120" as="geometry"/>
+                </mxCell>
+                <mxCell id="legendContent" value="🟣 Base Classes&#xa;🟡 Existing Task Models&#xa;🔵 New Schedule Models&#xa;🔴 Service Classes&#xa;🟢 Entity Classes&#xa;&#xa;--- = Inheritance&#xa;→ = Association&#xa;--- = Foreign Key&#xa;1..* = One-to-Many" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;rotatable=0;whiteSpace=wrap;html=1;" vertex="1" parent="legend">
+                    <mxGeometry y="30" width="200" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="title" value="aiFetchly - Schedule System Class Diagram" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=16;fontStyle=1;" vertex="1" parent="1">
+                    <mxGeometry x="400" y="10" width="400" height="30" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+</mxfile>

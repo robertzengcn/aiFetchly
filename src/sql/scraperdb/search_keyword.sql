@@ -1,0 +1,5 @@
+CREATE TABLE IF NOT EXISTS search_keyword(
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+keyword TEXT,
+task_id TEXT NULL
+)
