@@ -2,9 +2,9 @@
     <v-card class="login_container">
         <div class="group">
             <v-card class="form">
-                <v-card-title>Social Market Login</v-card-title>
+                <v-card-title>{{ $t('layout.login_title') }}</v-card-title>
                 <div class="mt-8 mb-8 login-description">
-                    <p>Click the button below to login to your account</p>
+                    <p>{{ $t('layout.login_description') }}</p>
                 </div>
                 <div style="text-align: center">
                     <v-btn
@@ -14,13 +14,13 @@
                         :loading="isLoading"
                         :disabled="isLoading"
                         @click="redirectToLogin">
-                        {{ isLoading ? 'Logging in...' : 'Login with Browser' }}
+                        {{ isLoading ? $t('layout.logging_in') : $t('layout.login_with_browser') }}
                     </v-btn>
                     
                     <!-- Show login URL message -->
                     <div v-if="showLoginUrl" class="mt-4 login-url-section">
                         <p class="login-url-text">
-                            If the browser doesn't open automatically, please click the button below to copy the login link:
+                            {{ $t('layout.login_url_message') }}
                         </p>
                         
                         <v-btn
@@ -31,7 +31,7 @@
                             class="mt-2"
                             @click="copyToClipboard"
                         >
-                            Copy Login URL
+                            {{ $t('layout.copy_login_url') }}
                         </v-btn>
                     </div>
                 </div>
@@ -47,7 +47,7 @@
            {{ alertContent }}
           </v-card-text>
           <v-card-actions>
-            <v-btn color="primary" block @click="dialog = false">Close Dialog</v-btn>
+            <v-btn color="primary" block @click="dialog = false">{{ $t('layout.close_dialog') }}</v-btn>
           </v-card-actions>
         </v-card>
       </v-dialog>
@@ -60,6 +60,9 @@ import {receiveRedirectevent} from "@/views/api/users"
 import router from '@/views/router';
 //import { defineComponent } from "vue";
 import {NATIVATECOMMAND} from "@/config/channellist"
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 const alertContent=ref('');
 const dialog=ref(false);    
 const isLoading = ref(false);
@@ -84,7 +87,7 @@ const redirectToLogin = async () => {
             if (isLoading.value) {
                 isLoading.value = false;
                 
-                alertContent.value = 'Login attempt timed out. Please try again.';
+                alertContent.value = t('layout.login_timeout');
                 dialog.value = true;
             }
         }, 20000); 
@@ -93,7 +96,7 @@ const redirectToLogin = async () => {
         await openPage();
     } catch (error) {
         console.error('Login failed:', error);
-        alertContent.value = 'Failed to open login page. Please try again.';
+        alertContent.value = t('layout.login_failed');
         dialog.value = true;
         isLoading.value = false; // Reset loading on error
         showLoginUrl.value = true; // Show URL even on error
@@ -109,11 +112,11 @@ const copyToClipboard = async () => {
         }
         
         await navigator.clipboard.writeText(urlToCopy);
-        alertContent.value = 'Login URL copied to clipboard!';
+        alertContent.value = t('layout.url_copied');
         dialog.value = true;
     } catch (error) {
         console.error('Failed to copy to clipboard:', error);
-        alertContent.value = 'Failed to copy URL to clipboard. Please copy manually.';
+        alertContent.value = t('layout.copy_failed');
         dialog.value = true;
     }
 }
