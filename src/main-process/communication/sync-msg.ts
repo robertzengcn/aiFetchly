@@ -1,5 +1,5 @@
 import { ipcMain, dialog, BrowserWindow } from 'electron'
-import { UserController, userResponse, userlogin } from '@/controller/UserController'
+//import { UserController, userResponse, userlogin } from '@/controller/UserController'
 import { CampaignController } from '@/controller/campaignController'
 // import { campaignResponse } from '@/modules/campaign'
 import { SocialTaskController } from '@/controller/socialtask-controller'
@@ -7,84 +7,22 @@ import { SocialTaskResponse, SocialTaskInfoResponse, SocialTaskTypeResponse, Tag
 import { SocialTaskRun } from "@/modules/socialtaskrun"
 import { SocialTaskResult } from '@/modules/socialtaskResult'
 import { User } from '@/modules/user'
+import { MainProcessAppInfoModule } from '@/modules/MainProcessAppInfoModule'
 
 // import { ProxyApi } from '@/modules/proxy_api'
 // import { ProxyController } from '@/controller/proxy-controller'
 // import { ProxyParseItem } from '@/entityTypes/proxyType'
-import { CommonResponse } from "@/entityTypes/commonType"
+import { CommonMessage, CommonResponse } from "@/entityTypes/commonType"
 import { campaignEntity } from "@/entityTypes/campaign-type"
-import { OPENDIRECTORY, CHOOSEFILEDIALOG } from "@/config/channellist"
+import { OPENDIRECTORY, CHOOSEFILEDIALOG, GET_APP_INFO } from "@/config/channellist"
+import { AppInfo } from '@/modules/AppInfoModule'
 
 
 export default function SyncMsg(mainWindow: BrowserWindow) {
   console.log("SyncMsg");
-  ipcMain.handle("user:Login", async (event, data) => {
-    // console.log("handle user:Login")
-    const userControll = new UserController()
-    const logindata: userlogin = {
-      user: data.username,
-      pass: data.password
-    };
-    const respon: userResponse = await userControll.login(logindata).then(function (res) {
-      //console.log(res);
-      return {
-        status: true,
-        msg: "login success",
-        data: res
-      } as userResponse;
+  
 
-    }).catch(function (err) {
-      // console.error(err);
-      console.error("Error trace:", err);
-      if (err instanceof Error) {
-        return {
-          status: false,
-          msg: err.message,
-        } as userResponse;
-      } else {
-        return {
-          status: false,
-          msg: "unknow error",
-        } as userResponse;
-      }
-    })
-    return respon;
-    // win.webContents.send("user:Login", respon);
-  });
-
-  //check if user login
-  ipcMain.handle("user:checklogin", async (event, data) => {
-    //console.log("handle user:checklogin")
-    const userControll = new UserController()
-    const checkres: userResponse = await userControll.checklogin().then(function (res) {
-      //console.log(res);
-      if (res == null) {
-        return {
-          status: false,
-          msg: "check failure",
-        } as userResponse;
-      }
-      return {
-        status: true,
-        msg: "check success",
-        data: res
-      } as userResponse;
-    }).catch(function (err) {
-      console.log(err);
-      if (err instanceof Error) {
-        return {
-          status: false,
-          msg: "check failure",
-        } as userResponse;
-      } else {
-        return {
-          status: false,
-          msg: "unknow error",
-        } as userResponse;
-      }
-    });
-    return checkres;
-  });
+ 
   ipcMain.handle("campaign:list", async (event, data) => {
     //console.log("handle campaign:list")
     const camControl = new CampaignController()
@@ -332,8 +270,16 @@ export default function SyncMsg(mainWindow: BrowserWindow) {
     return res;
   })
 
-
-
+  ipcMain.handle(GET_APP_INFO, async () => {
+    const appInfo = new MainProcessAppInfoModule()
+    const res = await appInfo.getAppInfo()
+    const result:CommonMessage<AppInfo> = {
+      status: true,
+      msg: "get app info success",
+      data: res
+    }
+    return result
+  })
 
 
   ipcMain.handle(OPENDIRECTORY, async () => {

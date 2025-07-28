@@ -3,7 +3,7 @@
     <v-form ref="form" @submit.prevent="onSubmit">
       <v-text-field
         v-model="socialaccountId"
-        label="Id"
+        :label="t('socialaccount.id')"
         type="input"
         v-show="isEdit"
         :readonly="true"
@@ -11,9 +11,9 @@
       ></v-text-field>
       <v-text-field
         v-model="user"
-        label="User"
+        :label="t('socialaccount.user')"
         type="input"
-        hint="input the name"
+        :hint="t('socialaccount.user_hint')"
         :rules="[rules.required]"
         required
         :readonly="loading"
@@ -21,9 +21,9 @@
       ></v-text-field>
       <v-text-field
         v-model="pass"
-        label="Pass"
+        :label="t('socialaccount.pass') + ' (' + t('common.optional') + ')'"
         
-        hint="input the pass"
+        :hint="t('socialaccount.pass_hint')"
         :readonly="loading"
         :type="show ? 'text' : 'password'"
             @click:append="show = !show"
@@ -31,55 +31,56 @@
         :append-icon="show ? 'mdi-eye' : 'mdi-eye-off'"
       ></v-text-field>
       
-      <v-btn-toggle v-model="status" mandatory >
-        <v-btn :value="0" color="primary">Inactive</v-btn>
-        <v-btn :value="1" color="success">Active</v-btn>
+      <v-label class="text-body-2 font-weight-medium mb-2 text-capitalize">{{ t('common.status') }}</v-label>
+      <v-btn-toggle v-model="status" mandatory>
+        <v-btn :value="0" color="primary">{{ t('socialaccount.inactive') }}</v-btn>
+        <v-btn :value="1" color="success">{{ t('socialaccount.active') }}</v-btn>
       </v-btn-toggle>
       <v-select class="mt-3"
         v-model="social_type_id"
         item-title="name"
         item-value="id"
         :items="platformitems"
-        label="Platform"
+        :label="t('socialaccount.platform') + ' (' + t('common.optional') + ')'"
         required
         :readonly="loading"
         :rules="[rules.required]"
       ></v-select>
       <v-text-field
         v-model="name"
-        label="Name"
+        :label="t('socialaccount.name') + ' (' + t('common.optional') + ')'"
         type="input"
-        hint="input the account name"
+        :hint="t('socialaccount.name_hint')"
         :readonly="loading"
       ></v-text-field>
       <v-text-field
         v-model="phone"
         clearable
-        label="Phone"
+        :label="t('socialaccount.phone') + ' (' + t('common.optional') + ')'"
         type="input"
-        hint="input the account phone"
+        :hint="t('socialaccount.phone_hint')"
         :readonly="loading"
       ></v-text-field>
       <v-text-field
         v-model="email"
         clearable
-        label="Email"
+        :label="t('socialaccount.email') + ' (' + t('common.optional') + ')'"
         type="input"
-        hint="input the account email"
+        :hint="t('socialaccount.email_hint')"
         :readonly="loading"
       ></v-text-field>
 
       <v-combobox
         v-model="proxyValue"
         :items="proxyValue"
-        label="Select proxy"
+        :label="t('socialaccount.select_proxy') + ' (' + t('common.optional') + ')'"
         item-title="host"
         multiple
         return-object
         chips
         clearable
       ></v-combobox>
-      <v-btn color="primary" @click="showProxytable">Change Proxy</v-btn>
+      <v-btn color="primary" @click="showProxytable">{{ t('socialaccount.change_proxy') }}</v-btn>
 
       <div v-if="proxytableshow">
         <ProxyTableselected @change="handleSelectedChanged" />
@@ -97,19 +98,18 @@
         {{ alertContent }}
       </v-alert>
 
-      <div class="d-flex flex-column">
+      <div class="d-flex flex-row">
         <v-btn
           color="success"
-          class="mt-4"
-          block
+          class="mt-4 me-4 flex-grow-1"
           type="submit"
           :loading="loading"
         >
-          Submit
+          {{ t('common.submit') }}
         </v-btn>
 
-        <v-btn color="error" class="mt-4" block @click="router.go(-1)">
-          Return
+        <v-btn color="error" class="mt-4 flex-grow-1" @click="router.go(-1)">
+          {{ t('common.return') }}
         </v-btn>
       </div>
     </v-form>
@@ -117,6 +117,7 @@
 </template>
 <script setup lang="ts">
 import { ref, onMounted, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import {
   getSocialaccountinfo,
   saveSocialAccount,
@@ -126,6 +127,8 @@ import { useRoute, useRouter } from "vue-router";
 import { SocialAccountDetailData } from "@/entityTypes/socialaccount-type";
 import ProxyTableselected from "@/views/pages/proxy/widgets/ProxySelectedTable.vue";
 import { ProxyListEntity, Proxy } from "@/entityTypes/proxyType";
+
+const { t } = useI18n({ inheritLocale: true });
 const show = ref<boolean>(false);
 const $route = useRoute();
 const router = useRouter();
@@ -134,11 +137,12 @@ const FakeAPI = {
     return await getSocialaccountinfo(id);
   },
 };
+
 //defined the value in page
 const form = ref<HTMLFormElement>();
 const user = ref(""); //account
 const pass = ref(""); //password
-const status = ref(0);
+const status = ref(1);
 const name = ref(""); //username
 const phone = ref("");
 const email = ref("");
@@ -232,7 +236,7 @@ async function onSubmit() {
     loading.value = false;
     alert.value = true;
     alertcolor.value = "error";
-    alertContent.value = "form is not valid";
+    alertContent.value = t('socialaccount.form_not_valid');
   } else {
     const soacc: SocialAccountDetailData = {
       social_type_id: social_type_id.value,
@@ -255,7 +259,7 @@ async function onSubmit() {
         if (res.id > 0) {
           alert.value = true;
           alertcolor.value = "success";
-          alertContent.value = "Save success, the account id is " + res.id;
+          alertContent.value = t('socialaccount.save_success') + " " + res.id;
           soacc.id = res.id;
           $route.params.id = res.id.toString();
           isEdit.value = true;
@@ -263,7 +267,7 @@ async function onSubmit() {
         } else {
           alert.value = true;
           alertcolor.value = "error";
-          alertContent.value = "Save fail";
+          alertContent.value = t('socialaccount.save_fail');
         }
         setTimeout(() => {
           alert.value = false;

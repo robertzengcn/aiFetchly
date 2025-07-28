@@ -5,7 +5,7 @@ import { getUserpath, checkAndCreatePath, getApplogspath } from "@/modules/lib/f
 // import {SequelizeConfig} from "@/config/SequelizeConfig"
 // import * as fs from 'fs';
 // import * as path from 'path';
-import { USERSDBPATH, USERLOGPATH, USEREMAIL,USERNAME } from '@/config/usersetting';
+import { USERSDBPATH, USERLOGPATH, USEREMAIL,USERNAME, USERROLES } from '@/config/usersetting';
 import { Token } from "@/modules/token"
 //import {runAfterTableCreate} from "@/modules/lib/databaseinit"
 import { SqliteDb } from "@/config/SqliteDb"
@@ -62,6 +62,7 @@ export class UserController {
                 tokenService.setValue(USERNAME, res.name)
                 tokenService.setValue(USERSDBPATH, userdataPath)
                 tokenService.setValue(USERLOGPATH, logPath)
+                //tokenService.setValue(USERROLES, JSON.stringify(res.roles))
                 //const scraperModel = Scraperdb.getInstance(userdataPath);
                 //const dbdatapath=scraperModel.getdbpath(userdataPath)
                 // console.log(dbdatapath)
@@ -198,9 +199,13 @@ export class UserController {
         const tokenService = new Token()
         const email = tokenService.getValue(USEREMAIL)
         const name = tokenService.getValue(USERNAME)
+        // const listroles = tokenService.getValue(USERROLES)
+        // console.log(listroles)
+        // const roles = JSON.parse(tokenService.getValue(USERROLES)) || []
         const data:UserInfoType={
             name:name,
-            email:email
+            email:email,
+            //roles:roles
 
         }
         return data;

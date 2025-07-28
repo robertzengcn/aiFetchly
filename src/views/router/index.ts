@@ -59,7 +59,7 @@ export const constantRoutes: RouteRecordRaw[] = [
     path: '/campaign',
     name: 'campaign',
     meta: {
-      visible: true,
+      visible: false,
       title: 'Campaign',
       icon: 'mdi-cube-scan',
     },

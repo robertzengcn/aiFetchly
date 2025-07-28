@@ -1,4 +1,4 @@
-import { SocialAccount } from "@/modules/socialaccount";
+//import { SocialAccount } from "@/modules/socialaccount";
 import { BrowserWindow, session } from 'electron'
 import { AccountCookiesEntity } from "@/entity/AccountCookies.entity";
 import { AccountCookiesModule } from "@/modules/accountCookiesModule"
@@ -13,13 +13,13 @@ import { proxyEntityToUrl } from "@/modules/lib/function"
 import { convertNetscapeCookiesToJson } from "@/modules/lib/function"
 import { CookiesType, CookiesParse } from "@/entityTypes/cookiesType"
 //import { SocialAccountDetailData } from "@/entityTypes/socialaccount-type"
-
+import { SocialAccountModule } from "@/modules/socialAccountModule"
 export class SocialAccountController {
     private accountCookiesModule: AccountCookiesModule
-    private socialaccountModel: SocialAccount
+    private socialaccountModel: SocialAccountModule
     constructor() {
         this.accountCookiesModule = new AccountCookiesModule()
-        this.socialaccountModel = new SocialAccount()
+        this.socialaccountModel = new SocialAccountModule()
     }
     //open open and login social account
     public async showSocialaccountMsg(id: number, platform: string, gmsgCallback?: () => void, omsgCallback?: () => void,closeFun?:()=>void): Promise<void> {
@@ -75,7 +75,7 @@ export class SocialAccountController {
     //open a pop window to show social media, allow user to login
     public async showSocialmediaWin(id: number,cookies?:AccountCookiesEntity,closeFun?:()=>void) {
         //get account information
-        const accinfo = await this.socialaccountModel.getAccountdetail(id)
+        const accinfo = await this.socialaccountModel.getAccountDetail(id)
         if (!accinfo || !accinfo.data.id) {
             throw new Error("get account info failed")
         }

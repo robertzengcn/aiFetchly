@@ -45,7 +45,8 @@ import { ScheduleTaskEntity } from "@/entity/ScheduleTask.entity";
 import { ScheduleExecutionLogEntity } from "@/entity/ScheduleExecutionLog.entity";
 import { ScheduleDependencyEntity } from "@/entity/ScheduleDependency.entity";
 import { SchedulerStatusEntity } from "@/entity/SchedulerStatus.entity";
-// import sqlite3 from "sqlite3"; 
+import { SocialAccountEntity } from "@/entity/SocialAccount.entity";
+// import sqlite3 from "sqlite3";
 
 
 import path from "node:path";
@@ -102,6 +103,7 @@ export class SqliteDb {
                 EmailFilterTaskRelationEntity,
                 EmailServiceEntity,
                 EmailServiceTaskRelationEntity,
+                SocialAccountEntity,
             ],
             synchronize: true, 
             migrations: [],

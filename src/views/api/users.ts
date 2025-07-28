@@ -5,7 +5,7 @@ export {};
 // import {ipcRenderer as ipc} from 'electron-better-ipc'
 import {Iresponse} from '@/views/api/types'
 import {windowInvoke,windowSend,windowReceive} from '@/views/utils/apirequest'
-import {QUERY_USER_INFO, GET_LOGIN_URL} from "@/config/channellist";
+import {QUERY_USER_INFO, GET_LOGIN_URL,USER_CHECK_LOGIN} from "@/config/channellist";
 import {UserInfoType} from "@/entityTypes/userType"
 import {OPENLOGINPAGE} from "@/config/channellist";
 import {NativateDatatype} from "@/entityTypes/commonType"
@@ -19,7 +19,7 @@ import {NativateDatatype} from "@/entityTypes/commonType"
 
 export const getUserInfo = () =>
 (async () => {
-  const result:Iresponse =await window.api.invoke("user:checklogin")
+  const result:Iresponse =await window.api.invoke(QUERY_USER_INFO)
   // console.log(result);
   return result as Iresponse;
 })();

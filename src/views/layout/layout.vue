@@ -7,25 +7,25 @@
             @update:rail="navigationRail" :permanent="permanent" v-model="navState.menuVisible" style="position: fixed">
             <v-list class="py-4 mx-2 logo" nav>
                 <v-list-item :prepend-avatar="logo" class="mx-1" @click="gotodashborad()">
-                    <v-list-item-title class="title">Material UI</v-list-item-title>
-                    <v-list-item-subtitle>vue-material-admin</v-list-item-subtitle>
+                    <v-list-item-title class="title">{{ appName }}</v-list-item-title>
+                    <v-list-item-subtitle>{{ t('layout.platform_subtitle') }}</v-list-item-subtitle>
                 </v-list-item>
             </v-list>
             <v-divider></v-divider>
 
             <v-list nav class="mx-2">
-                <v-list-subheader>Dashboard</v-list-subheader>
+                <v-list-subheader>{{ t('route.dashboard') }}</v-list-subheader>
                 <template v-for="(item, key) in navState.routes" :key="key">
                     <v-list-item v-if="item.meta?.visible && !item.children" :prepend-icon="(item.meta?.icon as any)"
-                        :title="(item.meta?.title as any)" :to="{ name: item.name }" class="mx-1"
+                        :title="getTranslatedTitle(item.meta?.title as string)" :to="{ name: item.name }" class="mx-1"
                         active-class="nav_active"></v-list-item>
 
                     <v-list-group v-if="item.meta?.visible && item.children && item.children.length > 0" class="mx-1">
                         <template v-slot:activator="{ props }">
-                            <v-list-item v-bind="props" :prepend-icon="item.meta.icon" :title="item.meta.title as string" />
+                            <v-list-item v-bind="props" :prepend-icon="item.meta.icon" :title="getTranslatedTitle(item.meta.title as string)" />
                         </template>
                         <template v-for="(row, i) in item.children">
-                            <v-list-item v-if="(row.meta?.visible as any)" :title="(row.meta?.title as any)"
+                            <v-list-item v-if="(row.meta?.visible as any)" :title="getTranslatedTitle(row.meta?.title as string)"
                                 :prepend-icon="navState.isMini ? (row.meta?.icon as any) : ''" :key="i"
                                 :to="{ name: row.name }" />
                         </template>
@@ -78,9 +78,9 @@
                         </v-badge>
                     </v-btn>
                     <v-btn variant="text" append-icon="mdi-chevron-down" class="mr-2">
-                        <v-avatar size="x-small" class="avatar mr-2">
+                        <!-- <v-avatar size="x-small" class="avatar mr-2">
                             <v-img :src="wxtx" alt="{{userName}}"></v-img>
-                        </v-avatar>
+                        </v-avatar> -->
                         <span v-if="!mainStore.isMobile">{{userName}}</span>
                         <v-menu activator="parent">
                             <v-list nav class="h_a_menu">
@@ -128,7 +128,7 @@
    
 </template>
 <script setup lang="ts">
-import logo from '@/assets/admin-logo.png';
+import logo from '@/assets/images/icon.png';
 import wxtx from '@/assets/wx.png';
 import { RouterView, useRouter } from 'vue-router';
 import Breadcrumbs from '@/views/components/breadcrumbs/breadcrumbs.vue';
@@ -142,6 +142,7 @@ import {receiveSystemMessage} from '@/views/api/layout'
 import {CommonDialogMsg} from "@/entityTypes/commonType"
 import NoticeSnackbar from '@/views/components/widgets/noticeSnackbar.vue';
 import {GetloginUserInfo} from '@/views/api/users'
+import { getAppName } from '@/views/api/app'
 
 
 // import {ref, watchEffect} from "vue";
@@ -150,6 +151,7 @@ const dialogStatus=ref(false)
 const noticeMessage=ref('')
 const noticeType=ref<NoticeType>('info')
 const userName=ref('')
+const appName=ref('Social Marketing')
 const snaptimeout=ref<number>(10000)
 // const dialogTitle=ref('')
 // const dialogContent=ref('')
@@ -215,11 +217,28 @@ const Usersignout = async () => {
     await Signout()
     router.push('/login')
 }
+
+const getTranslatedTitle = (title: string): string => {
+    if (title && title.startsWith('route.')) {
+        return t(title);
+    }
+    return title;
+}
 onMounted(async () => {
     await GetloginUserInfo().then(res=>{
         console.log(res)
         userName.value=res.name
     })
+    
+    // Load app name from backend
+    try {
+        const name = await getAppName()
+        appName.value = name
+    } catch (error) {
+        console.error('Failed to load app name:', error)
+        // Keep default value if loading fails
+    }
+    
     receiveSystemMessage((res:CommonDialogMsg)=>{
        
         //revice system message

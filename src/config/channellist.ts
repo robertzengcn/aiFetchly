@@ -90,6 +90,7 @@ export const SYSTEM_SETTING_UPDATE='system_setting:update'
 export const QUERY_USER_INFO='user:info'
 export const OPENLOGINPAGE='open:page'
 export const GET_LOGIN_URL='user:get_login_url'
+export const USER_LOGIN='user:Login'
 export const NATIVATECOMMAND='navigate:command'
 export const VIDEO_PUBLISH='video:publish'
 export const VIDEO_PUBLISH_RECORD_MESSAGE='video:publish:record:message'
@@ -136,3 +137,7 @@ export const SCHEDULER_RELOAD = 'scheduler:reload'
 // Utility Channels
 export const CRON_VALIDATE = 'cron:validate'
 export const CRON_NEXT_RUN_TIME = 'cron:next_run_time'
+export const USER_CHECK_LOGIN='user:checklogin'
+
+// App Information Channels
+export const GET_APP_INFO='app:info'

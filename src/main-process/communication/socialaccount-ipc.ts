@@ -6,6 +6,7 @@ import { SocialAccountController } from '@/controller/socialaccount-controller'
 import { CommonDialogMsg } from "@/entityTypes/commonType";
 import { RequireCookiesParam,RequireCookiesMsgbox } from "@/entityTypes/cookiesType"
 import fs from "fs";
+import { SocialAccountDetailData } from '@/entityTypes/socialaccount-type'
 //import {} from "@/config/channellist"
 // import { ItemSearchparam } from "@/entityTypes/commonType"
 export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
@@ -218,6 +219,7 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
       })
     } catch (error) {
       if (error instanceof Error) {
+        console.error(error.stack)
         //console.log(error.message)
         const comMsgs: CommonDialogMsg = {
           status: false,
@@ -235,7 +237,7 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
   })
   ipcMain.handle(SOCIALACCOUNTSAVE, async (event, data) => {
     //save social account
-    const qdata = JSON.parse(data);
+    const qdata = JSON.parse(data) as SocialAccountDetailData;
     const socialaccount = new SocialAccount()
     const res = await socialaccount.saveSocialAccount(qdata).catch(function (err) {
       console.log(err);
