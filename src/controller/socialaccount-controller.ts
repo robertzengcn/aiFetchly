@@ -14,12 +14,18 @@ import { convertNetscapeCookiesToJson } from "@/modules/lib/function"
 import { CookiesType, CookiesParse } from "@/entityTypes/cookiesType"
 //import { SocialAccountDetailData } from "@/entityTypes/socialaccount-type"
 import { SocialAccountModule } from "@/modules/socialAccountModule"
+import { SocialPlatformList } from "@/config/generate"
 export class SocialAccountController {
     private accountCookiesModule: AccountCookiesModule
     private socialaccountModel: SocialAccountModule
     constructor() {
         this.accountCookiesModule = new AccountCookiesModule()
         this.socialaccountModel = new SocialAccountModule()
+    }
+
+    private getSocialPlatformUrl(socialTypeId: number): string | null {
+        const platform = SocialPlatformList.find(item => item.id === socialTypeId)
+        return platform ? platform.url : null
     }
     //open open and login social account
     public async showSocialaccountMsg(id: number, platform: string, gmsgCallback?: () => void, omsgCallback?: () => void,closeFun?:()=>void): Promise<void> {
@@ -104,7 +110,7 @@ export class SocialAccountController {
         }
         if (accinfo.data.proxy) {
             const randomProxy = accinfo.data.proxy[Math.floor(Math.random() * accinfo.data.proxy.length)];
-
+            if(randomProxy){
             if (randomProxy.host && randomProxy.port) {
                 winTitle += " Use proxy host:" + randomProxy.host + " port:" + randomProxy.port
                 // const proxyCon = new ProxyController()
@@ -123,6 +129,7 @@ export class SocialAccountController {
                 }).catch((error) => {
                     console.log('set proxy failed, error:' + error)
                 })
+                }
             }
         }
         //handle cookies
@@ -181,9 +188,11 @@ export class SocialAccountController {
         win.setTitle(winTitle)
         win.setMenu(null)
         // showNotification("test title","test message")
-        console.log(accinfo.data.social_type_url)
-        if (accinfo.data.social_type_url) {
-            await win.loadURL(accinfo.data.social_type_url).catch((error) => {
+        
+        const socialTypeUrl = accinfo.data.social_type_id ? this.getSocialPlatformUrl(accinfo.data.social_type_id) : null
+        console.log(socialTypeUrl)
+        if (socialTypeUrl) {
+            await win.loadURL(socialTypeUrl).catch((error) => {
                 const ignoreMsg=["Message 0 rejected by interface blink.mojom.WidgetHost","ERR_FAILED (-2)"]
                 
                 if (!ignoreMsg.some(msg => error.message.includes(msg))) {
@@ -218,7 +227,7 @@ export class SocialAccountController {
         win.on('close', async () => { //   <---- Catch close event
             if(win&&win.webContents&&win.webContents.session){
             const winsession = win.webContents.session
-            const cookiescontent = await winsession.cookies.get({url: accinfo.data.social_type_url})
+            const cookiescontent = await winsession.cookies.get({url: socialTypeUrl})
             console.log("get cookies:")
             console.log(cookiescontent)
             const cookiesstr = JSON.stringify(cookiescontent)

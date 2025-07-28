@@ -122,11 +122,11 @@ import {
   getSocialaccountinfo,
   saveSocialAccount,
 } from "@/views/api/socialaccount";
-import { getSocialPlatformlist } from "@/views/api/social_platform";
 import { useRoute, useRouter } from "vue-router";
 import { SocialAccountDetailData } from "@/entityTypes/socialaccount-type";
 import ProxyTableselected from "@/views/pages/proxy/widgets/ProxySelectedTable.vue";
 import { ProxyListEntity, Proxy } from "@/entityTypes/proxyType";
+import { SocialPlatformList } from "@/config/generate";
 
 const { t } = useI18n({ inheritLocale: true });
 const show = ref<boolean>(false);
@@ -211,18 +211,12 @@ const initialize = async () => {
     // }
   }
   //get social task type
-  const platformlist = await getSocialPlatformlist({ page: 0, size: 100 });
-
-  if (platformlist != null) {
-    // console.log(tasktypelist)
-    platformitems.value = platformlist.map((item) => {
-      return {
-        id: item.id,
-        name: item.name,
-      };
-    });
-    // console.log(typeitems.value);
-  }
+  platformitems.value = SocialPlatformList.map((item) => {
+    return {
+      id: item.id,
+      name: item.name,
+    };
+  });
 };
 
 async function onSubmit() {
