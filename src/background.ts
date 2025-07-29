@@ -31,7 +31,7 @@ declare const MAIN_WINDOW_VITE_NAME: string;
 // Get app name for protocol
 const appName = app.getName();
 const protocolScheme = appName.replace(/-/g, ''); // Remove hyphens for protocol
-
+app.userAgentFallback = app.userAgentFallback.replace('Electron/' + process.versions.electron, '');
 // Configure log
 log.initialize();
 

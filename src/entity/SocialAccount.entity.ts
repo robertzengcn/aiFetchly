@@ -7,14 +7,14 @@ export class SocialAccountEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @Column({ type: 'varchar', length: 100,nullable: true })
-  social_type: string;
+  // @Column({ type: 'varchar', length: 100,nullable: true })
+  // social_type: string;
 
   @Column({ type: 'integer' })
   social_type_id: number;
 
-  @Column({ type: 'varchar', length: 255, nullable: true })
-  social_type_url: string;
+  // @Column({ type: 'varchar', length: 255, nullable: true })
+  // social_type_url: string;
 
   @Column({ type: 'varchar', length: 255 })
   user: string;

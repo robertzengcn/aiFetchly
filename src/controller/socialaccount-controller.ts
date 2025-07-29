@@ -15,6 +15,7 @@ import { CookiesType, CookiesParse } from "@/entityTypes/cookiesType"
 //import { SocialAccountDetailData } from "@/entityTypes/socialaccount-type"
 import { SocialAccountModule } from "@/modules/socialAccountModule"
 import { SocialPlatformList } from "@/config/generate"
+import { SavesocialaccountResp, SocialAccountDetailData, SocialAccountDetailResponse, SocialAccountResponse } from "@/entityTypes/socialaccount-type"
 export class SocialAccountController {
     private accountCookiesModule: AccountCookiesModule
     private socialaccountModel: SocialAccountModule
@@ -27,8 +28,15 @@ export class SocialAccountController {
         const platform = SocialPlatformList.find(item => item.id === socialTypeId)
         return platform ? platform.url : null
     }
+    //get social account by id
+    //get social account detail from local database
+    public async getAccountdetail(
+        id: number
+    ): Promise<SocialAccountDetailResponse> {
+        return await this.socialaccountModel.getAccountDetail(id);
+    }
     //open open and login social account
-    public async showSocialaccountMsg(id: number, platform: string, gmsgCallback?: () => void, omsgCallback?: () => void,closeFun?:()=>void): Promise<void> {
+    public async showSocialaccountMsg(id: number, platform: string, gmsgCallback?: () => void, omsgCallback?: () => void, closeFun?: () => void): Promise<void> {
         //get account cookies
         // const accoutndb = new AccountCookiesdb(dbpath)
         const cookies = await this.accountCookiesModule.getAccountCookies(id)
@@ -44,7 +52,14 @@ export class SocialAccountController {
         // console.log(accinfo.data.social_type)
         //console.log(accinfo.data.social_type)
         if (!cookies || !cookies.cookies) {
-            if ((platform == "google.com" || platform == "youtube")) {
+            const platformLower = platform.toLowerCase();
+            if (platformLower.includes("google1") || platformLower.includes("youtube1")) {
+            //     if (gmsgCallback) {
+            //         gmsgCallback()
+            //     }
+            //     return
+            // }
+            // if ((platform == "google.com" || platform == "youtube")) {
                 // console.log(accinfo.data)
                 // console.log(cookies)
                 // if(!cookies||!cookies.cookies){//open a new window to ask user choose file
@@ -74,12 +89,12 @@ export class SocialAccountController {
                 }
             }
         } else {
-            await this.showSocialmediaWin(id,cookies,closeFun)
+            await this.showSocialmediaWin(id, cookies, closeFun)
         }
 
     }
     //open a pop window to show social media, allow user to login
-    public async showSocialmediaWin(id: number,cookies?:AccountCookiesEntity,closeFun?:()=>void) {
+    public async showSocialmediaWin(id: number, cookies?: AccountCookiesEntity, closeFun?: () => void) {
         //get account information
         const accinfo = await this.socialaccountModel.getAccountDetail(id)
         if (!accinfo || !accinfo.data.id) {
@@ -93,12 +108,12 @@ export class SocialAccountController {
         let partition_path = this.accountCookiesModule.genPartitionPath()
 
         if (!cookies) {
-        //     if (cookies.partition_path) {
-        //         partition_path = cookies.partition_path
-        //     }
-        // }else{
+            //     if (cookies.partition_path) {
+            //         partition_path = cookies.partition_path
+            //     }
+            // }else{
             const cookiesres = await this.accountCookiesModule.getAccountCookies(id)
-            if(cookiesres){
+            if (cookiesres) {
                 cookies = cookiesres
             }
         }
@@ -110,25 +125,25 @@ export class SocialAccountController {
         }
         if (accinfo.data.proxy) {
             const randomProxy = accinfo.data.proxy[Math.floor(Math.random() * accinfo.data.proxy.length)];
-            if(randomProxy){
-            if (randomProxy.host && randomProxy.port) {
-                winTitle += " Use proxy host:" + randomProxy.host + " port:" + randomProxy.port
-                // const proxyCon = new ProxyController()
-                const proxyitem: ProxyParseItem = {
-                    host: randomProxy.host,
-                    port: randomProxy.port,
-                    user: randomProxy.username,
-                    pass: randomProxy.password,
-                    protocol: randomProxy.protocol
-                }
-                const proxyUrl = proxyEntityToUrl(proxyitem)
-                // console.log(randomProxy.url)
-                //convert proxy to string
-                ses.setProxy({ proxyRules: proxyUrl }).then(() => {
-                    console.log('set proxy success, use proxy host:' + randomProxy.host + " port:" + randomProxy.port)
-                }).catch((error) => {
-                    console.log('set proxy failed, error:' + error)
-                })
+            if (randomProxy) {
+                if (randomProxy.host && randomProxy.port) {
+                    winTitle += " Use proxy host:" + randomProxy.host + " port:" + randomProxy.port
+                    // const proxyCon = new ProxyController()
+                    const proxyitem: ProxyParseItem = {
+                        host: randomProxy.host,
+                        port: randomProxy.port,
+                        user: randomProxy.username,
+                        pass: randomProxy.password,
+                        protocol: randomProxy.protocol
+                    }
+                    const proxyUrl = proxyEntityToUrl(proxyitem)
+                    // console.log(randomProxy.url)
+                    //convert proxy to string
+                    ses.setProxy({ proxyRules: proxyUrl }).then(() => {
+                        console.log('set proxy success, use proxy host:' + randomProxy.host + " port:" + randomProxy.port)
+                    }).catch((error) => {
+                        console.log('set proxy failed, error:' + error)
+                    })
                 }
             }
         }
@@ -164,10 +179,10 @@ export class SocialAccountController {
                             delete cookieDetails.domain;
                         }
                     }
-                    if(cookie.name.startsWith("__Secure-")){
-                        cookieDetails.httpOnly=true
+                    if (cookie.name.startsWith("__Secure-")) {
+                        cookieDetails.httpOnly = true
                         // delete cookieDetails.domain;
-         
+
                     }
                     try {
                         console.log(cookieDetails)
@@ -188,25 +203,27 @@ export class SocialAccountController {
         win.setTitle(winTitle)
         win.setMenu(null)
         // showNotification("test title","test message")
-        
+
         const socialTypeUrl = accinfo.data.social_type_id ? this.getSocialPlatformUrl(accinfo.data.social_type_id) : null
         console.log(socialTypeUrl)
         if (socialTypeUrl) {
-            await win.loadURL(socialTypeUrl).catch((error) => {
-                const ignoreMsg=["Message 0 rejected by interface blink.mojom.WidgetHost","ERR_FAILED (-2)"]
-                
+            await win.loadURL(socialTypeUrl, {
+                 userAgent: 'Chrome'
+                }).catch((error) => {
+                const ignoreMsg = ["Message 0 rejected by interface blink.mojom.WidgetHost", "ERR_FAILED (-2)"]
+
                 if (!ignoreMsg.some(msg => error.message.includes(msg))) {
-                console.log('load url failed, error:' + error.message)
-                console.error(error)
-                // showNotification("error","load url failed, error:" + error.message)
-                win.close()
-                throw new Error('load url failed, error:' + error.message)
-                }else{
+                    console.log('load url failed, error:' + error.message)
+                    console.error(error)
+                    // showNotification("error","load url failed, error:" + error.message)
+                    win.close()
+                    throw new Error('load url failed, error:' + error.message)
+                } else {
                     console.log('Ignored error:', error.message)
                 }
             })
             // win.loadURL('https://ident.me/ip')
-        }else{
+        } else {
             throw new Error("social type url not exist")
         }
         win.once('ready-to-show', async () => {
@@ -222,40 +239,40 @@ export class SocialAccountController {
             //   await dialog.showMessageBox(win,options) 
             // win.webContents.executeJavaScript('alert("Hello, world!")');
         })
-        
+
         // winsession.cookies.remove()
         win.on('close', async () => { //   <---- Catch close event
-            if(win&&win.webContents&&win.webContents.session){
-            const winsession = win.webContents.session
-            const cookiescontent = await winsession.cookies.get({url: socialTypeUrl})
-            console.log("get cookies:")
-            console.log(cookiescontent)
-            const cookiesstr = JSON.stringify(cookiescontent)
-            if (accinfo.data.id) {
-                // const ace: AccountCookiesEntity = {
-                //     account_id: accinfo.data.id,
-                //     cookies: cookiesstr,
-                //     partition_path: partition_path
-                // }
-                const ace = new AccountCookiesEntity()
-                ace.account_id = accinfo.data.id
-                ace.cookies = cookiesstr
-                ace.partition_path = partition_path
-                // const tokenService=new Token()
-                // const dbpath=await tokenService.getValue(USERSDBPATH)
-                // if(!dbpath){
-                //     throw new CustomError("user path not exist",202407171402105)
-                // }
-                // const acdb = new AccountCookiesdb(dbpath)
-                this.accountCookiesModule.saveAccountCookies(ace)
-                if(closeFun){
-                closeFun()
+            if (win && win.webContents && win.webContents.session) {
+                const winsession = win.webContents.session
+                const cookiescontent = await winsession.cookies.get({ url: socialTypeUrl })
+                console.log("get cookies:")
+                console.log(cookiescontent)
+                const cookiesstr = JSON.stringify(cookiescontent)
+                if (accinfo.data.id) {
+                    // const ace: AccountCookiesEntity = {
+                    //     account_id: accinfo.data.id,
+                    //     cookies: cookiesstr,
+                    //     partition_path: partition_path
+                    // }
+                    const ace = new AccountCookiesEntity()
+                    ace.account_id = accinfo.data.id
+                    ace.cookies = cookiesstr
+                    ace.partition_path = partition_path
+                    // const tokenService=new Token()
+                    // const dbpath=await tokenService.getValue(USERSDBPATH)
+                    // if(!dbpath){
+                    //     throw new CustomError("user path not exist",202407171402105)
+                    // }
+                    // const acdb = new AccountCookiesdb(dbpath)
+                    this.accountCookiesModule.saveAccountCookies(ace)
+                    if (closeFun) {
+                        closeFun()
+                    }
                 }
             }
-        }
         });
 
-     
+
     }
     public async handleCookiesfile(filePath: string, accountId: number): Promise<number> {
         const cookiesArr = convertNetscapeCookiesToJson(filePath)
@@ -277,5 +294,37 @@ export class SocialAccountController {
 
         this.accountCookiesModule.deleteCookies(accountId)
     }
+
+    public convertPlatform(name: string): number {
+        //convert name to lower case
+        const lowerCaseName = name.toLowerCase();
+        
+        // Find platform by name in SocialPlatformList
+        const platform = SocialPlatformList.find(item => 
+            item.name.toLowerCase().includes(lowerCaseName) || 
+            lowerCaseName.includes(item.name.toLowerCase())
+        );
+        
+        if (platform) {
+            return platform.id;
+        } else {
+            throw new Error(`Unknown platform name: ${name}`);
+        }
+    }
+    //get social account list from local database
+    public async getSocialaccountlist(
+        page: number,
+        size: number,
+        search: string,
+        platform?: number,
+    ): Promise<SocialAccountResponse> {
+        return await this.socialaccountModel.getSocialAccountList(page, size, search, platform);
+    }
+     //save social account to local database
+  public async saveSocialAccount(
+    soc: SocialAccountDetailData
+  ): Promise<SavesocialaccountResp> {
+    return await this.socialaccountModel.saveSocialAccount(soc);
+  }
 
 }

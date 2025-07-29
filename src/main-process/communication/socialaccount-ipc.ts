@@ -1,5 +1,5 @@
 import { ipcMain, dialog, BrowserWindow } from 'electron'
-import { SOCIALPLATFORM_LIST, SOCIALACCOUNTlIST, SOCIALACCOUNTDETAIL, SOCIAL_ACCOUNT_LOGIN, SOCIALACCOUNTSAVE, SOCIAL_ACCOUNT_LOGIN_MESSSAGE, SOCIAL_ACCOUNT_LOGIN_UPLOADCOOKIES,SOCIAL_ACCOUNT_CLEAN_COOKIES,SOCIAL_ACCOUNT_SHOW_PLATFORMPAGE } from "@/config/channellist"
+import { SOCIALPLATFORM_LIST, SOCIALACCOUNTlIST, SOCIALACCOUNTDETAIL, SOCIALACCOUNTSAVE, SOCIALACCOUNTDELETE, SOCIAL_ACCOUNT_LOGIN, SOCIAL_ACCOUNT_LOGIN_MESSSAGE, SOCIAL_ACCOUNT_LOGIN_UPLOADCOOKIES,SOCIAL_ACCOUNT_CLEAN_COOKIES,SOCIAL_ACCOUNT_SHOW_PLATFORMPAGE } from "@/config/channellist"
 import { SocialAccount } from '@/modules/socialaccount'
 import { SocialPlatform } from "@/modules/social_platform"
 import { SocialAccountController } from '@/controller/socialaccount-controller'
@@ -7,6 +7,7 @@ import { CommonDialogMsg } from "@/entityTypes/commonType";
 import { RequireCookiesParam,RequireCookiesMsgbox } from "@/entityTypes/cookiesType"
 import fs from "fs";
 import { SocialAccountDetailData } from '@/entityTypes/socialaccount-type'
+import { SocialPlatformList } from '@/config/generate'
 //import {} from "@/config/channellist"
 // import { ItemSearchparam } from "@/entityTypes/commonType"
 export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
@@ -25,7 +26,7 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
     }
 
     let platformId = 0
-    const socialaccount = new SocialAccount()
+    const socialaccount = new SocialAccountController()
     if (qdata.where) {
       try {
        
@@ -73,7 +74,7 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
         msg: "id not found",
       };
     }
-    const socialaccount = new SocialAccount()
+    const socialaccount = new SocialAccountController()
     //get detail from remote
     // const socialaccount = new SocialAccount()
     const res = await socialaccount.getAccountdetail(qdata.id).catch(function (err) {
@@ -130,14 +131,36 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
     if (!("id" in qdata)) {
       throw new Error("id not found");
     }
-    if (!("platform" in qdata)) {
-      throw new Error("platform not found");
-    }
+    // if (!("platform" in qdata)) {
+    //   throw new Error("platform not found");
+    // }
     //const sac = new SocialAccountController()
     try {
+      let platform=""
       const sac=new SocialAccountController()
+      const accinfo=await sac.getAccountdetail(qdata.id)
+      if(accinfo.status){
+        const socialTypeId=accinfo.data.social_type_id
+        //convert social type id to platform
+        const platformItem=SocialPlatformList.find(item=>item.id===socialTypeId)
+        if(platformItem){
+          platform=platformItem.name
+        }
+      }else{
+        const comMsgs: CommonDialogMsg = {
+          status: false,
+          code: qdata.id,
+          data: {
+            action: "error",
+            title: "",
+            content: accinfo.msg
+          }
+        }
+        event.sender.send(SOCIAL_ACCOUNT_LOGIN_MESSSAGE, JSON.stringify(comMsgs))
+      return
+      }
       // event.sender.send('socialaccount:login:msg', JSON.stringify({ msg: "test", status: false }))
-      await sac.showSocialaccountMsg(qdata.id, qdata.platform,() => {
+      await sac.showSocialaccountMsg(qdata.id, platform,() => {
         const comMsgs: CommonDialogMsg = {
           status: false,
           code: qdata.id,
@@ -238,7 +261,7 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
   ipcMain.handle(SOCIALACCOUNTSAVE, async (event, data) => {
     //save social account
     const qdata = JSON.parse(data) as SocialAccountDetailData;
-    const socialaccount = new SocialAccount()
+    const socialaccount = new SocialAccountController()
     const res = await socialaccount.saveSocialAccount(qdata).catch(function (err) {
       console.log(err);
       if (err instanceof Error) {
@@ -256,7 +279,7 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
     return res
   })
   //delete social account
-  ipcMain.handle("socialaccount:delete", async (event, data) => {
+  ipcMain.handle(SOCIALACCOUNTDELETE, async (event, data) => {
     const qdata = JSON.parse(data);
     if (!("id" in qdata)) {
       //throw new Error("id not found");

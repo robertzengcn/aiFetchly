@@ -18,12 +18,12 @@ export const SocialPlatformList:SocialPlatformEntity[]=[
   {
     id:1,
     name:"Facebook",
-    url:"https://facebook.com"
+    url:"https://www.facebook.com"
   },
   {
     id:2,
     name:"Youtube",
-    url:"https://youtube.com"
+    url:"https://www.youtube.com"
   },
   {
     id:3,
@@ -33,11 +33,11 @@ export const SocialPlatformList:SocialPlatformEntity[]=[
   {
     id:4,
     name:"Google",
-    url:"https://google.com"
+    url:"https://www.google.com"
   },
   {
     id:5,
     name:"Bing",
-    url:"https://bing.com"
+    url:"https://www.bing.com"
   },
 ]

@@ -14,7 +14,7 @@ export type SocialAccountDetailResponse = {
 }
 export type SocialAccountListData={
     id: number,
-    social_type: string,
+    // social_type: string,
     social_type_id: number,
     user: string,
     pass:string,

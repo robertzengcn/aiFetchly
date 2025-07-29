@@ -36,7 +36,7 @@ export class SocialAccountModule extends BaseModule {
                     
                     return {
                         id: account.id,
-                        social_type: account.social_type,
+                        // social_type: account.social_type,
                         social_type_id: account.social_type_id,
                         user: account.user,
                         pass: account.pass,
@@ -85,9 +85,7 @@ export class SocialAccountModule extends BaseModule {
             // Convert to SocialAccountDetailData format
             const detailData: SocialAccountDetailData = {
                 id: account.id,
-                social_type: account.social_type,
                 social_type_id: account.social_type_id,
-                social_type_url: account.social_type_url,
                 user: account.user,
                 pass: account.pass,
                 status: account.status,
@@ -122,15 +120,15 @@ export class SocialAccountModule extends BaseModule {
             if (socialAccountData.id) {
                 socialAccount.id = socialAccountData.id;
             }
-            if (socialAccountData.social_type) {
-                socialAccount.social_type = socialAccountData.social_type;
-            }
+            // if (socialAccountData.social_type) {
+            //     socialAccount.social_type = socialAccountData.social_type;
+            // }
             if (socialAccountData.social_type_id) {
                 socialAccount.social_type_id = socialAccountData.social_type_id;
             }
-            if (socialAccountData.social_type_url) {
-                socialAccount.social_type_url = socialAccountData.social_type_url;
-            }
+                // if (socialAccountData.social_type_url) {
+                //     socialAccount.social_type_url = socialAccountData.social_type_url;
+                // }
             socialAccount.user = socialAccountData.user;
             if (socialAccountData.pass) {
                 socialAccount.pass = socialAccountData.pass;
