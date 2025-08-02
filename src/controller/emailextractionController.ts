@@ -171,6 +171,91 @@ export class EmailextractionController {
         console.log(content)
         return content
     }
+
+    /**
+     * Retrieves a single email extraction task by ID for editing purposes
+     * @param taskId - The unique identifier of the task to retrieve
+     * @returns Promise that resolves to the complete task data including URLs and proxies
+     * @throws Error if the task is not found
+     */
+    public async getEmailSearchTask(taskId: number): Promise<any> {
+        const task = await this.emailSeachTaskModule.getTaskDetail(taskId)
+        if (!task) {
+            throw new Error("Task not found")
+        }
+
+        // Get task URLs
+        const urls = await this.emailSeachTaskModule.getTaskurls(taskId, 0, 1000)
+        
+        // Get task proxies
+        const proxies = await this.emailSeachTaskModule.getTaskProxies(taskId)
+
+        // Convert status to string for frontend
+        const taskStatus = this.emailSeachTaskModule.taskstatusConvert(task.status)
+        const taskType = this.emailSeachTaskModule.taskTypeconvert(task.type_id)
+
+        return {
+            id: task.id,
+            searchResultId: task.search_result_id,
+            type_id: task.type_id,
+            typeName: taskType,
+            concurrency: task.concurrency,
+            pagelength: task.pagelength,
+            notShowBrowser: task.notShowBrowser,
+            processTimeout: task.processTimeout,
+            maxPageNumber: task.maxPageNumber,
+            status: task.status,
+            statusName: taskStatus,
+            record_time: task.record_time,
+            urls: urls,
+            proxies: proxies
+        }
+    }
+
+    /**
+     * Updates an existing email extraction task with new data
+     * @param taskId - The unique identifier of the task to update
+     * @param data - The updated task data including URLs, settings, and configuration
+     * @returns Promise that resolves when the task is updated successfully
+     * @throws Error if the task is not found or cannot be edited (e.g., running/completed tasks)
+     */
+    public async updateEmailSearchTask(taskId: number, data: EmailsControldata): Promise<void> {
+        // Validate task exists and can be edited
+        const task = await this.emailSeachTaskModule.getTaskDetail(taskId)
+        if (!task) {
+            throw new Error("Task not found")
+        }
+
+        // Only allow editing pending or error tasks
+        if (task.status !== 0 && task.status !== 2) { // 0 = pending, 2 = error
+            throw new Error("Cannot edit task with current status")
+        }
+
+        // Update the task
+        await this.emailSeachTaskModule.updateTask(taskId, data)
+    }
+
+    /**
+     * Deletes an email extraction task and all its associated data
+     * @param taskId - The unique identifier of the task to delete
+     * @returns Promise that resolves when the task is deleted successfully
+     * @throws Error if the task is not found or cannot be deleted (e.g., running tasks)
+     */
+    public async deleteEmailSearchTask(taskId: number): Promise<void> {
+        // Validate task exists and can be deleted
+        const task = await this.emailSeachTaskModule.getTaskDetail(taskId)
+        if (!task) {
+            throw new Error("Task not found")
+        }
+
+        // Only allow deleting pending or error tasks
+        if (task.status !== 0 && task.status !== 2) { // 0 = pending, 2 = error
+            throw new Error("Cannot delete task with current status")
+        }
+
+        // Delete the task
+        await this.emailSeachTaskModule.deleteTask(taskId)
+    }
   
     
 }

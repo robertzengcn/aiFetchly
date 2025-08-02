@@ -53,7 +53,7 @@
 
       <div class="d-flex justify-space-between mt-4 mb-4">
         <v-btn color="success" type="submit" :loading="loading" class="flex-grow-1 mr-2">
-          {{ t('common.submit') }}
+          {{ props.editMode ? t('common.save') : t('common.submit') }}
         </v-btn>
 
         <v-btn color="error" @click="router.go(-1)" class="flex-grow-1 ml-2">
@@ -85,10 +85,10 @@
 
 import { ref, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
-import { useRouter } from 'vue-router';
+import { useRouter, useRoute } from 'vue-router';
 import {EmailExtractionTypes} from "@/config/emailextraction";
 import { ToArray, CapitalizeFirstLetter } from "@/views/utils/function"
-import { submitScraper,receiveSearchEmailevent } from "@/views/api/emailextraction"
+import { submitScraper,receiveSearchEmailevent, getEmailSearchTask, updateEmailSearchTask } from "@/views/api/emailextraction"
 // import { Usersearchdata } from "@/entityTypes/searchControlType"
 // import { convertNumberToBoolean } from "@/views/utils/function"
 import {isValidUrl,convertNumberToBoolean} from "@/views/utils/function"
@@ -96,10 +96,26 @@ import ProxyTableselected from "@/views/pages/proxy/widgets/ProxySelectedTable.v
 import SearchResultSelectTable from "@/views/pages/search/widgets/SearchResultSelectTable.vue";
 import { ProxyEntity,ProxyListEntity } from "@/entityTypes/proxyType";
 import {SearchtaskItem } from "@/entityTypes/searchControlType"
-import {EmailscFormdata} from '@/entityTypes/emailextraction-type'
+import {EmailscFormdata, EmailSearchTaskDetail} from '@/entityTypes/emailextraction-type'
 import {EMAILEXTRACTIONMESSAGE} from "@/config/channellist"
 import { CommonDialogMsg } from "@/entityTypes/commonType"
+
+// Props for edit mode
+const props = defineProps({
+  editMode: {
+    type: Boolean,
+    default: false
+  },
+  taskId: {
+    type: Number,
+    default: 0
+  }
+});
+
 const { t } = useI18n({ inheritLocale: true });
+const router = useRouter();
+const route = useRoute();
+
 const alert = ref(false);
 const alerttext = ref("");
 const alerttitle = ref("");
@@ -119,7 +135,7 @@ type EmailOption = {
   index: number;
 };
 const urls=ref<string>("");
-const page_length=ref(1);
+const page_length=ref(10);
 const emailtype = ref<EmailOption>();
 
 const emailTypelist = ref<Array<EmailOption>>([]);
@@ -129,7 +145,10 @@ const concurrent_quantity = ref(1);
 const proxyValue = ref<Array<ProxyEntity>>([]);
 const proxytableshow = ref(false);
 const searchtaskId=ref<number>(0);
-const router = useRouter();
+
+// Task data for edit mode
+const taskData = ref<EmailSearchTaskDetail | null>(null);
+
 const initialize = () => {
   //searchplatform.value = ToArray(SearhEnginer);
   const seArr:string[]=ToArray(EmailExtractionTypes);
@@ -141,6 +160,7 @@ const initialize = () => {
  console.log(emailTypelist.value)
   //searchplatform.value=seArr
 };
+
 const setAlert = (
   text: string,
   title: string,
@@ -156,9 +176,54 @@ const setAlert = (
   }, 5000);
 };
 
+// Load task data for edit mode
+const loadTaskData = async () => {
+  if (!props.editMode || !props.taskId) return;
+  
+  try {
+    loading.value = true;
+    const task = await getEmailSearchTask(props.taskId);
+    taskData.value = task;
+    
+    // Populate form with task data
+    if (task) {
+      // Set extraction type
+      const typeIndex = task.type_id === EmailExtractionTypes.SearchResult ? 1 : 0;
+      emailtype.value = emailTypelist.value.find(item => item.index === typeIndex);
+      
+      // Set URLs
+      if (task.urls && task.urls.length > 0) {
+        urls.value = task.urls.join('\n');
+      }
+      
+      // Set other fields
+      page_length.value = task.pagelength || 10;
+      concurrent_quantity.value = task.concurrency || 1;
+      maxPageNumber.value = task.maxPageNumber || 100;
+      processTimeout.value = task.processTimeout || 10;
+      showinbrwoser.value = task.notShowBrowser ? 0 : 1;
+      searchtaskId.value = task.searchResultId || 0;
+      
+      // Set proxies
+      if (task.proxies && task.proxies.length > 0) {
+        proxyValue.value = task.proxies;
+      }
+    }
+  } catch (error) {
+    console.error('Error loading task data:', error);
+    setAlert(t('emailextraction.load_task_error'), "Error", "error");
+  } finally {
+    loading.value = false;
+  }
+};
+
 onMounted(() => {
   initialize();
-  receiveMsg()
+  if (props.editMode) {
+    loadTaskData();
+  } else {
+    receiveMsg();
+  }
 })
 const showProxytable = () => {
   console.log("show proxy table");
@@ -222,7 +287,7 @@ const receiveMsg = () => {
     if (obj.status) {
       if (obj.data) {
         if (obj.data.action) {
-          if (obj.data.action == 'emailsearch_task _start') {
+          if (obj.data.action == 'emailscrape.emailsearch_task_start') {
             router.push({
               path: '/emailextraction/tasklist'
             });
@@ -290,14 +355,30 @@ async function onSubmit() {
     maxPageNumber:maxPageNumber.value
    }
    console.log(scraperData)
-   submitScraper(scraperData).catch(function (err) {
-      //catch error
-      setAlert(err.message, "Error", "error");
-      return null
-    })
-
+   
+   if (props.editMode) {
+     // Edit mode - update existing task
+     try {
+       loading.value = true;
+       await updateEmailSearchTask(props.taskId, scraperData);
+       setAlert(t('emailextraction.update_success'), "Success", "success");
+       setTimeout(() => {
+         router.push('/emailextraction/tasklist');
+       }, 1500);
+     } catch (error) {
+       console.error('Error updating task:', error);
+       setAlert(error instanceof Error ? error.message : t('emailextraction.update_error'), "Error", "error");
+     } finally {
+       loading.value = false;
+     }
+   } else {
+     // Create mode - submit new task
+     submitScraper(scraperData).catch(function (err) {
+       //catch error
+       setAlert(err.message, "Error", "error");
+       return null
+     })
+   }
   }
-
-
 }
 </script>

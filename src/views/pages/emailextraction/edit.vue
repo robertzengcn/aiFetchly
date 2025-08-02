@@ -1,0 +1,301 @@
+<template>
+  <v-sheet class="mx-auto" rounded>
+    <v-form ref="form" @submit.prevent="onSubmit">
+      
+      <v-select v-model="emailtype" :items="emailTypelist" :label="t('emailextraction.extraction_type') as string" required
+        :readonly="loading" :rules="[rules.required]" class="mt-3"  
+        item-title="name"
+          item-value="key"
+          return-object
+          ></v-select>
+       <v-textarea class="mt-3" v-model="urls" :label="t('emailextraction.input_urls_hint')" v-if="emailtype?.index==0"></v-textarea> 
+       
+       <div v-if="emailtype?.index==1" class="mt-3">
+        <SearchResultSelectTable @change="handleSearchtaskChanged" />
+      </div>
+
+      <v-text-field v-model="page_length" :label="t('emailextraction.page_length')" clearable class="mt-3"></v-text-field>
+
+      <v-text-field v-model="concurrent_quantity" :label="t('search.concurrent_quantity')" clearable
+        class="mt-3"></v-text-field>
+        <v-number-input
+          :label="t('emailextraction.max_page_number')"
+          control-variant="default"
+          v-model="maxPageNumber"
+          :max="1000"
+          :min="0"
+          :default="100"
+        ></v-number-input>
+      
+        <v-number-input
+        :label="t('emailextraction.process_timeout')"
+        control-variant="default"
+        v-model="processTimeout"
+        :max="20"
+          :min="1"
+      ></v-number-input>
+        <v-combobox v-model="proxyValue" :items="proxyValue" label="Select proxy" item-title="host" multiple return-object
+        chips clearable></v-combobox>
+      <v-btn color="primary" @click="showProxytable">{{t('search.choose_proxy')}}</v-btn>
+
+      <div v-if="proxytableshow" class="mt-3">
+        <ProxyTableselected @change="handleSelectedChanged" />
+      </div>
+
+      <p class="mt-5">{{ capletter(t('search.show_in_Browser')) }}:</p>
+      <v-btn-toggle v-model="showinbrwoser" mandatory class="mt-3">
+        <v-btn :value="0" color="primary">No</v-btn>
+        <v-btn :value="1" color="success">Yes</v-btn>
+      </v-btn-toggle>
+
+      <div class="d-flex justify-space-between mt-4 mb-4">
+        <v-btn color="success" type="submit" :loading="loading" class="flex-grow-1 mr-2">
+          {{ t('common.save') }}
+        </v-btn>
+
+        <v-btn color="warning" @click="router.go(-1)" class="flex-grow-1 ml-2">
+          {{ t('common.cancel') }}
+        </v-btn>
+      </div>
+
+    </v-form>
+  </v-sheet>
+  
+  <!-- Alert dialog component -->
+  <v-dialog v-model="alert" width="auto">
+    <v-card max-width="400" prepend-icon="mdi-update" :text="alerttext" :title="alerttitle">
+      <template v-slot:actions>
+        <v-btn class="ms-auto" text="Ok" @click="alert = false"></v-btn>
+      </template>
+    </v-card>
+  </v-dialog>
+</template>
+
+<script setup lang="ts">
+import { ref, onMounted } from "vue";
+import { useI18n } from "vue-i18n";
+import { useRouter, useRoute } from 'vue-router';
+import { EmailExtractionTypes } from "@/config/emailextraction";
+import { ToArray, CapitalizeFirstLetter } from "@/views/utils/function"
+import { getEmailSearchTask, updateEmailSearchTask } from "@/views/api/emailextraction"
+import { isValidUrl, convertNumberToBoolean } from "@/views/utils/function"
+import ProxyTableselected from "@/views/pages/proxy/widgets/ProxySelectedTable.vue";
+import SearchResultSelectTable from "@/views/pages/search/widgets/SearchResultSelectTable.vue";
+import { ProxyEntity, ProxyListEntity } from "@/entityTypes/proxyType";
+import { SearchtaskItem } from "@/entityTypes/searchControlType"
+import { EmailscFormdata, EmailSearchTaskDetail } from '@/entityTypes/emailextraction-type'
+
+const { t } = useI18n({ inheritLocale: true });
+const router = useRouter();
+const route = useRoute();
+
+const alert = ref(false);
+const alerttext = ref("");
+const alerttitle = ref("");
+const alerttype = ref<"success" | "error" | "warning" | "info" | undefined>("success");
+
+const form = ref<HTMLFormElement>();
+const loading = ref(false);
+const rules = {
+  required: (value) => !!value || "Field is required",
+};
+
+// Form data
+const processTimeout = ref<number>(10);
+const maxPageNumber = ref<number>(100);
+const urls = ref<string>("");
+const page_length = ref(10);
+const emailtype = ref<any>();
+const emailTypelist = ref<Array<any>>([]);
+const showinbrwoser = ref(0);
+const concurrent_quantity = ref(1);
+const proxyValue = ref<Array<ProxyEntity>>([]);
+const proxytableshow = ref(false);
+const searchtaskId = ref<number>(0);
+
+// Task data
+const taskId = ref<number>(0);
+const taskData = ref<EmailSearchTaskDetail | null>(null);
+
+const capletter = CapitalizeFirstLetter;
+
+const initialize = () => {
+  const seArr: string[] = ToArray(EmailExtractionTypes);
+  seArr.map((item, index) => {
+    emailTypelist.value?.push({ name: t('emailextraction.' + item.toLowerCase()), key: item, index: index })
+  })
+};
+
+const setAlert = (
+  text: string,
+  title: string,
+  type: "success" | "error" | "warning" | "info" | undefined
+) => {
+  loading.value = false;
+  alerttext.value = text;
+  alerttitle.value = title;
+  alerttype.value = type;
+  alert.value = true;
+  setTimeout(() => {
+    alert.value = false;
+  }, 5000);
+};
+
+const loadTaskData = async () => {
+  try {
+    loading.value = true;
+    const task = await getEmailSearchTask(taskId.value);
+    taskData.value = task;
+    
+    // Populate form with task data
+    if (task) {
+      // Set extraction type
+      const typeIndex = task.type_id === EmailExtractionTypes.SearchResult ? 1 : 0;
+      emailtype.value = emailTypelist.value.find(item => item.index === typeIndex);
+      
+      // Set URLs
+      if (task.urls && task.urls.length > 0) {
+        urls.value = task.urls.join('\n');
+      }
+      
+      // Set other fields
+      page_length.value = task.pagelength || 10;
+      concurrent_quantity.value = task.concurrency || 1;
+      maxPageNumber.value = task.maxPageNumber || 100;
+      processTimeout.value = task.processTimeout || 10;
+      showinbrwoser.value = task.notShowBrowser ? 0 : 1;
+      searchtaskId.value = task.searchResultId || 0;
+      
+      // Set proxies
+      if (task.proxies && task.proxies.length > 0) {
+        proxyValue.value = task.proxies;
+      }
+    }
+  } catch (error) {
+    console.error('Error loading task data:', error);
+    setAlert(t('emailextraction.load_task_error'), "Error", "error");
+  } finally {
+    loading.value = false;
+  }
+};
+
+const showProxytable = () => {
+  proxytableshow.value = !proxytableshow.value;
+};
+
+const handleSelectedChanged = (newValue: ProxyListEntity[]) => {
+  if (newValue && newValue.length > 0) {
+    for (let i = 0; i < newValue.length; i++) {
+      if (newValue[i] && newValue[i].id) {
+        let isexist = false;
+        for (let is = 0; is < proxyValue.value.length; is++) {
+          if (proxyValue.value[is].id == newValue[i].id) {
+            isexist = true;
+          }
+        }
+        if (!isexist) {
+          if ((newValue[i].host) && (newValue[i].port)) {
+            proxyValue.value.push({
+              id: newValue[i].id,
+              host: newValue[i].host!,
+              port: newValue[i].port!,
+              user: newValue[i].username,
+              pass: newValue[i].password,
+              protocol: newValue[i].protocol,
+            });
+          }
+        }
+      }
+    }
+  }
+};
+
+const handleSearchtaskChanged = (newValue: SearchtaskItem[] | undefined) => {
+  if (newValue && newValue.length > 0) {
+    if (newValue[0] && newValue[0].id) {
+      searchtaskId.value = newValue[0].id;
+    }
+  } else {
+    searchtaskId.value = 0;
+  }
+};
+
+async function onSubmit() {
+  if (!form.value) return;
+  const { valid } = await form.value.validate();
+  if (!valid) {
+    setAlert(t('common.fill_require_field'), "Error", "error");
+    return;
+  }
+
+  if (!emailtype.value) {
+    setAlert(t('emailextraction.choose_email_extraction_type'), "Error", "error");
+    return;
+  }
+
+  const validateurl: Array<string> = [];
+  let extratype = "";
+
+  if (emailtype.value?.index == 0) {
+    extratype = emailtype.value.key;
+    if (urls.value == "") {
+      setAlert(t('emailextraction.input_urls_empty'), "Error", "error");
+      return;
+    }
+
+    const urlarr = urls.value.split('\n').map(keyword => keyword.trim());
+    urlarr.forEach((item) => {
+      isValidUrl(item) ? validateurl.push(item) : null
+    })
+    if (validateurl.length === 0) {
+      setAlert(t('emailextraction.no_valid_urls'), "Warning", "warning");
+      return;
+    }
+  } else if (emailtype.value?.index == 1) {
+    extratype = emailtype.value.key;
+    if (searchtaskId.value == 0 || !searchtaskId.value) {
+      setAlert(t('emailextraction.choose_search_task'), "Error", "error");
+      return;
+    }
+  }
+
+  const scraperData: EmailscFormdata = {
+    extratype: extratype,
+    urls: validateurl,
+    pagelength: page_length.value,
+    concurrency: concurrent_quantity.value,
+    notShowBrowser: !convertNumberToBoolean(showinbrwoser.value),
+    proxys: proxyValue.value,
+    searchTaskId: searchtaskId.value,
+    processTimeout: processTimeout.value,
+    maxPageNumber: maxPageNumber.value
+  }
+
+  try {
+    loading.value = true;
+    await updateEmailSearchTask(taskId.value, scraperData);
+    setAlert(t('emailextraction.update_success'), "Success", "success");
+    setTimeout(() => {
+      router.push('/emailextraction/tasklist');
+    }, 1500);
+  } catch (error) {
+    console.error('Error updating task:', error);
+    setAlert(error instanceof Error ? error.message : t('emailextraction.update_error'), "Error", "error");
+  } finally {
+    loading.value = false;
+  }
+}
+
+onMounted(() => {
+  initialize();
+  
+  // Get task ID from route
+  if (route.params.id) {
+    taskId.value = parseInt(route.params.id as string);
+    loadTaskData();
+  } else {
+    setAlert(t('emailextraction.task_id_missing'), "Error", "error");
+    router.push('/emailextraction/tasklist');
+  }
+});
+</script>

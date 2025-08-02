@@ -326,4 +326,95 @@ export class EmailSearchTaskModule extends BaseModule{
         return await this.emailsearchTaskdb.getTaskById(taskId);
     }
 
+    // Get task proxies
+    public async getTaskProxies(taskId: number): Promise<ProxyEntity[]> {
+        const proxies = await this.emailsearchTaskProxydb.getEmailSearchTaskProxiesByTaskId(taskId)
+        const proxyEntities: ProxyEntity[] = []
+        for (const proxy of proxies) {
+            proxyEntities.push(proxy.proxy)
+        }
+        return proxyEntities
+    }
+
+    // Update task
+    public async updateTask(taskId: number, data: EmailsControldata): Promise<void> {
+        // Update main task data
+        const task = await this.emailsearchTaskdb.getTaskById(taskId)
+        if (task) {
+            task.search_result_id = data.searchResultId || 0
+            task.concurrency = data.concurrency || 0
+            task.page_length = data.pagelength || 0
+            task.notShowBrowser = data.notShowBrowser
+            task.type_id = data.type
+            task.processTimeout = data.processTimeout || 30
+            task.maxPageNumber = data.maxPageNumber || 0
+            await this.emailsearchTaskdb.updateTask(task)
+        }
+
+        // Update URLs - delete existing and create new ones
+        const existingUrls = await this.emailsearchUrldb.getAllUrlsByTaskId(taskId)
+        for (const url of existingUrls) {
+            if (url.id) {
+                await this.emailsearchUrldb.delete(url.id)
+            }
+        }
+        
+        if (data.validUrls && data.validUrls.length > 0) {
+            for (const url of data.validUrls) {
+                await this.emailsearchUrldb.create({
+                    task_id: taskId,
+                    url: url
+                })
+            }
+        }
+
+        // Update proxies
+        await this.emailsearchTaskProxydb.deleteEmailSearchTaskProxyByTaskId(taskId)
+        if (data.proxys && data.proxys.length > 0) {
+            for (const proxy of data.proxys) {
+                if (proxy.id) {
+                    await this.emailsearchTaskProxydb.createEmailSearchTaskProxy(taskId, proxy.id)
+                }
+            }
+        }
+    }
+
+    // Delete task
+    public async deleteTask(taskId: number): Promise<void> {
+        // Delete task results first
+        const results = await this.emailsearchresultdb.getTaskResult(taskId, 0, 1000)
+        for (const result of results) {
+            if (result.id) {
+                // Delete result details
+                const details = await this.emailsearchResultDetaildb.getItemsByResultId(result.id)
+                for (const detail of details) {
+                    if (detail.id) {
+                        await this.emailsearchResultDetaildb.delete(detail.id)
+                    }
+                }
+            }
+        }
+        
+        // Delete task results
+        for (const result of results) {
+            if (result.id) {
+                await this.emailsearchresultdb.delete(result.id)
+            }
+        }
+
+        // Delete task URLs
+        const urls = await this.emailsearchUrldb.getAllUrlsByTaskId(taskId)
+        for (const url of urls) {
+            if (url.id) {
+                await this.emailsearchUrldb.delete(url.id)
+            }
+        }
+
+        // Delete task proxies
+        await this.emailsearchTaskProxydb.deleteEmailSearchTaskProxyByTaskId(taskId)
+
+        // Delete main task
+        await this.emailsearchTaskdb.deleteTask(taskId)
+    }
+
 }

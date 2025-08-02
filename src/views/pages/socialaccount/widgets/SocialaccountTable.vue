@@ -73,6 +73,19 @@
             </template>
         </v-card>
     </v-dialog>
+
+    <!-- Clear Cookies Confirmation Modal -->
+    <v-dialog v-model="showClearCookiesModal" width="auto">
+        <v-card max-width="400" prepend-icon="mdi-cookie-remove" text="The cookies will be cleared"
+            title="Confirm to clear cookies">
+            <template v-slot:actions>
+                <v-btn class="ms-auto" text="Ok" color="secondary" @click="confirmClearCookies">
+                </v-btn>
+                <v-btn class="ms-auto" text="Cancel" @click="showClearCookiesModal = false"></v-btn>
+
+            </template>
+        </v-card>
+    </v-dialog>
     <div>
 
         <!-- Define the alert dialog component -->
@@ -174,6 +187,8 @@ const search = ref('');
 // const $route = useRoute();
 const showDeleteModal = ref(false);
 const deleteAccountid = ref(0);
+const showClearCookiesModal = ref(false);
+const clearCookiesAccountid = ref(0);
 const showDialog = ref(false);
 const confirmDialogctl = ref(false);
 
@@ -251,12 +266,26 @@ const createAccount = () => {
 }
 //login social account
 const loginAccount = (item: SocialAccountListData) => {
-    socialaccountLogin({ id: item.id,platform:item.social_type })
+    socialaccountLogin({ id: item.id })
     tmpId.value = item.id
-    tmpPlatform.value = item.social_type
+    // tmpPlatform.value = item.social_type
 }
 const clearCookies = (item) => {
-    cleanCookies({ id: item.id })
+    showClearCookiesModal.value = true;
+    clearCookiesAccountid.value = item.id;
+}
+
+const confirmClearCookies = () => {
+    showClearCookiesModal.value = false;
+    cleanCookies({ id: clearCookiesAccountid.value }).then(
+        (res) => {
+            console.log(res)
+            setAlert(t('socialaccount.clear_cookies_success'), t('socialaccount.cookies_cleared_successfully'), "success")
+            loadItems({ page: 1, itemsPerPage: itemsPerPage.value, sortBy: '' })
+        }).catch(function (error) {
+            console.error(error);
+            setAlert(t('socialaccount.clear_cookies_error'), error.message, "error")
+        })
 }
 
 const receiveLoginMsg = (channel: string) => {
@@ -288,6 +317,9 @@ const receiveLoginMsg = (channel: string) => {
                     confirmContent.value = t(json_value.data.content)
                     confirmTitle.value = t(json_value.data.title)
 
+                }else if(json_value.data.action == "saveCookiesSuccess"){
+                    setAlert(t(json_value.data.title), t(json_value.data.content), "success")
+                    loadItems({ page: options.page, itemsPerPage: itemsPerPage.value, sortBy: "" });
                 }
             }
         } else {//success
@@ -305,7 +337,7 @@ const openNextstepdialog = () => {
     if (tmpId.value > 0) {
         const requireParam: RequireCookiesMsgbox = {
             id: tmpId.value,
-            platform: tmpPlatform.value
+            // platform: tmpPlatform.value
         }
         if (gstatus.value == 1) {
 

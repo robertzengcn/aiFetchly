@@ -90,3 +90,32 @@ export interface EmailsearchtaskResultquery extends ItemSearchparam{
 //   page: number,
 //   size: number
 // }
+
+// Email Search Task Detail for editing
+export interface EmailSearchTaskDetail {
+  id: number,
+  searchResultId?: number,
+  type_id: number,
+  typeName: string,
+  concurrency: number,
+  pagelength: number,
+  notShowBrowser: boolean,
+  processTimeout: number,
+  maxPageNumber: number,
+  status: number,
+  statusName: string,
+  record_time?: string,
+  urls: string[],
+  proxies: ProxyEntity[]
+}
+
+// Email Search Task Update Request
+export interface EmailSearchTaskUpdateRequest {
+  id: number,
+  data: EmailscFormdata
+}
+
+// Email Search Task Delete Request
+export interface EmailSearchTaskDeleteRequest {
+  id: number
+}

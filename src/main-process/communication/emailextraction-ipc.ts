@@ -1,5 +1,5 @@
 import { ipcMain } from 'electron';
-import { EMAILEXTRACTIONAPI, EMAILEXTRACTIONMESSAGE,LISTEMAILSEARCHTASK,EMAILSEARCHTASKRESULT, EMAILSEARCHTASK_ERROR_LOG_DOWNLOAD } from "@/config/channellist";
+import { EMAILEXTRACTIONAPI, EMAILEXTRACTIONMESSAGE,LISTEMAILSEARCHTASK,EMAILSEARCHTASKRESULT, EMAILSEARCHTASK_ERROR_LOG_DOWNLOAD, GETEMAILSEARCHTASK, UPDATEEMAILSEARCHTASK, DELETEEMAILSEARCHTASK } from "@/config/channellist";
 import { EmailscFormdata } from '@/entityTypes/emailextraction-type'
 import { CommonDialogMsg } from "@/entityTypes/commonType";
 import { isValidUrl } from "@/views/utils/function"
@@ -148,7 +148,7 @@ export function registerEmailextractionIpcHandlers() {
             status: true,
             code: 0,
             data: {
-                action: "emailscrape.emailsearch_task _start",
+                action: "emailscrape.emailsearch_task_start",
                 title: "",
                 content: ""
             }
@@ -234,6 +234,139 @@ export function registerEmailextractionIpcHandlers() {
                 status: true,
                 msg: "",
                 data: content
+            }
+            return resp
+        } catch (error) {
+            if (error instanceof Error) {
+                const resp: CommonMessage<string> = {
+                    status: false,
+                    msg: error.message
+                }
+                return resp
+            }
+        }
+    });
+
+    // Get single email search task for editing
+    ipcMain.handle(GETEMAILSEARCHTASK, async (event, data) => {
+        try {
+            const qdata = JSON.parse(data) as CommonIdrequestType<number>
+            if (!("id" in qdata)) {
+                throw new Error("Task ID not found");
+            }
+            const emailCon = new EmailextractionController();
+            const task = await emailCon.getEmailSearchTask(qdata.id)
+            const resp: CommonMessage<any> = {
+                status: true,
+                msg: "",
+                data: task
+            }
+            return resp
+        } catch (error) {
+            if (error instanceof Error) {
+                const resp: CommonMessage<any> = {
+                    status: false,
+                    msg: error.message
+                }
+                return resp
+            }
+        }
+    });
+
+    // Update email search task
+    ipcMain.handle(UPDATEEMAILSEARCHTASK, async (event, data) => {
+        try {
+            const qdata = JSON.parse(data) as { id: number, data: EmailscFormdata }
+            if (!qdata.id) {
+                throw new Error("Task ID not found");
+            }
+            if (!qdata.data) {
+                throw new Error("Task data not found");
+            }
+
+            // Validate task status before allowing edit
+            const emailCon = new EmailextractionController();
+            const task = await emailCon.getEmailSearchTask(qdata.id)
+            if (!task) {
+                throw new Error("Task not found");
+            }
+
+            // Only allow editing pending or error tasks
+            if (task.status !== 'pending' && task.status !== 'error') {
+                throw new Error("Cannot edit task with current status");
+            }
+
+            // Validate URLs if provided
+            const validUrls: string[] = []
+            if (qdata.data.extratype === "ManualInputUrl") {
+                if (!qdata.data.urls || qdata.data.urls.length === 0) {
+                    throw new Error("URLs cannot be empty");
+                }
+                qdata.data.urls.forEach((item) => {
+                    isValidUrl(item) ? validUrls.push(item) : null
+                })
+                if (validUrls.length === 0) {
+                    throw new Error("No valid URLs provided");
+                }
+            }
+
+            const updateData: EmailsControldata = {
+                searchResultId: qdata.data.searchTaskId ? qdata.data.searchTaskId : 0,
+                validUrls: validUrls,
+                concurrency: qdata.data.concurrency,
+                pagelength: qdata.data.pagelength,
+                notShowBrowser: qdata.data.notShowBrowser,
+                proxys: qdata.data.proxys,
+                type: qdata.data.extratype === "SearchResult" ? EmailExtractionTypes.SearchResult : EmailExtractionTypes.ManualInputUrl,
+                processTimeout: Number(qdata.data.processTimeout),
+                maxPageNumber: qdata.data.maxPageNumber
+            }
+
+            await emailCon.updateEmailSearchTask(qdata.id, updateData)
+            
+            const resp: CommonMessage<string> = {
+                status: true,
+                msg: "Task updated successfully",
+                data: "Task updated successfully"
+            }
+            return resp
+        } catch (error) {
+            if (error instanceof Error) {
+                const resp: CommonMessage<string> = {
+                    status: false,
+                    msg: error.message
+                }
+                return resp
+            }
+        }
+    });
+
+    // Delete email search task
+    ipcMain.handle(DELETEEMAILSEARCHTASK, async (event, data) => {
+        try {
+            const qdata = JSON.parse(data) as CommonIdrequestType<number>
+            if (!("id" in qdata)) {
+                throw new Error("Task ID not found");
+            }
+
+            // Validate task status before allowing deletion
+            const emailCon = new EmailextractionController();
+            const task = await emailCon.getEmailSearchTask(qdata.id)
+            if (!task) {
+                throw new Error("Task not found");
+            }
+
+            // Only allow deleting pending or error tasks
+            if (task.status !== 'pending' && task.status !== 'error') {
+                throw new Error("Cannot delete task with current status");
+            }
+
+            await emailCon.deleteEmailSearchTask(qdata.id)
+            
+            const resp: CommonMessage<string> = {
+                status: true,
+                msg: "Task deleted successfully",
+                data: "Task deleted successfully"
             }
             return resp
         } catch (error) {

@@ -16,7 +16,7 @@ export type RequireCookiesParam={
 }
 export type RequireCookiesMsgbox={
     id:number;
-    platform:string;
+    // platform:string;
 }
 export type CookiesParse={
 url: string;

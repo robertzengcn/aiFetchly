@@ -10,7 +10,12 @@
       <v-icon size="small" class="me-2" v-if="item.statusName == 'Error'" @click="downloadErrorlog(item)">
         mdi-download
       </v-icon>
-
+      <v-icon size="small" class="me-2" v-if="canEdit(item)" @click="editTask(item)" color="primary">
+        mdi-pencil
+      </v-icon>
+      <v-icon size="small" class="me-2" v-if="canDelete(item)" @click="deleteTask(item)" color="error">
+        mdi-delete
+      </v-icon>
     </template>
     <template v-slot:expanded-row="{ columns, item }">
       <tr>
@@ -30,7 +35,7 @@
 
 <script setup lang="ts">
 import { useI18n } from "vue-i18n";
-import { listEmailSearchtasks, downloadErrorLog } from '@/views/api/emailextraction'
+import { listEmailSearchtasks, downloadErrorLog, deleteEmailSearchTask } from '@/views/api/emailextraction'
 //import {SearchTaskItemdisplay} from '@/entityTypes/emailextraction-type'
 import { ref, computed, onMounted, onUnmounted, reactive, watch } from 'vue'
 import { SearchResult } from '@/views/api/types'
@@ -216,6 +221,37 @@ const downloadErrorlog = async (item) => {
     } catch (error) {
         console.error('Failed to download error log:', error)
     }
+}
+
+// Check if task can be edited (only pending or error tasks)
+const canEdit = (item: EmailsearchTaskEntityDisplay): boolean => {
+  return item.statusName === 'Pending' || item.statusName === 'Error'
+}
+
+// Check if task can be deleted (only pending or error tasks)
+const canDelete = (item: EmailsearchTaskEntityDisplay): boolean => {
+  return item.statusName === 'Pending' || item.statusName === 'Error'
+}
+
+// Edit task
+const editTask = (item: EmailsearchTaskEntityDisplay) => {
+  router.push({
+    name: 'Email_Extraction_Edit', params: { id: item.id }
+  });
+}
+
+// Delete task
+const deleteTask = async (item: EmailsearchTaskEntityDisplay) => {
+  if (confirm(t('emailextraction.confirm_delete'))) {
+    try {
+      await deleteEmailSearchTask(item.id)
+      // Refresh the table after deletion
+      loadItems({ page: options.page, itemsPerPage: options.itemsPerPage, sortBy: "" })
+    } catch (error) {
+      console.error('Failed to delete task:', error)
+      alert(t('emailextraction.delete_error'))
+    }
+  }
 }
 const emit = defineEmits(['change'])
 
