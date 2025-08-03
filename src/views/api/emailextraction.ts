@@ -96,10 +96,11 @@ export async function getEmailSearchTask(taskId: number): Promise<any> {
     try {
         const querydata = { id: taskId }
         const resp = await windowInvoke(GETEMAILSEARCHTASK, querydata)
-        if (!resp || !resp.status) {
+        if (!resp) {
             throw new Error(resp?.msg || "Failed to get task")
         }
-        return resp.data
+        console.log("resp", resp)
+        return resp
     } catch (error) {
         console.error('Error getting task:', error)
         throw error

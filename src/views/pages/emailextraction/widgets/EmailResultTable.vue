@@ -132,7 +132,7 @@ headers.value = [
     title: 'Actions',
     key: 'actions',
     sortable: false,
-    width: '10%'
+    width: '15%'
   },
   { title: '', key: 'data-table-expand', sortable: false },
 ];
@@ -223,9 +223,10 @@ const downloadErrorlog = async (item) => {
     }
 }
 
-// Check if task can be edited (only pending or error tasks)
+// always allow edit
 const canEdit = (item: EmailsearchTaskEntityDisplay): boolean => {
-  return item.statusName === 'Pending' || item.statusName === 'Error'
+  // return item.statusName === 'Pending' || item.statusName === 'Error'
+  return true
 }
 
 // Check if task can be deleted (only pending or error tasks)
@@ -235,6 +236,7 @@ const canDelete = (item: EmailsearchTaskEntityDisplay): boolean => {
 
 // Edit task
 const editTask = (item: EmailsearchTaskEntityDisplay) => {
+  console.log("edit task", item)
   router.push({
     name: 'Email_Extraction_Edit', params: { id: item.id }
   });

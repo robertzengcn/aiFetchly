@@ -14,7 +14,7 @@ import {EXTRAMODULECHANNE_LIST,EXTRAMODULECHANNE_INSTALL,EXTRAMODULECHANNE_UNINS
   // Scheduler Management Channels
   SCHEDULER_STATUS,SCHEDULER_START,SCHEDULER_STOP,SCHEDULER_RELOAD,
   // Utility Channels
-  CRON_VALIDATE,CRON_NEXT_RUN_TIME,GET_LOGIN_URL,USER_CHECK_LOGIN,GET_APP_INFO} from "@/config/channellist";
+  CRON_VALIDATE,CRON_NEXT_RUN_TIME,GET_LOGIN_URL,USER_CHECK_LOGIN,GET_APP_INFO,GETEMAILSEARCHTASK} from "@/config/channellist";
 
 // window.ipcRenderer = ipcRenderer
 // console.log('preload.js')
@@ -56,7 +56,7 @@ contextBridge.exposeInMainWorld('api', {
         // Scheduler Management Channels
         SCHEDULER_STATUS,SCHEDULER_START,SCHEDULER_STOP,SCHEDULER_RELOAD,
         // Utility Channels
-        CRON_VALIDATE,CRON_NEXT_RUN_TIME,GET_LOGIN_URL,GET_APP_INFO]
+        CRON_VALIDATE,CRON_NEXT_RUN_TIME,GET_LOGIN_URL,GET_APP_INFO,GETEMAILSEARCHTASK]
       if (validChannels.includes(channel)) {
         return ipcRenderer.invoke(channel, data)
       }

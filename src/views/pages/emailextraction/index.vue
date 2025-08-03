@@ -1,5 +1,6 @@
 <template>
   <v-sheet class="mx-auto" rounded>
+    <h2 class="text-h4 mb-4">{{ pageTitle }}</h2>
     <v-form ref="form" @submit.prevent="onSubmit">
     
       
@@ -12,7 +13,7 @@
        <v-textarea class="mt-3" v-model="urls" :label="t('emailextraction.input_urls_hint')" v-if="emailtype?.index==0"></v-textarea> 
        
        <div v-if="emailtype?.index==1" class="mt-3">
-        <SearchResultSelectTable @change="handleSearchtaskChanged" />
+        <SearchResultSelectTable @change="handleSearchtaskChanged" :selectedValue="searchtaskId" />
       </div>
 
 
@@ -53,7 +54,7 @@
 
       <div class="d-flex justify-space-between mt-4 mb-4">
         <v-btn color="success" type="submit" :loading="loading" class="flex-grow-1 mr-2">
-          {{ props.editMode ? t('common.save') : t('common.submit') }}
+          {{ isEditMode ? t('common.save') : t('common.submit') }}
         </v-btn>
 
         <v-btn color="error" @click="router.go(-1)" class="flex-grow-1 ml-2">
@@ -83,7 +84,7 @@
 </template>
 <script setup lang="ts">
 
-import { ref, onMounted } from "vue";
+import { ref, onMounted, computed } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRouter, useRoute } from 'vue-router';
 import {EmailExtractionTypes} from "@/config/emailextraction";
@@ -100,7 +101,7 @@ import {EmailscFormdata, EmailSearchTaskDetail} from '@/entityTypes/emailextract
 import {EMAILEXTRACTIONMESSAGE} from "@/config/channellist"
 import { CommonDialogMsg } from "@/entityTypes/commonType"
 
-// Props for edit mode
+// Props for edit mode (for backward compatibility)
 const props = defineProps({
   editMode: {
     type: Boolean,
@@ -110,6 +111,23 @@ const props = defineProps({
     type: Number,
     default: 0
   }
+});
+
+// Detect edit mode from route
+const isEditMode = computed(() => {
+  return route.name === 'Email_Extraction_Edit' || props.editMode;
+});
+
+const currentTaskId = computed(() => {
+  if (route.params.id) {
+    return parseInt(route.params.id as string);
+  }
+  return props.taskId;
+});
+
+// Dynamic page title
+const pageTitle = computed(() => {
+  return isEditMode.value ? t('emailextraction.edit_task') : t('emailextraction.create_task');
 });
 
 const { t } = useI18n({ inheritLocale: true });
@@ -178,11 +196,12 @@ const setAlert = (
 
 // Load task data for edit mode
 const loadTaskData = async () => {
-  if (!props.editMode || !props.taskId) return;
+  if (!isEditMode.value || !currentTaskId.value) return;
   
   try {
     loading.value = true;
-    const task = await getEmailSearchTask(props.taskId);
+    const task = await getEmailSearchTask(currentTaskId.value);
+    console.log("task", task)
     taskData.value = task;
     
     // Populate form with task data
@@ -219,7 +238,7 @@ const loadTaskData = async () => {
 
 onMounted(() => {
   initialize();
-  if (props.editMode) {
+  if (isEditMode.value) {
     loadTaskData();
   } else {
     receiveMsg();
@@ -356,11 +375,11 @@ async function onSubmit() {
    }
    console.log(scraperData)
    
-   if (props.editMode) {
+   if (isEditMode.value) {
      // Edit mode - update existing task
      try {
        loading.value = true;
-       await updateEmailSearchTask(props.taskId, scraperData);
+       await updateEmailSearchTask(currentTaskId.value, scraperData);
        setAlert(t('emailextraction.update_success'), "Success", "success");
        setTimeout(() => {
          router.push('/emailextraction/tasklist');

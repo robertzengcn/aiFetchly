@@ -389,6 +389,16 @@ export const constantRoutes: RouteRecordRaw[] = [
         }
       },
       {
+        path: 'edit/:id(\\d+)',
+        component: () => import(/* webpackChunkName: "staff-list" */ '@/views/pages/emailextraction/index.vue'),
+        name: 'Email_Extraction_Edit',
+        meta: {
+          visible: false,
+          title: 'Edit Email Extraction Task',
+          icon: 'edit'
+        }
+      },
+      {
         path: 'tasklist',
         component: () => import(/* webpackChunkName: "staff-list" */ '@/views/pages/emailextraction/resultlist.vue'),
         name: 'Email_Extraction_list',
@@ -406,16 +416,6 @@ export const constantRoutes: RouteRecordRaw[] = [
           visible: false,
           title: 'Email Extraction Detail',
           icon: 'list'
-        }
-      },
-      {
-        path: 'edit/:id(\\d+)',
-        component: () => import(/* webpackChunkName: "staff-list" */ '@/views/pages/emailextraction/edit.vue'),
-        name: 'Email_Extraction_Edit',
-        meta: {
-          visible: false,
-          title: 'Edit Email Extraction Task',
-          icon: 'edit'
         }
       }
     ]

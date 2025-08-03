@@ -22,7 +22,7 @@ import {USERLOGPATH,USEREMAIL} from '@/config/usersetting';
 import {getApplogspath,getRandomValues} from "@/modules/lib/function"
 import { v4 as uuidv4 } from 'uuid';
 import {SortBy} from "@/entityTypes/commonType";
-import { SystemSettingGroupModule } from '@/modules/SystemSettingGroupModule';
+//import { SystemSettingGroupModule } from '@/modules/SystemSettingGroupModule';
 // import {twocaptchagroup,twocaptchatoken,twocaptcha_enabled,chrome_path,firefox_path,external_system} from '@/config/settinggroupInit'
 // import { AccountCookiesModule } from "@/modules/accountCookiesModule"
 // import {CookiesType} from "@/entityTypes/cookiesType"

@@ -45,7 +45,7 @@ The email extraction edit functionality allows users to modify existing email ex
 ### Frontend Components
 
 #### Form Components
-- `src/views/pages/emailextraction/edit.vue`: Edit form component
+- `src/views/pages/emailextraction/index.vue`: Unified form component (handles both create and edit)
 - `src/views/pages/emailextraction/index.vue`: Enhanced create form
 - `src/views/components/widgets/confirmDialog.vue`: Confirmation dialogs
 

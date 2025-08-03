@@ -77,7 +77,7 @@ This document outlines the implementation plan for adding edit functionality to 
 ### 3. Frontend Components
 
 #### 3.1 Create Edit Form Component
-**File**: `src/views/pages/emailextraction/edit.vue`
+**File**: `src/views/pages/emailextraction/index.vue` (unified component)
 - [x] Create new edit form component based on existing form
 - [x] Add form validation for edit mode
 - [x] Add loading states and error handling

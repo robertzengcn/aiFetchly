@@ -281,6 +281,12 @@ export default {
         process_timeout:"process timeout minutes",
         failed:"Email extraction failed",
         searchResult_empty:"No search results found for email extraction",
+        create_task:"Create Email Extraction Task",
+        edit_task:"Edit Email Extraction Task",
+        update_success:"Task updated successfully",
+        update_error:"Failed to update task",
+        load_task_error:"Failed to load task data",
+        no_valid_urls:"No valid URLs found",
     },
     emailscrape:{
         failed:"Email scrape failed",

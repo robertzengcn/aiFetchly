@@ -11,11 +11,20 @@
 <script setup lang="ts">
 import {useI18n} from "vue-i18n";
 import { listSearchresult} from '@/views/api/search'
-import { ref,computed,watch,reactive } from 'vue'
+import { ref,computed,watch,reactive, onMounted } from 'vue'
 import { SearchResult } from '@/views/api/types'
 // import router from '@/views/router';
 import {SearchtaskItem } from "@/entityTypes/searchControlType"
 import {CapitalizeFirstLetter} from "@/views/utils/function"
+
+// Props for selected value
+const props = defineProps({
+  selectedValue: {
+    type: Number,
+    default: 0
+  }
+});
+
 const {t} = useI18n({inheritLocale: true});
 
 
@@ -102,6 +111,14 @@ function loadItems({ page=1, itemsPerPage=10, sortBy }) {
             serverItems.value = data
             totalItems.value = total
             loading.value = false
+            
+            // Set selected value if provided and item exists in current page
+            if (props.selectedValue && props.selectedValue > 0) {
+                const selectedItem = data.find(item => item.id === props.selectedValue);
+                if (selectedItem) {
+                    selected.value = selectedItem;
+                }
+            }
         }).catch(function (error) {
             console.error(error);
         })
@@ -109,6 +126,15 @@ function loadItems({ page=1, itemsPerPage=10, sortBy }) {
 
 
 const emit = defineEmits(['change'])
+
+// Handle initial selection when component mounts
+onMounted(() => {
+  if (props.selectedValue && props.selectedValue > 0) {
+    // Load items to find the selected one
+    loadItems({ page: 1, itemsPerPage: 10, sortBy: undefined });
+  }
+});
+
 watch(selected, (newValue:SearchtaskItem|undefined, oldValue:SearchtaskItem|undefined) => {
   console.log(`selectedtask changed from ${oldValue} to ${newValue}`);
   console.log(newValue)
