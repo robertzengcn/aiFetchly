@@ -12,15 +12,7 @@ import {EmailTemplateTaskRelationEntity} from "@/entity/EmailTemplateTaskRelatio
 import {EmailFilterTaskRelationEntity} from "@/entity/EmailFilterTaskRelation.entity"
 import {EmailServiceEntity} from "@/entity/EmailService.entity"
 import {EmailServiceTaskRelationEntity} from "@/entity/EmailServiceTaskRelation.entity"
-import {VideoCaptionEntity} from "@/entity/VideoCaption.entity"
-import {VideoDescriptionEntity} from "@/entity/VideoDescription.entity"
-import {VideoDownloadEntity} from "@/entity/VideoDownload.entity"
-import {VideoDownloadTaskEntity} from "@/entity/VideoDownloadTask.entity"
-import {VideoDownloadTaskAccountsEntity} from "@/entity/VideoDownloadTaskAccounts.entity"
-import {VideoDownloadTaskDetailEntity} from "@/entity/VideoDownloadTaskDetail.entity"
-import {VideoDownloadTaskProxyEntity} from "@/entity/VideoDownloadTaskProxy.entity"
-import {VideoDownloadTaskUrlsEntity} from "@/entity/VideoDownloadTaskUrls.entity"
-import {VideoDownloadTagEntity} from "@/entity/VideoDownloadTag.entity"
+// import {VideoDownloadTagEntity} from "@/entity/VideoDownloadTag.entity"
 import {EmailMarketingSendLogEntity} from "@/entity/EmailMarketingSendLog.entity"
 import {EmailMarketingTaskEntity} from "@/entity/EmailMarketingTask.entity"
 import {EmailMarketingTaskDetailEntity} from "@/entity/EmailMarketingTaskDetail.entity"
@@ -36,11 +28,11 @@ import {ProxyEntity} from "@/entity/Proxy.entity"
 import {SearchKeywordEntity} from "@/entity/SearchKeyword.entity"
 import {SearchResultEntity} from "@/entity/SearchResult.entity"
 import {TaskRunEntity} from "@/entity/TaskRun.entity"
-import {VideoDownloadTaskKeywordEntity} from "@/entity/VideoDownloadTaskKeyword.entity"
+// import {VideoDownloadTaskKeywordEntity} from "@/entity/VideoDownloadTaskKeyword.entity"
 import { SearchTaskEntity } from "@/entity/SearchTask.entity";
 import { SearchTaskProxyEntity } from "@/entity/SearchTaskProxy.entity";
 import {SearchAccountEntity} from "@/entity/SearchAccount.entity"
-import {VideoPublishRecordEntity} from "@/entity/VideoPublishRecord.entity"
+//import {VideoPublishRecordEntity} from "@/entity/VideoPublishRecord.entity"
 import { ScheduleTaskEntity } from "@/entity/ScheduleTask.entity";
 import { ScheduleExecutionLogEntity } from "@/entity/ScheduleExecutionLog.entity";
 import { ScheduleDependencyEntity } from "@/entity/ScheduleDependency.entity";
@@ -79,19 +71,19 @@ export class SqliteDb {
                 SystemSettingGroupEntity,
                 SystemSettingEntity,
                 SystemSettingOptionEntity,
-                VideoCaptionEntity,
-                VideoDescriptionEntity,
-                VideoDownloadEntity,
-                VideoDownloadTaskEntity,
-                VideoDownloadTaskAccountsEntity,
-                VideoDownloadTaskDetailEntity,
-                VideoDownloadTaskProxyEntity,
-                VideoDownloadTaskUrlsEntity,
-                VideoDownloadTagEntity,
-                VideoDownloadTaskKeywordEntity,
+                // VideoCaptionEntity,
+                // VideoDescriptionEntity,
+                // VideoDownloadEntity,
+                // VideoDownloadTaskEntity,
+                // VideoDownloadTaskAccountsEntity,
+                // VideoDownloadTaskDetailEntity,
+                // VideoDownloadTaskProxyEntity,
+                // VideoDownloadTaskUrlsEntity,
+                // VideoDownloadTagEntity,
+                // VideoDownloadTaskKeywordEntity,
                 SearchTaskProxyEntity,
                 SearchAccountEntity,
-                VideoPublishRecordEntity,
+               // VideoPublishRecordEntity,
                 ScheduleTaskEntity,
                 ScheduleExecutionLogEntity,
                 ScheduleDependencyEntity,

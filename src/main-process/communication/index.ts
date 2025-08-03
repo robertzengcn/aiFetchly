@@ -1,7 +1,6 @@
 // export { default as SyncMsg } from "./sync-msg";
 // export { default as AsyncMsg } from "./async-msg";
 import {registerExtraModulesIpcHandlers} from "@/main-process/communication/extramodule-ipc";
-import {registerVideoIpcHandlers} from "@/main-process/communication/videoIpc";
 import {registerScheduleIpcHandlers} from "@/main-process/communication/scheduleIpc";
 import SyncMsg from "@/main-process/communication/sync-msg";
 import AsyncMsg from "@/main-process/communication/async-msg"
@@ -19,7 +18,6 @@ export function registerCommunicationIpcHandlers(win: BrowserWindow) {
     try{
     SyncMsg(win)
     registerExtraModulesIpcHandlers()
-    registerVideoIpcHandlers()
     registerScheduleIpcHandlers()
     registerSearchIpcHandlers()
     registeProxyIpcHandlers()

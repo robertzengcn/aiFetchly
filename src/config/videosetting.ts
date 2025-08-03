@@ -2,8 +2,8 @@
 export {};
 //import {LanguageItem} from '@/entityTypes/commonType'
 import {LanguageCode} from '@/entityTypes/commonType'
-import {Vpformconfig} from '@/entityTypes/videoType'
-import {PublishPlatform} from '@/entityTypes/videoPublishType'
+//import {Vpformconfig} from '@/entityTypes/videoType'
+//import {PublishPlatform} from '@/entityTypes/videoPublishType'
 
 export enum VideoPublishCategory {
     SOCIAL_MEDIA = 'social_media',
@@ -79,24 +79,24 @@ export const BaiduCategories = [
     '生活'
 ]
 
-export const VideoPublishPlatformConfig:Vpformconfig[]=[
-    {
-        name:PublishPlatform.YOUTUBE,
-        language:LanguageCode.EN,
-        //category: VideoPublishCategory.VIDEO_PLATFORM,
-        videoCategories: YouTubeCategories
-    },
-    {
-        name:PublishPlatform.BILIBILI,
-        language:LanguageCode.ZH,
-        //category: VideoPublishCategory.VIDEO_PLATFORM,
-        videoCategories: BilibiliCategories
-    },
-    {
-        name:PublishPlatform.BAIDU,
-        language:LanguageCode.ZH,
-        //category: VideoPublishCategory.SEARCH_ENGINE,
-        videoCategories: BaiduCategories
-    }
-]
+// export const VideoPublishPlatformConfig:Vpformconfig[]=[
+//     {
+//         name:PublishPlatform.YOUTUBE,
+//         language:LanguageCode.EN,
+//         //category: VideoPublishCategory.VIDEO_PLATFORM,
+//         videoCategories: YouTubeCategories
+//     },
+//     {
+//         name:PublishPlatform.BILIBILI,
+//         language:LanguageCode.ZH,
+//         //category: VideoPublishCategory.VIDEO_PLATFORM,
+//         videoCategories: BilibiliCategories
+//     },
+//     {
+//         name:PublishPlatform.BAIDU,
+//         language:LanguageCode.ZH,
+//         //category: VideoPublishCategory.SEARCH_ENGINE,
+//         videoCategories: BaiduCategories
+//     }
+// ]
 

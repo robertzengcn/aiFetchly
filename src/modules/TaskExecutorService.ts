@@ -10,7 +10,7 @@ import { SearchModule } from "@/modules/searchModule";
 import {SearchTaskModule} from "@/modules/SearchTaskModule"
 import {EmailMarketingTaskModule} from "@/modules/EmailMarketingTaskModule"
 import {BuckEmailTaskModule} from "@/modules/buckEmailTaskModule"
-import {VideoDownloadTaskModule} from "@/modules/VideoDownloadTaskModule"
+//import {VideoDownloadTaskModule} from "@/modules/VideoDownloadTaskModule"
 import { EmailSearchTaskModule } from "./EmailSearchTaskModule";
 //import {getStatusName} from "@/modules/lib/function"
 // export enum TaskStatus {
@@ -25,7 +25,7 @@ export class TaskExecutorService {
     private searchTaskModel: SearchTaskModule;
     //private emailMarketingTaskModel: EmailMarketingTaskModule;
     private buckEmailTaskModel: BuckEmailTaskModule;    
-    private videoDownloadTaskModel: VideoDownloadTaskModule;
+    //private videoDownloadTaskModel: VideoDownloadTaskModule;
     private searchModel: SearchModule;
     private emailSeachTaskModule:EmailSearchTaskModule
     //private socialTaskModel: SocialTaskModel;
@@ -35,7 +35,7 @@ export class TaskExecutorService {
         this.searchTaskModel = new SearchTaskModule();
         //this.emailMarketingTaskModel = new EmailMarketingTaskModule();
         this.buckEmailTaskModel = new BuckEmailTaskModule();
-        this.videoDownloadTaskModel = new VideoDownloadTaskModule();
+        //this.videoDownloadTaskModel = new VideoDownloadTaskModule();
         this.searchModel = new SearchModule();
         this.emailSeachTaskModule=new EmailSearchTaskModule()
 
@@ -64,9 +64,9 @@ export class TaskExecutorService {
                 case TaskType.BUCK_EMAIL:
                     taskOutputId = await this.executeBuckEmailTask(schedule.task_id);
                     break;
-                case TaskType.VIDEO_DOWNLOAD:
-                    taskOutputId = await this.executeVideoDownloadTask(schedule.task_id);
-                    break;
+                // case TaskType.VIDEO_DOWNLOAD:
+                //     taskOutputId = await this.executeVideoDownloadTask(schedule.task_id);
+                //     break;
                 // case TaskType.SOCIAL_TASK:
                 //     taskOutputId = await this.executeSocialTask(schedule.task_id);
                 //     break;
@@ -199,7 +199,7 @@ export class TaskExecutorService {
      * @param taskId The video download task ID
      * @returns The task output ID
      */
-    async executeVideoDownloadTask(taskId: number): Promise<number> {
+    /*async executeVideoDownloadTask(taskId: number): Promise<number> {
         try {
             console.log(`Executing video download task ${taskId}`);
 
@@ -279,10 +279,10 @@ export class TaskExecutorService {
                     const buckEmailTask = await this.buckEmailTaskModel.read(taskId);
                     status = buckEmailTask?.status || undefined;
                     break;
-                case TaskType.VIDEO_DOWNLOAD:
-                    const videoTask = await this.videoDownloadTaskModel.getVideoDownloadTask(taskId);
-                    status = videoTask?.status || undefined;
-                    break;
+                // case TaskType.VIDEO_DOWNLOAD:
+                //     const videoTask = await this.videoDownloadTaskModel.getVideoDownloadTask(taskId);
+                //     status = videoTask?.status || undefined;
+                //     break;
                 // case TaskType.SOCIAL_TASK:
                 //     const socialTask = await this.socialTaskModel.getTaskById(taskId);
                 //     status = socialTask?.status || 'unknown';
@@ -349,14 +349,14 @@ export class TaskExecutorService {
                         await this.buckEmailTaskModel.updateTaskStatus(taskId, buckEmailTask.status);
                     }
                     break;
-                case TaskType.VIDEO_DOWNLOAD:
-                    // Update video download task status
-                    const videoTask = await this.videoDownloadTaskModel.getVideoDownloadTask(taskId);
-                    if (videoTask) {
-                        videoTask.status = TaskStatus.Cancel;
-                        await this.videoDownloadTaskModel.updateVideoDownloadTaskStatus(taskId, videoTask.status);
-                    }
-                    break;
+                // case TaskType.VIDEO_DOWNLOAD:
+                //     // Update video download task status
+                //     const videoTask = await this.videoDownloadTaskModel.getVideoDownloadTask(taskId);
+                //     if (videoTask) {
+                //         videoTask.status = TaskStatus.Cancel;
+                //         await this.videoDownloadTaskModel.updateVideoDownloadTaskStatus(taskId, videoTask.status);
+                //     }
+                //     break;
                 //case TaskType.SOCIAL_TASK:
                     // Update social task status
                     // const socialTask = await this.socialTaskModel.getTaskById(taskId);
@@ -463,10 +463,10 @@ export class TaskExecutorService {
                     const buckEmailTask = await this.buckEmailTaskModel.read(taskId);
                     taskExists = !!buckEmailTask;
                     break;
-                case TaskType.VIDEO_DOWNLOAD:
-                    const videoTask = await this.videoDownloadTaskModel.getVideoDownloadTask(taskId);
-                    taskExists = !!videoTask;
-                    break;
+                // case TaskType.VIDEO_DOWNLOAD:
+                //     const videoTask = await this.videoDownloadTaskModel.getVideoDownloadTask(taskId);
+                //     taskExists = !!videoTask;
+                //     break;
                 // case TaskType.SOCIAL_TASK:
                 //     const socialTask = await this.socialTaskModel.getTaskById(taskId);
                 //     taskExists = !!socialTask;

@@ -304,90 +304,28 @@ export const constantRoutes: RouteRecordRaw[] = [
       }
     ]
   },
-  {
-    path: '/extramodules',
-    name: 'Modules',
-    meta: {
-      visible: true,
-      title: 'Modules',
-      icon: 'mdi-paw-off'
-    },
-    component: Layout, 
-    children: [
-      {
-        path: 'list',
-        component: () => import(/* webpackChunkName: "staff-list" */ '@/views/pages/extramodules/extramoduleslist.vue'),
-        name: 'Moduleslist',
-        meta: {
-          visible: true,
-          title: 'Modules List',
-          icon: 'list'
-        }
-      }
-    ]
-  },
-  {
-    path: '/video',
-    name: 'Video',
-    meta: {
-      visible: true,
-      title: 'Video',
-      icon: 'mdi-paw-off'
-    },
-    component: Layout, 
-    children: [
-      {
-        path: 'download',
-        component: () => import(/* webpackChunkName: "staff-list" */ '@/views/pages/videodownload/index.vue'),
-        name: 'Videodownload',
-        meta: {
-          visible: true,
-          title: 'Video Download',
-          icon: 'list'
-        }
-      },
-      {
-        path: 'dowloadtasklist',
-        component: () => import(/* webpackChunkName: "staff-list" */ '@/views/pages/videodownload/list.vue'),
-        name: 'VideodownloadTasklist',
-        meta: {
-          visible: true,
-          title: 'Video Download Task List',
-          icon: 'list'
-        }
-      },
-      {
-        path: 'videolist/:taskid(\\d+)',
-        component: () => import(/* webpackChunkName: "staff-list" */ '@/views/pages/videodownload/videoList.vue'),
-        name: 'VideoList',
-        meta: {
-          visible: false,
-          title: 'Video List',
-          icon: 'list'
-        }
-      },
-      {
-        path: 'videodetail/:id(\\d+)',
-        component: () => import(/* webpackChunkName: "staff-list" */ '@/views/pages/videodownload/detail.vue'),
-        name: 'VideoDetail',
-        meta: {
-          visible: false,
-          title: 'Video Detail',
-          icon: 'list'
-        }
-      },
-      {
-        path: 'publish',
-        component: () => import(/* webpackChunkName: "staff-list" */ '@/views/pages/videopublish/list.vue'),
-        name: 'VideoPublishList',
-        meta: {
-          visible: true,
-          title: 'Video Publish Records',
-          icon: 'list'
-        }
-      }
-    ]
-  },
+  // {
+  //   path: '/extramodules',
+  //   name: 'Modules',
+  //   meta: {
+  //     visible: true,
+  //     title: 'Modules',
+  //     icon: 'mdi-paw-off'
+  //   },
+  //   component: Layout, 
+  //   children: [
+  //     {
+  //       path: 'list',
+  //       component: () => import(/* webpackChunkName: "staff-list" */ '@/views/pages/extramodules/extramoduleslist.vue'),
+  //       name: 'Moduleslist',
+  //       meta: {
+  //         visible: true,
+  //         title: 'Modules List',
+  //         icon: 'list'
+  //       }
+  //     }
+  //   ]
+  // },
   {
     path: '/search',
     name: 'Search',

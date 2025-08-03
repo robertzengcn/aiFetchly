@@ -31,13 +31,6 @@ const cardRouter=(link:string|undefined)=>{
   }
 }
 const homeCardlist: homecardEntity[] = [
-  {
-        title: t('home.video_download_title'),
-        subtitle: t('home.video_download_subtitle'),
-        prependIcon: 'mdi-account',
-        description: t('home.video_download_description'),
-        link: '/video/download'
-    },
     {
         title: t('home.search'),
         subtitle: t('home.search_scraper'),
