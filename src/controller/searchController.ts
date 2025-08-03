@@ -362,5 +362,71 @@ export class SearchController {
         await this.runSearchTask(taskId)
     }
 
+    /**
+     * Update search task with new parameters
+     * @param taskId The task ID to update
+     * @param updates The updated task parameters
+     * @returns True if update was successful
+     */
+    public async updateSearchTask(taskId: number, updates: {
+        engine?: string;
+        keywords?: string[];
+        num_pages?: number;
+        concurrency?: number;
+        notShowBrowser?: boolean;
+        localBrowser?: string;
+        proxys?: Array<{host: string, port: number, user?: string, pass?: string}>;
+        accounts?: number[];
+    }): Promise<boolean> {
+        // Validate task existence and editability
+        const taskEntity = await this.searchModel.getTaskEntityById(taskId);
+        if (!taskEntity) {
+            throw new Error("Task not found");
+        }
+
+        // Check if task is editable
+        const isEditable = await this.searchModel.isTaskEditable(taskId);
+        if (!isEditable) {
+            throw new Error("Task cannot be edited. Only tasks with status 'NotStart' or 'Error' can be modified.");
+        }
+
+        // Validate input parameters
+        if (updates.keywords && updates.keywords.length === 0) {
+            throw new Error("At least one keyword is required");
+        }
+
+        if (updates.num_pages !== undefined && (updates.num_pages < 1 || updates.num_pages > 100)) {
+            throw new Error("Number of pages must be between 1 and 100");
+        }
+
+        if (updates.concurrency !== undefined && (updates.concurrency < 1 || updates.concurrency > 10)) {
+            throw new Error("Concurrency must be between 1 and 10");
+        }
+
+        // Perform the update
+        return await this.searchModel.updateSearchTask(taskId, updates);
+    }
+
+    /**
+     * Get task details for editing
+     * @param taskId The task ID
+     * @returns Task details suitable for editing
+     */
+    public async getTaskDetailsForEdit(taskId: number): Promise<any> {
+        // Validate task existence
+        const taskEntity = await this.searchModel.getTaskEntityById(taskId);
+        if (!taskEntity) {
+            throw new Error("Task not found");
+        }
+
+        // Check if task is editable
+        const isEditable = await this.searchModel.isTaskEditable(taskId);
+        if (!isEditable) {
+            throw new Error("Task cannot be edited. Only tasks with status 'NotStart' or 'Error' can be modified.");
+        }
+
+        return await this.searchModel.getTaskDetailsForEdit(taskId);
+    }
+
 
 }

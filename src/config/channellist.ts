@@ -108,6 +108,11 @@ export const SYSTEM_MESSAGE='system:message'
 export const RETRYSEARCHTASK='search:retry_task'
 export const CHOOSEFILEDIALOG='choose:file:dialog'
 
+// Search Task Edit Channels
+export const GET_SEARCH_TASK_DETAILS='search:task:get_details'
+export const UPDATE_SEARCH_TASK='search:task:update'
+export const SEARCH_TASK_UPDATE_EVENT='search:task:update:event'
+
 // Schedule Management Channels
 export const SCHEDULE_CREATE = 'schedule:create'
 export const SCHEDULE_UPDATE = 'schedule:update'

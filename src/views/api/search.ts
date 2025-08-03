@@ -3,7 +3,7 @@ import { SEARCHSCRAPERAPI } from '@/config/channellist'
 import { SearchtaskItem,SearchResultFetchparam } from "@/entityTypes/searchControlType"
 import { SearchResult} from '@/views/api/types'
 import { windowInvoke,windowReceive,windowSend } from '@/views/utils/apirequest'
-import {LISTSESARCHRESUT,TASKSEARCHRESULTLIST,SAVESEARCHERRORLOG,RETRYSEARCHTASK} from "@/config/channellist";
+import {LISTSESARCHRESUT,TASKSEARCHRESULTLIST,SAVESEARCHERRORLOG,RETRYSEARCHTASK,GET_SEARCH_TASK_DETAILS,UPDATE_SEARCH_TASK,SEARCH_TASK_UPDATE_EVENT} from "@/config/channellist";
 import {SearchResEntityDisplay} from "@/entityTypes/scrapeType"
 import {ItemSearchparam} from "@/entityTypes/commonType"
 //import {CommonDialogMsg} from "@/entityTypes/commonType";
@@ -56,5 +56,37 @@ export async function retrySearchTask(id: number) {
     // return res;
 }
 
+/**
+ * Get search task details for editing
+ * @param taskId The task ID
+ * @returns Task details
+ */
+export async function getSearchTaskDetails(taskId: number): Promise<any> {
+    const resp = await windowInvoke(GET_SEARCH_TASK_DETAILS, { id: taskId });
+    if (!resp) {
+        throw new Error("Unknown error");
+    }
+    return resp;
+}
 
+/**
+ * Update search task
+ * @param taskId The task ID
+ * @param updates The update data
+ * @returns Update result
+ */
+export async function updateSearchTask(taskId: number, updates: any): Promise<any> {
+    const resp = await windowInvoke(UPDATE_SEARCH_TASK, { id: taskId, updates: updates });
+    if (!resp) {
+        throw new Error("Unknown error");
+    }
+    return resp;
+}
 
+/**
+ * Listen for search task update events
+ * @param callback The callback function to handle events
+ */
+export function receiveSearchTaskUpdateEvent(callback: (data: any) => void) {
+    windowReceive(SEARCH_TASK_UPDATE_EVENT, callback);
+}

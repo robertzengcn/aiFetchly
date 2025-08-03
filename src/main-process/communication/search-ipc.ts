@@ -1,5 +1,5 @@
 import { ipcMain, dialog, app } from 'electron';
-import { SEARCHSCRAPERAPI, LISTSESARCHRESUT, SEARCHEVENT, TASKSEARCHRESULTLIST, SAVESEARCHERRORLOG, RETRYSEARCHTASK,SYSTEM_MESSAGE } from '@/config/channellist'
+import { SEARCHSCRAPERAPI, LISTSESARCHRESUT, SEARCHEVENT, TASKSEARCHRESULTLIST, SAVESEARCHERRORLOG, RETRYSEARCHTASK, SYSTEM_MESSAGE, GET_SEARCH_TASK_DETAILS, UPDATE_SEARCH_TASK, SEARCH_TASK_UPDATE_EVENT } from '@/config/channellist'
 import { CommonDialogMsg } from "@/entityTypes/commonType";
 import { Usersearchdata, SearchtaskItem, SearchResultFetchparam } from "@/entityTypes/searchControlType"
 import { SearchController } from "@/controller/searchController"
@@ -175,6 +175,92 @@ export function registerSearchIpcHandlers() {
                 msg: error instanceof Error ? error.message : "Unknown error occurred",
             }
             event.sender.send(SYSTEM_MESSAGE, JSON.stringify(resp))
+            return resp;
+        }
+    });
+
+    // Get search task details for editing
+    ipcMain.handle(GET_SEARCH_TASK_DETAILS, async (event, data) => {
+        const qdata = JSON.parse(data) as { id: number };
+        if (!qdata.id) {
+            const resp: CommonResponse<any> = {
+                status: false,
+                msg: "Task ID is required",
+            }
+            return resp;
+        }
+
+        try {
+            const searchControl = new SearchController();
+            const taskDetails = await searchControl.getTaskDetailsForEdit(qdata.id);
+            const resp: CommonResponse<any> = {
+                status: true,
+                msg: "Task details retrieved successfully",
+                data: taskDetails
+            }
+            return resp;
+        } catch (error) {
+            const resp: CommonResponse<any> = {
+                status: false,
+                msg: error instanceof Error ? error.message : "Unknown error occurred",
+            }
+            return resp;
+        }
+    });
+
+    // Update search task
+    ipcMain.handle(UPDATE_SEARCH_TASK, async (event, data) => {
+        const qdata = JSON.parse(data) as { id: number; updates: any };
+        if (!qdata.id) {
+            const resp: CommonResponse<any> = {
+                status: false,
+                msg: "Task ID is required",
+            }
+            return resp;
+        }
+
+        if (!qdata.updates) {
+            const resp: CommonResponse<any> = {
+                status: false,
+                msg: "Update data is required",
+            }
+            return resp;
+        }
+
+        try {
+            const searchControl = new SearchController();
+            const success = await searchControl.updateSearchTask(qdata.id, qdata.updates);
+            
+            if (success) {
+                const resp: CommonResponse<any> = {
+                    status: true,
+                    msg: "Task updated successfully",
+                }
+                // Send event to notify about the update
+                event.sender.send(SEARCH_TASK_UPDATE_EVENT, JSON.stringify({
+                    status: true,
+                    msg: "Task updated successfully",
+                    taskId: qdata.id
+                }));
+                return resp;
+            } else {
+                const resp: CommonResponse<any> = {
+                    status: false,
+                    msg: "Failed to update task",
+                }
+                return resp;
+            }
+        } catch (error) {
+            const resp: CommonResponse<any> = {
+                status: false,
+                msg: error instanceof Error ? error.message : "Unknown error occurred",
+            }
+            // Send error event
+            event.sender.send(SEARCH_TASK_UPDATE_EVENT, JSON.stringify({
+                status: false,
+                msg: error instanceof Error ? error.message : "Unknown error occurred",
+                taskId: qdata.id
+            }));
             return resp;
         }
     });

@@ -18,6 +18,15 @@
           </v-icon>
           <v-icon 
           size="small"
+            class="me-2"
+            v-if="isTaskEditable(item.status)"
+            @click="editTask(item)"
+            title="Edit Task"
+          >
+            mdi-pencil
+          </v-icon>
+          <v-icon 
+          size="small"
           class="me-2"
           v-if="item.status=='Error'" 
           @click="downloadErrorlog(item)"
@@ -196,6 +205,20 @@ const retryTask = async (item) => {
     } catch (error) {
         console.error('Error retrying task:', error);
     }
+}
+
+// Check if task is editable based on status
+const isTaskEditable = (status: string): boolean => {
+    return status === 'Not Start' || status === 'Error';
+}
+
+// Edit task function
+const editTask = (item: any) => {
+    // Navigate to edit page or open edit dialog
+    router.push({
+        name: 'EditSearchTask',
+        params: { id: item.id }
+    });
 }
 onMounted(() => {
   

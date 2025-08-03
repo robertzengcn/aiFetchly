@@ -154,6 +154,58 @@ export class SearchTaskModel extends BaseDb {
   }
 
   /**
+   * Check if a task is editable based on its status
+   * @param taskId The task ID
+   * @returns True if the task can be edited
+   */
+  async isTaskEditable(taskId: number): Promise<boolean> {
+    const task = await this.getTaskEntity(taskId);
+    if (!task) {
+      return false;
+    }
+    // Only tasks with status "NotStart" or "Error" can be edited
+    return task.status === SearchTaskStatus.NotStart || task.status === SearchTaskStatus.Error;
+  }
+
+  /**
+   * Update search task properties
+   * @param taskId The task ID
+   * @param updates The properties to update
+   * @returns True if update was successful
+   */
+  async updateSearchTask(taskId: number, updates: {
+    enginer_id?: string;
+    num_pages?: number;
+    concurrency?: number;
+    notShowBrowser?: number;
+    localBrowser?: string;
+    record_time?: string;
+  }): Promise<boolean> {
+    // Check if task exists and is editable
+    const isEditable = await this.isTaskEditable(taskId);
+    if (!isEditable) {
+      throw new Error("Task cannot be edited. Only tasks with status 'NotStart' or 'Error' can be modified.");
+    }
+
+    // Validate numeric fields
+    if (updates.num_pages !== undefined && (updates.num_pages < 1 || updates.num_pages > 100)) {
+      throw new Error("Number of pages must be between 1 and 100");
+    }
+
+    if (updates.concurrency !== undefined && (updates.concurrency < 1 || updates.concurrency > 10)) {
+      throw new Error("Concurrency must be between 1 and 10");
+    }
+
+    // Update the task
+    const result = await this.repository.update(
+      { id: taskId },
+      updates
+    );
+
+    return result.affected !== undefined && result.affected > 0;
+  }
+
+  /**
    * Truncate the database table
    */
   async truncatedb(): Promise<void> {

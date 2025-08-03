@@ -4,280 +4,134 @@
 This document outlines the tasks required to implement the edit search task functionality, allowing users to modify existing search tasks from the search task list page.
 
 ## Current State Analysis
-- Search tasks are displayed in `SearchResultTable.vue` with actions for open folder, download error log, and retry
-- Search task data structure includes: engine, keywords, num_pages, concurrency, notShowBrowser, localBrowser, accounts
-- Current IPC handlers exist for search operations but no edit functionality
-- Search task entity has fields that can be modified: enginer_id, num_pages, concurrency, notShowBrowser, localBrowser
+- Search tasks are displayed in SearchResultTable.vue with actions for open folder, download error log, and retry
+- Search task data is managed through SearchController and SearchModule
+- Current actions: open folder (view details), download error log, retry task
+- Missing: edit functionality
 
-## Implementation Tasks
+## Backend Implementation Tasks
 
-### 1. Backend/Model Layer
+### 1. Database Layer Updates
+- [x] Update SearchTaskModel (src/model/SearchTask.model.ts)
+  - [x] Add updateSearchTask() method to update task properties
+  - [x] Add validation for editable fields (engine, keywords, num_pages, concurrency, etc.)
+  - [x] Ensure only tasks with status "NotStart" or "Error" can be edited
+  - [x] Add method to check if task is editable based on status
 
-#### 1.1 Update SearchTask Model
-- [ ] **Task**: Add update method to SearchTaskModel
-  - **File**: `src/model/SearchTask.model.ts`
-  - **Description**: Create `updateSearchTask(taskId: number, updates: Partial<SearchTaskEntity>): Promise<boolean>` method
-  - **Dependencies**: None
-  - **Priority**: High
+### 2. Search Module Updates
+- [x] Update SearchModule (src/modules/searchModule.ts)
+  - [x] Add updateSearchTask() method to handle task updates
+  - [x] Add validation logic for task editability
+  - [x] Update task keywords if keywords are modified
+  - [x] Handle proxy updates if proxys are modified
+  - [x] Handle account updates if accounts are modified
 
-#### 1.2 Update SearchModule
-- [ ] **Task**: Add update task method to SearchModule
-  - **File**: `src/modules/searchModule.ts`
-  - **Description**: Create `updateSearchTask(taskId: number, updates: SearchDataParam): Promise<boolean>` method
-  - **Dependencies**: SearchTaskModel update method
-  - **Priority**: High
+### 3. Controller Layer Updates
+- [x] Update SearchController (src/controller/searchController.ts)
+  - [x] Add updateSearchTask() method
+  - [x] Add validation for task existence and editability
+  - [x] Handle the update workflow (validate → update → return result)
+  - [x] Add method to get task details for editing
 
-#### 1.3 Update SearchController
-- [ ] **Task**: Add update task method to SearchController
-  - **File**: `src/controller/searchController.ts`
-  - **Description**: Create `updateSearchTask(taskId: number, data: Usersearchdata): Promise<void>` method
-  - **Dependencies**: SearchModule update method
-  - **Priority**: High
+### 4. IPC Communication Updates
+- [x] Update search-ipc.ts (src/main-process/communication/search-ipc.ts)
+  - [x] Add new IPC handler for GET_SEARCH_TASK_DETAILS
+  - [x] Add new IPC handler for UPDATE_SEARCH_TASK
+  - [x] Add validation for incoming edit requests
+  - [x] Handle error responses for invalid edit attempts
 
-### 2. IPC Communication Layer
+### 5. Channel Configuration
+- [x] Update channellist.ts (src/config/channellist.ts)
+  - [x] Add GET_SEARCH_TASK_DETAILS channel constant
+  - [x] Add UPDATE_SEARCH_TASK channel constant
+  - [x] Add SEARCH_TASK_UPDATE_EVENT channel constant
 
-#### 2.1 Add IPC Handler
-- [ ] **Task**: Add edit search task IPC handler
-  - **File**: `src/main-process/communication/search-ipc.ts`
-  - **Description**: Add new IPC handler for `EDITSEARCHTASK` channel
-  - **Dependencies**: SearchController update method
-  - **Priority**: High
+## Frontend Implementation Tasks
 
-#### 2.2 Update Channel List
-- [ ] **Task**: Add new channel constant
-  - **File**: `src/config/channellist.ts`
-  - **Description**: Add `EDITSEARCHTASK` constant
-  - **Dependencies**: None
-  - **Priority**: Medium
+### 6. API Layer Updates
+- [x] Update search API (src/views/api/search.ts)
+  - [x] Add getSearchTaskDetails(taskId: number) function
+  - [x] Add updateSearchTask(taskId: number, data: UpdateSearchTaskData) function
+  - [x] Add proper TypeScript types for update data
+  - [x] Add error handling for API calls
 
-### 3. Frontend API Layer
+### 7. Type Definitions
+- [x] Update types (src/views/api/types.d.ts)
+  - [x] Add UpdateSearchTaskData interface
+  - [x] Add SearchTaskDetails interface
+  - [x] Add response types for edit operations
 
-#### 3.1 Add API Function
-- [ ] **Task**: Create edit search task API function
-  - **File**: `src/views/api/search.ts`
-  - **Description**: Add `editSearchTask(taskId: number, data: Usersearchdata): Promise<any>` function
-  - **Dependencies**: IPC handler
-  - **Priority**: High
+### 8. UI Component Updates
+- [x] Update SearchResultTable.vue (src/views/pages/search/widgets/SearchResultTable.vue)
+  - [x] Add edit icon to actions column (only for editable tasks)
+  - [x] Add click handler for edit action
+  - [x] Add conditional rendering for edit button based on task status
+  - [x] Add loading state for edit operations
 
-#### 3.2 Update API Types
-- [ ] **Task**: Add edit task types
-  - **File**: `src/views/api/types.ts` or relevant type file
-  - **Description**: Add types for edit task request/response
-  - **Dependencies**: None
-  - **Priority**: Medium
+### 9. Edit Dialog Component
+- [x] Create EditSearchTaskDialog.vue (src/views/pages/search/components/EditSearchTaskDialog.vue)
+  - [x] Create form with all editable fields:
+    - Search engine selection
+    - Keywords input
+    - Number of pages
+    - Concurrency settings
+    - Browser visibility option
+    - Local browser selection
+    - Proxy settings
+    - Account selection
+  - [x] Add form validation
+  - [x] Add loading states
+  - [x] Add success/error feedback
+  - [x] Add cancel/confirm actions
 
-### 4. Frontend UI Components
+## Business Logic Tasks
 
-#### 4.1 Add Edit Icon to SearchResultTable
-- [ ] **Task**: Add edit icon to actions column
-  - **File**: `src/views/pages/search/widgets/SearchResultTable.vue`
-  - **Description**: Add edit icon button in the actions template
-  - **Dependencies**: Edit dialog component
-  - **Priority**: High
+### 10. Validation Rules
+- [x] Implement edit validation
+  - [x] Only allow editing of tasks with status "NotStart" or "Error"
+  - [x] Validate search engine compatibility with keywords
+  - [x] Validate proxy settings if provided
+  - [x] Validate account settings if provided
+  - [x] Ensure keywords are not empty
+  - [x] Validate numeric fields (pages, concurrency)
 
-#### 4.2 Create Edit Dialog Component
-- [ ] **Task**: Create SearchTaskEditDialog component
-  - **File**: `src/views/pages/search/widgets/SearchTaskEditDialog.vue`
-  - **Description**: Create a dialog component for editing search task parameters
-  - **Dependencies**: None
-  - **Priority**: High
+### 11. Status Management
+- [x] Handle task status updates
+  - [x] Reset task status to "NotStart" when edited
+  - [x] Clear previous results when task is modified
+  - [x] Update task record time when modified
+  - [x] Handle log file updates if needed
 
-#### 4.3 Add Edit Function to SearchResultTable
-- [ ] **Task**: Implement edit task function
-  - **File**: `src/views/pages/search/widgets/SearchResultTable.vue`
-  - **Description**: Add `editTask(item)` function to handle edit button clicks
-  - **Dependencies**: Edit dialog component, API function
-  - **Priority**: High
+## Testing Tasks
 
-### 5. Edit Dialog Implementation
+### 12. Unit Tests
+- [x] Backend testing
+  - [x] Test SearchTaskModel update methods
+  - [x] Test SearchModule update functionality
+  - [x] Test SearchController update logic
+  - [x] Test IPC handlers for edit operations
+  - [x] Test validation rules
 
-#### 5.1 Dialog Form Fields
-- [ ] **Task**: Create form fields for editable parameters
-  - **File**: `src/views/pages/search/widgets/SearchTaskEditDialog.vue`
-  - **Description**: Add form fields for: search engine, keywords, num_pages, concurrency, notShowBrowser, localBrowser
-  - **Dependencies**: None
-  - **Priority**: High
 
-#### 5.2 Form Validation
-- [ ] **Task**: Add form validation
-  - **File**: `src/views/pages/search/widgets/SearchTaskEditDialog.vue`
-  - **Description**: Add validation rules for form fields
-  - **Dependencies**: None
-  - **Priority**: Medium
+## Estimated Timeline
+- Backend Implementation: 3-4 days
+- Frontend Implementation: 2-3 days
+- Testing and Documentation: 2-3 days
+- Total Estimated Time: 7-10 days
 
-#### 5.3 Load Existing Data
-- [ ] **Task**: Load current task data into form
-  - **File**: `src/views/pages/search/widgets/SearchTaskEditDialog.vue`
-  - **Description**: Populate form with existing task data when dialog opens
-  - **Dependencies**: API function to get task details
-  - **Priority**: High
+## Priority Levels
 
-#### 5.4 Save Functionality
-- [ ] **Task**: Implement save functionality
-  - **File**: `src/views/pages/search/widgets/SearchTaskEditDialog.vue`
-  - **Description**: Add save button and function to update task
-  - **Dependencies**: API function
-  - **Priority**: High
+### High Priority (Must Have)
+- Tasks 1-5: Backend implementation
+- Tasks 6-9: Frontend API and basic UI
+- Tasks 10-11: Core validation and status management
 
-### 6. API Integration
+### Medium Priority (Should Have)
+- Tasks 12-13: Testing and validation
 
-#### 6.1 Get Task Details API
-- [ ] **Task**: Create get task details API
-  - **File**: `src/views/api/search.ts`
-  - **Description**: Add `getSearchTaskDetails(taskId: number): Promise<SearchtaskItem>` function
-  - **Dependencies**: Backend get task method
-  - **Priority**: Medium
-
-#### 6.2 Update Task API
-- [ ] **Task**: Create update task API
-  - **File**: `src/views/api/search.ts`
-  - **Description**: Add `updateSearchTask(taskId: number, data: Usersearchdata): Promise<any>` function
-  - **Dependencies**: Backend update method
-  - **Priority**: High
-
-### 7. Backend Get Task Details
-
-#### 7.1 Add Get Task Method to Controller
-- [ ] **Task**: Add get task details method to SearchController
-  - **File**: `src/controller/searchController.ts`
-  - **Description**: Add `getSearchTaskDetails(taskId: number): Promise<SearchtaskItem>` method
-  - **Dependencies**: SearchModule get task method
-  - **Priority**: Medium
-
-#### 7.2 Add IPC Handler for Get Task
-- [ ] **Task**: Add get task details IPC handler
-  - **File**: `src/main-process/communication/search-ipc.ts`
-  - **Description**: Add IPC handler for `GETSEARCHTASKDETAILS` channel
-  - **Dependencies**: SearchController get task method
-  - **Priority**: Medium
-
-### 8. UI/UX Enhancements
-
-#### 8.1 Loading States
-- [ ] **Task**: Add loading states to edit dialog
-  - **File**: `src/views/pages/search/widgets/SearchTaskEditDialog.vue`
-  - **Description**: Show loading indicators during save operations
-  - **Dependencies**: None
-  - **Priority**: Low
-
-#### 8.2 Success/Error Messages
-- [ ] **Task**: Add success/error message handling
-  - **File**: `src/views/pages/search/widgets/SearchTaskEditDialog.vue`
-  - **Description**: Show appropriate messages after save operations
-  - **Dependencies**: None
-  - **Priority**: Medium
-
-#### 8.3 Refresh Table After Edit
-- [ ] **Task**: Refresh search result table after successful edit
-  - **File**: `src/views/pages/search/widgets/SearchResultTable.vue`
-  - **Description**: Reload table data after successful task update
-  - **Dependencies**: None
-  - **Priority**: Medium
-
-### 9. Validation and Error Handling
-
-#### 9.1 Input Validation
-- [ ] **Task**: Add comprehensive input validation
-  - **Description**: Validate all form inputs (keywords, num_pages, concurrency, etc.)
-  - **Dependencies**: None
-  - **Priority**: High
-
-#### 9.2 Error Handling
-- [ ] **Task**: Add error handling for API calls
-  - **Description**: Handle network errors, validation errors, and server errors
-  - **Dependencies**: None
-  - **Priority**: Medium
-
-#### 9.3 Permission Checks
-- [ ] **Task**: Add permission checks for editing tasks
-  - **Description**: Ensure only tasks in appropriate status can be edited
-  - **Dependencies**: None
-  - **Priority**: Medium
-
-### 10. Testing
-
-#### 10.1 Unit Tests
-- [ ] **Task**: Add unit tests for new methods
-  - **Description**: Test SearchController, SearchModule, and model update methods
-  - **Dependencies**: None
-  - **Priority**: Medium
-
-#### 10.2 Integration Tests
-- [ ] **Task**: Add integration tests for IPC handlers
-  - **Description**: Test the complete flow from frontend to backend
-  - **Dependencies**: None
-  - **Priority**: Low
-
-#### 10.3 UI Tests
-- [ ] **Task**: Add UI tests for edit dialog
-  - **Description**: Test form validation, save functionality, and error handling
-  - **Dependencies**: None
-  - **Priority**: Low
-
-### 11. Documentation
-
-#### 11.1 API Documentation
-- [ ] **Task**: Document new API endpoints
-  - **Description**: Update API documentation with new edit task endpoints
-  - **Dependencies**: None
-  - **Priority**: Low
-
-#### 11.2 User Documentation
-- [ ] **Task**: Create user guide for edit functionality
-  - **Description**: Document how to use the edit search task feature
-  - **Dependencies**: None
-  - **Priority**: Low
-
-## Implementation Order
-
-### Phase 1: Backend Foundation (High Priority)
-1. Update SearchTaskModel with update method
-2. Add update method to SearchModule
-3. Add update method to SearchController
-4. Add IPC handler for edit task
-5. Add channel constant
-
-### Phase 2: Frontend Foundation (High Priority)
-6. Create SearchTaskEditDialog component
-7. Add edit icon to SearchResultTable
-8. Add API functions for edit and get task details
-9. Implement edit task function in SearchResultTable
-
-### Phase 3: Integration and Polish (Medium Priority)
-10. Add form validation and error handling
-11. Add loading states and success/error messages
-12. Refresh table after successful edit
-13. Add comprehensive testing
-
-### Phase 4: Documentation and Final Testing (Low Priority)
-14. Add unit and integration tests
-15. Update documentation
-16. Final testing and bug fixes
-
-## Dependencies Map
-
-```
-SearchTaskModel.update() 
-    ↓
-SearchModule.updateSearchTask()
-    ↓
-SearchController.updateSearchTask()
-    ↓
-IPC Handler (EDITSEARCHTASK)
-    ↓
-Frontend API function
-    ↓
-Edit Dialog Component
-    ↓
-SearchResultTable edit function
-```
-
-## Notes
-
-- Only tasks in "Not Start" or "Error" status should be editable
-- Keywords should be editable as a comma-separated string
-- Search engine should be validated against available engines
-- All numeric fields should have appropriate min/max validation
-- The edit dialog should show current values and allow modification
-- After successful edit, the table should refresh to show updated data
-- Error messages should be user-friendly and specific 
+## Dependencies
+- Existing search task infrastructure
+- Current IPC communication system
+- Vue.js and Vuetify components
+- TypeORM database layer
+- Electron main process setup

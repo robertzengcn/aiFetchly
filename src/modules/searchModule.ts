@@ -19,13 +19,14 @@ import { SearchTaskProxyEntity } from "@/entity/SearchTaskProxy.entity";
 //import { SearchTaskEntity } from "@/entity/SearchTask.entity";
 import { SearchAccountModel } from "@/model/SearchAccount.model"
 import { SearchAccountEntity } from "@/entity/SearchAccount.entity";
+import { SearchKeywordEntity } from "@/entity/SearchKeyword.entity";
 import { CookiesType } from "@/entityTypes/cookiesType"
 import { AccountCookiesModule } from "./accountCookiesModule";
 import {Usersearchdata } from "@/entityTypes/searchControlType"
 import { utilityProcess, MessageChannelMain} from "electron";
 import { SystemSettingGroupModule } from '@/modules/SystemSettingGroupModule';
 import { twocaptchagroup,twocaptchatoken,twocaptcha_enabled,chrome_path,firefox_path,external_system} from '@/config/settinggroupInit'
-import {WriteLog,getChromeExcutepath,getFirefoxExcutepath} from "@/modules/lib/function"
+import {WriteLog,getChromeExcutepath,getFirefoxExcutepath,getRecorddatetime} from "@/modules/lib/function"
 
 export class SearchModule extends BaseModule {
     // private dbpath: string
@@ -458,6 +459,150 @@ export class SearchModule extends BaseModule {
             cookies: cookiesArray
         }
         return data
+    }
+
+    /**
+     * Update search task with new parameters
+     * @param taskId The task ID to update
+     * @param updates The updated task parameters
+     * @returns True if update was successful
+     */
+    public async updateSearchTask(taskId: number, updates: {
+        engine?: string;
+        keywords?: string[];
+        num_pages?: number;
+        concurrency?: number;
+        notShowBrowser?: boolean;
+        localBrowser?: string;
+        proxys?: Array<{host: string, port: number, user?: string, pass?: string}>;
+        accounts?: number[];
+    }): Promise<boolean> {
+        // Check if task exists and is editable
+        const isEditable = await this.taskdbModel.isTaskEditable(taskId);
+        if (!isEditable) {
+            throw new Error("Task cannot be edited. Only tasks with status 'NotStart' or 'Error' can be modified.");
+        }
+
+        // Get current task entity
+        const currentTask = await this.taskdbModel.getTaskEntity(taskId);
+        if (!currentTask) {
+            throw new Error("Task not found");
+        }
+
+        // Prepare updates for the main task entity
+        const taskUpdates: any = {};
+        
+        if (updates.engine !== undefined) {
+            taskUpdates.enginer_id = updates.engine;
+        }
+        
+        if (updates.num_pages !== undefined) {
+            taskUpdates.num_pages = updates.num_pages;
+        }
+        
+        if (updates.concurrency !== undefined) {
+            taskUpdates.concurrency = updates.concurrency;
+        }
+        
+        if (updates.notShowBrowser !== undefined) {
+            taskUpdates.notShowBrowser = updates.notShowBrowser ? 1 : 0;
+        }
+        
+        if (updates.localBrowser !== undefined) {
+            taskUpdates.localBrowser = updates.localBrowser;
+        }
+
+        // Update record time to indicate modification
+        taskUpdates.record_time = getRecorddatetime();
+
+        // Update the main task entity
+        const taskUpdateSuccess = await this.taskdbModel.updateSearchTask(taskId, taskUpdates);
+        if (!taskUpdateSuccess) {
+            throw new Error("Failed to update task entity");
+        }
+
+        // Update keywords if provided
+        if (updates.keywords !== undefined) {
+            // For keywords, we'll just add new ones since the existing saveSearchKeyword method handles duplicates
+            // Clear existing keywords by not preserving them
+            for (const keyword of updates.keywords) {
+                await this.serKeywordModel.saveSearchKeyword(keyword, taskId);
+            }
+        }
+
+        // Update proxies if provided
+        if (updates.proxys !== undefined) {
+            // For proxies, we'll recreate them
+            for (const proxy of updates.proxys) {
+                const proxyEntity = new SearchTaskProxyEntity();
+                proxyEntity.task_id = taskId;
+                proxyEntity.host = proxy.host;
+                proxyEntity.port = proxy.port.toString();
+                proxyEntity.user = proxy.user || '';
+                proxyEntity.pass = proxy.pass || '';
+                await this.searchTaskProxyModel.create(proxyEntity);
+            }
+        }
+
+        // Update accounts if provided
+        if (updates.accounts !== undefined) {
+            // For accounts, we'll recreate them
+            for (const accountId of updates.accounts) {
+                const accountEntity = new SearchAccountEntity();
+                accountEntity.task_id = taskId;
+                accountEntity.account_id = accountId as number;
+                await this.searchAccountModel.create(accountEntity);
+            }
+        }
+
+        // Reset task status to NotStart since it's been modified
+        await this.taskdbModel.updateTaskStatus(taskId, SearchTaskStatus.NotStart);
+
+        return true;
+    }
+
+    /**
+     * Check if a task is editable based on its status
+     * @param taskId The task ID
+     * @returns True if the task can be edited
+     */
+    public async isTaskEditable(taskId: number): Promise<boolean> {
+        return await this.taskdbModel.isTaskEditable(taskId);
+    }
+
+    /**
+     * Get task details for editing
+     * @param taskId The task ID
+     * @returns Task details suitable for editing
+     */
+    public async getTaskDetailsForEdit(taskId: number): Promise<any> {
+        const taskEntity = await this.taskdbModel.getTaskEntity(taskId);
+        if (!taskEntity) {
+            throw new Error("Task not found");
+        }
+
+        const keywords = await this.serKeywordModel.getKeywordsEntityByTask(taskId);
+        const proxys = await this.searchTaskProxyModel.getItemsByTaskId(taskId);
+        const accounts = await this.searchAccountModel.getAccountByTaskId(taskId);
+
+        return {
+            id: taskEntity.id,
+            engine: taskEntity.enginer_id,
+            keywords: keywords.map(item => item.keyword),
+            num_pages: taskEntity.num_pages,
+            concurrency: taskEntity.concurrency,
+            notShowBrowser: taskEntity.notShowBrowser ? true : false,
+            localBrowser: taskEntity.localBrowser || "",
+            proxys: proxys.map(item => ({
+                host: item.host,
+                port: item.port,
+                user: item.user,
+                pass: item.pass
+            })),
+            accounts: accounts.map(item => item.account_id),
+            status: taskEntity.status,
+            record_time: taskEntity.record_time
+        };
     }
 
 
