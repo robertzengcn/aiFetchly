@@ -158,6 +158,7 @@ const initialize = () => {
   seArr.map((item, index) => {
     searchplatform.value?.push({ name: t('search.' + item.toLowerCase()), key: item, index: index })
   })
+  console.log("searchplatform.value")
   console.log(searchplatform.value)
   //searchplatform.value=seArr
 };
@@ -168,12 +169,15 @@ const loadTaskDetails = async () => {
   try {
     loading.value = true;
     const taskDetails = await getSearchTaskDetails(taskId.value);
-    
-    if (taskDetails.status && taskDetails.data) {
-      const data = taskDetails.data;
+    console.log(taskDetails)
+    //if (taskDetails.status && taskDetails.data) {
+        const data = taskDetails;
       
       // Populate form fields
-      enginer.value = data.engine;
+      // Find the engine name by engine ID
+      const engineItem = searchplatform.value.find(item => item.index === data.engine);
+      console.log("engineItem:"+engineItem)
+      enginer.value = engineItem ? engineItem.key : data.engine.toString();
       keywords.value = data.keywords.join('\n');
       page_number.value = data.num_pages;
       concurrent_quantity.value = data.concurrency;
@@ -187,7 +191,7 @@ const loadTaskDetails = async () => {
         proxyValue.value = data.proxys.map(proxy => ({
           id: 0, // We don't have the original proxy ID in the response
           host: proxy.host,
-          port: proxy.port,
+          port: proxy.port.toString(),
           user: proxy.user || '',
           pass: proxy.pass || '',
           protocol: 'http' // Default protocol
@@ -197,13 +201,22 @@ const loadTaskDetails = async () => {
       // Set accounts
       if (data.accounts && data.accounts.length > 0) {
         // Note: We need to fetch account details to populate the accounts array
-        // For now, we'll just set the account IDs
-        accounts.value = data.accounts.map(id => ({ id, name: `Account ${id}` }));
+        // For now, we'll just set the account IDs with default values
+        accounts.value = data.accounts.map(id => ({ 
+          id, 
+          social_type_id: 1, // Default social type
+          user: `Account ${id}`,
+          pass: '',
+          status: 1,
+          use_proxy: 0
+        }));
       }
-    }
+    //}
   } catch (error) {
     console.error('Error loading task details:', error);
-    setAlert(error instanceof Error ? error.message : 'Failed to load task details', 'Error', 'error');
+    const errorMessage = error instanceof Error ? error.message : 'Failed to load task details';
+    const translatedMessage = errorMessage.startsWith('search.') ? t(errorMessage) : errorMessage;
+    setAlert(translatedMessage, 'Error', 'error');
   } finally {
     loading.value = false;
   }
@@ -378,7 +391,10 @@ async function onSubmit() {
           router.push({ name: 'Searchtasklist' });
         }, 1500);
       } else {
-        setAlert(result.msg || 'Failed to update task', 'Error', 'error');
+        // Check if the error message is a translation key
+        const errorMessage = result.msg || 'Failed to update task';
+        const translatedMessage = errorMessage.startsWith('search.') ? t(errorMessage) : errorMessage;
+        setAlert(translatedMessage, 'Error', 'error');
       }
     } else {
       // Create new task
@@ -388,7 +404,9 @@ async function onSubmit() {
       });
     }
   } catch (error) {
-    setAlert(error instanceof Error ? error.message : 'An error occurred', 'Error', 'error');
+    const errorMessage = error instanceof Error ? error.message : 'An error occurred';
+    const translatedMessage = errorMessage.startsWith('search.') ? t(errorMessage) : errorMessage;
+    setAlert(translatedMessage, 'Error', 'error');
   } finally {
     loading.value = false;
   }

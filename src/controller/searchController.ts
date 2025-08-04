@@ -14,6 +14,7 @@ import {SearchModule} from "@/modules/searchModule"
 import { Token } from "@/modules/token"
 // import {USERSDBPATH} from '@/config/usersetting';
 import {SearchDataParam,SearchResEntityDisplay,SearchResEntityRecord} from "@/entityTypes/scrapeType"
+import {TaskDetailsForEdit} from "@/modules/searchModule"
 // import {SEARCHEVENT} from "@/config/channellist"
 // import { SearchTaskStatus } from "@/model/SearchTask.model"
 // import { SearchKeyworddb } from "@/model/searchKeyworddb";
@@ -381,26 +382,27 @@ export class SearchController {
         // Validate task existence and editability
         const taskEntity = await this.searchModel.getTaskEntityById(taskId);
         if (!taskEntity) {
-            throw new Error("Task not found");
+            throw new Error("search.task_not_found");
         }
 
         // Check if task is editable
         const isEditable = await this.searchModel.isTaskEditable(taskId);
+        console.log("isEditable",isEditable)
         if (!isEditable) {
-            throw new Error("Task cannot be edited. Only tasks with status 'NotStart', 'Error', or 'Processing' can be modified.");
+            throw new Error("search.task_cannot_be_edited");
         }
 
         // Validate input parameters
         if (updates.keywords && updates.keywords.length === 0) {
-            throw new Error("At least one keyword is required");
+            throw new Error("search.at_least_one_keyword_required");
         }
 
         if (updates.num_pages !== undefined && (updates.num_pages < 1 || updates.num_pages > 100)) {
-            throw new Error("Number of pages must be between 1 and 100");
+            throw new Error("search.pages_must_be_between");
         }
 
         if (updates.concurrency !== undefined && (updates.concurrency < 1 || updates.concurrency > 10)) {
-            throw new Error("Concurrency must be between 1 and 10");
+            throw new Error("search.concurrency_must_be_between");
         }
 
         // Perform the update
@@ -412,17 +414,17 @@ export class SearchController {
      * @param taskId The task ID
      * @returns Task details suitable for editing
      */
-    public async getTaskDetailsForEdit(taskId: number): Promise<any> {
+    public async getTaskDetailsForEdit(taskId: number): Promise<TaskDetailsForEdit> {
         // Validate task existence
         const taskEntity = await this.searchModel.getTaskEntityById(taskId);
         if (!taskEntity) {
-            throw new Error("Task not found");
+            throw new Error("search.task_not_found");
         }
 
         // Check if task is editable
         const isEditable = await this.searchModel.isTaskEditable(taskId);
         if (!isEditable) {
-            throw new Error("Task cannot be edited. Only tasks with status 'NotStart', 'Error', or 'Processing' can be modified.");
+            throw new Error("search.task_cannot_be_edited");
         }
 
         return await this.searchModel.getTaskDetailsForEdit(taskId);

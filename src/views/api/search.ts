@@ -6,6 +6,7 @@ import { windowInvoke,windowReceive,windowSend } from '@/views/utils/apirequest'
 import {LISTSESARCHRESUT,TASKSEARCHRESULTLIST,SAVESEARCHERRORLOG,RETRYSEARCHTASK,GET_SEARCH_TASK_DETAILS,UPDATE_SEARCH_TASK,SEARCH_TASK_UPDATE_EVENT} from "@/config/channellist";
 import {SearchResEntityDisplay} from "@/entityTypes/scrapeType"
 import {ItemSearchparam} from "@/entityTypes/commonType"
+import {TaskDetailsForEdit} from "@/modules/searchModule"
 //import {CommonDialogMsg} from "@/entityTypes/commonType";
 // import { ipcMain} from 'electron'
 
@@ -61,7 +62,7 @@ export async function retrySearchTask(id: number) {
  * @param taskId The task ID
  * @returns Task details
  */
-export async function getSearchTaskDetails(taskId: number): Promise<any> {
+export async function getSearchTaskDetails(taskId: number): Promise<TaskDetailsForEdit> {
     const resp = await windowInvoke(GET_SEARCH_TASK_DETAILS, { id: taskId });
     if (!resp) {
         throw new Error("Unknown error");

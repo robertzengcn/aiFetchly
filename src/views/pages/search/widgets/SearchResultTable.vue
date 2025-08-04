@@ -209,8 +209,8 @@ const retryTask = async (item) => {
 
 // Check if task is editable based on status
 const isTaskEditable = (status: string): boolean => {
-    // Allow editing for Not Start, Error, and Processing statuses
-    return status === 'Not Start' || status === 'Error' || status === 'Processing';
+    // Allow editing for Not Start, Error, Processing, and Complete statuses
+    return status === 'Not Start' || status === 'Error' || status === 'Processing' || status === 'Complete';
 }
 
 // Edit task function

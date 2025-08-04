@@ -3,8 +3,9 @@ import { SEARCHSCRAPERAPI, LISTSESARCHRESUT, SEARCHEVENT, TASKSEARCHRESULTLIST, 
 import { CommonDialogMsg } from "@/entityTypes/commonType";
 import { Usersearchdata, SearchtaskItem, SearchResultFetchparam } from "@/entityTypes/searchControlType"
 import { SearchController } from "@/controller/searchController"
-import { CommonResponse } from "@/entityTypes/commonType"
+import { CommonResponse, CommonMessage } from "@/entityTypes/commonType"
 import { SearchResEntity } from "@/entityTypes/scrapeType"
+import { TaskDetailsForEdit } from "@/modules/searchModule"
 import * as path from 'path';
 import * as fs from 'fs';
 import { ItemSearchparam } from "@/entityTypes/commonType"
@@ -183,7 +184,7 @@ export function registerSearchIpcHandlers() {
     ipcMain.handle(GET_SEARCH_TASK_DETAILS, async (event, data) => {
         const qdata = JSON.parse(data) as { id: number };
         if (!qdata.id) {
-            const resp: CommonResponse<any> = {
+            const resp: CommonMessage<TaskDetailsForEdit> = {
                 status: false,
                 msg: "Task ID is required",
             }
@@ -193,14 +194,14 @@ export function registerSearchIpcHandlers() {
         try {
             const searchControl = new SearchController();
             const taskDetails = await searchControl.getTaskDetailsForEdit(qdata.id);
-            const resp: CommonResponse<any> = {
+            const resp: CommonMessage<TaskDetailsForEdit> = {
                 status: true,
                 msg: "Task details retrieved successfully",
                 data: taskDetails
             }
             return resp;
         } catch (error) {
-            const resp: CommonResponse<any> = {
+            const resp: CommonMessage<TaskDetailsForEdit> = {
                 status: false,
                 msg: error instanceof Error ? error.message : "Unknown error occurred",
             }

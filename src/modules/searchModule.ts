@@ -28,6 +28,20 @@ import { SystemSettingGroupModule } from '@/modules/SystemSettingGroupModule';
 import { twocaptchagroup,twocaptchatoken,twocaptcha_enabled,chrome_path,firefox_path,external_system} from '@/config/settinggroupInit'
 import {WriteLog,getChromeExcutepath,getFirefoxExcutepath,getRecorddatetime} from "@/modules/lib/function"
 
+export type TaskDetailsForEdit = {
+    id: number;
+    engine: number;
+    keywords: Array<string>;
+    num_pages: number;
+    concurrency: number;
+    notShowBrowser: boolean;
+    localBrowser: string;
+    proxys: Array<{host: string, port: number, user: string, pass: string}>;
+    accounts: Array<number>;
+    status: SearchTaskStatus;
+    record_time: string;
+}
+
 export class SearchModule extends BaseModule {
     // private dbpath: string
     private taskdbModel: SearchTaskModel
@@ -480,7 +494,7 @@ export class SearchModule extends BaseModule {
         // Check if task exists and is editable
         const isEditable = await this.taskdbModel.isTaskEditable(taskId);
         if (!isEditable) {
-            throw new Error("Task cannot be edited. Only tasks with status 'NotStart', 'Error', or 'Processing' can be modified.");
+            throw new Error("search.task_cannot_be_edited");
         }
 
         // Get current task entity
@@ -575,7 +589,7 @@ export class SearchModule extends BaseModule {
      * @param taskId The task ID
      * @returns Task details suitable for editing
      */
-    public async getTaskDetailsForEdit(taskId: number): Promise<any> {
+    public async getTaskDetailsForEdit(taskId: number): Promise<TaskDetailsForEdit> {
         const taskEntity = await this.taskdbModel.getTaskEntity(taskId);
         if (!taskEntity) {
             throw new Error("Task not found");
@@ -587,7 +601,7 @@ export class SearchModule extends BaseModule {
 
         return {
             id: taskEntity.id,
-            engine: taskEntity.enginer_id,
+            engine: Number(taskEntity.enginer_id),
             keywords: keywords.map(item => item.keyword),
             num_pages: taskEntity.num_pages,
             concurrency: taskEntity.concurrency,
@@ -595,7 +609,7 @@ export class SearchModule extends BaseModule {
             localBrowser: taskEntity.localBrowser || "",
             proxys: proxys.map(item => ({
                 host: item.host,
-                port: item.port,
+                port: parseInt(item.port, 10),
                 user: item.user,
                 pass: item.pass
             })),

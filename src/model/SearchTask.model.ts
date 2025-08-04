@@ -163,10 +163,12 @@ export class SearchTaskModel extends BaseDb {
     if (!task) {
       return false;
     }
-    // Tasks with status "NotStart", "Error", or "Processing" can be edited
+    console.log("task.status",task.status)
+    // Tasks with status "NotStart", "Error", "Processing", or "Complete" can be edited
     return task.status === SearchTaskStatus.NotStart || 
            task.status === SearchTaskStatus.Error || 
-           task.status === SearchTaskStatus.Processing;
+           task.status === SearchTaskStatus.Processing ||
+           task.status === SearchTaskStatus.Complete;
   }
 
   /**
@@ -186,16 +188,16 @@ export class SearchTaskModel extends BaseDb {
     // Check if task exists and is editable
     const isEditable = await this.isTaskEditable(taskId);
     if (!isEditable) {
-      throw new Error("Task cannot be edited. Only tasks with status 'NotStart', 'Error', or 'Processing' can be modified.");
+      throw new Error("search.task_cannot_be_edited");
     }
 
     // Validate numeric fields
     if (updates.num_pages !== undefined && (updates.num_pages < 1 || updates.num_pages > 100)) {
-      throw new Error("Number of pages must be between 1 and 100");
+      throw new Error("search.pages_must_be_between");
     }
 
     if (updates.concurrency !== undefined && (updates.concurrency < 1 || updates.concurrency > 10)) {
-      throw new Error("Concurrency must be between 1 and 10");
+      throw new Error("search.concurrency_must_be_between");
     }
 
     // Update the task

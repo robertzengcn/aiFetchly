@@ -91,7 +91,7 @@ This document outlines the tasks required to implement the edit search task func
 
 ### 10. Validation Rules
 - [x] Implement edit validation
-  - [x] Only allow editing of tasks with status "NotStart", "Error", or "Processing"
+  - [x] Only allow editing of tasks with status "NotStart", "Error", "Processing", or "Complete"
   - [x] Validate search engine compatibility with keywords
   - [x] Validate proxy settings if provided
   - [x] Validate account settings if provided
@@ -104,7 +104,8 @@ This document outlines the tasks required to implement the edit search task func
   - [x] Clear previous results when task is modified
   - [x] Update task record time when modified
   - [x] Handle log file updates if needed
-- [x] Update edit validation to allow "Processing" status in addition to "NotStart" and "Error"
+- [x] Update edit validation to allow "Processing" and "Complete" statuses in addition to "NotStart" and "Error"
+- [x] Convert hardcoded error messages to translation keys for internationalization
 
 ## Testing Tasks
 
