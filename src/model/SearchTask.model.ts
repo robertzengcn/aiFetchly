@@ -163,8 +163,10 @@ export class SearchTaskModel extends BaseDb {
     if (!task) {
       return false;
     }
-    // Only tasks with status "NotStart" or "Error" can be edited
-    return task.status === SearchTaskStatus.NotStart || task.status === SearchTaskStatus.Error;
+    // Tasks with status "NotStart", "Error", or "Processing" can be edited
+    return task.status === SearchTaskStatus.NotStart || 
+           task.status === SearchTaskStatus.Error || 
+           task.status === SearchTaskStatus.Processing;
   }
 
   /**
@@ -184,7 +186,7 @@ export class SearchTaskModel extends BaseDb {
     // Check if task exists and is editable
     const isEditable = await this.isTaskEditable(taskId);
     if (!isEditable) {
-      throw new Error("Task cannot be edited. Only tasks with status 'NotStart' or 'Error' can be modified.");
+      throw new Error("Task cannot be edited. Only tasks with status 'NotStart', 'Error', or 'Processing' can be modified.");
     }
 
     // Validate numeric fields

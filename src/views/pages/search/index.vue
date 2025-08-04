@@ -1,7 +1,7 @@
 <template>
   <v-sheet class="mx-auto px-6" rounded>
     <v-form ref="form" @submit.prevent="onSubmit">
-      <h3>{{ t('search.use_hint') }}</h3>
+      <h3>{{ isEditMode ? t('search.edit_task') : t('search.use_hint') }}</h3>
       <v-textarea class="mt-3" v-model="keywords" :label="t('search.input_keywords_hint')"></v-textarea>
       <v-select v-model="enginer" :items="searchplatform" :label="t('search.search_enginer_name')" required
         :readonly="loading" :rules="[rules.required]" class="mt-3" item-title="name" item-value="key"></v-select>
@@ -59,7 +59,7 @@
       </v-btn-toggle>
       <div class="d-flex justify-space-between mt-4 mb-4">
         <v-btn color="success" type="submit" :loading="loading" class="flex-grow-1 mr-2">
-          {{ t('common.submit') }}
+          {{ isEditMode ? t('common.update') : t('common.submit') }}
         </v-btn>
 
         <v-btn color="error" @click="router.go(-1)" class="flex-grow-1 ml-2">
@@ -109,7 +109,7 @@ import { useI18n } from "vue-i18n";
 //import router from '@/views/router';
 import { SearhEnginer } from "@/config/searchSetting"
 import { ToArray, CapitalizeFirstLetter } from "@/views/utils/function"
-import { submitScraper, receiveSearchevent } from "@/views/api/search"
+import { submitScraper, receiveSearchevent, getSearchTaskDetails, updateSearchTask } from "@/views/api/search"
 import { Usersearchdata } from "@/entityTypes/searchControlType"
 import { convertNumberToBoolean } from "@/views/utils/function"
 import { SEARCHEVENT } from "@/config/channellist"
@@ -120,6 +120,13 @@ import { LocalBrowerList } from "@/config/searchSetting"
 import { SocialAccountListData } from '@/entityTypes/socialaccount-type'
 
 const { t } = useI18n({ inheritLocale: true });
+const route = useRoute();
+const router = useRouter();
+
+// Check if we're in edit mode
+const isEditMode = ref(!!route.params.id);
+const taskId = ref(isEditMode.value ? Number(route.params.id) : null);
+
 const alert = ref(false);
 const alerttext = ref("");
 const alerttitle = ref("");
@@ -142,8 +149,6 @@ const page_number = ref(1);
 const concurrent_quantity = ref(1);
 const proxyValue = ref<Array<ProxyEntity>>([]);
 const proxytableshow = ref(false);
-//const $route = useRoute();
-const router = useRouter();
 const accounts = ref<Array<SocialAccountListData>>([])
 const initialize = () => {
   //searchplatform.value = ToArray(SearhEnginer);
@@ -155,6 +160,53 @@ const initialize = () => {
   })
   console.log(searchplatform.value)
   //searchplatform.value=seArr
+};
+
+const loadTaskDetails = async () => {
+  if (!taskId.value) return;
+  
+  try {
+    loading.value = true;
+    const taskDetails = await getSearchTaskDetails(taskId.value);
+    
+    if (taskDetails.status && taskDetails.data) {
+      const data = taskDetails.data;
+      
+      // Populate form fields
+      enginer.value = data.engine;
+      keywords.value = data.keywords.join('\n');
+      page_number.value = data.num_pages;
+      concurrent_quantity.value = data.concurrency;
+      showinbrwoser.value = data.notShowBrowser ? 0 : 1;
+      useLocalBrowser.value = !!data.localBrowser;
+      localBrowser.value = data.localBrowser || '';
+      useAccount.value = data.accounts && data.accounts.length > 0;
+      
+      // Set proxies
+      if (data.proxys && data.proxys.length > 0) {
+        proxyValue.value = data.proxys.map(proxy => ({
+          id: 0, // We don't have the original proxy ID in the response
+          host: proxy.host,
+          port: proxy.port,
+          user: proxy.user || '',
+          pass: proxy.pass || '',
+          protocol: 'http' // Default protocol
+        }));
+      }
+      
+      // Set accounts
+      if (data.accounts && data.accounts.length > 0) {
+        // Note: We need to fetch account details to populate the accounts array
+        // For now, we'll just set the account IDs
+        accounts.value = data.accounts.map(id => ({ id, name: `Account ${id}` }));
+      }
+    }
+  } catch (error) {
+    console.error('Error loading task details:', error);
+    setAlert(error instanceof Error ? error.message : 'Failed to load task details', 'Error', 'error');
+  } finally {
+    loading.value = false;
+  }
 };
 const setAlert = (
   text: string,
@@ -171,9 +223,14 @@ const setAlert = (
   }, 5000);
 };
 
-onMounted(() => {
+onMounted(async () => {
   initialize();
-  receiveMsg()
+  receiveMsg();
+  
+  // If in edit mode, load task details
+  if (isEditMode.value && taskId.value) {
+    await loadTaskDetails();
+  }
 })
 const showProxytable = () => {
   console.log("show proxy table");
@@ -261,64 +318,79 @@ async function onSubmit() {
   loading.value = true;
   const { valid } = await form.value.validate();
   if (!valid) {
-    //console.log("form is not valid");
     setAlert("Please fill all required fields", "Error", "error");
-  } else {
-    if (!enginer.value) {
-      //return; 
-      setAlert(t("search.search_enginer_empty"), "Error", "error");
-      return
-    }
-    if (!keywords.value) {
-      setAlert(t("search.keywords_empty"), "Error", "error");
-      return
-    }
-    const subkeyword = keywords.value.split('\n').map(keyword => keyword.trim());
-    // let finalser="";
-    console.log("enginer value is" + enginer.value)
-    // searchplatform.value.forEach((item) => {
-    //   console.log(item)
-    //   if (item.key == enginer.value) {
-    //     finalser = item.index;
-    //   }
-    // })
-    let localbowser: string = ""
-    if (useLocalBrowser) {
-      localbowser = localBrowser.value
-    }
-    let accountids:Array<number>=[]
-    if(useAccount.value){
-      accountids=accounts.value.map(item=>item.id)
-    }
-    const subdata: Usersearchdata = {
-      searchEnginer: enginer.value,
-      keywords: subkeyword,
-      num_pages: page_number.value,
-      concurrency: concurrent_quantity.value,
-      notShowBrowser: !convertNumberToBoolean(showinbrwoser.value),
-      proxys: proxyValue.value,
-      // useLocalbrowserdata:convertNumberToBoolean(useLocalbrowserdata.value),
-      localBrowser: localbowser,
-      accounts:accountids
-      // maxConcurrent:concurrent_quantity.value
-    }
-    //split keywords one line per one
-    // subdata.keywords=
-    //submit form
-    console.log(subdata)
-    await submitScraper(subdata).catch(function (err) {
-      //loading.value = false;
-      //catch error
-      setAlert(err.message, "Error", "error");
-      return null
-    })
     loading.value = false;
-    // if(res){
-
-    // }
-
+    return;
   }
-
-
+  
+  if (!enginer.value) {
+    setAlert(t("search.search_enginer_empty"), "Error", "error");
+    loading.value = false;
+    return;
+  }
+  
+  if (!keywords.value) {
+    setAlert(t("search.keywords_empty"), "Error", "error");
+    loading.value = false;
+    return;
+  }
+  
+  const subkeyword = keywords.value.split('\n').map(keyword => keyword.trim());
+  let localbowser: string = ""
+  if (useLocalBrowser.value) {
+    localbowser = localBrowser.value
+  }
+  let accountids: Array<number> = []
+  if (useAccount.value) {
+    accountids = accounts.value.map(item => item.id)
+  }
+  
+  const subdata: Usersearchdata = {
+    searchEnginer: enginer.value,
+    keywords: subkeyword,
+    num_pages: page_number.value,
+    concurrency: concurrent_quantity.value,
+    notShowBrowser: !convertNumberToBoolean(showinbrwoser.value),
+    proxys: proxyValue.value,
+    localBrowser: localbowser,
+    accounts: accountids
+  }
+  
+  try {
+    if (isEditMode.value && taskId.value) {
+      // Update existing task
+      const updateData = {
+        engine: subdata.searchEnginer,
+        keywords: subdata.keywords,
+        num_pages: subdata.num_pages,
+        concurrency: subdata.concurrency,
+        notShowBrowser: subdata.notShowBrowser,
+        localBrowser: subdata.localBrowser,
+        proxys: subdata.proxys,
+        accounts: subdata.accounts
+      };
+      
+      const result = await updateSearchTask(taskId.value, updateData);
+      if (result.status) {
+        setAlert(t('search.task_updated_successfully'), 'Success', 'success');
+        // Navigate back to task list after a short delay
+        setTimeout(() => {
+          router.push({ name: 'Searchtasklist' });
+        }, 1500);
+      } else {
+        setAlert(result.msg || 'Failed to update task', 'Error', 'error');
+      }
+    } else {
+      // Create new task
+      await submitScraper(subdata).catch(function (err) {
+        setAlert(err.message, "Error", "error");
+        return null;
+      });
+    }
+  } catch (error) {
+    setAlert(error instanceof Error ? error.message : 'An error occurred', 'Error', 'error');
+  } finally {
+    loading.value = false;
+  }
 }
 </script>

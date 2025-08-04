@@ -365,6 +365,16 @@ export const constantRoutes: RouteRecordRaw[] = [
           title: 'Search Task Detail',
           icon: 'list'
         }
+      },
+      {
+        path: 'edit/:id(\\d+)',
+        component: () => import(/* webpackChunkName: "staff-list" */ '@/views/pages/search/index.vue'),
+        name: 'EditSearchTask',
+        meta: {
+          visible: false,
+          title: 'Edit Search Task',
+          icon: 'edit'
+        }
       }
     ]
   },

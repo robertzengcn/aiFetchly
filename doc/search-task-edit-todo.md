@@ -67,6 +67,8 @@ This document outlines the tasks required to implement the edit search task func
   - [x] Add click handler for edit action
   - [x] Add conditional rendering for edit button based on task status
   - [x] Add loading state for edit operations
+- [x] Add EditSearchTask route to router configuration
+- [x] Modify index.vue to support both create and edit modes (reuse existing form)
 
 ### 9. Edit Dialog Component
 - [x] Create EditSearchTaskDialog.vue (src/views/pages/search/components/EditSearchTaskDialog.vue)
@@ -83,12 +85,13 @@ This document outlines the tasks required to implement the edit search task func
   - [x] Add loading states
   - [x] Add success/error feedback
   - [x] Add cancel/confirm actions
+- [x] **Note**: Dialog component created but not used in final implementation - reusing existing index.vue form instead
 
 ## Business Logic Tasks
 
 ### 10. Validation Rules
 - [x] Implement edit validation
-  - [x] Only allow editing of tasks with status "NotStart" or "Error"
+  - [x] Only allow editing of tasks with status "NotStart", "Error", or "Processing"
   - [x] Validate search engine compatibility with keywords
   - [x] Validate proxy settings if provided
   - [x] Validate account settings if provided
@@ -101,6 +104,7 @@ This document outlines the tasks required to implement the edit search task func
   - [x] Clear previous results when task is modified
   - [x] Update task record time when modified
   - [x] Handle log file updates if needed
+- [x] Update edit validation to allow "Processing" status in addition to "NotStart" and "Error"
 
 ## Testing Tasks
 

@@ -480,7 +480,7 @@ export class SearchModule extends BaseModule {
         // Check if task exists and is editable
         const isEditable = await this.taskdbModel.isTaskEditable(taskId);
         if (!isEditable) {
-            throw new Error("Task cannot be edited. Only tasks with status 'NotStart' or 'Error' can be modified.");
+            throw new Error("Task cannot be edited. Only tasks with status 'NotStart', 'Error', or 'Processing' can be modified.");
         }
 
         // Get current task entity

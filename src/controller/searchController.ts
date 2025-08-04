@@ -387,7 +387,7 @@ export class SearchController {
         // Check if task is editable
         const isEditable = await this.searchModel.isTaskEditable(taskId);
         if (!isEditable) {
-            throw new Error("Task cannot be edited. Only tasks with status 'NotStart' or 'Error' can be modified.");
+            throw new Error("Task cannot be edited. Only tasks with status 'NotStart', 'Error', or 'Processing' can be modified.");
         }
 
         // Validate input parameters
@@ -422,7 +422,7 @@ export class SearchController {
         // Check if task is editable
         const isEditable = await this.searchModel.isTaskEditable(taskId);
         if (!isEditable) {
-            throw new Error("Task cannot be edited. Only tasks with status 'NotStart' or 'Error' can be modified.");
+            throw new Error("Task cannot be edited. Only tasks with status 'NotStart', 'Error', or 'Processing' can be modified.");
         }
 
         return await this.searchModel.getTaskDetailsForEdit(taskId);
