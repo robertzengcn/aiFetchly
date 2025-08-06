@@ -112,6 +112,7 @@ export const CHOOSEFILEDIALOG='choose:file:dialog'
 export const GET_SEARCH_TASK_DETAILS='search:task:get_details'
 export const UPDATE_SEARCH_TASK='search:task:update'
 export const SEARCH_TASK_UPDATE_EVENT='search:task:update:event'
+export const CREATE_SEARCH_TASK_ONLY='search:task:create_only'
 
 // Schedule Management Channels
 export const SCHEDULE_CREATE = 'schedule:create'

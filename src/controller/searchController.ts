@@ -36,7 +36,7 @@ export class SearchController {
         this.searchModel=new SearchModule()
         //this.systemSettingGroupModule=new SystemSettingGroupModule()
     }
-    
+    //save user search task, and run task
     public async searchData(data: Usersearchdata) {
         //search data
 
@@ -131,6 +131,30 @@ export class SearchController {
 
     public async createTask(data:SearchDataParam):Promise<number>{
         const taskId=await this.searchModel.saveSearchtask(data)
+        const tokenService=new Token()
+        let logpath=tokenService.getValue(USERLOGPATH)
+        if(!logpath){
+            const useremail=tokenService.getValue(USEREMAIL)
+            //create log path
+            logpath=getApplogspath(useremail)
+        }
+        const uuid=uuidv4({random: getRandomValues(new Uint8Array(16))})
+        const errorLogfile=path.join(logpath,'search_'+taskId.toString()+'_'+uuid+'.error.log')
+        const runLogfile=path.join(logpath,'search_'+taskId.toString()+'_'+uuid+'.runtime.log')
+        //create log file and runlog file
+        fs.writeFileSync(errorLogfile,'')
+        fs.writeFileSync(runLogfile,'')
+        await this.searchModel.updateTaskLog(taskId,runLogfile,errorLogfile)
+        return taskId
+    }
+
+    /**
+     * Create a search task without running it
+     * @param data Search task parameters
+     * @returns The ID of the created task
+     */
+    public async createTaskOnly(data:SearchDataParam):Promise<number>{
+        const taskId=await this.searchModel.saveSearchtaskOnly(data)
         const tokenService=new Token()
         let logpath=tokenService.getValue(USERLOGPATH)
         if(!logpath){
@@ -384,6 +408,7 @@ export class SearchController {
         if (!taskEntity) {
             throw new Error("search.task_not_found");
         }
+      
 
         // Check if task is editable
         const isEditable = await this.searchModel.isTaskEditable(taskId);
@@ -420,7 +445,7 @@ export class SearchController {
         if (!taskEntity) {
             throw new Error("search.task_not_found");
         }
-
+        
         // Check if task is editable
         const isEditable = await this.searchModel.isTaskEditable(taskId);
         if (!isEditable) {

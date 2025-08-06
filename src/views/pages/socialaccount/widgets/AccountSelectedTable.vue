@@ -24,7 +24,7 @@
 
 <script setup lang="ts">
 import { getSocialAccountlist} from '@/views/api/socialaccount'
-import { ref,watch,computed} from 'vue'
+import { ref,watch,computed, PropType} from 'vue'
 import { SearchResult } from '@/views/api/types'
 import {SocialAccountListData} from '@/entityTypes/socialaccount-type'
 import {useI18n} from "vue-i18n";
@@ -37,6 +37,11 @@ const props = defineProps({
     type: String,
     required: false,
     default:""
+  },
+  preSelectedAccounts: {
+    type: Array as PropType<SocialAccountListData[]>,
+    required: false,
+    default: () => []
   }
   
 });
@@ -132,6 +137,16 @@ function loadItems({ page, itemsPerPage, sortBy }) {
             serverItems.value = data
             totalItems.value = total
             loading.value = false
+            
+            // Auto-select accounts if preSelectedAccounts is provided
+            if (props.preSelectedAccounts && props.preSelectedAccounts.length > 0) {
+                const accountsToSelect = data.filter(item => 
+                    props.preSelectedAccounts.some(preSelected => preSelected.id === item.id)
+                );
+                if (accountsToSelect.length > 0) {
+                    selected.value = accountsToSelect;
+                }
+            }
         }).catch(function (error) {
             console.error(error);
         })

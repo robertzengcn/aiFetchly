@@ -1,9 +1,10 @@
 import { ipcMain, dialog, app } from 'electron';
-import { SEARCHSCRAPERAPI, LISTSESARCHRESUT, SEARCHEVENT, TASKSEARCHRESULTLIST, SAVESEARCHERRORLOG, RETRYSEARCHTASK, SYSTEM_MESSAGE, GET_SEARCH_TASK_DETAILS, UPDATE_SEARCH_TASK, SEARCH_TASK_UPDATE_EVENT } from '@/config/channellist'
+import { SEARCHSCRAPERAPI, LISTSESARCHRESUT, SEARCHEVENT, TASKSEARCHRESULTLIST, SAVESEARCHERRORLOG, RETRYSEARCHTASK, SYSTEM_MESSAGE, GET_SEARCH_TASK_DETAILS, UPDATE_SEARCH_TASK, SEARCH_TASK_UPDATE_EVENT, CREATE_SEARCH_TASK_ONLY } from '@/config/channellist'
 import { CommonDialogMsg } from "@/entityTypes/commonType";
 import { Usersearchdata, SearchtaskItem, SearchResultFetchparam } from "@/entityTypes/searchControlType"
 import { SearchController } from "@/controller/searchController"
 import { CommonResponse, CommonMessage } from "@/entityTypes/commonType"
+import { SearchTaskUpdateData } from "@/modules/searchModule"
 import { SearchResEntity } from "@/entityTypes/scrapeType"
 import { TaskDetailsForEdit } from "@/modules/searchModule"
 import * as path from 'path';
@@ -12,8 +13,8 @@ import { ItemSearchparam } from "@/entityTypes/commonType"
 import { SearhEnginer } from "@/config/searchSetting"
 import { ToArray } from "@/views/utils/function"
 
-export function registerSearchIpcHandlers() {
-    ipcMain.on(SEARCHSCRAPERAPI, async (event, arg) => {
+export function registerSearchIpcHandlers(): void {
+    ipcMain.on(SEARCHSCRAPERAPI, async (event, arg): Promise<void> => {
 
         //handle search event
         const qdata = JSON.parse(arg) as Usersearchdata;
@@ -29,7 +30,7 @@ export function registerSearchIpcHandlers() {
                 }
             }
             event.sender.send(SEARCHEVENT, JSON.stringify(comMsgs))
-            return comMsgs
+            return
         }
         if (!("keywords" in qdata)) {
             const comMsgs: CommonDialogMsg = {
@@ -42,7 +43,7 @@ export function registerSearchIpcHandlers() {
                 }
             }
             event.sender.send(SEARCHEVENT, JSON.stringify(comMsgs))
-            return comMsgs
+            return
         }
         if (typeof qdata.concurrency === 'string') {
             qdata.concurrency = parseInt(qdata.concurrency, 10);
@@ -71,7 +72,7 @@ export function registerSearchIpcHandlers() {
                 }
             }
             event.sender.send(SEARCHEVENT, JSON.stringify(comMsgs))
-            return comMsgs
+            return
         }
 
         const searchcon = new SearchController()
@@ -88,7 +89,7 @@ export function registerSearchIpcHandlers() {
         event.sender.send(SEARCHEVENT, JSON.stringify(comMsgs))
         //return comMsgs
     })
-    ipcMain.handle(LISTSESARCHRESUT, async (event, data) => {
+    ipcMain.handle(LISTSESARCHRESUT, async (event, data): Promise<CommonResponse<SearchtaskItem>> => {
         const qdata = JSON.parse(data) as ItemSearchparam;
 
         //console.log("handle campaign:list")
@@ -106,7 +107,7 @@ export function registerSearchIpcHandlers() {
         // return res as CommonResponse<SearchtaskEntityNum>;
     });
     //return the result list in search task
-    ipcMain.handle(TASKSEARCHRESULTLIST, async (event, data) => {
+    ipcMain.handle(TASKSEARCHRESULTLIST, async (event, data): Promise<CommonResponse<SearchResEntity>> => {
         const qdata = JSON.parse(data) as SearchResultFetchparam;
         if (!("taskId" in qdata)) {
             const resp: CommonResponse<SearchResEntity> = {
@@ -130,7 +131,7 @@ export function registerSearchIpcHandlers() {
         return resp
     });
 
-    ipcMain.handle(SAVESEARCHERRORLOG, async (event, data) => {
+    ipcMain.handle(SAVESEARCHERRORLOG, async (event, data): Promise<string | undefined> => {
         const qdata = JSON.parse(data) as { id: number };
         const { filePath } = await dialog.showSaveDialog({
             title: 'Save Text File',
@@ -147,10 +148,10 @@ export function registerSearchIpcHandlers() {
                 return filePath;
             }
         }
-
+        return undefined;
     })
 
-    ipcMain.on(RETRYSEARCHTASK, async (event, data) => {
+    ipcMain.on(RETRYSEARCHTASK, async (event, data): Promise<void> => {
         const qdata = JSON.parse(data) as { id: number };
         if (!qdata.id) {
             const resp: CommonResponse<any> = {
@@ -158,7 +159,7 @@ export function registerSearchIpcHandlers() {
                 msg: "task id is empty",
             }
             event.sender.send(SYSTEM_MESSAGE, JSON.stringify(resp))
-            return resp;
+            return;
         }
 
         try {
@@ -169,19 +170,19 @@ export function registerSearchIpcHandlers() {
                 msg: "Task retry started successfully",
             }
             event.sender.send(SYSTEM_MESSAGE, JSON.stringify(resp))
-            return resp;
+            return;
         } catch (error) {
             const resp: CommonResponse<any> = {
                 status: false,
                 msg: error instanceof Error ? error.message : "Unknown error occurred",
             }
             event.sender.send(SYSTEM_MESSAGE, JSON.stringify(resp))
-            return resp;
+            return;
         }
     });
 
     // Get search task details for editing
-    ipcMain.handle(GET_SEARCH_TASK_DETAILS, async (event, data) => {
+    ipcMain.handle(GET_SEARCH_TASK_DETAILS, async (event, data): Promise<CommonMessage<TaskDetailsForEdit>> => {
         const qdata = JSON.parse(data) as { id: number };
         if (!qdata.id) {
             const resp: CommonMessage<TaskDetailsForEdit> = {
@@ -210,10 +211,12 @@ export function registerSearchIpcHandlers() {
     });
 
     // Update search task
-    ipcMain.handle(UPDATE_SEARCH_TASK, async (event, data) => {
-        const qdata = JSON.parse(data) as { id: number; updates: any };
+    ipcMain.handle(UPDATE_SEARCH_TASK, async (event, data): Promise<CommonMessage<any>> => {
+        const qdata = JSON.parse(data) as { id: number; updates: SearchTaskUpdateData };
+        console.log("update search task")
+        console.log(qdata)
         if (!qdata.id) {
-            const resp: CommonResponse<any> = {
+            const resp: CommonMessage<any> = {
                 status: false,
                 msg: "Task ID is required",
             }
@@ -221,7 +224,7 @@ export function registerSearchIpcHandlers() {
         }
 
         if (!qdata.updates) {
-            const resp: CommonResponse<any> = {
+            const resp: CommonMessage<any> = {
                 status: false,
                 msg: "Update data is required",
             }
@@ -233,9 +236,10 @@ export function registerSearchIpcHandlers() {
             const success = await searchControl.updateSearchTask(qdata.id, qdata.updates);
             
             if (success) {
-                const resp: CommonResponse<any> = {
+                const resp: CommonMessage<number> = {
                     status: true,
                     msg: "Task updated successfully",
+                    data:qdata.id
                 }
                 // Send event to notify about the update
                 event.sender.send(SEARCH_TASK_UPDATE_EVENT, JSON.stringify({
@@ -245,14 +249,14 @@ export function registerSearchIpcHandlers() {
                 }));
                 return resp;
             } else {
-                const resp: CommonResponse<any> = {
+                const resp: CommonMessage<any> = {
                     status: false,
                     msg: "Failed to update task",
                 }
                 return resp;
             }
         } catch (error) {
-            const resp: CommonResponse<any> = {
+            const resp: CommonMessage<any> = {
                 status: false,
                 msg: error instanceof Error ? error.message : "Unknown error occurred",
             }
@@ -262,6 +266,80 @@ export function registerSearchIpcHandlers() {
                 msg: error instanceof Error ? error.message : "Unknown error occurred",
                 taskId: qdata.id
             }));
+            return resp;
+        }
+    });
+
+    // Create search task without running it
+    ipcMain.handle(CREATE_SEARCH_TASK_ONLY, async (event, data): Promise<CommonMessage<number>> => {
+        const qdata = JSON.parse(data) as Usersearchdata;
+        console.log("create search task only")
+        console.log(qdata)
+        
+        // Validate required fields
+        if (!("searchEnginer" in qdata)) {
+            const resp: CommonMessage<number> = {
+                status: false,
+                msg: "Search engine is required",
+            }
+            return resp;
+        }
+        if (!("keywords" in qdata)) {
+            const resp: CommonMessage<number> = {
+                status: false,
+                msg: "Keywords are required",
+            }
+            return resp;
+        }
+
+        // Validate data types
+        if (typeof qdata.concurrency === 'string') {
+            qdata.concurrency = parseInt(qdata.concurrency, 10);
+            if (isNaN(qdata.concurrency)) {
+                qdata.concurrency = 1
+            }
+        }
+        if (typeof qdata.num_pages === 'string') {
+            qdata.num_pages = parseInt(qdata.num_pages, 10);
+            if (isNaN(qdata.num_pages)) {
+                qdata.num_pages = 1
+            }
+        }
+
+        // Validate search engine
+        const seArr: string[] = ToArray(SearhEnginer);
+        if (!seArr.includes(qdata.searchEnginer)) {
+            const resp: CommonMessage<number> = {
+                status: false,
+                msg: "Invalid search engine",
+            }
+            return resp;
+        }
+
+        try {
+            const searchControl = new SearchController();
+            const taskId = await searchControl.createTaskOnly({
+                engine: qdata.searchEnginer,
+                keywords: qdata.keywords,
+                num_pages: qdata.num_pages,
+                concurrency: qdata.concurrency,
+                notShowBrowser: qdata.notShowBrowser,
+                localBrowser: qdata.localBrowser,
+                proxys: qdata.proxys,
+                accounts: qdata.accounts
+            });
+            
+            const resp: CommonMessage<number> = {
+                status: true,
+                msg: "Task created successfully",
+                data: taskId
+            }
+            return resp;
+        } catch (error) {
+            const resp: CommonMessage<number> = {
+                status: false,
+                msg: error instanceof Error ? error.message : "Unknown error occurred",
+            }
             return resp;
         }
     });

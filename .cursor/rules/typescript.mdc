@@ -1,0 +1,182 @@
+---
+description: TypeScript best practices focusing on type safety and avoiding the `any` type
+globs: **/*.{ts,tsx}
+alwaysApply: true
+---
+
+- **Avoid `any` Type**
+  - **Never use `any` type** - it defeats the purpose of TypeScript's type safety
+  - **Use proper types** instead of `any` for better type checking and IDE support
+  - **When unsure of type**, use `unknown` instead of `any` for safer type handling
+
+- **Type Safety Best Practices**
+  - **Define explicit types** for all variables, parameters, and return values
+  - **Use interfaces and types** for complex data structures
+  - **Leverage TypeScript's type inference** when types are obvious
+  - **Use union types** instead of `any` for multiple possible types
+
+- **Common `any` Replacements**
+  ```typescript
+  // ❌ DON'T: Using any
+  const data: any = getData();
+  function processData(data: any) { }
+  
+  // ✅ DO: Use proper types
+  interface DataType {
+    id: number;
+    name: string;
+    value: unknown;
+  }
+  const data: DataType = getData();
+  function processData(data: DataType) { }
+  
+  // ✅ DO: Use unknown for truly unknown types
+  function handleUnknownData(data: unknown) {
+    if (typeof data === 'string') {
+      return data.toUpperCase();
+    }
+    return String(data);
+  }
+  ```
+
+- **Object and Record Types**
+  ```typescript
+  // ❌ DON'T: Using any for objects
+  const config: any = { timeout: 1000, retries: 3 };
+  
+  // ✅ DO: Use proper object types
+  interface Config {
+    timeout: number;
+    retries: number;
+    url?: string;
+  }
+  const config: Config = { timeout: 1000, retries: 3 };
+  
+  // ✅ DO: Use Record for dynamic keys
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  ```
+
+- **Array and Collection Types**
+  ```typescript
+  // ❌ DON'T: Using any for arrays
+  const items: any[] = [];
+  function processItems(items: any[]) { }
+  
+  // ✅ DO: Use proper array types
+  const items: string[] = [];
+  function processItems(items: string[]) { }
+  
+  // ✅ DO: Use generic types for flexible collections
+  function processArray<T>(items: T[]): T[] {
+    return items.filter(item => item !== null);
+  }
+  ```
+
+- **Function Types**
+  ```typescript
+  // ❌ DON'T: Using any for functions
+  const callback: any = (data: any) => { };
+  
+  // ✅ DO: Use proper function types
+  type DataCallback = (data: string) => void;
+  const callback: DataCallback = (data: string) => { };
+  
+  // ✅ DO: Use generic function types
+  function createHandler<T>(processor: (data: T) => void) {
+    return (data: T) => processor(data);
+  }
+  ```
+
+- **API and External Data**
+  ```typescript
+  // ❌ DON'T: Using any for API responses
+  async function fetchData(): Promise<any> { }
+  
+  // ✅ DO: Define response types
+  interface ApiResponse<T> {
+    data: T;
+    status: number;
+    message: string;
+  }
+  async function fetchData(): Promise<ApiResponse<UserData>> { }
+  ```
+
+- **Error Handling**
+  ```typescript
+  // ❌ DON'T: Using any for errors
+  catch (error: any) {
+    console.log(error.message);
+  }
+  
+  // ✅ DO: Use proper error types
+  catch (error: unknown) {
+    if (error instanceof Error) {
+      console.log(error.message);
+    } else {
+      console.log('Unknown error occurred');
+    }
+  }
+  ```
+
+- **Database and ORM Types**
+  ```typescript
+  // ❌ DON'T: Using any for database entities
+  const taskUpdates: any = {};
+  
+  // ✅ DO: Use proper entity types
+  interface TaskUpdateFields {
+    enginer_id?: number;
+    num_pages?: number;
+    concurrency?: number;
+    notShowBrowser?: number;
+    localBrowser?: string;
+    record_time?: string;
+  }
+  const taskUpdates: TaskUpdateFields = {};
+  ```
+
+- **When `any` Might Be Necessary**
+  - **Third-party libraries** without TypeScript definitions
+  - **Dynamic data** that cannot be typed at compile time
+  - **Legacy code** that cannot be immediately refactored
+  
+  **Always document why `any` is used:**
+  ```typescript
+  // TODO: Replace with proper type when library provides TypeScript definitions
+  const legacyData: any = getLegacyData();
+  ```
+
+- **Type Assertions vs `any`**
+  ```typescript
+  // ❌ DON'T: Using any for type assertions
+  const element = document.getElementById('app') as any;
+  
+  // ✅ DO: Use proper type assertions
+  const element = document.getElementById('app') as HTMLElement;
+  
+  // ✅ DO: Use type guards for safer assertions
+  function isHTMLElement(element: unknown): element is HTMLElement {
+    return element instanceof HTMLElement;
+  }
+  ```
+
+- **Migration Strategy**
+  - **Start with `unknown`** instead of `any` for safer handling
+  - **Gradually replace** `any` types with proper types
+  - **Use type guards** to narrow down unknown types
+  - **Create interfaces** for commonly used data structures
+  - **Leverage TypeScript's utility types** like `Partial<T>`, `Pick<T>`, `Omit<T>`
+
+- **Code Review Checklist**
+  - [ ] No `any` types in new code
+  - [ ] All functions have explicit return types
+  - [ ] All parameters have explicit types
+  - [ ] Complex objects use interfaces or types
+  - [ ] Arrays have proper element types
+  - [ ] Error handling uses `unknown` instead of `any`
+  - [ ] Third-party integrations have proper type definitions
+
+- **References:**
+  - [TypeScript Handbook - Type Safety](https://www.typescriptlang.org/docs/handbook/2/basic-types.html)
+  - [TypeScript Utility Types](https://www.typescriptlang.org/docs/handbook/utility-types.html)
+  - [TypeScript Best Practices](https://github.com/typescript-eslint/typescript-eslint/blob/main/packages/eslint-plugin/docs/rules/no-explicit-any.md)

@@ -1,5 +1,5 @@
 import { SearchDataParam } from "@/entityTypes/scrapeType"
-import { SearchTaskModel, SearchTaskStatus } from "@/model/SearchTask.model"
+import { SearchTaskModel, SearchTaskStatus, SearchTaskUpdateFields } from "@/model/SearchTask.model"
 //import { Token } from "@/modules/token"
 //import { USERSDBPATH } from '@/config/usersetting';
 import { SearhEnginer } from "@/config/searchSetting"
@@ -31,6 +31,7 @@ import {WriteLog,getChromeExcutepath,getFirefoxExcutepath,getRecorddatetime} fro
 export type TaskDetailsForEdit = {
     id: number;
     engine: number;
+    engineName?: string;
     keywords: Array<string>;
     num_pages: number;
     concurrency: number;
@@ -40,6 +41,17 @@ export type TaskDetailsForEdit = {
     accounts: Array<number>;
     status: SearchTaskStatus;
     record_time: string;
+}
+
+export type SearchTaskUpdateData = {
+    engine?: string;
+    keywords?: string[];
+    num_pages?: number;
+    concurrency?: number;
+    notShowBrowser?: boolean;
+    localBrowser?: string;
+    proxys?: Array<{host: string, port: number, user?: string, pass?: string}>;
+    accounts?: number[];
 }
 
 export class SearchModule extends BaseModule {
@@ -227,11 +239,53 @@ export class SearchModule extends BaseModule {
         // }
         //const searchtask = new SearchTaskdb(this.dbpath)
         const enginId = this.convertSEtoNum(data.engine)
+        console.log("enginId is"+enginId)
         if (!enginId) {
             throw new Error("enginerId empty")
         }
         const taskId = await this.taskdbModel.saveSearchTask(enginId, data.num_pages, data.concurrency, data.notShowBrowser, data.localBrowser)
         //const searshdb = new SearchKeyworddb(this.dbpath)
+        for (const keyword of data.keywords) {
+            await this.serKeywordModel.saveSearchKeyword(keyword, Number(taskId))
+        }
+        if (data.proxys) {
+            for (const proxy of data.proxys) {
+                const proxyEntity = new SearchTaskProxyEntity()
+                proxyEntity.task_id = Number(taskId)
+
+                proxyEntity.host = proxy.host
+                proxyEntity.port = proxy.port
+                proxyEntity.user = proxy.user ? proxy.user : ''
+                proxyEntity.pass = proxy.pass ? proxy.pass : ''
+
+                await this.searchTaskProxyModel.create(proxyEntity)
+            }
+        }
+        if (data.accounts) {
+            for (const account of data.accounts) {
+                const accountEntity = new SearchAccountEntity()
+                accountEntity.task_id = Number(taskId)
+                accountEntity.account_id = account
+                await this.searchAccountModel.create(accountEntity)
+            }
+        }
+        return Number(taskId)
+    }
+
+    /**
+     * Save search task without running it (status: Not Start)
+     * @param data Search task parameters
+     * @returns The ID of the created task
+     */
+    public async saveSearchtaskOnly(data: SearchDataParam): Promise<number> {
+        console.log("save search task only")
+        const enginId = this.convertSEtoNum(data.engine)
+        console.log("enginId is"+enginId)
+        if (!enginId) {
+            throw new Error("enginerId empty")
+        }
+        const taskId = await this.taskdbModel.saveSearchTaskOnly(enginId, data.num_pages, data.concurrency, data.notShowBrowser, data.localBrowser)
+        
         for (const keyword of data.keywords) {
             await this.serKeywordModel.saveSearchKeyword(keyword, Number(taskId))
         }
@@ -452,7 +506,7 @@ export class SearchModule extends BaseModule {
         }
         //get accounts by task id
         const data: SearchDataParam = {
-            engine: taskEntity.enginer_id,
+            engine: taskEntity.enginer_id.toString(),
             keywords: keywords.map(item => item.keyword),
             num_pages: taskEntity.num_pages,
             concurrency: taskEntity.concurrency,
@@ -481,16 +535,7 @@ export class SearchModule extends BaseModule {
      * @param updates The updated task parameters
      * @returns True if update was successful
      */
-    public async updateSearchTask(taskId: number, updates: {
-        engine?: string;
-        keywords?: string[];
-        num_pages?: number;
-        concurrency?: number;
-        notShowBrowser?: boolean;
-        localBrowser?: string;
-        proxys?: Array<{host: string, port: number, user?: string, pass?: string}>;
-        accounts?: number[];
-    }): Promise<boolean> {
+    public async updateSearchTask(taskId: number, updates: SearchTaskUpdateData): Promise<boolean> {
         // Check if task exists and is editable
         const isEditable = await this.taskdbModel.isTaskEditable(taskId);
         if (!isEditable) {
@@ -504,11 +549,7 @@ export class SearchModule extends BaseModule {
         }
 
         // Prepare updates for the main task entity
-        const taskUpdates: any = {};
-        
-        if (updates.engine !== undefined) {
-            taskUpdates.enginer_id = updates.engine;
-        }
+        const taskUpdates: SearchTaskUpdateFields = {};
         
         if (updates.num_pages !== undefined) {
             taskUpdates.num_pages = updates.num_pages;
@@ -529,6 +570,14 @@ export class SearchModule extends BaseModule {
         // Update record time to indicate modification
         taskUpdates.record_time = getRecorddatetime();
 
+        // Convert engine name to engine id
+        if (updates.engine) {
+            const engineId = await this.convertSEtoNum(updates.engine);
+            if (engineId) {
+                taskUpdates.enginer_id = engineId;
+            }
+        }
+
         // Update the main task entity
         const taskUpdateSuccess = await this.taskdbModel.updateSearchTask(taskId, taskUpdates);
         if (!taskUpdateSuccess) {
@@ -537,10 +586,24 @@ export class SearchModule extends BaseModule {
 
         // Update keywords if provided
         if (updates.keywords !== undefined) {
-            // For keywords, we'll just add new ones since the existing saveSearchKeyword method handles duplicates
-            // Clear existing keywords by not preserving them
-            for (const keyword of updates.keywords) {
+            // Get existing keywords for this task
+            const existingKeywords = await this.serKeywordModel.getKeywordsByTask(taskId);
+            const newKeywords = updates.keywords;
+            
+            // Find keywords to add (new keywords that don't exist)
+            const keywordsToAdd = newKeywords.filter(keyword => !existingKeywords.includes(keyword));
+            
+            // Find keywords to remove (existing keywords that are not in new submission)
+            const keywordsToRemove = existingKeywords.filter(keyword => !newKeywords.includes(keyword));
+            
+            // Add new keywords
+            for (const keyword of keywordsToAdd) {
                 await this.serKeywordModel.saveSearchKeyword(keyword, taskId);
+            }
+            
+            // Remove keywords that are no longer in the submission
+            for (const keyword of keywordsToRemove) {
+                await this.serKeywordModel.deleteKeyword(keyword, taskId);
             }
         }
 
@@ -568,6 +631,7 @@ export class SearchModule extends BaseModule {
                 await this.searchAccountModel.create(accountEntity);
             }
         }
+       
 
         // Reset task status to NotStart since it's been modified
         await this.taskdbModel.updateTaskStatus(taskId, SearchTaskStatus.NotStart);
@@ -598,10 +662,11 @@ export class SearchModule extends BaseModule {
         const keywords = await this.serKeywordModel.getKeywordsEntityByTask(taskId);
         const proxys = await this.searchTaskProxyModel.getItemsByTaskId(taskId);
         const accounts = await this.searchAccountModel.getAccountByTaskId(taskId);
-
+        const engineName=this.convertNumtoSE(Number(taskEntity.enginer_id))
         return {
             id: taskEntity.id,
             engine: Number(taskEntity.enginer_id),
+            engineName:engineName,
             keywords: keywords.map(item => item.keyword),
             num_pages: taskEntity.num_pages,
             concurrency: taskEntity.concurrency,

@@ -49,7 +49,7 @@
     
 
       <v-container v-if="useAccount == true">
-        <AccountSelectedTable :accountSource="enginer" @change="handleAccountChange" />
+        <AccountSelectedTable :accountSource="enginer" :preSelectedAccounts="accounts" @change="handleAccountChange" />
       </v-container>
 
       <p class="mt-5">{{ capletter(t('search.show_in_Browser')) }}:</p>
@@ -60,6 +60,10 @@
       <div class="d-flex justify-space-between mt-4 mb-4">
         <v-btn color="success" type="submit" :loading="loading" class="flex-grow-1 mr-2">
           {{ isEditMode ? t('common.update') : t('common.submit') }}
+        </v-btn>
+
+        <v-btn v-if="!isEditMode" color="primary" @click="onSaveOnly" :loading="loading" class="flex-grow-1 mx-2">
+          {{ t('search.save_only') }}
         </v-btn>
 
         <v-btn color="error" @click="router.go(-1)" class="flex-grow-1 ml-2">
@@ -109,7 +113,8 @@ import { useI18n } from "vue-i18n";
 //import router from '@/views/router';
 import { SearhEnginer } from "@/config/searchSetting"
 import { ToArray, CapitalizeFirstLetter } from "@/views/utils/function"
-import { submitScraper, receiveSearchevent, getSearchTaskDetails, updateSearchTask } from "@/views/api/search"
+import { submitScraper, receiveSearchevent, getSearchTaskDetails, updateSearchTask, createSearchTaskOnly } from "@/views/api/search"
+import { getSocialaccountinfo } from "@/views/api/socialaccount"
 import { Usersearchdata } from "@/entityTypes/searchControlType"
 import { convertNumberToBoolean } from "@/views/utils/function"
 import { SEARCHEVENT } from "@/config/channellist"
@@ -172,12 +177,15 @@ const loadTaskDetails = async () => {
     console.log(taskDetails)
     //if (taskDetails.status && taskDetails.data) {
         const data = taskDetails;
-      
+      console.log("data")
+      console.log(taskDetails)
       // Populate form fields
       // Find the engine name by engine ID
-      const engineItem = searchplatform.value.find(item => item.index === data.engine);
+      if(data.engineName){
+      const engineItem = searchplatform.value.find(item => item.key === data.engineName);
       console.log("engineItem:"+engineItem)
       enginer.value = engineItem ? engineItem.key : data.engine.toString();
+      }
       keywords.value = data.keywords.join('\n');
       page_number.value = data.num_pages;
       concurrent_quantity.value = data.concurrency;
@@ -200,16 +208,50 @@ const loadTaskDetails = async () => {
       
       // Set accounts
       if (data.accounts && data.accounts.length > 0) {
-        // Note: We need to fetch account details to populate the accounts array
-        // For now, we'll just set the account IDs with default values
-        accounts.value = data.accounts.map(id => ({ 
-          id, 
-          social_type_id: 1, // Default social type
-          user: `Account ${id}`,
-          pass: '',
-          status: 1,
-          use_proxy: 0
-        }));
+        // Fetch account details for each account ID
+        try {
+          const accountDetails = await Promise.all(
+            data.accounts.map(async (id) => {
+              try {
+                const accountDetail = await getSocialaccountinfo(id);
+                return {
+                  id: accountDetail.id || 0,
+                  social_type_id: accountDetail.social_type_id || 1,
+                  user: accountDetail.user,
+                  pass: accountDetail.pass,
+                  status: accountDetail.status,
+                  use_proxy: accountDetail.proxy && accountDetail.proxy.length > 0 ? 1 : 0,
+                  cookies: false // cookies property doesn't exist in SocialAccountDetailData
+                };
+              } catch (error) {
+                console.error(`Failed to fetch account details for ID ${id}:`, error);
+                // Return a fallback account object if fetching fails
+                return {
+                  id: id,
+                  social_type_id: 1,
+                  user: `Account ${id}`,
+                  pass: '',
+                  status: 1,
+                  use_proxy: 0,
+                  cookies: false
+                };
+              }
+            })
+          );
+          accounts.value = accountDetails;
+        } catch (error) {
+          console.error('Error fetching account details:', error);
+          // Fallback to basic account objects if bulk fetch fails
+          accounts.value = data.accounts.map(id => ({ 
+            id: id, 
+            social_type_id: 1,
+            user: `Account ${id}`,
+            pass: '',
+            status: 1,
+            use_proxy: 0,
+            cookies: false
+          }));
+        }
       }
     //}
   } catch (error) {
@@ -379,22 +421,25 @@ async function onSubmit() {
         concurrency: subdata.concurrency,
         notShowBrowser: subdata.notShowBrowser,
         localBrowser: subdata.localBrowser,
-        proxys: subdata.proxys,
+        proxys: subdata.proxys?.map(proxy => ({
+          host: proxy.host,
+          port: parseInt(proxy.port),
+          user: proxy.user,
+          pass: proxy.pass
+        })),
         accounts: subdata.accounts
       };
       
       const result = await updateSearchTask(taskId.value, updateData);
-      if (result.status) {
+      console.log("result")
+      if (result) {
         setAlert(t('search.task_updated_successfully'), 'Success', 'success');
         // Navigate back to task list after a short delay
         setTimeout(() => {
           router.push({ name: 'Searchtasklist' });
         }, 1500);
       } else {
-        // Check if the error message is a translation key
-        const errorMessage = result.msg || 'Failed to update task';
-        const translatedMessage = errorMessage.startsWith('search.') ? t(errorMessage) : errorMessage;
-        setAlert(translatedMessage, 'Error', 'error');
+        setAlert('Failed to update task', 'Error', 'error');
       }
     } else {
       // Create new task
@@ -402,6 +447,74 @@ async function onSubmit() {
         setAlert(err.message, "Error", "error");
         return null;
       });
+    }
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'An error occurred';
+    const translatedMessage = errorMessage.startsWith('search.') ? t(errorMessage) : errorMessage;
+    setAlert(translatedMessage, 'Error', 'error');
+  } finally {
+    loading.value = false;
+  }
+}
+
+/**
+ * Save search task without running it
+ */
+async function onSaveOnly() {
+  if (!form.value) return;
+  loading.value = true;
+  const { valid } = await form.value.validate();
+  if (!valid) {
+    setAlert("Please fill all required fields", "Error", "error");
+    loading.value = false;
+    return;
+  }
+  
+  if (!enginer.value) {
+    setAlert(t("search.search_enginer_empty"), "Error", "error");
+    loading.value = false;
+    return;
+  }
+  
+  if (!keywords.value) {
+    setAlert(t("search.keywords_empty"), "Error", "error");
+    loading.value = false;
+    return;
+  }
+  
+  const subkeyword = keywords.value.split('\n').map(keyword => keyword.trim());
+  let localbowser: string = ""
+  if (useLocalBrowser.value) {
+    localbowser = localBrowser.value
+  }
+  let accountids: Array<number> = []
+  if (useAccount.value) {
+    accountids = accounts.value.map(item => item.id)
+  }
+  
+  const subdata: Usersearchdata = {
+    searchEnginer: enginer.value,
+    keywords: subkeyword,
+    num_pages: page_number.value,
+    concurrency: concurrent_quantity.value,
+    notShowBrowser: !convertNumberToBoolean(showinbrwoser.value),
+    proxys: proxyValue.value,
+    localBrowser: localbowser,
+    accounts: accountids
+  }
+  
+  try {
+    const result = await createSearchTaskOnly(subdata);
+    console.log("result")
+    console.log(result)
+    if (result) {
+      setAlert(`${t('search.task_saved_successfully')} (ID: ${result})`, 'Success', 'success');
+      // Navigate back to task list after a short delay
+      setTimeout(() => {
+        router.push({ name: 'Searchtasklist' });
+      }, 1500);
+    } else {
+      setAlert('Failed to save task', 'Error', 'error');
     }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'An error occurred';

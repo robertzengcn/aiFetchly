@@ -1,19 +1,40 @@
 <template>
     <div class="tables_page">
+        <!-- Add create task button -->
+        <div class="search_bar mt-4 d-flex jsb">
+            <div class="d-flex jsb search_tool">
+                <div class="search_wrap mr-4">
+                    <v-text-field rounded class="elevation-0" density="compact" variant="solo" label="Search tasks"
+                        append-inner-icon="mdi-magnify" single-line hide-details></v-text-field>
+                </div>
+                <div class="ml-auto">
+                    <v-btn class="btn mb-4" variant="flat" prepend-icon="mdi-plus" color="#5865f2" @click="createTask()">
+                        Create Search Task
+                    </v-btn>
+                </div>
+            </div>
+        </div>
        
-<SearchresultTable />
+        <SearchresultTable />
     </div>
 </template>
 <script setup lang="ts">
 
 import { ref } from 'vue';
 import SearchresultTable from '@/views/pages/search/widgets/SearchResultTable.vue'
+import router from '@/views/router';
 //const dialog = ref(false);
 
 // onMounted(() => {
     
 // });
 
+const createTask = () => {
+    console.log("create search task")
+    router.push({
+        name: 'Searchform'
+    });
+}
 
 </script>
 <style lang="scss">

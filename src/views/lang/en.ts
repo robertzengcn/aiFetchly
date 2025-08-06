@@ -243,6 +243,11 @@ export default {
         at_least_one_keyword_required:"At least one keyword is required",
         pages_must_be_between:"Number of pages must be between 1 and 100",
         concurrency_must_be_between:"Concurrency must be between 1 and 10",
+        save_only:"Save Only",
+        task_saved_successfully:"Task saved successfully",
+        task_id:"Task ID",
+        run_task:"Run Task",
+        task_status_not_start:"Not Start",
     },
     searchtask:{
         id:"Task Id",

@@ -40,6 +40,15 @@
           >
           mdi-refresh
           </v-icon>
+          <v-icon 
+          size="small"
+          class="me-2"
+          v-if="item.status=='Not Start'"
+          @click="runTask(item)"
+          title="Run Task"
+          >
+          mdi-play
+          </v-icon>
         </template>
     </v-data-table-server>
     
@@ -220,6 +229,18 @@ const editTask = (item: any) => {
         name: 'EditSearchTask',
         params: { id: item.id }
     });
+}
+
+// Run task function
+const runTask = async (item: any) => {
+    try {
+        // Call the run task API
+        await retrySearchTask(item.id);
+        // Refresh the table after successful run
+        loadItems({ page: options.page, itemsPerPage: options.itemsPerPage, sortBy: "" });
+    } catch (error) {
+        console.error('Error running task:', error);
+    }
 }
 onMounted(() => {
   

@@ -7,7 +7,7 @@ export class SearchTaskEntity extends AuditableEntity {
     id: number;
 
     @Column("text", { nullable: true })
-    enginer_id: string;
+    enginer_id: number;
     
     @Column("text", { nullable: true })
     error_log: string;

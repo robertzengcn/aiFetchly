@@ -56,4 +56,23 @@ export class SearchKeywordModel extends BaseDb {
     async getKeywordsEntityById(keywordId: number): Promise<SearchKeywordEntity | null> {
         return this.repository.findOne({ where: { id: keywordId } })
     }
+
+    /**
+     * Delete keyword by keyword string and task id
+     */
+    async deleteKeyword(keyword: string, taskId: number): Promise<boolean> {
+        const result = await this.repository.delete({
+            keyword,
+            task_id: taskId
+        })
+        return result.affected ? result.affected > 0 : false
+    }
+
+    /**
+     * Delete keyword by id
+     */
+    async deleteKeywordById(keywordId: number): Promise<boolean> {
+        const result = await this.repository.delete(keywordId)
+        return result.affected ? result.affected > 0 : false
+    }
 } 

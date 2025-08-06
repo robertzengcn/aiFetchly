@@ -13,9 +13,9 @@ export class SearchAccountEntity extends AuditableEntity {
     @Column("integer")
     account_id: number;
 
-    @ManyToOne(() => SearchTaskEntity)
-    @JoinColumn({ name: "id" })
-    searchtask: SearchTaskEntity;
+    // @ManyToOne(() => SearchTaskEntity)
+    // @JoinColumn({ name: "id" })
+    // searchtask: SearchTaskEntity;
 
    
 } 

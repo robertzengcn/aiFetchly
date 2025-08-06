@@ -13,6 +13,15 @@ export enum SearchTaskStatus {
   NotStart = 4
 }
 
+export type SearchTaskUpdateFields = {
+  enginer_id?: number;
+  num_pages?: number;
+  concurrency?: number;
+  notShowBrowser?: number;
+  localBrowser?: string;
+  record_time?: string;
+}
+
 export class SearchTaskModel extends BaseDb {
   private repository: Repository<SearchTaskEntity>;
 
@@ -28,7 +37,7 @@ export class SearchTaskModel extends BaseDb {
    */
   async saveSearchTask(enginerId: number,num_pages?:number,concurrency?:number,notShowBrowser?:boolean,localBrowser?:string,accounts?:Array<number>): Promise<number> {
     const taskEntity = new SearchTaskEntity();
-    taskEntity.enginer_id = enginerId.toString();
+    taskEntity.enginer_id = enginerId;
     taskEntity.record_time = getRecorddatetime();
     taskEntity.status = SearchTaskStatus.NotStart;
     taskEntity.num_pages = num_pages?num_pages:1;
@@ -37,6 +46,28 @@ export class SearchTaskModel extends BaseDb {
     //taskEntity.useLocalbrowserdata = useLocalbrowserdata ? 1 : 0;
     taskEntity.localBrowser = localBrowser?localBrowser:"";
     //taskEntity.accounts = accounts?accounts:[];
+    const savedTask = await this.repository.save(taskEntity);
+    return savedTask.id;
+  }
+
+  /**
+   * Save a new search task without running it (explicitly set to Not Start status)
+   * @param enginerId The search engine ID
+   * @param num_pages Number of pages to scrape (optional)
+   * @param concurrency Number of concurrent requests (optional)
+   * @param notShowBrowser Whether to hide browser (optional)
+   * @param localBrowser Local browser path (optional)
+   * @returns The ID of the created task
+   */
+  async saveSearchTaskOnly(enginerId: number,num_pages?:number,concurrency?:number,notShowBrowser?:boolean,localBrowser?:string): Promise<number> {
+    const taskEntity = new SearchTaskEntity();
+    taskEntity.enginer_id = enginerId;
+    taskEntity.record_time = getRecorddatetime();
+    taskEntity.status = SearchTaskStatus.NotStart; // Explicitly set to Not Start
+    taskEntity.num_pages = num_pages?num_pages:1;
+    taskEntity.concurrency = concurrency?concurrency:1;
+    taskEntity.notShowBrowser = notShowBrowser ? 1 : 0;
+    taskEntity.localBrowser = localBrowser?localBrowser:"";
     const savedTask = await this.repository.save(taskEntity);
     return savedTask.id;
   }
@@ -177,14 +208,7 @@ export class SearchTaskModel extends BaseDb {
    * @param updates The properties to update
    * @returns True if update was successful
    */
-  async updateSearchTask(taskId: number, updates: {
-    enginer_id?: string;
-    num_pages?: number;
-    concurrency?: number;
-    notShowBrowser?: number;
-    localBrowser?: string;
-    record_time?: string;
-  }): Promise<boolean> {
+  async updateSearchTask(taskId: number, updates: SearchTaskUpdateFields): Promise<boolean> {
     // Check if task exists and is editable
     const isEditable = await this.isTaskEditable(taskId);
     if (!isEditable) {

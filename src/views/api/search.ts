@@ -3,10 +3,10 @@ import { SEARCHSCRAPERAPI } from '@/config/channellist'
 import { SearchtaskItem,SearchResultFetchparam } from "@/entityTypes/searchControlType"
 import { SearchResult} from '@/views/api/types'
 import { windowInvoke,windowReceive,windowSend } from '@/views/utils/apirequest'
-import {LISTSESARCHRESUT,TASKSEARCHRESULTLIST,SAVESEARCHERRORLOG,RETRYSEARCHTASK,GET_SEARCH_TASK_DETAILS,UPDATE_SEARCH_TASK,SEARCH_TASK_UPDATE_EVENT} from "@/config/channellist";
+import {LISTSESARCHRESUT,TASKSEARCHRESULTLIST,SAVESEARCHERRORLOG,RETRYSEARCHTASK,GET_SEARCH_TASK_DETAILS,UPDATE_SEARCH_TASK,SEARCH_TASK_UPDATE_EVENT,CREATE_SEARCH_TASK_ONLY} from "@/config/channellist";
 import {SearchResEntityDisplay} from "@/entityTypes/scrapeType"
 import {ItemSearchparam} from "@/entityTypes/commonType"
-import {TaskDetailsForEdit} from "@/modules/searchModule"
+import {TaskDetailsForEdit, SearchTaskUpdateData} from "@/modules/searchModule"
 //import {CommonDialogMsg} from "@/entityTypes/commonType";
 // import { ipcMain} from 'electron'
 
@@ -76,7 +76,7 @@ export async function getSearchTaskDetails(taskId: number): Promise<TaskDetailsF
  * @param updates The update data
  * @returns Update result
  */
-export async function updateSearchTask(taskId: number, updates: any): Promise<any> {
+export async function updateSearchTask(taskId: number, updates: SearchTaskUpdateData): Promise<boolean> {
     const resp = await windowInvoke(UPDATE_SEARCH_TASK, { id: taskId, updates: updates });
     if (!resp) {
         throw new Error("Unknown error");
@@ -88,6 +88,19 @@ export async function updateSearchTask(taskId: number, updates: any): Promise<an
  * Listen for search task update events
  * @param callback The callback function to handle events
  */
-export function receiveSearchTaskUpdateEvent(callback: (data: any) => void) {
+export function receiveSearchTaskUpdateEvent(callback: (data: unknown) => void) {
     windowReceive(SEARCH_TASK_UPDATE_EVENT, callback);
+}
+
+/**
+ * Create a search task without running it
+ * @param data Search task data
+ * @returns Promise with task ID or error
+ */
+export async function createSearchTaskOnly(data: Usersearchdata): Promise<number> {
+    const resp = await windowInvoke(CREATE_SEARCH_TASK_ONLY, data);
+    if (!resp) {
+        throw new Error("Unknown error");
+    }
+    return resp;
 }

@@ -233,6 +233,11 @@ export default {
         at_least_one_keyword_required:"至少需要一个关键词",
         pages_must_be_between:"页数必须在1到100之间",
         concurrency_must_be_between:"并发数必须在1到10之间",
+        save_only:"仅保存",
+        task_saved_successfully:"任务保存成功",
+        task_id:"任务ID",
+        run_task:"运行任务",
+        task_status_not_start:"未开始",
     },
     searchtask:{
         id:"任务ID",
