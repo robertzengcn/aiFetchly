@@ -38,6 +38,9 @@ import { ScheduleExecutionLogEntity } from "@/entity/ScheduleExecutionLog.entity
 import { ScheduleDependencyEntity } from "@/entity/ScheduleDependency.entity";
 import { SchedulerStatusEntity } from "@/entity/SchedulerStatus.entity";
 import { SocialAccountEntity } from "@/entity/SocialAccount.entity";
+import { YellowPagesTaskEntity } from "@/entity/YellowPagesTask.entity";
+import { YellowPagesResultEntity } from "@/entity/YellowPagesResult.entity";
+import { YellowPagesPlatformEntity } from "@/entity/YellowPagesPlatform.entity";
 // import sqlite3 from "sqlite3";
 
 
@@ -96,6 +99,9 @@ export class SqliteDb {
                 EmailServiceEntity,
                 EmailServiceTaskRelationEntity,
                 SocialAccountEntity,
+                YellowPagesTaskEntity,
+                YellowPagesResultEntity,
+                YellowPagesPlatformEntity,
             ],
             synchronize: true, 
             migrations: [],
