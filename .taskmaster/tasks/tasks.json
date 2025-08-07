@@ -1,0 +1,685 @@
+{
+  "master": {
+    "tasks": [
+      {
+        "id": 11,
+        "title": "Setup Core Architecture and Database Schema",
+        "description": "Implement the foundational multi-process architecture (Main/Child) and define/create the SQLite database schema for YellowPagesTask, YellowPagesResult, and YellowPagesPlatform entities as specified in the PRD.",
+        "details": "This task involves setting up the Electron multi-process structure with a Main Process for management and Child Processes for scraping. It also includes creating the necessary database tables using the schemas defined in section 5 of the PRD.",
+        "testStrategy": "Unit test database migration scripts. Verify process isolation by ensuring a child process crash does not affect the main process. Validate database schema against PRD requirements.",
+        "priority": "high",
+        "dependencies": [],
+        "status": "in-progress",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Initialize Electron Application Shell and Main Process",
+            "description": "Set up the basic file structure for the Electron application, including the main process entry point that creates a browser window and handles basic application lifecycle events.",
+            "dependencies": [],
+            "details": "Create the package.json, main.js, and index.html files. The main.js should handle the 'ready' and 'window-all-closed' app events and create a basic BrowserWindow.",
+            "status": "done",
+            "testStrategy": "Run the application to ensure a window appears on screen without any console errors."
+          },
+          {
+            "id": 2,
+            "title": "Define Database Entity Models in Code",
+            "description": "Translate the schemas for YellowPagesTask, YellowPagesResult, and YellowPagesPlatform from the PRD into code-based models or interfaces (e.g., using TypeScript or an ORM's entity definition).",
+            "dependencies": [],
+            "details": "Create files (e.g., models/task.js) that define the structure, field names, and data types for each of the three required database entities. This step does not involve writing SQL or connecting to a database.",
+            "status": "pending",
+            "testStrategy": "Perform a code review to validate that the defined models perfectly match the specifications in section 5 of the PRD."
+          },
+          {
+            "id": 3,
+            "title": "Implement Database Initialization and Schema Migration",
+            "description": "Write the logic to connect to the SQLite database and execute the `CREATE TABLE` statements based on the models defined in the previous subtask. This script should run on application startup.",
+            "dependencies": [
+              2
+            ],
+            "details": "Create a database module that uses a library like 'sqlite3' or 'better-sqlite3'. The initialization logic should be idempotent, checking for the existence of tables before attempting to create them.",
+            "status": "pending",
+            "testStrategy": "Unit test the migration script. After running the application, inspect the generated SQLite file with a database browser to verify all tables and columns are created correctly."
+          },
+          {
+            "id": 4,
+            "title": "Implement Child Process Spawning Mechanism",
+            "description": "Create the basic entry point script for a child process and implement the logic within the main process to spawn this script using Node.js's `child_process.fork()`.",
+            "dependencies": [
+              1
+            ],
+            "details": "The main process will have a function or class (e.g., ChildProcessManager) that is responsible for starting a new child process. The child process script itself can be a simple stub for now.",
+            "status": "pending",
+            "testStrategy": "Trigger the spawning mechanism and verify via console logs and the operating system's task manager that a new Node.js process is successfully created by the main Electron process."
+          },
+          {
+            "id": 5,
+            "title": "Verify Process Isolation and Basic IPC Health Check",
+            "description": "Establish a minimal IPC channel to confirm the main process can communicate with a child and that a child process crash does not terminate the main process.",
+            "dependencies": [
+              4
+            ],
+            "details": "Implement logic for the main process to listen for the 'exit' event on the child process object. Add a simple 'ping' message from main to child and a 'pong' response from child to main to verify communication. Intentionally crash the child to test the 'exit' handler.",
+            "status": "pending",
+            "testStrategy": "Confirm the main process receives the 'pong' message. Trigger a child process crash and verify the main process logs the event but remains fully responsive and does not crash."
+          }
+        ]
+      },
+      {
+        "id": 12,
+        "title": "Define Core System Interfaces and Factories",
+        "description": "Create the TypeScript interfaces for the core design patterns: IScraperEngine, IPlatformAdapter, IDataExtractor, ITaskManager, IProgressReporter, and the associated Factory interfaces (IScraperFactory, IPlatformFactory).",
+        "details": "Based on section 7.1 of the PRD, this task focuses on establishing the contracts for the entire system. This interface-first approach is critical for ensuring loose coupling, testability, and extensibility.",
+        "testStrategy": "Code review to ensure interfaces accurately reflect the PRD. Create mock implementations for each interface to be used in future unit tests.",
+        "priority": "high",
+        "dependencies": [
+          11
+        ],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Define Core Scraping Logic Interfaces",
+            "description": "Create the TypeScript interfaces for the primary scraping components: IScraperEngine, IPlatformAdapter, and IDataExtractor. These will define the contracts for orchestrating a scrape, interacting with a specific website, and extracting structured data from a page.",
+            "dependencies": [],
+            "details": "The IScraperEngine interface should define methods for running and managing a scraping job. The IPlatformAdapter will abstract platform-specific logic like pagination and selector targeting. The IDataExtractor will define the contract for parsing raw page content into structured data.",
+            "status": "pending",
+            "testStrategy": "Code review against PRD section 7.1 to ensure method signatures and properties are correctly defined."
+          },
+          {
+            "id": 2,
+            "title": "Define Task and Progress Management Interfaces",
+            "description": "Create the TypeScript interfaces for ITaskManager and IProgressReporter. These will establish the contracts for managing the lifecycle of scraping tasks and for communicating status updates, respectively.",
+            "dependencies": [],
+            "details": "ITaskManager will define how tasks are queued, started, paused, and stopped. IProgressReporter will define a standardized way to emit progress events (e.g., percentage complete, items found), errors, and final completion signals, which is critical for IPC in Task 14.",
+            "status": "pending",
+            "testStrategy": "Review to ensure the interfaces support all states required for robust task control and reporting as outlined in the PRD."
+          },
+          {
+            "id": 3,
+            "title": "Define Core Factory Interfaces",
+            "description": "Create the TypeScript interfaces for the factory patterns: IScraperFactory and IPlatformFactory. These interfaces are central to the system's extensibility and loose coupling.",
+            "dependencies": [
+              1
+            ],
+            "details": "The IScraperFactory will define a contract for creating different types of scraper engines. The IPlatformFactory will define the contract for dynamically instantiating IPlatformAdapter implementations, which is a prerequisite for the Unified Platform Extensibility Framework (Task 13).",
+            "status": "pending",
+            "testStrategy": "Verify that the factory interfaces are generic enough to support the creation of all components defined in subtask 1."
+          },
+          {
+            "id": 4,
+            "title": "Develop Mock Implementations for All Interfaces",
+            "description": "Create a basic, in-memory mock implementation for each of the six core interfaces and two factory interfaces defined in the previous subtasks. These mocks are essential for future unit testing.",
+            "dependencies": [
+              1,
+              2,
+              3
+            ],
+            "details": "These mock classes (e.g., MockPlatformAdapter, MockTaskManager) will implement the interfaces but return hardcoded, predictable data. They will not perform any real I/O or processing, enabling isolated unit tests for dependent components like the ChildProcessManager (Task 14).",
+            "status": "pending",
+            "testStrategy": "Create a test file that instantiates each mock to ensure it conforms to its interface without compilation errors."
+          },
+          {
+            "id": 5,
+            "title": "Add TSDoc and Conduct Final Peer Review",
+            "description": "Add comprehensive TSDoc comments to all newly created interfaces, detailing the purpose of each interface, method, parameter, and return value. Conduct a final peer review of all interfaces and mocks.",
+            "dependencies": [
+              4
+            ],
+            "details": "The documentation is crucial for developers who will implement these interfaces later. The peer review will serve as a final quality gate, ensuring the contracts are robust, extensible, and accurately reflect the system architecture described in the PRD before dependent tasks begin.",
+            "status": "pending",
+            "testStrategy": "The review process will check for clarity, completeness, and correctness against PRD section 7.1. An automated tool can be used to check for TSDoc coverage."
+          }
+        ]
+      },
+      {
+        "id": 13,
+        "title": "Develop Unified Platform Extensibility Framework",
+        "description": "Implement the system to support configuration-only (JSON), class-based, and hybrid platform additions. This includes the UnifiedPlatformFactory for dynamically loading and creating platform adapters and the PlatformRegistry for managing platform configurations.",
+        "details": "This task covers the core innovation of the project as described in sections 2.3 and 7.2.3. The factory must be able to dynamically load and instantiate adapters based on a platform's 'type' property (configuration, class, or hybrid).",
+        "testStrategy": "Unit test the PlatformFactory by registering and creating adapters of all three types. Test hot-reloading of platform configurations. Validate that new platforms can be added via JSON without restarting the application.",
+        "priority": "high",
+        "dependencies": [
+          12
+        ],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Define Core Platform Interfaces and Data Models",
+            "description": "Establish the fundamental contracts for the extensibility framework. This includes defining the `IPlatformAdapter` interface that all class-based adapters must implement, and specifying the JSON schema for platform configurations.",
+            "dependencies": [],
+            "details": "The `IPlatformAdapter` should define methods for core operations like searching, data extraction, and pagination. The JSON schema must include a mandatory 'type' property ('configuration', 'class', 'hybrid') and a 'classPath' property for class-based and hybrid types.",
+            "status": "pending",
+            "testStrategy": "Review the interface and schema definitions to ensure they cover all required functionality for the three platform types."
+          },
+          {
+            "id": 2,
+            "title": "Implement the PlatformRegistry for Configuration Management",
+            "description": "Create the `PlatformRegistry` service responsible for discovering, loading, and managing platform configuration files from the filesystem. It must provide an interface to access configurations and support hot-reloading.",
+            "dependencies": [
+              1
+            ],
+            "details": "The registry should scan a designated directory for platform JSON files. Implement a file system watcher to detect new, modified, or deleted configurations and update the in-memory registry without requiring an application restart. Provide methods like `getPlatformConfig(platformId)` and `getAllConfigs()`.",
+            "status": "pending",
+            "testStrategy": "Unit test the registry's ability to load initial configurations. Test the hot-reloading feature by adding, modifying, and deleting a JSON file in the watched directory and verifying the registry state is updated correctly."
+          },
+          {
+            "id": 3,
+            "title": "Implement Factory Logic for Configuration-Only Platforms",
+            "description": "Develop the initial version of the `UnifiedPlatformFactory` to handle the creation of 'configuration-only' platform adapters. This involves creating a generic adapter instance that is configured entirely by the JSON data.",
+            "dependencies": [
+              1,
+              2
+            ],
+            "details": "The factory will receive a platform ID, retrieve the corresponding configuration from the `PlatformRegistry`, and if the 'type' is 'configuration', it will instantiate a generic, pre-defined `ConfigurablePlatformAdapter` class, passing the JSON configuration to its constructor.",
+            "status": "pending",
+            "testStrategy": "Unit test the factory's `createAdapter` method. Provide a mock registry with a 'configuration-only' platform definition and assert that the correct generic adapter is instantiated and configured properly."
+          },
+          {
+            "id": 4,
+            "title": "Extend Factory to Support Class-Based and Hybrid Platforms",
+            "description": "Enhance the `UnifiedPlatformFactory` to dynamically load and instantiate custom adapter classes for 'class-based' and 'hybrid' platforms.",
+            "dependencies": [
+              3
+            ],
+            "details": "When the platform 'type' is 'class' or 'hybrid', the factory must use the 'classPath' property from the configuration to dynamically import the specified module/class. For 'hybrid' types, the factory must pass the associated JSON configuration to the custom class instance after creation.",
+            "status": "pending",
+            "testStrategy": "Create mock class-based and hybrid platform adapters. Unit test the factory's ability to dynamically load and instantiate these classes. Verify that for hybrid types, the configuration object is correctly passed to the instance."
+          },
+          {
+            "id": 5,
+            "title": "Integrate and Test the Full Extensibility Framework",
+            "description": "Integrate the `PlatformRegistry` and the complete `UnifiedPlatformFactory` and perform end-to-end validation using sample platforms of all three types.",
+            "dependencies": [
+              2,
+              4
+            ],
+            "details": "Ensure the factory correctly uses the registry to get configurations before creating adapters. Create one sample platform for each type: a simple JSON-only configuration, a custom class file, and a hybrid example. Write integration tests that trigger the creation of each sample platform to validate the entire workflow.",
+            "status": "pending",
+            "testStrategy": "Execute a test suite that requests adapters for all three sample platforms. Validate that the correct adapter type is returned and is functional. Confirm that adding a new JSON-only platform file is recognized and usable without a restart, fulfilling a key requirement."
+          }
+        ]
+      },
+      {
+        "id": 14,
+        "title": "Implement Child Process Scraping Engine and IPC Communication",
+        "description": "Develop the child process logic (YellowPagesScraperProcess) responsible for running Puppeteer. Implement the IPC protocol for communication between the main process (YellowPagesModule, ChildProcessManager) and the child process.",
+        "details": "This involves implementing the child process entry point and the main process's ChildProcessManager. The IPC communication protocol (section 6.4) must handle messages for task control (START, STOP, PAUSE) and reporting (PROGRESS, COMPLETED, ERROR).",
+        "testStrategy": "Integration test the IPC communication by sending commands from main to child and verifying responses. Test error propagation from child to main. Monitor process memory usage to ensure it stays within the limits defined in section 4.2.3.",
+        "priority": "high",
+        "dependencies": [
+          12
+        ],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Define and Document the IPC Message Protocol",
+            "description": "Establish a clear, typed contract for all messages exchanged between the main and child processes. This includes defining the structure for control messages (START, STOP, PAUSE) and reporting messages (PROGRESS, COMPLETED, ERROR).",
+            "dependencies": [],
+            "details": "Create a shared module or type definition file (e.g., `ipc-protocol.ts`) that specifies the exact payload for each message type. The START message payload should contain all necessary task parameters, while reporting messages should include relevant data like progress percentage or error details.",
+            "status": "pending",
+            "testStrategy": "Code review the protocol definition to ensure it's comprehensive and covers all data points mentioned in section 6.4. Ensure types are strict to prevent runtime errors."
+          },
+          {
+            "id": 2,
+            "title": "Implement the Child Process Entry Point and Command Handler",
+            "description": "Create the `YellowPagesScraperProcess` script which will be the entry point for the forked process. This script must initialize its environment and set up a listener to receive and handle incoming IPC commands from the main process.",
+            "dependencies": [
+              1
+            ],
+            "details": "Use `process.on('message', callback)` to create the main message handling loop. Implement the logic to parse incoming messages and delegate to specific functions based on the command type (e.g., a function to handle `START`, another for `STOP`).",
+            "status": "pending",
+            "testStrategy": "Create a simple test harness that forks this script and sends it mock START, STOP, and PAUSE messages. Verify via console logs that the correct handlers are being invoked."
+          },
+          {
+            "id": 3,
+            "title": "Implement the Main Process's ChildProcessManager",
+            "description": "Develop the `ChildProcessManager` class within the main application. This manager will be responsible for spawning, terminating, and communicating with the `YellowPagesScraperProcess` instances.",
+            "dependencies": [
+              1
+            ],
+            "details": "Implement methods like `spawnProcess()`, `sendMessage(command, payload)`, and `killProcess()`. The `sendMessage` method will use the defined IPC protocol to send commands like START, STOP, and PAUSE to the child process it manages.",
+            "status": "pending",
+            "testStrategy": "Unit test the `ChildProcessManager` by mocking Node.js's `child_process.fork`. Verify that the manager calls `fork` with the correct script path and that its `sendMessage` method calls `child.send()` with a correctly formatted message object."
+          },
+          {
+            "id": 4,
+            "title": "Integrate Puppeteer Scraping Logic into the Child Process",
+            "description": "Flesh out the `START` command handler in the `YellowPagesScraperProcess` to launch and control a Puppeteer instance. This involves implementing the core scraping functionality that the child process is responsible for.",
+            "dependencies": [
+              2
+            ],
+            "details": "Within the `START` handler, add the code to launch Puppeteer, navigate to a URL provided in the message payload, and perform data extraction. The logic must be designed to be gracefully interruptible by `STOP` or `PAUSE` commands.",
+            "status": "pending",
+            "testStrategy": "Test the child process script in isolation by running it directly and passing a hard-coded task configuration. Verify that it successfully launches Puppeteer and scrapes a target test page."
+          },
+          {
+            "id": 5,
+            "title": "Implement Child-to-Main Status Reporting and Error Handling",
+            "description": "Enable two-way communication by implementing the reporting mechanism. The child process must send PROGRESS, COMPLETED, and ERROR messages back to the main process. The `ChildProcessManager` must listen for and act on these messages.",
+            "dependencies": [
+              3,
+              4
+            ],
+            "details": "In the child process, use `process.send()` to emit status updates during scraping. In the `ChildProcessManager`, use `child.on('message', ...)` to receive these reports and `child.on('exit', ...)` to handle unexpected crashes. Propagate this status information to the rest of the application.",
+            "status": "pending",
+            "testStrategy": "Conduct an integration test by having the `ChildProcessManager` start a real child process. Verify that the main process correctly receives and logs `PROGRESS` updates, a final `COMPLETED` message, and can correctly handle a simulated `ERROR` sent from the child."
+          }
+        ]
+      },
+      {
+        "id": 15,
+        "title": "Implement Adapters for Phase 1 Platforms",
+        "description": "Create the specific platform adapters for YellowPages.com, Yelp.com, and YellowPages.ca using the new extensibility framework. This involves defining their selectors and any custom logic required for data extraction and pagination.",
+        "details": "This is the first practical application of the platform framework. Each platform will be implemented as a configuration or class-based adapter, populating the selectors and logic needed to scrape the required data fields from section 3.1.1.",
+        "testStrategy": "End-to-end test scraping for each platform. Validate extracted data against manual verification for 98%+ accuracy. Ensure success rate of 95%+ for target pages.",
+        "priority": "medium",
+        "dependencies": [
+          13,
+          14
+        ],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Implement Adapter for YellowPages.com",
+            "description": "Create the specific adapter for YellowPages.com. This includes researching and defining the CSS selectors for all required data fields (as per section 3.1.1) and the 'next page' element for pagination.",
+            "dependencies": [],
+            "details": "Implement the adapter as a new class or configuration file using the extensibility framework. This will be the first implementation and will serve as a practical template for the other adapters. Handle any site-specific logic, such as cookie banners or lazy-loaded content.",
+            "status": "pending",
+            "testStrategy": "Perform initial end-to-end runs to ensure the scraper can navigate pages and extract a sample of data without critical errors. Focus on selector stability."
+          },
+          {
+            "id": 2,
+            "title": "Implement Adapter for Yelp.com",
+            "description": "Develop the platform adapter for Yelp.com. This involves defining a unique set of selectors for Yelp's page structure and implementing logic to handle its specific pagination mechanism.",
+            "dependencies": [
+              1
+            ],
+            "details": "Yelp often uses dynamic content loading and has a more complex DOM. This implementation will test the framework's flexibility. Pay special attention to selectors that may be obfuscated or tied to front-end frameworks like React.",
+            "status": "pending",
+            "testStrategy": "Test against various search queries and locations on Yelp to ensure selectors are robust. Verify extraction of all required fields, especially those that might be conditionally present."
+          },
+          {
+            "id": 3,
+            "title": "Implement Adapter for YellowPages.ca",
+            "description": "Create the specific adapter for the Canadian Yellow Pages (YellowPages.ca). Define its selectors for data fields and pagination, noting any structural differences from the .com version.",
+            "dependencies": [
+              1
+            ],
+            "details": "While the branding is similar to YellowPages.com, the site structure, selectors, and ad placements may differ. Create a new, distinct adapter configuration/class and verify its functionality independently.",
+            "status": "pending",
+            "testStrategy": "Run test scrapes targeting major Canadian cities to confirm the adapter works correctly for its specific geographic region and page layouts."
+          },
+          {
+            "id": 4,
+            "title": "Refactor Common Logic from Phase 1 Adapters",
+            "description": "After implementing the first three adapters, review their code to identify common patterns, helper functions, or logic (e.g., cleaning phone numbers, parsing addresses). Abstract this common code into a shared utility or a base adapter class.",
+            "dependencies": [
+              1,
+              2,
+              3
+            ],
+            "details": "The goal is to make the framework more DRY (Don't Repeat Yourself) and simplify the process of adding new adapters in the future (e.g., for Task 19). Refine the base adapter interface based on the practical needs discovered during implementation.",
+            "status": "pending",
+            "testStrategy": "Run regression tests on the three existing adapters to ensure that the refactoring did not introduce any bugs or change the output data."
+          },
+          {
+            "id": 5,
+            "title": "End-to-End Data Validation and Accuracy Testing",
+            "description": "Conduct a comprehensive end-to-end test for all three Phase 1 platforms to validate the quality and accuracy of the extracted data against the project's requirements.",
+            "dependencies": [
+              4
+            ],
+            "details": "For each platform, run a scrape of at least 100 business listings. Manually compare the scraped data against the live websites to measure accuracy. The results must meet the 98%+ data accuracy and 95%+ page success rate targets.",
+            "status": "pending",
+            "testStrategy": "Document the validation results in a report, noting any discrepancies and confirming that all three adapters meet the quality assurance standards for this task."
+          }
+        ]
+      },
+      {
+        "id": 16,
+        "title": "Integrate with Scheduler, Cookie, and Browser Management Modules",
+        "description": "Connect the new Yellow Pages module with existing aiFetchly systems. Integrate with BackgroundScheduler for cron jobs, AccountCookiesModule for authentication, and BrowserManager for Puppeteer instance management.",
+        "details": "Leverage existing application infrastructure as outlined in section 3.2. This involves calling the appropriate methods from the existing modules for scheduling tasks, retrieving/rotating cookies, and managing browser instances with proxy and stealth support.",
+        "testStrategy": "Integration test each point of connection. Schedule a task and verify it runs at the correct time. Run a task that requires authentication and verify cookies are applied. Confirm that browser instances are created and cleaned up correctly.",
+        "priority": "medium",
+        "dependencies": [
+          14
+        ],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Integrate Yellow Pages Module with BackgroundScheduler",
+            "description": "Create the necessary adapter or entry point for the Yellow Pages module to be registered as a cron job with the BackgroundScheduler. This will allow scraping tasks to be scheduled and triggered automatically.",
+            "dependencies": [],
+            "details": "Implement a job handler function that can be passed to `BackgroundScheduler.scheduleJob()`. This function will serve as the starting point for a scheduled Yellow Pages scrape and must be able to process any arguments passed from the scheduler.",
+            "status": "pending",
+            "testStrategy": "Write a unit test to schedule a job that runs one minute in the future. Verify that the job handler function is called at the correct time and logs an expected message."
+          },
+          {
+            "id": 2,
+            "title": "Implement Browser Instance Management via BrowserManager",
+            "description": "Modify the core scraping logic of the Yellow Pages module to request and release Puppeteer browser instances from the central BrowserManager.",
+            "dependencies": [],
+            "details": "At the start of a scrape, call `BrowserManager.getBrowser()` to obtain a pre-configured browser instance with proxy and stealth support. Ensure `BrowserManager.releaseBrowser()` is called within a `finally` block to guarantee cleanup, even if the scrape fails.",
+            "status": "pending",
+            "testStrategy": "Create an integration test that requests a browser, navigates to a public IP checking service, and confirms the browser is using a proxy IP provided by the manager. Verify the browser is released correctly."
+          },
+          {
+            "id": 3,
+            "title": "Implement Authentication via AccountCookiesModule",
+            "description": "Connect the Yellow Pages module to the AccountCookiesModule to fetch and apply authentication cookies to the browser instance before interacting with the target website.",
+            "dependencies": [],
+            "details": "Before navigating to the Yellow Pages site, call `AccountCookiesModule.getCookies('yellow-pages')` to retrieve the current valid cookies. Use Puppeteer's `page.setCookie()` method to apply these cookies to the browser page context.",
+            "status": "pending",
+            "testStrategy": "Using a mock of the AccountCookiesModule that returns a predefined test cookie, run a scrape against a local test server that requires the cookie for access. Verify the page is accessed successfully."
+          },
+          {
+            "id": 4,
+            "title": "Develop Main Task Orchestration Logic",
+            "description": "Create the primary execution function within the Yellow Pages module that orchestrates the sequential calls to the BrowserManager and AccountCookiesModule before running the actual scraping logic.",
+            "dependencies": [
+              2,
+              3
+            ],
+            "details": "This orchestrator function will be the main logic block for any scrape. The sequence should be: 1) Get browser from BrowserManager. 2) Get cookies from AccountCookiesModule. 3) Apply cookies to page. 4) Execute scraping steps. 5) Release browser.",
+            "status": "pending",
+            "testStrategy": "Run an integration test of the orchestrator function (without the scheduler). Mock the external modules and verify that the calls are made in the correct order and that the browser release function is always called."
+          },
+          {
+            "id": 5,
+            "title": "Create End-to-End Scheduled Task Test and Add Error Handling",
+            "description": "Develop a full end-to-end integration test that uses the BackgroundScheduler to trigger the complete, orchestrated Yellow Pages task. Implement robust error handling for each integration point.",
+            "dependencies": [
+              1,
+              4
+            ],
+            "details": "The test will schedule a real task to run in the near future and assert its successful completion. Add `try...catch` blocks around calls to external modules (Scheduler, Browser, Cookies) to log specific errors and ensure graceful failure and resource cleanup.",
+            "status": "pending",
+            "testStrategy": "Execute the end-to-end test and verify the expected outcome. Create failure-path tests by forcing `BrowserManager.getBrowser()` and `AccountCookiesModule.getCookies()` to throw exceptions, and confirm the system handles the errors without crashing and still releases any acquired resources."
+          }
+        ]
+      },
+      {
+        "id": 17,
+        "title": "Develop UI for Task and Platform Management",
+        "description": "Build the user interface components for creating, viewing, and managing scraping tasks. Implement the platform management UI, including a configuration editor for adding/editing platforms via the UI.",
+        "details": "This task covers the frontend requirements from section 8. Key features include a task list with progress indicators, a form for creating new tasks, a results viewer with export options, and a visual editor for platform configurations.",
+        "testStrategy": "User acceptance testing (UAT) to ensure the UI is intuitive. Test the platform editor by creating a new simple platform entirely through the UI and running a successful scraping task with it.",
+        "priority": "medium",
+        "dependencies": [
+          13,
+          14
+        ],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Implement Task Dashboard and List View",
+            "description": "Create the main dashboard component that displays a list of all scraping tasks. Each item in the list should show its current status (e.g., pending, running, completed, failed) and a real-time progress indicator.",
+            "dependencies": [],
+            "details": "This view will serve as the primary interface for task management. It should fetch task data from the backend API and include controls for pausing, resuming, or deleting tasks. The UI should be clean and provide at-a-glance information.",
+            "status": "pending",
+            "testStrategy": "Verify that the dashboard correctly displays tasks with different statuses and that progress bars update as expected. Test UI responsiveness and interaction with task control buttons."
+          },
+          {
+            "id": 2,
+            "title": "Build New Task Creation Form",
+            "description": "Develop a form, likely within a modal or on a separate page, for creating new scraping tasks. The form must allow users to input necessary parameters like keywords, location, and select a target platform from a dynamic list.",
+            "dependencies": [
+              1
+            ],
+            "details": "This component will be launched from the Task Dashboard. It needs to dynamically populate the 'platform' dropdown by fetching the list of available platforms from the PlatformRegistry via the API (dependency on Task 13). Implement client-side validation for all form fields.",
+            "status": "pending",
+            "testStrategy": "Test form submission with valid and invalid data. Ensure the platform list is populated correctly. Confirm that a new task appears on the dashboard after successful creation."
+          },
+          {
+            "id": 3,
+            "title": "Develop Task Results Viewer with Export Options",
+            "description": "Create a detailed view to display the structured data from a completed scraping task. This view should present the results in a clear, tabular format and include functionality to export the data.",
+            "dependencies": [
+              1
+            ],
+            "details": "The results viewer will be accessed by clicking on a completed task in the dashboard. Implement export options for common formats like CSV and JSON. Include features for pagination and searching within the results.",
+            "status": "pending",
+            "testStrategy": "Verify that scraped data is displayed correctly for a completed task. Test the export functionality for both CSV and JSON formats, ensuring the output files are well-formed and contain the correct data."
+          },
+          {
+            "id": 4,
+            "title": "Create Platform Management Dashboard",
+            "description": "Build the user interface for listing and managing all available scraping platforms. This dashboard will show all registered platforms and provide options to view details, edit, or add a new platform.",
+            "dependencies": [],
+            "details": "This is the entry point for platform configuration. It will list platforms sourced from the PlatformRegistry. Each platform entry should indicate its type (e.g., JSON-only, class-based) and status (e.g., valid, configuration error).",
+            "status": "pending",
+            "testStrategy": "Ensure the dashboard correctly lists all platforms from the backend. Verify that the UI provides clear navigation to add a new platform or edit an existing one."
+          },
+          {
+            "id": 5,
+            "title": "Implement Visual Editor for Platform Configurations",
+            "description": "Develop a visual, form-based editor that allows users to create and modify platform configurations directly through the UI. This editor should abstract the underlying JSON structure into user-friendly fields.",
+            "dependencies": [
+              4
+            ],
+            "details": "This is the core of the platform management UI. The editor should guide the user through defining selectors, pagination rules, and data extraction logic. It should include real-time validation and feedback. For advanced users, provide an option to view/edit the raw JSON configuration.",
+            "status": "pending",
+            "testStrategy": "As part of UAT, create a new, simple platform entirely through the visual editor. Save it, and then use the 'New Task Creation Form' to run a scraping task against it. The task must complete successfully and return correct data."
+          }
+        ]
+      },
+      {
+        "id": 18,
+        "title": "Create Platform Development Kit (PDK)",
+        "description": "Develop tools to simplify adding new platforms. This includes a PlatformTemplateGenerator to create boilerplate configurations and a PlatformTestingFramework to validate selectors and platform functionality before deployment.",
+        "details": "Implement the PDK as described in section 7.4. The template generator will create a valid starting configuration file. The testing framework will run a series of checks against a live URL to validate selectors, pagination, and data extraction.",
+        "testStrategy": "Use the PDK to generate a template for a new platform. Fill in the details and use the testing framework to validate it. The test should produce a report with success/failure status and recommendations.",
+        "priority": "low",
+        "dependencies": [
+          13
+        ],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Implement PlatformTemplateGenerator CLI",
+            "description": "Create a command-line tool that prompts for a new platform's name and generates a boilerplate platform configuration file based on the standard template.",
+            "dependencies": [],
+            "details": "The generator will produce a valid JSON or YAML configuration file with all required keys (e.g., platformName, rootUrl, selectors, pagination) present but with placeholder values. This depends on the final configuration structure from Task 13.",
+            "status": "pending",
+            "testStrategy": "Run the generator and verify the output file is created, is well-formed, and contains all expected placeholder fields."
+          },
+          {
+            "id": 2,
+            "title": "Build Core Scaffolding for PlatformTestingFramework",
+            "description": "Establish the foundational structure for the testing framework, including the main test runner script, command-line argument parsing (for config file path and target URL), and the basic test execution engine.",
+            "dependencies": [],
+            "details": "This subtask focuses on creating the entry point and orchestration logic. It will load a platform configuration and a target URL and initialize a headless browser instance, but will not run specific validation checks yet.",
+            "status": "pending",
+            "testStrategy": "Run the framework with a mock config and URL. Verify it starts, loads the configuration, navigates to the URL, and exits cleanly without errors."
+          },
+          {
+            "id": 3,
+            "title": "Implement Selector Existence Validation",
+            "description": "Add a test suite to the framework that validates the presence of all CSS selectors defined in the platform configuration on a given live URL.",
+            "dependencies": [
+              2
+            ],
+            "details": "The framework should load the page, iterate through all selectors in the configuration's `selectors` block, and report whether each selector successfully finds at least one element on the page.",
+            "status": "pending",
+            "testStrategy": "Test against a known-good platform config and URL, ensuring all selectors are reported as 'found'. Test against a config with a deliberately incorrect selector, ensuring it's reported as 'not found'."
+          },
+          {
+            "id": 4,
+            "title": "Implement Pagination and Data Extraction Validation",
+            "description": "Extend the testing framework to validate the pagination mechanism and the data extraction process for a list of items.",
+            "dependencies": [
+              3
+            ],
+            "details": "This involves two checks: 1) Use the pagination selector to find and click the 'next' link, verifying it leads to a new page. 2) On the initial page, use the item and data selectors to extract a sample of data, verifying that the expected data fields are populated.",
+            "status": "pending",
+            "testStrategy": "Run against a live search results page. The test should report success if it can navigate to page 2 and successfully extract structured data from the first page."
+          },
+          {
+            "id": 5,
+            "title": "Develop Test Report Generator and PDK Documentation",
+            "description": "Create the final user-facing components: a consolidated test report and comprehensive documentation for the entire Platform Development Kit.",
+            "dependencies": [
+              1,
+              4
+            ],
+            "details": "The report should aggregate results from all checks (selector, pagination, extraction) into a single, human-readable summary with a clear pass/fail status and recommendations. The documentation will cover using both the template generator and the testing framework.",
+            "status": "pending",
+            "testStrategy": "Run the full test suite and verify that the generated report accurately reflects the test outcomes. Have a team member follow the documentation to add a new test platform to ensure clarity."
+          }
+        ]
+      },
+      {
+        "id": 19,
+        "title": "Implement Adapters for European, German, and UK Platforms",
+        "description": "Develop platform adapters for PagesJaunes.fr, PagineGialle.it, GelbeSeiten.de, 11880.com, Yell.com, and 192.com. This will test the robustness and ease of use of the platform extensibility framework.",
+        "details": "This task involves creating adapters for the Phase 2 and 3 platforms listed in the PRD. It will serve as a stress test for the PDK and the overall platform management workflow.",
+        "testStrategy": "For each new platform, perform the same end-to-end testing as in task 15. Measure the time it takes to add each new platform to evaluate the efficiency of the extensibility framework.",
+        "priority": "low",
+        "dependencies": [
+          15,
+          18
+        ],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Implement Adapter for French and Italian Platforms",
+            "description": "Develop the platform adapters for PagesJaunes.fr and PagineGialle.it. This will establish a baseline for European platform integration.",
+            "dependencies": [],
+            "details": "For each platform, analyze the site structure to define CSS selectors for data fields (name, address, phone, etc.) and pagination. Implement any custom logic required for handling search forms, cookie banners, and result page navigation.",
+            "status": "pending",
+            "testStrategy": "Perform end-to-end scraping tests for both PagesJaunes.fr and PagineGialle.it. Validate extracted data against manual verification for accuracy."
+          },
+          {
+            "id": 2,
+            "title": "Implement Adapter for German Platform: GelbeSeiten.de",
+            "description": "Develop the platform adapter for GelbeSeiten.de, focusing on its specific structure and data presentation.",
+            "dependencies": [
+              1
+            ],
+            "details": "Create the adapter configuration or class for GelbeSeiten.de. Identify and implement selectors and logic, paying attention to any unique structural elements or anti-scraping measures compared to the French/Italian sites.",
+            "status": "pending",
+            "testStrategy": "Execute end-to-end tests for GelbeSeiten.de. Ensure it meets the 98%+ accuracy and 95%+ success rate targets."
+          },
+          {
+            "id": 3,
+            "title": "Implement Adapter for German Platform: 11880.com",
+            "description": "Develop the platform adapter for the second German platform, 11880.com, and compare its implementation complexity with GelbeSeiten.de.",
+            "dependencies": [
+              2
+            ],
+            "details": "Build the adapter for 11880.com. Document any significant differences in implementation effort or required custom logic compared to previous adapters to provide feedback on the PDK's flexibility.",
+            "status": "pending",
+            "testStrategy": "Run a full end-to-end test suite for 11880.com. Validate data accuracy and scraping success rate."
+          },
+          {
+            "id": 4,
+            "title": "Implement Adapters for UK Platforms (Yell.com & 192.com)",
+            "description": "Develop the platform adapters for the two UK-based platforms, Yell.com and 192.com.",
+            "dependencies": [
+              3
+            ],
+            "details": "Create the two separate adapter configurations/classes for the UK platforms. Define the necessary selectors and logic for data extraction and navigation on both sites, completing the implementation for all Phase 2/3 platforms.",
+            "status": "pending",
+            "testStrategy": "Conduct individual end-to-end tests for Yell.com and 192.com, ensuring data integrity and successful scraping runs for both."
+          },
+          {
+            "id": 5,
+            "title": "Consolidated Testing and Framework Evaluation",
+            "description": "Perform final end-to-end testing on all 6 new adapters and formally evaluate the extensibility framework's efficiency and robustness.",
+            "dependencies": [
+              1,
+              4
+            ],
+            "details": "Execute the full test suite from Task 15 across all 6 new platforms. Systematically measure and document the time it took to add each new platform. Compile findings into a report on the PDK's ease of use and the overall platform management workflow.",
+            "status": "pending",
+            "testStrategy": "Run concurrent scraping tasks using a mix of the new European adapters to stress test the system. Verify that all 6 adapters consistently meet the required accuracy and success metrics."
+          }
+        ]
+      },
+      {
+        "id": 20,
+        "title": "Implement End-to-End Testing and System Documentation",
+        "description": "Conduct comprehensive testing, including unit tests for adapters, integration tests for the end-to-end scraping flow, and performance tests for concurrent tasks. Create final user and developer documentation.",
+        "details": "This final task involves a full quality assurance pass. Performance testing should verify that the system meets the requirements in section 4.2 (e.g., 100 businesses/hour, <500MB main process memory). Documentation should cover user guides and developer guides for adding new platforms.",
+        "testStrategy": "Execute a full regression test suite. Run load tests with multiple concurrent scraping tasks to check for memory leaks and ensure UI responsiveness. Review all documentation for clarity and completeness.",
+        "priority": "medium",
+        "dependencies": [
+          15,
+          16,
+          17,
+          19
+        ],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Develop and Execute Unit and Integration Test Suites",
+            "description": "Create unit tests for all platform adapters developed in tasks 15 and 19. Develop an integration test suite to validate the end-to-end scraping flow, from task creation to data persistence, including the IPC communication between the main and child processes.",
+            "dependencies": [],
+            "details": "Unit tests should mock network requests to isolate adapter logic. Integration tests should use a small, controlled set of live or cached web pages to verify the entire data pipeline, ensuring commands (START, STOP) and data reporting (PROGRESS, COMPLETED) work as expected.",
+            "status": "pending",
+            "testStrategy": "Achieve >90% code coverage for adapter logic. The integration test suite must validate every IPC message type defined in section 6.4."
+          },
+          {
+            "id": 2,
+            "title": "Conduct Performance and Load Testing",
+            "description": "Execute performance and load tests to verify the system meets the non-functional requirements outlined in section 4.2. This includes testing with multiple concurrent scraping tasks to measure resource consumption and identify potential memory leaks.",
+            "dependencies": [
+              1
+            ],
+            "details": "Simulate a workload of at least 5 concurrent scraping tasks running for an extended period (e.g., 2+ hours). Use profiling tools to monitor the main process memory, ensuring it remains below the 500MB limit. Measure the overall data extraction rate to confirm it meets or exceeds the 100 businesses/hour target.",
+            "status": "pending",
+            "testStrategy": "Log memory and CPU usage at one-minute intervals during the load test. Analyze logs to confirm stability and adherence to performance metrics. Ensure the UI remains responsive under load."
+          },
+          {
+            "id": 3,
+            "title": "Create Final User Documentation",
+            "description": "Write a comprehensive user guide detailing the installation, configuration, and operation of the scraping application. The guide should be aimed at non-technical users and cover all primary features.",
+            "dependencies": [
+              2
+            ],
+            "details": "The documentation must include sections for system requirements, step-by-step installation, a guide to the user interface, how to start/pause/stop scraping tasks, and how to access and interpret the exported data. Use screenshots to illustrate the process.",
+            "status": "pending",
+            "testStrategy": "Have a user unfamiliar with the project attempt to install and run the application using only the draft guide. Incorporate their feedback to improve clarity and completeness."
+          },
+          {
+            "id": 4,
+            "title": "Create Developer Documentation for Platform Extensibility",
+            "description": "Write a detailed developer guide explaining the architecture of the platform extensibility framework and providing a step-by-step tutorial for adding new platform adapters.",
+            "dependencies": [
+              2
+            ],
+            "details": "Document the adapter class structure, the purpose of key configuration files (e.g., for selectors), and the workflow for developing and testing a new adapter. Explain the Platform Development Kit (PDK) and its tools. Provide a complete code example for a simple, new platform.",
+            "status": "pending",
+            "testStrategy": "Ask a developer not involved in the framework's creation to follow the guide to implement a new adapter. Verify they can complete the task successfully without needing to consult the core engine's source code."
+          },
+          {
+            "id": 5,
+            "title": "Perform Full Regression Test and Final Release Packaging",
+            "description": "Execute the complete suite of unit, integration, and performance tests to ensure no regressions were introduced during the final stages. Review all documentation for accuracy and package the application for final delivery.",
+            "dependencies": [
+              3,
+              4
+            ],
+            "details": "This final quality assurance pass involves running all automated tests and performing a manual smoke test of the main user flows described in the user guide. The final package should include the executable, all dependencies, and both the user and developer guides.",
+            "status": "pending",
+            "testStrategy": "Execute the full, automated regression test suite. Perform a final check to ensure the packaged application installs and runs correctly on a clean environment."
+          }
+        ]
+      }
+    ],
+    "metadata": {
+      "created": "2025-08-07T06:47:13.596Z",
+      "updated": "2025-08-07T08:03:42.329Z",
+      "description": "Tasks for master context"
+    }
+  }
+}

@@ -96,17 +96,20 @@ The Yellow Pages Scraper System is a comprehensive web scraping solution designe
 
 ### 2.3 Platform Extensibility Framework
 
-#### 2.3.1 Easy Platform Addition
-The system is designed to make adding new platforms as simple as possible through a standardized configuration approach:
+#### 2.3.1 Unified Platform Addition (Configuration + Class Hybrid)
 
-**Configuration-Based Platform Addition:**
+The system supports **both configuration-driven and class-based platform addition** through a unified approach:
+
+**Option 1: Configuration-Only Platform (JSON)**
 ```typescript
-// Example: Adding a new platform via configuration
-const newPlatformConfig = {
-  name: "NewYellowPages",
-  baseUrl: "https://newyellowpages.com",
+// For simple platforms that don't need custom logic
+const simplePlatformConfig = {
+  id: "simple-yellow-pages",
+  name: "Simple Yellow Pages",
+  baseUrl: "https://simpleyellowpages.com",
   country: "Country",
   language: "Language",
+  type: "configuration", // Indicates JSON-only approach
   selectors: {
     businessList: ".business-item",
     businessName: ".business-name",
@@ -122,21 +125,72 @@ const newPlatformConfig = {
       maxPages: ".total-pages"
     }
   },
-  rateLimit: 100, // requests per hour
-  delayBetweenRequests: 2000, // milliseconds
-  customExtractors: {
-    // Optional custom extraction functions
-    extractBusinessHours: (element) => { /* custom logic */ },
-    extractRating: (element) => { /* custom logic */ }
+  rateLimit: 100,
+  delayBetweenRequests: 2000,
+  settings: {
+    requiresAuthentication: false,
+    supportsProxy: true,
+    supportsCookies: true
   }
 }
 ```
 
-#### 2.2.6 Plugin Architecture
-- **Platform Plugin System**: Each platform is implemented as a plugin
-- **Configuration-Driven**: Platform behavior defined through JSON configuration
+**Option 2: Class-Based Platform (Custom Logic)**
+```typescript
+// For complex platforms that need custom logic
+const complexPlatformConfig = {
+  id: "complex-yellow-pages",
+  name: "Complex Yellow Pages",
+  baseUrl: "https://complexyellowpages.com",
+  country: "Country",
+  language: "Language",
+  type: "class", // Indicates class-based approach
+  className: "ComplexYellowPagesAdapter", // Class to instantiate
+  modulePath: "./platforms/ComplexYellowPagesAdapter", // Module path
+  selectors: {
+    // Base selectors (can be overridden by class)
+    businessList: ".business-item",
+    businessName: ".business-name"
+  },
+  rateLimit: 100,
+  delayBetweenRequests: 2000
+}
+```
+
+**Option 3: Hybrid Platform (Configuration + Class)**
+```typescript
+// For platforms that need both configuration and custom logic
+const hybridPlatformConfig = {
+  id: "hybrid-yellow-pages",
+  name: "Hybrid Yellow Pages",
+  baseUrl: "https://hybridyellowpages.com",
+  country: "Country",
+  language: "Language",
+  type: "hybrid", // Indicates hybrid approach
+  className: "HybridYellowPagesAdapter",
+  modulePath: "./platforms/HybridYellowPagesAdapter",
+  selectors: {
+    businessList: ".business-item",
+    businessName: ".business-name"
+  },
+  customExtractors: {
+    // Custom extraction functions (optional)
+    extractBusinessHours: "customBusinessHoursExtractor",
+    extractRating: "customRatingExtractor"
+  },
+  rateLimit: 100,
+  delayBetweenRequests: 2000
+}
+```
+
+#### 2.2.6 Unified Plugin Architecture
+- **Flexible Platform Types**: Support for configuration-only, class-based, and hybrid platforms
+- **Configuration-Driven**: Simple platforms defined through JSON configuration
+- **Class-Based**: Complex platforms implemented as classes with custom logic
+- **Hybrid Approach**: Combine configuration with custom class implementations
 - **Hot-Reloading**: New platforms can be added without restarting the application
 - **Version Control**: Platform configurations are versioned and can be updated independently
+- **Dynamic Loading**: Platform classes are loaded dynamically based on configuration
 
 ## 3. Functional Requirements
 
@@ -944,132 +998,332 @@ class YellowPagesScraperEngine implements IScraperEngine {
 }
 ```
 
-#### 7.2.2 Concrete PlatformAdapter Implementation
+#### 7.2.2 Unified PlatformAdapter Implementation
 ```typescript
-class YellowPagesComAdapter implements IPlatformAdapter {
-  readonly platformName = 'yellowpages.com';
-  readonly baseUrl = 'https://www.yellowpages.com';
-  readonly version = '1.0.0';
+// Base class for all platform adapters
+abstract class BasePlatformAdapter implements IPlatformAdapter {
+  protected config: PlatformConfig;
   
+  constructor(config: PlatformConfig) {
+    this.config = config;
+  }
+  
+  get platformName(): string { return this.config.name; }
+  get baseUrl(): string { return this.config.baseUrl; }
+  get version(): string { return this.config.version || '1.0.0'; }
+  
+  // Default implementations that can be overridden
   async searchBusinesses(keywords: string[], location: string): Promise<SearchResult[]> {
-    // Implementation for yellowpages.com search
+    // Default implementation using config.selectors
+    return this.defaultSearchImplementation(keywords, location);
   }
   
   async extractBusinessData(page: Page): Promise<BusinessData> {
-    // Implementation for yellowpages.com data extraction
+    // Default implementation using config.selectors
+    return this.defaultExtractBusinessData(page);
   }
   
   async handlePagination(page: Page, maxPages: number): Promise<void> {
-    // Implementation for yellowpages.com pagination
+    // Default implementation using config.selectors.pagination
+    return this.defaultHandlePagination(page, maxPages);
   }
   
   async applyCookies(page: Page, cookies: CookiesType): Promise<void> {
-    // Implementation for applying cookies
+    // Default implementation
+    return this.defaultApplyCookies(page, cookies);
   }
   
   getSelectors(): PlatformSelectors {
-    return {
-      businessList: '.result',
-      businessName: '.business-name',
-      phone: '.phone',
-      email: '.email',
-      website: '.website',
-      address: '.address',
-      categories: '.categories',
-      socialMedia: '.social-media',
-      pagination: {
-        nextButton: '.next-page',
-        currentPage: '.current-page',
-        maxPages: '.total-pages'
-      }
-    };
+    return this.config.selectors;
   }
   
   getRateLimitingConfig(): RateLimitingConfig {
     return {
-      requestsPerHour: 100,
-      delayBetweenRequests: 2000,
-      maxConcurrentRequests: 1
+      requestsPerHour: this.config.rateLimit || 100,
+      delayBetweenRequests: this.config.delayBetweenRequests || 2000,
+      maxConcurrentRequests: this.config.maxConcurrentRequests || 1
     };
   }
   
   getAuthenticationConfig(): AuthenticationConfig {
     return {
-      requiresAuthentication: false,
-      supportsCookies: true,
-      supportsProxy: true
+      requiresAuthentication: this.config.settings?.requiresAuthentication || false,
+      supportsCookies: this.config.settings?.supportsCookies || true,
+      supportsProxy: this.config.settings?.supportsProxy || true
     };
   }
   
   supportsAuthentication(): boolean {
-    return false;
+    return this.config.settings?.requiresAuthentication || false;
   }
   
   supportsProxy(): boolean {
-    return true;
+    return this.config.settings?.supportsProxy || true;
   }
   
   supportsCookies(): boolean {
-    return true;
+    return this.config.settings?.supportsCookies || true;
   }
   
   getSupportedFeatures(): PlatformFeature[] {
-    return ['search', 'pagination', 'cookies', 'proxy'];
+    return this.config.settings?.supportedFeatures || ['search', 'pagination'];
+  }
+  
+  // Protected methods for subclasses to override
+  protected async defaultSearchImplementation(keywords: string[], location: string): Promise<SearchResult[]> {
+    // Default search implementation using config
+  }
+  
+  protected async defaultExtractBusinessData(page: Page): Promise<BusinessData> {
+    // Default extraction using config.selectors
+  }
+  
+  protected async defaultHandlePagination(page: Page, maxPages: number): Promise<void> {
+    // Default pagination using config.selectors.pagination
+  }
+  
+  protected async defaultApplyCookies(page: Page, cookies: CookiesType): Promise<void> {
+    // Default cookie application
+  }
+}
+
+// Configuration-only platform adapter (no custom logic needed)
+class ConfigurationPlatformAdapter extends BasePlatformAdapter {
+  // Uses all default implementations from BasePlatformAdapter
+  // No custom logic needed - everything driven by config
+}
+
+// Class-based platform adapter (with custom logic)
+class YellowPagesComAdapter extends BasePlatformAdapter {
+  async searchBusinesses(keywords: string[], location: string): Promise<SearchResult[]> {
+    // Custom implementation for yellowpages.com
+    return this.customYellowPagesSearch(keywords, location);
+  }
+  
+  async extractBusinessData(page: Page): Promise<BusinessData> {
+    // Custom implementation for yellowpages.com
+    return this.customYellowPagesExtraction(page);
+  }
+  
+  async handlePagination(page: Page, maxPages: number): Promise<void> {
+    // Custom implementation for yellowpages.com pagination
+    return this.customYellowPagesPagination(page, maxPages);
+  }
+  
+  // Custom methods for yellowpages.com specific logic
+  private async customYellowPagesSearch(keywords: string[], location: string): Promise<SearchResult[]> {
+    // YellowPages.com specific search logic
+  }
+  
+  private async customYellowPagesExtraction(page: Page): Promise<BusinessData> {
+    // YellowPages.com specific extraction logic
+  }
+  
+  private async customYellowPagesPagination(page: Page, maxPages: number): Promise<void> {
+    // YellowPages.com specific pagination logic
+  }
+}
+
+// Hybrid platform adapter (configuration + custom logic)
+class HybridPlatformAdapter extends BasePlatformAdapter {
+  async extractBusinessData(page: Page): Promise<BusinessData> {
+    // Use base implementation but override specific extractors
+    const baseData = await super.extractBusinessData(page);
+    
+    // Apply custom extractors if defined in config
+    if (this.config.customExtractors) {
+      return this.applyCustomExtractors(baseData, page);
+    }
+    
+    return baseData;
+  }
+  
+  private async applyCustomExtractors(baseData: BusinessData, page: Page): Promise<BusinessData> {
+    // Apply custom extraction logic defined in config.customExtractors
+    const customData = { ...baseData };
+    
+    for (const [extractorName, extractorFunction] of Object.entries(this.config.customExtractors)) {
+      if (typeof extractorFunction === 'string') {
+        // Load custom function from module
+        const customExtractor = await this.loadCustomExtractor(extractorFunction);
+        customData[extractorName] = await customExtractor(page);
+      }
+    }
+    
+    return customData;
+  }
+  
+  private async loadCustomExtractor(functionName: string): Promise<Function> {
+    // Dynamic loading of custom extractor functions
+    const module = await import(this.config.modulePath);
+    return module[functionName];
   }
 }
 ```
 
-#### 7.2.3 Concrete Factory Implementation
+#### 7.2.3 Unified Factory Implementation
 ```typescript
-class YellowPagesScraperFactory implements IScraperFactory {
+class UnifiedPlatformFactory implements IScraperFactory {
+  private platformConfigs: Map<string, PlatformConfig> = new Map();
   private platformAdapters: Map<string, IPlatformAdapter> = new Map();
   private dataExtractors: Map<string, IDataExtractor> = new Map();
   
   constructor() {
-    this.registerDefaultAdapters();
-    this.registerDefaultExtractors();
+    this.loadPlatformConfigurations();
   }
   
-  createScraperEngine(platform: string): IScraperEngine {
-    const platformAdapter = this.createPlatformAdapter(platform);
+  async createScraperEngine(platform: string): Promise<IScraperEngine> {
+    const platformAdapter = await this.createPlatformAdapter(platform);
     const dataExtractor = this.createDataExtractor(platform);
     const progressReporter = new ProgressReporter();
     
     return new YellowPagesScraperEngine(platformAdapter, dataExtractor, progressReporter);
   }
   
-  createPlatformAdapter(platform: string): IPlatformAdapter {
-    const adapter = this.platformAdapters.get(platform);
-    if (!adapter) {
-      throw new Error(`Platform adapter not found: ${platform}`);
+  async createPlatformAdapter(platform: string): Promise<IPlatformAdapter> {
+    const config = this.platformConfigs.get(platform);
+    if (!config) {
+      throw new Error(`Platform configuration not found: ${platform}`);
     }
+    
+    // Check if adapter already exists
+    if (this.platformAdapters.has(platform)) {
+      return this.platformAdapters.get(platform)!;
+    }
+    
+    // Create adapter based on configuration type
+    const adapter = await this.createAdapterFromConfig(config);
+    this.platformAdapters.set(platform, adapter);
     return adapter;
+  }
+  
+  private async createAdapterFromConfig(config: PlatformConfig): Promise<IPlatformAdapter> {
+    switch (config.type) {
+      case 'configuration':
+        // Configuration-only platform
+        return new ConfigurationPlatformAdapter(config);
+        
+      case 'class':
+        // Class-based platform with custom logic
+        return await this.createClassBasedAdapter(config);
+        
+      case 'hybrid':
+        // Hybrid platform (configuration + custom logic)
+        return await this.createHybridAdapter(config);
+        
+      default:
+        throw new Error(`Unknown platform type: ${config.type}`);
+    }
+  }
+  
+  private async createClassBasedAdapter(config: PlatformConfig): Promise<IPlatformAdapter> {
+    // Dynamically load the class from the specified module
+    const module = await import(config.modulePath);
+    const AdapterClass = module[config.className];
+    
+    if (!AdapterClass) {
+      throw new Error(`Class ${config.className} not found in ${config.modulePath}`);
+    }
+    
+    // Create instance with config
+    return new AdapterClass(config);
+  }
+  
+  private async createHybridAdapter(config: PlatformConfig): Promise<IPlatformAdapter> {
+    // Load the base class and create hybrid adapter
+    const module = await import(config.modulePath);
+    const BaseClass = module[config.className];
+    
+    if (!BaseClass) {
+      throw new Error(`Class ${config.className} not found in ${config.modulePath}`);
+    }
+    
+    // Create hybrid adapter that extends the base class
+    return new HybridPlatformAdapter(config, BaseClass);
   }
   
   createDataExtractor(platform: string): IDataExtractor {
     const extractor = this.dataExtractors.get(platform);
     if (!extractor) {
-      throw new Error(`Data extractor not found: ${platform}`);
+      // Create default data extractor
+      return new DefaultDataExtractor();
     }
     return extractor;
   }
   
   getSupportedPlatforms(): string[] {
-    return Array.from(this.platformAdapters.keys());
+    return Array.from(this.platformConfigs.keys());
   }
   
-  private registerDefaultAdapters(): void {
-    this.platformAdapters.set('yellowpages.com', new YellowPagesComAdapter());
-    this.platformAdapters.set('yelp.com', new YelpComAdapter());
-    this.platformAdapters.set('yellowpages.ca', new YellowPagesCaAdapter());
+  // Platform configuration management
+  async registerPlatform(config: PlatformConfig): Promise<void> {
+    this.platformConfigs.set(config.id, config);
+    // Clear cached adapter to force recreation
+    this.platformAdapters.delete(config.id);
   }
   
-  private registerDefaultExtractors(): void {
-    this.dataExtractors.set('yellowpages.com', new YellowPagesDataExtractor());
-    this.dataExtractors.set('yelp.com', new YelpDataExtractor());
-    this.dataExtractors.set('yellowpages.ca', new YellowPagesCaDataExtractor());
+  async unregisterPlatform(platformId: string): Promise<void> {
+    this.platformConfigs.delete(platformId);
+    this.platformAdapters.delete(platformId);
+    this.dataExtractors.delete(platformId);
+  }
+  
+  async updatePlatformConfig(platformId: string, updates: Partial<PlatformConfig>): Promise<void> {
+    const existing = this.platformConfigs.get(platformId);
+    if (existing) {
+      const updated = { ...existing, ...updates };
+      this.platformConfigs.set(platformId, updated);
+      // Clear cached adapter to force recreation
+      this.platformAdapters.delete(platformId);
+    }
+  }
+  
+  private loadPlatformConfigurations(): void {
+    // Load platform configurations from JSON files or database
+    // This could load from:
+    // - JSON files in a platforms directory
+    // - Database table
+    // - Remote configuration service
   }
 }
+
+// Example usage:
+const factory = new UnifiedPlatformFactory();
+
+// Register a configuration-only platform
+await factory.registerPlatform({
+  id: "simple-platform",
+  name: "Simple Platform",
+  type: "configuration",
+  baseUrl: "https://simpleplatform.com",
+  selectors: { /* ... */ },
+  rateLimit: 100
+});
+
+// Register a class-based platform
+await factory.registerPlatform({
+  id: "complex-platform",
+  name: "Complex Platform",
+  type: "class",
+  className: "ComplexPlatformAdapter",
+  modulePath: "./platforms/ComplexPlatformAdapter",
+  baseUrl: "https://complexplatform.com",
+  selectors: { /* ... */ }
+});
+
+// Register a hybrid platform
+await factory.registerPlatform({
+  id: "hybrid-platform",
+  name: "Hybrid Platform",
+  type: "hybrid",
+  className: "HybridPlatformAdapter",
+  modulePath: "./platforms/HybridPlatformAdapter",
+  baseUrl: "https://hybridplatform.com",
+  selectors: { /* ... */ },
+  customExtractors: {
+    extractBusinessHours: "customBusinessHoursExtractor"
+  }
+});
 ```
 
 ### 7.3 Platform Configuration System
