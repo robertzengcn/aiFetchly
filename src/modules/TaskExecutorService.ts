@@ -12,6 +12,7 @@ import {EmailMarketingTaskModule} from "@/modules/EmailMarketingTaskModule"
 import {BuckEmailTaskModule} from "@/modules/buckEmailTaskModule"
 //import {VideoDownloadTaskModule} from "@/modules/VideoDownloadTaskModule"
 import { EmailSearchTaskModule } from "./EmailSearchTaskModule";
+import { YellowPagesModule } from "./YellowPagesModule";
 //import {getStatusName} from "@/modules/lib/function"
 // export enum TaskStatus {
 //     PENDING = 'pending',
@@ -27,7 +28,8 @@ export class TaskExecutorService {
     private buckEmailTaskModel: BuckEmailTaskModule;    
     //private videoDownloadTaskModel: VideoDownloadTaskModule;
     private searchModel: SearchModule;
-    private emailSeachTaskModule:EmailSearchTaskModule
+    private emailSeachTaskModule:EmailSearchTaskModule;
+    private yellowPagesModule: YellowPagesModule;
     //private socialTaskModel: SocialTaskModel;
 
     constructor() {
@@ -37,7 +39,8 @@ export class TaskExecutorService {
         this.buckEmailTaskModel = new BuckEmailTaskModule();
         //this.videoDownloadTaskModel = new VideoDownloadTaskModule();
         this.searchModel = new SearchModule();
-        this.emailSeachTaskModule=new EmailSearchTaskModule()
+        this.emailSeachTaskModule=new EmailSearchTaskModule();
+        this.yellowPagesModule = new YellowPagesModule();
 
         //this.socialTaskModel = new SocialTaskModel(filepath);
     }
@@ -63,6 +66,9 @@ export class TaskExecutorService {
                     break;
                 case TaskType.BUCK_EMAIL:
                     taskOutputId = await this.executeBuckEmailTask(schedule.task_id);
+                    break;
+                case TaskType.YELLOW_PAGES:
+                    taskOutputId = await this.executeYellowPagesTask(schedule.task_id);
                     break;
                 // case TaskType.VIDEO_DOWNLOAD:
                 //     taskOutputId = await this.executeVideoDownloadTask(schedule.task_id);
@@ -195,6 +201,27 @@ export class TaskExecutorService {
     }
 
     /**
+     * Execute a Yellow Pages task
+     * @param taskId The Yellow Pages task ID
+     * @returns The task output ID
+     */
+    async executeYellowPagesTask(taskId: number): Promise<number> {
+        try {
+            console.log(`Executing Yellow Pages task ${taskId}`);
+
+            // Start the Yellow Pages task using the YellowPagesModule
+            await this.yellowPagesModule.startTask(taskId);
+
+            console.log(`Yellow Pages task ${taskId} started successfully`);
+            return taskId;
+
+        } catch (error) {
+            console.error(`Failed to execute Yellow Pages task ${taskId}:`, error);
+            throw error;
+        }
+    }
+
+    /**
      * Execute a video download task
      * @param taskId The video download task ID
      * @returns The task output ID
@@ -279,6 +306,29 @@ export class TaskExecutorService {
                     const buckEmailTask = await this.buckEmailTaskModel.read(taskId);
                     status = buckEmailTask?.status || undefined;
                     break;
+                case TaskType.YELLOW_PAGES:
+                    const yellowPagesStatus = await this.yellowPagesModule.getTaskStatus(taskId);
+                    // Map ITaskManager.TaskStatus to commonType.TaskStatus
+                    switch (yellowPagesStatus) {
+                        case 0: // TaskStatus.Pending
+                            status = TaskStatus.Notstart;
+                            break;
+                        case 1: // TaskStatus.InProgress  
+                            status = TaskStatus.Processing;
+                            break;
+                        case 2: // TaskStatus.Completed
+                            status = TaskStatus.Complete;
+                            break;
+                        case 3: // TaskStatus.Failed
+                            status = TaskStatus.Error;
+                            break;
+                        case 4: // TaskStatus.Paused
+                            status = TaskStatus.Cancel;
+                            break;
+                        default:
+                            status = TaskStatus.Error;
+                    }
+                    break;
                 // case TaskType.VIDEO_DOWNLOAD:
                 //     const videoTask = await this.videoDownloadTaskModel.getVideoDownloadTask(taskId);
                 //     status = videoTask?.status || undefined;
@@ -348,6 +398,10 @@ export class TaskExecutorService {
                         buckEmailTask.status = TaskStatus.Cancel;
                         await this.buckEmailTaskModel.updateTaskStatus(taskId, buckEmailTask.status);
                     }
+                    break;
+                case TaskType.YELLOW_PAGES:
+                    // Stop the Yellow Pages task
+                    await this.yellowPagesModule.stopTask(taskId);
                     break;
                 // case TaskType.VIDEO_DOWNLOAD:
                 //     // Update video download task status
@@ -462,6 +516,14 @@ export class TaskExecutorService {
                 case TaskType.BUCK_EMAIL:
                     const buckEmailTask = await this.buckEmailTaskModel.read(taskId);
                     taskExists = !!buckEmailTask;
+                    break;
+                case TaskType.YELLOW_PAGES:
+                    try {
+                        await this.yellowPagesModule.getTaskStatus(taskId);
+                        taskExists = true;
+                    } catch (error) {
+                        taskExists = false;
+                    }
                     break;
                 // case TaskType.VIDEO_DOWNLOAD:
                 //     const videoTask = await this.videoDownloadTaskModel.getVideoDownloadTask(taskId);

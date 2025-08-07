@@ -6,6 +6,7 @@ export enum TaskType {
     EMAIL_EXTRACT = 'email_extract',
     BUCK_EMAIL = 'buck_email',
     VIDEO_DOWNLOAD = 'video_download',
+    YELLOW_PAGES = 'yellow_pages'
    // SOCIAL_TASK = 'social_task'
 }
 
@@ -43,7 +44,7 @@ export class ScheduleTaskEntity extends AuditableEntity {
 
     @Column("varchar", { 
         length: 50, 
-        comment: "Type of task to be executed: search, email_marketing, buck_email, video_download" 
+        comment: "Type of task to be executed: search, email_extract, buck_email, video_download, yellow_pages" 
     })
     task_type: string;
 

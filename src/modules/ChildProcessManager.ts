@@ -1,5 +1,56 @@
 import { spawn, ChildProcess } from 'child_process';
-import { MessageType, TaskStatus, IPCMessage, TaskControlMessage, TaskDataMessage, ProgressUpdateMessage, StatusUpdateMessage, ResultDataMessage, ErrorMessage, IPCMessageFactory } from '@/interfaces/IPCMessageProtocol';
+import { MessageType } from '@/interfaces/IPCMessageProtocol';
+import { TaskStatus } from '@/interfaces/ITaskManager';
+
+// Define missing interfaces based on usage
+interface IPCMessage {
+    type: MessageType;
+    taskId: string;
+}
+
+interface TaskControlMessage extends IPCMessage {
+    id: string;
+    timestamp: number;
+    sourceProcessId: string;
+    targetProcessId: string;
+    parameters?: any;
+}
+
+interface TaskDataMessage extends IPCMessage {
+    id: string;
+    timestamp: number;
+    sourceProcessId: string;
+    targetProcessId: string;
+    taskData: any;
+}
+
+interface ProgressUpdateMessage extends IPCMessage {
+    progress: number;
+    currentPage: number;
+    totalPages: number;
+}
+
+interface StatusUpdateMessage extends IPCMessage {
+    status: TaskStatus;
+    message: string;
+}
+
+interface ErrorMessage extends IPCMessage {
+    message: string;
+}
+
+// Simple factory for creating messages
+const IPCMessageFactory = {
+    createTaskControlMessage: (type: MessageType, taskId: string, sourceProcessId: string, targetProcessId: string, parameters?: any): TaskControlMessage => ({
+        id: `control_${Date.now()}`,
+        type,
+        taskId,
+        timestamp: Date.now(),
+        sourceProcessId,
+        targetProcessId,
+        parameters
+    })
+};
 import { BaseModule } from '@/modules/baseModule';
 import path from 'path';
 
@@ -78,7 +129,7 @@ export class ChildProcessManager extends BaseModule {
                 processId,
                 childProcess,
                 taskId,
-                status: TaskStatus.PENDING,
+                status: TaskStatus.Pending,
                 startTime: Date.now(),
                 lastActivity: Date.now(),
                 isHealthy: true
@@ -439,7 +490,7 @@ export class ChildProcessManager extends BaseModule {
             
             const checkReady = () => {
                 const processInfo = this.processes.get(processId);
-                if (processInfo && processInfo.status !== TaskStatus.PENDING) {
+                if (processInfo && processInfo.status !== TaskStatus.Pending) {
                     resolve();
                     return;
                 }
@@ -491,7 +542,7 @@ export class ChildProcessManager extends BaseModule {
         
         return {
             totalProcesses: processes.length,
-            activeProcesses: processes.filter(p => p.status === TaskStatus.RUNNING).length,
+            activeProcesses: processes.filter(p => p.status === TaskStatus.InProgress).length,
             healthyProcesses: processes.filter(p => p.isHealthy).length,
             totalTasks: processes.filter(p => p.taskId).length
         };

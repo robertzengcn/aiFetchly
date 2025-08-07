@@ -1,6 +1,98 @@
-import { MessageType, TaskStatus, ErrorSeverity, IPCMessage, TaskControlMessage, TaskDataMessage, ProgressUpdateMessage, ErrorMessage, IPCMessageFactory } from '@/interfaces/IPCMessageProtocol';
-import { YellowPagesScraper } from './yellowPagesScraper';
+import { MessageType } from '@/interfaces/IPCMessageProtocol';
+import { TaskStatus } from '@/interfaces/ITaskManager';
+import { YellowPagesScraperProcess as YellowPagesScraper } from './yellowPagesScraper';
 import { BaseModule } from '@/modules/baseModule';
+
+// Define missing interfaces and enums
+enum ErrorSeverity {
+    WARNING = 'warning',
+    ERROR = 'error',
+    CRITICAL = 'critical'
+}
+
+interface IPCMessage {
+    id: string;
+    type: MessageType;
+    timestamp: number;
+    sourceProcessId: string;
+    targetProcessId: string;
+    taskId: string;
+}
+
+interface TaskControlMessage extends IPCMessage {
+    parameters?: any;
+}
+
+interface TaskDataMessage extends IPCMessage {
+    taskData: any;
+}
+
+interface ProgressUpdateMessage extends IPCMessage {
+    progress: number;
+    currentPage: number;
+    totalPages: number;
+    businessesFound: number;
+    status: TaskStatus;
+    details?: any;
+}
+
+interface ErrorMessage extends IPCMessage {
+    message: string;
+    severity: ErrorSeverity;
+    stack?: string;
+    code?: string;
+    data?: any;
+}
+
+const IPCMessageFactory = {
+    createProgressUpdateMessage: (
+        taskId: string,
+        percentage: number,
+        currentPage: number,
+        totalPages: number,
+        businessesFound: number,
+        status: TaskStatus,
+        sourceProcessId: string,
+        targetProcessId: string,
+        details?: any
+    ): ProgressUpdateMessage => ({
+        id: `progress_${Date.now()}`,
+        type: MessageType.PROGRESS_UPDATE,
+        timestamp: Date.now(),
+        sourceProcessId,
+        targetProcessId,
+        taskId,
+        progress: percentage,
+        currentPage,
+        totalPages,
+        businessesFound,
+        status,
+        details
+    }),
+
+    createErrorMessage: (
+        taskId: string,
+        message: string,
+        severity: ErrorSeverity,
+        sourceProcessId: string,
+        targetProcessId: string,
+        stack?: string,
+        code?: string,
+        data?: any
+    ): ErrorMessage => ({
+        id: `error_${Date.now()}`,
+        type: MessageType.TASK_ERROR,
+        timestamp: Date.now(),
+        sourceProcessId,
+        targetProcessId,
+        taskId,
+        message,
+        severity,
+        stack,
+        code,
+        data
+    })
+};
 
 /**
  * Child process entry point for Yellow Pages scraping
@@ -10,7 +102,7 @@ import { BaseModule } from '@/modules/baseModule';
  * @author Yellow Pages Scraper Team
  */
 export class YellowPagesScraperProcess extends BaseModule {
-    private scraper: YellowPagesScraper;
+    private scraper: YellowPagesScraper | null;
     private currentTaskId: string | null = null;
     private isRunning: boolean = false;
     private isPaused: boolean = false;
@@ -19,7 +111,8 @@ export class YellowPagesScraperProcess extends BaseModule {
     constructor() {
         super();
         this.processId = `child_${process.pid}_${Date.now()}`;
-        this.scraper = new YellowPagesScraper();
+        // Note: YellowPagesScraper needs a taskId, will be set when task starts
+        this.scraper = null;
         this.setupIPC();
     }
 
@@ -30,8 +123,7 @@ export class YellowPagesScraperProcess extends BaseModule {
         try {
             console.log(`YellowPagesScraperProcess initialized with PID: ${process.pid}`);
             
-            // Initialize the scraper
-            await this.scraper.initialize();
+            // Scraper will be initialized when task starts
             
             // Send ready message to main process
             this.sendReadyMessage();
@@ -144,7 +236,7 @@ export class YellowPagesScraperProcess extends BaseModule {
             console.log(`Starting task: ${message.taskId}`);
             
             // Send task started message
-            this.sendStatusUpdate(message.taskId, TaskStatus.RUNNING, 'Task started');
+            this.sendStatusUpdate(message.taskId, TaskStatus.InProgress, 'Task started');
 
             // Start the scraping process
             await this.startScraping(message.taskId);
@@ -171,10 +263,12 @@ export class YellowPagesScraperProcess extends BaseModule {
             this.isPaused = false;
 
             // Stop the scraper
-            await this.scraper.stop();
+            if (this.scraper) {
+                await this.scraper.stop();
+            }
 
             // Send task stopped message
-            this.sendStatusUpdate(message.taskId, TaskStatus.STOPPED, 'Task stopped');
+            this.sendStatusUpdate(message.taskId, TaskStatus.Failed, 'Task stopped');
 
         } catch (error) {
             console.error('Error stopping task:', error);
@@ -197,10 +291,12 @@ export class YellowPagesScraperProcess extends BaseModule {
             this.isPaused = true;
 
             // Pause the scraper
-            await this.scraper.pause();
+            if (this.scraper) {
+                await this.scraper.pause();
+            }
 
             // Send task paused message
-            this.sendStatusUpdate(message.taskId, TaskStatus.PAUSED, 'Task paused');
+            this.sendStatusUpdate(message.taskId, TaskStatus.Paused, 'Task paused');
 
         } catch (error) {
             console.error('Error pausing task:', error);
@@ -223,10 +319,12 @@ export class YellowPagesScraperProcess extends BaseModule {
             this.isPaused = false;
 
             // Resume the scraper
-            await this.scraper.resume();
+            if (this.scraper) {
+                await this.scraper.resume();
+            }
 
             // Send task resumed message
-            this.sendStatusUpdate(message.taskId, TaskStatus.RUNNING, 'Task resumed');
+            this.sendStatusUpdate(message.taskId, TaskStatus.InProgress, 'Task resumed');
 
         } catch (error) {
             console.error('Error resuming task:', error);
@@ -241,8 +339,12 @@ export class YellowPagesScraperProcess extends BaseModule {
         try {
             console.log(`Received task data for task: ${message.taskId}`);
             
-            // Store task data in the scraper
-            await this.scraper.setTaskData(message.taskData);
+            // Initialize scraper with task data if not already done
+            if (!this.scraper) {
+                // Extract taskId from taskData or use a default
+                const taskId = message.taskData?.taskId || parseInt(message.taskId) || 1;
+                this.scraper = new YellowPagesScraper(taskId);
+            }
 
         } catch (error) {
             console.error('Error handling task data:', error);
@@ -282,6 +384,12 @@ export class YellowPagesScraperProcess extends BaseModule {
      */
     private async startScraping(taskId: string): Promise<void> {
         try {
+            if (!this.scraper) {
+                // Initialize scraper with taskId
+                const numericTaskId = parseInt(taskId) || 1;
+                this.scraper = new YellowPagesScraper(numericTaskId);
+            }
+
             // Set up progress callback
             this.scraper.onProgress((progress) => {
                 this.sendProgressUpdate(taskId, progress);
@@ -317,7 +425,7 @@ export class YellowPagesScraperProcess extends BaseModule {
             sourceProcessId: this.processId,
             targetProcessId: 'main',
             taskId: '',
-            status: TaskStatus.PENDING,
+            status: TaskStatus.Pending,
             message: 'Child process ready',
             data: {
                 processId: this.processId,
@@ -358,7 +466,7 @@ export class YellowPagesScraperProcess extends BaseModule {
             progress.currentPage || 0,
             progress.totalPages || 0,
             progress.businessesFound || 0,
-            progress.status || TaskStatus.RUNNING,
+            progress.status || TaskStatus.InProgress,
             this.processId,
             'main',
             progress.details
@@ -441,12 +549,12 @@ export class YellowPagesScraperProcess extends BaseModule {
             console.log('Shutting down child process...');
 
             // Stop any running tasks
-            if (this.isRunning) {
+            if (this.isRunning && this.scraper) {
                 await this.scraper.stop();
             }
 
             // Send shutdown message
-            this.sendStatusUpdate(this.currentTaskId || '', TaskStatus.STOPPED, 'Process shutting down');
+            this.sendStatusUpdate(this.currentTaskId || '', TaskStatus.Failed, 'Process shutting down');
 
             console.log('Child process shutdown complete');
             process.exit(0);
@@ -460,8 +568,8 @@ export class YellowPagesScraperProcess extends BaseModule {
 
 // Start the child process if this file is executed directly
 if (require.main === module) {
-    const process = new YellowPagesScraperProcess();
-    process.initialize().catch((error) => {
+    const scraperProcess = new YellowPagesScraperProcess();
+    scraperProcess.initialize().catch((error) => {
         console.error('Failed to initialize child process:', error);
         process.exit(1);
     });

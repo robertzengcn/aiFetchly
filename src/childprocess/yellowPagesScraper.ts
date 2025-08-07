@@ -117,6 +117,11 @@ export class YellowPagesScraperProcess extends BaseModule {
             // Initialize browser
             await this.initializeBrowser();
 
+            // Apply cookies if account is specified
+            if (task.account_id) {
+                await this.applyCookies(task.account_id);
+            }
+
             // Start scraping
             await this.scrapeTask(task, platform);
 
@@ -169,8 +174,8 @@ export class YellowPagesScraperProcess extends BaseModule {
      */
     private async initializeBrowser(): Promise<void> {
         try {
-            // Get browser executable path from BrowserManager
-            const browserInfo = await this.browserManager.getBrowserExecutablePath();
+            // Get browser information from BrowserManager
+            const browserInfo = await this.browserManager.getBrowserInfo();
             const launchOptions = await this.browserManager.createLaunchOptions();
             
             // Launch browser using Puppeteer
@@ -195,6 +200,65 @@ export class YellowPagesScraperProcess extends BaseModule {
         } catch (error) {
             console.error('Failed to initialize browser:', error);
             throw error;
+        }
+    }
+
+    /**
+     * Apply cookies from account to the browser page
+     */
+    private async applyCookies(accountId: number): Promise<void> {
+        try {
+            if (!this.page) {
+                throw new Error('Page is not initialized');
+            }
+
+            console.log(`Applying cookies for account ${accountId}`);
+
+            // Get account cookies from the database
+            const accountCookies = await this.accountCookiesModule.getAccountCookies(accountId);
+            
+            if (!accountCookies || !accountCookies.cookies) {
+                console.log(`No cookies found for account ${accountId}`);
+                return;
+            }
+
+            // Parse cookies JSON
+            const cookies = JSON.parse(accountCookies.cookies);
+            
+            if (!Array.isArray(cookies) || cookies.length === 0) {
+                console.log(`No valid cookies found for account ${accountId}`);
+                return;
+            }
+
+            // Apply each cookie to the page
+            for (const cookie of cookies) {
+                try {
+                    // Convert cookie format if needed
+                    const cookieData = {
+                        name: cookie.name,
+                        value: cookie.value,
+                        domain: cookie.domain,
+                        path: cookie.path || '/',
+                        expires: cookie.expirationDate ? cookie.expirationDate * 1000 : undefined,
+                        httpOnly: cookie.httpOnly || false,
+                        secure: cookie.secure || false,
+                        sameSite: cookie.sameSite as 'Strict' | 'Lax' | 'None' | undefined
+                    };
+
+                    await this.page.setCookie(cookieData);
+                    console.log(`Applied cookie: ${cookie.name} for domain: ${cookie.domain}`);
+                    
+                } catch (error) {
+                    console.error(`Failed to set cookie ${cookie.name}:`, error);
+                    // Continue with other cookies
+                }
+            }
+
+            console.log(`Successfully applied cookies for account ${accountId}`);
+
+        } catch (error) {
+            console.error(`Error applying cookies for account ${accountId}:`, error);
+            // Don't throw error - cookies are optional
         }
     }
 

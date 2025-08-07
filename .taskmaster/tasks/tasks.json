@@ -279,7 +279,7 @@
           13,
           14
         ],
-        "status": "pending",
+        "status": "in-progress",
         "subtasks": [
           {
             "id": 1,
@@ -287,7 +287,7 @@
             "description": "Create the specific adapter for YellowPages.com. This includes researching and defining the CSS selectors for all required data fields (as per section 3.1.1) and the 'next page' element for pagination.",
             "dependencies": [],
             "details": "Implement the adapter as a new class or configuration file using the extensibility framework. This will be the first implementation and will serve as a practical template for the other adapters. Handle any site-specific logic, such as cookie banners or lazy-loaded content.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "Perform initial end-to-end runs to ensure the scraper can navigate pages and extract a sample of data without critical errors. Focus on selector stability."
           },
           {
@@ -348,7 +348,7 @@
         "dependencies": [
           14
         ],
-        "status": "pending",
+        "status": "done",
         "subtasks": [
           {
             "id": 1,
@@ -356,7 +356,7 @@
             "description": "Create the necessary adapter or entry point for the Yellow Pages module to be registered as a cron job with the BackgroundScheduler. This will allow scraping tasks to be scheduled and triggered automatically.",
             "dependencies": [],
             "details": "Implement a job handler function that can be passed to `BackgroundScheduler.scheduleJob()`. This function will serve as the starting point for a scheduled Yellow Pages scrape and must be able to process any arguments passed from the scheduler.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "Write a unit test to schedule a job that runs one minute in the future. Verify that the job handler function is called at the correct time and logs an expected message."
           },
           {
@@ -365,7 +365,7 @@
             "description": "Modify the core scraping logic of the Yellow Pages module to request and release Puppeteer browser instances from the central BrowserManager.",
             "dependencies": [],
             "details": "At the start of a scrape, call `BrowserManager.getBrowser()` to obtain a pre-configured browser instance with proxy and stealth support. Ensure `BrowserManager.releaseBrowser()` is called within a `finally` block to guarantee cleanup, even if the scrape fails.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "Create an integration test that requests a browser, navigates to a public IP checking service, and confirms the browser is using a proxy IP provided by the manager. Verify the browser is released correctly."
           },
           {
@@ -374,7 +374,7 @@
             "description": "Connect the Yellow Pages module to the AccountCookiesModule to fetch and apply authentication cookies to the browser instance before interacting with the target website.",
             "dependencies": [],
             "details": "Before navigating to the Yellow Pages site, call `AccountCookiesModule.getCookies('yellow-pages')` to retrieve the current valid cookies. Use Puppeteer's `page.setCookie()` method to apply these cookies to the browser page context.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "Using a mock of the AccountCookiesModule that returns a predefined test cookie, run a scrape against a local test server that requires the cookie for access. Verify the page is accessed successfully."
           },
           {
@@ -386,7 +386,7 @@
               3
             ],
             "details": "This orchestrator function will be the main logic block for any scrape. The sequence should be: 1) Get browser from BrowserManager. 2) Get cookies from AccountCookiesModule. 3) Apply cookies to page. 4) Execute scraping steps. 5) Release browser.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "Run an integration test of the orchestrator function (without the scheduler). Mock the external modules and verify that the calls are made in the correct order and that the browser release function is always called."
           },
           {
@@ -398,7 +398,7 @@
               4
             ],
             "details": "The test will schedule a real task to run in the near future and assert its successful completion. Add `try...catch` blocks around calls to external modules (Scheduler, Browser, Cookies) to log specific errors and ensure graceful failure and resource cleanup.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "Execute the end-to-end test and verify the expected outcome. Create failure-path tests by forcing `BrowserManager.getBrowser()` and `AccountCookiesModule.getCookies()` to throw exceptions, and confirm the system handles the errors without crashing and still releases any acquired resources."
           }
         ]
@@ -678,7 +678,7 @@
     ],
     "metadata": {
       "created": "2025-08-07T06:47:13.596Z",
-      "updated": "2025-08-07T15:10:44.699Z",
+      "updated": "2025-08-07T23:17:11.519Z",
       "description": "Tasks for master context"
     }
   }

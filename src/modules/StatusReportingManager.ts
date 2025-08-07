@@ -1,7 +1,66 @@
-import { MessageType, TaskStatus, ErrorSeverity, IPCMessage, ProgressUpdateMessage, StatusUpdateMessage, ResultDataMessage, ErrorMessage, LogMessage } from '@/interfaces/IPCMessageProtocol';
+import { MessageType } from '@/interfaces/IPCMessageProtocol';
+import { TaskStatus } from '@/interfaces/ITaskManager';
 import { BaseModule } from '@/modules/baseModule';
 import { YellowPagesTaskModel, YellowPagesTaskStatus } from '@/model/YellowPagesTask.model';
 import { YellowPagesResultModel } from '@/model/YellowPagesResult.model';
+
+// Define missing interfaces based on usage
+interface IPCMessage {
+    type: MessageType;
+    taskId: string;
+}
+
+interface ProgressUpdateMessage extends IPCMessage {
+    progress: number;
+    currentPage: number;
+    totalPages: number;
+    businessesFound: number;
+    details?: {
+        currentUrl?: string;
+        timeElapsed?: number;
+        timeRemaining?: number;
+        successRate?: number;
+        errorCount?: number;
+    };
+}
+
+interface StatusUpdateMessage extends IPCMessage {
+    status: TaskStatus;
+    message: string;
+    data?: any;
+}
+
+interface ResultDataMessage extends IPCMessage {
+    pageNumber: number;
+    results: Array<{
+        businessName: string;
+        email?: string;
+        phone?: string;
+        website?: string;
+        address?: any;
+        socialMedia?: any;
+        categories?: any;
+        businessHours?: any;
+        rating?: {
+            score?: number;
+            reviewCount?: number;
+        };
+        rawData?: any;
+    }>;
+}
+
+interface ErrorMessage extends IPCMessage {
+    message: string;
+    severity: 'WARNING' | 'ERROR' | 'CRITICAL';
+    stack?: string;
+    context?: any;
+}
+
+interface LogMessage extends IPCMessage {
+    level: 'debug' | 'info' | 'warn' | 'error';
+    message: string;
+    data?: any;
+}
 
 /**
  * Status reporting manager for handling child-to-main process communication
@@ -105,14 +164,8 @@ export class StatusReportingManager extends BaseModule {
                 errors: this.taskProgress.get(taskId)?.errors || []
             });
 
-            // Update task in database
-            await this.taskModel.updateTaskProgress(
-                parseInt(taskId),
-                message.progress,
-                message.currentPage,
-                message.totalPages,
-                message.businessesFound
-            );
+            // Progress tracking is handled in memory only
+            // Task status updates are handled separately via status messages
 
             // Log progress details
             if (message.details) {
@@ -145,16 +198,16 @@ export class StatusReportingManager extends BaseModule {
 
             // Handle specific status changes
             switch (message.status) {
-                case TaskStatus.COMPLETED:
+                case TaskStatus.Completed:
                     await this.handleTaskCompleted(taskId, message.data);
                     break;
 
-                case TaskStatus.FAILED:
+                case TaskStatus.Failed:
                     await this.handleTaskFailed(taskId, message.data);
                     break;
 
-                case TaskStatus.STOPPED:
-                    await this.handleTaskStopped(taskId, message.data);
+                default:
+                    // Handle other statuses or unknown status
                     break;
             }
 
@@ -180,15 +233,14 @@ export class StatusReportingManager extends BaseModule {
                     email: result.email,
                     phone: result.phone,
                     website: result.website,
-                    address: result.address ? JSON.stringify(result.address) : undefined,
-                    social_media: result.socialMedia ? JSON.stringify(result.socialMedia) : undefined,
-                    categories: result.categories ? JSON.stringify(result.categories) : undefined,
-                    business_hours: result.businessHours ? JSON.stringify(result.businessHours) : undefined,
+                    address: result.address,
+                    social_media: result.socialMedia,
+                    categories: result.categories,
+                    business_hours: result.businessHours,
                     rating: result.rating?.score,
                     review_count: result.rating?.reviewCount,
-                    raw_data: result.rawData ? JSON.stringify(result.rawData) : undefined,
-                    source_url: result.sourceUrl,
-                    extracted_at: new Date(result.extractedAt)
+                    platform: 'YellowPages',
+                    raw_data: result.rawData
                 });
             }
 
@@ -218,7 +270,7 @@ export class StatusReportingManager extends BaseModule {
 
             // Update task status based on error severity
             let dbStatus = YellowPagesTaskStatus.Failed;
-            if (message.severity === ErrorSeverity.WARNING) {
+            if (message.severity === 'WARNING') {
                 dbStatus = YellowPagesTaskStatus.InProgress; // Continue with warnings
             }
 
@@ -231,7 +283,7 @@ export class StatusReportingManager extends BaseModule {
             }
 
             // Handle critical errors
-            if (message.severity === ErrorSeverity.CRITICAL) {
+            if (message.severity === 'CRITICAL') {
                 await this.handleCriticalError(taskId, message);
             }
 
@@ -385,17 +437,15 @@ export class StatusReportingManager extends BaseModule {
      */
     private mapTaskStatus(ipcStatus: TaskStatus): YellowPagesTaskStatus {
         switch (ipcStatus) {
-            case TaskStatus.PENDING:
+            case TaskStatus.Pending:
                 return YellowPagesTaskStatus.Pending;
-            case TaskStatus.RUNNING:
+            case TaskStatus.InProgress:
                 return YellowPagesTaskStatus.InProgress;
-            case TaskStatus.PAUSED:
+            case TaskStatus.Paused:
                 return YellowPagesTaskStatus.Paused;
-            case TaskStatus.COMPLETED:
+            case TaskStatus.Completed:
                 return YellowPagesTaskStatus.Completed;
-            case TaskStatus.FAILED:
-                return YellowPagesTaskStatus.Failed;
-            case TaskStatus.STOPPED:
+            case TaskStatus.Failed:
                 return YellowPagesTaskStatus.Failed;
             default:
                 return YellowPagesTaskStatus.Pending;
