@@ -111,7 +111,7 @@ export class ConfigurationPlatformAdapter extends BasePlatformAdapter {
         try {
             return await page.evaluate((selector) => {
                 const nextButton = document.querySelector(selector);
-                return nextButton && !nextButton.classList.contains('disabled');
+                return nextButton ? !nextButton.classList.contains('disabled') : false;
             }, selectors.pagination.nextButton);
         } catch {
             return false;
@@ -125,7 +125,7 @@ export class ConfigurationPlatformAdapter extends BasePlatformAdapter {
         const selectors = this.getSelectors();
         
         // Look for total results selector in configuration
-        if (!selectors.totalResults) {
+        if (!selectors.pagination?.maxPages) {
             return null;
         }
 
@@ -137,7 +137,7 @@ export class ConfigurationPlatformAdapter extends BasePlatformAdapter {
                 const text = totalElement.textContent || '';
                 const match = text.match(/(\d+)/);
                 return match ? parseInt(match[1]) : null;
-            }, selectors.totalResults);
+            }, selectors.pagination.maxPages);
         } catch {
             return null;
         }

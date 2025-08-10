@@ -159,7 +159,7 @@ export class PlatformAdapterFactory extends BaseModule implements IPlatformAdapt
 
         } catch (error) {
             console.error(`❌ Error loading class-based adapter ${config.class_name}:`, error);
-            throw new Error(`Failed to load class-based adapter: ${error.message}`);
+            throw new Error(`Failed to load class-based adapter: ${error instanceof Error ? error.message : String(error)}`);
         }
     }
 
@@ -186,7 +186,7 @@ export class PlatformAdapterFactory extends BaseModule implements IPlatformAdapt
 
         } catch (error) {
             console.error(`❌ Error loading hybrid adapter ${config.class_name}:`, error);
-            throw new Error(`Failed to load hybrid adapter: ${error.message}`);
+            throw new Error(`Failed to load hybrid adapter: ${error instanceof Error ? error.message : String(error)}`);
         }
     }
 

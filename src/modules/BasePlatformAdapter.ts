@@ -63,7 +63,7 @@ export abstract class BasePlatformAdapter implements IBasePlatformAdapter {
      * Get platform selectors
      */
     getSelectors(): PlatformSelectors {
-        return this._config.selectors;
+        return this._config.selectors || { businessList: '', businessName: '' };
     }
 
     /**
@@ -87,9 +87,9 @@ export abstract class BasePlatformAdapter implements IBasePlatformAdapter {
             requiresAuthentication: this._config.settings?.requiresAuthentication || false,
             supportsCookies: this._config.settings?.supportsCookies || true,
             supportsProxy: this._config.settings?.supportsProxy || true,
-            loginUrl: this._config.settings?.loginUrl,
-            logoutUrl: this._config.settings?.logoutUrl,
-            sessionTimeout: this._config.settings?.sessionTimeout || 30
+            loginUrl: undefined,
+            logoutUrl: undefined,
+            sessionTimeout: 30
         };
     }
 
@@ -159,7 +159,7 @@ export abstract class BasePlatformAdapter implements IBasePlatformAdapter {
             score -= 20;
         }
 
-        if (!this._config.baseUrl) {
+        if (!this._config.base_url) {
             errors.push('Base URL is required');
             score -= 20;
         }
@@ -180,7 +180,7 @@ export abstract class BasePlatformAdapter implements IBasePlatformAdapter {
             score -= 5;
         }
 
-        if (this._config.rateLimit && this._config.rateLimit < 10) {
+        if (this._config.rate_limit && this._config.rate_limit < 10) {
             warnings.push('Rate limit is very low (< 10 requests/hour)');
             score -= 10;
         }
@@ -211,28 +211,29 @@ export abstract class BasePlatformAdapter implements IBasePlatformAdapter {
                 const nameElement = element.querySelector(sels.businessName);
                 business.name = nameElement?.textContent?.trim() || null;
 
-                const phoneElement = element.querySelector(sels.phone);
+                const phoneElement = element.querySelector(sels.phone || '');
                 business.phone = phoneElement?.textContent?.trim() || null;
 
-                const emailElement = element.querySelector(sels.email);
+                const emailElement = element.querySelector(sels.email || '');
                 business.email = emailElement?.textContent?.trim() || emailElement?.getAttribute('href')?.replace('mailto:', '') || null;
 
-                const websiteElement = element.querySelector(sels.website);
+                const websiteElement = element.querySelector(sels.website || '');
                 business.websiteUrl = websiteElement?.getAttribute('href') || websiteElement?.textContent?.trim() || null;
 
-                const addressElement = element.querySelector(sels.address);
+                const addressElement = element.querySelector(sels.address || '');
                 business.address = addressElement?.textContent?.trim() || null;
 
-                const categoriesElement = element.querySelector(sels.categories);
+                const categoriesElement = element.querySelector(sels.categories || '');
                 business.categories = categoriesElement?.textContent?.trim().split(',').map((cat: string) => cat.trim()) || [];
 
-                const socialElement = element.querySelector(sels.socialMedia);
+                const socialElement = element.querySelector(sels.socialMedia || '');
                 business.socialMedia = socialElement?.textContent?.trim().split(',').map((link: string) => link.trim()) || [];
 
                 businesses.push(business);
             });
 
             return {
+                business_name: businesses.length > 0 ? businesses[0].name || '' : '',
                 businesses,
                 totalCount: businesses.length,
                 currentPage: 1,

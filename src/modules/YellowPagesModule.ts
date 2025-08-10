@@ -1,6 +1,6 @@
 import { BaseModule } from "@/modules/baseModule";
 import { ITaskManager, YellowPagesTaskData, TaskStatus, TaskProgress, TaskFilters, TaskSummary, YellowPagesTask, YellowPagesResult } from "@/interfaces/ITaskManager";
-import { YellowPagesTaskModel } from "@/model/YellowPagesTask.model";
+import { YellowPagesTaskModel, YellowPagesTaskStatus } from "@/model/YellowPagesTask.model";
 import { YellowPagesResultModel } from "@/model/YellowPagesResult.model";
 import { YellowPagesProcessManager } from "@/modules/YellowPagesProcessManager";
 import { BrowserManager } from "@/modules/browserManager";
@@ -71,17 +71,16 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
             const taskId = await this.taskModel.saveYellowPagesTask({
                 name: taskData.name,
                 platform: taskData.platform,
-                keywords: JSON.stringify(taskData.keywords),
+                keywords: taskData.keywords,
                 location: taskData.location,
                 max_pages: taskData.max_pages || 1,
                 concurrency: taskData.concurrency || 1,
-                status: TaskStatus.Pending,
+
                 account_id: taskData.account_id,
                 proxy_config: taskData.proxy_config ? JSON.stringify(taskData.proxy_config) : undefined,
                 delay_between_requests: taskData.delay_between_requests || 2000,
-                scheduled_at: taskData.scheduled_at,
-                created_at: new Date(),
-                updated_at: new Date()
+
+
             });
 
             console.log(`Created Yellow Pages task with ID: ${taskId}`);
@@ -103,7 +102,7 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
             console.log(`Starting Yellow Pages task ${taskId}`);
 
             // Update task status to in-progress
-            await this.taskModel.updateTaskStatus(taskId, TaskStatus.InProgress);
+            await this.taskModel.updateTaskStatus(taskId, YellowPagesTaskStatus.InProgress);
 
             // Spawn child process for scraping
             await this.processManager.spawnScraperProcess(taskId);
@@ -114,8 +113,8 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
             console.error(`Failed to start Yellow Pages task ${taskId}:`, error);
             
             // Update task status to failed
-            await this.taskModel.updateTaskStatus(taskId, TaskStatus.Failed);
-            await this.taskModel.updateTaskErrorLog(taskId, error.message);
+            await this.taskModel.updateTaskStatus(taskId, YellowPagesTaskStatus.Failed);
+            await this.taskModel.updateTaskErrorLog(taskId, error instanceof Error ? error.message : String(error));
             
             throw error;
         }
@@ -134,7 +133,7 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
             await this.processManager.terminateProcess(taskId);
 
             // Update task status
-            await this.taskModel.updateTaskStatus(taskId, TaskStatus.Paused);
+            await this.taskModel.updateTaskStatus(taskId, YellowPagesTaskStatus.Paused);
 
             console.log(`Successfully stopped Yellow Pages task ${taskId}`);
 
@@ -155,7 +154,7 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
 
             // Terminate the process and update status
             await this.processManager.terminateProcess(taskId);
-            await this.taskModel.updateTaskStatus(taskId, TaskStatus.Paused);
+            await this.taskModel.updateTaskStatus(taskId, YellowPagesTaskStatus.Paused);
 
             console.log(`Successfully paused Yellow Pages task ${taskId}`);
 
@@ -175,7 +174,7 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
             console.log(`Resuming Yellow Pages task ${taskId}`);
 
             // Check if task is in paused state
-            const task = await this.taskModel.getYellowPagesTask(taskId);
+            const task = await this.taskModel.getTaskById(taskId);
             if (!task) {
                 throw new Error(`Task ${taskId} not found`);
             }
@@ -202,7 +201,7 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
      */
     async getTaskStatus(taskId: number): Promise<TaskStatus> {
         try {
-            const task = await this.taskModel.getYellowPagesTask(taskId);
+            const task = await this.taskModel.getTaskById(taskId);
             if (!task) {
                 throw new Error(`Task ${taskId} not found`);
             }
@@ -222,14 +221,14 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
      */
     async getTaskProgress(taskId: number): Promise<TaskProgress> {
         try {
-            const task = await this.taskModel.getYellowPagesTask(taskId);
+            const task = await this.taskModel.getTaskById(taskId);
             if (!task) {
                 throw new Error(`Task ${taskId} not found`);
             }
 
             // Get process info if available
             const processInfo = this.processManager.getProcessInfo(taskId);
-            const resultsCount = await this.resultModel.getResultCount(taskId);
+            const resultsCount = await this.resultModel.getResultCountByTaskId(taskId);
 
             const progress: TaskProgress = {
                 taskId: taskId,
@@ -240,7 +239,7 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
                 percentage: processInfo?.progress?.percentage || 0,
                 estimatedTimeRemaining: processInfo?.progress?.estimatedTimeRemaining,
                 startTime: processInfo?.startTime,
-                lastUpdateTime: task.updated_at,
+                lastUpdateTime: task.updatedAt || new Date(),
                 errorMessage: task.error_log || undefined
             };
 
@@ -306,19 +305,15 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
      */
     async listTasks(filters?: TaskFilters): Promise<TaskSummary[]> {
         try {
-            const tasks = await this.taskModel.getYellowPagesTaskList(
-                filters?.offset || 0,
-                filters?.limit || 50,
-                filters?.status,
-                filters?.platform,
-                filters?.createdAfter,
-                filters?.createdBefore
+            const tasks = await this.taskModel.listTasks(
+                Math.floor((filters?.offset || 0) / (filters?.limit || 50)) + 1,
+                filters?.limit || 50
             );
 
             const summaries: TaskSummary[] = [];
             
             for (const task of tasks) {
-                const resultsCount = await this.resultModel.getResultCount(task.id);
+                const resultsCount = await this.resultModel.getResultCountByTaskId(task.id);
                 const processInfo = this.processManager.getProcessInfo(task.id);
                 
                 summaries.push({
@@ -326,7 +321,7 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
                     name: task.name,
                     platform: task.platform,
                     status: task.status as TaskStatus,
-                    created_at: task.created_at,
+                    created_at: task.createdAt || new Date(),
                     completed_at: task.completed_at || undefined,
                     results_count: resultsCount,
                     progress_percentage: processInfo?.progress?.percentage || 0
@@ -364,7 +359,7 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
                 updateData.proxy_config = JSON.stringify(updates.proxy_config);
             }
 
-            await this.taskModel.updateYellowPagesTask(taskId, updateData);
+            await this.taskModel.updateTask(taskId, updateData);
 
             console.log(`Successfully updated Yellow Pages task ${taskId}`);
 
@@ -392,7 +387,7 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
             await this.resultModel.deleteResultsByTaskId(taskId);
 
             // Delete the task
-            await this.taskModel.deleteYellowPagesTask(taskId);
+            await this.taskModel.deleteTask(taskId);
 
             console.log(`Successfully deleted Yellow Pages task ${taskId}`);
 

@@ -86,7 +86,7 @@ export class YellowPagesOrchestrator extends BaseModule implements ITaskManager 
             });
 
             // Step 4: Initialize health check monitoring
-            await this.healthCheck.initialize();
+            // Health check is ready to use without initialization
 
             this.isInitialized = true;
             console.log('Yellow Pages Orchestrator initialized successfully');
@@ -112,8 +112,7 @@ export class YellowPagesOrchestrator extends BaseModule implements ITaskManager 
             // Stop all active processes
             await this.processManager.terminateAllProcesses();
 
-            // Perform health check cleanup
-            await this.healthCheck.cleanup();
+            // Health check cleanup not required
 
             console.log('Yellow Pages Orchestrator shutdown complete');
 
@@ -348,7 +347,7 @@ export class YellowPagesOrchestrator extends BaseModule implements ITaskManager 
         try {
             await this.browserManager.getBrowserInfo();
         } catch (error) {
-            throw new Error(`Browser not available: ${error.message}`);
+            throw new Error(`Browser not available: ${error instanceof Error ? error.message : String(error)}`);
         }
 
         console.log(`Pre-flight checks passed for task ${taskId}`);

@@ -431,6 +431,68 @@ export const constantRoutes: RouteRecordRaw[] = [
     ]
   },
   {
+    path: '/yellowpages',
+    name: 'Yellow_Pages',
+    meta: {
+      visible: true,
+      title: 'Yellow Pages Scraper',
+      icon: 'mdi-phone-book'
+    },
+    component: Layout, 
+    children: [
+      {
+        path: 'list',
+        component: () => import('@/views/pages/yellowpages/list.vue'),
+        name: 'YellowPagesList',
+        meta: {
+          visible: true,
+          title: 'Task List',
+          icon: 'list'
+        }
+      },
+      {
+        path: 'create',
+        component: () => import('@/views/pages/yellowpages/list.vue'),
+        name: 'CreateYellowPagesTask',
+        meta: {
+          visible: false,
+          title: 'Create Task',
+          icon: 'add'
+        }
+      },
+      {
+        path: 'edit/:id(\\d+)',
+        component: () => import('@/views/pages/yellowpages/list.vue'),
+        name: 'EditYellowPagesTask',
+        meta: {
+          visible: false,
+          title: 'Edit Task',
+          icon: 'edit'
+        }
+      },
+      {
+        path: 'detail/:id(\\d+)',
+        component: () => import('@/views/pages/yellowpages/components/TaskDetailsView.vue'),
+        name: 'YellowPagesTaskDetail',
+        meta: {
+          visible: false,
+          title: 'Task Detail',
+          icon: 'view'
+        }
+      },
+      {
+        path: 'results/:id(\\d+)',
+        component: () => import('@/views/pages/yellowpages/list.vue'),
+        name: 'YellowPagesResults',
+        meta: {
+          visible: false,
+          title: 'Task Results',
+          icon: 'data'
+        }
+      }
+    ]
+  },
+  {
     path: '/emailmarketing',
     name: 'Email_Marketing',
     meta: {

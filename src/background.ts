@@ -381,3 +381,4 @@ initialize()
 
 
 
+import { registerTaskIpcHandlers } from './main-process/communication/task-ipc'

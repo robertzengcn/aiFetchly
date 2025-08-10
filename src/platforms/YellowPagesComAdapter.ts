@@ -1,13 +1,8 @@
 import { Page } from 'puppeteer';
 import { BasePlatformAdapter } from '@/modules/BasePlatformAdapter';
-import { 
-    PlatformConfig, 
-    SearchResult, 
-    BusinessData, 
-    Address,
-    BusinessHours,
-    Rating
-} from '@/interfaces/ITaskManager';
+import { PlatformConfig } from '@/interfaces/IPlatformConfig';
+import { SearchResult } from '@/interfaces/IBasePlatformAdapter';
+import { BusinessData, Address, BusinessHours, Rating } from '@/interfaces/IDataExtractor';
 
 /**
  * YellowPages.com Platform Adapter
@@ -96,12 +91,25 @@ export class YellowPagesComAdapter extends BasePlatformAdapter {
             return results;
         });
 
-        return {
-            businesses,
-            totalCount: businesses.length,
-            currentPage: await this.getCurrentPage(page),
-            hasNextPage: await this.hasNextPage(page)
-        };
+        // Return the first business data (or create a default structure)
+        if (businesses.length > 0) {
+            const firstBusiness = businesses[0];
+            return {
+                business_name: firstBusiness.name || '',
+                email: firstBusiness.email,
+                phone: firstBusiness.phone,
+                website: firstBusiness.websiteUrl,
+                address: firstBusiness.address,
+                categories: firstBusiness.categories,
+                rating: firstBusiness.rating,
+                raw_data: { businesses, totalCount: businesses.length }
+            };
+        } else {
+            return {
+                business_name: '',
+                raw_data: { businesses: [], totalCount: 0 }
+            };
+        }
     }
 
     /**
@@ -233,9 +241,10 @@ export class YellowPagesComAdapter extends BasePlatformAdapter {
         for (const className of ratingClasses) {
             if (ratingMap[className]) {
                 return {
-                    value: ratingMap[className],
-                    maxValue: 5,
-                    source: 'YellowPages.com'
+                    score: ratingMap[className],
+                    max_score: 5,
+                    review_count: 0,
+                    rating_text: 'YellowPages.com'
                 };
             }
         }

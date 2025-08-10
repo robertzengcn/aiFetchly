@@ -310,7 +310,7 @@ export class PlatformRegistry extends BaseModule {
      */
     getPlatformStatistics(): any {
         const platforms = this.getAllPlatforms();
-        const activePlatforms = platforms.filter(p => p.isActive);
+        const activePlatforms = platforms.filter(p => p.is_active);
         
         const byCountry = platforms.reduce((acc, platform) => {
             acc[platform.country] = (acc[platform.country] || 0) + 1;

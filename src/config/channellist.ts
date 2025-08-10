@@ -154,3 +154,13 @@ export const USER_CHECK_LOGIN='user:checklogin'
 
 // App Information Channels
 export const GET_APP_INFO='app:info'
+
+// Platform Management Channels
+export const PLATFORM_LIST = 'platform:list'
+export const PLATFORM_DETAIL = 'platform:detail'
+export const PLATFORM_CREATE = 'platform:create'
+export const PLATFORM_UPDATE = 'platform:update'
+export const PLATFORM_DELETE = 'platform:delete'
+export const PLATFORM_VALIDATE = 'platform:validate'
+export const PLATFORM_STATISTICS = 'platform:statistics'
+export const PLATFORM_TOGGLE = 'platform:toggle'

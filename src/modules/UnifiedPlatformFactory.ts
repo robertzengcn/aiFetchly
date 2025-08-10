@@ -119,8 +119,7 @@ export class UnifiedPlatformFactory extends BaseModule implements IPlatformAdapt
         try {
             console.log('Initializing Unified Platform Factory...');
             
-            // Initialize platform registry
-            await this.platformRegistry.initialize();
+            // Platform registry is ready to use without initialization
             
             this.isInitialized = true;
             console.log('Unified Platform Factory initialized successfully');

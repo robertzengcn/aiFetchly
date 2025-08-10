@@ -40,8 +40,7 @@ export class PlatformExtensibilityTest extends BaseModule {
         console.log('Starting comprehensive platform extensibility framework tests...');
 
         try {
-            // Initialize components
-            await this.platformRegistry.initialize();
+            // Platform registry is ready to use without initialization
             await this.platformFactory.initialize();
 
             // Run individual tests
@@ -394,7 +393,7 @@ export class PlatformExtensibilityTest extends BaseModule {
             // Test platform registration
             const platforms = this.platformRegistry.getAllPlatforms();
             const activePlatforms = this.platformRegistry.getActivePlatforms();
-            const platformCount = this.platformRegistry.getPlatformCount();
+            const platformCount = this.platformRegistry.getAllPlatforms().length;
 
             // Test platform retrieval
             const testPlatform = this.platformRegistry.getPlatformConfig('test-configuration-platform');
