@@ -338,7 +338,7 @@ const applyPreset = (expression: string) => {
 }
 
 const updateExpression = () => {
-  const parts = []
+  const parts: string[] = []
 
   // Minutes
   if (customSchedule.value.minutes === 'every') {

@@ -29,8 +29,6 @@ const statusColor = computed(() => {
       return 'grey'
     case ScheduleStatus.PAUSED:
       return 'warning'
-    case ScheduleStatus.ERROR:
-      return 'error'
     default:
       return 'grey'
   }
@@ -43,8 +41,6 @@ const statusVariant = computed(() => {
     case ScheduleStatus.INACTIVE:
       return 'outlined'
     case ScheduleStatus.PAUSED:
-      return 'elevated'
-    case ScheduleStatus.ERROR:
       return 'elevated'
     default:
       return 'outlined'
@@ -59,8 +55,6 @@ const statusIcon = computed(() => {
       return 'mdi-pause-circle'
     case ScheduleStatus.PAUSED:
       return 'mdi-pause-circle'
-    case ScheduleStatus.ERROR:
-      return 'mdi-alert-circle'
     default:
       return 'mdi-help-circle'
   }
@@ -74,8 +68,6 @@ const statusLabel = computed(() => {
       return 'Inactive'
     case ScheduleStatus.PAUSED:
       return 'Paused'
-    case ScheduleStatus.ERROR:
-      return 'Error'
     default:
       return 'Unknown'
   }

@@ -67,7 +67,7 @@
     "rebuild-better-sqlite": "electron-rebuild -f -w better-sqlite3",
     "prepackage": "npm run rebuild-sqlite3",
     "rebuild-sqlite3": "electron-rebuild -f -w sqlite3",
-    "type-check": "vue-tsc --noEmit --watch",
+    "vue-check": "vue-tsc --noEmit --watch",
     "test-installer": "node installer-scripts/test-installer.js",
     "uninstall-win": "node installer-scripts/uninstall-windows.js",
     "uninstall-mac": "./installer-scripts/uninstall-macos.sh",

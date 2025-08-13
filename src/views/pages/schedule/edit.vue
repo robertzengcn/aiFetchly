@@ -122,7 +122,7 @@ const alertDialog = ref({
   message: '',
   type: 'info' as 'success' | 'error' | 'warning' | 'info',
   actionText: 'OK',
-  action: null as (() => void) | null
+  action: undefined as (() => void) | undefined
 })
 
 // Methods

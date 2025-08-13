@@ -3,6 +3,7 @@ import { PlatformConfig } from '@/interfaces/IPlatformConfig';
 import { ValidationResult } from '@/interfaces/IBasePlatformAdapter';
 import * as fs from 'fs';
 import * as path from 'path';
+import { platforms as staticPlatforms } from '@/config/platforms';
 
 /**
  * Platform Registry - Manages platform configurations and adapters
@@ -12,11 +13,11 @@ import * as path from 'path';
  */
 export class PlatformRegistry extends BaseModule {
     private platforms: Map<string, PlatformConfig> = new Map();
-    private platformsDir: string;
+    // private platformsDir: string;
 
     constructor() {
         super();
-        this.platformsDir = path.join(process.cwd(), 'src/config/platforms');
+        // this.platformsDir = path.join(process.cwd(), 'src/config/platforms');
         this.loadPlatformConfigurations();
     }
 
@@ -208,89 +209,81 @@ export class PlatformRegistry extends BaseModule {
      * Load platform configurations from files
      */
     private loadPlatformConfigurations(): void {
-        try {
-            // Ensure platforms directory exists
-            if (!fs.existsSync(this.platformsDir)) {
-                fs.mkdirSync(this.platformsDir, { recursive: true });
-                console.log(`Created platforms directory: ${this.platformsDir}`);
-                return;
-            }
-
-            // Load all JSON files from platforms directory
-            const files = fs.readdirSync(this.platformsDir)
-                .filter(file => file.endsWith('.json'));
-
-            for (const file of files) {
-                try {
-                    const filePath = path.join(this.platformsDir, file);
-                    const configData = fs.readFileSync(filePath, 'utf8');
-                    const config: PlatformConfig = JSON.parse(configData);
-                    
-                    // Validate configuration
-                    const validation = this.validatePlatformConfig(config);
-                    if (validation.isValid) {
-                        this.platforms.set(config.id, config);
-                        console.log(`✅ Loaded platform: ${config.name} (${config.id})`);
-                    } else {
-                        console.error(`❌ Invalid platform config in ${file}:`, validation.errors);
-                    }
-                } catch (error) {
-                    console.error(`❌ Error loading platform config from ${file}:`, error);
+        // Prefer statically-typed TS platform configs
+        if (Array.isArray(staticPlatforms) && staticPlatforms.length > 0) {
+            for (const config of staticPlatforms) {
+                const validation = this.validatePlatformConfig(config);
+                if (validation.isValid) {
+                    this.platforms.set(config.id, config);
+                    console.log(`✅ Loaded platform: ${config.name} (${config.id})`);
+                } else {
+                    console.error(
+                        `❌ Invalid platform config (${config.id}):`,
+                        validation.errors
+                    );
                 }
             }
-
-            console.log(`📋 Loaded ${this.platforms.size} platform configurations`);
-        } catch (error) {
-            console.error('❌ Error loading platform configurations:', error);
+            console.log(`📋 Loaded ${this.platforms.size} platform configurations (TS)`);
+            return;
         }
+
+        // Fallback: legacy JSON loader (kept for backward compatibility)
+        // try {
+        //     // if (!fs.existsSync(this.platformsDir)) {
+        //     //     fs.mkdirSync(this.platformsDir, { recursive: true });
+        //     //     console.log(`Created platforms directory: ${this.platformsDir}`);
+        //     //     return;
+        //     // }
+
+        //     // const files = fs
+        //     //     .readdirSync(this.platformsDir)
+        //     //     .filter((file) => file.endsWith('.json'));
+
+        //     for (const file of files) {
+        //         try {
+        //             const filePath = path.join(this.platformsDir, file);
+        //             const configData = fs.readFileSync(filePath, 'utf8');
+        //             const config: PlatformConfig = JSON.parse(configData);
+
+        //             const validation = this.validatePlatformConfig(config);
+        //             if (validation.isValid) {
+        //                 this.platforms.set(config.id, config);
+        //                 console.log(`✅ Loaded platform: ${config.name} (${config.id})`);
+        //             } else {
+        //                 console.error(
+        //                     `❌ Invalid platform config in ${file}:`,
+        //                     validation.errors
+        //                 );
+        //             }
+        //         } catch (error) {
+        //             console.error(
+        //                 `❌ Error loading platform config from ${file}:`,
+        //                 error
+        //             );
+        //         }
+        //     }
+
+        //     console.log(`📋 Loaded ${this.platforms.size} platform configurations`);
+        // } catch (error) {
+        //     console.error('❌ Error loading platform configurations:', error);
+        // }
     }
 
     /**
      * Save platform configuration to file
      */
-    private async savePlatformConfig(config: PlatformConfig): Promise<void> {
-        try {
-            // Ensure platforms directory exists
-            if (!fs.existsSync(this.platformsDir)) {
-                fs.mkdirSync(this.platformsDir, { recursive: true });
-            }
-
-            const fileName = `${config.id}.json`;
-            const filePath = path.join(this.platformsDir, fileName);
-            
-            // Add metadata timestamps
-            const configWithMetadata = {
-                ...config,
-                metadata: {
-                    ...config.metadata,
-                    lastUpdated: new Date().toISOString()
-                }
-            };
-
-            fs.writeFileSync(filePath, JSON.stringify(configWithMetadata, null, 2));
-            console.log(`💾 Saved platform config: ${filePath}`);
-        } catch (error) {
-            console.error(`❌ Error saving platform config for ${config.id}:`, error);
-            throw error;
-        }
+    private async savePlatformConfig(_config: PlatformConfig): Promise<void> {
+        // TS configs are source-controlled. Persist by editing TS files.
+        // Intentionally no-op to avoid drifting JSON files.
+        return;
     }
 
     /**
      * Remove platform configuration file
      */
-    private async removePlatformConfig(platformId: string): Promise<void> {
-        try {
-            const fileName = `${platformId}.json`;
-            const filePath = path.join(this.platformsDir, fileName);
-            
-            if (fs.existsSync(filePath)) {
-                fs.unlinkSync(filePath);
-                console.log(`🗑️ Deleted platform config file: ${filePath}`);
-            }
-        } catch (error) {
-            console.error(`❌ Error removing platform config for ${platformId}:`, error);
-            throw error;
-        }
+    private async removePlatformConfig(_platformId: string): Promise<void> {
+        // TS configs are source-controlled. Remove by deleting TS files.
+        return;
     }
 
     /**

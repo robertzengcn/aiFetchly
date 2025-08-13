@@ -1,0 +1,67 @@
+import { PlatformConfig, PlatformFeature } from '@/interfaces/IPlatformConfig';
+
+export const Platform_pagesjaunes_fr: PlatformConfig = {
+  id: 'pagesjaunes-fr',
+  name: 'PagesJaunes.fr',
+  display_name: 'PagesJaunes.fr',
+  base_url: 'https://www.pagesjaunes.fr',
+  country: 'France',
+  language: 'French',
+  is_active: true,
+  version: '1.0.0',
+  type: 'configuration',
+  documentation: 'https://docs.yellowpages-scraper.com/platforms/pagesjaunes-fr',
+  maintainer: 'Platform Development Team',
+  rate_limit: 100,
+  delay_between_requests: 2000,
+  max_concurrent_requests: 1,
+  selectors: {
+    businessList: 'div.bi-list, .bi-list-item, .result-item',
+    businessName: 'h3.bi-name, .bi-name a, .result-name',
+    phone: '.bi-phone, .phone-number, .result-phone',
+    email: '.bi-email, .email-address, .result-email',
+    website: '.bi-website, .website-link, .result-website',
+    address: '.bi-address, .address-text, .result-address',
+    address_city: '.bi-city, .city-name, .result-city',
+    address_state: '.bi-region, .region-name, .result-region',
+    address_zip: '.bi-postal, .postal-code, .result-postal',
+    address_country: '.bi-country, .country-name, .result-country',
+    categories: '.bi-categories, .business-categories, .result-categories',
+    rating: '.bi-rating, .rating-stars, .result-rating',
+    reviewCount: '.bi-reviews, .review-count, .result-reviews',
+    description: '.bi-description, .business-description, .result-description',
+    pagination: {
+      nextButton: '.pagination-next, .next-page, a[rel=\'next\']',
+      currentPage: '.pagination-current, .current-page, .page-number',
+      maxPages: '.pagination-total, .total-pages, .page-count',
+    },
+  },
+  settings: {
+    requiresAuthentication: false,
+    supportsProxy: true,
+    supportsCookies: true,
+    searchUrlPattern:
+      'https://www.pagesjaunes.fr/recherche?quoiqui={keywords}&ou={location}&page={page}',
+    resultUrlPattern: 'https://www.pagesjaunes.fr{path}',
+    supportedFeatures: [
+      PlatformFeature.SEARCH,
+      PlatformFeature.PAGINATION,
+      PlatformFeature.DETAILED_EXTRACTION,
+    ],
+  },
+  metadata: {
+    lastUpdated: new Date('2024-01-15T10:30:00.000Z'),
+    version: '1.0.0',
+    category: 'business-directory',
+    tags: ['france', 'business-directory', 'yellow-pages'],
+    statistics: {
+      totalBusinesses: 0,
+      lastScraped: new Date('2024-01-15T10:30:00.000Z'),
+      successRate: 0,
+    },
+  },
+  description:
+    'Platform configuration for PagesJaunes.fr - French Yellow Pages directory',
+};
+
+

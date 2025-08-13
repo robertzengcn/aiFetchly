@@ -421,7 +421,10 @@ const running = ref(false)
 const error = ref('')
 const executionHistory = ref<any[]>([])
 const loadingHistory = ref(false)
-const dependencies = ref({
+const dependencies = ref<{
+  children: any[];
+  parents: any[];
+}>({
   children: [],
   parents: []
 })
@@ -433,7 +436,7 @@ const alertDialog = ref({
   message: '',
   type: 'info' as 'success' | 'error' | 'warning' | 'info',
   actionText: 'OK',
-  action: null as (() => void) | null
+  action: null as (() => void) | null | undefined
 })
 
 const confirmDialog = ref({
@@ -471,7 +474,7 @@ const loadSchedule = async () => {
     
     const data = await getScheduleById(scheduleId)
     schedule.value = data.schedule
-    dependencies.value = data.dependencies
+    dependencies.value = data.dependencies || { children: [], parents: [] }
   } catch (err) {
     error.value = `Failed to load schedule: ${err}`
   } finally {
@@ -602,10 +605,10 @@ const getAlertIcon = (type: string) => {
 const getTaskTypeColor = (taskType: TaskType): string => {
   switch (taskType) {
     case TaskType.SEARCH: return 'blue'
-    case TaskType.EMAIL_MARKETING: return 'green'
-    case TaskType.BULK_EMAIL: return 'orange'
+    case TaskType.EMAIL_EXTRACT: return 'green'
+    case TaskType.BUCK_EMAIL: return 'orange'
     case TaskType.VIDEO_DOWNLOAD: return 'purple'
-    case TaskType.SOCIAL_TASK: return 'pink'
+    case TaskType.YELLOW_PAGES: return 'pink'
     default: return 'grey'
   }
 }
@@ -613,10 +616,10 @@ const getTaskTypeColor = (taskType: TaskType): string => {
 const getTaskTypeLabel = (taskType: TaskType): string => {
   switch (taskType) {
     case TaskType.SEARCH: return 'Search'
-    case TaskType.EMAIL_MARKETING: return 'Email Marketing'
-    case TaskType.BULK_EMAIL: return 'Bulk Email'
+    case TaskType.EMAIL_EXTRACT: return 'Email Extract'
+    case TaskType.BUCK_EMAIL: return 'Buck Email'
     case TaskType.VIDEO_DOWNLOAD: return 'Video Download'
-    case TaskType.SOCIAL_TASK: return 'Social Task'
+    case TaskType.YELLOW_PAGES: return 'Yellow Pages'
     default: return 'Unknown'
   }
 }

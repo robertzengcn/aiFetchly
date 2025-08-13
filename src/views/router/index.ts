@@ -436,7 +436,7 @@ export const constantRoutes: RouteRecordRaw[] = [
     meta: {
       visible: true,
       title: 'Yellow Pages Scraper',
-      icon: 'mdi-phone-book'
+      icon: 'mdi-database-search'
     },
     component: Layout, 
     children: [
@@ -452,7 +452,7 @@ export const constantRoutes: RouteRecordRaw[] = [
       },
       {
         path: 'create',
-        component: () => import('@/views/pages/yellowpages/list.vue'),
+        component: () => import('@/views/pages/yellowpages/create.vue'),
         name: 'CreateYellowPagesTask',
         meta: {
           visible: false,
@@ -462,7 +462,7 @@ export const constantRoutes: RouteRecordRaw[] = [
       },
       {
         path: 'edit/:id(\\d+)',
-        component: () => import('@/views/pages/yellowpages/list.vue'),
+        component: () => import('@/views/pages/yellowpages/edit.vue'),
         name: 'EditYellowPagesTask',
         meta: {
           visible: false,

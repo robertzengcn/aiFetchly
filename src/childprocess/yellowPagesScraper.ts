@@ -2,7 +2,7 @@ import { Page, Browser } from 'puppeteer';
 import puppeteer from 'puppeteer';
 import { YellowPagesTaskModel, YellowPagesTaskStatus } from "@/model/YellowPagesTask.model";
 import { YellowPagesResultModel } from "@/model/YellowPagesResult.model";
-import { YellowPagesPlatformModel } from "@/model/YellowPagesPlatform.model";
+import { PlatformRegistry } from "@/modules/PlatformRegistry";
 import { BaseModule } from "@/modules/baseModule";
 import { BrowserManager } from "@/modules/browserManager";
 import { AccountCookiesModule } from "@/modules/accountCookiesModule";
@@ -47,7 +47,7 @@ export class YellowPagesScraperProcess extends BaseModule {
     private taskId: number;
     private taskModel: YellowPagesTaskModel;
     private resultModel: YellowPagesResultModel;
-    private platformModel: YellowPagesPlatformModel;
+    private platformRegistry: PlatformRegistry;
     private browserManager: BrowserManager;
     private accountCookiesModule: AccountCookiesModule;
     private browser: Browser | null = null;
@@ -65,7 +65,7 @@ export class YellowPagesScraperProcess extends BaseModule {
         this.taskId = taskId;
         this.taskModel = new YellowPagesTaskModel(this.dbpath);
         this.resultModel = new YellowPagesResultModel(this.dbpath);
-        this.platformModel = new YellowPagesPlatformModel(this.dbpath);
+        this.platformRegistry = new PlatformRegistry();
         this.browserManager = new BrowserManager();
         this.accountCookiesModule = new AccountCookiesModule();
     }
@@ -104,8 +104,10 @@ export class YellowPagesScraperProcess extends BaseModule {
                 throw new Error(`Task ${this.taskId} not found`);
             }
 
-            // Get platform details
-            const platform = await this.platformModel.getPlatformByName(task.platform);
+            // Get platform details from registry (id/name/display_name match)
+            const platform = this.platformRegistry
+              .getAllPlatforms()
+              .find(p => p.id === task.platform || p.name === task.platform || p.display_name === task.platform);
             if (!platform) {
                 throw new Error(`Platform ${task.platform} not found`);
             }
@@ -271,7 +273,7 @@ export class YellowPagesScraperProcess extends BaseModule {
         const maxPages = task.max_pages;
         const delayBetweenRequests = task.delay_between_requests;
 
-        let currentPage = 1;
+        //let currentPage = 1;
         let totalResults = 0;
 
         for (const keyword of keywords) {
@@ -337,7 +339,7 @@ export class YellowPagesScraperProcess extends BaseModule {
      * Build search URL for the platform
      */
     private buildSearchUrl(platform: any, keyword: string, location: string, pageNum: number): string {
-        const settings = JSON.parse(platform.settings || '{}');
+        const settings = platform.settings || {};
         const searchUrlPattern = settings.searchUrlPattern || `${platform.base_url}/search`;
         
         let url = searchUrlPattern
@@ -357,7 +359,7 @@ export class YellowPagesScraperProcess extends BaseModule {
      * Extract business data from the current page
      */
     private async extractBusinessData(platform: any): Promise<ScrapingResult[]> {
-        const selectors = JSON.parse(platform.selectors || '{}');
+        const selectors = platform.selectors || {};
         const results: ScrapingResult[] = [];
 
         try {

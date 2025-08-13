@@ -74,84 +74,98 @@ export interface PlatformConfig {
 /**
  * Platform selectors for data extraction
  */
+export type SelectorValue =
+    | string
+    | {
+          /** Selector for next button */
+          nextButton?: string;
+          /** Selector for current page indicator */
+          currentPage?: string;
+          /** Selector for max pages indicator */
+          maxPages?: string;
+      };
+
 export interface PlatformSelectors {
     /** Selector for business list container */
     businessList: string;
-    
+
     /** Selector for business name */
     businessName: string;
-    
+
     /** Selector for phone number */
     phone?: string;
-    
+
     /** Selector for email address */
     email?: string;
-    
+
     /** Selector for website URL */
     website?: string;
-    
+
     /** Selector for address */
     address?: string;
-    
+
     /** Selector for address city */
     address_city?: string;
-    
+
     /** Selector for address state */
     address_state?: string;
-    
+
     /** Selector for address zip */
     address_zip?: string;
-    
+
     /** Selector for address country */
     address_country?: string;
-    
+
     /** Selector for social media links */
     socialMedia?: string;
-    
+
     /** Selector for business categories */
     categories?: string;
-    
+
     /** Selector for business hours */
     businessHours?: string;
-    
+
     /** Selector for business description */
     description?: string;
-    
+
     /** Selector for rating */
     rating?: string;
-    
+
     /** Selector for review count */
     reviewCount?: string;
-    
+
     /** Selector for fax number */
     faxNumber?: string;
-    
+
     /** Selector for contact person */
     contactPerson?: string;
-    
+
     /** Selector for year established */
     yearEstablished?: string;
-    
+
     /** Selector for number of employees */
     numberOfEmployees?: string;
-    
+
     /** Selector for payment methods */
     paymentMethods?: string;
-    
+
     /** Selector for specialties */
     specialties?: string;
-    
+
     /** Pagination selectors */
     pagination?: {
         /** Selector for next button */
         nextButton?: string;
-        
+
         /** Selector for current page indicator */
         currentPage?: string;
-        
+
         /** Selector for max pages indicator */
         maxPages?: string;
     };
+
+    /** Allow platform-specific extra selectors without weakening types */
+    [key: string]: SelectorValue | undefined;
 }
 
 /**
@@ -173,13 +187,17 @@ export interface PlatformSettings {
     /** Result URL pattern with placeholders */
     resultUrlPattern: string;
     
+    /** Optional pagination URL pattern for sites using page segments */
+    paginationUrlPattern?: string;
+    
     /** Supported platform features */
     supportedFeatures?: PlatformFeature[];
     
     /** Custom settings specific to the platform */
-    custom?: {
-        [key: string]: any;
-    };
+    custom?: Record<string, unknown>;
+    
+    /** Optional pagination offset value for sites using offsets */
+    paginationOffset?: number;
 }
 
 /**
@@ -194,6 +212,9 @@ export interface PlatformMetadata {
     
     /** Platform category */
     category?: string;
+    
+    /** Optional priority indicator */
+    priority?: 'low' | 'medium' | 'high';
     
     /** Platform tags */
     tags?: string[];
@@ -212,6 +233,7 @@ export interface PlatformMetadata {
 export enum PlatformFeature {
     SEARCH = 'search',
     PAGINATION = 'pagination',
+    DETAILED_EXTRACTION = 'detailed_extraction',
     AUTHENTICATION = 'authentication',
     PROXY = 'proxy',
     COOKIES = 'cookies',

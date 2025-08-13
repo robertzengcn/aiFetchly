@@ -60,7 +60,7 @@
             <p class="text-body-2">{{ platform.description }}</p>
             <div class="mt-2">
               <v-chip
-                v-for="tag in platform.tags"
+                v-for="tag in platform.metadata?.tags || []"
                 :key="tag"
                 size="small"
                 variant="outlined"
@@ -92,7 +92,7 @@
               size="small"
               color="warning"
               variant="text"
-              @click="togglePlatform(platform)"
+              @click="handleTogglePlatform(platform)"
             >
               {{ platform.is_active ? 'Disable' : 'Enable' }}
             </v-btn>
@@ -100,7 +100,7 @@
               size="small"
               color="error"
               variant="text"
-              @click="deletePlatform(platform)"
+              @click="handleDeletePlatform(platform)"
             >
               Delete
             </v-btn>
@@ -227,15 +227,16 @@ const statistics = ref<any>(null)
 const platformDialog = ref({
   show: false,
   isEdit: false,
-  platform: null,
+  platform: null as PlatformConfig | null,
   loading: false
 })
 
 const configDialog = ref({
   show: false,
   activeTab: 'json',
-  config: {},
-  jsonConfig: ''
+  config: {} as any,
+  jsonConfig: '',
+  platformId: '' as string
 })
 
 // Methods
@@ -346,7 +347,7 @@ const saveConfig = async () => {
   }
 }
 
-const togglePlatform = async (platform: PlatformConfig) => {
+const handleTogglePlatform = async (platform: PlatformConfig) => {
   try {
     await togglePlatform(platform.id)
     // Update local state
@@ -361,7 +362,7 @@ const togglePlatform = async (platform: PlatformConfig) => {
   }
 }
 
-const deletePlatform = async (platform: PlatformConfig) => {
+const handleDeletePlatform = async (platform: PlatformConfig) => {
   try {
     await deletePlatform(platform.id)
     // Remove from local state

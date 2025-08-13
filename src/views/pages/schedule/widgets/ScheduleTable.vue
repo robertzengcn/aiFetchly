@@ -299,10 +299,10 @@ const headers = computed(() => [
 const getTaskTypeColor = (taskType: TaskType): string => {
   switch (taskType) {
     case TaskType.SEARCH: return 'blue'
-    case TaskType.EMAIL_MARKETING: return 'green'
-    case TaskType.BULK_EMAIL: return 'orange'
+    case TaskType.EMAIL_EXTRACT: return 'green'
+    case TaskType.BUCK_EMAIL: return 'orange'
     case TaskType.VIDEO_DOWNLOAD: return 'purple'
-    case TaskType.SOCIAL_TASK: return 'pink'
+    case TaskType.YELLOW_PAGES: return 'pink'
     default: return 'grey'
   }
 }
@@ -310,10 +310,10 @@ const getTaskTypeColor = (taskType: TaskType): string => {
 const getTaskTypeIcon = (taskType: TaskType): string => {
   switch (taskType) {
     case TaskType.SEARCH: return 'mdi-magnify'
-    case TaskType.EMAIL_MARKETING: return 'mdi-email-multiple'
-    case TaskType.BULK_EMAIL: return 'mdi-email-send'
+    case TaskType.EMAIL_EXTRACT: return 'mdi-email-multiple'
+    case TaskType.BUCK_EMAIL: return 'mdi-email-send'
     case TaskType.VIDEO_DOWNLOAD: return 'mdi-download'
-    case TaskType.SOCIAL_TASK: return 'mdi-share-variant'
+    case TaskType.YELLOW_PAGES: return 'mdi-share-variant'
     default: return 'mdi-cog'
   }
 }
@@ -321,10 +321,10 @@ const getTaskTypeIcon = (taskType: TaskType): string => {
 const getTaskTypeLabel = (taskType: TaskType): string => {
   switch (taskType) {
     case TaskType.SEARCH: return 'Search'
-    case TaskType.EMAIL_MARKETING: return 'Email Marketing'
-    case TaskType.BULK_EMAIL: return 'Bulk Email'
+    case TaskType.EMAIL_EXTRACT: return 'Email Extract'
+    case TaskType.BUCK_EMAIL: return 'Buck Email'
     case TaskType.VIDEO_DOWNLOAD: return 'Video Download'
-    case TaskType.SOCIAL_TASK: return 'Social Task'
+    case TaskType.YELLOW_PAGES: return 'Yellow Pages'
     default: return 'Unknown'
   }
 }

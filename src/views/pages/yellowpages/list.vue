@@ -5,10 +5,10 @@
       <v-col cols="12" md="8">
         <h2 class="text-h4 font-weight-bold">
           <v-icon class="mr-2">mdi-phone-book</v-icon>
-          Yellow Pages Task Management
+          {{ t('home.yellow_pages_task_management') }}
         </h2>
         <p class="text-subtitle-1 text-medium-emphasis">
-          Manage scraping tasks for Yellow Pages platforms
+          {{ t('home.yellow_pages_task_management_description') }}
         </p>
       </v-col>
       <v-col cols="12" md="4" class="d-flex justify-end align-center">
@@ -18,23 +18,23 @@
           @click="createNewTask"
           class="mr-2"
         >
-          New Task
+          {{ t('home.new_task') }}
         </v-btn>
-        <v-btn
+        <!-- <v-btn
           color="secondary"
           prepend-icon="mdi-import"
           @click="importTasks"
           class="mr-2"
         >
-          Import
-        </v-btn>
-        <v-btn
+          {{ t('home.import') }}
+        </v-btn> -->
+        <!-- <v-btn
           color="secondary"
           prepend-icon="mdi-export"
           @click="exportTasks"
         >
-          Export
-        </v-btn>
+          {{ t('home.export') }}
+        </v-btn> -->
       </v-col>
     </v-row>
 
@@ -44,44 +44,44 @@
         <v-card>
           <v-card-title class="d-flex align-center">
             <v-icon class="mr-2">mdi-chart-line</v-icon>
-            Task Overview
+            {{ t('home.task_overview') }}
           </v-card-title>
           <v-card-text>
             <v-row>
               <v-col cols="12" md="2">
                 <div class="text-center">
                   <div class="text-h6 font-weight-bold text-primary">{{ taskStats.total }}</div>
-                  <div class="text-caption">Total Tasks</div>
+                  <div class="text-caption">{{ t('home.total_tasks') }}</div>
                 </div>
               </v-col>
               <v-col cols="12" md="2">
                 <div class="text-center">
                   <div class="text-h6 font-weight-bold text-success">{{ taskStats.running }}</div>
-                  <div class="text-caption">Running</div>
+                  <div class="text-caption">{{ t('home.running') }}</div>
                 </div>
               </v-col>
               <v-col cols="12" md="2">
                 <div class="text-center">
                   <div class="text-h6 font-weight-bold text-warning">{{ taskStats.pending }}</div>
-                  <div class="text-caption">Pending</div>
+                  <div class="text-caption">{{ t('home.pending') }}</div>
                 </div>
               </v-col>
               <v-col cols="12" md="2">
                 <div class="text-center">
                   <div class="text-h6 font-weight-bold text-info">{{ taskStats.completed }}</div>
-                  <div class="text-caption">Completed</div>
+                  <div class="text-caption">{{ t('home.completed') }}</div>
                 </div>
               </v-col>
               <v-col cols="12" md="2">
                 <div class="text-center">
                   <div class="text-h6 font-weight-bold text-error">{{ taskStats.failed }}</div>
-                  <div class="text-caption">Failed</div>
+                  <div class="text-caption">{{ t('home.failed') }}</div>
                 </div>
               </v-col>
               <v-col cols="12" md="2">
                 <div class="text-center">
                   <div class="text-h6 font-weight-bold">{{ taskStats.successRate }}%</div>
-                  <div class="text-caption">Success Rate</div>
+                  <div class="text-caption">{{ t('home.success_rate') }}</div>
                 </div>
               </v-col>
             </v-row>
@@ -99,7 +99,7 @@
               <v-col cols="12" md="3">
                 <v-text-field
                   v-model="searchQuery"
-                  label="Search tasks"
+                  :label="t('home.search_tasks')"
                   prepend-inner-icon="mdi-magnify"
                   clearable
                   @update:model-value="handleSearch"
@@ -109,7 +109,7 @@
                 <v-select
                   v-model="statusFilter"
                   :items="statusOptions"
-                  label="Status"
+                  :label="t('home.status')"
                   clearable
                   @update:model-value="handleFilter"
                 />
@@ -118,7 +118,7 @@
                 <v-select
                   v-model="platformFilter"
                   :items="platformOptions"
-                  label="Platform"
+                  :label="t('home.platform')"
                   clearable
                   @update:model-value="handleFilter"
                 />
@@ -127,7 +127,7 @@
                 <v-select
                   v-model="priorityFilter"
                   :items="priorityOptions"
-                  label="Priority"
+                  :label="t('home.priority')"
                   clearable
                   @update:model-value="handleFilter"
                 />
@@ -147,7 +147,7 @@
                   variant="outlined"
                   @click="clearFilters"
                 >
-                  Clear Filters
+                  {{ t('home.clear_filters') }}
                 </v-btn>
               </v-col>
             </v-row>
@@ -161,9 +161,9 @@
       <v-col cols="12">
         <v-card>
           <v-card-title class="d-flex justify-space-between align-center">
-            <span>Tasks ({{ total }})</span>
+            <span>{{ t('home.tasks') }} ({{ total }})</span>
             <v-chip color="info" size="small">
-              Page {{ currentPage + 1 }} of {{ Math.ceil(total / pageSize) }}
+              {{ t('home.page') }} {{ currentPage + 1 }} {{ t('home.of') }} {{ Math.ceil(total / pageSize) }}
             </v-chip>
           </v-card-title>
           <v-card-text>
@@ -203,8 +203,8 @@
         <v-card-text>{{ confirmDialog.message }}</v-card-text>
         <v-card-actions>
           <v-spacer></v-spacer>
-          <v-btn color="secondary" @click="confirmDialog.show = false">Cancel</v-btn>
-          <v-btn color="error" @click="confirmAction">Confirm</v-btn>
+          <v-btn color="secondary" @click="confirmDialog.show = false">{{ t('home.cancel') }}</v-btn>
+          <v-btn color="error" @click="confirmAction">{{ t('home.confirm') }}</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -213,7 +213,7 @@
     <v-dialog v-model="taskDetailsDialog.show" max-width="800">
       <v-card>
         <v-card-title class="d-flex justify-space-between align-center">
-          <span>Task Details</span>
+          <span>{{ t('home.task_details') }}</span>
           <v-btn icon="mdi-close" variant="text" @click="taskDetailsDialog.show = false"></v-btn>
         </v-card-title>
         <v-card-text>
@@ -231,22 +231,40 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import YellowPagesTaskTable from './components/YellowPagesTaskTable.vue'
 import TaskDetailsView from './components/TaskDetailsView.vue'
+import { getYellowPagesTaskList, getYellowPagesPlatforms } from '@/views/api/yellowpages'
+import { TaskStatus } from '@/interfaces/ITaskManager'
+import { PlatformConfig } from '@/interfaces/IPlatformConfig'
 
-// Router
+// Router and i18n
 const router = useRouter()
+const { t } = useI18n()
+
+// Define task type - using TaskSummary interface from API
+interface Task {
+  id: number
+  name: string
+  platform: string
+  status: TaskStatus
+  created_at: Date
+  completed_at?: Date
+  results_count?: number
+  progress_percentage?: number
+}
 
 // Reactive data
 const loading = ref(false)
 const searchQuery = ref('')
-const statusFilter = ref('')
+const statusFilter = ref<TaskStatus | ''>('')
 const platformFilter = ref('')
 const priorityFilter = ref('')
 const currentPage = ref(0)
 const pageSize = ref(10)
 const total = ref(0)
-const tasks = ref([])
+const tasks = ref<Task[]>([])
+const platforms = ref<PlatformConfig[]>([])
 
 // Task statistics
 const taskStats = reactive({
@@ -260,23 +278,26 @@ const taskStats = reactive({
 
 // Filter options
 const statusOptions = [
-  { title: 'Pending', value: 'pending' },
-  { title: 'Running', value: 'running' },
-  { title: 'Completed', value: 'completed' },
-  { title: 'Failed', value: 'failed' },
-  { title: 'Paused', value: 'paused' }
+  { title: t('home.pending'), value: TaskStatus.Pending },
+  { title: t('home.running'), value: TaskStatus.InProgress },
+  { title: t('home.completed'), value: TaskStatus.Completed },
+  { title: t('home.failed'), value: TaskStatus.Failed },
+  { title: t('home.paused'), value: TaskStatus.Paused }
 ]
 
-const platformOptions = [
-  { title: 'YellowPages.com', value: 'yellowpages.com' },
-  { title: 'Yelp.com', value: 'yelp.com' },
-  { title: 'YellowPages.ca', value: 'yellowpages.ca' }
-]
+const platformOptions = computed(() => {
+  return platforms.value
+    .filter(platform => platform.is_active)
+    .map(platform => ({
+      title: platform.display_name || platform.name,
+      value: platform.id
+    }))
+})
 
 const priorityOptions = [
-  { title: 'High', value: 'high' },
-  { title: 'Medium', value: 'medium' },
-  { title: 'Low', value: 'low' }
+  { title: t('home.high'), value: 'high' },
+  { title: t('home.medium'), value: 'medium' },
+  { title: t('home.low'), value: 'low' }
 ]
 
 // Dialog states
@@ -293,71 +314,40 @@ const taskDetailsDialog = reactive({
 })
 
 // Methods
+const loadPlatforms = async () => {
+  try {
+    const platformsData = await getYellowPagesPlatforms()
+    if (platformsData) {
+      platforms.value = platformsData
+    } else {
+      platforms.value = []
+    }
+  } catch (error) {
+    console.error('Failed to load platforms:', error)
+    // Fallback to empty platforms array
+    platforms.value = []
+  }
+}
+
 const loadTasks = async () => {
   loading.value = true
   try {
-    // TODO: Replace with actual API call
-    const response = await fetch('/api/yellow-pages/tasks', {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json'
-      }
-    })
+    const response = await getYellowPagesTaskList()
     
-    if (response.ok) {
-      const data = await response.json()
-      tasks.value = data.tasks
-      total.value = data.total
+    if (response && response.length > 0) {
+      tasks.value = response
+      total.value = response.length
+      updateTaskStats()
+    } else {
+      tasks.value = []
+      total.value = 0
       updateTaskStats()
     }
   } catch (error) {
     console.error('Failed to load tasks:', error)
-    // Mock data for development
-    tasks.value = [
-      {
-        id: 1,
-        name: 'Restaurant Search - NYC',
-        platform: 'yellowpages.com',
-        status: 'running',
-        priority: 'high',
-        progress: 65,
-        created_at: '2024-01-15T10:30:00Z',
-        updated_at: '2024-01-15T11:45:00Z',
-        keywords: ['restaurant', 'pizza'],
-        location: 'New York, NY',
-        max_pages: 10,
-        results_count: 156
-      },
-      {
-        id: 2,
-        name: 'Cafe Search - LA',
-        platform: 'yelp.com',
-        status: 'completed',
-        priority: 'medium',
-        progress: 100,
-        created_at: '2024-01-14T09:00:00Z',
-        updated_at: '2024-01-14T12:30:00Z',
-        keywords: ['cafe', 'coffee'],
-        location: 'Los Angeles, CA',
-        max_pages: 5,
-        results_count: 89
-      },
-      {
-        id: 3,
-        name: 'Bakery Search - Toronto',
-        platform: 'yellowpages.ca',
-        status: 'pending',
-        priority: 'low',
-        progress: 0,
-        created_at: '2024-01-15T14:20:00Z',
-        updated_at: '2024-01-15T14:20:00Z',
-        keywords: ['bakery', 'bread'],
-        location: 'Toronto, ON',
-        max_pages: 8,
-        results_count: 0
-      }
-    ]
-    total.value = tasks.value.length
+    // Fallback to empty state on error
+    tasks.value = []
+    total.value = 0
     updateTaskStats()
   } finally {
     loading.value = false
@@ -367,10 +357,10 @@ const loadTasks = async () => {
 const updateTaskStats = () => {
   const stats = {
     total: tasks.value.length,
-    running: tasks.value.filter(t => t.status === 'running').length,
-    pending: tasks.value.filter(t => t.status === 'pending').length,
-    completed: tasks.value.filter(t => t.status === 'completed').length,
-    failed: tasks.value.filter(t => t.status === 'failed').length,
+    running: tasks.value.filter(t => t.status === TaskStatus.InProgress).length,
+    pending: tasks.value.filter(t => t.status === TaskStatus.Pending).length,
+    completed: tasks.value.filter(t => t.status === TaskStatus.Completed).length,
+    failed: tasks.value.filter(t => t.status === TaskStatus.Failed).length,
     successRate: 0
   }
   
@@ -414,15 +404,15 @@ const editTask = (task: any) => {
 }
 
 const deleteTask = (task: any) => {
-  confirmDialog.title = 'Delete Task'
-  confirmDialog.message = `Are you sure you want to delete task "${task.name}"?`
+  confirmDialog.title = t('home.delete_task')
+  confirmDialog.message = t('home.delete_task_confirm', { name: task.name })
   confirmDialog.action = () => performDeleteTask(task.id)
   confirmDialog.show = true
 }
 
 const performDeleteTask = async (taskId: number) => {
   try {
-    // TODO: Replace with actual API call
+    // TODO: Replace with actual API call when deleteYellowPagesTask is implemented
     await fetch(`/api/yellow-pages/tasks/${taskId}`, {
       method: 'DELETE'
     })
@@ -509,6 +499,7 @@ const confirmAction = () => {
 
 // Lifecycle
 onMounted(() => {
+  loadPlatforms()
   loadTasks()
 })
 </script>

@@ -2,9 +2,9 @@
     <v-card class="login_container">
         <div class="group">
             <v-card class="form">
-                <v-card-title>{{ $t('layout.login_title') }}</v-card-title>
+                <v-card-title>{{ t('layout.login_title') }}</v-card-title>
                 <div class="mt-8 mb-8 login-description">
-                    <p>{{ $t('layout.login_description') }}</p>
+                    <p>{{ t('layout.login_description') }}</p>
                 </div>
                 <div style="text-align: center">
                     <v-btn
@@ -14,13 +14,13 @@
                         :loading="isLoading"
                         :disabled="isLoading"
                         @click="redirectToLogin">
-                        {{ isLoading ? $t('layout.logging_in') : $t('layout.login_with_browser') }}
+                        {{ isLoading ? t('layout.logging_in') : t('layout.login_with_browser') }}
                     </v-btn>
                     
                     <!-- Show login URL message -->
                     <div v-if="showLoginUrl" class="mt-4 login-url-section">
                         <p class="login-url-text">
-                            {{ $t('layout.login_url_message') }}
+                            {{ t('layout.login_url_message') }}
                         </p>
                         
                         <v-btn
@@ -31,7 +31,7 @@
                             class="mt-2"
                             @click="copyToClipboard"
                         >
-                            {{ $t('layout.copy_login_url') }}
+                            {{ t('layout.copy_login_url') }}
                         </v-btn>
                     </div>
                 </div>
@@ -47,7 +47,7 @@
            {{ alertContent }}
           </v-card-text>
           <v-card-actions>
-            <v-btn color="primary" block @click="dialog = false">{{ $t('layout.close_dialog') }}</v-btn>
+            <v-btn color="primary" block @click="dialog = false">{{ t('layout.close_dialog') }}</v-btn>
           </v-card-actions>
         </v-card>
       </v-dialog>
@@ -68,6 +68,8 @@ const dialog=ref(false);
 const isLoading = ref(false);
 const showLoginUrl = ref(false);
 const loginUrl = ref<any>('');
+
+
 
 onMounted(() => {
  

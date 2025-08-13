@@ -22,7 +22,8 @@
                 <template v-slot:prepend>
                   <v-icon :color="getPlatformColor(task.platform)">
                     {{ getPlatformIcon(task.platform) }}
-                  </template>
+                  </v-icon>
+                </template>
                 <v-list-item-title>Platform</v-list-item-title>
                 <v-list-item-subtitle>{{ task.platform }}</v-list-item-subtitle>
               </v-list-item>
@@ -84,7 +85,8 @@
                 <template v-slot:prepend>
                   <v-icon :color="getStatusColor(task.status)">
                     {{ getStatusIcon(task.status) }}
-                  </template>
+                  </v-icon>
+                </template>
                 <v-list-item-title>Status</v-list-item-title>
                 <v-list-item-subtitle>
                   <v-chip

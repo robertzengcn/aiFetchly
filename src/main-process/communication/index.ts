@@ -2,6 +2,7 @@
 // export { default as AsyncMsg } from "./async-msg";
 import {registerExtraModulesIpcHandlers} from "@/main-process/communication/extramodule-ipc";
 import {registerScheduleIpcHandlers} from "@/main-process/communication/scheduleIpc";
+import {registerYellowPagesIpcHandlers} from "@/main-process/communication/yellowPagesIpc";
 import SyncMsg from "@/main-process/communication/sync-msg";
 import AsyncMsg from "@/main-process/communication/async-msg"
 import {BrowserWindow } from 'electron'
@@ -20,6 +21,7 @@ export function registerCommunicationIpcHandlers(win: BrowserWindow) {
     SyncMsg(win)
     registerExtraModulesIpcHandlers()
     registerScheduleIpcHandlers()
+    registerYellowPagesIpcHandlers()
     registerSearchIpcHandlers()
     registeProxyIpcHandlers()
     registerEmailextractionIpcHandlers()

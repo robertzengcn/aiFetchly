@@ -4,7 +4,7 @@ import { YellowPagesProcessManager } from "@/modules/YellowPagesProcessManager";
 import { BrowserManager } from "@/modules/browserManager";
 import { AccountCookiesModule } from "@/modules/accountCookiesModule";
 import { YellowPagesTaskModel } from "@/model/YellowPagesTask.model";
-import { YellowPagesPlatformModel } from "@/model/YellowPagesPlatform.model";
+import { PlatformRegistry } from "@/modules/PlatformRegistry";
 import { YellowPagesResultModel } from "@/model/YellowPagesResult.model";
 import { YellowPagesInitModule } from "@/modules/YellowPagesInitModule";
 import { YellowPagesHealthCheck } from "@/modules/YellowPagesHealthCheck";
@@ -32,7 +32,7 @@ export class YellowPagesOrchestrator extends BaseModule implements ITaskManager 
     private browserManager: BrowserManager;
     private accountCookiesModule: AccountCookiesModule;
     private taskModel: YellowPagesTaskModel;
-    private platformModel: YellowPagesPlatformModel;
+    private platformRegistry: PlatformRegistry;
     private resultModel: YellowPagesResultModel;
     private initModule: YellowPagesInitModule;
     private healthCheck: YellowPagesHealthCheck;
@@ -49,7 +49,7 @@ export class YellowPagesOrchestrator extends BaseModule implements ITaskManager 
         this.browserManager = new BrowserManager();
         this.accountCookiesModule = new AccountCookiesModule();
         this.taskModel = new YellowPagesTaskModel(this.dbpath);
-        this.platformModel = new YellowPagesPlatformModel(this.dbpath);
+        this.platformRegistry = new PlatformRegistry();
         this.resultModel = new YellowPagesResultModel(this.dbpath);
         this.initModule = new YellowPagesInitModule();
         this.healthCheck = new YellowPagesHealthCheck();
@@ -130,8 +130,8 @@ export class YellowPagesOrchestrator extends BaseModule implements ITaskManager 
         
         try {
             // Validate platform exists
-            const platform = await this.platformModel.getPlatformByName(taskData.platform);
-            if (!platform) {
+            const platform = this.platformRegistry.getAllPlatforms().find(p => p.id === taskData.platform || p.name === taskData.platform || p.display_name === taskData.platform);
+            if (!platform || !platform.is_active) {
                 throw new Error(`Platform ${taskData.platform} is not supported or not active`);
             }
 
@@ -266,14 +266,12 @@ export class YellowPagesOrchestrator extends BaseModule implements ITaskManager 
                 moduleHealth,
                 processHealth,
                 browserInfo,
-                systemStatus,
-                activePlatforms
+                systemStatus
             ] = await Promise.all([
                 this.yellowPagesModule.getHealthStatus(),
                 this.processManager.healthCheck(),
                 this.browserManager.getBrowserInfo(),
-                this.initModule.getSystemStatus(),
-                this.platformModel.getActivePlatforms()
+                this.initModule.getSystemStatus()
             ]);
 
             // Determine overall health
@@ -301,20 +299,21 @@ export class YellowPagesOrchestrator extends BaseModule implements ITaskManager 
                 platforms: {
                     total: systemStatus.totalPlatforms,
                     active: systemStatus.activePlatforms,
-                    available: activePlatforms.length
+                    available: this.platformRegistry.getActivePlatforms().length
                 },
                 overall
             };
 
         } catch (error) {
             console.error('Failed to get system health status:', error);
+            const available = this.platformRegistry.getActivePlatforms().length;
             return {
                 orchestrator: { initialized: false, shuttingDown: false, uptime: 0 },
                 modules: null,
                 processes: null,
                 browser: null,
                 database: null,
-                platforms: null,
+                platforms: { total: 0, active: 0, available },
                 overall: 'critical'
             };
         }
@@ -372,7 +371,7 @@ export class YellowPagesOrchestrator extends BaseModule implements ITaskManager 
             browserManager: this.browserManager,
             accountCookies: this.accountCookiesModule,
             taskModel: this.taskModel,
-            platformModel: this.platformModel,
+            platformRegistry: this.platformRegistry,
             resultModel: this.resultModel,
             initModule: this.initModule,
             healthCheck: this.healthCheck

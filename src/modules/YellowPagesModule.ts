@@ -5,7 +5,7 @@ import { YellowPagesResultModel } from "@/model/YellowPagesResult.model";
 import { YellowPagesProcessManager } from "@/modules/YellowPagesProcessManager";
 import { BrowserManager } from "@/modules/browserManager";
 import { AccountCookiesModule } from "@/modules/accountCookiesModule";
-import { YellowPagesPlatformModel } from "@/model/YellowPagesPlatform.model";
+import { PlatformRegistry } from "@/modules/PlatformRegistry";
 
 /**
  * Main Yellow Pages Module that implements ITaskManager interface
@@ -26,7 +26,7 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
     private processManager: YellowPagesProcessManager;
     private browserManager: BrowserManager;
     private accountCookiesModule: AccountCookiesModule;
-    private platformModel: YellowPagesPlatformModel;
+    private platformRegistry: PlatformRegistry;
 
     constructor() {
         super();
@@ -35,7 +35,7 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
         this.processManager = new YellowPagesProcessManager();
         this.browserManager = new BrowserManager();
         this.accountCookiesModule = new AccountCookiesModule();
-        this.platformModel = new YellowPagesPlatformModel(this.dbpath);
+        this.platformRegistry = new PlatformRegistry();
     }
 
     /**
@@ -50,14 +50,12 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
             // Validate task data
             this.validateTaskData(taskData);
 
-            // Validate platform exists and is active
-            const platform = await this.platformModel.getPlatformByName(taskData.platform);
-            if (!platform) {
-                throw new Error(`Platform '${taskData.platform}' not found`);
-            }
-            if (!platform.is_active) {
-                throw new Error(`Platform '${taskData.platform}' is not active`);
-            }
+            // Validate platform exists and is active (using TS registry)
+            const platform = this.platformRegistry
+                .getAllPlatforms()
+                .find(p => p.id === taskData.platform || p.name === taskData.platform || p.display_name === taskData.platform);
+            if (!platform) throw new Error(`Platform '${taskData.platform}' not found`);
+            if (!platform.is_active) throw new Error(`Platform '${taskData.platform}' is not active`);
 
             // Validate account if specified
             if (taskData.account_id) {

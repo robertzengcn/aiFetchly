@@ -334,8 +334,7 @@ const tableHeaders = computed(() => {
     {
       title: 'Actions',
       key: 'actions',
-      sortable: false,
-      width: '80px'
+      sortable: false
     }
   ])
 })

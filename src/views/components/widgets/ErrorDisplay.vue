@@ -55,35 +55,33 @@
           You are currently offline
         </v-chip>
       </div>
-
-      <!-- Action Buttons -->
-      <template v-slot:actions>
-        <v-spacer></v-spacer>
-        
-        <!-- Retry Button -->
-        <v-btn
-          v-if="error.recoverable && !error.recoveryOptions?.some(o => o.id === 'retry')"
-          color="primary"
-          variant="outlined"
-          size="small"
-          @click="retryOperation"
-          :loading="retryLoading"
-          :disabled="retryLoading"
-        >
-          Try Again
-        </v-btn>
-
-        <!-- Dismiss Button -->
-        <v-btn
-          color="secondary"
-          variant="text"
-          size="small"
-          @click="dismissError"
-        >
-          Dismiss
-        </v-btn>
-      </template>
     </v-alert>
+
+    <!-- Action Buttons -->
+    <div class="d-flex justify-end gap-2 mt-3">
+      <!-- Retry Button -->
+      <v-btn
+        v-if="error.recoverable && !error.recoveryOptions?.some(o => o.id === 'retry')"
+        color="primary"
+        variant="outlined"
+        size="small"
+        @click="retryOperation"
+        :loading="retryLoading"
+        :disabled="retryLoading"
+      >
+        Try Again
+      </v-btn>
+
+      <!-- Dismiss Button -->
+      <v-btn
+        color="secondary"
+        variant="text"
+        size="small"
+        @click="dismissError"
+      >
+        Dismiss
+      </v-btn>
+    </div>
   </div>
 </template>
 

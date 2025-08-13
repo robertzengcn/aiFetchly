@@ -202,7 +202,7 @@ import { useI18n } from 'vue-i18n'
 import { getSearchTaskDetails, updateSearchTask, receiveSearchTaskUpdateEvent } from '@/views/api/search'
 import { SearchTaskDetails, UpdateSearchTaskData } from '@/views/api/types'
 
-const { t } = useI18n()
+const { t: $t } = useI18n()
 
 // Props
 interface Props {
@@ -269,12 +269,12 @@ const updateKeywords = () => {
 }
 
 const removeKeyword = (index: number) => {
-  formData.keywords.splice(index, 1)
-  keywordsText.value = formData.keywords.join('\n')
+  formData.keywords?.splice(index, 1)
+  keywordsText.value = formData.keywords?.join('\n') || ''
 }
 
 const addProxy = () => {
-  formData.proxys.push({
+  formData.proxys?.push({
     host: '',
     port: 8080,
     user: '',
@@ -283,7 +283,7 @@ const addProxy = () => {
 }
 
 const removeProxy = (index: number) => {
-  formData.proxys.splice(index, 1)
+  formData.proxys?.splice(index, 1)
 }
 
 const loadTaskDetails = async () => {
@@ -293,21 +293,19 @@ const loadTaskDetails = async () => {
     loading.value = true
     const response = await getSearchTaskDetails(props.taskId)
     
-    if (response.status && response.data) {
-      const taskDetails: SearchTaskDetails = response.data
-      
+    if (response) {
       // Populate form data
-      formData.engine = taskDetails.engine
-      formData.keywords = taskDetails.keywords
-      formData.num_pages = taskDetails.num_pages
-      formData.concurrency = taskDetails.concurrency
-      formData.notShowBrowser = taskDetails.notShowBrowser
-      formData.localBrowser = taskDetails.localBrowser
-      formData.proxys = taskDetails.proxys
-      formData.accounts = taskDetails.accounts
+      formData.engine = response.engine.toString()
+      formData.keywords = response.keywords
+      formData.num_pages = response.num_pages
+      formData.concurrency = response.concurrency
+      formData.notShowBrowser = response.notShowBrowser
+      formData.localBrowser = response.localBrowser
+      formData.proxys = response.proxys
+      formData.accounts = response.accounts
       
       // Update keywords text
-      keywordsText.value = taskDetails.keywords.join('\n')
+      keywordsText.value = response.keywords.join('\n')
     }
   } catch (error) {
     console.error('Error loading task details:', error)
@@ -328,11 +326,11 @@ const saveTask = async () => {
     
     const response = await updateSearchTask(props.taskId, formData)
     
-    if (response.status) {
+    if (response) {
       emit('saved', props.taskId)
       closeDialog()
     } else {
-      emit('error', response.msg || 'Failed to update task')
+      emit('error', 'Failed to update task')
     }
   } catch (error) {
     console.error('Error saving task:', error)
@@ -354,12 +352,13 @@ watch(dialog, (newValue) => {
 })
 
 // Listen for update events
-receiveSearchTaskUpdateEvent((data) => {
-  if (data.taskId === props.taskId) {
-    if (data.status) {
+receiveSearchTaskUpdateEvent((data: unknown) => {
+  const updateData = data as { taskId: number; status: boolean; msg?: string }
+  if (updateData.taskId === props.taskId) {
+    if (updateData.status) {
       emit('saved', props.taskId!)
     } else {
-      emit('error', data.msg)
+      emit('error', updateData.msg || 'Update failed')
     }
   }
 })
