@@ -1,11 +1,14 @@
-import { spawn, ChildProcess } from 'child_process';
+import { utilityProcess, MessageChannelMain } from 'electron';
+import type { UtilityProcess } from 'electron';
 import { YellowPagesTaskModel, YellowPagesTaskStatus } from "@/model/YellowPagesTask.model";
 import { BaseModule } from "@/modules/baseModule";
 import { IPCMessage, ScrapingProgress } from "@/interfaces/IPCMessage";
+import * as path from 'path';
+import * as fs from 'fs';
 
 interface ProcessInfo {
     taskId: number;
-    process: ChildProcess;
+    process: UtilityProcess;
     startTime: Date;
     status: 'running' | 'completed' | 'failed' | 'stopped';
     progress?: ScrapingProgress;
@@ -23,7 +26,7 @@ export class YellowPagesProcessManager extends BaseModule {
     /**
      * Spawn a child process for Yellow Pages scraping
      */
-    async spawnScraperProcess(taskId: number): Promise<ChildProcess> {
+    async spawnScraperProcess(taskId: number): Promise<UtilityProcess> {
         try {
             console.log(`Spawning Yellow Pages scraper process for task ${taskId}`);
 
@@ -31,12 +34,23 @@ export class YellowPagesProcessManager extends BaseModule {
             if (this.activeProcesses.has(taskId)) {
                 throw new Error(`Process for task ${taskId} already exists`);
             }
-            //const childPath = path.join(__dirname, 'yellowPagesScraper.js')
-            // Spawn the child process
-            const childProcess = spawn('node', [
-                'dist/childprocess/yellowPagesScraper.js'
-            ], {
-                stdio: ['pipe', 'pipe', 'pipe', 'ipc']
+            // Resolve scraper path and validate existence
+            const childPath = path.resolve(process.cwd(), 'dist/childprocess/yellowPagesScraper.js');
+            if (!fs.existsSync(childPath)) {
+                throw new Error(`Child process file not found at path: ${childPath}`);
+            }
+
+            // Create message channel for IPC communication
+            const { port1, port2 } = new MessageChannelMain();
+
+            // Fork the child process using Electron utilityProcess
+            const childProcess = utilityProcess.fork(childPath, [], {
+                stdio: 'pipe',
+                execArgv: ["puppeteer-cluster:*"],
+                env: {
+                    ...process.env,
+                    NODE_OPTIONS: ""
+                }
             });
 
             // Set up process info
@@ -55,8 +69,10 @@ export class YellowPagesProcessManager extends BaseModule {
             // Set up error handlers
             this.setupErrorHandlers(childProcess, taskId);
 
-            // Send start message to child process
-            childProcess.send({ type: 'START', taskId });
+            // Send start message to child process when spawned
+            childProcess.on('spawn', () => {
+                childProcess.postMessage(JSON.stringify({ type: 'START', taskId }), [port1]);
+            });
 
             console.log(`Successfully spawned process for task ${taskId}`);
             return childProcess;
@@ -70,8 +86,21 @@ export class YellowPagesProcessManager extends BaseModule {
     /**
      * Set up IPC message handlers
      */
-    private setupIPCHandlers(childProcess: ChildProcess, taskId: number): void {
-        childProcess.on('message', (message: IPCMessage) => {
+    private setupIPCHandlers(childProcess: UtilityProcess, taskId: number): void {
+        childProcess.on('message', (raw: unknown) => {
+            let message: IPCMessage | undefined;
+            try {
+                if (typeof raw === 'string') {
+                    message = JSON.parse(raw) as IPCMessage;
+                } else {
+                    message = raw as IPCMessage;
+                }
+            } catch (err) {
+                console.error(`Failed to parse message from task ${taskId}:`, raw);
+                return;
+            }
+
+            if (!message) return;
             console.log(`Received message from task ${taskId}:`, message);
 
             switch (message.type) {
@@ -95,20 +124,14 @@ export class YellowPagesProcessManager extends BaseModule {
     /**
      * Set up error handlers
      */
-    private setupErrorHandlers(childProcess: ChildProcess, taskId: number): void {
-        childProcess.on('error', (error) => {
-            console.error(`Process error for task ${taskId}:`, error);
-            this.handleProcessError(taskId, error);
+    private setupErrorHandlers(childProcess: UtilityProcess, taskId: number): void {
+        childProcess.on('spawn', () => {
+            console.log(`Process spawned for task ${taskId}`);
         });
 
-        childProcess.on('exit', (code, signal) => {
-            console.log(`Process exited for task ${taskId}: code=${code}, signal=${signal}`);
-            this.handleProcessExit(taskId, code, signal);
-        });
-
-        childProcess.on('close', (code) => {
-            console.log(`Process closed for task ${taskId}: code=${code}`);
-            this.handleProcessClose(taskId, code);
+        childProcess.on('exit', (code: number) => {
+            console.log(`Process exited for task ${taskId}: code=${code}`);
+            this.handleProcessExit(taskId, code, null);
         });
     }
 
@@ -230,7 +253,7 @@ export class YellowPagesProcessManager extends BaseModule {
             console.log(`Terminating process for task ${taskId}`);
             
             try {
-                processInfo.process.kill('SIGTERM');
+                processInfo.process.kill();
                 processInfo.status = 'stopped';
                 
                 // Update task status
