@@ -33,7 +33,8 @@ import { PlatformConfig } from '@/interfaces/IPlatformConfig'
 // Task Management
 export async function createYellowPagesTask(taskData: YellowPagesTaskData): Promise<number | null> {
     const resp = await windowInvoke(YELLOW_PAGES_CREATE, taskData)
-    
+    console.log("createYellowPagesTask")
+    console.log(resp)
     if (!resp) {
         throw new Error("Unknown error")
     }
@@ -62,7 +63,7 @@ export async function deleteYellowPagesTask(id: number): Promise<void> {
 }
 
 // Task Control Operations
-export async function startYellowPagesTask(id: number): Promise<void> {
+export async function startYellowPagesTask(id: number): Promise<number> {
     const resp = await windowInvoke(YELLOW_PAGES_START, { id })
     
     if (!resp) {

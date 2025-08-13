@@ -31,7 +31,7 @@ export class YellowPagesProcessManager extends BaseModule {
             if (this.activeProcesses.has(taskId)) {
                 throw new Error(`Process for task ${taskId} already exists`);
             }
-
+            //const childPath = path.join(__dirname, 'yellowPagesScraper.js')
             // Spawn the child process
             const childProcess = spawn('node', [
                 'dist/childprocess/yellowPagesScraper.js'

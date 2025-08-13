@@ -191,9 +191,11 @@
               <v-row>
                 <v-col cols="12">
                   <v-card variant="outlined" class="pa-4">
-                    <v-card-title class="text-subtitle-1 pa-0 mb-3">
+                    <v-card-title class="text-subtitle-1 pa-0 mb-3 d-flex align-center">
+                      <v-icon class="mr-2">mdi-clock-outline</v-icon>
                       {{ $t('home.scheduling_optional') }}
                     </v-card-title>
+                    
                     <v-row>
                       <v-col cols="12" md="6">
                         <v-switch
@@ -204,12 +206,156 @@
                         />
                       </v-col>
                       <v-col cols="12" md="6" v-if="scheduleTask">
+                        <v-select
+                          v-model="scheduleType"
+                          :items="scheduleTypeOptions"
+                          :label="$t('home.schedule_type')"
+                          @update:model-value="handleScheduleTypeChange"
+                        />
+                      </v-col>
+                    </v-row>
+
+                    <!-- One-time scheduling -->
+                    <v-row v-if="scheduleTask && scheduleType === 'one-time'">
+                      <v-col cols="12" md="6">
                         <v-text-field
                           v-model="scheduledTime"
                           :label="$t('home.scheduled_time')"
                           type="datetime-local"
+                          :min="minDateTime"
                           clearable
                         />
+                      </v-col>
+                      <v-col cols="12" md="6">
+                        <v-text-field
+                          v-model="scheduleName"
+                          :label="$t('home.schedule_name')"
+                          :placeholder="$t('home.schedule_name_placeholder')"
+                          clearable
+                        />
+                      </v-col>
+                    </v-row>
+
+                    <!-- Recurring scheduling -->
+                    <v-row v-if="scheduleTask && scheduleType === 'recurring'">
+                      <v-col cols="12" md="8">
+                        <v-text-field
+                          v-model="cronExpression"
+                          :label="$t('home.cron_expression')"
+                          :placeholder="$t('home.cron_expression_placeholder')"
+                          :error-messages="cronValidationError"
+                          @update:model-value="validateCronExpression"
+                          clearable
+                        />
+                      </v-col>
+                      <v-col cols="12" md="4" class="d-flex align-center">
+                        <CronExpressionBuilder @expression-change="handleCronExpressionChange" />
+                      </v-col>
+                    </v-row>
+
+                    <!-- Quick presets for recurring schedules -->
+                    <v-row v-if="scheduleTask && scheduleType === 'recurring'">
+                      <v-col cols="12">
+                        <v-chip-group>
+                          <v-chip
+                            v-for="preset in cronPresets"
+                            :key="preset.name"
+                            :variant="preset.variant"
+                            @click="applyCronPreset(preset.expression)"
+                            class="ma-1"
+                            size="small"
+                          >
+                            {{ preset.name }}
+                          </v-chip>
+                        </v-chip-group>
+                      </v-col>
+                    </v-row>
+
+                    <!-- Next run preview for recurring schedules -->
+                    <v-row v-if="scheduleTask && scheduleType === 'recurring' && cronExpression && !cronValidationError">
+                      <v-col cols="12">
+                        <v-alert
+                          type="info"
+                          variant="tonal"
+                          class="mb-4"
+                        >
+                          <template v-slot:prepend>
+                            <v-icon>mdi-clock</v-icon>
+                          </template>
+                          <div class="d-flex justify-space-between align-center">
+                            <span>{{ $t('home.next_run_time', { time: nextRunTime }) }}</span>
+                            <v-btn
+                              size="small"
+                              variant="outlined"
+                              @click="calculateNextRunTime"
+                            >
+                              {{ $t('home.refresh') }}
+                            </v-btn>
+                          </div>
+                        </v-alert>
+                      </v-col>
+                    </v-row>
+
+                    <!-- Schedule options -->
+                    <v-row v-if="scheduleTask">
+                      <v-col cols="12" md="6">
+                        <v-textarea
+                          v-model="scheduleDescription"
+                          :label="$t('home.schedule_description')"
+                          :placeholder="$t('home.schedule_description_placeholder')"
+                          rows="2"
+                          clearable
+                        />
+                      </v-col>
+                      <v-col cols="12" md="6">
+                        <v-switch
+                          v-model="scheduleActive"
+                          :label="$t('home.schedule_active')"
+                          color="success"
+                          hide-details
+                        />
+                      </v-col>
+                    </v-row>
+
+                    <!-- Schedule preview -->
+                    <v-row v-if="scheduleTask">
+                      <v-col cols="12">
+                        <v-alert
+                          type="info"
+                          variant="tonal"
+                          class="mb-4"
+                        >
+                          <template v-slot:prepend>
+                            <v-icon>mdi-information</v-icon>
+                          </template>
+                          <div class="text-body-2">
+                            <div class="d-flex justify-space-between mb-2">
+                              <span class="font-weight-medium">{{ $t('home.schedule_type') }}:</span>
+                              <span>{{ scheduleType === 'one-time' ? $t('home.one_time') : $t('home.recurring') }}</span>
+                            </div>
+                            <div v-if="scheduleType === 'one-time'" class="d-flex justify-space-between mb-2">
+                              <span class="font-weight-medium">{{ $t('home.run_at') }}:</span>
+                              <span>{{ scheduledTime ? new Date(scheduledTime).toLocaleString() : 'Not set' }}</span>
+                            </div>
+                            <div v-if="scheduleType === 'recurring'" class="d-flex justify-space-between mb-2">
+                              <span class="font-weight-medium">{{ $t('home.cron_expression') }}:</span>
+                              <span class="font-family-mono">{{ cronExpression || 'Not set' }}</span>
+                            </div>
+                            <div class="d-flex justify-space-between mb-2">
+                              <span class="font-weight-medium">{{ $t('home.schedule_name') }}:</span>
+                              <span>{{ scheduleName || 'Not set' }}</span>
+                            </div>
+                            <div class="d-flex justify-space-between mb-2">
+                              <span class="font-weight-medium">{{ $t('home.schedule_status') }}:</span>
+                              <v-chip
+                                :color="scheduleActive ? 'success' : 'warning'"
+                                size="small"
+                              >
+                                {{ scheduleActive ? $t('home.active') : $t('home.inactive') }}
+                              </v-chip>
+                            </div>
+                          </div>
+                        </v-alert>
                       </v-col>
                     </v-row>
                   </v-card>
@@ -361,12 +507,25 @@
     <!-- Error Dialog -->
     <v-dialog v-model="errorDialog.show" max-width="500">
       <v-card>
-        <v-card-title class="d-flex align-center">
+        <v-card-title class="d-flex align-center error-dialog-title">
           <v-icon color="error" class="mr-2">mdi-alert-circle</v-icon>
           {{ $t('home.error_creating_task') }}
         </v-card-title>
         <v-card-text>
-          <p class="text-error">{{ errorDialog.message }}</p>
+          <div v-if="errorDialog.message.includes('\n')" class="text-error">
+            <p class="mb-2 font-weight-medium">Please fix the following errors:</p>
+            <ul class="ma-0 pa-0 error-list">
+              <li 
+                v-for="(error, index) in errorDialog.message.split('\n')" 
+                :key="index"
+                class="d-flex align-center mb-1"
+              >
+                <v-icon size="small" color="error" class="mr-2">mdi-close-circle</v-icon>
+                {{ error }}
+              </li>
+            </ul>
+          </div>
+          <p v-else class="text-error">{{ errorDialog.message }}</p>
         </v-card-text>
         <v-card-actions>
           <v-spacer></v-spacer>
@@ -374,6 +533,16 @@
         </v-card-actions>
       </v-card>
     </v-dialog>
+
+    <!-- Success Notification -->
+    <SuccessNotification
+      v-model="showSuccessNotification"
+      :title="$t('home.task_created_successfully')"
+      :message="$t('home.task_created_message')"
+      color="success"
+      icon="mdi-check-circle"
+      :timeout="5000"
+    />
   </v-container>
 </template>
 
@@ -391,6 +560,10 @@ import AccountSelectedTable from '@/views/pages/socialaccount/widgets/AccountSel
 import { SocialAccountListData } from '@/entityTypes/socialaccount-type'
 import ProxyTableselected from '@/views/pages/proxy/widgets/ProxySelectedTable.vue'
 import { ProxyEntity, ProxyListEntity } from '@/entityTypes/proxyType'
+import CronExpressionBuilder from '@/views/pages/schedule/widgets/CronExpressionBuilder.vue'
+import { createSchedule } from '@/views/api/schedule'
+import { TaskType, TriggerType } from '@/entity/ScheduleTask.entity'
+import SuccessNotification from '@/views/components/widgets/SuccessNotification.vue'
 
 // Router
 const router = useRouter()
@@ -399,7 +572,7 @@ const router = useRouter()
 const { t: $t } = useI18n()
 
 // Form validation
-const form = ref()
+const form = ref<HTMLFormElement>()
 const formValid = ref(false)
 
 // Form data
@@ -427,13 +600,48 @@ const selectedAccounts = ref<SocialAccountListData[]>([])
 const proxyValue = ref<Array<ProxyEntity>>([])
 const proxytableshow = ref(false)
 
-// Proxy configuration (replaced by ProxyTableselected selection)
-const proxyConfig = reactive({
-  host: '',
-  port: '',
-  username: '',
-  password: ''
+// Scheduling variables
+const scheduleType = ref<'one-time' | 'recurring'>('one-time')
+const scheduleName = ref('')
+const scheduleDescription = ref('')
+const scheduleActive = ref(true)
+const cronExpression = ref('')
+const cronValidationError = ref('')
+const nextRunTime = ref('')
+
+// Schedule options
+const scheduleTypeOptions = [
+  { title: 'One Time', value: 'one-time' },
+  { title: 'Recurring', value: 'recurring' }
+]
+
+// Cron presets
+const cronPresets = [
+  { name: 'Every Hour', expression: '0 * * * *', variant: 'outlined' as const },
+  { name: 'Daily', expression: '0 0 * * *', variant: 'outlined' as const },
+  { name: 'Weekly', expression: '0 0 * * 0', variant: 'outlined' as const },
+  { name: 'Monthly', expression: '0 0 1 * *', variant: 'outlined' as const },
+  { name: 'Every 15 Min', expression: '*/15 * * * *', variant: 'outlined' as const },
+  { name: 'Every 30 Min', expression: '*/30 * * * *', variant: 'outlined' as const },
+  { name: 'Every 2 Hours', expression: '0 */2 * * *', variant: 'outlined' as const },
+  { name: 'Weekdays 9 AM', expression: '0 9 * * 1-5', variant: 'outlined' as const },
+  { name: 'Weekends 10 AM', expression: '0 10 * * 0,6', variant: 'outlined' as const }
+]
+
+// Computed properties
+const minDateTime = computed(() => {
+  const now = new Date()
+  now.setMinutes(now.getMinutes() + 1) // Minimum 1 minute from now
+  return now.toISOString().slice(0, 16)
 })
+
+// Proxy configuration (replaced by ProxyTableselected selection)
+// const proxyConfig = reactive({
+//   host: '',
+//   port: '',
+//   username: '',
+//   password: ''
+// })
 
 // Platform data
 const platforms = ref<PlatformConfig[]>([])
@@ -453,6 +661,9 @@ const errorDialog = reactive({
   show: false,
   message: ''
 })
+
+// Success notification state
+const showSuccessNotification = ref(false)
 
 // Options
 const platformOptions = computed(() => {
@@ -482,15 +693,97 @@ const removeKeyword = (keyword: string) => {
   keywordsInput.value = taskForm.keywords.join(', ')
 }
 
-const validateForm = () => {
-  if (!form.value) return false
+const validateForm = async () => {
+  if (!form.value) return { valid: false, errors: [$t('common.error')] }
   
-  const { valid } = form.value.validate()
-  return valid
+  try {
+    const { valid } = await form.value.validate()
+    console.log("validateForm result:", { valid })
+    
+    if (!valid) {
+      // Get detailed validation errors from form fields
+      const fieldErrors: string[] = []
+      
+      // Check required fields manually for better error messages
+      if (!taskForm.name || taskForm.name.trim() === '') {
+        fieldErrors.push($t('home.task_name_required'))
+      }
+      
+      if (!taskForm.platform) {
+        fieldErrors.push($t('home.platform_required'))
+      } else if (selectedPlatform.value && !selectedPlatform.value.is_active) {
+        fieldErrors.push($t('home.platform_inactive_error', { platformName: selectedPlatform.value.display_name }))
+      }
+      
+      if (!keywordsInput.value || keywordsInput.value.trim() === '') {
+        fieldErrors.push($t('home.keywords_required'))
+      } else {
+        // Check if keywords are properly formatted (not just commas or spaces)
+        const keywords = keywordsInput.value.split(',').map(k => k.trim()).filter(k => k.length > 0)
+        if (keywords.length === 0) {
+          fieldErrors.push($t('home.keywords_required'))
+        }
+      }
+      
+      if (!taskForm.location || taskForm.location.trim() === '') {
+        fieldErrors.push($t('home.location_required'))
+      }
+      
+      // Check conditional validations
+      if (useAccount.value && selectedAccounts.value.length === 0) {
+        fieldErrors.push($t('home.account_required_when_enabled'))
+      }
+      
+      if (useProxy.value && proxyValue.value.length === 0) {
+        fieldErrors.push($t('home.proxy_required_when_enabled'))
+      }
+      
+      // Check scheduling validations
+      if (scheduleTask.value) {
+        if (scheduleType.value === 'one-time' && !scheduledTime.value) {
+          fieldErrors.push($t('home.scheduled_time_required'))
+        }
+        
+        if (scheduleType.value === 'recurring' && (!cronExpression.value || cronValidationError.value)) {
+          if (!cronExpression.value) {
+            fieldErrors.push($t('home.cron_expression_required'))
+          } else {
+            fieldErrors.push($t('home.invalid_cron_expression'))
+          }
+        }
+      }
+      
+      // Check numeric field validations
+      if (taskForm.max_pages < 1 || taskForm.max_pages > 100) {
+        fieldErrors.push($t('home.max_pages_range_error'))
+      }
+      
+      if (taskForm.concurrency < 1 || taskForm.concurrency > 10) {
+        fieldErrors.push($t('home.concurrency_range_error'))
+      }
+      
+      if (taskForm.delay_between_requests < 0 || taskForm.delay_between_requests > 10000) {
+        fieldErrors.push($t('home.delay_range_error'))
+      }
+      
+      return { valid: false, errors: fieldErrors.length > 0 ? fieldErrors : [$t('common.fill_require_field')] }
+    }
+    
+    return { valid: true, errors: [] }
+  } catch (error) {
+    console.error('Validation error:', error)
+    return { valid: false, errors: [$t('common.error')] }
+  }
 }
 
 const createTask = async () => {
-  if (!validateForm()) return
+  const validationResult = await validateForm()
+  if (!validationResult.valid) {
+    errorDialog.message = validationResult.errors.join('\n')
+    errorDialog.show = true
+    console.log("validateForm")
+    return
+  }
   
   creating.value = true
   
@@ -498,6 +791,11 @@ const createTask = async () => {
     // Prepare task data
     const taskData = {
       ...taskForm,
+      keywords: keywordsInput.value
+        .split(',')
+        .map(k => k.trim())
+        .filter(k => k.length > 0)
+        .filter((k, index, arr) => arr.indexOf(k) === index), // Remove duplicates
       max_pages: taskForm.max_pages || 1,
       concurrency: taskForm.concurrency || 1,
       delay_between_requests: taskForm.delay_between_requests || 2000
@@ -538,10 +836,26 @@ const createTask = async () => {
     })
     
     if (response) {
+      // Create schedule if scheduling is enabled
+      if (scheduleTask.value) {
+        try {
+          await createScheduleForTask(response, taskData)
+        } catch (scheduleError) {
+          console.warn('Failed to create schedule, but task was created:', scheduleError)
+          // Task was created successfully, so we'll show success but warn about schedule
+          errorDialog.message = `Task created successfully, but failed to create schedule: ${scheduleError instanceof Error ? scheduleError.message : 'Unknown error'}`
+          errorDialog.show = true
+          return
+        }
+      }
+
       successDialog.taskId = response
       successDialog.taskName = taskData.name
       successDialog.status = 'pending'
       successDialog.show = true
+      
+      // Show success notification
+      showSuccessNotification.value = true
       
       // Start the task immediately
       await startYellowPagesTask(response)
@@ -549,6 +863,8 @@ const createTask = async () => {
     } else {
       throw new Error('Failed to create task')
     }
+
+
     
   } catch (error) {
     console.error('Failed to create task:', error)
@@ -560,7 +876,12 @@ const createTask = async () => {
 }
 
 const createTaskOnly = async () => {
-  if (!validateForm()) return
+  const validationResult = await validateForm()
+  if (!validationResult.valid) {
+    errorDialog.message = validationResult.errors.join('\n')
+    errorDialog.show = true
+    return
+  }
   
   creating.value = true
   
@@ -568,6 +889,11 @@ const createTaskOnly = async () => {
     // Prepare task data (same as createTask but without starting)
     const taskData = {
       ...taskForm,
+      keywords: keywordsInput.value
+        .split(',')
+        .map(k => k.trim())
+        .filter(k => k.length > 0)
+        .filter((k, index, arr) => arr.indexOf(k) === index), // Remove duplicates
       max_pages: taskForm.max_pages || 1,
       concurrency: taskForm.concurrency || 1,
       delay_between_requests: taskForm.delay_between_requests || 2000
@@ -605,10 +931,26 @@ const createTaskOnly = async () => {
     })
     
     if (response) {
+      // Create schedule if scheduling is enabled
+      if (scheduleTask.value) {
+        try {
+          await createScheduleForTask(response, taskData)
+        } catch (scheduleError) {
+          console.warn('Failed to create schedule, but task was created:', scheduleError)
+          // Task was created successfully, so we'll show success but warn about schedule
+          errorDialog.message = `Task created successfully, but failed to create schedule: ${scheduleError instanceof Error ? scheduleError.message : 'Unknown error'}`
+          errorDialog.show = true
+          return
+        }
+      }
+
       successDialog.taskId = response
       successDialog.taskName = taskData.name
       successDialog.status = 'pending'
       successDialog.show = true
+      
+      // Show success notification
+      showSuccessNotification.value = true
     } else {
       throw new Error( 'Failed to create task')
     }
@@ -680,6 +1022,125 @@ const handleSelectedChanged = (newValue: ProxyListEntity[]) => {
   }
 }
 
+// Scheduling methods
+const handleScheduleTypeChange = () => {
+  // Reset schedule-specific fields when type changes
+  if (scheduleType.value === 'one-time') {
+    cronExpression.value = ''
+    cronValidationError.value = ''
+    nextRunTime.value = ''
+  } else {
+    scheduledTime.value = ''
+  }
+}
+
+const handleCronExpressionChange = (expression: string) => {
+  cronExpression.value = expression
+  validateCronExpression()
+}
+
+const validateCronExpression = async () => {
+  if (!cronExpression.value) {
+    cronValidationError.value = ''
+    return
+  }
+
+  try {
+    // Basic cron validation regex
+    const cronRegex = /^(\*|([0-9]|1[0-9]|2[0-9]|3[0-9]|4[0-9]|5[0-9])|\*\/([0-9]|1[0-9]|2[0-9]|3[0-9]|4[0-9]|5[0-9])) (\*|([0-9]|1[0-9]|2[0-3])|\*\/([0-9]|1[0-9]|2[0-3])) (\*|([1-9]|1[0-9]|2[0-9]|3[0-1])|\*\/([1-9]|1[0-9]|2[0-9]|3[0-1])) (\*|([1-9]|1[0-2])|\*\/([1-9]|1[0-2])) (\*|([0-6])|\*\/([0-6]))$/
+    
+    if (cronRegex.test(cronExpression.value)) {
+      cronValidationError.value = ''
+      calculateNextRunTime()
+    } else {
+      cronValidationError.value = 'Invalid cron expression format'
+    }
+  } catch (error) {
+    cronValidationError.value = 'Failed to validate cron expression'
+  }
+}
+
+const applyCronPreset = (expression: string) => {
+  cronExpression.value = expression
+  validateCronExpression()
+}
+
+const calculateNextRunTime = async () => {
+  if (!cronExpression.value || cronValidationError.value) {
+    nextRunTime.value = ''
+    return
+  }
+
+  try {
+    // Simple next run time calculation for common patterns
+    const now = new Date()
+    let nextRun = new Date(now)
+    
+    const parts = cronExpression.value.split(' ')
+    const [minute, hour, day, month, weekday] = parts
+    
+    // Basic calculation - this is a simplified version
+    // In production, you'd want to use a proper cron library
+    if (minute !== '*' && hour !== '*') {
+      nextRun.setMinutes(parseInt(minute), 0, 0)
+      nextRun.setHours(parseInt(hour))
+      
+      if (nextRun <= now) {
+        nextRun.setDate(nextRun.getDate() + 1)
+      }
+    } else if (hour !== '*') {
+      nextRun.setMinutes(0, 0, 0)
+      nextRun.setHours(parseInt(hour))
+      
+      if (nextRun <= now) {
+        nextRun.setDate(nextRun.getDate() + 1)
+      }
+    } else if (minute !== '*') {
+      nextRun.setMinutes(parseInt(minute), 0, 0)
+      
+      if (nextRun <= now) {
+        nextRun.setHours(nextRun.getHours() + 1)
+      }
+    } else {
+      nextRun.setMinutes(now.getMinutes() + 1, 0, 0)
+    }
+    
+    nextRunTime.value = nextRun.toLocaleString()
+  } catch (error) {
+    nextRunTime.value = 'Unable to calculate'
+  }
+}
+
+// Create schedule for the yellow pages task
+const createScheduleForTask = async (taskId: number, taskData: any) => {
+  try {
+    if (scheduleType.value === 'one-time' && scheduledTime.value) {
+      // For one-time scheduling, we don't create a separate schedule
+      // The task already has scheduled_at set
+      console.log('One-time scheduled task created with ID:', taskId)
+      return
+    } else if (scheduleType.value === 'recurring' && cronExpression.value) {
+      // Create a recurring schedule using the schedule module
+      const scheduleData = {
+        name: scheduleName.value || `Schedule for ${taskData.name}`,
+        description: scheduleDescription.value || `Recurring schedule for yellow pages task: ${taskData.name}`,
+        task_type: TaskType.YELLOW_PAGES,
+        task_id: taskId,
+        cron_expression: cronExpression.value,
+        is_active: scheduleActive.value,
+        trigger_type: TriggerType.CRON
+      }
+      
+      const scheduleId = await createSchedule(scheduleData)
+      console.log('Recurring schedule created with ID:', scheduleId)
+      return scheduleId
+    }
+  } catch (error) {
+    console.error('Failed to create schedule:', error)
+    throw error
+  }
+}
+
 const goBack = () => {
   router.push('/yellowpages/list')
 }
@@ -719,5 +1180,29 @@ onMounted(() => {
 
 .v-chip {
   cursor: pointer;
+}
+
+.font-family-mono {
+  font-family: 'Courier New', monospace;
+  font-size: 0.875rem;
+}
+
+/* Error dialog styling */
+.error-list {
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.error-list li {
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.error-list li:last-child {
+  border-bottom: none;
+}
+
+.error-dialog-title {
+  color: #f44336;
 }
 </style>

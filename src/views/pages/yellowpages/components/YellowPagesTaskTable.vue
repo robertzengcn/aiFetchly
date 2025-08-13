@@ -16,7 +16,7 @@
           <div>
             <div class="font-weight-medium">{{ item.name }}</div>
             <div class="text-caption text-medium-emphasis">
-              {{ item.keywords.join(', ') }} in {{ item.location }}
+              {{ (item.keywords || []).join(', ') }} in {{ item.location || 'Unknown' }}
             </div>
           </div>
         </div>
@@ -38,14 +38,14 @@
       <template v-slot:item.progress="{ item }">
         <div class="d-flex align-center">
           <v-progress-linear
-            :model-value="item.progress"
+            :model-value="item.progress || 0"
             :color="getProgressColor(item.status)"
             height="8"
             rounded
             class="mr-2"
             style="width: 60px"
           ></v-progress-linear>
-          <span class="text-caption">{{ item.progress }}%</span>
+          <span class="text-caption">{{ item.progress || 0 }}%</span>
         </div>
       </template>
 
@@ -64,7 +64,7 @@
       <template v-slot:item.results_count="{ item }">
         <div class="d-flex align-center">
           <v-icon class="mr-1" size="small">mdi-database</v-icon>
-          <span>{{ item.results_count }}</span>
+          <span>{{ item.results_count || 0 }}</span>
         </div>
       </template>
 
@@ -175,9 +175,24 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 
+// Task interface
+interface Task {
+  id: string | number
+  name: string
+  platform: string
+  keywords?: string[]
+  location?: string
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'paused'
+  progress: number
+  priority: 'high' | 'medium' | 'low'
+  results_count: number
+  created_at: string
+  updated_at: string
+}
+
 // Props
 interface Props {
-  tasks: any[]
+  tasks: Task[]
   loading: boolean
 }
 
@@ -185,14 +200,14 @@ const props = defineProps<Props>()
 
 // Emits
 const emit = defineEmits<{
-  edit: [task: any]
-  delete: [task: any]
-  start: [task: any]
-  stop: [task: any]
-  pause: [task: any]
-  resume: [task: any]
-  'view-results': [task: any]
-  'view-details': [task: any]
+  edit: [task: Task]
+  delete: [task: Task]
+  start: [task: Task]
+  stop: [task: Task]
+  pause: [task: Task]
+  resume: [task: Task]
+  'view-results': [task: Task]
+  'view-details': [task: Task]
 }>()
 
 // Table headers
@@ -209,7 +224,8 @@ const headers = [
 ]
 
 // Methods
-const getPlatformColor = (platform: string) => {
+const getPlatformColor = (platform?: string) => {
+  if (!platform) return 'grey'
   const colors = {
     'yellowpages.com': 'blue',
     'yelp.com': 'red',
@@ -218,7 +234,8 @@ const getPlatformColor = (platform: string) => {
   return colors[platform] || 'grey'
 }
 
-const getPlatformIcon = (platform: string) => {
+const getPlatformIcon = (platform?: string) => {
+  if (!platform) return 'mdi-web'
   const icons = {
     'yellowpages.com': 'mdi-phone-book',
     'yelp.com': 'mdi-star',
@@ -227,7 +244,8 @@ const getPlatformIcon = (platform: string) => {
   return icons[platform] || 'mdi-web'
 }
 
-const getStatusColor = (status: string) => {
+const getStatusColor = (status?: string) => {
+  if (!status) return 'grey'
   const colors = {
     pending: 'warning',
     running: 'info',
@@ -238,7 +256,8 @@ const getStatusColor = (status: string) => {
   return colors[status] || 'grey'
 }
 
-const getStatusIcon = (status: string) => {
+const getStatusIcon = (status?: string) => {
+  if (!status) return 'mdi-help-circle'
   const icons = {
     pending: 'mdi-clock-outline',
     running: 'mdi-play-circle',
@@ -249,7 +268,8 @@ const getStatusIcon = (status: string) => {
   return icons[status] || 'mdi-help-circle'
 }
 
-const getStatusText = (status: string) => {
+const getStatusText = (status?: string) => {
+  if (!status) return 'Unknown'
   const texts = {
     pending: 'Pending',
     running: 'Running',
@@ -260,14 +280,16 @@ const getStatusText = (status: string) => {
   return texts[status] || status
 }
 
-const getProgressColor = (status: string) => {
+const getProgressColor = (status?: string) => {
+  if (!status) return 'warning'
   if (status === 'failed') return 'error'
   if (status === 'completed') return 'success'
   if (status === 'running') return 'info'
   return 'warning'
 }
 
-const getPriorityColor = (priority: string) => {
+const getPriorityColor = (priority?: string) => {
+  if (!priority) return 'grey'
   const colors = {
     high: 'error',
     medium: 'warning',
@@ -276,9 +298,15 @@ const getPriorityColor = (priority: string) => {
   return colors[priority] || 'grey'
 }
 
-const formatDate = (dateString: string) => {
-  const date = new Date(dateString)
-  return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+const formatDate = (dateString?: string) => {
+  if (!dateString) return 'Unknown'
+  try {
+    const date = new Date(dateString)
+    if (isNaN(date.getTime())) return 'Invalid Date'
+    return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  } catch (error) {
+    return 'Invalid Date'
+  }
 }
 </script>
 
