@@ -328,6 +328,10 @@ module.exports={
             entry: 'src/taskCode.ts',
             config: 'vite.taskCode.config.mjs'
           },
+          {
+            entry: 'src/yellowPages.ts',
+            config: 'vite.yellowPages.config.mjs'
+          },
           // {
           //   entry: 'src/buckEmail.ts',
           //   config: 'vite.buckEmail.config.mjs'
