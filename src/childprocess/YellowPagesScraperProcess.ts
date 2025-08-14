@@ -1,7 +1,6 @@
 import { MessageType } from '@/interfaces/IPCMessageProtocol';
 import { TaskStatus } from '@/interfaces/ITaskManager';
 import { YellowPagesScraperProcess as YellowPagesScraper } from './yellowPagesScraper';
-import { BaseModule } from '@/modules/baseModule';
 
 // Define missing interfaces and enums
 enum ErrorSeverity {
@@ -101,7 +100,7 @@ const IPCMessageFactory = {
  * @since 1.0.0
  * @author Yellow Pages Scraper Team
  */
-export class YellowPagesScraperProcess extends BaseModule {
+export class YellowPagesScraperProcess {
     private scraper: YellowPagesScraper | null;
     private currentTaskId: string | null = null;
     private isRunning: boolean = false;
@@ -109,9 +108,8 @@ export class YellowPagesScraperProcess extends BaseModule {
     private processId: string;
 
     constructor() {
-        super();
         this.processId = `child_${process.pid}_${Date.now()}`;
-        // Note: YellowPagesScraper needs a taskId, will be set when task starts
+        // Note: YellowPagesScraper needs taskId, will be set when task starts
         this.scraper = null;
         this.setupIPC();
     }
@@ -343,7 +341,41 @@ export class YellowPagesScraperProcess extends BaseModule {
             if (!this.scraper) {
                 // Extract taskId from taskData or use a default
                 const taskId = message.taskData?.taskId || parseInt(message.taskId) || 1;
-                this.scraper = new YellowPagesScraper(taskId);
+                // For now, create a minimal taskData structure - this will be updated when we refactor
+                const taskData = {
+                    taskId: taskId,
+                    platform: 'yellowpages',
+                    keywords: ['default'],
+                    location: 'default',
+                    max_pages: 1,
+                    delay_between_requests: 1000
+                };
+                const platformInfo = {
+                    id: 1,
+                    name: 'yellowpages',
+                    display_name: 'Yellow Pages',
+                    base_url: 'https://www.yellowpages.com',
+                    settings: {},
+                    selectors: {
+                        businessList: '.result',
+                        businessName: '.business-name',
+                        searchForm: {
+                            keywordInput: '#searchTerms',
+                            locationInput: '#location',
+                            searchButton: '.search-button, .btn-search, [type="submit"]',
+                            formContainer: '.search-form, form[role="search"]'
+                        },
+                        pagination: {
+                            nextButton: '.pagination .next, .pagination-next, a[rel="next"]',
+                            previousButton: '.pagination .prev, .pagination-prev, a[rel="prev"]',
+                            currentPage: '.pagination .current, .current-page',
+                            maxPages: '.pagination .total, .total-pages',
+                            pageNumbers: '.pagination a[href*="page"], .pagination-number',
+                            container: '.pagination, .pagination-container'
+                        }
+                    }
+                };
+                this.scraper = new YellowPagesScraper(taskData, platformInfo);
             }
 
         } catch (error) {
@@ -387,7 +419,41 @@ export class YellowPagesScraperProcess extends BaseModule {
             if (!this.scraper) {
                 // Initialize scraper with taskId
                 const numericTaskId = parseInt(taskId) || 1;
-                this.scraper = new YellowPagesScraper(numericTaskId);
+                // For now, create a minimal taskData structure - this will be updated when we refactor
+                const taskData = {
+                    taskId: numericTaskId,
+                    platform: 'yellowpages',
+                    keywords: ['default'],
+                    location: 'default',
+                    max_pages: 1,
+                    delay_between_requests: 1000
+                };
+                const platformInfo = {
+                    id: 1,
+                    name: 'yellowpages',
+                    display_name: 'Yellow Pages',
+                    base_url: 'https://www.yellowpages.com',
+                    settings: {},
+                    selectors: {
+                        businessList: '.result',
+                        businessName: '.business-name',
+                        searchForm: {
+                            keywordInput: '#searchTerms',
+                            locationInput: '#location',
+                            searchButton: '.search-button, .btn-search, [type="submit"]',
+                            formContainer: '.search-form, form[role="search"]'
+                        },
+                        pagination: {
+                            nextButton: '.pagination .next, .pagination-next, a[rel="next"]',
+                            previousButton: '.pagination .prev, .pagination-prev, a[rel="prev"]',
+                            currentPage: '.pagination .current, .current-page',
+                            maxPages: '.pagination .total, .total-pages',
+                            pageNumbers: '.pagination a[href*="page"], .pagination-number',
+                            container: '.pagination, .pagination-container'
+                        }
+                    }
+                };
+                this.scraper = new YellowPagesScraper(taskData, platformInfo);
             }
 
             // Set up progress callback

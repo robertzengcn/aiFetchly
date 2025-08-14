@@ -84,7 +84,7 @@ export class ConfigurationPlatformAdapter extends BasePlatformAdapter {
     async getCurrentPage(page: Page): Promise<number> {
         const selectors = this.getSelectors();
         
-        if (!selectors.pagination?.currentPage) {
+        if (!selectors.pagination || typeof selectors.pagination !== 'object' || !('currentPage' in selectors.pagination)) {
             return 1;
         }
 
@@ -92,7 +92,7 @@ export class ConfigurationPlatformAdapter extends BasePlatformAdapter {
             return await page.evaluate((selector) => {
                 const currentPageElement = document.querySelector(selector);
                 return currentPageElement ? parseInt(currentPageElement.textContent || '1') : 1;
-            }, selectors.pagination.currentPage);
+            }, selectors.pagination.currentPage!);
         } catch {
             return 1;
         }
@@ -104,7 +104,7 @@ export class ConfigurationPlatformAdapter extends BasePlatformAdapter {
     async hasNextPage(page: Page): Promise<boolean> {
         const selectors = this.getSelectors();
         
-        if (!selectors.pagination?.nextButton) {
+        if (!selectors.pagination || typeof selectors.pagination !== 'object' || !('nextButton' in selectors.pagination)) {
             return false;
         }
 
@@ -112,7 +112,7 @@ export class ConfigurationPlatformAdapter extends BasePlatformAdapter {
             return await page.evaluate((selector) => {
                 const nextButton = document.querySelector(selector);
                 return nextButton ? !nextButton.classList.contains('disabled') : false;
-            }, selectors.pagination.nextButton);
+            }, selectors.pagination.nextButton!);
         } catch {
             return false;
         }
@@ -125,7 +125,7 @@ export class ConfigurationPlatformAdapter extends BasePlatformAdapter {
         const selectors = this.getSelectors();
         
         // Look for total results selector in configuration
-        if (!selectors.pagination?.maxPages) {
+        if (!selectors.pagination || typeof selectors.pagination !== 'object' || !('maxPages' in selectors.pagination)) {
             return null;
         }
 
@@ -137,7 +137,7 @@ export class ConfigurationPlatformAdapter extends BasePlatformAdapter {
                 const text = totalElement.textContent || '';
                 const match = text.match(/(\d+)/);
                 return match ? parseInt(match[1]) : null;
-            }, selectors.pagination.maxPages);
+            }, selectors.pagination.maxPages!);
         } catch {
             return null;
         }

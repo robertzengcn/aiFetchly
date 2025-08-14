@@ -1,8 +1,11 @@
 import { utilityProcess, MessageChannelMain } from 'electron';
 import type { UtilityProcess } from 'electron';
 import { YellowPagesTaskModel, YellowPagesTaskStatus } from "@/model/YellowPagesTask.model";
+import { YellowPagesResultModel } from "@/model/YellowPagesResult.model";
+import { PlatformRegistry } from "@/modules/PlatformRegistry";
+import { AccountCookiesModule } from "@/modules/accountCookiesModule";
 import { BaseModule } from "@/modules/baseModule";
-import { IPCMessage, ScrapingProgress } from "@/interfaces/IPCMessage";
+import { ScrapingProgress } from "@/interfaces/IPCMessage";
 import * as path from 'path';
 import * as fs from 'fs';
 
@@ -14,13 +17,80 @@ interface ProcessInfo {
     progress?: ScrapingProgress;
 }
 
+interface TaskData {
+    taskId: number;
+    platform: string;
+    keywords: string[];
+    location: string;
+    max_pages: number;
+    delay_between_requests: number;
+    account_id?: number;
+    cookies?: any[];
+}
+
+interface PlatformInfo {
+    id: number;
+    name: string;
+    display_name: string;
+    base_url: string;
+    settings: {
+        searchUrlPattern?: string;
+    };
+    selectors: {
+        businessList: string;
+        businessName: string;
+        email?: string;
+        phone?: string;
+        website?: string;
+        address?: string;
+        address_city?: string;
+        address_state?: string;
+        address_zip?: string;
+        address_country?: string;
+        socialMedia?: string;
+        categories?: string;
+        businessHours?: string;
+        description?: string;
+        rating?: string;
+        reviewCount?: string;
+        faxNumber?: string;
+        contactPerson?: string;
+        yearEstablished?: string;
+        numberOfEmployees?: string;
+        paymentMethods?: string;
+        specialties?: string;
+        searchForm?: {
+            keywordInput?: string;
+            locationInput?: string;
+            searchButton?: string;
+            formContainer?: string;
+            categoryDropdown?: string;
+            radiusDropdown?: string;
+        };
+        pagination?: {
+            nextButton?: string;
+            currentPage?: string;
+            maxPages?: string;
+            previousButton?: string;
+            pageNumbers?: string;
+            container?: string;
+        };
+    };
+}
+
 export class YellowPagesProcessManager extends BaseModule {
     private activeProcesses: Map<number, ProcessInfo> = new Map();
     private taskModel: YellowPagesTaskModel;
+    private resultModel: YellowPagesResultModel;
+    private platformRegistry: PlatformRegistry;
+    private accountCookiesModule: AccountCookiesModule;
 
     constructor() {
         super();
         this.taskModel = new YellowPagesTaskModel(this.dbpath);
+        this.resultModel = new YellowPagesResultModel(this.dbpath);
+        this.platformRegistry = new PlatformRegistry();
+        this.accountCookiesModule = new AccountCookiesModule();
     }
 
     /**
@@ -34,6 +104,78 @@ export class YellowPagesProcessManager extends BaseModule {
             if (this.activeProcesses.has(taskId)) {
                 throw new Error(`Process for task ${taskId} already exists`);
             }
+
+            // Get task details from database
+            const task = await this.taskModel.getTaskById(taskId);
+            if (!task) {
+                throw new Error(`Task ${taskId} not found`);
+            }
+
+            // Get platform details from registry
+            const platform = this.platformRegistry
+                .getAllPlatforms()
+                .find(p => p.id === task.platform || p.name === task.platform || p.display_name === task.platform);
+            if (!platform) {
+                throw new Error(`Platform ${task.platform} not found`);
+            }
+
+            // Parse keywords from JSON
+            const keywords = JSON.parse(task.keywords);
+
+            // Prepare task data for child process
+            const taskData: TaskData = {
+                taskId: taskId,
+                platform: task.platform,
+                keywords: keywords,
+                location: task.location,
+                max_pages: task.max_pages,
+                delay_between_requests: task.delay_between_requests,
+                account_id: task.account_id
+            };
+
+            // Get cookies if account is specified
+            if (task.account_id) {
+                const accountCookies = await this.accountCookiesModule.getAccountCookies(task.account_id);
+                if (accountCookies && accountCookies.cookies) {
+                    taskData.cookies = JSON.parse(accountCookies.cookies);
+                }
+            }
+
+            // Prepare platform info for child process
+            const platformInfo: PlatformInfo = {
+                id: Number(platform.id),
+                name: platform.name,
+                display_name: platform.display_name,
+                base_url: platform.base_url,
+                settings: platform.settings || {},
+                selectors: {
+                    businessList: platform.selectors?.businessList || '',
+                    businessName: platform.selectors?.businessName || '',
+                    email: platform.selectors?.email,
+                    phone: platform.selectors?.phone,
+                    website: platform.selectors?.website,
+                    address: platform.selectors?.address,
+                    address_city: platform.selectors?.address_city,
+                    address_state: platform.selectors?.address_state,
+                    address_zip: platform.selectors?.address_zip,
+                    address_country: platform.selectors?.address_country,
+                    socialMedia: platform.selectors?.socialMedia,
+                    categories: platform.selectors?.categories,
+                    businessHours: platform.selectors?.businessHours,
+                    description: platform.selectors?.description,
+                    rating: platform.selectors?.rating,
+                    reviewCount: platform.selectors?.reviewCount,
+                    faxNumber: platform.selectors?.faxNumber,
+                    contactPerson: platform.selectors?.contactPerson,
+                    yearEstablished: platform.selectors?.yearEstablished,
+                    numberOfEmployees: platform.selectors?.numberOfEmployees,
+                    paymentMethods: platform.selectors?.paymentMethods,
+                    specialties: platform.selectors?.specialties,
+                    searchForm: platform.selectors?.searchForm && typeof platform.selectors.searchForm === 'object' && 'keywordInput' in platform.selectors.searchForm ? platform.selectors.searchForm : undefined,
+                    pagination: platform.selectors?.pagination && typeof platform.selectors.pagination === 'object' && 'nextButton' in platform.selectors.pagination ? platform.selectors.pagination : undefined
+                }
+            };
+
             // Resolve scraper path and validate existence
             const childPath = path.resolve(process.cwd(), 'dist/childprocess/yellowPagesScraper.js');
             if (!fs.existsSync(childPath)) {
@@ -71,7 +213,15 @@ export class YellowPagesProcessManager extends BaseModule {
 
             // Send start message to child process when spawned
             childProcess.on('spawn', () => {
-                childProcess.postMessage(JSON.stringify({ type: 'START', taskId }), [port1]);
+                // Update task status to in-progress
+                this.taskModel.updateTaskStatus(taskId, YellowPagesTaskStatus.InProgress);
+                
+                // Send task data and platform info to child process
+                childProcess.postMessage(JSON.stringify({ 
+                    type: 'START', 
+                    taskData, 
+                    platformInfo 
+                }), [port1]);
             });
 
             console.log(`Successfully spawned process for task ${taskId}`);
@@ -88,12 +238,12 @@ export class YellowPagesProcessManager extends BaseModule {
      */
     private setupIPCHandlers(childProcess: UtilityProcess, taskId: number): void {
         childProcess.on('message', (raw: unknown) => {
-            let message: IPCMessage | undefined;
+            let message: any;
             try {
                 if (typeof raw === 'string') {
-                    message = JSON.parse(raw) as IPCMessage;
+                    message = JSON.parse(raw);
                 } else {
-                    message = raw as IPCMessage;
+                    message = raw;
                 }
             } catch (err) {
                 console.error(`Failed to parse message from task ${taskId}:`, raw);
@@ -110,7 +260,7 @@ export class YellowPagesProcessManager extends BaseModule {
                     }
                     break;
                 case 'COMPLETED':
-                    this.handleCompletionMessage(taskId);
+                    this.handleCompletionMessage(taskId, message.results);
                     break;
                 case 'ERROR':
                     this.handleErrorMessage(taskId, message.error || 'Unknown error');
@@ -149,20 +299,35 @@ export class YellowPagesProcessManager extends BaseModule {
     /**
      * Handle completion messages from child process
      */
-    private async handleCompletionMessage(taskId: number): Promise<void> {
-        console.log(`Task ${taskId} completed successfully`);
+    private async handleCompletionMessage(taskId: number, results: any[]): Promise<void> {
+        console.log(`Task ${taskId} completed successfully with ${results.length} results`);
         
         const processInfo = this.activeProcesses.get(taskId);
         if (processInfo) {
             processInfo.status = 'completed';
         }
 
-        // Update task status in database
         try {
+            // Save results to database
+            if (results && results.length > 0) {
+                const resultIds = await this.resultModel.saveMultipleResults(
+                    results.map(result => ({
+                        ...result,
+                        task_id: taskId,
+                        platform: processInfo?.process ? 'yellowpages' : 'unknown'
+                    }))
+                );
+                console.log(`Saved ${resultIds.length} results for task ${taskId}`);
+            }
+
+            // Update task status in database
             await this.taskModel.updateTaskStatus(taskId, YellowPagesTaskStatus.Completed);
             await this.taskModel.updateTaskCompletion(taskId);
         } catch (error) {
-            console.error(`Failed to update task ${taskId} status:`, error);
+            console.error(`Failed to save results or update task ${taskId} status:`, error);
+            // Update task status to failed if saving results fails
+            await this.taskModel.updateTaskStatus(taskId, YellowPagesTaskStatus.Failed);
+            await this.taskModel.updateTaskErrorLog(taskId, `Failed to save results: ${error}`);
         }
 
         // Clean up process
@@ -184,29 +349,6 @@ export class YellowPagesProcessManager extends BaseModule {
         try {
             await this.taskModel.updateTaskStatus(taskId, YellowPagesTaskStatus.Failed);
             await this.taskModel.updateTaskErrorLog(taskId, error);
-        } catch (dbError) {
-            console.error(`Failed to update task ${taskId} error status:`, dbError);
-        }
-
-        // Clean up process
-        this.cleanupProcess(taskId);
-    }
-
-    /**
-     * Handle process errors
-     */
-    private async handleProcessError(taskId: number, error: Error): Promise<void> {
-        console.error(`Process error for task ${taskId}:`, error);
-        
-        const processInfo = this.activeProcesses.get(taskId);
-        if (processInfo) {
-            processInfo.status = 'failed';
-        }
-
-        // Update task status in database
-        try {
-            await this.taskModel.updateTaskStatus(taskId, YellowPagesTaskStatus.Failed);
-            await this.taskModel.updateTaskErrorLog(taskId, error.message);
         } catch (dbError) {
             console.error(`Failed to update task ${taskId} error status:`, dbError);
         }

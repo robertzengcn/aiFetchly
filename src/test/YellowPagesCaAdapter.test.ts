@@ -1,4 +1,4 @@
-import { YellowPagesCaAdapter } from '@/platforms/YellowPagesCaAdapter';
+import { YellowPagesCaAdapter } from '@/modules/platforms/YellowPagesCaAdapter';
 import { PlatformConfig, PlatformFeature } from '@/interfaces/IPlatformConfig';
 // @ts-ignore - Jest globals are available in test environment
 declare const expect: any;
@@ -110,7 +110,7 @@ describe('YellowPagesCaAdapter', () => {
         expect(selectors.businessList).toBe('div#main-content div.search-results.organic div.result, .listing-item, .business-listing, .result-item');
         expect(selectors.businessName).toBe('a.business-name, .business-name, .listing-name, h3 a, .name a');
         expect(selectors.phone).toBe('div.phones, .phone, .phone-number, .contact-phone');
-        expect(selectors.pagination?.nextButton).toBe('a.next, .pagination .next, .next-page, .pagination-next');
+        expect(typeof selectors.pagination === 'object' && 'nextButton' in selectors.pagination ? selectors.pagination.nextButton : undefined).toBe('a.next, .pagination .next, .next-page, .pagination-next');
     });
 
     test('should build correct search URL', () => {

@@ -391,7 +391,7 @@ export class PlatformTestingFramework extends BaseModule {
       }
 
       const pagination = platform.selectors?.pagination
-      if (!pagination || !pagination.nextButton) {
+      if (!pagination || typeof pagination !== 'object' || !('nextButton' in pagination)) {
         return {
           testName: 'Pagination Mechanism',
           passed: false,
@@ -405,7 +405,7 @@ export class PlatformTestingFramework extends BaseModule {
       const currentUrl = this.page.url()
       
       // Find and click next button
-      const nextButton = await this.page.$(pagination.nextButton)
+      const nextButton = await this.page.$(pagination.nextButton!)
       if (!nextButton) {
         return {
           testName: 'Pagination Mechanism',
@@ -778,21 +778,21 @@ export class PlatformTestingFramework extends BaseModule {
       let totalFound = 0
 
       // Test next button
-      if (pagination.nextButton) {
+      if (typeof pagination === 'object' && 'nextButton' in pagination && pagination.nextButton) {
         const nextElements = await this.page.$$(pagination.nextButton)
         results.nextButton = { selector: pagination.nextButton, count: nextElements.length }
         totalFound += nextElements.length
       }
 
       // Test current page
-      if (pagination.currentPage) {
+      if (typeof pagination === 'object' && 'currentPage' in pagination && pagination.currentPage) {
         const currentElements = await this.page.$$(pagination.currentPage)
         results.currentPage = { selector: pagination.currentPage, count: currentElements.length }
         totalFound += currentElements.length
       }
 
       // Test max pages
-      if (pagination.maxPages) {
+      if (typeof pagination === 'object' && 'maxPages' in pagination && pagination.maxPages) {
         const maxElements = await this.page.$$(pagination.maxPages)
         results.maxPages = { selector: pagination.maxPages, count: maxElements.length }
         totalFound += maxElements.length

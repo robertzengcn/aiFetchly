@@ -11,9 +11,9 @@
  * the results against manual verification to ensure 98%+ data accuracy and 95%+ page success rate.
  */
 
-import { YellowPagesComAdapter } from '../platforms/YellowPagesComAdapter';
-import { YelpComAdapter } from '../platforms/YelpComAdapter';
-import { YellowPagesCaAdapter } from '../platforms/YellowPagesCaAdapter';
+import { YellowPagesComAdapter } from '../modules/platforms/YellowPagesComAdapter';
+import { YelpComAdapter } from '../modules/platforms/YelpComAdapter';
+import { YellowPagesCaAdapter } from '../modules/platforms/YellowPagesCaAdapter';
 import { PlatformConfig } from '../interfaces/IPlatformConfig';
 
 interface ValidationResult {

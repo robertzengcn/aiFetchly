@@ -248,12 +248,12 @@ export abstract class BasePlatformAdapter implements IBasePlatformAdapter {
     protected async defaultHandlePagination(page: Page, maxPages: number): Promise<void> {
         const selectors = this.getSelectors();
         
-        if (!selectors.pagination?.nextButton) {
+        if (!selectors.pagination || typeof selectors.pagination !== 'object' || !('nextButton' in selectors.pagination)) {
             console.log('No pagination selector configured');
             return;
         }
 
-        const nextButton = await page.$(selectors.pagination.nextButton);
+        const nextButton = await page.$(selectors.pagination.nextButton!);
         if (!nextButton) {
             console.log('No next page button found');
             return;

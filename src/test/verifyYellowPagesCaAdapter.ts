@@ -3,7 +3,7 @@
  * This script tests the basic functionality of the adapter without requiring a test framework
  */
 
-import { YellowPagesCaAdapter } from '@/platforms/YellowPagesCaAdapter';
+import { YellowPagesCaAdapter } from '@/modules/platforms/YellowPagesCaAdapter';
 import { PlatformConfig, PlatformFeature } from '@/interfaces/IPlatformConfig';
 
 // Mock platform configuration for testing
@@ -104,7 +104,7 @@ function testYellowPagesCaAdapter(): void {
         console.log(`   ✓ Business List Selector: ${selectors.businessList}`);
         console.log(`   ✓ Business Name Selector: ${selectors.businessName}`);
         console.log(`   ✓ Phone Selector: ${selectors.phone}`);
-        console.log(`   ✓ Pagination Next Button: ${selectors.pagination?.nextButton}`);
+        console.log(`   ✓ Pagination Next Button: ${typeof selectors.pagination === 'object' && 'nextButton' in selectors.pagination ? selectors.pagination.nextButton : 'N/A'}`);
 
         // Test 7: Search URL building
         console.log('\n✅ Test 7: Testing search URL building...');

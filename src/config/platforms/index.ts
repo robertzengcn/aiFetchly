@@ -9,6 +9,16 @@ import { Platform_pagesjaunes_fr } from './pagesjaunes-fr';
 import { Platform_yelp_com } from './yelp-com';
 import { Platform_yellowpages_com } from './yellowpages-com';
 
+/**
+ * Platform configurations array
+ * 
+ * The new direct class loading approach provides:
+ * - Type safety: No more string-based dynamic imports
+ * - Better IDE support: Autocomplete, refactoring, and error checking
+ * - Compile-time validation: TypeScript catches errors at build time
+ * - Performance: No need for dynamic imports or string parsing
+ * - Easier testing: Direct instantiation in unit tests
+ */
 export const platforms: PlatformConfig[] = [
   Platform_192_com,
   Platform_yell_com,
@@ -31,6 +41,24 @@ export function getAllPlatforms(): PlatformConfig[] {
 export function getPlatformById(id: string): PlatformConfig | undefined {
   return platformsById[id];
 }
+
+/**
+ * Example usage of the new direct class loading approach:
+ * 
+ * ```typescript
+ * import { PlatformFactory } from '@/modules/PlatformFactory';
+ * import { Platform_192_com } from '@/config/platforms/192-com';
+ * 
+ * // Direct instantiation - no dynamic imports needed
+ * const adapter = PlatformFactory.createAdapter(Platform_192_com);
+ * 
+ * // Type-safe access to platform-specific methods
+ * if (adapter instanceof ComAdapter192) {
+ *   // TypeScript knows this is a ComAdapter192 instance
+ *   await adapter.searchBusinesses(['restaurant'], 'London');
+ * }
+ * ```
+ */
 
 
 

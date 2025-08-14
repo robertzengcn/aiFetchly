@@ -230,7 +230,7 @@ export class ExampleHybridAdapter implements IBasePlatformAdapter {
     
     private async configurationBasedPagination(page: Page, maxPages: number): Promise<void> {
         // Basic configuration-based pagination
-        if (this.config.selectors?.pagination?.nextButton) {
+        if (this.config.selectors?.pagination && typeof this.config.selectors.pagination === 'object' && 'nextButton' in this.config.selectors.pagination) {
             // Implementation for configuration-based pagination
         }
     }

@@ -1,10 +1,64 @@
 /**
  * Core platform configuration interface that defines the structure for platform configurations.
  * This interface supports configuration-only, class-based, and hybrid platform approaches.
+ * 
+ * @example
+ * ```typescript
+ * const yellowPagesConfig: PlatformConfig = {
+ *   id: 'yellowpages',
+ *   name: 'yellowpages',
+ *   display_name: 'Yellow Pages',
+ *   base_url: 'https://www.yellowpages.com',
+ *   country: 'US',
+ *   language: 'en',
+ *   is_active: true,
+ *   version: '1.0.0',
+ *   rate_limit: 1000,
+ *   delay_between_requests: 1000,
+ *   max_concurrent_requests: 1,
+ *   type: 'configuration',
+ *   selectors: {
+ *     // Business data extraction
+ *     businessList: '.result',
+ *     businessName: '.business-name',
+ *     phone: '.phone',
+ *     email: '.email',
+ *     website: '.website',
+ *     address: '.address',
+ *     address_city: '.city',
+ *     address_state: '.state',
+ *     address_zip: '.zip',
+ *     categories: '.categories',
+ *     rating: '.rating',
+ *     reviewCount: '.review-count',
+ *     
+ *     // Search form elements
+ *     searchForm: {
+ *       keywordInput: '#searchTerms',
+ *       locationInput: '#location',
+ *       searchButton: '.search-button',
+ *       formContainer: '.search-form'
+ *     },
+ *     
+ *     // Pagination navigation
+ *     pagination: {
+ *       nextButton: '.pagination .next',
+ *       previousButton: '.pagination .prev',
+ *       currentPage: '.pagination .current',
+ *       maxPages: '.pagination .total',
+ *       pageNumbers: '.pagination a[href*="page"]',
+ *       container: '.pagination'
+ *     }
+ *   }
+ * };
+ * ```
+ * 
  * @since 1.0.0
  * @author Yellow Pages Scraper Team
  */
-export interface PlatformConfig {
+import { BasePlatformAdapter } from '@/modules/BasePlatformAdapter';
+
+export interface PlatformConfig<T extends BasePlatformAdapter = BasePlatformAdapter> {
     /** Unique identifier for the platform */
     id: string;
     
@@ -52,8 +106,11 @@ export interface PlatformConfig {
     /** Class name for class-based platforms */
     class_name?: string;
     
-    /** Module path for class-based platforms */
+    /** Module path for class-based platforms (legacy support) */
     module_path?: string;
+    
+    /** Direct class reference for immediate instantiation (recommended) */
+    adapter_class?: new (config: PlatformConfig<T>) => T;
     
     /** Platform-specific settings */
     settings?: PlatformSettings;
@@ -73,6 +130,34 @@ export interface PlatformConfig {
 
 /**
  * Platform selectors for data extraction
+ * 
+ * @example
+ * ```typescript
+ * // Simple string selector
+ * businessName: '.business-name'
+ * 
+ * // Search form selectors
+ * searchForm: {
+ *   keywordInput: '#searchTerms',
+ *   locationInput: '#location', 
+ *   searchButton: '.search-button',
+ *   formContainer: '.search-form'
+ * }
+ * 
+ * // Pagination selectors
+ * pagination: {
+ *   nextButton: '.pagination .next',
+ *   currentPage: '.pagination .current',
+ *   maxPages: '.pagination .total'
+ * }
+ * 
+ * // Complex nested selectors
+ * hours: {
+ *   container: '.hours-container',
+ *   day: '.day-label',
+ *   time: '.time-range'
+ * }
+ * ```
  */
 export type SelectorValue =
     | string
@@ -83,6 +168,64 @@ export type SelectorValue =
           currentPage?: string;
           /** Selector for max pages indicator */
           maxPages?: string;
+      }
+    | {
+          /** Selector for keyword input field */
+          keywordInput?: string;
+          
+          /** Selector for location input field */
+          locationInput?: string;
+          
+          /** Selector for search button */
+          searchButton?: string;
+          
+          /** Selector for search form container */
+          formContainer?: string;
+          
+          /** Selector for category/industry dropdown (if applicable) */
+          categoryDropdown?: string;
+          
+          /** Selector for radius/distance dropdown (if applicable) */
+          radiusDropdown?: string;
+      }
+    | {
+          /** Selector for next button */
+          nextButton?: string;
+          /** Selector for current page indicator */
+          currentPage?: string;
+          /** Selector for max pages indicator */
+          maxPages?: string;
+          
+          /** Selector for previous button */
+          previousButton?: string;
+          
+          /** Selector for page number links */
+          pageNumbers?: string;
+          
+          /** Selector for pagination container */
+          container?: string;
+      }
+    | {
+          /** Selector for hours container */
+          container?: string;
+          /** Selector for day labels */
+          day?: string;
+          /** Selector for time ranges */
+          time?: string;
+          /** Selector for open/closed status */
+          status?: string;
+      }
+    | {
+          /** Selector for review container */
+          container?: string;
+          /** Selector for review text */
+          text?: string;
+          /** Selector for review author */
+          author?: string;
+          /** Selector for review date */
+          date?: string;
+          /** Selector for review rating */
+          rating?: string;
       };
 
 export interface PlatformSelectors {
@@ -152,17 +295,127 @@ export interface PlatformSelectors {
     /** Selector for specialties */
     specialties?: string;
 
-    /** Pagination selectors */
-    pagination?: {
-        /** Selector for next button */
-        nextButton?: string;
+    /** Selector for business logo/image */
+    logo?: string;
 
-        /** Selector for current page indicator */
-        currentPage?: string;
+    /** Selector for business photos */
+    photos?: string;
 
-        /** Selector for max pages indicator */
-        maxPages?: string;
+    /** Selector for map/location widget */
+    map?: string;
+
+    /** Selector for business status (open/closed) */
+    status?: string;
+
+    /** Selector for price range indicators */
+    priceRange?: string;
+
+    /** Selector for business certifications */
+    certifications?: string;
+
+    /** Selector for business licenses */
+    licenses?: string;
+
+    /** Selector for insurance information */
+    insurance?: string;
+
+    /** Selector for business associations */
+    associations?: string;
+
+    /** Selector for awards/recognition */
+    awards?: string;
+
+    /** Selector for business hours (detailed) */
+    hours?: {
+        /** Selector for hours container */
+        container?: string;
+        /** Selector for day labels */
+        day?: string;
+        /** Selector for time ranges */
+        time?: string;
+        /** Selector for open/closed status */
+        status?: string;
     };
+
+    /** Selector for business services */
+    services?: string;
+
+    /** Selector for business products */
+    products?: string;
+
+    /** Selector for business team/staff */
+    team?: string;
+
+    /** Selector for business testimonials */
+    testimonials?: string;
+
+    /** Selector for business reviews */
+    reviews?: {
+        /** Selector for review container */
+        container?: string;
+        /** Selector for review text */
+        text?: string;
+        /** Selector for review author */
+        author?: string;
+        /** Selector for review date */
+        date?: string;
+        /** Selector for review rating */
+        rating?: string;
+    };
+
+    /** Selector for business events */
+    events?: string;
+
+    /** Selector for business news/updates */
+    news?: string;
+
+    /** Selector for business blog */
+    blog?: string;
+
+    /** Selector for business gallery */
+    gallery?: string;
+
+    /** Selector for business videos */
+    videos?: string;
+
+    /** Selector for business contact form */
+    contactForm?: string;
+
+    /** Selector for business appointment booking */
+    appointmentBooking?: string;
+
+    /** Selector for business online ordering */
+    onlineOrdering?: string;
+
+    /** Selector for business payment options */
+    paymentOptions?: string;
+
+    /** Selector for business accessibility features */
+    accessibility?: string;
+
+    /** Selector for business parking information */
+    parking?: string;
+
+    /** Selector for business WiFi availability */
+    wifi?: string;
+
+    /** Selector for business pet policy */
+    petPolicy?: string;
+
+    /** Selector for business smoking policy */
+    smokingPolicy?: string;
+
+    /** Selector for business dress code */
+    dressCode?: string;
+
+    /** Selector for business age restrictions */
+    ageRestrictions?: string;
+
+    /** Search form selectors */
+    searchForm?: SelectorValue;
+
+    /** Pagination selectors */
+    pagination?: SelectorValue;
 
     /** Allow platform-specific extra selectors without weakening types */
     [key: string]: SelectorValue | undefined;

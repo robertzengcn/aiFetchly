@@ -1,4 +1,5 @@
 import { PlatformConfig, PlatformFeature } from '@/interfaces/IPlatformConfig';
+import { YellComAdapter } from '@/modules/platforms/YellComAdapter';
 
 export const Platform_yell_com: PlatformConfig = {
   id: 'yell-com',
@@ -6,12 +7,11 @@ export const Platform_yell_com: PlatformConfig = {
   display_name: 'Yell.com',
   base_url: 'https://www.yell.com',
   country: 'UK',
-  language: 'English',
+  language: 'en',
   is_active: true,
   version: '1.0.0',
   type: 'class',
-  class_name: 'YellComAdapter',
-  module_path: './platforms/YellComAdapter',
+  adapter_class: YellComAdapter, // Direct class reference
   documentation: 'https://docs.yellowpages-scraper.com/platforms/yell-com',
   maintainer: 'UK Platform Scraper Team',
   description:

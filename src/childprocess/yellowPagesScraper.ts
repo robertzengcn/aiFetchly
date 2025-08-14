@@ -1,12 +1,7 @@
 import { Page, Browser } from 'puppeteer';
 import puppeteer from 'puppeteer';
-import { YellowPagesTaskModel, YellowPagesTaskStatus } from "@/model/YellowPagesTask.model";
-import { YellowPagesResultModel } from "@/model/YellowPagesResult.model";
-import { PlatformRegistry } from "@/modules/PlatformRegistry";
-import { BaseModule } from "@/modules/baseModule";
-import { BrowserManager } from "@/modules/browserManager";
-import { AccountCookiesModule } from "@/modules/accountCookiesModule";
-import { MessageType } from '@/interfaces/IPCMessageProtocol';
+import { BrowserManager } from '@/modules/browserManager';
+//import { MessageType } from '@/interfaces/IPCMessageProtocol';
 
 interface ScrapingProgress {
     currentPage: number;
@@ -43,13 +38,75 @@ interface ScrapingResult {
     specialties?: string[];
 }
 
-export class YellowPagesScraperProcess extends BaseModule {
-    private taskId: number;
-    private taskModel: YellowPagesTaskModel;
-    private resultModel: YellowPagesResultModel;
-    private platformRegistry: PlatformRegistry;
-    private browserManager: BrowserManager;
-    private accountCookiesModule: AccountCookiesModule;
+interface TaskData {
+    taskId: number;
+    platform: string;
+    keywords: string[];
+    location: string;
+    max_pages: number;
+    delay_between_requests: number;
+    account_id?: number;
+    cookies?: any[];
+}
+
+interface PlatformInfo {
+    id: number;
+    name: string;
+    display_name: string;
+    base_url: string;
+    settings: {
+        searchUrlPattern?: string;
+    };
+    selectors: {
+        businessList: string;
+        businessName: string;
+        email?: string;
+        phone?: string;
+        website?: string;
+        address?: string;
+        address_city?: string;
+        address_state?: string;
+        address_zip?: string;
+        address_country?: string;
+        socialMedia?: string;
+        categories?: string;
+        businessHours?: string;
+        description?: string;
+        rating?: string;
+        reviewCount?: string;
+        faxNumber?: string;
+        contactPerson?: string;
+        yearEstablished?: string;
+        numberOfEmployees?: string;
+        paymentMethods?: string;
+        specialties?: string;
+        searchForm?: {
+            keywordInput?: string;
+            locationInput?: string;
+            searchButton?: string;
+            formContainer?: string;
+            categoryDropdown?: string;
+            radiusDropdown?: string;
+        };
+        pagination?: {
+            nextButton?: string;
+            currentPage?: string;
+            maxPages?: string;
+            previousButton?: string;
+            pageNumbers?: string;
+            container?: string;
+        };
+    };
+}
+
+/**
+ * Yellow Pages Scraper Process
+ * Handles the actual scraping logic without database operations
+ * Communicates results back to parent process via IPC
+ */
+export class YellowPagesScraperProcess {
+    private taskData: TaskData;
+    private platformInfo: PlatformInfo;
     private browser: Browser | null = null;
     private page: Page | null = null;
     private isRunning: boolean = false;
@@ -60,14 +117,9 @@ export class YellowPagesScraperProcess extends BaseModule {
     private onCompleteCallback?: (results: ScrapingResult[]) => void;
     private onErrorCallback?: (error: Error) => void;
 
-    constructor(taskId: number) {
-        super();
-        this.taskId = taskId;
-        this.taskModel = new YellowPagesTaskModel(this.dbpath);
-        this.resultModel = new YellowPagesResultModel(this.dbpath);
-        this.platformRegistry = new PlatformRegistry();
-        this.browserManager = new BrowserManager();
-        this.accountCookiesModule = new AccountCookiesModule();
+    constructor(taskData: TaskData, platformInfo: PlatformInfo) {
+        this.taskData = taskData;
+        this.platformInfo = platformInfo;
     }
 
     /**
@@ -96,49 +148,35 @@ export class YellowPagesScraperProcess extends BaseModule {
      */
     async start(): Promise<void> {
         try {
-            console.log(`Starting Yellow Pages scraping for task ${this.taskId}`);
+            console.log(`Starting Yellow Pages scraping for task ${this.taskData.taskId}`);
             
-            // Get task details
-            const task = await this.taskModel.getTaskById(this.taskId);
-            if (!task) {
-                throw new Error(`Task ${this.taskId} not found`);
-            }
-
-            // Get platform details from registry (id/name/display_name match)
-            const platform = this.platformRegistry
-              .getAllPlatforms()
-              .find(p => p.id === task.platform || p.name === task.platform || p.display_name === task.platform);
-            if (!platform) {
-                throw new Error(`Platform ${task.platform} not found`);
-            }
-
-            // Update task status to in-progress
-            await this.taskModel.updateTaskStatus(this.taskId, YellowPagesTaskStatus.InProgress);
             this.isRunning = true;
 
             // Initialize browser
             await this.initializeBrowser();
 
             // Apply cookies if account is specified
-            if (task.account_id) {
-                await this.applyCookies(task.account_id);
+            if (this.taskData.account_id && this.taskData.cookies) {
+                await this.applyCookies(this.taskData.cookies);
             }
 
             // Start scraping
-            await this.scrapeTask(task, platform);
+            const results = await this.scrapeTask();
 
-            // Update task status to completed
-            await this.taskModel.updateTaskStatus(this.taskId, YellowPagesTaskStatus.Completed);
-            await this.taskModel.updateTaskCompletion(this.taskId);
+            // Call completion callback
+            if (this.onCompleteCallback) {
+                this.onCompleteCallback(results);
+            }
 
-            console.log(`Completed Yellow Pages scraping for task ${this.taskId}`);
+            console.log(`Completed Yellow Pages scraping for task ${this.taskData.taskId}`);
 
         } catch (error) {
-            console.error(`Error in Yellow Pages scraping for task ${this.taskId}:`, error);
+            console.error(`Error in Yellow Pages scraping for task ${this.taskData.taskId}:`, error);
             
-            // Update task status to failed
-            await this.taskModel.updateTaskStatus(this.taskId, YellowPagesTaskStatus.Failed);
-            await this.taskModel.updateTaskErrorLog(this.taskId, error instanceof Error ? error.message : String(error));
+            // Call error callback
+            if (this.onErrorCallback) {
+                this.onErrorCallback(error instanceof Error ? error : new Error(String(error)));
+            }
             
             throw error;
         } finally {
@@ -150,7 +188,7 @@ export class YellowPagesScraperProcess extends BaseModule {
      * Stop the scraping process
      */
     async stop(): Promise<void> {
-        console.log(`Stopping Yellow Pages scraping for task ${this.taskId}`);
+        console.log(`Stopping Yellow Pages scraping for task ${this.taskData.taskId}`);
         this.isRunning = false;
         await this.cleanup();
     }
@@ -159,7 +197,7 @@ export class YellowPagesScraperProcess extends BaseModule {
      * Pause the scraping process
      */
     async pause(): Promise<void> {
-        console.log(`Pausing Yellow Pages scraping for task ${this.taskId}`);
+        console.log(`Pausing Yellow Pages scraping for task ${this.taskData.taskId}`);
         this.isPaused = true;
     }
 
@@ -167,7 +205,7 @@ export class YellowPagesScraperProcess extends BaseModule {
      * Resume the scraping process
      */
     async resume(): Promise<void> {
-        console.log(`Resuming Yellow Pages scraping for task ${this.taskId}`);
+        console.log(`Resuming Yellow Pages scraping for task ${this.taskData.taskId}`);
         this.isPaused = false;
     }
 
@@ -176,15 +214,12 @@ export class YellowPagesScraperProcess extends BaseModule {
      */
     private async initializeBrowser(): Promise<void> {
         try {
-            // Get browser information from BrowserManager
-            const browserInfo = await this.browserManager.getBrowserInfo();
-            const launchOptions = await this.browserManager.createLaunchOptions();
+            // Use BrowserManager to get proper launch options
+            const browserManager = new BrowserManager();
+            const launchOptions = await browserManager.createLaunchOptions();
             
-            // Launch browser using Puppeteer
-            this.browser = await puppeteer.launch({
-                ...launchOptions,
-                executablePath: browserInfo.executablePath
-            });
+            // Launch browser using Puppeteer with BrowserManager options
+            this.browser = await puppeteer.launch(launchOptions);
             
             if (!this.browser) {
                 throw new Error('Failed to create browser instance');
@@ -206,29 +241,18 @@ export class YellowPagesScraperProcess extends BaseModule {
     }
 
     /**
-     * Apply cookies from account to the browser page
+     * Apply cookies to the browser page
      */
-    private async applyCookies(accountId: number): Promise<void> {
+    private async applyCookies(cookies: any[]): Promise<void> {
         try {
             if (!this.page) {
                 throw new Error('Page is not initialized');
             }
 
-            console.log(`Applying cookies for account ${accountId}`);
+            console.log(`Applying ${cookies.length} cookies`);
 
-            // Get account cookies from the database
-            const accountCookies = await this.accountCookiesModule.getAccountCookies(accountId);
-            
-            if (!accountCookies || !accountCookies.cookies) {
-                console.log(`No cookies found for account ${accountId}`);
-                return;
-            }
-
-            // Parse cookies JSON
-            const cookies = JSON.parse(accountCookies.cookies);
-            
             if (!Array.isArray(cookies) || cookies.length === 0) {
-                console.log(`No valid cookies found for account ${accountId}`);
+                console.log('No valid cookies found');
                 return;
             }
 
@@ -256,10 +280,10 @@ export class YellowPagesScraperProcess extends BaseModule {
                 }
             }
 
-            console.log(`Successfully applied cookies for account ${accountId}`);
+            console.log('Successfully applied cookies');
 
         } catch (error) {
-            console.error(`Error applying cookies for account ${accountId}:`, error);
+            console.error('Error applying cookies:', error);
             // Don't throw error - cookies are optional
         }
     }
@@ -267,14 +291,13 @@ export class YellowPagesScraperProcess extends BaseModule {
     /**
      * Main scraping logic
      */
-    private async scrapeTask(task: any, platform: any): Promise<void> {
-        const keywords = JSON.parse(task.keywords);
-        const location = task.location;
-        const maxPages = task.max_pages;
-        const delayBetweenRequests = task.delay_between_requests;
+    private async scrapeTask(): Promise<ScrapingResult[]> {
+        const keywords = this.taskData.keywords;
+        const location = this.taskData.location;
+        const maxPages = this.taskData.max_pages;
+        const delayBetweenRequests = this.taskData.delay_between_requests;
 
-        //let currentPage = 1;
-        let totalResults = 0;
+        let totalResults: ScrapingResult[] = [];
 
         for (const keyword of keywords) {
             if (!this.isRunning) break;
@@ -290,34 +313,23 @@ export class YellowPagesScraperProcess extends BaseModule {
                 }
 
                 try {
-                    // Navigate to search page
-                    const searchUrl = this.buildSearchUrl(platform, keyword, location, pageNum);
-                    if (!this.page) {
-                        throw new Error('Page is not initialized');
-                    }
-                    await this.page.goto(searchUrl, { waitUntil: 'networkidle2' });
+                    // Navigate to search page using human-like interaction
+                    await this.navigateToSearchPage(keyword, location, pageNum);
 
                     // Extract business data
-                    const results = await this.extractBusinessData(platform);
+                    const results = await this.extractBusinessData();
                     
-                    // Save results
+                    // Add results to total
                     if (results.length > 0) {
-                        const resultIds = await this.resultModel.saveMultipleResults(
-                            results.map(result => ({
-                                ...result,
-                                task_id: this.taskId,
-                                platform: task.platform
-                            }))
-                        );
-                        totalResults += resultIds.length;
-                        console.log(`Saved ${resultIds.length} results from page ${pageNum}`);
+                        totalResults = totalResults.concat(results);
+                        console.log(`Found ${results.length} results from page ${pageNum}`);
                     }
 
                     // Report progress
                     const progress: ScrapingProgress = {
                         currentPage: pageNum,
                         totalPages: maxPages,
-                        resultsCount: totalResults,
+                        resultsCount: totalResults.length,
                         percentage: (pageNum / maxPages) * 100
                     };
                     this.reportProgress(progress);
@@ -333,14 +345,430 @@ export class YellowPagesScraperProcess extends BaseModule {
                 }
             }
         }
+
+        return totalResults;
     }
 
     /**
-     * Build search URL for the platform
+     * Navigate to search page using human-like interaction
      */
-    private buildSearchUrl(platform: any, keyword: string, location: string, pageNum: number): string {
-        const settings = platform.settings || {};
-        const searchUrlPattern = settings.searchUrlPattern || `${platform.base_url}/search`;
+    private async navigateToSearchPage(keyword: string, location: string, pageNum: number): Promise<void> {
+        if (!this.page) {
+            throw new Error('Page is not initialized');
+        }
+
+        try {
+            // Navigate to base URL first
+            console.log(`Navigating to base URL: ${this.platformInfo.base_url}`);
+            await this.page.goto(this.platformInfo.base_url, { 
+                waitUntil: 'networkidle2',
+                timeout: 30000 
+            });
+
+            // Wait for page to load completely
+            await this.sleep(2000);
+
+            // Check if platform has search form selectors defined
+            const hasSearchFormSelectors = this.platformInfo.selectors.searchForm && 
+                typeof this.platformInfo.selectors.searchForm === 'object' &&
+                'keywordInput' in this.platformInfo.selectors.searchForm;
+
+            if (hasSearchFormSelectors) {
+                // Use platform-defined search form selectors
+                console.log('Using platform-defined search form selectors');
+                await this.fillSearchFormWithPlatformSelectors(keyword, location);
+                
+                // Submit the form using platform selector
+                await this.submitSearchFormWithPlatformSelector();
+                
+                // Wait for search results to load
+                await this.page.waitForSelector(this.platformInfo.selectors.businessList, { 
+                    timeout: 15000 
+                });
+                
+                // Navigate to specific page if needed
+                if (pageNum > 1) {
+                    await this.navigateToPage(pageNum);
+                }
+            } else {
+                // Fallback to generic search form detection
+                console.log('No platform search form selectors found, using generic detection');
+                const searchForm = await this.findSearchForm();
+                if (searchForm) {
+                    // Fill in search form like a human would
+                    await this.fillSearchForm(keyword, location);
+                    
+                    // Submit the form
+                    await this.submitSearchForm();
+                    
+                    // Wait for search results to load
+                    await this.page.waitForSelector(this.platformInfo.selectors.businessList, { 
+                        timeout: 15000 
+                    });
+                    
+                    // Navigate to specific page if needed
+                    if (pageNum > 1) {
+                        await this.navigateToPage(pageNum);
+                    }
+                } else {
+                    // Fallback to URL-based navigation if no form found
+                    console.log('No search form found, using URL-based navigation');
+                    const searchUrl = this.buildFallbackSearchUrl(keyword, location, pageNum);
+                    await this.page.goto(searchUrl, { waitUntil: 'networkidle2' });
+                }
+            }
+
+            // Wait for content to settle
+            await this.sleep(1000);
+
+        } catch (error) {
+            console.error('Error navigating to search page:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Find search form on the page
+     */
+    private async findSearchForm(): Promise<boolean> {
+        if (!this.page) return false;
+
+        try {
+            // Common search form selectors
+            const formSelectors = [
+                'form[action*="search"]',
+                'form[action*="find"]',
+                'form[action*="lookup"]',
+                '.search-form',
+                '#search-form',
+                '[data-testid*="search"]',
+                'input[name*="search"]',
+                'input[name*="keyword"]',
+                'input[name*="q"]'
+            ];
+
+            for (const selector of formSelectors) {
+                const element = await this.page.$(selector);
+                if (element) {
+                    console.log(`Found search form with selector: ${selector}`);
+                    return true;
+                }
+            }
+
+            return false;
+        } catch (error) {
+            console.error('Error finding search form:', error);
+            return false;
+        }
+    }
+
+    /**
+     * Fill search form with keyword and location
+     */
+    private async fillSearchForm(keyword: string, location: string): Promise<void> {
+        if (!this.page) return;
+
+        try {
+            // Common input field selectors
+            const keywordSelectors = [
+                'input[name="q"]',
+                'input[name="keyword"]',
+                'input[name="search"]',
+                'input[name="query"]',
+                'input[placeholder*="search"]',
+                'input[placeholder*="keyword"]',
+                'input[type="text"]'
+            ];
+
+            const locationSelectors = [
+                'input[name="location"]',
+                'input[name="city"]',
+                'input[name="state"]',
+                'input[name="zip"]',
+                'input[name="address"]',
+                'input[placeholder*="location"]',
+                'input[placeholder*="city"]',
+                'input[placeholder*="zip"]'
+            ];
+
+            // Fill keyword field
+            let keywordField: any = null;
+            for (const selector of keywordSelectors) {
+                keywordField = await this.page.$(selector);
+                if (keywordField) {
+                    console.log(`Filling keyword field: ${selector}`);
+                    break;
+                }
+            }
+
+            if (keywordField) {
+                // Clear field first
+                await keywordField.click({ clickCount: 3 });
+                await keywordField.type(keyword, { delay: 100 }); // Human-like typing
+            }
+
+            // Fill location field if found
+            let locationField: any = null;
+            for (const selector of locationSelectors) {
+                locationField = await this.page.$(selector);
+                if (locationField) {
+                    console.log(`Filling location field: ${selector}`);
+                    break;
+                }
+            }
+
+            if (locationField) {
+                // Clear field first
+                await locationField.click({ clickCount: 3 });
+                await locationField.type(location, { delay: 100 }); // Human-like typing
+            }
+
+            // Wait a bit after filling forms
+            await this.sleep(500);
+
+        } catch (error) {
+            console.error('Error filling search form:', error);
+        }
+    }
+
+    /**
+     * Submit search form
+     */
+    private async submitSearchForm(): Promise<void> {
+        if (!this.page) return;
+
+        try {
+            // Common submit button selectors
+            const submitSelectors = [
+                'button[type="submit"]',
+                'input[type="submit"]',
+                'button:contains("Search")',
+                'button:contains("Find")',
+                'button:contains("Go")',
+                '.search-button',
+                '#search-button',
+                '[data-testid*="submit"]'
+            ];
+
+            let submitButton: any = null;
+            for (const selector of submitSelectors) {
+                submitButton = await this.page.$(selector);
+                if (submitButton) {
+                    console.log(`Found submit button: ${selector}`);
+                    break;
+                }
+            }
+
+            if (submitButton) {
+                // Click the submit button
+                await submitButton.click();
+                console.log('Submitted search form');
+            } else {
+                // Try pressing Enter key
+                await this.page.keyboard.press('Enter');
+                console.log('Submitted search form using Enter key');
+            }
+
+            // Wait for navigation
+            await this.page.waitForNavigation({ 
+                waitUntil: 'networkidle2',
+                timeout: 15000 
+            });
+
+        } catch (error) {
+            console.error('Error submitting search form:', error);
+        }
+    }
+
+    /**
+     * Fill search form using platform-defined selectors
+     */
+    private async fillSearchFormWithPlatformSelectors(keyword: string, location: string): Promise<void> {
+        if (!this.page || !this.platformInfo.selectors.searchForm) return;
+
+        try {
+            const searchForm = this.platformInfo.selectors.searchForm;
+            
+            // Fill keyword field if selector exists
+            if (searchForm.keywordInput) {
+                const keywordField = await this.page.$(searchForm.keywordInput);
+                if (keywordField) {
+                    console.log(`Filling keyword field with platform selector: ${searchForm.keywordInput}`);
+                    // Clear field first
+                    await keywordField.click({ clickCount: 3 });
+                    await keywordField.type(keyword, { delay: 100 }); // Human-like typing
+                } else {
+                    console.warn(`Keyword input field not found with selector: ${searchForm.keywordInput}`);
+                }
+            }
+
+            // Fill location field if selector exists
+            if (searchForm.locationInput) {
+                const locationField = await this.page.$(searchForm.locationInput);
+                if (locationField) {
+                    console.log(`Filling location field with platform selector: ${searchForm.locationInput}`);
+                    // Clear field first
+                    await locationField.click({ clickCount: 3 });
+                    await locationField.type(location, { delay: 100 }); // Human-like typing
+                } else {
+                    console.warn(`Location input field not found with selector: ${searchForm.locationInput}`);
+                }
+            }
+
+            // Wait a bit after filling forms
+            await this.sleep(500);
+
+        } catch (error) {
+            console.error('Error filling search form with platform selectors:', error);
+        }
+    }
+
+    /**
+     * Submit search form using platform-defined selector
+     */
+    private async submitSearchFormWithPlatformSelector(): Promise<void> {
+        if (!this.page || !this.platformInfo.selectors.searchForm) return;
+
+        try {
+            const searchForm = this.platformInfo.selectors.searchForm;
+            
+            if (searchForm.searchButton) {
+                const submitButton = await this.page.$(searchForm.searchButton);
+                if (submitButton) {
+                    console.log(`Submitting search form with platform selector: ${searchForm.searchButton}`);
+                    await submitButton.click();
+                } else {
+                    console.warn(`Search button not found with selector: ${searchForm.searchButton}`);
+                    // Fallback to Enter key
+                    await this.page.keyboard.press('Enter');
+                    console.log('Submitted search form using Enter key (fallback)');
+                }
+            } else {
+                // No search button selector, try Enter key
+                await this.page.keyboard.press('Enter');
+                console.log('Submitted search form using Enter key (no button selector)');
+            }
+
+            // Wait for navigation
+            await this.page.waitForNavigation({ 
+                waitUntil: 'networkidle2',
+                timeout: 15000 
+            });
+
+        } catch (error) {
+            console.error('Error submitting search form with platform selector:', error);
+        }
+    }
+
+    /**
+     * Navigate to specific page number
+     */
+    private async navigateToPage(pageNum: number): Promise<void> {
+        if (!this.page || pageNum <= 1) return;
+
+        try {
+            // Check if platform has pagination selectors defined
+            const hasPaginationSelectors = this.platformInfo.selectors.pagination && 
+                typeof this.platformInfo.selectors.pagination === 'object';
+
+            if (hasPaginationSelectors) {
+                // Use platform-defined pagination selectors
+                await this.navigateToPageWithPlatformSelectors(pageNum);
+            } else {
+                // Fallback to generic pagination detection
+                await this.navigateToPageWithGenericSelectors(pageNum);
+            }
+
+        } catch (error) {
+            console.error(`Error navigating to page ${pageNum}:`, error);
+        }
+    }
+
+    /**
+     * Navigate to page using platform-defined pagination selectors
+     */
+    private async navigateToPageWithPlatformSelectors(pageNum: number): Promise<void> {
+        if (!this.page || !this.platformInfo.selectors.pagination) return;
+
+        try {
+            const pagination = this.platformInfo.selectors.pagination;
+            
+            // Try to find page number link using platform selector
+            if (pagination.pageNumbers) {
+                const pageSelector = pagination.pageNumbers.replace('{page}', pageNum.toString());
+                const pageLink = await this.page.$(pageSelector);
+                
+                if (pageLink) {
+                    console.log(`Found page ${pageNum} link with platform selector: ${pageSelector}`);
+                    await pageLink.click();
+                    await this.page.waitForNavigation({ 
+                        waitUntil: 'networkidle2',
+                        timeout: 15000 
+                    });
+                    console.log(`Navigated to page ${pageNum} using platform selector`);
+                    return;
+                }
+            }
+
+            // Fallback to generic selectors if platform selector doesn't work
+            console.log('Platform pagination selector failed, falling back to generic selectors');
+            await this.navigateToPageWithGenericSelectors(pageNum);
+
+        } catch (error) {
+            console.error(`Error navigating to page ${pageNum} with platform selectors:`, error);
+            // Fallback to generic selectors
+            await this.navigateToPageWithGenericSelectors(pageNum);
+        }
+    }
+
+    /**
+     * Navigate to page using generic pagination selectors (fallback)
+     */
+    private async navigateToPageWithGenericSelectors(pageNum: number): Promise<void> {
+        if (!this.page) return;
+
+        try {
+            // Common pagination selectors
+            const paginationSelectors = [
+                `a[href*="page=${pageNum}"]`,
+                `a[href*="p=${pageNum}"]`,
+                `a[href*="pg=${pageNum}"]`,
+                `button[data-page="${pageNum}"]`,
+                `[data-testid="page-${pageNum}"]`,
+                `a:contains("${pageNum}")`
+            ];
+
+            let pageLink: any = null;
+            for (const selector of paginationSelectors) {
+                pageLink = await this.page.$(selector);
+                if (pageLink) {
+                    console.log(`Found page ${pageNum} link: ${selector}`);
+                    break;
+                }
+            }
+
+            if (pageLink) {
+                await pageLink.click();
+                await this.page.waitForNavigation({ 
+                    waitUntil: 'networkidle2',
+                    timeout: 15000 
+                });
+                console.log(`Navigated to page ${pageNum}`);
+            } else {
+                console.log(`Could not find page ${pageNum} link, staying on current page`);
+            }
+
+        } catch (error) {
+            console.error(`Error navigating to page ${pageNum} with generic selectors:`, error);
+        }
+    }
+
+    /**
+     * Build fallback search URL (used when form interaction fails)
+     */
+    private buildFallbackSearchUrl(keyword: string, location: string, pageNum: number): string {
+        const settings = this.platformInfo.settings || {};
+        const searchUrlPattern = settings.searchUrlPattern || `${this.platformInfo.base_url}/search`;
         
         let url = searchUrlPattern
             .replace('{keywords}', encodeURIComponent(keyword))
@@ -358,8 +786,8 @@ export class YellowPagesScraperProcess extends BaseModule {
     /**
      * Extract business data from the current page
      */
-    private async extractBusinessData(platform: any): Promise<ScrapingResult[]> {
-        const selectors = platform.selectors || {};
+    private async extractBusinessData(): Promise<ScrapingResult[]> {
+        const selectors = this.platformInfo.selectors;
         const results: ScrapingResult[] = [];
 
         try {
@@ -396,36 +824,36 @@ export class YellowPagesScraperProcess extends BaseModule {
     /**
      * Extract business data from a single element
      */
-    private async extractBusinessFromElement(element: any, selectors: any): Promise<ScrapingResult | null> {
+    private async extractBusinessFromElement(element: any, selectors: PlatformInfo['selectors']): Promise<ScrapingResult | null> {
         try {
             const business_name = await this.extractText(element, selectors.businessName);
             if (!business_name) return null;
 
             const result: ScrapingResult = {
                 business_name,
-                email: await this.extractText(element, selectors.email),
-                phone: await this.extractText(element, selectors.phone),
-                website: await this.extractAttribute(element, selectors.website, 'href'),
+                email: selectors.email ? await this.extractText(element, selectors.email) : undefined,
+                phone: selectors.phone ? await this.extractText(element, selectors.phone) : undefined,
+                website: selectors.website ? await this.extractAttribute(element, selectors.website, 'href') : undefined,
                 address: {
-                    street: await this.extractText(element, selectors.address),
-                    city: await this.extractText(element, selectors.address_city),
-                    state: await this.extractText(element, selectors.address_state),
-                    zip: await this.extractText(element, selectors.address_zip),
-                    country: await this.extractText(element, selectors.address_country)
+                    street: selectors.address ? await this.extractText(element, selectors.address) : undefined,
+                    city: selectors.address_city ? await this.extractText(element, selectors.address_city) : undefined,
+                    state: selectors.address_state ? await this.extractText(element, selectors.address_state) : undefined,
+                    zip: selectors.address_zip ? await this.extractText(element, selectors.address_zip) : undefined,
+                    country: selectors.address_country ? await this.extractText(element, selectors.address_country) : undefined
                 },
-                social_media: await this.extractArray(element, selectors.socialMedia),
-                categories: await this.extractArray(element, selectors.categories),
-                business_hours: await this.extractObject(element, selectors.businessHours),
-                description: await this.extractText(element, selectors.description),
-                rating: await this.extractNumber(element, selectors.rating),
-                review_count: await this.extractNumber(element, selectors.reviewCount),
+                social_media: selectors.socialMedia ? await this.extractArray(element, selectors.socialMedia) : undefined,
+                categories: selectors.categories ? await this.extractArray(element, selectors.categories) : undefined,
+                business_hours: selectors.businessHours ? await this.extractObject(element, selectors.businessHours) : undefined,
+                description: selectors.description ? await this.extractText(element, selectors.description) : undefined,
+                rating: selectors.rating ? await this.extractNumber(element, selectors.rating) : undefined,
+                review_count: selectors.reviewCount ? await this.extractNumber(element, selectors.reviewCount) : undefined,
                 raw_data: await this.extractRawData(element),
-                fax_number: await this.extractText(element, selectors.faxNumber),
-                contact_person: await this.extractText(element, selectors.contactPerson),
-                year_established: await this.extractNumber(element, selectors.yearEstablished),
-                number_of_employees: await this.extractText(element, selectors.numberOfEmployees),
-                payment_methods: await this.extractArray(element, selectors.paymentMethods),
-                specialties: await this.extractArray(element, selectors.specialties)
+                fax_number: selectors.faxNumber ? await this.extractText(element, selectors.faxNumber) : undefined,
+                contact_person: selectors.contactPerson ? await this.extractText(element, selectors.contactPerson) : undefined,
+                year_established: selectors.yearEstablished ? await this.extractNumber(element, selectors.yearEstablished) : undefined,
+                number_of_employees: selectors.numberOfEmployees ? await this.extractText(element, selectors.numberOfEmployees) : undefined,
+                payment_methods: selectors.paymentMethods ? await this.extractArray(element, selectors.paymentMethods) : undefined,
+                specialties: selectors.specialties ? await this.extractArray(element, selectors.specialties) : undefined
             };
 
             return result;
@@ -538,15 +966,11 @@ export class YellowPagesScraperProcess extends BaseModule {
     }
 
     /**
-     * Report progress to main process
+     * Report progress to parent process
      */
     private reportProgress(progress: ScrapingProgress): void {
-        if (process.send) {
-            process.send({
-                type: 'PROGRESS',
-                taskId: this.taskId,
-                progress
-            });
+        if (this.onProgressCallback) {
+            this.onProgressCallback(progress);
         }
     }
 
@@ -578,18 +1002,47 @@ export class YellowPagesScraperProcess extends BaseModule {
 
 // Handle process messages
 process.on('message', async (message: any) => {
-    if (message.type === 'START' && message.taskId) {
-        const scraper = new YellowPagesScraperProcess(message.taskId);
+    if (message.type === 'START' && message.taskData && message.platformInfo) {
+        const scraper = new YellowPagesScraperProcess(message.taskData, message.platformInfo);
+        
+        // Set up callbacks for IPC communication
+        scraper.onProgress((progress) => {
+            if (process.send) {
+                process.send({ 
+                    type: 'PROGRESS', 
+                    taskId: message.taskData.taskId, 
+                    progress 
+                });
+            }
+        });
+
+        scraper.onComplete((results) => {
+            if (process.send) {
+                process.send({ 
+                    type: 'COMPLETED', 
+                    taskId: message.taskData.taskId, 
+                    results 
+                });
+            }
+        });
+
+        scraper.onError((error) => {
+            if (process.send) {
+                process.send({ 
+                    type: 'ERROR', 
+                    taskId: message.taskData.taskId, 
+                    error: error.message 
+                });
+            }
+        });
+
         try {
             await scraper.start();
-            if (process.send) {
-                process.send({ type: 'COMPLETED', taskId: message.taskId });
-            }
         } catch (error) {
             if (process.send) {
                 process.send({ 
                     type: 'ERROR', 
-                    taskId: message.taskId, 
+                    taskId: message.taskData.taskId, 
                     error: error instanceof Error ? error.message : String(error)
                 });
             }
