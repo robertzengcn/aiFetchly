@@ -27,6 +27,7 @@ export type YellowPagesTaskUpdateFields = {
   account_id?: number;
   proxy_config?: string;
   delay_between_requests?: number;
+  headless?: boolean;
 }
 
 export class YellowPagesTaskModel extends BaseDb {
@@ -52,6 +53,7 @@ export class YellowPagesTaskModel extends BaseDb {
     account_id?: number;
     proxy_config?: string;
     delay_between_requests?: number;
+    headless?: boolean;
   }): Promise<number> {
     const taskEntity = new YellowPagesTaskEntity();
     taskEntity.name = taskData.name;
@@ -64,6 +66,7 @@ export class YellowPagesTaskModel extends BaseDb {
     taskEntity.account_id = taskData.account_id;
     taskEntity.proxy_config = taskData.proxy_config ? JSON.stringify(taskData.proxy_config) : undefined;
     taskEntity.delay_between_requests = taskData.delay_between_requests || 2000;
+    taskEntity.headless = taskData.headless !== undefined ? taskData.headless : true;
     
     const savedTask = await this.repository.save(taskEntity);
     return savedTask.id;

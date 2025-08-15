@@ -6,7 +6,7 @@ export const Platform_paginegialle_it: PlatformConfig = {
   display_name: 'PagineGialle.it',
   base_url: 'https://www.paginegialle.it',
   country: 'Italy',
-  language: 'Italian',
+  language: 'it',
   is_active: true,
   version: '1.0.0',
   type: 'configuration',
@@ -53,6 +53,7 @@ export const Platform_paginegialle_it: PlatformConfig = {
     lastUpdated: new Date('2024-01-15T10:30:00.000Z'),
     version: '1.0.0',
     category: 'business-directory',
+    priority: 'medium',
     tags: ['italy', 'business-directory', 'yellow-pages'],
     statistics: {
       totalBusinesses: 0,

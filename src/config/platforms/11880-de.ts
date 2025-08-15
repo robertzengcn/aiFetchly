@@ -6,7 +6,7 @@ export const Platform_11880_de: PlatformConfig = {
   display_name: '11880.com',
   base_url: 'https://www.11880.com',
   country: 'Germany',
-  language: 'German',
+  language: 'de',
   is_active: true,
   version: '1.0.0',
   type: 'configuration',
@@ -70,6 +70,7 @@ export const Platform_11880_de: PlatformConfig = {
     lastUpdated: new Date('2024-01-15T10:30:00.000Z'),
     version: '1.0.0',
     category: 'business-directory',
+    priority: 'medium',
     tags: ['germany', 'business-directory', 'yellow-pages', 'phase-3'],
     statistics: {
       totalBusinesses: 0,

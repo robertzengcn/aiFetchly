@@ -94,6 +94,7 @@ export class YellowPagesTaskModule extends BaseModule {
                 }
             }
             if (updates.delay_between_requests !== undefined) modelUpdates.delay_between_requests = updates.delay_between_requests;
+            if (updates.headless !== undefined) modelUpdates.headless = updates.headless;
 
             const success = await this.yellowPagesTaskModel.updateTask(id, modelUpdates);
             if (!success) {

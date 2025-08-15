@@ -165,16 +165,16 @@ export class PlatformRegistry extends BaseModule {
         }
 
         // Class-based platform validation
-        if (config.type === 'class' || config.type === 'hybrid') {
-            if (!config.class_name) {
-                errors.push('Class name is required for class-based platforms');
-                score -= 15;
-            }
-            if (!config.module_path) {
-                errors.push('Module path is required for class-based platforms');
-                score -= 15;
-            }
-        }
+        // if (config.type === 'class' || config.type === 'hybrid') {
+        //     if (!config.class_name) {
+        //         errors.push('Class name is required for class-based platforms');
+        //         score -= 15;
+        //     }
+        //     if (!config.module_path) {
+        //         errors.push('Module path is required for class-based platforms');
+        //         score -= 15;
+        //     }
+        // }
 
         // Optional field warnings
         if (!config.country) {

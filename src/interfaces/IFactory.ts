@@ -1,6 +1,7 @@
 import { IScraperEngine } from './IScraperEngine';
 import { IPlatformAdapter } from './IPlatformAdapter';
 import { IDataExtractor } from './IDataExtractor';
+import { PlatformSummary } from './IPlatformConfig';
 
 /**
  * Scraper factory interface that defines the contract for creating scraper engine instances.
@@ -115,9 +116,9 @@ export interface IPlatformFactory {
 
     /**
      * Get list of available platforms
-     * @returns Array of available platform names
+     * @returns Array of available platform summaries with id, name, and display_name
      */
-    getAvailablePlatforms(): string[];
+    getAvailablePlatforms(): PlatformSummary[];
 }
 
 /**

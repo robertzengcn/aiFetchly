@@ -1,4 +1,5 @@
 import { PlatformConfig, PlatformFeature } from '@/interfaces/IPlatformConfig';
+import { YellowPagesComAdapter } from '@/modules/platforms/YellowPagesComAdapter';
 
 export const Platform_yellowpages_com: PlatformConfig = {
   id: 'yellowpages-com',
@@ -6,12 +7,11 @@ export const Platform_yellowpages_com: PlatformConfig = {
   display_name: 'YellowPages.com',
   base_url: 'https://www.yellowpages.com',
   country: 'USA',
-  language: 'English',
+  language: 'en',
   is_active: true,
   version: '1.0.0',
   type: 'class',
-  class_name: 'YellowPagesComAdapter',
-  module_path: './platforms/YellowPagesComAdapter',
+  adapter_class: YellowPagesComAdapter, // Direct class reference
   description:
     'Platform adapter for YellowPages.com - the original online business directory for the United States',
   maintainer: 'Yellow Pages Scraper Team',

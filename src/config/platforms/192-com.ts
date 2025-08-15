@@ -17,6 +17,25 @@ export const Platform_192_com: PlatformConfig = {
     adapter_class: ComAdapter192, // Direct class reference
     description: 'UK business directory platform',
     maintainer: 'Platform Team',
+    selectors: {
+        businessList: 'div.business-result',
+        businessName: 'h3.business-name',
+        phone: 'span.business-phone',
+        email: 'a.business-email',
+        website: 'a.business-website',
+        address: 'span.business-address',
+        categories: 'span.business-category',
+        socialMedia: 'a.business-social',
+        rating: 'div.business-rating',
+        reviewCount: 'span.business-review-count',
+        businessHours: 'div.business-hours',
+        description: 'div.business-description',
+        pagination: {
+            nextButton: 'a.pagination-next',
+            currentPage: '.pagination-current',
+            maxPages: '.pagination-last',
+        },
+    },
     settings: {
         requiresAuthentication: false,
         supportsProxy: true,

@@ -1,5 +1,5 @@
 import { Page } from 'puppeteer';
-import { PlatformConfig, PlatformSelectors, PlatformSettings } from './IPlatformConfig';
+import { PlatformConfig, PlatformSelectors, PlatformSettings, PlatformSummary } from './IPlatformConfig';
 import { BusinessData, Address } from './IDataExtractor';
 
 /**
@@ -232,4 +232,10 @@ export interface IPlatformAdapterFactory {
      * @returns True if adapter exists
      */
     hasAdapter(platformName: string): boolean;
+    
+    /**
+     * Get available platforms with basic information
+     * @returns Array of platform summaries with id, name, and display_name
+     */
+    getAvailablePlatforms(): PlatformSummary[];
 } 

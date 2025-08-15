@@ -1,7 +1,7 @@
 import { BaseModule } from '@/modules/baseModule';
 import { PlatformRegistry } from '@/modules/PlatformRegistry';
 import { IBasePlatformAdapter, IPlatformAdapterFactory } from '@/interfaces/IBasePlatformAdapter';
-import { PlatformConfig } from '@/interfaces/IPlatformConfig';
+import { PlatformConfig, PlatformSummary } from '@/interfaces/IPlatformConfig';
 
 /**
  * Platform Adapter Factory - Creates platform adapters based on configuration
@@ -116,8 +116,16 @@ export class PlatformAdapterFactory extends BaseModule implements IPlatformAdapt
     /**
      * Get available platforms
      */
-    getAvailablePlatforms(): string[] {
-        return this.platformRegistry.getAllPlatforms().map(p => p.id);
+    getAvailablePlatforms(): PlatformSummary[] {
+        return this.platformRegistry.getAllPlatforms().map(p => ({
+            id: p.id,
+            name: p.name,
+            display_name: p.display_name,
+            country: p.country,
+            language: p.language,
+            rate_limit: p.rate_limit,
+            is_active: p.is_active
+        }));
     }
 
     /**

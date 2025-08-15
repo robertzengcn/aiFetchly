@@ -16,7 +16,7 @@
           <div>
             <div class="font-weight-medium">{{ item.name }}</div>
             <div class="text-caption text-medium-emphasis">
-              {{ (item.keywords || []).join(', ') }} in {{ item.location || 'Unknown' }}
+              Platform: {{ item.platform }}
             </div>
           </div>
         </div>
@@ -38,25 +38,25 @@
       <template v-slot:item.progress="{ item }">
         <div class="d-flex align-center">
           <v-progress-linear
-            :model-value="item.progress || 0"
+            :model-value="item.progress_percentage || 0"
             :color="getProgressColor(item.status)"
             height="8"
             rounded
             class="mr-2"
             style="width: 60px"
           ></v-progress-linear>
-          <span class="text-caption">{{ item.progress || 0 }}%</span>
+          <span class="text-caption">{{ item.progress_percentage || 0 }}%</span>
         </div>
       </template>
 
       <!-- Priority Column -->
       <template v-slot:item.priority="{ item }">
         <v-chip
-          :color="getPriorityColor(item.priority)"
+          color="grey"
           size="small"
           variant="outlined"
         >
-          {{ item.priority }}
+          N/A
         </v-chip>
       </template>
 
@@ -78,7 +78,7 @@
       <!-- Updated Date Column -->
       <template v-slot:item.updated_at="{ item }">
         <div class="text-caption">
-          {{ formatDate(item.updated_at) }}
+          {{ formatDate(item.created_at) }}
         </div>
       </template>
 
@@ -97,7 +97,7 @@
 
           <!-- Start/Stop Button -->
           <v-btn
-            v-if="item.status === 'pending' || item.status === 'paused'"
+            v-if="item.status === TaskStatus.Pending || item.status === TaskStatus.Paused"
             icon="mdi-play"
             size="small"
             variant="text"
@@ -107,7 +107,7 @@
           ></v-btn>
 
           <v-btn
-            v-if="item.status === 'running'"
+            v-if="item.status === TaskStatus.InProgress"
             icon="mdi-stop"
             size="small"
             variant="text"
@@ -118,7 +118,7 @@
 
           <!-- Pause/Resume Button -->
           <v-btn
-            v-if="item.status === 'running'"
+            v-if="item.status === TaskStatus.InProgress"
             icon="mdi-pause"
             size="small"
             variant="text"
@@ -128,7 +128,7 @@
           ></v-btn>
 
           <v-btn
-            v-if="item.status === 'paused'"
+            v-if="item.status === TaskStatus.Paused"
             icon="mdi-play"
             size="small"
             variant="text"
@@ -139,7 +139,7 @@
 
           <!-- View Results -->
           <v-btn
-            v-if="item.status === 'completed'"
+            v-if="item.status === TaskStatus.Completed"
             icon="mdi-chart-bar"
             size="small"
             variant="text"
@@ -173,26 +173,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
-
-// Task interface
-interface Task {
-  id: string | number
-  name: string
-  platform: string
-  keywords?: string[]
-  location?: string
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'paused'
-  progress: number
-  priority: 'high' | 'medium' | 'low'
-  results_count: number
-  created_at: string
-  updated_at: string
-}
+import { ref, computed } from 'vue'
+import { TaskSummary, TaskStatus } from '@/interfaces/ITaskManager'
 
 // Props
 interface Props {
-  tasks: Task[]
+  tasks: TaskSummary[]
   loading: boolean
 }
 
@@ -200,14 +186,14 @@ const props = defineProps<Props>()
 
 // Emits
 const emit = defineEmits<{
-  edit: [task: Task]
-  delete: [task: Task]
-  start: [task: Task]
-  stop: [task: Task]
-  pause: [task: Task]
-  resume: [task: Task]
-  'view-results': [task: Task]
-  'view-details': [task: Task]
+  edit: [task: TaskSummary]
+  delete: [task: TaskSummary]
+  start: [task: TaskSummary]
+  stop: [task: TaskSummary]
+  pause: [task: TaskSummary]
+  resume: [task: TaskSummary]
+  'view-results': [task: TaskSummary]
+  'view-details': [task: TaskSummary]
 }>()
 
 // Table headers
@@ -244,47 +230,47 @@ const getPlatformIcon = (platform?: string) => {
   return icons[platform] || 'mdi-web'
 }
 
-const getStatusColor = (status?: string) => {
+const getStatusColor = (status?: TaskStatus) => {
   if (!status) return 'grey'
   const colors = {
-    pending: 'warning',
-    running: 'info',
-    completed: 'success',
-    failed: 'error',
-    paused: 'orange'
+    [TaskStatus.Pending]: 'warning',
+    [TaskStatus.InProgress]: 'info',
+    [TaskStatus.Completed]: 'success',
+    [TaskStatus.Failed]: 'error',
+    [TaskStatus.Paused]: 'orange'
   }
   return colors[status] || 'grey'
 }
 
-const getStatusIcon = (status?: string) => {
+const getStatusIcon = (status?: TaskStatus) => {
   if (!status) return 'mdi-help-circle'
   const icons = {
-    pending: 'mdi-clock-outline',
-    running: 'mdi-play-circle',
-    completed: 'mdi-check-circle',
-    failed: 'mdi-alert-circle',
-    paused: 'mdi-pause-circle'
+    [TaskStatus.Pending]: 'mdi-clock-outline',
+    [TaskStatus.InProgress]: 'mdi-play-circle',
+    [TaskStatus.Completed]: 'mdi-check-circle',
+    [TaskStatus.Failed]: 'mdi-alert-circle',
+    [TaskStatus.Paused]: 'mdi-pause-circle'
   }
   return icons[status] || 'mdi-help-circle'
 }
 
-const getStatusText = (status?: string) => {
+const getStatusText = (status?: TaskStatus) => {
   if (!status) return 'Unknown'
   const texts = {
-    pending: 'Pending',
-    running: 'Running',
-    completed: 'Completed',
-    failed: 'Failed',
-    paused: 'Paused'
+    [TaskStatus.Pending]: 'Pending',
+    [TaskStatus.InProgress]: 'Running',
+    [TaskStatus.Completed]: 'Completed',
+    [TaskStatus.Failed]: 'Failed',
+    [TaskStatus.Paused]: 'Paused'
   }
   return texts[status] || status
 }
 
-const getProgressColor = (status?: string) => {
+const getProgressColor = (status?: TaskStatus) => {
   if (!status) return 'warning'
-  if (status === 'failed') return 'error'
-  if (status === 'completed') return 'success'
-  if (status === 'running') return 'info'
+  if (status === TaskStatus.Failed) return 'error'
+  if (status === TaskStatus.Completed) return 'success'
+  if (status === TaskStatus.InProgress) return 'info'
   return 'warning'
 }
 
@@ -298,13 +284,12 @@ const getPriorityColor = (priority?: string) => {
   return colors[priority] || 'grey'
 }
 
-const formatDate = (dateString?: string) => {
-  if (!dateString) return 'Unknown'
+const formatDate = (date: Date | string) => {
+  if (!date) return 'N/A'
   try {
-    const date = new Date(dateString)
-    if (isNaN(date.getTime())) return 'Invalid Date'
-    return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-  } catch (error) {
+    const dateObj = typeof date === 'string' ? new Date(date) : date
+    return dateObj.toLocaleDateString()
+  } catch {
     return 'Invalid Date'
   }
 }

@@ -84,6 +84,8 @@ export default {
     concurrency_hint:"Number of concurrent scraping processes",
     delay_between_requests:"Delay Between Requests (ms)",
     delay_hint:"Delay between requests to avoid rate limiting",
+    headless_mode:"Run in Headless Mode",
+    headless_mode_hint:"When enabled, browser runs without visible UI (faster, less resource usage)",
     account_optional:"Account (Optional)",
     account_placeholder:"Select an account for authentication",
     account_hint:"Use an account for authenticated scraping",

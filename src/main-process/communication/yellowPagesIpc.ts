@@ -27,6 +27,7 @@ import {
     TaskProgress, 
     YellowPagesResult 
 } from '@/interfaces/ITaskManager';
+import { PlatformSummary } from '@/interfaces/IPlatformConfig';
 
 export function registerYellowPagesIpcHandlers(): void {
     console.log("Yellow Pages IPC handlers registered");
@@ -350,12 +351,12 @@ export function registerYellowPagesIpcHandlers(): void {
         }
     });
 
-    ipcMain.handle(YELLOW_PAGES_PLATFORMS, async (event): Promise<CommonMessage<any[] | null>> => {
+    ipcMain.handle(YELLOW_PAGES_PLATFORMS, async (event): Promise<CommonMessage<PlatformSummary[] | null>> => {
         try {
             const yellowPagesCtrl = new YellowPagesController();
             const platforms = await yellowPagesCtrl.getAvailablePlatforms();
             
-            const response: CommonMessage<any[]> = {
+            const response: CommonMessage<PlatformSummary[]> = {
                 status: true,
                 msg: "yellow_pages.platforms_retrieved_successfully",
                 data: platforms

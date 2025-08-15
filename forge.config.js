@@ -329,7 +329,7 @@ module.exports={
             config: 'vite.taskCode.config.mjs'
           },
           {
-            entry: 'src/yellowPages.ts',
+            entry: 'src/childprocess/yellowPagesScraper.ts',
             config: 'vite.yellowPages.config.mjs'
           },
           // {

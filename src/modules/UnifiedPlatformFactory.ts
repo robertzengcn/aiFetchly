@@ -1,4 +1,4 @@
-import { PlatformConfig, PlatformType } from '@/interfaces/IPlatformConfig';
+import { PlatformConfig, PlatformType, PlatformSummary } from '@/interfaces/IPlatformConfig';
 import { IBasePlatformAdapter, IPlatformAdapterFactory } from '@/interfaces/IBasePlatformAdapter';
 import { PlatformRegistry } from '@/modules/PlatformRegistry';
 import { BaseModule } from '@/modules/baseModule';
@@ -302,6 +302,22 @@ export class UnifiedPlatformFactory extends BaseModule implements IPlatformAdapt
      */
     getSupportedPlatforms(): string[] {
         return Array.from(this.platformAdapters.keys());
+    }
+
+    /**
+     * Get available platforms with basic information
+     * @returns Array of platform summaries with id, name, and display_name
+     */
+    getAvailablePlatforms(): PlatformSummary[] {
+        return this.platformRegistry.getAllPlatforms().map(p => ({
+            id: p.id,
+            name: p.name,
+            display_name: p.display_name,
+            country: p.country,
+            language: p.language,
+            rate_limit: p.rate_limit,
+            is_active: p.is_active
+        }));
     }
 
     /**

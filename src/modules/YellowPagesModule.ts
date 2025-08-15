@@ -73,12 +73,10 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
                 location: taskData.location,
                 max_pages: taskData.max_pages || 1,
                 concurrency: taskData.concurrency || 1,
-
                 account_id: taskData.account_id,
                 proxy_config: taskData.proxy_config ? JSON.stringify(taskData.proxy_config) : undefined,
                 delay_between_requests: taskData.delay_between_requests || 2000,
-
-
+                headless: taskData.headless !== undefined ? taskData.headless : true
             });
 
             console.log(`Created Yellow Pages task with ID: ${taskId}`);
@@ -485,6 +483,11 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
 
         if (taskData.delay_between_requests && taskData.delay_between_requests < 0) {
             throw new Error('Delay between requests cannot be negative');
+        }
+
+        // Validate headless parameter if provided
+        if (taskData.headless !== undefined && typeof taskData.headless !== 'boolean') {
+            throw new Error('Headless parameter must be a boolean value');
         }
     }
 }

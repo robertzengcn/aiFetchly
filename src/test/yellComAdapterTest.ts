@@ -4,7 +4,7 @@
  */
 
 import { PlatformAdapterFactory } from '@/modules/PlatformAdapterFactory';
-import { YellComAdapter } from '@/platforms/YellComAdapter';
+import { YellComAdapter } from '@/modules/platforms/YellComAdapter';
 import { PlatformConfig } from '@/interfaces/IPlatformConfig';
 
 export class YellComAdapterTest {

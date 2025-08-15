@@ -129,6 +129,32 @@ export interface PlatformConfig<T extends BasePlatformAdapter = BasePlatformAdap
 }
 
 /**
+ * Simplified platform data for listing available platforms
+ */
+export interface PlatformSummary {
+    /** Unique identifier for the platform */
+    id: string;
+    
+    /** Display name for the platform */
+    name: string;
+    
+    /** Human-readable display name */
+    display_name: string;
+    
+    /** Country where the platform operates */
+    country: string;
+    
+    /** Language used by the platform */
+    language: string;
+    
+    /** Rate limiting configuration (requests per hour) */
+    rate_limit: number;
+    
+    /** Whether the platform is active */
+    is_active: boolean;
+}
+
+/**
  * Platform selectors for data extraction
  * 
  * @example

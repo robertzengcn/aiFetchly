@@ -47,4 +47,7 @@ export class YellowPagesTaskEntity extends AuditableEntity {
 
     @Column("integer", { nullable: false, default: 2000 })
     delay_between_requests: number; // milliseconds
+
+    @Column("boolean", { nullable: true, default: true })
+    headless?: boolean; // Whether to run Puppeteer in headless mode
 } 

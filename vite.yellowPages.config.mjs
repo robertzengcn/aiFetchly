@@ -58,14 +58,14 @@ export default ({ mode }) => {
         },
         build: {
             rollupOptions: {
-                input: {
-                    yellowPagesScraper: path.resolve(__dirname, 'src/childprocess/yellowPagesScraper.ts')
-                },
-                output: {
-                    dir: 'dist/childprocess',
-                    entryFileNames: 'yellowPagesScraper.js',
-                    format: 'cjs'
-                },
+                // input: {
+                //     yellowPagesScraper: path.resolve(__dirname, 'src/childprocess/yellowPagesScraper.ts')
+                // },
+                // output: {
+                //     dir: 'dist/childprocess',
+                //     entryFileNames: 'yellowPagesScraper.js',
+                //     format: 'cjs'
+                // },
                 external: [
                     'sqlite3',
                     'better-sqlite3',

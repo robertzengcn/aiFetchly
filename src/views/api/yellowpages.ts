@@ -28,7 +28,8 @@ import {
     TaskProgress, 
     YellowPagesResult 
 } from '@/interfaces/ITaskManager'
-import { PlatformConfig } from '@/interfaces/IPlatformConfig'
+// import { PlatformConfig } from '@/interfaces/IPlatformConfig'
+import { PlatformSummary } from '@/interfaces/IPlatformConfig';
 
 // Task Management
 export async function createYellowPagesTask(taskData: YellowPagesTaskData): Promise<number | null> {
@@ -179,13 +180,14 @@ export async function getYellowPagesHealthStatus(): Promise<any | null> {
     return resp
 }
 
-export async function getYellowPagesPlatforms(): Promise<PlatformConfig[] | null> {
+export async function getYellowPagesPlatforms(): Promise<PlatformSummary[] | null> {
     const resp = await windowInvoke(YELLOW_PAGES_PLATFORMS)
     
     if (!resp) {
         throw new Error("Unknown error")
     }
-    
+    console.log("getYellowPagesPlatforms")
+    console.log(resp)
     return resp
 }
 

@@ -235,24 +235,12 @@ import { useI18n } from 'vue-i18n'
 import YellowPagesTaskTable from './components/YellowPagesTaskTable.vue'
 import TaskDetailsView from './components/TaskDetailsView.vue'
 import { getYellowPagesTaskList, getYellowPagesPlatforms } from '@/views/api/yellowpages'
-import { TaskStatus } from '@/interfaces/ITaskManager'
-import { PlatformConfig } from '@/interfaces/IPlatformConfig'
+import { TaskStatus, TaskSummary } from '@/interfaces/ITaskManager'
+import { PlatformSummary } from '@/interfaces/IPlatformConfig'
 
 // Router and i18n
 const router = useRouter()
 const { t } = useI18n()
-
-// Define task type - using TaskSummary interface from API
-interface Task {
-  id: number
-  name: string
-  platform: string
-  status: TaskStatus
-  created_at: Date
-  completed_at?: Date
-  results_count?: number
-  progress_percentage?: number
-}
 
 // Reactive data
 const loading = ref(false)
@@ -263,8 +251,8 @@ const priorityFilter = ref('')
 const currentPage = ref(0)
 const pageSize = ref(10)
 const total = ref(0)
-const tasks = ref<Task[]>([])
-const platforms = ref<PlatformConfig[]>([])
+const tasks = ref<TaskSummary[]>([])
+const platforms = ref<PlatformSummary[]>([])
 
 // Task statistics
 const taskStats = reactive({

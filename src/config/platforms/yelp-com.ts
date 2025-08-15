@@ -1,4 +1,5 @@
-import { PlatformConfig } from '@/interfaces/IPlatformConfig';
+import { PlatformConfig, PlatformFeature } from '@/interfaces/IPlatformConfig';
+import { YelpComAdapter } from '@/modules/platforms/YelpComAdapter';
 
 export const Platform_yelp_com: PlatformConfig = {
   id: 'yelp-com',
@@ -6,12 +7,11 @@ export const Platform_yelp_com: PlatformConfig = {
   display_name: 'Yelp.com',
   base_url: 'https://www.yelp.com',
   country: 'USA',
-  language: 'English',
+  language: 'en',
   is_active: true,
   version: '1.0.0',
   type: 'class',
-  class_name: 'YelpComAdapter',
-  module_path: './platforms/YelpComAdapter',
+  adapter_class: YelpComAdapter, // Direct class reference
   documentation: 'https://www.yelp.com/developers',
   maintainer: 'AI Agent',
 
@@ -48,6 +48,14 @@ export const Platform_yelp_com: PlatformConfig = {
       'https://www.yelp.com/search?find_desc={keywords}&find_loc={location}&start={offset}',
     resultUrlPattern: 'https://www.yelp.com{businessPath}',
     paginationOffset: 10,
+    supportedFeatures: [
+      PlatformFeature.SEARCH,
+      PlatformFeature.PAGINATION,
+      PlatformFeature.DETAILED_EXTRACTION,
+      PlatformFeature.RATINGS,
+      PlatformFeature.REVIEWS,
+      PlatformFeature.PHOTOS,
+    ],
   },
 
   description:
@@ -55,6 +63,9 @@ export const Platform_yelp_com: PlatformConfig = {
   metadata: {
     lastUpdated: new Date('2024-07-30T12:00:00Z'),
     version: '1.0.0',
+    category: 'business_reviews',
+    priority: 'high',
+    tags: ['usa', 'business-reviews', 'ratings', 'local-search'],
   },
 };
 

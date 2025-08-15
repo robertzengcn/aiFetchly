@@ -142,6 +142,20 @@
                 </v-col>
               </v-row>
 
+              <!-- Browser Settings -->
+              <v-row>
+                <v-col cols="12" md="6">
+                  <v-switch
+                    v-model="taskForm.headless"
+                    :label="$t('home.headless_mode')"
+                    color="primary"
+                    hide-details
+                    :hint="$t('home.headless_mode_hint')"
+                    persistent-hint
+                  />
+                </v-col>
+              </v-row>
+
               <!-- Account Selection -->
               <v-row>
                 <v-col cols="12" md="6">
@@ -400,6 +414,10 @@
                 <span class="font-weight-medium">{{ $t('home.concurrency') }}:</span>
                 <span>{{ taskForm.concurrency || 'Not set' }}</span>
               </div>
+              <div class="d-flex justify-space-between mb-2">
+                <span class="font-weight-medium">{{ $t('home.headless_mode') }}:</span>
+                <span>{{ taskForm.headless ? 'Enabled' : 'Disabled' }}</span>
+              </div>
             </div>
           </v-card-text>
         </v-card>
@@ -555,7 +573,7 @@ import {
   startYellowPagesTask, 
   getYellowPagesPlatforms 
 } from '@/views/api/yellowpages'
-import { PlatformConfig } from '@/interfaces/IPlatformConfig'
+import { PlatformSummary } from '@/interfaces/IPlatformConfig'
 import AccountSelectedTable from '@/views/pages/socialaccount/widgets/AccountSelectedTable.vue'
 import { SocialAccountListData } from '@/entityTypes/socialaccount-type'
 import ProxyTableselected from '@/views/pages/proxy/widgets/ProxySelectedTable.vue'
@@ -584,6 +602,7 @@ const taskForm = reactive({
   max_pages: 10,
   concurrency: 2,
   delay_between_requests: 2000,
+  headless: true,
   account_id: undefined as number | undefined,
   proxy_config: undefined as any,
   scheduled_at: undefined as Date | undefined
@@ -644,8 +663,8 @@ const minDateTime = computed(() => {
 // })
 
 // Platform data
-const platforms = ref<PlatformConfig[]>([])
-const selectedPlatform = computed((): PlatformConfig | undefined => {
+const platforms = ref<PlatformSummary[]>([])
+const selectedPlatform = computed((): PlatformSummary | undefined => {
   return platforms.value.find(p => p.name === taskForm.platform)
 })
 
@@ -667,7 +686,7 @@ const showSuccessNotification = ref(false)
 
 // Options
 const platformOptions = computed(() => {
-  return platforms.value.map((p: PlatformConfig) => ({
+  return platforms.value.map((p: PlatformSummary) => ({
     title: p.display_name,
     value: p.name
   }))

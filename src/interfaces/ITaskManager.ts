@@ -110,6 +110,7 @@ export interface YellowPagesTaskData {
     account_id?: number;
     proxy_config?: object;
     delay_between_requests?: number;
+    headless?: boolean;
     scheduled_at?: Date;
 }
 
@@ -187,6 +188,7 @@ export interface YellowPagesTask {
     account_id?: number;
     proxy_config?: object;
     delay_between_requests: number;
+    headless?: boolean;
 }
 
 /**

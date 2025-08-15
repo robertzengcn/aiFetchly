@@ -15,6 +15,7 @@ import {
     YellowPagesTask, 
     YellowPagesResult 
 } from "@/interfaces/ITaskManager";
+import { PlatformSummary } from "@/interfaces/IPlatformConfig";
 
 /**
  * Yellow Pages Controller
@@ -397,12 +398,20 @@ export class YellowPagesController {
 
     /**
      * Get available platforms
-     * @returns Promise resolving to array of available platforms
+     * @returns Promise resolving to array of available platform summaries
      */
-    async getAvailablePlatforms(): Promise<any[]> {
+    async getAvailablePlatforms(): Promise<PlatformSummary[]> {
         try {
             const platforms = await this.platformModule.getAllPlatforms();
-            return platforms;
+            return platforms.map(p => ({
+                id: p.id,
+                name: p.name,
+                display_name: p.display_name,
+                country: p.country,
+                language: p.language,
+                rate_limit: p.rate_limit,
+                is_active: p.is_active
+            }));
         } catch (error) {
             console.error('Failed to get available platforms:', error);
             throw error;
@@ -486,6 +495,11 @@ export class YellowPagesController {
         if (taskData.delay_between_requests && taskData.delay_between_requests < 0) {
             throw new Error('Delay between requests cannot be negative');
         }
+
+        // Validate headless parameter if provided
+        if (taskData.headless !== undefined && typeof taskData.headless !== 'boolean') {
+            throw new Error('Headless parameter must be a boolean value');
+        }
     }
 
     /**
@@ -511,7 +525,8 @@ export class YellowPagesController {
             run_log: task.run_log,
             account_id: task.account_id,
             proxy_config: task.proxy_config ? JSON.parse(task.proxy_config) : undefined,
-            delay_between_requests: task.delay_between_requests
+            delay_between_requests: task.delay_between_requests,
+            headless: task.headless !== undefined ? task.headless : true
         };
     }
 
@@ -533,6 +548,7 @@ export class YellowPagesController {
         if (updates.delay_between_requests !== undefined) entityUpdates.delay_between_requests = updates.delay_between_requests;
         if (updates.account_id !== undefined) entityUpdates.account_id = updates.account_id;
         if (updates.proxy_config !== undefined) entityUpdates.proxy_config = updates.proxy_config ? JSON.stringify(updates.proxy_config) : null;
+        if (updates.headless !== undefined) entityUpdates.headless = updates.headless;
         if (updates.scheduled_at !== undefined) entityUpdates.scheduled_at = updates.scheduled_at;
         if (updates.completed_at !== undefined) entityUpdates.completed_at = updates.completed_at;
         if (updates.error_log !== undefined) entityUpdates.error_log = updates.error_log;

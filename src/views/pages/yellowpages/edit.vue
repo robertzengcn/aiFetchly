@@ -154,6 +154,20 @@
                 </v-col>
               </v-row>
 
+              <!-- Browser Settings -->
+              <v-row>
+                <v-col cols="12" md="6">
+                  <v-switch
+                    v-model="taskForm.headless"
+                    label="Run in Headless Mode"
+                    color="primary"
+                    hide-details
+                    hint="When enabled, browser runs without visible UI (faster, less resource usage)"
+                    persistent-hint
+                  />
+                </v-col>
+              </v-row>
+
               <!-- Account Selection -->
               <v-row>
                 <v-col cols="12" md="6">
@@ -277,6 +291,10 @@
               <div class="d-flex justify-space-between mb-2">
                 <span class="font-weight-medium">Concurrency:</span>
                 <span>{{ taskForm.concurrency || 'Not set' }}</span>
+              </div>
+              <div class="d-flex justify-space-between mb-2">
+                <span class="font-weight-medium">Headless Mode:</span>
+                <span>{{ taskForm.headless ? 'Enabled' : 'Disabled' }}</span>
               </div>
             </div>
           </v-card-text>
@@ -439,7 +457,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { PlatformConfig } from '@/interfaces/IPlatformConfig'
+import { PlatformSummary } from '@/interfaces/IPlatformConfig'
 import { 
   getYellowPagesTaskDetail, 
   updateYellowPagesTask, 
@@ -456,6 +474,7 @@ interface YellowPagesTaskForm {
   max_pages: number
   concurrency: number
   delay_between_requests: number
+  headless: boolean
   account_id: number | null
   proxy_config: {
     host: string
@@ -474,6 +493,7 @@ interface YellowPagesTaskData {
   max_pages: number
   concurrency: number
   delay_between_requests: number
+  headless?: boolean
   account_id: number | null
   status?: string
   proxy_config?: {
@@ -508,6 +528,7 @@ const taskForm = reactive({
   max_pages: 10,
   concurrency: 2,
   delay_between_requests: 2000,
+  headless: true,
   account_id: null as number | null,
   proxy_config: null as any
 })
@@ -525,8 +546,8 @@ const proxyConfig = reactive({
 })
 
 // Platform data
-const platforms = ref<PlatformConfig[]>([])
-const selectedPlatform = computed((): PlatformConfig | undefined => {
+const platforms = ref<PlatformSummary[]>([])
+const selectedPlatform = computed((): PlatformSummary | undefined => {
   return platforms.value.find(p => p.name === taskForm.platform)
 })
 
@@ -551,7 +572,7 @@ const deleteDialog = reactive({
 
 // Options
 const platformOptions = computed(() => {
-  return platforms.value.map((p: PlatformConfig) => ({
+  return platforms.value.map((p: PlatformSummary) => ({
     title: p.display_name,
     value: p.name
   }))
@@ -587,6 +608,7 @@ const loadTask = async () => {
         taskForm.max_pages = task.value.max_pages || 10
         taskForm.concurrency = task.value.concurrency || 2
         taskForm.delay_between_requests = task.value.delay_between_requests || 2000
+        taskForm.headless = task.value.headless !== undefined ? task.value.headless : true
         taskForm.account_id = task.value.account_id || null
         
         // Update keywords input
@@ -657,6 +679,7 @@ const updateTask = async () => {
       max_pages: taskForm.max_pages || 1,
       concurrency: taskForm.concurrency || 1,
       delay_between_requests: taskForm.delay_between_requests || 2000,
+      headless: taskForm.headless,
       account_id: taskForm.account_id
     }
 

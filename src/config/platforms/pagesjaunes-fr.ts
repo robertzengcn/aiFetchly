@@ -6,7 +6,7 @@ export const Platform_pagesjaunes_fr: PlatformConfig = {
   display_name: 'PagesJaunes.fr',
   base_url: 'https://www.pagesjaunes.fr',
   country: 'France',
-  language: 'French',
+  language: 'fr',
   is_active: true,
   version: '1.0.0',
   type: 'configuration',
@@ -53,6 +53,7 @@ export const Platform_pagesjaunes_fr: PlatformConfig = {
     lastUpdated: new Date('2024-01-15T10:30:00.000Z'),
     version: '1.0.0',
     category: 'business-directory',
+    priority: 'medium',
     tags: ['france', 'business-directory', 'yellow-pages'],
     statistics: {
       totalBusinesses: 0,

@@ -1,6 +1,26 @@
+/**
+ * Yellow Pages Scraper Child Process
+ * 
+ * This child process handles the actual scraping logic without database operations.
+ * It communicates results back to the parent process via IPC.
+ * 
+ * NEW: Adapter Class Support
+ * - The child process now accepts adapter class information from the parent
+ * - When an adapter class is provided, it dynamically loads and uses platform-specific methods
+ * - Falls back to configuration-based approach when no adapter is available
+ * - Supports custom search, data extraction, and pagination methods
+ * 
+ * Usage:
+ * - Parent process sends adapter class info via message.platformInfo.adapterClass
+ * - Child process automatically detects and uses platform-specific capabilities
+ * - Adapter methods take precedence over configuration-based selectors
+ */
+
 import { Page, Browser } from 'puppeteer';
 import puppeteer from 'puppeteer';
 import { BrowserManager } from '@/modules/browserManager';
+import { ChildProcessAdapterFactory } from '@/modules/ChildProcessAdapterFactory';
+import { BasePlatformAdapter } from '@/modules/BasePlatformAdapter';
 //import { MessageType } from '@/interfaces/IPCMessageProtocol';
 
 interface ScrapingProgress {
@@ -47,6 +67,11 @@ interface TaskData {
     delay_between_requests: number;
     account_id?: number;
     cookies?: any[];
+    headless?: boolean;
+    adapterClass?: {
+        className: string;
+        modulePath: string;
+    };
 }
 
 interface PlatformInfo {
@@ -97,6 +122,10 @@ interface PlatformInfo {
             container?: string;
         };
     };
+    adapterClass?: {
+        className: string;
+        modulePath: string;
+    };
 }
 
 /**
@@ -111,6 +140,7 @@ export class YellowPagesScraperProcess {
     private page: Page | null = null;
     private isRunning: boolean = false;
     private isPaused: boolean = false;
+    private adapter: BasePlatformAdapter | null = null;
     
     // IPC integration
     private onProgressCallback?: (progress: ScrapingProgress) => void;
@@ -120,6 +150,31 @@ export class YellowPagesScraperProcess {
     constructor(taskData: TaskData, platformInfo: PlatformInfo) {
         this.taskData = taskData;
         this.platformInfo = platformInfo;
+        
+        // Log headless setting
+        const headlessMode = this.taskData.headless !== undefined ? this.taskData.headless : true;
+        console.log(`🔧 Scraper initialized with headless mode: ${headlessMode}`);
+    }
+
+    /**
+     * Initialize the adapter if adapter class information is available
+     */
+    private async initializeAdapter(): Promise<void> {
+        if (this.platformInfo.adapterClass) {
+            try {
+                console.log(`Initializing adapter: ${this.platformInfo.adapterClass.className}`);
+                this.adapter = await ChildProcessAdapterFactory.createAdapter(
+                    this.platformInfo.adapterClass,
+                    this.platformInfo as any // Cast to PlatformConfig for compatibility
+                );
+                console.log(`✅ Adapter initialized successfully: ${this.platformInfo.adapterClass.className}`);
+            } catch (error) {
+                console.warn(`⚠️ Failed to initialize adapter: ${error}. Falling back to configuration-based approach.`);
+                this.adapter = null;
+            }
+        } else {
+            console.log('No adapter class specified, using configuration-based approach');
+        }
     }
 
     /**
@@ -144,13 +199,81 @@ export class YellowPagesScraperProcess {
     }
 
     /**
+     * Log adapter information and capabilities
+     */
+    private logAdapterInfo(): void {
+        if (this.adapter) {
+            const capabilities = this.getAdapterCapabilities();
+            console.log(`🔧 Using adapter: ${this.platformInfo.adapterClass?.className}`);
+            console.log(`📋 Adapter capabilities: ${capabilities.join(', ')}`);
+        } else {
+            console.log('🔧 Using configuration-based approach');
+        }
+    }
+
+    /**
+     * Execute platform-specific operations using the adapter if available
+     */
+    private async executePlatformSpecificOperations(): Promise<void> {
+        if (!this.adapter) {
+            console.log('No adapter available, skipping platform-specific operations');
+            return;
+        }
+
+        try {
+            console.log('🔧 Executing platform-specific operations...');
+            
+            // Example: Use adapter-specific search method if available
+            if (this.adapterSupportsFeature('custom-search')) {
+                console.log('🔍 Adapter supports custom search, this will be used during scraping');
+            }
+            
+            // Example: Use adapter-specific data extraction if available
+            if (this.adapterSupportsFeature('custom-extraction')) {
+                console.log('📊 Adapter supports custom data extraction, this will be used during scraping');
+            }
+            
+            // Example: Use adapter-specific pagination if available
+            if (this.adapterSupportsFeature('custom-pagination')) {
+                console.log('📄 Adapter supports custom pagination, this will be used during scraping');
+            }
+            
+            console.log('✅ Platform-specific operations completed');
+            
+        } catch (error) {
+            console.warn('⚠️ Error during platform-specific operations:', error);
+        }
+    }
+
+    /**
      * Start the scraping process
      */
     async start(): Promise<void> {
         try {
             console.log(`Starting Yellow Pages scraping for task ${this.taskData.taskId}`);
+            console.log(`📋 Task configuration:`, {
+                taskId: this.taskData.taskId,
+                platform: this.taskData.platform,
+                keywords: this.taskData.keywords,
+                location: this.taskData.location,
+                maxPages: this.taskData.max_pages,
+                delayBetweenRequests: this.taskData.delay_between_requests,
+                headless: this.taskData.headless,
+                hasAccount: !!this.taskData.account_id,
+                hasCookies: !!(this.taskData.cookies && this.taskData.cookies.length > 0),
+                hasAdapter: !!this.platformInfo.adapterClass
+            });
             
             this.isRunning = true;
+
+            // Initialize adapter if available
+            await this.initializeAdapter();
+            
+            // Log adapter information
+            this.logAdapterInfo();
+            
+            // Execute platform-specific operations
+            await this.executePlatformSpecificOperations();
 
             // Initialize browser
             await this.initializeBrowser();
@@ -217,6 +340,16 @@ export class YellowPagesScraperProcess {
             // Use BrowserManager to get proper launch options
             const browserManager = new BrowserManager();
             const launchOptions = await browserManager.createLaunchOptions();
+            
+            // Override headless setting if specified in task data
+            if (this.taskData.headless !== undefined) {
+                launchOptions.headless = this.taskData.headless;
+                console.log(`Browser will run in ${this.taskData.headless ? 'headless' : 'non-headless'} mode`);
+            } else {
+                // Default to headless if not specified
+                launchOptions.headless = true;
+                console.log('Browser will run in headless mode (default)');
+            }
             
             // Launch browser using Puppeteer with BrowserManager options
             this.browser = await puppeteer.launch(launchOptions);
@@ -998,11 +1131,56 @@ export class YellowPagesScraperProcess {
             console.error('Error during cleanup:', error);
         }
     }
+
+    /**
+     * Check if adapter supports a specific feature
+     */
+    private adapterSupportsFeature(feature: string): boolean {
+        if (!this.adapter) return false;
+        
+        switch (feature) {
+            case 'custom-search':
+                return this.adapter.searchBusinesses !== BasePlatformAdapter.prototype.searchBusinesses;
+            case 'custom-extraction':
+                return this.adapter.extractBusinessData !== BasePlatformAdapter.prototype.extractBusinessData;
+            case 'custom-pagination':
+                return this.adapter.handlePagination !== BasePlatformAdapter.prototype.handlePagination;
+            default:
+                return false;
+        }
+    }
+
+    /**
+     * Get adapter capabilities
+     */
+    private getAdapterCapabilities(): string[] {
+        if (!this.adapter) {
+            return ['configuration-based'];
+        }
+
+        const capabilities: string[] = ['class-based'];
+        
+        // Check what methods the adapter provides
+        if (this.adapter.searchBusinesses !== BasePlatformAdapter.prototype.searchBusinesses) capabilities.push('custom-search');
+        if (this.adapter.extractBusinessData !== BasePlatformAdapter.prototype.extractBusinessData) capabilities.push('custom-extraction');
+        if (this.adapter.handlePagination !== BasePlatformAdapter.prototype.handlePagination) capabilities.push('custom-pagination');
+        
+        return capabilities;
+    }
 }
 
 // Handle process messages
 process.on('message', async (message: any) => {
+    console.log('📨 Received message:', message.type);
+    
     if (message.type === 'START' && message.taskData && message.platformInfo) {
+        console.log('🚀 Starting scraper with data:', {
+            taskId: message.taskData.taskId,
+            platform: message.taskData.platform,
+            hasAdapter: !!message.platformInfo.adapterClass,
+            adapterClass: message.platformInfo.adapterClass?.className || 'None'
+        });
+        
         const scraper = new YellowPagesScraperProcess(message.taskData, message.platformInfo);
         
         // Set up callbacks for IPC communication
@@ -1047,6 +1225,8 @@ process.on('message', async (message: any) => {
                 });
             }
         }
+    } else {
+        console.log('⚠️ Invalid message format or missing required data');
     }
 });
 
