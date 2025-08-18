@@ -17,7 +17,8 @@ import {
     YELLOW_PAGES_BULK,
     YELLOW_PAGES_HEALTH,
     YELLOW_PAGES_PLATFORMS,
-    YELLOW_PAGES_STATISTICS
+    YELLOW_PAGES_STATISTICS,
+    YELLOW_PAGES_KILL_PROCESS
 } from '@/config/channellist'
 import { CommonResponse, CommonMessage } from "@/entityTypes/commonType"
 import { 
@@ -96,12 +97,54 @@ export async function pauseYellowPagesTask(id: number): Promise<void> {
 
 export async function resumeYellowPagesTask(id: number): Promise<void> {
     const resp = await windowInvoke(YELLOW_PAGES_RESUME, { id })
-    
+    console.log("resumeYellowPagesTask")
+    console.log(resp)
     if (!resp) {
         throw new Error("Unknown error")
     }
     
-    return resp
+    if (!resp.status) {
+        throw new Error(resp.msg || "Unknown error")
+    }
+}
+
+export async function killProcessByPID(pid: number): Promise<{
+    success: boolean;
+    taskId?: number;
+    message: string;
+}> {
+    const resp = await windowInvoke(YELLOW_PAGES_KILL_PROCESS, { pid })
+    console.log("killProcessByPID")
+    console.log(resp)
+    if (!resp) {
+        throw new Error("Unknown error")
+    }
+    
+    if (!resp.status) {
+        throw new Error(resp.msg || "Unknown error")
+    }
+    
+    return resp.data
+}
+
+export async function getProcessStatusByPID(pid: number): Promise<{
+    isRunning: boolean;
+    taskId?: number;
+    status?: string;
+    error?: string;
+}> {
+    const resp = await windowInvoke('yellow_pages:get_process_status', { pid })
+    console.log("getProcessStatusByPID")
+    console.log(resp)
+    if (!resp) {
+        throw new Error("Unknown error")
+    }
+    
+    if (!resp.status) {
+        throw new Error(resp.msg || "Unknown error")
+    }
+    
+    return resp.data
 }
 
 // Task Information Operations

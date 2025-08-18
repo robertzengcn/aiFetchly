@@ -21,6 +21,8 @@ import puppeteer from 'puppeteer';
 import { BrowserManager } from '@/modules/browserManager';
 import { ChildProcessAdapterFactory } from '@/modules/ChildProcessAdapterFactory';
 import { BasePlatformAdapter } from '@/modules/BasePlatformAdapter';
+import { ProcessMessage } from '@/entityTypes/processMessage-type';
+import { StartTaskMessage, ProgressMessage, CompletedMessage, ErrorMessage } from '@/interfaces/BackgroundProcessMessages';
 //import { MessageType } from '@/interfaces/IPCMessageProtocol';
 
 interface ScrapingProgress {
@@ -1168,9 +1170,11 @@ export class YellowPagesScraperProcess {
         return capabilities;
     }
 }
-
+console.log('🚀 YellowPagesScraperProcess loaded');
 // Handle process messages
-process.on('message', async (message: any) => {
+process.parentPort.on('message',  async (e) => {
+    console.log(e)
+    const message = JSON.parse(e.data) as StartTaskMessage;
     console.log('📨 Received message:', message.type);
     
     if (message.type === 'START' && message.taskData && message.platformInfo) {
@@ -1185,45 +1189,41 @@ process.on('message', async (message: any) => {
         
         // Set up callbacks for IPC communication
         scraper.onProgress((progress) => {
-            if (process.send) {
-                process.send({ 
-                    type: 'PROGRESS', 
-                    taskId: message.taskData.taskId, 
-                    progress 
-                });
-            }
+            const progressMessage: ProgressMessage = {
+                type: 'PROGRESS',
+                taskId: message.taskData.taskId,
+                progress
+            };
+            process.parentPort?.postMessage(progressMessage);
         });
 
         scraper.onComplete((results) => {
-            if (process.send) {
-                process.send({ 
-                    type: 'COMPLETED', 
-                    taskId: message.taskData.taskId, 
-                    results 
-                });
-            }
+            const completedMessage: CompletedMessage = {
+                type: 'COMPLETED',
+                taskId: message.taskData.taskId,
+                results
+            };
+            process.parentPort?.postMessage(completedMessage);
         });
 
         scraper.onError((error) => {
-            if (process.send) {
-                process.send({ 
-                    type: 'ERROR', 
-                    taskId: message.taskData.taskId, 
-                    error: error.message 
-                });
-            }
+            const errorMessage: ErrorMessage = {
+                type: 'ERROR',
+                taskId: message.taskData.taskId,
+                error: error.message
+            };
+            process.parentPort?.postMessage(errorMessage);
         });
 
         try {
             await scraper.start();
         } catch (error) {
-            if (process.send) {
-                process.send({ 
-                    type: 'ERROR', 
-                    taskId: message.taskData.taskId, 
-                    error: error instanceof Error ? error.message : String(error)
-                });
-            }
+            const errorMessage: ErrorMessage = {
+                type: 'ERROR',
+                taskId: message.taskData.taskId,
+                error: error instanceof Error ? error.message : String(error)
+            };
+            process.parentPort?.postMessage(errorMessage);
         }
     } else {
         console.log('⚠️ Invalid message format or missing required data');

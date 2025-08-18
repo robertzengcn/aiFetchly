@@ -215,7 +215,7 @@ export class PlatformRegistry extends BaseModule {
                 const validation = this.validatePlatformConfig(config);
                 if (validation.isValid) {
                     this.platforms.set(config.id, config);
-                    console.log(`✅ Loaded platform: ${config.name} (${config.id})`);
+                    //console.log(`✅ Loaded platform: ${config.name} (${config.id})`);
                 } else {
                     console.error(
                         `❌ Invalid platform config (${config.id}):`,

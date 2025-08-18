@@ -6,12 +6,29 @@ import { PlatformRegistry } from "@/modules/PlatformRegistry";
 import { AccountCookiesModule } from "@/modules/accountCookiesModule";
 import { BaseModule } from "@/modules/baseModule";
 import { ScrapingProgress } from "@/interfaces/IPCMessage";
+import { 
+    BackgroundProcessMessage, 
+    StartTaskMessage, 
+    ProgressMessage, 
+    CompletedMessage, 
+    ErrorMessage,
+    ScrapingStartedMessage,
+    ScrapingPageCompleteMessage,
+    ScrapingResultFoundMessage,
+    ScrapingRateLimitedMessage,
+    ScrapingCaptchaDetectedMessage,
+    isStartTaskMessage,
+    isProgressMessage,
+    isCompletedMessage,
+    isErrorMessage
+} from "@/interfaces/BackgroundProcessMessages";
 import { WriteLog, getApplogspath, getRandomValues, getRecorddatetime } from "@/modules/lib/function";
 import { USERLOGPATH, USEREMAIL } from '@/config/usersetting';
 import { Token } from "@/modules/token";
 import { v4 as uuidv4 } from 'uuid';
 import * as path from 'path';
 import * as fs from 'fs';
+import { YellowPagesTaskEntity } from "@/entity/YellowPagesTask.entity";
 
 interface ProcessInfo {
     taskId: number;
@@ -25,75 +42,10 @@ interface ProcessInfo {
     };
 }
 
-interface TaskData {
-    taskId: number;
-    platform: string;
-    keywords: string[];
-    location: string;
-    max_pages: number;
-    delay_between_requests: number;
-    account_id?: number;
-    cookies?: any[];
-    headless?: boolean;
-    adapterClass?: {
-        className: string;
-        modulePath: string;
-    };
-}
 
-interface PlatformInfo {
-    id: number;
-    name: string;
-    display_name: string;
-    base_url: string;
-    settings: {
-        searchUrlPattern?: string;
-    };
-    selectors: {
-        businessList: string;
-        businessName: string;
-        email?: string;
-        phone?: string;
-        website?: string;
-        address?: string;
-        address_city?: string;
-        address_state?: string;
-        address_zip?: string;
-        address_country?: string;
-        socialMedia?: string;
-        categories?: string;
-        businessHours?: string;
-        description?: string;
-        rating?: string;
-        reviewCount?: string;
-        faxNumber?: string;
-        contactPerson?: string;
-        yearEstablished?: string;
-        numberOfEmployees?: string;
-        paymentMethods?: string;
-        specialties?: string;
-        searchForm?: {
-            keywordInput?: string;
-            locationInput?: string;
-            searchButton?: string;
-            formContainer?: string;
-            categoryDropdown?: string;
-            radiusDropdown?: string;
-        };
-        pagination?: {
-            nextButton?: string;
-            currentPage?: string;
-            maxPages?: string;
-            previousButton?: string;
-            pageNumbers?: string;
-            container?: string;
-        };
-    };
-    adapterClass?: {
-        className: string;
-        modulePath: string;
-    };
-}
+
+type TaskData = StartTaskMessage['taskData'];
+type PlatformInfo = StartTaskMessage['platformInfo'];
 
 export class YellowPagesProcessManager extends BaseModule {
     private activeProcesses: Map<number, ProcessInfo> = new Map();
@@ -313,15 +265,25 @@ export class YellowPagesProcessManager extends BaseModule {
             // Send start message to child process when spawned
             childProcess.on('spawn', () => {
                 console.log("child process satart, pid is" + childProcess.pid)
+                
+                // Save the process PID to database for future management
+                if (childProcess.pid) {
+                    this.taskModel.updateTaskPID(taskId, childProcess.pid).catch(err => {
+                        console.error(`Failed to update PID for task ${taskId}:`, err);
+                    });
+                }
+                
                 // Update task status to in-progress
                 this.taskModel.updateTaskStatus(taskId, YellowPagesTaskStatus.InProgress);
                 
                 // Send task data and platform info to child process
-                childProcess.postMessage(JSON.stringify({ 
-                    type: 'START', 
-                    taskData, 
-                    platformInfo 
-                }), [port1]);
+                const startMessage: StartTaskMessage = {
+                    type: 'START',
+                    taskId,
+                    taskData,
+                    platformInfo
+                };
+                childProcess.postMessage(JSON.stringify(startMessage), [port1]);
             });
 
             console.log(`Successfully spawned process for task ${taskId}`);
@@ -339,12 +301,12 @@ export class YellowPagesProcessManager extends BaseModule {
      */
     private setupIPCHandlers(childProcess: UtilityProcess, taskId: number): void {
         childProcess.on('message', (raw: unknown) => {
-            let message: any;
+            let message: BackgroundProcessMessage;
             try {
                 if (typeof raw === 'string') {
                     message = JSON.parse(raw);
                 } else {
-                    message = raw;
+                    message = raw as BackgroundProcessMessage;
                 }
             } catch (err) {
                 console.error(`Failed to parse message from task ${taskId}:`, raw);
@@ -364,26 +326,30 @@ export class YellowPagesProcessManager extends BaseModule {
 
             switch (message.type) {
                 case 'PROGRESS':
-                    if (message.progress) {
+                    if (isProgressMessage(message)) {
                         this.handleProgressMessage(taskId, message.progress);
                     }
                     break;
                 case 'COMPLETED':
-                    this.handleCompletionMessage(taskId, message.results);
+                    if (isCompletedMessage(message)) {
+                        this.handleCompletionMessage(taskId, message.results);
+                    }
                     break;
                 case 'ERROR':
-                    this.handleErrorMessage(taskId, message.error || 'Unknown error');
+                    if (isErrorMessage(message)) {
+                        this.handleErrorMessage(taskId, message.error);
+                    }
                     break;
                 case 'SCRAPING_STARTED':
                     console.log(`Scraping started for task ${taskId}`);
                     break;
                 case 'SCRAPING_PAGE_COMPLETE':
-                    if (message.page && message.totalPages) {
+                    if (message.type === 'SCRAPING_PAGE_COMPLETE' && message.page && message.totalPages) {
                         console.log(`Task ${taskId}: Completed page ${message.page}/${message.totalPages}`);
                     }
                     break;
                 case 'SCRAPING_RESULT_FOUND':
-                    if (message.result) {
+                    if (message.type === 'SCRAPING_RESULT_FOUND' && message.result) {
                         console.log(`Task ${taskId}: Found result - ${message.result.businessName || 'Unknown business'}`);
                     }
                     break;
@@ -511,6 +477,9 @@ export class YellowPagesProcessManager extends BaseModule {
             // Update task status in database
             await this.taskModel.updateTaskStatus(taskId, YellowPagesTaskStatus.Completed);
             await this.taskModel.updateTaskCompletion(taskId);
+            
+            // Clear the PID since task is completed
+            await this.taskModel.clearTaskPID(taskId);
         } catch (error) {
             console.error(`Failed to save results or update task ${taskId} status:`, error);
             // Update task status to failed if saving results fails
@@ -549,6 +518,9 @@ export class YellowPagesProcessManager extends BaseModule {
         try {
             await this.taskModel.updateTaskStatus(taskId, YellowPagesTaskStatus.Failed);
             await this.taskModel.updateTaskErrorLog(taskId, error);
+            
+            // Clear the PID since task is failed
+            await this.taskModel.clearTaskPID(taskId);
         } catch (dbError) {
             console.error(`Failed to update task ${taskId} error status:`, dbError);
             
@@ -624,6 +596,9 @@ export class YellowPagesProcessManager extends BaseModule {
                 // Update task status
                 await this.taskModel.updateTaskStatus(taskId, YellowPagesTaskStatus.Paused);
                 
+                // Clear the PID since process is terminated
+                await this.taskModel.clearTaskPID(taskId);
+                
                 // Clean up after a short delay
                 setTimeout(() => {
                     this.cleanupProcess(taskId);
@@ -640,6 +615,24 @@ export class YellowPagesProcessManager extends BaseModule {
             }
         } else {
             console.log(`No active process found for task ${taskId}`);
+        }
+    }
+
+    /**
+     * Clean up process resources
+     */
+    private cleanupProcess(taskId: number): void {
+        const processInfo = this.activeProcesses.get(taskId);
+        if (processInfo) {
+            // Log cleanup to runtime log file
+            if (processInfo.logFiles) {
+                const cleanupMessage = `[${new Date().toISOString()}] Process cleanup completed`;
+                WriteLog(processInfo.logFiles.runtimeLog, cleanupMessage);
+            }
+            
+            // Remove from active processes
+            this.activeProcesses.delete(taskId);
+            console.log(`Cleaned up process for task ${taskId}`);
         }
     }
 
@@ -673,20 +666,101 @@ export class YellowPagesProcessManager extends BaseModule {
     }
 
     /**
-     * Clean up process resources
+     * Find task by process ID
+     * @param pid The process ID
+     * @returns The task entity or null
+     * 
+     * @example
+     * // Find a task by its process ID
+     * const task = await processManager.getTaskByPID(12345);
+     * if (task) {
+     *   console.log(`Found task: ${task.name} (ID: ${task.id})`);
+     * }
      */
-    private cleanupProcess(taskId: number): void {
-        const processInfo = this.activeProcesses.get(taskId);
-        if (processInfo) {
-            // Log cleanup to runtime log file
-            if (processInfo.logFiles) {
-                const cleanupMessage = `[${new Date().toISOString()}] Process cleanup completed`;
-                WriteLog(processInfo.logFiles.runtimeLog, cleanupMessage);
+    async getTaskByPID(pid: number): Promise<YellowPagesTaskEntity | null> {
+        return await this.taskModel.getTaskByPID(pid);
+    }
+
+    /**
+     * Terminate a process by PID
+     * @param pid The process ID to terminate
+     * @returns Success status
+     * 
+     * @example
+     * // Terminate a process by PID
+     * const success = await processManager.terminateProcessByPID(12345);
+     * if (success) {
+     *   console.log('Process terminated successfully');
+     * }
+     */
+    async terminateProcessByPID(pid: number): Promise<boolean> {
+        try {
+            // Find the task associated with this PID
+            const task = await this.taskModel.getTaskByPID(pid);
+            if (!task) {
+                console.log(`No task found for PID ${pid}`);
+                return false;
             }
+
+            // Terminate the process using the task ID
+            await this.terminateProcess(task.id);
+            return true;
+        } catch (error) {
+            console.error(`Failed to terminate process with PID ${pid}:`, error);
+            return false;
+        }
+    }
+
+    /**
+     * Check if a process is still running by PID
+     * @param pid The process ID to check
+     * @returns Process status information
+     * 
+     * @example
+     * // Check if a process is still running
+     * const status = await processManager.checkProcessStatusByPID(12345);
+     * if (status.isRunning) {
+     *   console.log(`Process ${status.taskId} is still running`);
+     * } else {
+     *   console.log(`Process status: ${status.status || status.error}`);
+     * }
+     */
+    async checkProcessStatusByPID(pid: number): Promise<{
+        isRunning: boolean;
+        taskId?: number;
+        status?: string;
+        error?: string;
+    }> {
+        try {
+            // Find the task associated with this PID
+            const task = await this.taskModel.getTaskByPID(pid);
+            if (!task) {
+                return { isRunning: false, error: 'No task found for this PID' };
+            }
+
+            // Check if the process is in our active processes map
+            const processInfo = this.activeProcesses.get(task.id);
+            if (!processInfo) {
+                return { 
+                    isRunning: false, 
+                    taskId: task.id, 
+                    status: 'Process not in active processes map' 
+                };
+            }
+
+            // Check if the process is actually running
+            const isRunning = processInfo.status === 'running';
             
-            // Remove from active processes
-            this.activeProcesses.delete(taskId);
-            console.log(`Cleaned up process for task ${taskId}`);
+            return {
+                isRunning,
+                taskId: task.id,
+                status: processInfo.status
+            };
+        } catch (error) {
+            return { 
+                isRunning: false, 
+                error: `Error checking process status: ${error}` 
+            };
         }
     }
 
@@ -732,4 +806,4 @@ export class YellowPagesProcessManager extends BaseModule {
             processIsolation
         };
     }
-} 
+}

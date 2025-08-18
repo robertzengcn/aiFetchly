@@ -268,6 +268,71 @@ export class YellowPagesController {
     }
 
     /**
+     * Kill a child process by PID
+     * @param pid The process ID to kill
+     * @returns Promise that resolves when the process is killed
+     */
+    async killProcessByPID(pid: number): Promise<{
+        success: boolean;
+        taskId?: number;
+        message: string;
+    }> {
+        try {
+            console.log(`Killing process with PID ${pid}`);
+            
+            // Use the process manager to terminate the process by PID
+            const success = await this.processManager.terminateProcessByPID(pid);
+            
+            if (success) {
+                // Find the task associated with this PID
+                const task = await this.processManager.getTaskByPID(pid);
+                const taskId = task?.id;
+                
+                console.log(`Successfully killed process ${pid} for task ${taskId}`);
+                
+                return {
+                    success: true,
+                    taskId,
+                    message: `Process ${pid} killed successfully`
+                };
+            } else {
+                return {
+                    success: false,
+                    message: `Failed to kill process ${pid}`
+                };
+            }
+        } catch (error) {
+            console.error(`Failed to kill process ${pid}:`, error);
+            throw error;
+        }
+    }
+
+    /**
+     * Get process status by PID
+     * @param pid The process ID to check
+     * @returns Promise that resolves to process status information
+     */
+    async getProcessStatusByPID(pid: number): Promise<{
+        isRunning: boolean;
+        taskId?: number;
+        status?: string;
+        error?: string;
+    }> {
+        try {
+            console.log(`Getting status for process with PID ${pid}`);
+            
+            // Use the process manager to check process status by PID
+            const status = await this.processManager.checkProcessStatusByPID(pid);
+            
+            console.log(`Process ${pid} status:`, status);
+            return status;
+        } catch (error) {
+            console.error(`Failed to get status for process ${pid}:`, error);
+            throw error;
+        }
+    }
+
+    /**
      * Get task progress
      * @param taskId ID of the task
      * @returns Promise resolving to task progress

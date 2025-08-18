@@ -408,7 +408,8 @@ export class YellowPagesTaskModule extends BaseModule {
             created_at: entity.createdAt || new Date(),
             completed_at: entity.completed_at,
             progress_percentage: this.calculateProgress(entity),
-            results_count: 0 // This should come from results model
+            results_count: 0, // This should come from results model
+            pid: entity.pid // Include PID for process management
         };
     }
 

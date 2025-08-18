@@ -320,7 +320,8 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
                     created_at: task.createdAt || new Date(),
                     completed_at: task.completed_at || undefined,
                     results_count: resultsCount,
-                    progress_percentage: processInfo?.progress?.percentage || 0
+                    progress_percentage: processInfo?.progress?.percentage || 0,
+                    pid: task.pid // Include PID for process management
                 });
             }
 

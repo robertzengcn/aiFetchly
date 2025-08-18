@@ -15,7 +15,8 @@ import {
     YELLOW_PAGES_BULK,
     YELLOW_PAGES_HEALTH,
     YELLOW_PAGES_PLATFORMS,
-    YELLOW_PAGES_STATISTICS
+    YELLOW_PAGES_STATISTICS,
+    YELLOW_PAGES_KILL_PROCESS
 } from '@/config/channellist';
 import { YellowPagesController } from '@/controller/YellowPagesController';
 import { CommonMessage } from "@/entityTypes/commonType";
@@ -180,6 +181,85 @@ export function registerYellowPagesIpcHandlers(): void {
             const errorResponse: CommonMessage<void> = {
                 status: false,
                 msg: error instanceof Error ? error.message : "Unknown error occurred"
+            };
+            return errorResponse;
+        }
+    });
+
+    ipcMain.handle(YELLOW_PAGES_KILL_PROCESS, async (event, data): Promise<CommonMessage<{
+        success: boolean;
+        taskId?: number;
+        message: string;
+    }>> => {
+        try {
+            const yellowPagesCtrl = new YellowPagesController();
+            const { pid } = JSON.parse(data) as { pid: number };
+            const result = await yellowPagesCtrl.killProcessByPID(pid);
+            
+            const response: CommonMessage<{
+                success: boolean;
+                taskId?: number;
+                message: string;
+            }> = {
+                status: true,
+                msg: "yellow_pages.process_killed_successfully",
+                data: result
+            };
+            return response;
+        } catch (error) {
+            console.error('Yellow Pages process kill error:', error);
+            const errorResponse: CommonMessage<{
+                success: boolean;
+                taskId?: number;
+                message: string;
+            }> = {
+                status: false,
+                msg: error instanceof Error ? error.message : "Unknown error occurred",
+                data: {
+                    success: false,
+                    message: error instanceof Error ? error.message : "Unknown error occurred"
+                }
+            };
+            return errorResponse;
+        }
+    });
+
+    ipcMain.handle('yellow_pages:get_process_status', async (event, data): Promise<CommonMessage<{
+        isRunning: boolean;
+        taskId?: number;
+        status?: string;
+        error?: string;
+    }>> => {
+        try {
+            const yellowPagesCtrl = new YellowPagesController();
+            const { pid } = JSON.parse(data) as { pid: number };
+            const result = await yellowPagesCtrl.getProcessStatusByPID(pid);
+            
+            const response: CommonMessage<{
+                isRunning: boolean;
+                taskId?: number;
+                status?: string;
+                error?: string;
+            }> = {
+                status: true,
+                msg: "yellow_pages.process_status_retrieved_successfully",
+                data: result
+            };
+            return response;
+        } catch (error) {
+            console.error('Yellow Pages process status error:', error);
+            const errorResponse: CommonMessage<{
+                isRunning: boolean;
+                taskId?: number;
+                status?: string;
+                error?: string;
+            }> = {
+                status: false,
+                msg: error instanceof Error ? error.message : "Unknown error occurred",
+                data: {
+                    isRunning: false,
+                    error: error instanceof Error ? error.message : "Unknown error occurred"
+                }
             };
             return errorResponse;
         }

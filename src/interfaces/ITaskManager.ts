@@ -165,6 +165,7 @@ export interface TaskSummary {
     completed_at?: Date;
     results_count?: number;
     progress_percentage?: number;
+    pid?: number; // Process ID for PID management
 }
 
 /**

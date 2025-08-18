@@ -234,7 +234,7 @@ import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import YellowPagesTaskTable from './components/YellowPagesTaskTable.vue'
 import TaskDetailsView from './components/TaskDetailsView.vue'
-import { getYellowPagesTaskList, getYellowPagesPlatforms } from '@/views/api/yellowpages'
+import { getYellowPagesTaskList, getYellowPagesPlatforms, killProcessByPID, startYellowPagesTask, pauseYellowPagesTask, resumeYellowPagesTask } from '@/views/api/yellowpages'
 import { TaskStatus, TaskSummary } from '@/interfaces/ITaskManager'
 import { PlatformSummary } from '@/interfaces/IPlatformConfig'
 
@@ -415,9 +415,7 @@ const performDeleteTask = async (taskId: number) => {
 const startTask = async (task: any) => {
   try {
     // TODO: Replace with actual API call
-    await fetch(`/api/yellow-pages/tasks/${task.id}/start`, {
-      method: 'POST'
-    })
+    await startYellowPagesTask(task.id)
     await loadTasks()
   } catch (error) {
     console.error('Failed to start task:', error)
@@ -426,22 +424,47 @@ const startTask = async (task: any) => {
 
 const stopTask = async (task: any) => {
   try {
-    // TODO: Replace with actual API call
-    await fetch(`/api/yellow-pages/tasks/${task.id}/stop`, {
-      method: 'POST'
-    })
-    await loadTasks()
+    // Check if task has a PID (is currently running)
+    if (!task.pid) {
+      console.warn(`Task ${task.id} has no PID, cannot stop process`);
+      // Show user feedback that task is not running
+      alert(`Task "${task.name}" is not currently running`);
+      return;
+    }
+
+    console.log(`Stopping task ${task.id} with PID ${task.pid}`);
+    
+    // Show confirmation dialog
+    if (!confirm(`Are you sure you want to stop task "${task.name}" (PID: ${task.pid})?`)) {
+      return;
+    }
+    
+    // Use the new PID-based process killing
+    const result = await killProcessByPID(task.pid);
+    
+    if (result.success) {
+      console.log(`Successfully stopped process for task ${task.id}: ${result.message}`);
+      // Show success message
+      alert(`Successfully stopped task "${task.name}"`);
+      // Refresh the task list to show updated status
+      await loadTasks();
+    } else {
+      console.error(`Failed to stop process for task ${task.id}: ${result.message}`);
+      // Show error message to user
+      alert(`Failed to stop task "${task.name}": ${result.message}`);
+    }
   } catch (error) {
-    console.error('Failed to stop task:', error)
+    console.error(`Failed to stop task ${task.id}:`, error);
+    // Show error message to user
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    alert(`Error stopping task "${task.name}": ${errorMessage}`);
   }
 }
 
 const pauseTask = async (task: any) => {
   try {
     // TODO: Replace with actual API call
-    await fetch(`/api/yellow-pages/tasks/${task.id}/pause`, {
-      method: 'POST'
-    })
+    await pauseYellowPagesTask(task.id)
     await loadTasks()
   } catch (error) {
     console.error('Failed to pause task:', error)
@@ -451,9 +474,7 @@ const pauseTask = async (task: any) => {
 const resumeTask = async (task: any) => {
   try {
     // TODO: Replace with actual API call
-    await fetch(`/api/yellow-pages/tasks/${task.id}/resume`, {
-      method: 'POST'
-    })
+    await resumeYellowPagesTask(task.id)
     await loadTasks()
   } catch (error) {
     console.error('Failed to resume task:', error)

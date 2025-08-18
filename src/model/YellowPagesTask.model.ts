@@ -28,6 +28,7 @@ export type YellowPagesTaskUpdateFields = {
   proxy_config?: string;
   delay_between_requests?: number;
   headless?: boolean;
+  pid?: number;
 }
 
 export class YellowPagesTaskModel extends BaseDb {
@@ -106,6 +107,38 @@ export class YellowPagesTaskModel extends BaseDb {
       { id: taskId },
       { run_log: runLog }
     );
+  }
+
+  /**
+   * Update task process ID
+   * @param taskId The task ID
+   * @param pid The process ID
+   */
+  async updateTaskPID(taskId: number, pid: number): Promise<void> {
+    await this.repository.update(
+      { id: taskId },
+      { pid }
+    );
+  }
+
+  /**
+   * Clear task process ID
+   * @param taskId The task ID
+   */
+  async clearTaskPID(taskId: number): Promise<void> {
+    await this.repository.update(
+      { id: taskId },
+      { pid: undefined }
+    );
+  }
+
+  /**
+   * Find task by process ID
+   * @param pid The process ID
+   * @returns The task entity or null
+   */
+  async getTaskByPID(pid: number): Promise<YellowPagesTaskEntity | null> {
+    return await this.repository.findOne({ where: { pid } });
   }
 
   /**

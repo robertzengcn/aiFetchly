@@ -50,4 +50,7 @@ export class YellowPagesTaskEntity extends AuditableEntity {
 
     @Column("boolean", { nullable: true, default: true })
     headless?: boolean; // Whether to run Puppeteer in headless mode
+
+    @Column("integer", { nullable: true })
+    pid?: number; // Process ID of the child process for management
 } 
