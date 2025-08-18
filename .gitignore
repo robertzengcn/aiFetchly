@@ -99,7 +99,7 @@ build/
 dev-debug.log
 # Environment variables
 # Editor directories and files
-.vscode
+
 *.suo
 *.ntvs*
 *.njsproj
