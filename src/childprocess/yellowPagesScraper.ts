@@ -17,7 +17,6 @@
  */
 
 import { Page, Browser } from 'puppeteer';
-import puppeteer from 'puppeteer';
 import { BrowserManager } from '@/modules/browserManager';
 import { ChildProcessAdapterFactory } from '@/modules/ChildProcessAdapterFactory';
 import { BasePlatformAdapter } from '@/modules/BasePlatformAdapter';
@@ -339,22 +338,15 @@ export class YellowPagesScraperProcess {
      */
     private async initializeBrowser(): Promise<void> {
         try {
-            // Use BrowserManager to get proper launch options
-            const browserManager = new BrowserManager();
-            const launchOptions = await browserManager.createLaunchOptions();
+            // Use BrowserManager to get proper launch options with stealth mode
+            const browserManager = new BrowserManager({ enableStealth: true });
             
             // Override headless setting if specified in task data
-            if (this.taskData.headless !== undefined) {
-                launchOptions.headless = this.taskData.headless;
-                console.log(`Browser will run in ${this.taskData.headless ? 'headless' : 'non-headless'} mode`);
-            } else {
-                // Default to headless if not specified
-                launchOptions.headless = true;
-                console.log('Browser will run in headless mode (default)');
-            }
+            const headless = this.taskData.headless !== undefined ? this.taskData.headless : false;
+            console.log(`Browser will run in ${headless ? 'headless' : 'non-headless'} mode`);
             
-            // Launch browser using Puppeteer with BrowserManager options
-            this.browser = await puppeteer.launch(launchOptions);
+            // Launch browser using puppeteer-extra with stealth plugin
+            this.browser = await browserManager.launchWithStealth({ headless });
             
             if (!this.browser) {
                 throw new Error('Failed to create browser instance');
@@ -364,16 +356,24 @@ export class YellowPagesScraperProcess {
                 throw new Error('Failed to create page instance');
             }
             
-            // Set up page configurations
-            await this.page.setViewport({ width: 1920, height: 1080 });
-            await this.page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
+            // Set up page configurations with random viewport
+            const viewport = browserManager.getRandomViewport();
+            await this.page.setViewport(viewport);
+            console.log(`Set viewport to: ${viewport.width}x${viewport.height}`);
             
-            console.log('Browser initialized successfully');
+            // Set random user agent
+            const userAgent = browserManager.getRandomUserAgent();
+            await this.page.setUserAgent(userAgent);
+            console.log(`Set user agent: ${userAgent}`);
+            
+            console.log('Browser initialized successfully with stealth mode using puppeteer-extra');
         } catch (error) {
             console.error('Failed to initialize browser:', error);
             throw error;
         }
     }
+
+
 
     /**
      * Apply cookies to the browser page
@@ -626,7 +626,7 @@ export class YellowPagesScraperProcess {
                 'input[placeholder*="zip"]'
             ];
 
-            // Fill keyword field
+            // Fill keyword field with human-like behavior
             let keywordField: any = null;
             for (const selector of keywordSelectors) {
                 keywordField = await this.page.$(selector);
@@ -636,11 +636,15 @@ export class YellowPagesScraperProcess {
                 }
             }
 
-            if (keywordField) {
-                // Clear field first
-                await keywordField.click({ clickCount: 3 });
-                await keywordField.type(keyword, { delay: 100 }); // Human-like typing
+            if (keywordField && this.page) {
+                const selector = keywordSelectors.find(s => this.page!.$(s));
+                if (selector) {
+                    await this.humanLikeType(this.page, selector, keyword);
+                }
             }
+
+            // Small pause between fields
+            await this.sleep(Math.random() * 300 + 200);
 
             // Fill location field if found
             let locationField: any = null;
@@ -652,68 +656,22 @@ export class YellowPagesScraperProcess {
                 }
             }
 
-            if (locationField) {
-                // Clear field first
-                await locationField.click({ clickCount: 3 });
-                await locationField.type(location, { delay: 100 }); // Human-like typing
+            if (locationField && this.page) {
+                const selector = locationSelectors.find(s => this.page!.$(s));
+                if (selector) {
+                    await this.humanLikeType(this.page, selector, location);
+                }
             }
 
             // Wait a bit after filling forms
-            await this.sleep(500);
+            await this.sleep(Math.random() * 500 + 300);
 
         } catch (error) {
             console.error('Error filling search form:', error);
         }
     }
 
-    /**
-     * Submit search form
-     */
-    private async submitSearchForm(): Promise<void> {
-        if (!this.page) return;
 
-        try {
-            // Common submit button selectors
-            const submitSelectors = [
-                'button[type="submit"]',
-                'input[type="submit"]',
-                'button:contains("Search")',
-                'button:contains("Find")',
-                'button:contains("Go")',
-                '.search-button',
-                '#search-button',
-                '[data-testid*="submit"]'
-            ];
-
-            let submitButton: any = null;
-            for (const selector of submitSelectors) {
-                submitButton = await this.page.$(selector);
-                if (submitButton) {
-                    console.log(`Found submit button: ${selector}`);
-                    break;
-                }
-            }
-
-            if (submitButton) {
-                // Click the submit button
-                await submitButton.click();
-                console.log('Submitted search form');
-            } else {
-                // Try pressing Enter key
-                await this.page.keyboard.press('Enter');
-                console.log('Submitted search form using Enter key');
-            }
-
-            // Wait for navigation
-            await this.page.waitForNavigation({ 
-                waitUntil: 'networkidle2',
-                timeout: 15000 
-            });
-
-        } catch (error) {
-            console.error('Error submitting search form:', error);
-        }
-    }
 
     /**
      * Fill search form using platform-defined selectors
@@ -1110,10 +1068,229 @@ export class YellowPagesScraperProcess {
     }
 
     /**
-     * Sleep utility
+     * Sleep utility with human-like randomization
      */
     private async sleep(ms: number): Promise<void> {
-        return new Promise(resolve => setTimeout(resolve, ms));
+        // Add random jitter to make timing more human-like
+        const jitter = Math.random() * 200 - 100; // ±100ms random variation
+        const actualDelay = Math.max(100, ms + jitter); // Minimum 100ms delay
+        return new Promise(resolve => setTimeout(resolve, actualDelay));
+    }
+
+    /**
+     * Human-like mouse movement with natural curves
+     */
+    private async humanLikeMouseMove(page: Page, targetX: number, targetY: number): Promise<void> {
+        try {
+            // Get current mouse position (Puppeteer doesn't have position() method, so we'll use a default)
+            const startX = 0;
+            const startY = 0;
+
+            // Calculate distance
+            const distance = Math.sqrt(Math.pow(targetX - startX, 2) + Math.pow(targetY - startY, 2));
+            
+            // Number of steps based on distance (more steps for longer distances)
+            const steps = Math.max(10, Math.floor(distance / 20));
+            
+            // Generate natural curve using Bezier-like interpolation
+            for (let i = 0; i <= steps; i++) {
+                const progress = i / steps;
+                
+                // Add some randomness to make movement more natural
+                const randomOffsetX = (Math.random() - 0.5) * 10;
+                const randomOffsetY = (Math.random() - 0.5) * 10;
+                
+                // Smooth interpolation with slight curve
+                const x = startX + (targetX - startX) * progress + randomOffsetX;
+                const y = startY + (targetY - startY) * progress + randomOffsetY;
+                
+                await page.mouse.move(x, y);
+                
+                // Random delay between movements
+                await this.sleep(Math.random() * 5 + 2); // 2-7ms delay
+            }
+        } catch (error) {
+            // Fallback to direct movement if human-like movement fails
+            await page.mouse.move(targetX, targetY);
+        }
+    }
+
+    /**
+     * Human-like click with natural behavior
+     */
+    private async humanLikeClick(page: Page, selector: string): Promise<void> {
+        try {
+            const element = await page.$(selector);
+            if (!element) {
+                throw new Error(`Element not found: ${selector}`);
+            }
+
+            // Get element position
+            const box = await element.boundingBox();
+            if (!box) {
+                throw new Error('Could not get element bounding box');
+            }
+
+            // Calculate click position (slightly randomized within the element)
+            const clickX = box.x + box.width / 2 + (Math.random() - 0.5) * 10;
+            const clickY = box.y + box.height / 2 + (Math.random() - 0.5) * 10;
+
+            // Human-like mouse movement to the element
+            await this.humanLikeMouseMove(page, clickX, clickY);
+            
+            // Small pause before clicking (like a human would)
+            await this.sleep(Math.random() * 100 + 50); // 50-150ms pause
+            
+            // Click with natural pressure
+            await page.mouse.click(clickX, clickY, {
+                button: 'left',
+                clickCount: 1,
+                delay: Math.random() * 50 + 25 // 25-75ms delay between mousedown and mouseup
+            });
+
+            // Small pause after clicking
+            await this.sleep(Math.random() * 100 + 50);
+
+        } catch (error) {
+            console.error(`Error in human-like click: ${error}`);
+            // Fallback to regular click
+            await page.click(selector);
+        }
+    }
+
+    /**
+     * Human-like typing with realistic delays and mistakes
+     */
+    private async humanLikeType(page: Page, selector: string, text: string): Promise<void> {
+        try {
+            const element = await page.$(selector);
+            if (!element) {
+                throw new Error(`Element not found: ${selector}`);
+            }
+
+            // Focus on the element
+            await element.focus();
+            await this.sleep(Math.random() * 200 + 100); // 100-300ms pause
+
+            // Clear the field first
+            await element.click({ clickCount: 3 }); // Select all text
+            await element.press('Backspace');
+            await this.sleep(Math.random() * 100 + 50);
+
+            // Type with human-like characteristics
+            for (let i = 0; i < text.length; i++) {
+                const char = text[i];
+                
+                // Random typing speed (50-150ms per character)
+                const typingDelay = Math.random() * 100 + 50;
+                
+                // Occasionally make a "typo" and correct it (5% chance)
+                if (Math.random() < 0.05 && i > 0) {
+                    // Type wrong character
+                    await element.type(char === ' ' ? 'x' : 'x', { delay: 0 });
+                    await this.sleep(Math.random() * 200 + 100);
+                    
+                    // Delete it
+                    await element.press('Backspace');
+                    await this.sleep(Math.random() * 100 + 50);
+                }
+                
+                // Type the correct character
+                await element.type(char, { delay: 0 });
+                await this.sleep(typingDelay);
+                
+                // Occasionally pause longer (like thinking)
+                if (Math.random() < 0.1) {
+                    await this.sleep(Math.random() * 300 + 200); // 200-500ms thinking pause
+                }
+            }
+
+            // Final pause after typing
+            await this.sleep(Math.random() * 200 + 100);
+
+        } catch (error) {
+            console.error(`Error in human-like typing: ${error}`);
+            // Fallback to regular typing
+            await page.type(selector, text);
+        }
+    }
+
+    /**
+     * Random scroll behavior to simulate human browsing
+     */
+    private async humanLikeScroll(page: Page): Promise<void> {
+        try {
+            // Random scroll amount (100-500px)
+            const scrollAmount = Math.random() * 400 + 100;
+            
+            // Random scroll direction (mostly down, occasionally up)
+            const direction = Math.random() < 0.9 ? 1 : -1;
+            
+            await page.evaluate((amount, dir) => {
+                window.scrollBy(0, amount * dir);
+            }, scrollAmount, direction);
+            
+            // Pause after scrolling
+            await this.sleep(Math.random() * 300 + 200);
+            
+        } catch (error) {
+            // Ignore scroll errors
+        }
+    }
+
+
+
+    /**
+     * Submit search form with human-like behavior
+     */
+    private async submitSearchForm(): Promise<void> {
+        if (!this.page) return;
+
+        try {
+            // Common submit button selectors
+            const submitSelectors = [
+                'button[type="submit"]',
+                'input[type="submit"]',
+                'button:contains("Search")',
+                'button:contains("Find")',
+                'button:contains("Go")',
+                '.search-button',
+                '#search-button',
+                '[data-testid*="submit"]'
+            ];
+
+            let submitButton: any = null;
+            for (const selector of submitSelectors) {
+                submitButton = await this.page.$(selector);
+                if (submitButton) {
+                    console.log(`Found submit button: ${selector}`);
+                    break;
+                }
+            }
+
+            if (submitButton && this.page) {
+                // Human-like click on submit button
+                const selector = submitSelectors.find(s => this.page!.$(s));
+                if (selector) {
+                    await this.humanLikeClick(this.page, selector);
+                    console.log('Submitted search form');
+                }
+            } else {
+                // Try pressing Enter key with human-like timing
+                await this.sleep(Math.random() * 200 + 100);
+                await this.page.keyboard.press('Enter');
+                console.log('Submitted search form using Enter key');
+            }
+
+            // Wait for navigation
+            await this.page.waitForNavigation({ 
+                waitUntil: 'networkidle2',
+                timeout: 15000 
+            });
+
+        } catch (error) {
+            console.error('Error submitting search form:', error);
+        }
     }
 
     /**

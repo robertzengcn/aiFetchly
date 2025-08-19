@@ -1,8 +1,14 @@
 import * as puppeteer from 'puppeteer';
+import { addExtra } from 'puppeteer-extra';
 import { detectBrowserPlatform, install, canDownload, Browser as PuppeteerBrowser, getInstalledBrowsers, resolveBuildId } from '@puppeteer/browsers';
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+// Create enhanced puppeteer with stealth plugin
+const puppeteerExtra = addExtra(puppeteer as any);
+//const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+puppeteerExtra.use(StealthPlugin());
 
 // Default Chrome build ID
 const DEFAULT_CHROME_BUILD_ID = '136.0.7103.94';
@@ -12,6 +18,7 @@ export interface BrowserManagerOptions {
     cacheDir?: string;
     useLocalBrowser?: boolean;
     localBrowserPath?: string;
+    enableStealth?: boolean;
 }
 
 export interface BrowserInfo {
@@ -30,6 +37,7 @@ export class BrowserManager {
             cacheDir: this.getCacheDir(),
             useLocalBrowser: false,
             localBrowserPath: process.env.LOCAL_BROWSER_EXCUTE_PATH,
+            enableStealth: true, // Enable stealth mode by default
             ...options
         };
     }
@@ -213,6 +221,97 @@ export class BrowserManager {
     }
 
     /**
+     * Get comprehensive anti-detection launch options
+     */
+    getStealthLaunchOptions(): puppeteer.LaunchOptions {
+        return {
+            headless: false, // Use non-headless mode for better stealth
+            args: [
+                // Basic stealth arguments
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-blink-features=AutomationControlled',
+                '--disable-web-security',
+                '--disable-features=VizDisplayCompositor',
+                
+                // Hide automation indicators
+                '--disable-automation',
+                '--disable-extensions-except',
+                '--disable-component-extensions-with-background-pages',
+                '--disable-default-apps',
+                '--disable-sync',
+                '--disable-translate',
+                '--disable-background-timer-throttling',
+                '--disable-backgrounding-occluded-windows',
+                '--disable-renderer-backgrounding',
+                '--disable-features=TranslateUI',
+                '--disable-ipc-flooding-protection',
+                
+                // Performance and stability
+                '--no-first-run',
+                '--no-default-browser-check',
+                '--no-pings',
+                '--no-zygote',
+                '--disable-gpu',
+                '--disable-software-rasterizer',
+                '--disable-background-networking',
+                '--disable-default-apps',
+                '--disable-extensions',
+                '--disable-sync',
+                '--disable-translate',
+                '--hide-scrollbars',
+                '--mute-audio',
+                '--no-first-run',
+                '--safebrowsing-disable-auto-update',
+                '--ignore-certificate-errors',
+                '--ignore-ssl-errors',
+                '--ignore-certificate-errors-spki-list',
+                
+                // Window and display
+                '--window-size=1920,1080',
+                '--start-maximized',
+                '--disable-infobars',
+                '--disable-notifications',
+                '--disable-popup-blocking',
+                
+                // User agent and language
+                '--lang=en-US,en',
+                '--accept-lang=en-US,en',
+                
+                // Memory and process management
+                '--memory-pressure-off',
+                '--max_old_space_size=4096',
+                '--disable-background-timer-throttling',
+                '--disable-backgrounding-occluded-windows',
+                '--disable-renderer-backgrounding',
+                
+                // Network and security
+                '--disable-web-security',
+                '--disable-features=VizDisplayCompositor',
+                '--allow-running-insecure-content',
+                '--disable-site-isolation-trials',
+                '--disable-features=TranslateUI',
+                '--disable-ipc-flooding-protection',
+                
+                // Additional stealth measures
+                '--disable-features=IsolateOrigins,site-per-process',
+                '--disable-site-isolation-trials',
+                '--disable-features=VizDisplayCompositor',
+                '--disable-background-timer-throttling',
+                '--disable-backgrounding-occluded-windows',
+                '--disable-renderer-backgrounding',
+                '--disable-features=TranslateUI',
+                '--disable-ipc-flooding-protection'
+            ],
+            ignoreDefaultArgs: [
+                '--enable-automation',
+                '--enable-blink-features=AutomationControlled'
+            ]
+        };
+    }
+
+    /**
      * Get default launch options for Puppeteer
      */
     getDefaultLaunchOptions(): puppeteer.LaunchOptions {
@@ -230,21 +329,39 @@ export class BrowserManager {
     }
 
     /**
-     * Create launch options with browser executable path
+     * Create launch options with browser executable path and stealth mode
      */
     async createLaunchOptions(customOptions?: puppeteer.LaunchOptions): Promise<puppeteer.LaunchOptions> {
         const browserInfo = await this.getBrowserExecutablePath();
-        const defaultOptions = this.getDefaultLaunchOptions();
+        const baseOptions = this.options.enableStealth ? 
+            this.getStealthLaunchOptions() : 
+            this.getDefaultLaunchOptions();
         
         return {
-            ...defaultOptions,
+            ...baseOptions,
             ...customOptions,
             executablePath: browserInfo.executablePath || undefined,
             args: [
-                ...defaultOptions.args || [],
+                ...baseOptions.args || [],
                 ...(customOptions?.args || [])
             ]
         };
+    }
+
+    /**
+     * Launch browser with stealth mode using puppeteer-extra
+     */
+    async launchWithStealth(options?: puppeteer.LaunchOptions): Promise<puppeteer.Browser> {
+        const launchOptions = await this.createLaunchOptions(options);
+        return puppeteerExtra.launch(launchOptions);
+    }
+
+    /**
+     * Launch browser without stealth mode using regular puppeteer
+     */
+    async launchWithoutStealth(options?: puppeteer.LaunchOptions): Promise<puppeteer.Browser> {
+        const launchOptions = await this.createLaunchOptions(options);
+        return puppeteer.launch(launchOptions);
     }
 
     /**
@@ -252,6 +369,54 @@ export class BrowserManager {
      */
     async getBrowserInfo(): Promise<BrowserInfo> {
         return await this.getBrowserExecutablePath();
+    }
+
+    /**
+     * Get random user agent for better stealth
+     */
+    getRandomUserAgent(): string {
+        const userAgents = [
+            // Windows Chrome
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36',
+            
+            // macOS Chrome
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+            
+            // Linux Chrome
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+            
+            // Windows Edge
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36 Edg/119.0.0.0',
+            
+            // macOS Safari
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15'
+        ];
+        
+        return userAgents[Math.floor(Math.random() * userAgents.length)];
+    }
+
+    /**
+     * Get random viewport dimensions for better stealth
+     */
+    getRandomViewport(): { width: number; height: number } {
+        const viewports = [
+            { width: 1920, height: 1080 },
+            { width: 1366, height: 768 },
+            { width: 1536, height: 864 },
+            { width: 1440, height: 900 },
+            { width: 1280, height: 720 },
+            { width: 1600, height: 900 },
+            { width: 1024, height: 768 },
+            { width: 1680, height: 1050 }
+        ];
+        
+        return viewports[Math.floor(Math.random() * viewports.length)];
     }
 }
 
