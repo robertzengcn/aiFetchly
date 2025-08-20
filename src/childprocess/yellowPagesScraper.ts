@@ -129,6 +129,11 @@ interface PlatformInfo {
     };
 }
 
+interface PauseResumePromise {
+    resolve: () => void;
+    reject: (error: Error) => void;
+}
+
 /**
  * Yellow Pages Scraper Process
  * Handles the actual scraping logic without database operations
@@ -147,6 +152,7 @@ export class YellowPagesScraperProcess {
     private onProgressCallback?: (progress: ScrapingProgress) => void;
     private onCompleteCallback?: (results: ScrapingResult[]) => void;
     private onErrorCallback?: (error: Error) => void;
+    private pauseResumePromise: PauseResumePromise | null = null;
 
     constructor(taskData: TaskData, platformInfo: PlatformInfo) {
         this.taskData = taskData;
@@ -321,16 +327,49 @@ export class YellowPagesScraperProcess {
      * Pause the scraping process
      */
     async pause(): Promise<void> {
+        if (this.isPaused) return;
+        
         console.log(`Pausing Yellow Pages scraping for task ${this.taskData.taskId}`);
         this.isPaused = true;
+        
+        // Send pause confirmation to parent process
+        if (process.parentPort) {
+            const pauseMessage = {
+                type: 'TASK_PAUSED',
+                taskId: this.taskData.taskId
+            };
+            process.parentPort.postMessage(pauseMessage);
+        }
+        
+        // Create a promise that resolves when resume is called
+        return new Promise<void>((resolve, reject) => {
+            this.pauseResumePromise = { resolve, reject };
+        });
     }
 
     /**
      * Resume the scraping process
      */
     async resume(): Promise<void> {
+        if (!this.isPaused) return;
+        
         console.log(`Resuming Yellow Pages scraping for task ${this.taskData.taskId}`);
         this.isPaused = false;
+        
+        // Send resume confirmation to parent process
+        if (process.parentPort) {
+            const resumeMessage = {
+                type: 'TASK_RESUMED',
+                taskId: this.taskData.taskId
+            };
+            process.parentPort.postMessage(resumeMessage);
+        }
+        
+        // Resolve the pause promise
+        if (this.pauseResumePromise) {
+            this.pauseResumePromise.resolve();
+            this.pauseResumePromise = null;
+        }
     }
 
     /**
@@ -468,6 +507,17 @@ export class YellowPagesScraperProcess {
                         percentage: (pageNum / maxPages) * 100
                     };
                     this.reportProgress(progress);
+
+                    // Check if paused after each major operation
+                    if (this.isPaused) {
+                        console.log(`Task ${this.taskData.taskId} is paused, waiting for resume...`);
+                        try {
+                            await this.pause();
+                        } catch (error) {
+                            console.log(`Task ${this.taskData.taskId} was stopped while paused`);
+                            break;
+                        }
+                    }
 
                     // Delay between requests
                     if (pageNum < maxPages) {
@@ -1348,10 +1398,14 @@ export class YellowPagesScraperProcess {
     }
 }
 console.log('🚀 YellowPagesScraperProcess loaded');
+
+// Global scraper instance for pause/resume operations
+let globalScraper: YellowPagesScraperProcess | null = null;
+
 // Handle process messages
-process.parentPort.on('message',  async (e) => {
-    console.log(e)
-    const message = JSON.parse(e.data) as StartTaskMessage;
+process.parentPort.on('message', async (e) => {
+    console.log(e);
+    const message = JSON.parse(e.data);
     console.log('📨 Received message:', message.type);
     
     if (message.type === 'START' && message.taskData && message.platformInfo) {
@@ -1363,6 +1417,7 @@ process.parentPort.on('message',  async (e) => {
         });
         
         const scraper = new YellowPagesScraperProcess(message.taskData, message.platformInfo);
+        globalScraper = scraper; // Store reference for pause/resume operations
         
         // Set up callbacks for IPC communication
         scraper.onProgress((progress) => {
@@ -1402,8 +1457,30 @@ process.parentPort.on('message',  async (e) => {
             };
             process.parentPort?.postMessage(errorMessage);
         }
+    } else if (message.type === 'PAUSE') {
+        console.log('⏸️ Received pause command');
+        if (globalScraper) {
+            try {
+                await globalScraper.pause();
+            } catch (error) {
+                console.error('Failed to pause scraper:', error);
+            }
+        } else {
+            console.warn('No active scraper to pause');
+        }
+    } else if (message.type === 'RESUME') {
+        console.log('▶️ Received resume command');
+        if (globalScraper) {
+            try {
+                await globalScraper.resume();
+            } catch (error) {
+                console.error('Failed to resume scraper:', error);
+            }
+        } else {
+            console.warn('No active scraper to resume');
+        }
     } else {
-        console.log('⚠️ Invalid message format or missing required data');
+        console.log('⚠️ Unknown message type:', message.type);
     }
 });
 

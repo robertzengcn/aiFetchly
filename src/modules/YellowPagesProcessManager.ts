@@ -17,6 +17,10 @@ import {
     ScrapingResultFoundMessage,
     ScrapingRateLimitedMessage,
     ScrapingCaptchaDetectedMessage,
+    PauseTaskMessage,
+    ResumeTaskMessage,
+    TaskPausedMessage,
+    TaskResumedMessage,
     isStartTaskMessage,
     isProgressMessage,
     isCompletedMessage,
@@ -358,6 +362,12 @@ export class YellowPagesProcessManager extends BaseModule {
                     break;
                 case 'SCRAPING_CAPTCHA_DETECTED':
                     console.log(`Task ${taskId}: CAPTCHA detected, may need manual intervention`);
+                    break;
+                case 'TASK_PAUSED':
+                    console.log(`Task ${taskId} paused successfully`);
+                    break;
+                case 'TASK_RESUMED':
+                    console.log(`Task ${taskId} resumed successfully`);
                     break;
                 default:
                     console.log(`Unknown message type from task ${taskId}:`, message.type);
@@ -805,5 +815,71 @@ export class YellowPagesProcessManager extends BaseModule {
             failedProcesses: failed,
             processIsolation
         };
+    }
+
+    /**
+     * Pause a specific Yellow Pages task
+     * @param taskId ID of the task to pause
+     * @returns Promise that resolves when the task is paused
+     */
+    async pauseTask(taskId: number): Promise<void> {
+        try {
+            console.log(`Pausing Yellow Pages task ${taskId}`);
+            
+            const processInfo = this.activeProcesses.get(taskId);
+            if (!processInfo) {
+                throw new Error(`No active process found for task ${taskId}`);
+            }
+
+            // Send pause message to child process
+            const pauseMessage: PauseTaskMessage = {
+                type: 'PAUSE',
+                taskId: taskId
+            };
+            
+            processInfo.process.postMessage(JSON.stringify(pauseMessage));
+            
+            // Update task status to paused
+            await this.taskModel.updateTaskStatus(taskId, YellowPagesTaskStatus.Paused);
+            
+            console.log(`Successfully paused Yellow Pages task ${taskId}`);
+            
+        } catch (error) {
+            console.error(`Failed to pause Yellow Pages task ${taskId}:`, error);
+            throw error;
+        }
+    }
+
+    /**
+     * Resume a specific Yellow Pages task
+     * @param taskId ID of the task to resume
+     * @returns Promise that resolves when the task resumes
+     */
+    async resumeTask(taskId: number): Promise<void> {
+        try {
+            console.log(`Resuming Yellow Pages task ${taskId}`);
+            
+            const processInfo = this.activeProcesses.get(taskId);
+            if (!processInfo) {
+                throw new Error(`No active process found for task ${taskId}`);
+            }
+
+            // Send resume message to child process
+            const resumeMessage: ResumeTaskMessage = {
+                type: 'RESUME',
+                taskId: taskId
+            };
+            
+            processInfo.process.postMessage(JSON.stringify(resumeMessage));
+            
+            // Update task status to in-progress
+            await this.taskModel.updateTaskStatus(taskId, YellowPagesTaskStatus.InProgress);
+            
+            console.log(`Successfully resumed Yellow Pages task ${taskId}`);
+            
+        } catch (error) {
+            console.error(`Failed to resume Yellow Pages task ${taskId}:`, error);
+            throw error;
+        }
     }
 }

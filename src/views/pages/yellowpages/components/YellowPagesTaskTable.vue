@@ -117,7 +117,7 @@
           ></v-btn>
 
           <!-- Pause/Resume Button -->
-          <!-- <v-btn
+          <v-btn
             v-if="item.status === TaskStatus.InProgress"
             icon="mdi-pause"
             size="small"
@@ -125,9 +125,10 @@
             color="warning"
             @click="$emit('pause', item)"
             class="mr-1"
-          ></v-btn> -->
+            title="Pause Task"
+          ></v-btn>
 
-          <!-- <v-btn
+          <v-btn
             v-if="item.status === TaskStatus.Paused"
             icon="mdi-play"
             size="small"
@@ -135,7 +136,8 @@
             color="success"
             @click="$emit('resume', item)"
             class="mr-1"
-          ></v-btn> -->
+            title="Resume Task"
+          ></v-btn>
 
           <!-- View Results -->
           <v-btn

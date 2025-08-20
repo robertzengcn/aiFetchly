@@ -155,6 +155,34 @@ export interface ScrapingCaptchaDetectedMessage extends BaseBackgroundMessage {
 }
 
 /**
+ * Message sent from main process to pause a task
+ */
+export interface PauseTaskMessage extends BaseBackgroundMessage {
+    type: 'PAUSE';
+}
+
+/**
+ * Message sent from main process to resume a task
+ */
+export interface ResumeTaskMessage extends BaseBackgroundMessage {
+    type: 'RESUME';
+}
+
+/**
+ * Message sent from background process when task is paused
+ */
+export interface TaskPausedMessage extends BaseBackgroundMessage {
+    type: 'TASK_PAUSED';
+}
+
+/**
+ * Message sent from background process when task is resumed
+ */
+export interface TaskResumedMessage extends BaseBackgroundMessage {
+    type: 'TASK_RESUMED';
+}
+
+/**
  * Union type for all possible background process messages
  */
 export type BackgroundProcessMessage = 
@@ -166,7 +194,11 @@ export type BackgroundProcessMessage =
     | ScrapingPageCompleteMessage
     | ScrapingResultFoundMessage
     | ScrapingRateLimitedMessage
-    | ScrapingCaptchaDetectedMessage;
+    | ScrapingCaptchaDetectedMessage
+    | PauseTaskMessage
+    | ResumeTaskMessage
+    | TaskPausedMessage
+    | TaskResumedMessage;
 
 /**
  * Type guard to check if a message is a StartTaskMessage

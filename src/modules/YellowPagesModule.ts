@@ -148,9 +148,8 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
         try {
             console.log(`Pausing Yellow Pages task ${taskId}`);
 
-            // Terminate the process and update status
-            await this.processManager.terminateProcess(taskId);
-            await this.taskModel.updateTaskStatus(taskId, YellowPagesTaskStatus.Paused);
+            // Use the process manager to pause the task
+            await this.processManager.pauseTask(taskId);
 
             console.log(`Successfully paused Yellow Pages task ${taskId}`);
 
@@ -179,8 +178,8 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
                 throw new Error(`Task ${taskId} is not in paused state`);
             }
 
-            // Start the task again
-            await this.startTask(taskId);
+            // Use the process manager to resume the task
+            await this.processManager.resumeTask(taskId);
 
             console.log(`Successfully resumed Yellow Pages task ${taskId}`);
 
