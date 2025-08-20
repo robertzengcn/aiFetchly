@@ -102,7 +102,7 @@
                   :label="t('home.search_tasks')"
                   prepend-inner-icon="mdi-magnify"
                   clearable
-                  @update:model-value="handleSearch"
+                  placeholder="Search by task name or platform..."
                 />
               </v-col>
               <v-col cols="12" md="2">
@@ -146,13 +146,71 @@
                   color="secondary"
                   variant="outlined"
                   @click="clearFilters"
+                  :disabled="loading"
                 >
                   {{ t('home.clear_filters') }}
                 </v-btn>
+                <v-chip
+                  v-if="loading"
+                  color="info"
+                  size="small"
+                  class="ml-2"
+                >
+                  <v-icon size="small" class="mr-1">mdi-loading</v-icon>
+                  Applying filters...
+                </v-chip>
               </v-col>
             </v-row>
           </v-card-text>
         </v-card>
+        
+        <!-- Active Filters Summary -->
+        <div v-if="hasActiveFilters" class="mt-2">
+          <v-chip
+            v-if="searchQuery"
+            color="primary"
+            size="small"
+            closable
+            @click:close="removeFilter('search')"
+            class="mr-2 mb-1"
+          >
+            <v-icon size="small" class="mr-1">mdi-magnify</v-icon>
+            Search: "{{ searchQuery }}"
+          </v-chip>
+          <v-chip
+            v-if="statusFilter"
+            color="success"
+            size="small"
+            closable
+            @click:close="removeFilter('status')"
+            class="mr-2 mb-1"
+          >
+            <v-icon size="small" class="mr-1">mdi-filter</v-icon>
+            Status: {{ statusOptions.find(s => s.value === statusFilter)?.title }}
+          </v-chip>
+          <v-chip
+            v-if="platformFilter"
+            color="info"
+            size="small"
+            closable
+            @click:close="removeFilter('platform')"
+            class="mr-2 mb-1"
+          >
+            <v-icon size="small" class="mr-1">mdi-web</v-icon>
+            Platform: {{ platformOptions.find(p => p.value === platformFilter)?.title }}
+          </v-chip>
+          <v-chip
+            v-if="priorityFilter"
+            color="warning"
+            size="small"
+            closable
+            @click:close="removeFilter('priority')"
+            class="mr-2 mb-1"
+          >
+            <v-icon size="small" class="mr-1">mdi-priority-high</v-icon>
+            Priority: {{ priorityOptions.find(p => p.value === priorityFilter)?.title }}
+          </v-chip>
+        </div>
       </v-col>
     </v-row>
 
@@ -161,13 +219,38 @@
       <v-col cols="12">
         <v-card>
           <v-card-title class="d-flex justify-space-between align-center">
-            <span>{{ t('home.tasks') }} ({{ total }})</span>
+            <div>
+              <span>{{ t('home.tasks') }} ({{ total }})</span>
+              <v-chip
+                v-if="hasActiveFilters"
+                color="info"
+                size="small"
+                class="ml-2"
+              >
+                {{ total }} of {{ totalUnfiltered }} tasks match filters
+              </v-chip>
+            </div>
             <v-chip color="info" size="small">
               {{ t('home.page') }} {{ currentPage + 1 }} {{ t('home.of') }} {{ Math.ceil(total / pageSize) }}
             </v-chip>
           </v-card-title>
           <v-card-text>
+            <div v-if="!loading && hasActiveFilters && total === 0" class="text-center py-8">
+              <v-icon size="64" color="grey-lighten-1" class="mb-4">mdi-filter-off</v-icon>
+              <h3 class="text-h6 text-grey-darken-1 mb-2">No tasks match your filters</h3>
+              <p class="text-body-2 text-grey-darken-1 mb-4">
+                Try adjusting your search criteria or clearing some filters
+              </p>
+              <v-btn
+                color="primary"
+                variant="outlined"
+                @click="clearFilters"
+              >
+                Clear All Filters
+              </v-btn>
+            </div>
             <YellowPagesTaskTable
+              v-else
               :tasks="tasks"
               :loading="loading"
               @edit="editTask"
@@ -229,7 +312,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import YellowPagesTaskTable from './components/YellowPagesTaskTable.vue'
@@ -251,6 +334,7 @@ const priorityFilter = ref('')
 const currentPage = ref(0)
 const pageSize = ref(10)
 const total = ref(0)
+const totalUnfiltered = ref(0) // Track total unfiltered count
 const tasks = ref<TaskSummary[]>([])
 const platforms = ref<PlatformSummary[]>([])
 
@@ -288,6 +372,11 @@ const priorityOptions = [
   { title: t('home.low'), value: 'low' }
 ]
 
+// Computed properties
+const hasActiveFilters = computed(() => {
+  return !!(searchQuery.value || statusFilter.value || platformFilter.value || priorityFilter.value)
+})
+
 // Dialog states
 const confirmDialog = reactive({
   show: false,
@@ -299,6 +388,24 @@ const confirmDialog = reactive({
 const taskDetailsDialog = reactive({
   show: false,
   task: null as any
+})
+
+// Debounced search functionality
+let searchTimeout: NodeJS.Timeout | null = null
+
+// Watch for search query changes with debouncing
+watch(searchQuery, (newQuery) => {
+  // Clear existing timeout
+  if (searchTimeout) {
+    clearTimeout(searchTimeout)
+  }
+  
+  // Set new timeout for debounced search
+  searchTimeout = setTimeout(() => {
+    if (newQuery !== undefined) {
+      handleSearch()
+    }
+  }, 300) // 300ms delay
 })
 
 // Methods
@@ -325,10 +432,12 @@ const loadTasks = async () => {
     if (response && response.length > 0) {
       tasks.value = response
       total.value = response.length
+      totalUnfiltered.value = response.length
       updateTaskStats()
     } else {
       tasks.value = []
       total.value = 0
+      totalUnfiltered.value = 0
       updateTaskStats()
     }
   } catch (error) {
@@ -336,6 +445,7 @@ const loadTasks = async () => {
     // Fallback to empty state on error
     tasks.value = []
     total.value = 0
+    totalUnfiltered.value = 0
     updateTaskStats()
   } finally {
     loading.value = false
@@ -361,13 +471,93 @@ const updateTaskStats = () => {
 }
 
 const handleSearch = () => {
-  // TODO: Implement search functionality
-  console.log('Search query:', searchQuery.value)
+  // Reset to first page when searching
+  currentPage.value = 0
+  // Apply filters and search
+  applyFiltersAndSearch()
 }
 
 const handleFilter = () => {
-  // TODO: Implement filter functionality
-  console.log('Filters:', { statusFilter: statusFilter.value, platformFilter: platformFilter.value, priorityFilter: priorityFilter.value })
+  // Reset to first page when filtering
+  currentPage.value = 0
+  // Apply filters and search
+  applyFiltersAndSearch()
+}
+
+const applyFiltersAndSearch = () => {
+  loading.value = true
+  
+  // Create filter object for API call
+  const filters: any = {
+    offset: currentPage.value * pageSize.value,
+    limit: pageSize.value
+  }
+  
+  // Add status filter
+  if (statusFilter.value) {
+    filters.status = statusFilter.value
+  }
+  
+  // Add platform filter
+  if (platformFilter.value) {
+    filters.platform = platformFilter.value
+  }
+  
+  // Load tasks with filters
+  loadTasksWithFilters(filters)
+}
+
+const loadTasksWithFilters = async (filters: any) => {
+  try {
+    const response = await getYellowPagesTaskList(filters)
+    
+    if (response && response.length > 0) {
+      // Apply client-side filtering for search and priority
+      let filteredTasks = response
+      
+      // Apply search query filtering (client-side since TaskSummary doesn't have search field)
+      if (searchQuery.value && searchQuery.value.trim()) {
+        const searchTerm = searchQuery.value.trim().toLowerCase()
+        filteredTasks = filteredTasks.filter(task => {
+          // Search in task name
+          if (task.name && task.name.toLowerCase().includes(searchTerm)) {
+            return true
+          }
+          // Search in platform
+          if (task.platform && task.platform.toLowerCase().includes(searchTerm)) {
+            return true
+          }
+          return false
+        })
+      }
+      
+      // Apply priority filter (client-side since TaskSummary doesn't have priority field)
+      if (priorityFilter.value) {
+        // Note: Priority filtering is not available in the current TaskSummary interface
+        // This filter will be applied when the backend supports it
+        // For now, we'll show all tasks when priority filter is selected
+        console.log('Priority filtering not yet implemented in backend')
+      }
+      
+      tasks.value = filteredTasks
+      total.value = filteredTasks.length
+      // Keep totalUnfiltered as the original count
+      updateTaskStats()
+    } else {
+      tasks.value = []
+      total.value = 0
+      // Keep totalUnfiltered as the original count
+      updateTaskStats()
+    }
+  } catch (error) {
+    console.error('Failed to load tasks with filters:', error)
+    // Fallback to empty state on error
+    tasks.value = []
+    total.value = 0
+    updateTaskStats()
+  } finally {
+    loading.value = false
+  }
 }
 
 const clearFilters = () => {
@@ -375,12 +565,41 @@ const clearFilters = () => {
   statusFilter.value = ''
   platformFilter.value = ''
   priorityFilter.value = ''
+  // Reset to first page
+  currentPage.value = 0
+  // Load tasks without filters
   loadTasks()
+}
+
+const removeFilter = (filterType: 'search' | 'status' | 'platform' | 'priority') => {
+  switch (filterType) {
+    case 'search':
+      searchQuery.value = ''
+      break
+    case 'status':
+      statusFilter.value = ''
+      break
+    case 'platform':
+      platformFilter.value = ''
+      break
+    case 'priority':
+      priorityFilter.value = ''
+      break
+  }
+  // Apply remaining filters
+  applyFiltersAndSearch()
 }
 
 const handlePageChange = (page: number) => {
   currentPage.value = page
-  loadTasks()
+  // Check if we have active filters or search
+  if (searchQuery.value || statusFilter.value || platformFilter.value || priorityFilter.value) {
+    // Apply filters and search for the new page
+    applyFiltersAndSearch()
+  } else {
+    // Load tasks normally for the new page
+    loadTasks()
+  }
 }
 
 const createNewTask = () => {
@@ -482,7 +701,24 @@ const resumeTask = async (task: any) => {
 }
 
 const viewTaskResults = (task: any) => {
-  router.push(`/yellowpages/results/${task.id}`)
+  // Check if task has results
+  if (!task.results_count || task.results_count === 0) {
+    // Show a message for tasks with no results
+    const message = task.status === TaskStatus.InProgress 
+      ? 'Task is still running. Results will be available when scraping completes.'
+      : 'This task has no results yet.';
+    
+    // You could add a toast notification here
+    console.log(message);
+    
+    // Optionally, you could show an alert or use a notification system
+    if (confirm(message + '\n\nDo you still want to view the results page?')) {
+      router.push(`/yellowpages/results/${task.id}`)
+    }
+  } else {
+    // Task has results, navigate directly
+    router.push(`/yellowpages/results/${task.id}`)
+  }
 }
 
 const viewTaskDetails = (task: any) => {

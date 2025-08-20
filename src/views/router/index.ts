@@ -482,7 +482,7 @@ export const constantRoutes: RouteRecordRaw[] = [
       },
       {
         path: 'results/:id(\\d+)',
-        component: () => import('@/views/pages/yellowpages/list.vue'),
+        component: () => import('@/views/pages/yellowpages/results.vue'),
         name: 'YellowPagesResults',
         meta: {
           visible: false,

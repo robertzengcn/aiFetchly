@@ -14,7 +14,19 @@
             {{ getPlatformIcon(item.platform) }}
           </v-icon>
           <div>
-            <div class="font-weight-medium">{{ item.name }}</div>
+            <div class="d-flex align-center">
+              <span class="font-weight-medium">{{ item.name }}</span>
+              <!-- Results indicator badge -->
+              <v-chip
+                v-if="item.results_count && item.results_count > 0"
+                size="x-small"
+                color="success"
+                class="ml-2"
+                :title="`${item.results_count} results available`"
+              >
+                {{ item.results_count }} results
+              </v-chip>
+            </div>
             <div class="text-caption text-medium-emphasis">
               Platform: {{ item.platform }}
             </div>
@@ -63,8 +75,30 @@
       <!-- Results Column -->
       <template v-slot:item.results_count="{ item }">
         <div class="d-flex align-center">
-          <v-icon class="mr-1" size="small">mdi-database</v-icon>
-          <span>{{ item.results_count || 0 }}</span>
+          <v-icon class="mr-1" size="small" :color="item.results_count && item.results_count > 0 ? 'primary' : 'grey'">mdi-database</v-icon>
+          <div v-if="item.results_count && item.results_count > 0">
+            <v-btn
+              variant="text"
+              size="small"
+              color="primary"
+              class="px-0 text-body-2 font-weight-medium results-button"
+              @click="$emit('view-results', item)"
+              :title="`View ${item.results_count} results`"
+            >
+              <v-chip
+                size="x-small"
+                color="primary"
+                variant="outlined"
+                class="mr-1"
+              >
+                {{ item.results_count }}
+              </v-chip>
+              View Results
+            </v-btn>
+          </div>
+          <div v-else class="text-caption text-grey-darken-1">
+            {{ item.status === TaskStatus.InProgress ? 'Collecting...' : 'No results' }}
+          </div>
         </div>
       </template>
 
@@ -86,14 +120,14 @@
       <template v-slot:item.actions="{ item }">
         <div class="d-flex align-center">
           <!-- View Details -->
-          <v-btn
+          <!-- <v-btn
             icon="mdi-eye"
             size="small"
             variant="text"
             color="info"
             @click="$emit('view-details', item)"
             class="mr-1"
-          ></v-btn>
+          ></v-btn> -->
 
           <!-- Start/Stop Button -->
           <v-btn
@@ -141,13 +175,14 @@
 
           <!-- View Results -->
           <v-btn
-            v-if="item.status === TaskStatus.Completed"
+            v-if="item.results_count && item.results_count > 0"
             icon="mdi-chart-bar"
             size="small"
             variant="text"
             color="primary"
             @click="$emit('view-results', item)"
             class="mr-1"
+            :title="`View ${item.results_count} results`"
           ></v-btn>
 
           <!-- Edit Button -->
@@ -205,7 +240,7 @@ const headers = [
   { title: 'Status', key: 'status', sortable: true },
   { title: 'Progress', key: 'progress', sortable: true },
   { title: 'Priority', key: 'priority', sortable: true },
-  { title: 'Results', key: 'results_count', sortable: true },
+  { title: 'Results (Click to View)', key: 'results_count', sortable: true },
   { title: 'Created', key: 'created_at', sortable: true },
   { title: 'Updated', key: 'updated_at', sortable: true },
   { title: 'Actions', key: 'actions', sortable: false }
@@ -304,5 +339,15 @@ const formatDate = (date: Date | string) => {
 
 .v-chip {
   text-transform: none;
+}
+
+/* Results button styling */
+.results-button {
+  transition: all 0.2s ease;
+}
+
+.results-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
 }
 </style> 
