@@ -11,18 +11,32 @@
             class="mr-2"
           ></v-btn>
           <h2 class="text-h4 font-weight-bold">
-            <v-icon class="mr-2">mdi-plus-circle</v-icon>
-            {{ $t('home.create_yellow_pages_task') }}
+            <v-icon class="mr-2">
+              {{ (isEditMode || isDetailMode) ? 'mdi-pencil' : 'mdi-plus-circle' }}
+            </v-icon>
+            {{ (isEditMode || isDetailMode) ? $t('home.edit_yellow_pages_task') : $t('home.create_yellow_pages_task') }}
           </h2>
         </div>
         <p class="text-subtitle-1 text-medium-emphasis">
-          {{ $t('home.configure_yellow_pages_task') }}
+          {{ (isEditMode || isDetailMode) ? $t('home.modify_yellow_pages_task') : $t('home.configure_yellow_pages_task') }}
         </p>
       </v-col>
     </v-row>
 
+    <!-- Loading State -->
+    <v-row v-if="loading && (isEditMode || isDetailMode)">
+      <v-col cols="12" class="text-center">
+        <v-progress-circular
+          indeterminate
+          color="primary"
+          size="64"
+        ></v-progress-circular>
+        <p class="mt-4">{{ $t('home.loading_task_data') }}</p>
+      </v-col>
+    </v-row>
+
     <!-- Main Form -->
-    <v-row>
+    <v-row v-else>
       <v-col cols="12" lg="8">
         <v-card>
           <v-card-title class="d-flex align-center">
@@ -471,8 +485,8 @@
               :disabled="!formValid"
               class="mb-3"
             >
-              <v-icon class="mr-2">mdi-play</v-icon>
-              {{ $t('home.create_start_task') }}
+              <v-icon class="mr-2">{{ (isEditMode || isDetailMode) ? 'mdi-content-save' : 'mdi-play' }}</v-icon>
+              {{ (isEditMode || isDetailMode) ? $t('home.update_task') : $t('home.create_start_task') }}
             </v-btn>
             <v-btn
               color="secondary"
@@ -482,6 +496,7 @@
               :loading="creating"
               :disabled="!formValid"
               class="mb-3"
+              v-if="!(isEditMode || isDetailMode)"
             >
               <v-icon class="mr-2">mdi-content-save</v-icon>
               {{ $t('home.create_task_only') }}
@@ -504,14 +519,14 @@
       <v-card>
         <v-card-title class="d-flex align-center">
           <v-icon color="success" class="mr-2">mdi-check-circle</v-icon>
-          {{ $t('home.task_created_successfully') }}
+          {{ (isEditMode || isDetailMode) ? $t('home.task_updated_successfully') : $t('home.task_created_successfully') }}
         </v-card-title>
         <v-card-text>
-          <p class="mb-3">{{ $t('home.task_created_message') }}</p>
+          <p class="mb-3">{{ (isEditMode || isDetailMode) ? $t('home.task_updated_message') : $t('home.task_created_message') }}</p>
           <div class="d-flex flex-column">
             <span><strong>Task ID:</strong> {{ successDialog.taskId }}</span>
             <span><strong>Name:</strong> {{ successDialog.taskName }}</span>
-            <span><strong>Status:</strong> {{ successDialog.status }}</span>
+            <span v-if="!(isEditMode || isDetailMode)"><strong>Status:</strong> {{ successDialog.status }}</span>
           </div>
         </v-card-text>
         <v-card-actions>
@@ -555,8 +570,8 @@
     <!-- Success Notification -->
     <SuccessNotification
       v-model="showSuccessNotification"
-      :title="$t('home.task_created_successfully')"
-      :message="$t('home.task_created_message')"
+      :title="(isEditMode || isDetailMode) ? $t('home.task_updated_successfully') : $t('home.task_created_successfully')"
+      :message="(isEditMode || isDetailMode) ? $t('home.task_updated_message') : $t('home.task_created_message')"
       color="success"
       icon="mdi-check-circle"
       :timeout="5000"
@@ -566,12 +581,14 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { 
   createYellowPagesTask, 
   startYellowPagesTask, 
-  getYellowPagesPlatforms 
+  getYellowPagesPlatforms,
+  getYellowPagesTaskDetail,
+  updateYellowPagesTask
 } from '@/views/api/yellowpages'
 import { PlatformSummary } from '@/interfaces/IPlatformConfig'
 import AccountSelectedTable from '@/views/pages/socialaccount/widgets/AccountSelectedTable.vue'
@@ -585,6 +602,13 @@ import SuccessNotification from '@/views/components/widgets/SuccessNotification.
 
 // Router
 const router = useRouter()
+const route = useRoute()
+
+// Check if we're in edit mode or detail mode
+const isEditMode = computed(() => route.name === 'EditYellowPagesTask')
+const isDetailMode = computed(() => route.name === 'YellowPagesTaskDetail')
+const isCreateMode = computed(() => route.name === 'CreateYellowPagesTask')
+const taskId = ref((isEditMode.value || isDetailMode.value) ? Number(route.params.id) : null)
 
 // I18n
 const { t: $t } = useI18n()
@@ -592,6 +616,8 @@ const { t: $t } = useI18n()
 // Form validation
 const form = ref<HTMLFormElement>()
 const formValid = ref(false)
+
+
 
 // Form data
 const taskForm = reactive({
@@ -610,6 +636,7 @@ const taskForm = reactive({
 
 // UI state
 const creating = ref(false)
+const loading = ref(false)
 const useProxy = ref(false)
 const scheduleTask = ref(false)
 const keywordsInput = ref('')
@@ -795,6 +822,70 @@ const validateForm = async () => {
   }
 }
 
+const loadTaskDetails = async () => {
+  if (!taskId.value) return
+  
+  try {
+    loading.value = true // Set loading state
+    const response = await getYellowPagesTaskDetail(taskId.value)
+    
+    if (response) {
+      const data = response
+      console.log("loadTaskDetails", data)
+      // Populate form fields
+      taskForm.name = data.task.name || ''
+      taskForm.platform = data.task.platform || ''
+      taskForm.location = data.task.location || ''
+      taskForm.max_pages = data.task.max_pages || 10
+      taskForm.concurrency = data.task.concurrency || 2
+      taskForm.delay_between_requests = data.task.delay_between_requests || 2000
+      taskForm.headless = data.task.headless !== undefined ? data.task.headless : true
+      taskForm.account_id = data.task.account_id || undefined
+      
+      // Set keywords
+      if (data.task.keywords && data.task.keywords.length > 0) {
+        taskForm.keywords = data.task.keywords
+        keywordsInput.value = data.task.keywords.join(', ')
+      }
+      
+      // Set account selection
+      if (data.task.account_id) {
+        useAccount.value = true
+        // Note: Account details will be loaded by AccountSelectedTable component
+      }
+      
+      // Set proxy configuration
+      if (data.proxy_config) {
+        useProxy.value = true
+        proxyValue.value = [{
+          id: 0,
+          host: data.proxy_config.host,
+          port: data.proxy_config.port.toString(),
+          user: data.proxy_config.username || '',
+          pass: data.proxy_config.password || '',
+          protocol: data.proxy_config.protocol || 'http'
+        }]
+      }
+      
+      // Set scheduling if exists
+      if (data.scheduled_at) {
+        scheduleTask.value = true
+        scheduledTime.value = new Date(data.scheduled_at).toISOString().slice(0, 16)
+        scheduleType.value = 'one-time'
+      }
+      
+    } else {
+      console.error('Failed to load task details:', response)
+    }
+  } catch (error) {
+    console.error('Error loading task details:', error)
+    errorDialog.message = error instanceof Error ? error.message : 'Failed to load task details'
+    errorDialog.show = true
+  } finally {
+    loading.value = false
+  }
+}
+
 const createTask = async () => {
   const validationResult = await validateForm()
   if (!validationResult.valid) {
@@ -846,47 +937,61 @@ const createTask = async () => {
       taskData.scheduled_at = undefined
     }
 
-    // Create task using API
-    const response = await createYellowPagesTask(taskData).catch((error) => {
-      console.error('Failed to create task:', error)
-      errorDialog.message = error instanceof Error ? error.message : 'An unexpected error occurred'
-      errorDialog.show = true
-      return null
-    })
-    
-    if (response) {
-      // Create schedule if scheduling is enabled
-      if (scheduleTask.value) {
-        try {
-          await createScheduleForTask(response, taskData)
-        } catch (scheduleError) {
-          console.warn('Failed to create schedule, but task was created:', scheduleError)
-          // Task was created successfully, so we'll show success but warn about schedule
-          errorDialog.message = `Task created successfully, but failed to create schedule: ${scheduleError instanceof Error ? scheduleError.message : 'Unknown error'}`
-          errorDialog.show = true
-          return
-        }
+    if ((isEditMode.value || isDetailMode.value) && taskId.value) {
+      // Update existing task
+      try {
+        await updateYellowPagesTask(taskId.value, taskData)
+        successDialog.taskId = taskId.value
+        successDialog.taskName = taskData.name
+        successDialog.status = 'updated'
+        successDialog.show = true
+        
+        // Show success notification
+        showSuccessNotification.value = true
+      } catch (error) {
+        throw new Error('Failed to update task')
       }
-
-      successDialog.taskId = response
-      successDialog.taskName = taskData.name
-      successDialog.status = 'pending'
-      successDialog.show = true
-      
-      // Show success notification
-      showSuccessNotification.value = true
-      
-      // Start the task immediately
-      await startYellowPagesTask(response)
-      successDialog.status = 'running'
     } else {
-      throw new Error('Failed to create task')
+      // Create new task
+      const response = await createYellowPagesTask(taskData).catch((error) => {
+        console.error('Failed to create task:', error)
+        errorDialog.message = error instanceof Error ? error.message : 'An unexpected error occurred'
+        errorDialog.show = true
+        return null
+      })
+      
+      if (response) {
+        // Create schedule if scheduling is enabled
+        if (scheduleTask.value) {
+          try {
+            await createScheduleForTask(response, taskData)
+          } catch (scheduleError) {
+            console.warn('Failed to create schedule, but task was created:', scheduleError)
+            // Task was created successfully, so we'll show success but warn about schedule
+            errorDialog.message = `Task created successfully, but failed to create schedule: ${scheduleError instanceof Error ? scheduleError.message : 'Unknown error'}`
+            errorDialog.show = true
+            return
+          }
+        }
+
+        successDialog.taskId = response
+        successDialog.taskName = taskData.name
+        successDialog.status = 'pending'
+        successDialog.show = true
+        
+        // Show success notification
+        showSuccessNotification.value = true
+        
+        // Start the task immediately
+        await startYellowPagesTask(response)
+        successDialog.status = 'running'
+      } else {
+        throw new Error('Failed to create task')
+      }
     }
-
-
     
   } catch (error) {
-    console.error('Failed to create task:', error)
+    console.error('Failed to create/update task:', error)
     errorDialog.message = error instanceof Error ? error.message : 'An unexpected error occurred'
     errorDialog.show = true
   } finally {
@@ -941,41 +1046,57 @@ const createTaskOnly = async () => {
       taskData.scheduled_at = undefined
     }
 
-    // Create task using API
-    const response = await createYellowPagesTask(taskData).catch((error) => {
-      console.error('Failed to create task:', error)
-      errorDialog.message = error instanceof Error ? error.message : 'An unexpected error occurred'
-      errorDialog.show = true
-      return null
-    })
-    
-    if (response) {
-      // Create schedule if scheduling is enabled
-      if (scheduleTask.value) {
-        try {
-          await createScheduleForTask(response, taskData)
-        } catch (scheduleError) {
-          console.warn('Failed to create schedule, but task was created:', scheduleError)
-          // Task was created successfully, so we'll show success but warn about schedule
-          errorDialog.message = `Task created successfully, but failed to create schedule: ${scheduleError instanceof Error ? scheduleError.message : 'Unknown error'}`
-          errorDialog.show = true
-          return
-        }
+    if ((isEditMode.value || isDetailMode.value) && taskId.value) {
+      // Update existing task
+      try {
+        await updateYellowPagesTask(taskId.value, taskData)
+        successDialog.taskId = taskId.value
+        successDialog.taskName = taskData.name
+        successDialog.status = 'updated'
+        successDialog.show = true
+        
+        // Show success notification
+        showSuccessNotification.value = true
+      } catch (error) {
+        throw new Error('Failed to update task')
       }
-
-      successDialog.taskId = response
-      successDialog.taskName = taskData.name
-      successDialog.status = 'pending'
-      successDialog.show = true
-      
-      // Show success notification
-      showSuccessNotification.value = true
     } else {
-      throw new Error( 'Failed to create task')
+      // Create task using API
+      const response = await createYellowPagesTask(taskData).catch((error) => {
+        console.error('Failed to create task:', error)
+        errorDialog.message = error instanceof Error ? error.message : 'An unexpected error occurred'
+        errorDialog.show = true
+        return null
+      })
+      
+      if (response) {
+        // Create schedule if scheduling is enabled
+        if (scheduleTask.value) {
+          try {
+            await createScheduleForTask(response, taskData)
+          } catch (scheduleError) {
+            console.warn('Failed to create schedule, but task was created:', scheduleError)
+            // Task was created successfully, so we'll show success but warn about schedule
+            errorDialog.message = `Task created successfully, but failed to create schedule: ${scheduleError instanceof Error ? scheduleError.message : 'Unknown error'}`
+            errorDialog.show = true
+            return
+          }
+        }
+
+        successDialog.taskId = response
+        successDialog.taskName = taskData.name
+        successDialog.status = 'pending'
+        successDialog.show = true
+        
+        // Show success notification
+        showSuccessNotification.value = true
+      } else {
+        throw new Error( 'Failed to create task')
+      }
     }
     
   } catch (error) {
-    console.error('Failed to create task:', error)
+    console.error('Failed to create/update task:', error)
     errorDialog.message = error instanceof Error ? error.message : 'An unexpected error occurred'
     errorDialog.show = true
   } finally {
@@ -1174,6 +1295,10 @@ const goToTaskDetail = () => {
   router.push(`/yellowpages/detail/${successDialog.taskId}`)
 }
 
+const editTask = () => {
+  router.push(`/yellowpages/edit/${taskId.value}`)
+}
+
 // Watch for platform changes to update form validation
 watch(() => taskForm.platform, (newPlatform) => {
   if (newPlatform && selectedPlatform.value && !selectedPlatform.value.is_active) {
@@ -1185,6 +1310,11 @@ watch(() => taskForm.platform, (newPlatform) => {
 // Lifecycle
 onMounted(() => {
   loadPlatforms()
+  
+  // If in edit mode or detail mode, load task details
+  if ((isEditMode.value || isDetailMode.value) && taskId.value) {
+    loadTaskDetails()
+  }
 })
 </script>
 

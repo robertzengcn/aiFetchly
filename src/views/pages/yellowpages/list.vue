@@ -41,45 +41,45 @@
     <!-- Task Status Overview -->
     <v-row class="mb-4">
       <v-col cols="12">
-        <v-card>
-          <v-card-title class="d-flex align-center">
-            <v-icon class="mr-2">mdi-chart-line</v-icon>
-            {{ t('home.task_overview') }}
+        <v-card class="task-status-overview">
+          <v-card-title class="d-flex align-center flex-wrap">
+            <v-icon class="mr-2 mb-1">mdi-chart-line</v-icon>
+            <span class="text-wrap">{{ t('home.task_overview') }}</span>
           </v-card-title>
           <v-card-text>
-            <v-row>
-              <v-col cols="12" md="2">
-                <div class="text-center">
+            <v-row class="task-stats-row">
+              <v-col cols="6" sm="4" md="2">
+                <div class="text-center task-stat-item">
                   <div class="text-h6 font-weight-bold text-primary">{{ taskStats.total }}</div>
                   <div class="text-caption">{{ t('home.total_tasks') }}</div>
                 </div>
               </v-col>
-              <v-col cols="12" md="2">
-                <div class="text-center">
+              <v-col cols="6" sm="4" md="2">
+                <div class="text-center task-stat-item">
                   <div class="text-h6 font-weight-bold text-success">{{ taskStats.running }}</div>
                   <div class="text-caption">{{ t('home.running') }}</div>
                 </div>
               </v-col>
-              <v-col cols="12" md="2">
-                <div class="text-center">
+              <v-col cols="6" sm="4" md="2">
+                <div class="text-center task-stat-item">
                   <div class="text-h6 font-weight-bold text-warning">{{ taskStats.pending }}</div>
                   <div class="text-caption">{{ t('home.pending') }}</div>
                 </div>
               </v-col>
-              <v-col cols="12" md="2">
-                <div class="text-center">
+              <v-col cols="6" sm="4" md="2">
+                <div class="text-center task-stat-item">
                   <div class="text-h6 font-weight-bold text-info">{{ taskStats.completed }}</div>
                   <div class="text-caption">{{ t('home.completed') }}</div>
                 </div>
               </v-col>
-              <v-col cols="12" md="2">
-                <div class="text-center">
+              <v-col cols="6" sm="4" md="2">
+                <div class="text-center task-stat-item">
                   <div class="text-h6 font-weight-bold text-error">{{ taskStats.failed }}</div>
                   <div class="text-caption">{{ t('home.failed') }}</div>
                 </div>
               </v-col>
-              <v-col cols="12" md="2">
-                <div class="text-center">
+              <v-col cols="6" sm="4" md="2">
+                <div class="text-center task-stat-item">
                   <div class="text-h6 font-weight-bold">{{ taskStats.successRate }}%</div>
                   <div class="text-caption">{{ t('home.success_rate') }}</div>
                 </div>
@@ -520,5 +520,97 @@ onMounted(() => {
 
 .v-btn {
   text-transform: none;
+}
+
+/* Task Status Overview responsive improvements */
+.task-status-overview .v-col {
+  padding: 8px;
+}
+
+.task-status-overview .v-card-title {
+  min-height: auto;
+}
+
+.task-status-overview .v-card-title .v-icon {
+  flex-shrink: 0;
+}
+
+.task-stats-row {
+  margin: 0;
+}
+
+.task-stat-item {
+  padding: 8px 4px;
+  min-height: 60px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+}
+
+@media (max-width: 600px) {
+  .task-status-overview .v-col {
+    padding: 4px;
+  }
+  
+  .task-status-overview .text-h6 {
+    font-size: 1.1rem !important;
+    line-height: 1.2;
+  }
+  
+  .task-status-overview .text-caption {
+    font-size: 0.75rem !important;
+    line-height: 1.1;
+  }
+  
+  .task-status-overview .v-card-title {
+    padding: 16px 16px 8px 16px;
+  }
+  
+  .task-status-overview .v-card-title .v-icon {
+    margin-right: 8px !important;
+    margin-bottom: 4px !important;
+  }
+  
+  .task-stat-item {
+    min-height: 50px;
+    padding: 4px 2px;
+  }
+  
+  .task-stats-row {
+    margin: 0 -4px;
+  }
+}
+
+@media (max-width: 960px) {
+  .task-status-overview .v-card-text {
+    padding: 16px;
+  }
+}
+
+@media (min-width: 960px) {
+  .task-status-overview .v-card-text {
+    padding: 24px;
+  }
+}
+
+/* Extra small screens */
+@media (max-width: 400px) {
+  .task-status-overview .v-col {
+    padding: 2px;
+  }
+  
+  .task-stat-item {
+    min-height: 45px;
+    padding: 2px 1px;
+  }
+  
+  .task-status-overview .text-h6 {
+    font-size: 1rem !important;
+  }
+  
+  .task-status-overview .text-caption {
+    font-size: 0.7rem !important;
+  }
 }
 </style> 

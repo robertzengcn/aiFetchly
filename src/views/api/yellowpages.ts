@@ -46,7 +46,8 @@ export async function createYellowPagesTask(taskData: YellowPagesTaskData): Prom
 
 export async function updateYellowPagesTask(id: number, taskData: Partial<YellowPagesTask>): Promise<void> {
     const resp = await windowInvoke(YELLOW_PAGES_UPDATE, { id, ...taskData })
-    
+    console.log("updateYellowPagesTask")
+    console.log(resp)
     if (!resp) {
         throw new Error("Unknown error")
     }
@@ -195,7 +196,12 @@ export async function exportYellowPagesTaskResults(id: number, format: 'json' | 
         throw new Error("Unknown error")
     }
     
-    return resp
+    // Handle CommonMessage response format
+    if (resp.status && resp.data) {
+        return resp.data
+    } else {
+        throw new Error(resp.msg || "Failed to export task results")
+    }
 }
 
 // Bulk Operations
@@ -220,7 +226,12 @@ export async function getYellowPagesHealthStatus(): Promise<any | null> {
         throw new Error("Unknown error")
     }
     
-    return resp
+    // Handle CommonMessage response format
+    if (resp.status && resp.data) {
+        return resp.data
+    } else {
+        throw new Error(resp.msg || "Failed to retrieve health status")
+    }
 }
 
 export async function getYellowPagesPlatforms(): Promise<PlatformSummary[] | null> {
@@ -241,6 +252,11 @@ export async function getYellowPagesStatistics(): Promise<any | null> {
         throw new Error("Unknown error")
     }
     
-    return resp
+    // Handle CommonMessage response format
+    if (resp.status && resp.data) {
+        return resp.data
+    } else {
+        throw new Error(resp.msg || "Failed to retrieve statistics")
+    }
 }
 

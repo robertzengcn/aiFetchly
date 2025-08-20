@@ -462,7 +462,7 @@ export const constantRoutes: RouteRecordRaw[] = [
       },
       {
         path: 'edit/:id(\\d+)',
-        component: () => import('@/views/pages/yellowpages/edit.vue'),
+        component: () => import('@/views/pages/yellowpages/create.vue'),
         name: 'EditYellowPagesTask',
         meta: {
           visible: false,
@@ -472,7 +472,7 @@ export const constantRoutes: RouteRecordRaw[] = [
       },
       {
         path: 'detail/:id(\\d+)',
-        component: () => import('@/views/pages/yellowpages/components/TaskDetailsView.vue'),
+        component: () => import('@/views/pages/yellowpages/create.vue'),
         name: 'YellowPagesTaskDetail',
         meta: {
           visible: false,

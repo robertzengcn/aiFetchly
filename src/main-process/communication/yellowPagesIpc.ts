@@ -57,15 +57,16 @@ export function registerYellowPagesIpcHandlers(): void {
         }
     });
     // update yellow pages task
-    ipcMain.handle(YELLOW_PAGES_UPDATE, async (event, data): Promise<CommonMessage<void>> => {
+    ipcMain.handle(YELLOW_PAGES_UPDATE, async (event, data): Promise<CommonMessage<number|void>> => {
         try {
             const yellowPagesCtrl = new YellowPagesController();
             const { id, ...taskData } = JSON.parse(data) as { id: number } & Partial<YellowPagesTask>;
             await yellowPagesCtrl.updateTask(id, taskData);
             
-            const response: CommonMessage<void> = {
+            const response: CommonMessage<number> = {
                 status: true,
-                msg: "yellow_pages.task_updated_successfully"
+                msg: "yellow_pages.task_updated_successfully",
+                data: id
             };
             return response;
         } catch (error) {
