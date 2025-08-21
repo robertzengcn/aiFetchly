@@ -41,6 +41,7 @@ import { SocialAccountEntity } from "@/entity/SocialAccount.entity";
 import { YellowPagesTaskEntity } from "@/entity/YellowPagesTask.entity";
 import { YellowPagesResultEntity } from "@/entity/YellowPagesResult.entity";
 import { YellowPagesPlatformEntity } from "@/entity/YellowPagesPlatform.entity";
+import { SessionRecordingEntity } from "@/entity/SessionRecording.entity";
 // import sqlite3 from "sqlite3";
 
 
@@ -102,6 +103,7 @@ export class SqliteDb {
                 YellowPagesTaskEntity,
                 YellowPagesResultEntity,
                 YellowPagesPlatformEntity,
+                SessionRecordingEntity,
             ],
             synchronize: true, 
             migrations: [],

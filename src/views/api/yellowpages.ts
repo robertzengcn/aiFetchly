@@ -121,11 +121,11 @@ export async function killProcessByPID(pid: number): Promise<{
         throw new Error("Unknown error")
     }
     
-    if (!resp.status) {
-        throw new Error(resp.msg || "Unknown error")
-    }
-    
-    return resp.data
+    // if (!resp.status) {
+    //     throw new Error(resp.msg || "Unknown error")
+    // }
+    //console.log(resp)
+    return resp
 }
 
 export async function getProcessStatusByPID(pid: number): Promise<{

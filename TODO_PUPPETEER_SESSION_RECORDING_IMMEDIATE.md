@@ -10,12 +10,12 @@
   export class SessionRecordingManager {
     private isRecording: boolean = false;
     private currentSession: SessionRecord | null = null;
-    private sessionActions: ScrapingAction[] = [];
+    private trainingData: TrainingDataPoint[] = [];
     
     startSession(taskId: number, platform: string, keywords: string[], location: string): void
-    logAction(action: string, selector: string, value?: string, metadata?: any): void
+    logAction(state: string, action: string): void
     capturePageState(page: Page): Promise<string>
-    endSession(resultsCount: number): Promise<boolean>
+    endSession(resultsCount: number, expectedOutput: any[]): Promise<boolean>
     saveSession(): Promise<void>
   }
   ```
@@ -29,21 +29,15 @@
     keywords: string[];
     location: string;
     resultsCount: number;
-    actions: ScrapingAction[];
-    startTime: Date;
-    endTime: Date;
+    timestamp: Date;
+    trainingData: TrainingDataPoint[];
+    expectedOutput: any[];
     sessionFilePath: string;
   }
   
-  export interface ScrapingAction {
-    step: number;
-    action: string;
-    selector?: string;
-    value?: string;
-    stateBefore: string;
-    stateAfter: string;
-    timestamp: Date;
-    metadata?: any;
+  export interface TrainingDataPoint {
+    state: string; // DOM snapshot or simplified representation
+    action: string; // Puppeteer action (e.g., "click('#search-submit')")
   }
   ```
 
@@ -62,18 +56,15 @@
   ```typescript
   // Before each action
   if (this.sessionManager.isRecording) {
-    const stateBefore = await this.capturePageState();
-    this.sessionManager.logAction('before', action, selector, value);
+    const currentState = await this.capturePageState();
+    this.sessionManager.logAction(currentState, action);
   }
   
   // Execute action
   await this.executeAction(action, selector, value);
   
-  // After each action
-  if (this.sessionManager.isRecording) {
-    const stateAfter = await this.capturePageState();
-    this.sessionManager.logAction('after', action, selector, value);
-  }
+  // Note: We only capture state before action for AI training
+  // The AI learns: "Given this DOM state, perform this action"
   ```
 
 #### 2.3 Implement Result Validation
@@ -81,9 +72,9 @@
   ```typescript
   private async validateAndSaveSession(results: ScrapingResult[]): Promise<void> {
     if (results.length > 1 && this.sessionManager.isRecording) {
-      await this.sessionManager.endSession(results.length);
+      await this.sessionManager.endSession(results.length, results);
       await this.sessionManager.saveSession();
-      console.log(`Session recorded with ${results.length} results`);
+      console.log(`Session recorded with ${results.length} results for AI training`);
     }
   }
   ```
@@ -160,34 +151,39 @@ src/
     └── sessionRecording-ipc.ts            # IPC handlers
 ```
 
-## Session File Format (Simple Version)
+## Session File Format (AI Training Optimized)
 
 ```json
 {
-  "taskId": 123,
   "platform": "yellowpages.com",
+  "taskId": 123,
   "keywords": ["restaurants"],
   "location": "New York, NY",
   "resultsCount": 15,
-  "startTime": "2024-01-15T10:30:00Z",
-  "endTime": "2024-01-15T10:35:00Z",
-  "actions": [
+  "timestamp": "2024-01-15T10:30:00Z",
+  "trainingData": [
     {
-      "step": 1,
-      "action": "goto",
-      "url": "https://www.yellowpages.com/",
-      "stateBefore": "initial_state",
-      "stateAfter": "page_loaded_state",
-      "timestamp": "2024-01-15T10:30:01Z"
+      "state": "<DOM snapshot or simplified representation>",
+      "action": "goto('https://www.yellowpages.com/')"
     },
     {
-      "step": 2,
-      "action": "type",
-      "selector": "#search-term",
-      "value": "restaurants",
-      "stateBefore": "search_form_empty",
-      "stateAfter": "search_form_filled",
-      "timestamp": "2024-01-15T10:30:02Z"
+      "state": "<DOM snapshot after page load>",
+      "action": "type('#search-term', 'restaurants')"
+    },
+    {
+      "state": "<DOM snapshot with filled form>",
+      "action": "click('#search-submit')"
+    },
+    {
+      "state": "<DOM snapshot of search results>",
+      "action": "extract('.result')"
+    }
+  ],
+  "expectedOutput": [
+    {
+      "business_name": "Example Restaurant",
+      "phone": "(555) 123-4567",
+      "address": "123 Main St, New York, NY"
     }
   ]
 }

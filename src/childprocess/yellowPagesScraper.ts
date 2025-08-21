@@ -22,6 +22,7 @@ import { ChildProcessAdapterFactory } from '@/modules/ChildProcessAdapterFactory
 import { BasePlatformAdapter } from '@/modules/BasePlatformAdapter';
 import { ProcessMessage } from '@/entityTypes/processMessage-type';
 import { StartTaskMessage, ProgressMessage, CompletedMessage, ErrorMessage } from '@/interfaces/BackgroundProcessMessages';
+import { SessionRecordingManager } from '@/modules/SessionRecordingManager';
 //import { MessageType } from '@/interfaces/IPCMessageProtocol';
 
 interface ScrapingProgress {
@@ -147,6 +148,7 @@ export class YellowPagesScraperProcess {
     private isRunning: boolean = false;
     private isPaused: boolean = false;
     private adapter: BasePlatformAdapter | null = null;
+    private sessionManager: SessionRecordingManager;
     
     // IPC integration
     private onProgressCallback?: (progress: ScrapingProgress) => void;
@@ -157,10 +159,12 @@ export class YellowPagesScraperProcess {
     constructor(taskData: TaskData, platformInfo: PlatformInfo) {
         this.taskData = taskData;
         this.platformInfo = platformInfo;
+        this.sessionManager = new SessionRecordingManager();
         
         // Log headless setting
         const headlessMode = this.taskData.headless !== undefined ? this.taskData.headless : true;
         console.log(`🔧 Scraper initialized with headless mode: ${headlessMode}`);
+        console.log(`📹 Session recording initialized: ${this.sessionManager.getRecordingStatus()}`);
     }
 
     /**
@@ -228,6 +232,7 @@ export class YellowPagesScraperProcess {
         }
 
         try {
+            
             console.log('🔧 Executing platform-specific operations...');
             
             // Example: Use adapter-specific search method if available
@@ -281,6 +286,15 @@ export class YellowPagesScraperProcess {
             
             // Execute platform-specific operations
             await this.executePlatformSpecificOperations();
+
+            // Start session recording for AI training
+            this.sessionManager.startSession(
+                this.taskData.taskId,
+                this.taskData.platform,
+                this.taskData.keywords,
+                this.taskData.location
+            );
+            console.log(`📹 Started session recording for task ${this.taskData.taskId}`);
 
             // Initialize browser
             await this.initializeBrowser();
@@ -531,6 +545,13 @@ export class YellowPagesScraperProcess {
             }
         }
 
+        // Complete session recording and save if results > 1
+        if (this.sessionManager.getRecordingStatus()) {
+            console.log(`📹 Completing session recording with ${totalResults.length} results`);
+            await this.sessionManager.endSession(totalResults.length, totalResults);
+            await this.sessionManager.saveSession();
+        }
+
         return totalResults;
     }
 
@@ -545,6 +566,13 @@ export class YellowPagesScraperProcess {
         try {
             // Navigate to base URL first
             console.log(`Navigating to base URL: ${this.platformInfo.base_url}`);
+            
+            // Log action for AI training
+            if (this.sessionManager.getRecordingStatus()) {
+                const currentState = await this.sessionManager.capturePageState(this.page);
+                this.sessionManager.logAction(currentState, `goto('${this.platformInfo.base_url}')`);
+            }
+            
             await this.page.goto(this.platformInfo.base_url, { 
                 waitUntil: 'networkidle2',
                 timeout: 30000 
@@ -737,6 +765,13 @@ export class YellowPagesScraperProcess {
                 const keywordField = await this.page.$(searchForm.keywordInput);
                 if (keywordField) {
                     console.log(`Filling keyword field with platform selector: ${searchForm.keywordInput}`);
+                    
+                    // Log action for AI training
+                    if (this.sessionManager.getRecordingStatus()) {
+                        const currentState = await this.sessionManager.capturePageState(this.page);
+                        this.sessionManager.logAction(currentState, `type('${searchForm.keywordInput}', '${keyword}')`);
+                    }
+                    
                     // Clear field first
                     await keywordField.click({ clickCount: 3 });
                     await keywordField.type(keyword, { delay: 100 }); // Human-like typing
@@ -750,6 +785,13 @@ export class YellowPagesScraperProcess {
                 const locationField = await this.page.$(searchForm.locationInput);
                 if (locationField) {
                     console.log(`Filling location field with platform selector: ${searchForm.locationInput}`);
+                    
+                    // Log action for AI training
+                    if (this.sessionManager.getRecordingStatus()) {
+                        const currentState = await this.sessionManager.capturePageState(this.page);
+                        this.sessionManager.logAction(currentState, `type('${searchForm.locationInput}', '${location}')`);
+                    }
+                    
                     // Clear field first
                     await locationField.click({ clickCount: 3 });
                     await locationField.type(location, { delay: 100 }); // Human-like typing
@@ -779,15 +821,36 @@ export class YellowPagesScraperProcess {
                 const submitButton = await this.page.$(searchForm.searchButton);
                 if (submitButton) {
                     console.log(`Submitting search form with platform selector: ${searchForm.searchButton}`);
+                    
+                    // Log action for AI training
+                    if (this.sessionManager.getRecordingStatus()) {
+                        const currentState = await this.sessionManager.capturePageState(this.page);
+                        this.sessionManager.logAction(currentState, `click('${searchForm.searchButton}')`);
+                    }
+                    
                     await submitButton.click();
                 } else {
                     console.warn(`Search button not found with selector: ${searchForm.searchButton}`);
+                    
+                    // Log action for AI training (fallback)
+                    if (this.sessionManager.getRecordingStatus()) {
+                        const currentState = await this.sessionManager.capturePageState(this.page);
+                        this.sessionManager.logAction(currentState, `keyboard.press('Enter')`);
+                    }
+                    
                     // Fallback to Enter key
                     await this.page.keyboard.press('Enter');
                     console.log('Submitted search form using Enter key (fallback)');
                 }
             } else {
                 // No search button selector, try Enter key
+                
+                // Log action for AI training
+                if (this.sessionManager.getRecordingStatus()) {
+                    const currentState = await this.sessionManager.capturePageState(this.page);
+                    this.sessionManager.logAction(currentState, `keyboard.press('Enter')`);
+                }
+                
                 await this.page.keyboard.press('Enter');
                 console.log('Submitted search form using Enter key (no button selector)');
             }
@@ -939,6 +1002,12 @@ export class YellowPagesScraperProcess {
             }
             // Wait for business list to load
             await this.page.waitForSelector(selectors.businessList, { timeout: 10000 });
+
+            // Log data extraction action for AI training
+            if (this.sessionManager.getRecordingStatus()) {
+                const currentState = await this.sessionManager.capturePageState(this.page);
+                this.sessionManager.logAction(currentState, `extract('${selectors.businessList}')`);
+            }
 
             // Extract all business listings
             const businessElements = await this.page.$$(selectors.businessList);

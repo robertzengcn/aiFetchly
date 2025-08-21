@@ -1,12 +1,13 @@
 'use strict'
 import 'reflect-metadata';
 // import {ipcMain as ipc} from 'electron-better-ipc';
-import { app, BrowserWindow, dialog,autoUpdater } from 'electron'
+import { app, BrowserWindow, dialog, autoUpdater, Menu } from 'electron'
 // import { createProtocol } from 'vue-cli-plugin-electron-builder/lib'
 import installExtension, { VUEJS3_DEVTOOLS } from 'electron-devtools-installer'
 import { registerCommunicationIpcHandlers } from "./main-process/communication/";
 import * as path from 'path';
 import { Token } from "@/modules/token"
+import { MenuManager } from "@/main-process/menu/MenuManager";
 import { USERSDBPATH} from '@/config/usersetting';
 import { SqliteDb } from "@/config/SqliteDb"
 import log from 'electron-log/main';
@@ -232,6 +233,11 @@ function initialize() {
   // Some APIs can only be used after this event occurs.
   app.whenReady().then(async () => {
     const tokenService = new Token()
+
+    // Initialize and set application menu
+    const menuManager = new MenuManager();
+    const menu = menuManager.createMenu();
+    Menu.setApplicationMenu(menu);
 
     createWindow();
 
