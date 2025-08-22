@@ -42,6 +42,14 @@ export const Platform_yelp_com: PlatformConfig = {
 
   settings: {
     requiresAuthentication: false,
+    authentication: {
+      type: 'none',
+      requiresLogin: false,
+      requiresApiKey: false,
+      requiresOAuth: false,
+      requiresCookies: false,
+      persistentAuth: false
+    },
     supportsProxy: true,
     supportsCookies: true,
     searchUrlPattern:

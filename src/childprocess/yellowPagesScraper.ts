@@ -271,6 +271,11 @@ export class YellowPagesScraperProcess {
                 console.log('📄 Adapter supports custom pagination, this will be used during scraping');
             }
 
+            // Example: Use adapter-specific page load handling if available
+            if (this.adapterSupportsFeature('custom-page-load')) {
+                console.log('🔧 Adapter supports custom page load handling, this will be used during scraping');
+            }
+
             console.log('✅ Platform-specific operations completed');
 
         } catch (error) {
@@ -512,11 +517,13 @@ export class YellowPagesScraperProcess {
         const hasCustomSearch = this.adapter && this.adapterSupportsFeature('custom-search');
         const hasCustomExtraction = this.adapter && this.adapterSupportsFeature('custom-extraction');
         const hasCustomPagination = this.adapter && this.adapterSupportsFeature('custom-pagination');
+        const hasCustomPageLoad = this.adapter && this.adapterSupportsFeature('custom-page-load');
 
         console.log(`🔧 Platform capabilities:`, {
             customSearch: hasCustomSearch,
             customExtraction: hasCustomExtraction,
             customPagination: hasCustomPagination,
+            customPageLoad: hasCustomPageLoad,
             adapterClass: this.platformInfo.adapterClass?.className || 'None'
         });
 
@@ -525,7 +532,8 @@ export class YellowPagesScraperProcess {
             console.log(`📋 Adapter methods:`, {
                 searchBusinesses: hasCustomSearch ? 'Custom' : 'Default',
                 extractBusinessData: hasCustomExtraction ? 'Custom' : 'Default',
-                handlePagination: hasCustomPagination ? 'Custom' : 'Default'
+                handlePagination: hasCustomPagination ? 'Custom' : 'Default',
+                onPageLoad: hasCustomPageLoad ? 'Custom' : 'Default'
             });
         } else {
             console.log(`🔧 No platform adapter available, using configuration-based approach`);
@@ -757,6 +765,20 @@ export class YellowPagesScraperProcess {
 
             // Wait for content to settle
             await this.sleep(1000);
+
+            // Call custom onPageLoad method if it exists in the adapter
+            if (this.adapter && typeof this.adapter.onPageLoad === 'function') {
+                try {
+                    console.log('🔧 Calling custom onPageLoad method from adapter');
+                    await this.adapter.onPageLoad(this.page!);
+                    console.log('✅ Custom onPageLoad method completed successfully');
+                } catch (error) {
+                    console.warn('⚠️ Error in custom onPageLoad method:', error);
+                    // Don't fail the scraping process if onPageLoad fails
+                }
+            } else {
+                console.log('🔧 No custom onPageLoad method found, continuing with default flow');
+            }
 
         } catch (error) {
             console.error('Error navigating to search page:', error);
@@ -1183,47 +1205,65 @@ export class YellowPagesScraperProcess {
                 return basicResult;
             }
 
-            // Get the href attribute
-            const detailUrl = await detailLink.evaluate(el => el.getAttribute('href'));
-            if (!detailUrl) {
-                console.log('Detail URL not found, using basic result');
+            // Check if the element is clickable (visible and enabled)
+            const isClickable = await detailLink.evaluate(el => {
+                const rect = el.getBoundingClientRect();
+                const style = window.getComputedStyle(el);
+                return rect.width > 0 && 
+                       rect.height > 0 && 
+                       style.display !== 'none' && 
+                       style.visibility !== 'hidden' && 
+                       !el.disabled &&
+                       el.offsetParent !== null;
+            });
+
+            if (!isClickable) {
+                console.log('Detail link is not clickable, using basic result');
                 return basicResult;
             }
 
-            // Convert relative URL to absolute if needed
-            const absoluteUrl = detailUrl.startsWith('http') ? detailUrl : new URL(detailUrl, this.platformInfo.base_url).href;
-
-            console.log(`Navigating to detail page: ${absoluteUrl}`);
+            console.log('Detail link is clickable, clicking to navigate to detail page');
 
             // Store current page context for AI training
             if (this.sessionManager.getRecordingStatus() && this.page) {
                 const currentState = await this.sessionManager.capturePageState(this.page);
-                this.sessionManager.logAction(currentState, `goto('${absoluteUrl}')`);
+                this.sessionManager.logAction(currentState, `click('${selectors.navigation.detailLink}')`);
             }
 
-            // Navigate to detail page
-            if (this.page) {
-                await this.page.goto(absoluteUrl, {
-                    waitUntil: 'networkidle2',
-                    timeout: 30000
-                });
+            // Click the detail link to navigate naturally
+            await detailLink.click();
 
-                // Wait for page to load
-                await this.sleep(selectors.navigation.delayAfterNavigation || 2000);
+            // Wait for navigation to complete
+            await this.page.waitForNavigation({
+                waitUntil: 'networkidle2',
+                timeout: 30000
+            });
 
-                // Extract enhanced data from detail page
-                const enhancedResult = await this.extractEnhancedDataFromDetailPage(basicResult, selectors);
+            // Wait for page to load
+            await this.sleep(selectors.navigation.delayAfterNavigation || 2000);
 
-                // Navigate back to search results (if needed)
-                await this.page.goBack({ waitUntil: 'networkidle2' });
-
-                // Wait for search results to reload
-                await this.page.waitForSelector(selectors.businessList, { timeout: 10000 });
-
-                return enhancedResult;
+            // Call custom onPageLoad method if it exists in the adapter
+            if (this.adapter && typeof this.adapter.onPageLoad === 'function') {
+                try {
+                    console.log('🔧 Calling custom onPageLoad method for detail page');
+                    await this.adapter.onPageLoad(this.page);
+                    console.log('✅ Custom onPageLoad method for detail page completed');
+                } catch (error) {
+                    console.warn('⚠️ Error in custom onPageLoad method for detail page:', error);
+                    // Don't fail the process if onPageLoad fails
+                }
             }
 
-            return basicResult;
+            // Extract enhanced data from detail page
+            const enhancedResult = await this.extractEnhancedDataFromDetailPage(basicResult, selectors);
+
+            // Navigate back to search results (if needed)
+            await this.page.goBack({ waitUntil: 'networkidle2' });
+
+            // Wait for search results to reload
+            await this.page.waitForSelector(selectors.businessList, { timeout: 10000 });
+
+            return enhancedResult;
 
         } catch (error) {
             console.error('Error navigating to detail page:', error);
@@ -1851,6 +1891,8 @@ export class YellowPagesScraperProcess {
                 return this.adapter.extractBusinessData !== BasePlatformAdapter.prototype.extractBusinessData;
             case 'custom-pagination':
                 return this.adapter.handlePagination !== BasePlatformAdapter.prototype.handlePagination;
+            case 'custom-page-load':
+                return this.adapter.onPageLoad !== BasePlatformAdapter.prototype.onPageLoad;
             default:
                 return false;
         }
@@ -1870,6 +1912,7 @@ export class YellowPagesScraperProcess {
         if (this.adapter.searchBusinesses !== BasePlatformAdapter.prototype.searchBusinesses) capabilities.push('custom-search');
         if (this.adapter.extractBusinessData !== BasePlatformAdapter.prototype.extractBusinessData) capabilities.push('custom-extraction');
         if (this.adapter.handlePagination !== BasePlatformAdapter.prototype.handlePagination) capabilities.push('custom-pagination');
+        if (this.adapter.onPageLoad !== BasePlatformAdapter.prototype.onPageLoad) capabilities.push('custom-page-load');
 
         return capabilities;
     }

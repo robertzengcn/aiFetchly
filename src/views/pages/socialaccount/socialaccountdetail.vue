@@ -36,16 +36,42 @@
         <v-btn :value="0" color="primary">{{ t('socialaccount.inactive') }}</v-btn>
         <v-btn :value="1" color="success">{{ t('socialaccount.active') }}</v-btn>
       </v-btn-toggle>
-      <v-select class="mt-3"
+      
+      <v-autocomplete
+        class="mt-3"
         v-model="social_type_id"
-        item-title="name"
-        item-value="id"
         :items="platformitems"
-        :label="t('socialaccount.platform') + ' (' + t('common.optional') + ')'"
+        item-title="displayName"
+        item-value="id"
+        :label="t('socialaccount.platform')"
         required
         :readonly="loading"
         :rules="[rules.required]"
-      ></v-select>
+        clearable
+        :menu-props="{ maxHeight: 400 }"
+        no-data-text="No platforms available"
+      >
+        <template v-slot:item="{ props, item }">
+          <v-list-item v-bind="props">
+            <template v-slot:title>
+              <div class="d-flex align-center">
+                <span class="font-weight-medium">{{ (item as unknown as PlatformItem).displayName }}</span>
+                <v-chip
+                  size="small"
+                  :color="getCategoryColor((item as unknown as PlatformItem).category)"
+                  class="ml-2"
+                  variant="tonal"
+                >
+                  {{ (item as unknown as PlatformItem).category }}
+                </v-chip>
+              </div>
+            </template>
+            <template v-slot:subtitle>
+              <span class="text-caption text-grey">{{ (item as unknown as PlatformItem).url }}</span>
+            </template>
+          </v-list-item>
+        </template>
+      </v-autocomplete>
       <v-text-field
         v-model="name"
         :label="t('socialaccount.name') + ' (' + t('common.optional') + ')'"
@@ -128,6 +154,15 @@ import ProxyTableselected from "@/views/pages/proxy/widgets/ProxySelectedTable.v
 import { ProxyListEntity, Proxy } from "@/entityTypes/proxyType";
 import { SocialPlatformList } from "@/config/generate";
 
+// Interface for platform items with proper typing
+interface PlatformItem {
+  id: number;
+  name: string;
+  displayName: string;
+  category: string;
+  url: string;
+}
+
 const { t } = useI18n({ inheritLocale: true });
 const show = ref<boolean>(false);
 const $route = useRoute();
@@ -156,12 +191,29 @@ const alert = ref(false);
 const alertContent = ref("");
 const alertcolor = ref("");
 const isEdit = ref(false);
-const platformitems = ref();
+const platformitems = ref<PlatformItem[]>([]);
+
 const proxytableshow = ref(false);
 // const selectedProxy = ref<ProxyListEntity>();
 
 const rules = {
   required: (value) => !!value || "Field is required",
+};
+
+
+
+// Get color for different categories
+const getCategoryColor = (category: string) => {
+  switch (category) {
+    case 'Social Media':
+      return 'blue';
+    case 'Search Engine':
+      return 'green';
+    case 'Business Directory':
+      return 'orange';
+    default:
+      return 'grey';
+  }
 };
 const showProxytable = () => {
   console.log("show proxy table");
@@ -211,12 +263,27 @@ const initialize = async () => {
     // }
   }
   //get social task type
-  platformitems.value = SocialPlatformList.map((item) => {
-    return {
-      id: item.id,
-      name: item.name,
-    };
-  });
+  console.log('SocialPlatformList raw data:', SocialPlatformList);
+  console.log('SocialPlatformList type:', typeof SocialPlatformList);
+  console.log('SocialPlatformList is array:', Array.isArray(SocialPlatformList));
+  console.log('SocialPlatformList length:', SocialPlatformList?.length);
+  
+  if (SocialPlatformList && Array.isArray(SocialPlatformList) && SocialPlatformList.length > 0) {
+    platformitems.value = SocialPlatformList.map((item) => {
+      console.log('Mapping item:', item);
+      return {
+        id: item.id,
+        name: item.name,
+        displayName: `${item.name} (${item.category})`,
+        category: item.category,
+        url: item.url,
+      };
+    });
+    console.log('Platform items mapped successfully:', platformitems.value);
+  } else {
+    console.error('SocialPlatformList is not available or empty');
+    platformitems.value = [];
+  }
 };
 
 async function onSubmit() {
@@ -282,8 +349,20 @@ async function onSubmit() {
   loading.value = false;
 }
 
-onMounted(() => {
-  initialize();
+// Watch platformitems to debug when they change
+watch(platformitems, (newValue) => {
+  console.log('platformitems changed:', newValue);
+  console.log('platformitems length:', newValue.length);
+}, { immediate: true, deep: true });
+
+onMounted(async () => {
+  try {
+    console.log('Component mounted, initializing...');
+    await initialize();
+    console.log('Initialization complete');
+  } catch (error) {
+    console.error('Error during initialization:', error);
+  }
 });
 // watch(ProxyTableselected.selected, (newValue, oldValue) => {
 //   console.log(`selectedProxy changed from ${oldValue} to ${newValue}`);

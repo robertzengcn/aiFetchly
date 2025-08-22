@@ -122,7 +122,37 @@ export const Platform_example: PlatformConfig = {
   },
 
   settings: {
-    requiresAuthentication: false,
+    requiresAuthentication: true,
+    authentication: {
+      type: 'login',
+      requiresLogin: true,
+      requiresApiKey: false,
+      requiresOAuth: false,
+      //requiresSession: true,
+      requiresCookies: true,
+      loginUrl: 'https://example.com/login',
+      logoutUrl: 'https://example.com/logout',
+      loginForm: {
+        usernameInput: '#username',
+        passwordInput: '#password',
+        emailInput: '#email',
+        loginButton: '.login-button',
+        formContainer: '.login-form',
+        captchaSelector: '.captcha-container',
+        rememberMeCheckbox: '#remember-me'
+      },
+      authStatus: {
+        loggedInIndicator: '.user-menu',
+        loggedOutIndicator: '.login-link',
+        userMenuSelector: '.user-dropdown',
+        profileLinkSelector: '.profile-link'
+      },
+      requiredCredentials: ['username', 'password'],
+      persistentAuth: true,
+      authTimeout: 3600000, // 1 hour
+      requiresReauth: false,
+      authRateLimit: 5 // 5 attempts per minute
+    },
     supportsProxy: true,
     supportsCookies: true,
     searchUrlPattern: 'https://example.com/search?q={keywords}&location={location}&page={page}',
@@ -135,7 +165,8 @@ export const Platform_example: PlatformConfig = {
       PlatformFeature.REVIEWS,
       PlatformFeature.BUSINESS_HOURS,
       PlatformFeature.SOCIAL_MEDIA,
-      PlatformFeature.CATEGORIES
+      PlatformFeature.CATEGORIES,
+      PlatformFeature.AUTHENTICATION
     ],
   },
 

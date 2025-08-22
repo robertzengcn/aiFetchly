@@ -16,13 +16,22 @@ export class ComAdapter192 extends BasePlatformAdapter {
         super(config);
     }
 
-    /**
-     * Custom search implementation for 192.com
-     */
-    async searchBusinesses(page: Page, keywords: string[], location: string): Promise<SearchResult[]> {
-        const searchUrl = this.buildSearchUrl(keywords, location, 1);
-        console.log(`Searching 192.com: ${searchUrl}`);
-        return [];
+    // /**
+    //  * Custom search implementation for 192.com
+    //  */
+    // async searchBusinesses(page: Page, keywords: string[], location: string): Promise<SearchResult[]> {
+    //     const searchUrl = this.buildSearchUrl(keywords, location, 1);
+    //     console.log(`Searching 192.com: ${searchUrl}`);
+    //     return [];
+    // }
+
+    async onPageLoad(page: Page): Promise<void> {
+    const allowAllButton = await page.$('#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll');
+    if (allowAllButton) {
+        await allowAllButton.click();
+        // Optionally wait for the dialog to disappear
+        //await page.waitForSelector('#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll', { hidden: true, timeout: 5000 }).catch(() => {});
+    }
     }
 
     /**

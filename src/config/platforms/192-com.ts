@@ -18,8 +18,14 @@ export const Platform_192_com: PlatformConfig = {
     description: 'UK business directory platform',
     maintainer: 'Platform Team',
     selectors: {
-        businessList: 'div.business-result',
-        businessName: 'h3.business-name',
+        searchForm:{
+            keywordInput: '#peopleBusinesses_name',
+            locationInput: '#where_location',
+            searchButton: '#searchBtn',
+            formContainer: '#js-ont-header-search-form',
+          },
+        businessList: '#ont-result-content > ul > li',
+        businessName: 'div.test-name',
         phone: 'span.business-phone',
         email: 'a.business-email',
         website: 'a.business-website',
@@ -35,9 +41,38 @@ export const Platform_192_com: PlatformConfig = {
             currentPage: '.pagination-current',
             maxPages: '.pagination-last',
         },
+        navigation: {
+            required: true,
+            detailLink: 'div.viewBtn',
+            delayAfterNavigation: 2000,
+            detailPage: {
+                businessName: 'h1.business-title, .business-header h1',
+                fullAddress: '.business-address-full, .address-container',
+                businessHours: '.business-hours-detailed, .hours-container',
+                description: '.business-description-full, .description-container',
+                contactInfo: '.contact-information, .contact-details',
+                services: '.business-services, .services-list',
+                additionalPhone: '.phone-numbers .phone, .contact-phone',
+                additionalEmail: '.email-addresses .email, .contact-email',
+                socialMedia: '.social-media-links a, .social-links a',
+                categories: '.business-categories-full, .category-list',
+                yearEstablished: '.year-established, .established-date',
+                numberOfEmployees: '.employee-count, .staff-size',
+                paymentMethods: '.payment-methods, .accepted-payments',
+                specialties: '.business-specialties, .specialty-list'
+            }
+        }
     },
     settings: {
         requiresAuthentication: false,
+        authentication: {
+            type: 'none',
+            requiresLogin: false,
+            requiresApiKey: false,
+            requiresOAuth: false,
+            requiresCookies: true,
+            persistentAuth: false
+        },
         supportsProxy: true,
         supportsCookies: true,
         searchUrlPattern: '{base_url}/search?q={keywords}&location={location}&page={page}',

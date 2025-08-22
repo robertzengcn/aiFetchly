@@ -27,6 +27,9 @@ export interface IBasePlatformAdapter {
      * @param keywords - Array of search keywords
      * @param location - Location to search in
      * @returns Promise resolving to search results
+     * 
+     * Note: This method has a default implementation in BasePlatformAdapter.
+     * Subclasses can override it for custom search logic, but it's not required.
      */
     searchBusinesses(page: Page, keywords: string[], location: string): Promise<SearchResult[]>;
     
@@ -94,6 +97,19 @@ export interface IBasePlatformAdapter {
      * @returns Array of supported features
      */
     getSupportedFeatures(): string[];
+    
+    /**
+     * Custom function called after page load (optional)
+     * This method is called when a page is fully loaded and can be used for
+     * platform-specific post-load operations like waiting for dynamic content,
+     * handling overlays, or performing custom initialization.
+     * @param page - Puppeteer page object
+     * @returns Promise that resolves when post-load operations are complete
+     * 
+     * Note: This method is optional and has a default no-op implementation.
+     * Subclasses can override it for custom post-load logic.
+     */
+    onPageLoad?(page: Page): Promise<void>;
     
     /**
      * Build search URL for the platform

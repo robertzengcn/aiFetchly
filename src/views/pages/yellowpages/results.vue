@@ -274,13 +274,9 @@ const categoryOptions = computed(() => {
   const categories = new Set<string>()
   results.value.forEach(result => {
     if (result.categories) {
-      try {
-        const parsedCategories = JSON.parse(result.categories)
-        if (Array.isArray(parsedCategories)) {
-          parsedCategories.forEach(cat => categories.add(cat))
-        }
-      } catch (e) {
-        // If parsing fails, treat as single category
+      if (Array.isArray(result.categories)) {
+        result.categories.forEach(cat => categories.add(cat))
+      } else {
         categories.add(result.categories)
       }
     }
@@ -312,7 +308,7 @@ const filteredResults = computed(() => {
         return true
       }
       // Search in address
-      if (result.address_street && result.address_street.toLowerCase().includes(searchTerm)) {
+      if (result.address?.street && result.address.street.toLowerCase().includes(searchTerm)) {
         return true
       }
       return false
@@ -323,15 +319,10 @@ const filteredResults = computed(() => {
   if (categoryFilter.value) {
     filtered = filtered.filter(result => {
       if (!result.categories) return false
-      try {
-        const parsedCategories = JSON.parse(result.categories)
-        if (Array.isArray(parsedCategories)) {
-          return parsedCategories.includes(categoryFilter.value)
-        }
-        return result.categories === categoryFilter.value
-      } catch (e) {
-        return result.categories === categoryFilter.value
+      if (Array.isArray(result.categories)) {
+        return result.categories.includes(categoryFilter.value)
       }
+      return result.categories === categoryFilter.value
     })
   }
 
@@ -422,12 +413,12 @@ const createCSVExport = () => {
       `"${result.email || ''}"`,
       `"${result.phone || ''}"`,
       `"${result.website || ''}"`,
-      `"${result.address_street || ''}"`,
-      `"${result.address_city || ''}"`,
-      `"${result.address_state || ''}"`,
-      `"${result.address_zip || ''}"`,
-      `"${result.address_country || ''}"`,
-      `"${result.categories || ''}"`,
+      `"${result.address?.street || ''}"`,
+      `"${result.address?.city || ''}"`,
+      `"${result.address?.state || ''}"`,
+      `"${result.address?.zip || ''}"`,
+      `"${result.address?.country || ''}"`,
+      `"${Array.isArray(result.categories) ? result.categories.join(', ') : result.categories || ''}"`,
       result.rating || '',
       result.review_count || '',
       `"${(result.description || '').replace(/"/g, '""')}"`,

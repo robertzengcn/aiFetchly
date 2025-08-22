@@ -152,6 +152,27 @@ export interface PlatformSummary {
     
     /** Whether the platform is active */
     is_active: boolean;
+    
+    /** Authentication requirements */
+    authentication?: {
+        /** Whether the platform requires authentication */
+        requiresAuthentication?: boolean;
+        
+        /** Whether cookies are required for authentication */
+        requiresCookies?: boolean;
+        
+        /** Whether user login is required */
+        requiresLogin?: boolean;
+        
+        /** Whether API key is required */
+        requiresApiKey?: boolean;
+        
+        /** Whether OAuth authentication is required */
+        requiresOAuth?: boolean;
+        
+        /** Type of authentication required */
+        type?: 'login' | 'api_key' | 'oauth' | 'session' | 'cookie' | 'none';
+    };
 }
 
 /**
@@ -545,6 +566,67 @@ export interface PlatformSelectors {
 export interface PlatformSettings {
     /** Whether the platform requires authentication */
     requiresAuthentication: boolean;
+    
+    /** Authentication configuration details */
+    authentication?: {
+        /** Type of authentication required */
+        type?: 'login' | 'api_key' | 'oauth' | 'session' | 'cookie' | 'none';
+        
+        /** Whether user login is required */
+        requiresLogin?: boolean;
+        
+        /** Whether API key is required */
+        requiresApiKey?: boolean;
+        
+        /** Whether OAuth authentication is required */
+        requiresOAuth?: boolean;
+        
+        /** Whether session-based authentication is required */
+        // requiresSession: boolean;
+        
+        /** Whether cookies are required for authentication */
+        requiresCookies?: boolean;
+        
+        /** URL for login page */
+        loginUrl?: string;
+        
+        /** URL for logout page */
+        logoutUrl?: string;
+        
+        /** Selectors for login form elements */
+        loginForm?: {
+            usernameInput?: string;
+            passwordInput?: string;
+            emailInput?: string;
+            loginButton?: string;
+            formContainer?: string;
+            captchaSelector?: string;
+            rememberMeCheckbox?: string;
+        };
+        
+        /** Selectors for authentication status checks */
+        authStatus?: {
+            loggedInIndicator?: string;
+            loggedOutIndicator?: string;
+            userMenuSelector?: string;
+            profileLinkSelector?: string;
+        };
+        
+        /** Required credential fields */
+        requiredCredentials?: string[];
+        
+        /** Whether authentication persists across sessions */
+        persistentAuth?: boolean;
+        
+        /** Authentication timeout in milliseconds */
+        authTimeout?: number;
+        
+        /** Whether re-authentication is required after certain actions */
+        requiresReauth?: boolean;
+        
+        /** Rate limiting for authentication attempts */
+        authRateLimit?: number;
+    };
     
     /** Whether the platform supports proxy */
     supportsProxy: boolean;

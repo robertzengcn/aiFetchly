@@ -60,7 +60,7 @@ export class YellowPagesController {
             console.log('Creating Yellow Pages task:', taskData);
 
             // Validate task data
-            this.validateTaskData(taskData);
+            await this.validateTaskData(taskData);
 
             // Validate platform exists and is active
             const platform = await this.platformModule.getPlatformByName(taskData.platform);
@@ -475,7 +475,15 @@ export class YellowPagesController {
                 country: p.country,
                 language: p.language,
                 rate_limit: p.rate_limit,
-                is_active: p.is_active
+                is_active: p.is_active,
+                authentication: p.settings?.authentication ? {
+                    requiresAuthentication: p.settings.requiresAuthentication,
+                    requiresCookies: p.settings.authentication.requiresCookies,
+                    requiresLogin: p.settings.authentication.requiresLogin,
+                    requiresApiKey: p.settings.authentication.requiresApiKey,
+                    requiresOAuth: p.settings.authentication.requiresOAuth,
+                    type: p.settings.authentication.type
+                } : undefined
             }));
         } catch (error) {
             console.error('Failed to get available platforms:', error);
@@ -532,7 +540,7 @@ export class YellowPagesController {
      * @param taskData Task data to validate
      * @throws Error if validation fails
      */
-    private validateTaskData(taskData: YellowPagesTaskData): void {
+    private async validateTaskData(taskData: YellowPagesTaskData): Promise<void> {
         if (!taskData.name || taskData.name.trim().length === 0) {
             throw new Error('Task name is required');
         }
@@ -564,6 +572,12 @@ export class YellowPagesController {
         // Validate headless parameter if provided
         if (taskData.headless !== undefined && typeof taskData.headless !== 'boolean') {
             throw new Error('Headless parameter must be a boolean value');
+        }
+
+        // Check if platform requires cookies and account is provided
+        const platform = await this.platformModule.getPlatformByName(taskData.platform);
+        if (platform && platform.settings?.authentication?.requiresCookies && !taskData.account_id) {
+            throw new Error(`Platform '${platform.display_name}' requires cookies for authentication. Please select an account.`);
         }
     }
 

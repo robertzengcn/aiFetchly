@@ -174,10 +174,29 @@
               <v-row>
                 <v-col cols="12" md="6">
                   <p class="mb-2">Use account</p>
-                  <v-btn-toggle v-model="useAccount" mandatory>
-                    <v-btn :value="false" color="primary">No</v-btn>
+                  <v-btn-toggle 
+                    v-model="useAccount" 
+                    mandatory
+                    :disabled="selectedPlatform?.authentication?.requiresCookies"
+                  >
+                    <v-btn :value="false" color="primary" :disabled="selectedPlatform?.authentication?.requiresCookies">No</v-btn>
                     <v-btn :value="true" color="success">Yes</v-btn>
                   </v-btn-toggle>
+                  <div v-if="selectedPlatform?.authentication?.requiresCookies" class="mt-2">
+                    <v-alert
+                      type="warning"
+                      variant="tonal"
+                      density="compact"
+                      class="mb-0"
+                    >
+                      <template v-slot:prepend>
+                        <v-icon size="small">mdi-alert</v-icon>
+                      </template>
+                      <span class="text-caption">
+                        Account required for platform: {{ selectedPlatform.display_name }}
+                      </span>
+                    </v-alert>
+                  </div>
                 </v-col>
                 <v-col cols="12" md="6">
                   <v-switch
@@ -188,7 +207,7 @@
                   />
                 </v-col>
               </v-row>
-              <v-row v-if="useAccount === true">
+              <v-row v-if="useAccount === true || selectedPlatform?.authentication?.requiresCookies">
                 <v-col cols="12">
                   <AccountSelectedTable
                     :accountSource="taskForm.platform"
@@ -468,6 +487,56 @@
                 >
                   {{ selectedPlatform.is_active ? $t('home.active') : $t('home.inactive') }}
                 </v-chip>
+              </div>
+              
+              <!-- Authentication Information -->
+              <div v-if="selectedPlatform.authentication" class="mt-3 pt-3 border-top">
+                <div class="mb-2">
+                  <span class="font-weight-medium">Authentication:</span>
+                </div>
+                <div v-if="selectedPlatform.authentication.requiresCookies" class="mb-2">
+                  <v-chip
+                    color="warning"
+                    size="small"
+                    class="mr-2"
+                  >
+                    <v-icon size="small" class="mr-1">mdi-cookie</v-icon>
+                    Requires Cookies
+                  </v-chip>
+                  <span class="text-caption text-medium-emphasis">
+                    Account required for authentication
+                  </span>
+                </div>
+                <div v-if="selectedPlatform.authentication.requiresLogin" class="mb-2">
+                  <v-chip
+                    color="info"
+                    size="small"
+                    class="mr-2"
+                  >
+                    <v-icon size="small" class="mr-1">mdi-login</v-icon>
+                    Requires Login
+                  </v-chip>
+                </div>
+                <div v-if="selectedPlatform.authentication.requiresApiKey" class="mb-2">
+                  <v-chip
+                    color="secondary"
+                    size="small"
+                    class="mr-2"
+                  >
+                    <v-icon size="small" class="mr-1">mdi-key</v-icon>
+                    Requires API Key
+                  </v-chip>
+                </div>
+                <div v-if="selectedPlatform.authentication.requiresOAuth" class="mb-2">
+                  <v-chip
+                    color="primary"
+                    size="small"
+                    class="mr-2"
+                  >
+                    <v-icon size="small" class="mr-1">mdi-oauth</v-icon>
+                    Requires OAuth
+                  </v-chip>
+                </div>
               </div>
             </div>
           </v-card-text>
@@ -778,6 +847,11 @@ const validateForm = async () => {
       // Check conditional validations
       if (useAccount.value && selectedAccounts.value.length === 0) {
         fieldErrors.push($t('home.account_required_when_enabled'))
+      }
+      
+      // Check if platform requires cookies but no account is selected
+      if (selectedPlatform.value?.authentication?.requiresCookies && selectedAccounts.value.length === 0) {
+        fieldErrors.push(`Account required for platform: ${selectedPlatform.value.display_name}`)
       }
       
       if (useProxy.value && proxyValue.value.length === 0) {
@@ -1299,11 +1373,18 @@ const editTask = () => {
   router.push(`/yellowpages/edit/${taskId.value}`)
 }
 
-// Watch for platform changes to update form validation
+// Watch for platform changes to update form validation and account requirements
 watch(() => taskForm.platform, (newPlatform) => {
-  if (newPlatform && selectedPlatform.value && !selectedPlatform.value.is_active) {
-    errorDialog.message = `Platform "${selectedPlatform.value.display_name}" is currently inactive`
-    errorDialog.show = true
+  if (newPlatform && selectedPlatform.value) {
+    if (!selectedPlatform.value.is_active) {
+      errorDialog.message = `Platform "${selectedPlatform.value.display_name}" is currently inactive`
+      errorDialog.show = true
+    }
+    
+    // Automatically require account if platform needs cookies
+    if (selectedPlatform.value.authentication?.requiresCookies) {
+      useAccount.value = true
+    }
   }
 })
 
@@ -1353,5 +1434,9 @@ onMounted(() => {
 
 .error-dialog-title {
   color: #f44336;
+}
+
+.border-top {
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
 }
 </style>

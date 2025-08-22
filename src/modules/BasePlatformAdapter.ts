@@ -15,6 +15,9 @@ import { BusinessData } from '@/interfaces/IDataExtractor';
 /**
  * Base platform adapter that provides default implementations for all platform types
  * This class serves as the foundation for configuration-only, class-based, and hybrid platforms
+ * 
+ * Note: The searchBusinesses method now has a default implementation and is optional to override.
+ * Subclasses only need to implement extractBusinessData, handlePagination, and applyCookies.
  */
 export abstract class BasePlatformAdapter implements IBasePlatformAdapter {
     protected _config: PlatformConfig;
@@ -40,9 +43,13 @@ export abstract class BasePlatformAdapter implements IBasePlatformAdapter {
     }
 
     /**
-     * Abstract method - must be implemented by subclasses
+     * Search for businesses using keywords and location
+     * Default implementation returns empty results - can be overridden by subclasses
      */
-    abstract searchBusinesses(page: Page, keywords: string[], location: string): Promise<SearchResult[]>;
+    async searchBusinesses(page: Page, keywords: string[], location: string): Promise<SearchResult[]> {
+
+        return [];
+    }
 
     /**
      * Abstract method - must be implemented by subclasses
@@ -119,6 +126,15 @@ export abstract class BasePlatformAdapter implements IBasePlatformAdapter {
      */
     getSupportedFeatures(): string[] {
         return this._config.settings?.supportedFeatures || ['search', 'pagination'];
+    }
+
+    /**
+     * Custom function called after page load (optional)
+     * Default implementation does nothing - can be overridden by subclasses
+     */
+    async onPageLoad(page: Page): Promise<void> {
+        // Default implementation - do nothing
+        // Subclasses can override this for custom post-load logic
     }
 
     /**

@@ -18,7 +18,7 @@
               <div class="text-caption text-grey-darken-1">{{ t('home.categories') }}</div>
               <div class="d-flex flex-wrap">
                 <v-chip
-                  v-for="category in parseCategories(result.categories)"
+                  v-for="category in Array.isArray(result.categories) ? result.categories : [result.categories]"
                   :key="category"
                   size="small"
                   color="primary"
@@ -49,7 +49,7 @@
               <div class="text-caption text-grey-darken-1">{{ t('home.specialties') }}</div>
               <div class="d-flex flex-wrap">
                 <v-chip
-                  v-for="specialty in parseArrayField(result.specialties)"
+                  v-for="specialty in Array.isArray(result.specialties) ? result.specialties : [result.specialties]"
                   :key="specialty"
                   size="small"
                   color="secondary"
@@ -148,33 +148,33 @@
           <v-card-text>
             <v-row>
               <v-col cols="12" md="6">
-                <div v-if="result.address_street" class="mb-3">
+                <div v-if="result.address?.street" class="mb-3">
                   <div class="text-caption text-grey-darken-1">{{ t('home.street_address') }}</div>
-                  <div class="text-body-2">{{ result.address_street }}</div>
+                  <div class="text-body-2">{{ result.address.street }}</div>
                 </div>
               </v-col>
               <v-col cols="12" md="6">
-                <div v-if="result.address_city" class="mb-3">
+                <div v-if="result.address?.city" class="mb-3">
                   <div class="text-caption text-grey-darken-1">{{ t('home.city') }}</div>
-                  <div class="text-body-2">{{ result.address_city }}</div>
+                  <div class="text-body-2">{{ result.address.city }}</div>
                 </div>
               </v-col>
               <v-col cols="12" md="4">
-                <div v-if="result.address_state" class="mb-3">
+                <div v-if="result.address?.state" class="mb-3">
                   <div class="text-caption text-grey-darken-1">{{ t('home.state') }}</div>
-                  <div class="text-body-2">{{ result.address_state }}</div>
+                  <div class="text-body-2">{{ result.address.state }}</div>
                 </div>
               </v-col>
               <v-col cols="12" md="4">
-                <div v-if="result.address_zip" class="mb-3">
+                <div v-if="result.address?.zip" class="mb-3">
                   <div class="text-caption text-grey-darken-1">{{ t('home.zip_code') }}</div>
-                  <div class="text-body-2">{{ result.address_zip }}</div>
+                  <div class="text-body-2">{{ result.address.zip }}</div>
                 </div>
               </v-col>
               <v-col cols="12" md="4">
-                <div v-if="result.address_country" class="mb-3">
+                <div v-if="result.address?.country" class="mb-3">
                   <div class="text-caption text-grey-darken-1">{{ t('home.country') }}</div>
-                  <div class="text-body-2">{{ result.address_country }}</div>
+                  <div class="text-body-2">{{ result.address.country }}</div>
                 </div>
               </v-col>
             </v-row>
@@ -225,7 +225,7 @@
             <div v-if="result.business_hours" class="mb-3">
               <div class="text-caption text-grey-darken-1">{{ t('home.hours') }}</div>
               <div class="text-body-2">
-                <pre class="text-body-2" style="white-space: pre-wrap; font-family: inherit;">{{ formatBusinessHours(result.business_hours) }}</pre>
+                <pre class="text-body-2" style="white-space: pre-wrap; font-family: inherit;">{{ typeof result.business_hours === 'string' ? formatBusinessHours(result.business_hours) : JSON.stringify(result.business_hours, null, 2) }}</pre>
               </div>
             </div>
             <div v-else class="text-body-2 text-grey-darken-1">
@@ -251,7 +251,7 @@
                   <div class="text-caption text-grey-darken-1">{{ t('home.social_media') }}</div>
                   <div class="d-flex flex-wrap">
                     <v-chip
-                      v-for="social in parseArrayField(result.social_media)"
+                      v-for="social in Array.isArray(result.social_media) ? result.social_media : [result.social_media]"
                       :key="social"
                       size="small"
                       color="info"
@@ -269,7 +269,7 @@
                   <div class="text-caption text-grey-darken-1">{{ t('home.payment_methods') }}</div>
                   <div class="d-flex flex-wrap">
                     <v-chip
-                      v-for="method in parseArrayField(result.payment_methods)"
+                      v-for="method in Array.isArray(result.payment_methods) ? result.payment_methods : [result.payment_methods]"
                       :key="method"
                       size="small"
                       color="success"
@@ -289,7 +289,7 @@
                 <v-expansion-panel>
                   <v-expansion-panel-title>{{ t('home.view_raw_data') }}</v-expansion-panel-title>
                   <v-expansion-panel-text>
-                    <pre class="text-body-2" style="white-space: pre-wrap; font-family: monospace; background: #f5f5f5; padding: 16px; border-radius: 4px; max-height: 300px; overflow-y: auto;">{{ formatRawData(result.raw_data) }}</pre>
+                    <pre class="text-body-2" style="white-space: pre-wrap; font-family: monospace; background: #f5f5f5; padding: 16px; border-radius: 4px; max-height: 300px; overflow-y: auto;">{{ typeof result.raw_data === 'string' ? formatRawData(result.raw_data) : JSON.stringify(result.raw_data, null, 2) }}</pre>
                   </v-expansion-panel-text>
                 </v-expansion-panel>
               </v-expansion-panels>
@@ -370,7 +370,7 @@ const { t } = useI18n()
 
 // Computed properties
 const hasAddress = computed(() => {
-  return !!(props.result.address_street || props.result.address_city || props.result.address_state || props.result.address_zip || props.result.address_country)
+  return !!(props.result.address?.street || props.result.address?.city || props.result.address?.state || props.result.address?.zip || props.result.address?.country)
 })
 
 const hasAdditionalInfo = computed(() => {

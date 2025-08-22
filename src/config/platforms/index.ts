@@ -8,6 +8,9 @@ import { Platform_paginegialle_it } from './paginegialle-it';
 import { Platform_pagesjaunes_fr } from './pagesjaunes-fr';
 import { Platform_yelp_com } from './yelp-com';
 import { Platform_yellowpages_com } from './yellowpages-com';
+import { Platform_example } from './example-platform';
+import { Platform_api_key_example } from './api-key-example';
+import { Platform_oauth_example } from './oauth-example';
 
 /**
  * Platform configurations array
@@ -18,6 +21,11 @@ import { Platform_yellowpages_com } from './yellowpages-com';
  * - Compile-time validation: TypeScript catches errors at build time
  * - Performance: No need for dynamic imports or string parsing
  * - Easier testing: Direct instantiation in unit tests
+ * 
+ * Authentication Examples:
+ * - Platform_example: Demonstrates login-based authentication
+ * - Platform_api_key_example: Demonstrates API key authentication
+ * - Platform_oauth_example: Demonstrates OAuth authentication
  */
 export const platforms: PlatformConfig[] = [
   Platform_192_com,
@@ -28,6 +36,9 @@ export const platforms: PlatformConfig[] = [
   Platform_pagesjaunes_fr,
   Platform_yelp_com,
   Platform_yellowpages_com,
+  Platform_example,
+  Platform_api_key_example,
+  Platform_oauth_example,
 ];
 
 export const platformsById: Record<string, PlatformConfig> = Object.fromEntries(

@@ -35,10 +35,13 @@ export interface IPlatformAdapter {
 
     /**
      * Search for businesses using keywords and location
-     * @param page - Puppeteer Page object
+     * @param page - Puppeteer page object
      * @param keywords - Array of search keywords
      * @param location - Location to search in
      * @returns Promise resolving to search results
+     * 
+     * Note: This method has a default implementation in BasePlatformAdapter.
+     * Subclasses can override it for custom search logic, but it's not required.
      */
     searchBusinesses(page: Page, keywords: string[], location: string): Promise<SearchResult[]>;
 

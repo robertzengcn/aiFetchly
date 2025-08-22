@@ -16,7 +16,7 @@
             <div class="font-weight-medium">{{ item.business_name }}</div>
             <div v-if="item.categories" class="text-caption text-grey-darken-1">
               <v-chip
-                v-for="category in parseCategories(item.categories)"
+                v-for="category in Array.isArray(item.categories) ? item.categories : [item.categories]"
                 :key="category"
                 size="x-small"
                 color="primary"
@@ -57,7 +57,7 @@
 
       <!-- Address Column -->
       <template v-slot:item.address="{ item }">
-        <div v-if="item.address_street || item.address_city || item.address_state">
+        <div v-if="item.address?.street || item.address?.city || item.address?.state">
           <div class="d-flex align-center mb-1">
             <v-icon size="small" class="mr-1" color="orange">mdi-map-marker</v-icon>
             <span class="text-caption">
@@ -262,12 +262,12 @@ const parseCategories = (categories: string): string[] => {
 }
 
 const formatAddress = (item: YellowPagesResult): string => {
-  const parts = []
-  if (item.address_street) parts.push(item.address_street)
-  if (item.address_city) parts.push(item.address_city)
-  if (item.address_state) parts.push(item.address_state)
-  if (item.address_zip) parts.push(item.address_zip)
-  if (item.address_country) parts.push(item.address_country)
+  const parts: string[] = []
+  if (item.address?.street) parts.push(item.address.street)
+  if (item.address?.city) parts.push(item.address.city)
+  if (item.address?.state) parts.push(item.address.state)
+  if (item.address?.zip) parts.push(item.address.zip)
+  if (item.address?.country) parts.push(item.address.country)
   
   return parts.length > 0 ? parts.join(', ') : 'No address available'
 }

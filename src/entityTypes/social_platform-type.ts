@@ -1,7 +1,8 @@
 export type SocialPlatformEntity={
     id: number,
-    name: string
-    url:string
+    name: string,
+    url: string,
+    category: string
 }
 export type SocialPlatformResponse = {
     status: string,
