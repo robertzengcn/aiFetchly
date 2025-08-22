@@ -18,7 +18,7 @@ class ConfigurationPlatformAdapter implements IBasePlatformAdapter {
     get baseUrl(): string { return this.config.base_url; }
     get version(): string { return this.config.version; }
     
-    async searchBusinesses(keywords: string[], location: string): Promise<any[]> {
+    async searchBusinesses(page: any, keywords: string[], location: string): Promise<any[]> {
         // Default implementation using configuration
         return [];
     }
@@ -345,8 +345,8 @@ class HybridPlatformAdapter implements IBasePlatformAdapter {
     get baseUrl(): string { return this.config.base_url; }
     get version(): string { return this.config.version; }
     
-    async searchBusinesses(keywords: string[], location: string): Promise<any[]> {
-        return await this.baseAdapter.searchBusinesses(keywords, location);
+    async searchBusinesses(page: any, keywords: string[], location: string): Promise<any[]> {
+        return await this.baseAdapter.searchBusinesses(page, keywords, location);
     }
     
     async extractBusinessData(page: any): Promise<any> {

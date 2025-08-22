@@ -21,7 +21,7 @@ export class YellowPagesCaAdapter extends BasePlatformAdapter {
     /**
      * Custom search implementation for YellowPages.ca
      */
-    async searchBusinesses(keywords: string[], location: string): Promise<SearchResult[]> {
+    async searchBusinesses(page: Page, keywords: string[], location: string): Promise<SearchResult[]> {
         const searchUrl = this.buildSearchUrl(keywords, location, 1);
         console.log(`Searching YellowPages.ca: ${searchUrl}`);
         return [];

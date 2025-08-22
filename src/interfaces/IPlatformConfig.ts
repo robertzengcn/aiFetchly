@@ -252,6 +252,51 @@ export type SelectorValue =
           date?: string;
           /** Selector for review rating */
           rating?: string;
+      }
+    | {
+          /** Selector for the link/button to navigate to detail page */
+          detailLink?: string;
+          /** Alternative selectors if primary fails */
+          alternatives?: string[];
+          /** Whether navigation is required for full data extraction */
+          required?: boolean;
+          /** Delay after navigation (ms) */
+          delayAfterNavigation?: number;
+          /** Selectors specific to detail page */
+          detailPage?: {
+              /** Business name on detail page (might be different from listing) */
+              businessName?: string;
+              /** Full address on detail page */
+              fullAddress?: string;
+              /** Detailed business hours */
+              businessHours?: string;
+              /** Complete description */
+              description?: string;
+              /** Contact information */
+              contactInfo?: string;
+              /** Services offered */
+              services?: string;
+              /** Photos/gallery */
+              photos?: string;
+              /** Map/location widget */
+              map?: string;
+              /** Additional phone numbers */
+              additionalPhone?: string;
+              /** Additional email addresses */
+              additionalEmail?: string;
+              /** Social media links */
+              socialMedia?: string;
+              /** Business categories */
+              categories?: string;
+              /** Year established */
+              yearEstablished?: string;
+              /** Number of employees */
+              numberOfEmployees?: string;
+              /** Payment methods */
+              paymentMethods?: string;
+              /** Business specialties */
+              specialties?: string;
+          };
       };
 
 export interface PlatformSelectors {
@@ -442,6 +487,53 @@ export interface PlatformSelectors {
 
     /** Pagination selectors */
     pagination?: SelectorValue;
+
+    /** Navigation selectors for detail page extraction */
+    navigation?: {
+        /** Selector for the link/button to navigate to detail page */
+        detailLink?: string;
+        /** Alternative selectors if primary fails */
+        alternatives?: string[];
+        /** Whether navigation is required for full data extraction */
+        required?: boolean;
+        /** Delay after navigation (ms) */
+        delayAfterNavigation?: number;
+        /** Selectors specific to detail page */
+        detailPage?: {
+            /** Business name on detail page (might be different from listing) */
+            businessName?: string;
+            /** Full address on detail page */
+            fullAddress?: string;
+            /** Detailed business hours */
+            businessHours?: string;
+            /** Complete description */
+            description?: string;
+            /** Contact information */
+            contactInfo?: string;
+            /** Services offered */
+            services?: string;
+            /** Photos/gallery */
+            photos?: string;
+            /** Map/location widget */
+            map?: string;
+            /** Additional phone numbers */
+            additionalPhone?: string;
+            /** Additional email addresses */
+            additionalEmail?: string;
+            /** Social media links */
+            socialMedia?: string;
+            /** Business categories */
+            categories?: string;
+            /** Year established */
+            yearEstablished?: string;
+            /** Number of employees */
+            numberOfEmployees?: string;
+            /** Payment methods */
+            paymentMethods?: string;
+            /** Business specialties */
+            specialties?: string;
+        };
+    };
 
     /** Allow platform-specific extra selectors without weakening types */
     [key: string]: SelectorValue | undefined;

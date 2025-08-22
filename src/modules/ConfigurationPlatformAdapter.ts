@@ -20,7 +20,7 @@ export class ConfigurationPlatformAdapter extends BasePlatformAdapter {
     /**
      * Search for businesses using default implementation
      */
-    async searchBusinesses(keywords: string[], location: string): Promise<SearchResult[]> {
+    async searchBusinesses(page: Page, keywords: string[], location: string): Promise<SearchResult[]> {
         console.log(`Searching ${this.platformName} with keywords: ${keywords.join(', ')} in ${location}`);
         
         // For configuration-only platforms, we return empty results

@@ -12,7 +12,7 @@ export class MockPlatformAdapter implements IPlatformAdapter {
     /**
      * Mock search for businesses
      */
-    async searchBusinesses(keywords: string[], location: string): Promise<SearchResult[]> {
+    async searchBusinesses(page: any, keywords: string[], location: string): Promise<SearchResult[]> {
         console.log(`MockPlatformAdapter: Searching for ${keywords.join(', ')} in ${location}`);
         
         const mockResults: SearchResult[] = [];

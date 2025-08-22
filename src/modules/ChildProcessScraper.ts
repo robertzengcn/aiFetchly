@@ -33,7 +33,7 @@ export class ChildProcessScraper {
     /**
      * Execute scraping using the platform-specific adapter
      */
-    async executeScraping(taskData: any): Promise<any[]> {
+    async executeScraping(taskData: any, page?: any): Promise<any[]> {
         if (!this.platformConfig) {
             throw new Error('Scraper not initialized');
         }
@@ -45,6 +45,7 @@ export class ChildProcessScraper {
             // Example: Use adapter-specific search method
             if (this.adapter.searchBusinesses !== BasePlatformAdapter.prototype.searchBusinesses) {
                 const results = await this.adapter.searchBusinesses(
+                    page, 
                     taskData.keywords, 
                     taskData.location
                 );

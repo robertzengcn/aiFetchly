@@ -55,7 +55,7 @@ export function getPlatformById(id: string): PlatformConfig | undefined {
  * // Type-safe access to platform-specific methods
  * if (adapter instanceof ComAdapter192) {
  *   // TypeScript knows this is a ComAdapter192 instance
- *   await adapter.searchBusinesses(['restaurant'], 'London');
+ *   await adapter.searchBusinesses(page, ['restaurant'], 'London');
  * }
  * ```
  */

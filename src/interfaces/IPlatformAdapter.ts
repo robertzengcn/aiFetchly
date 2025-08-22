@@ -10,7 +10,7 @@ import { Page } from 'puppeteer';
  * @example
  * ```typescript
  * const adapter = new YellowPagesComAdapter();
- * const results = await adapter.searchBusinesses(['restaurant'], 'New York');
+ * const results = await adapter.searchBusinesses(page, ['restaurant'], 'New York');
  * const data = await adapter.extractBusinessData(page);
  * ```
  * 
@@ -35,11 +35,12 @@ export interface IPlatformAdapter {
 
     /**
      * Search for businesses using keywords and location
+     * @param page - Puppeteer Page object
      * @param keywords - Array of search keywords
      * @param location - Location to search in
      * @returns Promise resolving to search results
      */
-    searchBusinesses(keywords: string[], location: string): Promise<SearchResult[]>;
+    searchBusinesses(page: Page, keywords: string[], location: string): Promise<SearchResult[]>;
 
     /**
      * Extract business data from the current page

@@ -23,11 +23,12 @@ export interface IBasePlatformAdapter {
     
     /**
      * Search for businesses using keywords and location
+     * @param page - Puppeteer page object
      * @param keywords - Array of search keywords
      * @param location - Location to search in
      * @returns Promise resolving to search results
      */
-    searchBusinesses(keywords: string[], location: string): Promise<SearchResult[]>;
+    searchBusinesses(page: Page, keywords: string[], location: string): Promise<SearchResult[]>;
     
     /**
      * Extract business data from a page

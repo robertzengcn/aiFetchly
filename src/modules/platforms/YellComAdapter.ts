@@ -19,7 +19,7 @@ export class YellComAdapter extends BasePlatformAdapter {
     /**
      * Custom search implementation for Yell.com
      */
-    async searchBusinesses(keywords: string[], location: string): Promise<SearchResult[]> {
+    async searchBusinesses(page: Page, keywords: string[], location: string): Promise<SearchResult[]> {
         const searchUrl = this.buildSearchUrl(keywords, location, 1);
         console.log(`Searching Yell.com: ${searchUrl}`);
         return [];

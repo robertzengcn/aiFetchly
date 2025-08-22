@@ -32,7 +32,7 @@ export const Platform_yell_com: PlatformConfig = {
     businessName: 'h2.businessCapsule--name',
     phone: 'span.business--telephoneNumber',
     email: '',
-    website: 'a.business--website',
+    website: 'a[data-test="localBusiness--website"]',
     address: 'span.business--address',
     categories: 'span.business--category',
     socialMedia: '',
@@ -40,6 +40,37 @@ export const Platform_yell_com: PlatformConfig = {
     reviewCount: '',
     businessHours: '',
     description: 'div.businessCapsule--classStrap',
+    
+    // Navigation configuration for detail page extraction
+    navigation: {
+      detailLink: 'h2.businessCapsule--name a, .businessCapsule--name a',
+      alternatives: [
+        'a.businessCapsule--name',
+        '.businessCapsule a[href*="/business/"]',
+        'a[href*="/business/"]'
+      ],
+      required: true, // Navigation is required for full data
+      delayAfterNavigation: 2000,
+      detailPage: {
+        businessName: 'h1.business--name, .business--name',
+        fullAddress: '.business--full-address, .address--complete',
+        businessHours: '.business--hours, .hours--detailed',
+        description: '.business--description, .description--full',
+        contactInfo: '.business--contact, .contact--info',
+        services: '.business--services, .services--list',
+        photos: '.business--photos, .gallery--images',
+        map: '.business--map, .location--map',
+        additionalPhone: '.business--phone, .phone--additional',
+        additionalEmail: '.business--email, .email--additional',
+        socialMedia: '.business--social, .social--links',
+        categories: '.business--categories, .categories--detailed',
+        yearEstablished: '.business--established, .established--year',
+        numberOfEmployees: '.business--employees, .employees--count',
+        paymentMethods: '.business--payment, .payment--methods',
+        specialties: '.business--specialties, .specialties--list'
+      }
+    },
+    
     pagination: {
       nextButton: 'a.pagination--next',
       currentPage: '',

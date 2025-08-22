@@ -35,7 +35,7 @@ export class ExampleClassBasedAdapter implements IBasePlatformAdapter {
     /**
      * Custom search implementation with advanced logic
      */
-    async searchBusinesses(keywords: string[], location: string): Promise<any[]> {
+    async searchBusinesses(page: Page, keywords: string[], location: string): Promise<any[]> {
         // Custom search logic that might involve:
         // - Multiple search endpoints
         // - Advanced query building

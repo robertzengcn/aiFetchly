@@ -123,6 +123,27 @@ interface PlatformInfo {
             pageNumbers?: string;
             container?: string;
         };
+        navigation?: {
+            required?: boolean;
+            detailLink?: string;
+            delayAfterNavigation?: number;
+            detailPage?: {
+                businessName?: string;
+                fullAddress?: string;
+                businessHours?: string;
+                description?: string;
+                contactInfo?: string;
+                services?: string;
+                additionalPhone?: string;
+                additionalEmail?: string;
+                socialMedia?: string;
+                categories?: string;
+                yearEstablished?: string;
+                numberOfEmployees?: string;
+                paymentMethods?: string;
+                specialties?: string;
+            };
+        };
     };
     adapterClass?: {
         className: string;
@@ -149,7 +170,7 @@ export class YellowPagesScraperProcess {
     private isPaused: boolean = false;
     private adapter: BasePlatformAdapter | null = null;
     private sessionManager: SessionRecordingManager;
-    
+
     // IPC integration
     private onProgressCallback?: (progress: ScrapingProgress) => void;
     private onCompleteCallback?: (results: ScrapingResult[]) => void;
@@ -160,7 +181,7 @@ export class YellowPagesScraperProcess {
         this.taskData = taskData;
         this.platformInfo = platformInfo;
         this.sessionManager = new SessionRecordingManager();
-        
+
         // Log headless setting
         const headlessMode = this.taskData.headless !== undefined ? this.taskData.headless : true;
         console.log(`🔧 Scraper initialized with headless mode: ${headlessMode}`);
@@ -232,26 +253,26 @@ export class YellowPagesScraperProcess {
         }
 
         try {
-            
+
             console.log('🔧 Executing platform-specific operations...');
-            
+
             // Example: Use adapter-specific search method if available
             if (this.adapterSupportsFeature('custom-search')) {
                 console.log('🔍 Adapter supports custom search, this will be used during scraping');
             }
-            
+
             // Example: Use adapter-specific data extraction if available
             if (this.adapterSupportsFeature('custom-extraction')) {
                 console.log('📊 Adapter supports custom data extraction, this will be used during scraping');
             }
-            
+
             // Example: Use adapter-specific pagination if available
             if (this.adapterSupportsFeature('custom-pagination')) {
                 console.log('📄 Adapter supports custom pagination, this will be used during scraping');
             }
-            
+
             console.log('✅ Platform-specific operations completed');
-            
+
         } catch (error) {
             console.warn('⚠️ Error during platform-specific operations:', error);
         }
@@ -275,17 +296,17 @@ export class YellowPagesScraperProcess {
                 hasCookies: !!(this.taskData.cookies && this.taskData.cookies.length > 0),
                 hasAdapter: !!this.platformInfo.adapterClass
             });
-            
+
             this.isRunning = true;
 
             // Initialize adapter if available
             await this.initializeAdapter();
-            
+
             // Log adapter information
             this.logAdapterInfo();
-            
+
             // Execute platform-specific operations
-            await this.executePlatformSpecificOperations();
+            //await this.executePlatformSpecificOperations();
 
             // Start session recording for AI training
             this.sessionManager.startSession(
@@ -316,12 +337,12 @@ export class YellowPagesScraperProcess {
 
         } catch (error) {
             console.error(`Error in Yellow Pages scraping for task ${this.taskData.taskId}:`, error);
-            
+
             // Call error callback
             if (this.onErrorCallback) {
                 this.onErrorCallback(error instanceof Error ? error : new Error(String(error)));
             }
-            
+
             throw error;
         } finally {
             await this.cleanup();
@@ -342,10 +363,10 @@ export class YellowPagesScraperProcess {
      */
     async pause(): Promise<void> {
         if (this.isPaused) return;
-        
+
         console.log(`Pausing Yellow Pages scraping for task ${this.taskData.taskId}`);
         this.isPaused = true;
-        
+
         // Send pause confirmation to parent process
         if (process.parentPort) {
             const pauseMessage = {
@@ -354,7 +375,7 @@ export class YellowPagesScraperProcess {
             };
             process.parentPort.postMessage(pauseMessage);
         }
-        
+
         // Create a promise that resolves when resume is called
         return new Promise<void>((resolve, reject) => {
             this.pauseResumePromise = { resolve, reject };
@@ -366,10 +387,10 @@ export class YellowPagesScraperProcess {
      */
     async resume(): Promise<void> {
         if (!this.isPaused) return;
-        
+
         console.log(`Resuming Yellow Pages scraping for task ${this.taskData.taskId}`);
         this.isPaused = false;
-        
+
         // Send resume confirmation to parent process
         if (process.parentPort) {
             const resumeMessage = {
@@ -378,7 +399,7 @@ export class YellowPagesScraperProcess {
             };
             process.parentPort.postMessage(resumeMessage);
         }
-        
+
         // Resolve the pause promise
         if (this.pauseResumePromise) {
             this.pauseResumePromise.resolve();
@@ -393,14 +414,14 @@ export class YellowPagesScraperProcess {
         try {
             // Use BrowserManager to get proper launch options with stealth mode
             const browserManager = new BrowserManager({ enableStealth: true });
-            
+
             // Override headless setting if specified in task data
             const headless = this.taskData.headless !== undefined ? this.taskData.headless : false;
             console.log(`Browser will run in ${headless ? 'headless' : 'non-headless'} mode`);
-            
+
             // Launch browser using puppeteer-extra with stealth plugin
             this.browser = await browserManager.launchWithStealth({ headless });
-            
+
             if (!this.browser) {
                 throw new Error('Failed to create browser instance');
             }
@@ -408,17 +429,17 @@ export class YellowPagesScraperProcess {
             if (!this.page) {
                 throw new Error('Failed to create page instance');
             }
-            
+
             // Set up page configurations with random viewport
             const viewport = browserManager.getRandomViewport();
             await this.page.setViewport(viewport);
             console.log(`Set viewport to: ${viewport.width}x${viewport.height}`);
-            
+
             // Set random user agent
             const userAgent = browserManager.getRandomUserAgent();
             await this.page.setUserAgent(userAgent);
             console.log(`Set user agent: ${userAgent}`);
-            
+
             console.log('Browser initialized successfully with stealth mode using puppeteer-extra');
         } catch (error) {
             console.error('Failed to initialize browser:', error);
@@ -461,7 +482,7 @@ export class YellowPagesScraperProcess {
 
                     await this.page.setCookie(cookieData);
                     console.log(`Applied cookie: ${cookie.name} for domain: ${cookie.domain}`);
-                    
+
                 } catch (error) {
                     console.error(`Failed to set cookie ${cookie.name}:`, error);
                     // Continue with other cookies
@@ -503,10 +524,13 @@ export class YellowPagesScraperProcess {
                 try {
                     // Navigate to search page using human-like interaction
                     await this.navigateToSearchPage(keyword, location, pageNum);
-
+                    // Wait if paused
+                    while (this.isPaused && this.isRunning) {
+                        await this.sleep(1000);
+                    }
                     // Extract business data
                     const results = await this.extractBusinessData();
-                    
+
                     // Add results to total
                     if (results.length > 0) {
                         totalResults = totalResults.concat(results);
@@ -566,23 +590,23 @@ export class YellowPagesScraperProcess {
         try {
             // Navigate to base URL first
             console.log(`Navigating to base URL: ${this.platformInfo.base_url}`);
-            
+
             // Log action for AI training
-            if (this.sessionManager.getRecordingStatus()) {
+            if (this.sessionManager.getRecordingStatus() && this.page) {
                 const currentState = await this.sessionManager.capturePageState(this.page);
                 this.sessionManager.logAction(currentState, `goto('${this.platformInfo.base_url}')`);
             }
-            
-            await this.page.goto(this.platformInfo.base_url, { 
+
+            await this.page.goto(this.platformInfo.base_url, {
                 waitUntil: 'networkidle2',
-                timeout: 30000 
+                timeout: 30000
             });
 
             // Wait for page to load completely
             await this.sleep(2000);
 
             // Check if platform has search form selectors defined
-            const hasSearchFormSelectors = this.platformInfo.selectors.searchForm && 
+            const hasSearchFormSelectors = this.platformInfo.selectors.searchForm &&
                 typeof this.platformInfo.selectors.searchForm === 'object' &&
                 'keywordInput' in this.platformInfo.selectors.searchForm;
 
@@ -590,15 +614,15 @@ export class YellowPagesScraperProcess {
                 // Use platform-defined search form selectors
                 console.log('Using platform-defined search form selectors');
                 await this.fillSearchFormWithPlatformSelectors(keyword, location);
-                
+
                 // Submit the form using platform selector
                 await this.submitSearchFormWithPlatformSelector();
-                
+
                 // Wait for search results to load
-                await this.page.waitForSelector(this.platformInfo.selectors.businessList, { 
-                    timeout: 15000 
+                await this.page.waitForSelector(this.platformInfo.selectors.businessList, {
+                    timeout: 15000
                 });
-                
+
                 // Navigate to specific page if needed
                 if (pageNum > 1) {
                     await this.navigateToPage(pageNum);
@@ -610,15 +634,15 @@ export class YellowPagesScraperProcess {
                 if (searchForm) {
                     // Fill in search form like a human would
                     await this.fillSearchForm(keyword, location);
-                    
+
                     // Submit the form
                     await this.submitSearchForm();
-                    
+
                     // Wait for search results to load
-                    await this.page.waitForSelector(this.platformInfo.selectors.businessList, { 
-                        timeout: 15000 
+                    await this.page.waitForSelector(this.platformInfo.selectors.businessList, {
+                        timeout: 15000
                     });
-                    
+
                     // Navigate to specific page if needed
                     if (pageNum > 1) {
                         await this.navigateToPage(pageNum);
@@ -759,19 +783,19 @@ export class YellowPagesScraperProcess {
 
         try {
             const searchForm = this.platformInfo.selectors.searchForm;
-            
+
             // Fill keyword field if selector exists
             if (searchForm.keywordInput) {
                 const keywordField = await this.page.$(searchForm.keywordInput);
                 if (keywordField) {
                     console.log(`Filling keyword field with platform selector: ${searchForm.keywordInput}`);
-                    
+
                     // Log action for AI training
-                    if (this.sessionManager.getRecordingStatus()) {
+                    if (this.sessionManager.getRecordingStatus() && this.page) {
                         const currentState = await this.sessionManager.capturePageState(this.page);
                         this.sessionManager.logAction(currentState, `type('${searchForm.keywordInput}', '${keyword}')`);
                     }
-                    
+
                     // Clear field first
                     await keywordField.click({ clickCount: 3 });
                     await keywordField.type(keyword, { delay: 100 }); // Human-like typing
@@ -785,13 +809,13 @@ export class YellowPagesScraperProcess {
                 const locationField = await this.page.$(searchForm.locationInput);
                 if (locationField) {
                     console.log(`Filling location field with platform selector: ${searchForm.locationInput}`);
-                    
+
                     // Log action for AI training
-                    if (this.sessionManager.getRecordingStatus()) {
+                    if (this.sessionManager.getRecordingStatus() && this.page) {
                         const currentState = await this.sessionManager.capturePageState(this.page);
                         this.sessionManager.logAction(currentState, `type('${searchForm.locationInput}', '${location}')`);
                     }
-                    
+
                     // Clear field first
                     await locationField.click({ clickCount: 3 });
                     await locationField.type(location, { delay: 100 }); // Human-like typing
@@ -816,49 +840,49 @@ export class YellowPagesScraperProcess {
 
         try {
             const searchForm = this.platformInfo.selectors.searchForm;
-            
+
             if (searchForm.searchButton) {
                 const submitButton = await this.page.$(searchForm.searchButton);
                 if (submitButton) {
                     console.log(`Submitting search form with platform selector: ${searchForm.searchButton}`);
-                    
+
                     // Log action for AI training
-                    if (this.sessionManager.getRecordingStatus()) {
+                    if (this.sessionManager.getRecordingStatus() && this.page) {
                         const currentState = await this.sessionManager.capturePageState(this.page);
                         this.sessionManager.logAction(currentState, `click('${searchForm.searchButton}')`);
                     }
-                    
+
                     await submitButton.click();
                 } else {
                     console.warn(`Search button not found with selector: ${searchForm.searchButton}`);
-                    
+
                     // Log action for AI training (fallback)
-                    if (this.sessionManager.getRecordingStatus()) {
+                    if (this.sessionManager.getRecordingStatus() && this.page) {
                         const currentState = await this.sessionManager.capturePageState(this.page);
                         this.sessionManager.logAction(currentState, `keyboard.press('Enter')`);
                     }
-                    
+
                     // Fallback to Enter key
                     await this.page.keyboard.press('Enter');
                     console.log('Submitted search form using Enter key (fallback)');
                 }
             } else {
                 // No search button selector, try Enter key
-                
+
                 // Log action for AI training
-                if (this.sessionManager.getRecordingStatus()) {
+                if (this.sessionManager.getRecordingStatus() && this.page) {
                     const currentState = await this.sessionManager.capturePageState(this.page);
                     this.sessionManager.logAction(currentState, `keyboard.press('Enter')`);
                 }
-                
+
                 await this.page.keyboard.press('Enter');
                 console.log('Submitted search form using Enter key (no button selector)');
             }
 
             // Wait for navigation
-            await this.page.waitForNavigation({ 
+            await this.page.waitForNavigation({
                 waitUntil: 'networkidle2',
-                timeout: 15000 
+                timeout: 15000
             });
 
         } catch (error) {
@@ -874,7 +898,7 @@ export class YellowPagesScraperProcess {
 
         try {
             // Check if platform has pagination selectors defined
-            const hasPaginationSelectors = this.platformInfo.selectors.pagination && 
+            const hasPaginationSelectors = this.platformInfo.selectors.pagination &&
                 typeof this.platformInfo.selectors.pagination === 'object';
 
             if (hasPaginationSelectors) {
@@ -898,18 +922,18 @@ export class YellowPagesScraperProcess {
 
         try {
             const pagination = this.platformInfo.selectors.pagination;
-            
+
             // Try to find page number link using platform selector
             if (pagination.pageNumbers) {
                 const pageSelector = pagination.pageNumbers.replace('{page}', pageNum.toString());
                 const pageLink = await this.page.$(pageSelector);
-                
+
                 if (pageLink) {
                     console.log(`Found page ${pageNum} link with platform selector: ${pageSelector}`);
                     await pageLink.click();
-                    await this.page.waitForNavigation({ 
+                    await this.page.waitForNavigation({
                         waitUntil: 'networkidle2',
-                        timeout: 15000 
+                        timeout: 15000
                     });
                     console.log(`Navigated to page ${pageNum} using platform selector`);
                     return;
@@ -955,9 +979,9 @@ export class YellowPagesScraperProcess {
 
             if (pageLink) {
                 await pageLink.click();
-                await this.page.waitForNavigation({ 
+                await this.page.waitForNavigation({
                     waitUntil: 'networkidle2',
-                    timeout: 15000 
+                    timeout: 15000
                 });
                 console.log(`Navigated to page ${pageNum}`);
             } else {
@@ -975,17 +999,17 @@ export class YellowPagesScraperProcess {
     private buildFallbackSearchUrl(keyword: string, location: string, pageNum: number): string {
         const settings = this.platformInfo.settings || {};
         const searchUrlPattern = settings.searchUrlPattern || `${this.platformInfo.base_url}/search`;
-        
+
         let url = searchUrlPattern
             .replace('{keywords}', encodeURIComponent(keyword))
             .replace('{location}', encodeURIComponent(location));
-        
+
         // Add page parameter if needed
         if (pageNum > 1) {
             url += url.includes('?') ? '&' : '?';
             url += `page=${pageNum}`;
         }
-        
+
         return url;
     }
 
@@ -1004,21 +1028,29 @@ export class YellowPagesScraperProcess {
             await this.page.waitForSelector(selectors.businessList, { timeout: 10000 });
 
             // Log data extraction action for AI training
-            if (this.sessionManager.getRecordingStatus()) {
+            if (this.sessionManager.getRecordingStatus() && this.page) {
                 const currentState = await this.sessionManager.capturePageState(this.page);
                 this.sessionManager.logAction(currentState, `extract('${selectors.businessList}')`);
             }
 
             // Extract all business listings
             const businessElements = await this.page.$$(selectors.businessList);
-            
+
             for (const element of businessElements) {
                 if (!this.isRunning) break;
 
                 try {
                     const result = await this.extractBusinessFromElement(element, selectors);
                     if (result) {
-                        results.push(result);
+                        // Check if navigation to detail page is required
+                        if (selectors.navigation?.required && selectors.navigation.detailLink) {
+                            const enhancedResult = await this.navigateToDetailPageAndExtract(element, selectors, result);
+                            if (enhancedResult) {
+                                results.push(enhancedResult);
+                            }
+                        } else {
+                            results.push(result);
+                        }
                     }
                 } catch (error) {
                     console.error('Error extracting business data:', error);
@@ -1031,6 +1063,282 @@ export class YellowPagesScraperProcess {
         }
 
         return results;
+    }
+
+    /**
+     * Navigate to detail page and extract enhanced data
+     */
+    private async navigateToDetailPageAndExtract(
+        element: any,
+        selectors: PlatformInfo['selectors'],
+        basicResult: ScrapingResult
+    ): Promise<ScrapingResult | null> {
+        if (!this.page || !selectors.navigation?.detailLink) return basicResult;
+
+        try {
+            // Find the detail page link
+            const detailLink = await element.$(selectors.navigation.detailLink);
+            if (!detailLink) {
+                console.log('Detail link not found, using basic result');
+                return basicResult;
+            }
+
+            // Get the href attribute
+            const detailUrl = await detailLink.evaluate(el => el.getAttribute('href'));
+            if (!detailUrl) {
+                console.log('Detail URL not found, using basic result');
+                return basicResult;
+            }
+
+            // Convert relative URL to absolute if needed
+            const absoluteUrl = detailUrl.startsWith('http') ? detailUrl : new URL(detailUrl, this.platformInfo.base_url).href;
+
+            console.log(`Navigating to detail page: ${absoluteUrl}`);
+
+            // Store current page context for AI training
+            if (this.sessionManager.getRecordingStatus() && this.page) {
+                const currentState = await this.sessionManager.capturePageState(this.page);
+                this.sessionManager.logAction(currentState, `goto('${absoluteUrl}')`);
+            }
+
+            // Navigate to detail page
+            if (this.page) {
+                await this.page.goto(absoluteUrl, {
+                    waitUntil: 'networkidle2',
+                    timeout: 30000
+                });
+
+                // Wait for page to load
+                await this.sleep(selectors.navigation.delayAfterNavigation || 2000);
+
+                // Extract enhanced data from detail page
+                const enhancedResult = await this.extractEnhancedDataFromDetailPage(basicResult, selectors);
+
+                // Navigate back to search results (if needed)
+                await this.page.goBack({ waitUntil: 'networkidle2' });
+
+                // Wait for search results to reload
+                await this.page.waitForSelector(selectors.businessList, { timeout: 10000 });
+
+                return enhancedResult;
+            }
+
+            return basicResult;
+
+        } catch (error) {
+            console.error('Error navigating to detail page:', error);
+            // Return basic result if navigation fails
+            return basicResult;
+        }
+    }
+
+    /**
+     * Extract enhanced data from business detail page
+     */
+    private async extractEnhancedDataFromDetailPage(
+        basicResult: ScrapingResult,
+        selectors: PlatformInfo['selectors']
+    ): Promise<ScrapingResult> {
+        if (!this.page || !selectors.navigation?.detailPage) return basicResult;
+
+        const detailSelectors = selectors.navigation.detailPage;
+        const enhancedResult = { ...basicResult };
+
+        try {
+            // Extract enhanced business name if available
+            if (detailSelectors.businessName) {
+                const enhancedName = await this.extractTextFromPage(detailSelectors.businessName);
+                if (enhancedName) enhancedResult.business_name = enhancedName;
+            }
+
+            // Extract full address if available
+            if (detailSelectors.fullAddress) {
+                const fullAddress = await this.extractTextFromPage(detailSelectors.fullAddress);
+                if (fullAddress) {
+                    enhancedResult.address = {
+                        ...enhancedResult.address,
+                        street: fullAddress
+                    };
+                }
+            }
+
+            // Extract detailed business hours if available
+            if (detailSelectors.businessHours) {
+                const detailedHours = await this.extractObjectFromPage(detailSelectors.businessHours);
+                if (detailedHours) enhancedResult.business_hours = detailedHours;
+            }
+
+            // Extract complete description if available
+            if (detailSelectors.description) {
+                const fullDescription = await this.extractTextFromPage(detailSelectors.description);
+                if (fullDescription) enhancedResult.description = fullDescription;
+            }
+
+            // Extract contact information if available
+            if (detailSelectors.contactInfo) {
+                const contactInfo = await this.extractTextFromPage(detailSelectors.contactInfo);
+                if (contactInfo) {
+                    // Parse contact info for additional fields
+                    const parsedContact = this.parseContactInfo(contactInfo);
+                    enhancedResult.contact_person = parsedContact.contactPerson || enhancedResult.contact_person;
+                    enhancedResult.fax_number = parsedContact.faxNumber || enhancedResult.fax_number;
+                }
+            }
+
+            // Extract services if available
+            if (detailSelectors.services) {
+                const services = await this.extractArrayFromPage(detailSelectors.services);
+                if (services) enhancedResult.specialties = services;
+            }
+
+            // Extract additional phone numbers if available
+            if (detailSelectors.additionalPhone) {
+                const additionalPhone = await this.extractTextFromPage(detailSelectors.additionalPhone);
+                if (additionalPhone) enhancedResult.phone = additionalPhone;
+            }
+
+            // Extract additional email addresses if available
+            if (detailSelectors.additionalEmail) {
+                const additionalEmail = await this.extractTextFromPage(detailSelectors.additionalEmail);
+                if (additionalEmail) enhancedResult.email = additionalEmail;
+            }
+
+            // Extract social media links if available
+            if (detailSelectors.socialMedia) {
+                const socialMedia = await this.extractArrayFromPage(detailSelectors.socialMedia);
+                if (socialMedia) enhancedResult.social_media = socialMedia;
+            }
+
+            // Extract detailed categories if available
+            if (detailSelectors.categories) {
+                const detailedCategories = await this.extractArrayFromPage(detailSelectors.categories);
+                if (detailedCategories) enhancedResult.categories = detailedCategories;
+            }
+
+            // Extract year established if available
+            if (detailSelectors.yearEstablished) {
+                const yearEstablished = await this.extractNumberFromPage(detailSelectors.yearEstablished);
+                if (yearEstablished) enhancedResult.year_established = yearEstablished;
+            }
+
+            // Extract number of employees if available
+            if (detailSelectors.numberOfEmployees) {
+                const numberOfEmployees = await this.extractTextFromPage(detailSelectors.numberOfEmployees);
+                if (numberOfEmployees) enhancedResult.number_of_employees = numberOfEmployees;
+            }
+
+            // Extract payment methods if available
+            if (detailSelectors.paymentMethods) {
+                const paymentMethods = await this.extractArrayFromPage(detailSelectors.paymentMethods);
+                if (paymentMethods) enhancedResult.payment_methods = paymentMethods;
+            }
+
+            // Extract business specialties if available
+            if (detailSelectors.specialties) {
+                const specialties = await this.extractArrayFromPage(detailSelectors.specialties);
+                if (specialties) enhancedResult.specialties = specialties;
+            }
+
+            console.log('Enhanced data extracted from detail page');
+
+        } catch (error) {
+            console.error('Error extracting enhanced data from detail page:', error);
+        }
+
+        return enhancedResult;
+    }
+
+    /**
+     * Extract text from current page using selector
+     */
+    private async extractTextFromPage(selector: string): Promise<string | undefined> {
+        if (!this.page) return undefined;
+
+        try {
+            const element = await this.page.$(selector);
+            if (element) {
+                return await element.evaluate(el => el.textContent?.trim());
+            }
+        } catch (error) {
+            // Ignore extraction errors
+        }
+        return undefined;
+    }
+
+    /**
+     * Extract array from current page using selector
+     */
+    private async extractArrayFromPage(selector: string): Promise<string[] | undefined> {
+        if (!this.page) return undefined;
+
+        try {
+            const elements = await this.page.$$(selector);
+            const array: string[] = [];
+            for (const el of elements) {
+                const text = await el.evaluate(element => element.textContent?.trim());
+                if (text) array.push(text);
+            }
+            return array.length > 0 ? array : undefined;
+        } catch (error) {
+            // Ignore extraction errors
+        }
+        return undefined;
+    }
+
+    /**
+     * Extract object from current page using selector
+     */
+    private async extractObjectFromPage(selector: string): Promise<object | undefined> {
+        if (!this.page) return undefined;
+
+        try {
+            const text = await this.extractTextFromPage(selector);
+            if (text) {
+                return JSON.parse(text);
+            }
+        } catch (error) {
+            // Ignore extraction errors
+        }
+        return undefined;
+    }
+
+    /**
+     * Extract number from current page using selector
+     */
+    private async extractNumberFromPage(selector: string): Promise<number | undefined> {
+        if (!this.page) return undefined;
+
+        try {
+            const text = await this.extractTextFromPage(selector);
+            if (text) {
+                const num = parseFloat(text.replace(/[^\d.-]/g, ''));
+                return isNaN(num) ? undefined : num;
+            }
+        } catch (error) {
+            // Ignore extraction errors
+        }
+        return undefined;
+    }
+
+    /**
+     * Parse contact information text for additional fields
+     */
+    private parseContactInfo(contactText: string): { contactPerson?: string; faxNumber?: string } {
+        const result: { contactPerson?: string; faxNumber?: string } = {};
+
+        // Simple parsing logic - you can enhance this based on your needs
+        const lines = contactText.split('\n').map(line => line.trim());
+
+        for (const line of lines) {
+            if (line.toLowerCase().includes('contact') || line.toLowerCase().includes('person')) {
+                result.contactPerson = line;
+            }
+            if (line.toLowerCase().includes('fax')) {
+                result.faxNumber = line;
+            }
+        }
+
+        return result;
     }
 
     /**
@@ -1207,24 +1515,24 @@ export class YellowPagesScraperProcess {
 
             // Calculate distance
             const distance = Math.sqrt(Math.pow(targetX - startX, 2) + Math.pow(targetY - startY, 2));
-            
+
             // Number of steps based on distance (more steps for longer distances)
             const steps = Math.max(10, Math.floor(distance / 20));
-            
+
             // Generate natural curve using Bezier-like interpolation
             for (let i = 0; i <= steps; i++) {
                 const progress = i / steps;
-                
+
                 // Add some randomness to make movement more natural
                 const randomOffsetX = (Math.random() - 0.5) * 10;
                 const randomOffsetY = (Math.random() - 0.5) * 10;
-                
+
                 // Smooth interpolation with slight curve
                 const x = startX + (targetX - startX) * progress + randomOffsetX;
                 const y = startY + (targetY - startY) * progress + randomOffsetY;
-                
+
                 await page.mouse.move(x, y);
-                
+
                 // Random delay between movements
                 await this.sleep(Math.random() * 5 + 2); // 2-7ms delay
             }
@@ -1256,10 +1564,10 @@ export class YellowPagesScraperProcess {
 
             // Human-like mouse movement to the element
             await this.humanLikeMouseMove(page, clickX, clickY);
-            
+
             // Small pause before clicking (like a human would)
             await this.sleep(Math.random() * 100 + 50); // 50-150ms pause
-            
+
             // Click with natural pressure
             await page.mouse.click(clickX, clickY, {
                 button: 'left',
@@ -1299,25 +1607,25 @@ export class YellowPagesScraperProcess {
             // Type with human-like characteristics
             for (let i = 0; i < text.length; i++) {
                 const char = text[i];
-                
+
                 // Random typing speed (50-150ms per character)
                 const typingDelay = Math.random() * 100 + 50;
-                
+
                 // Occasionally make a "typo" and correct it (5% chance)
                 if (Math.random() < 0.05 && i > 0) {
                     // Type wrong character
                     await element.type(char === ' ' ? 'x' : 'x', { delay: 0 });
                     await this.sleep(Math.random() * 200 + 100);
-                    
+
                     // Delete it
                     await element.press('Backspace');
                     await this.sleep(Math.random() * 100 + 50);
                 }
-                
+
                 // Type the correct character
                 await element.type(char, { delay: 0 });
                 await this.sleep(typingDelay);
-                
+
                 // Occasionally pause longer (like thinking)
                 if (Math.random() < 0.1) {
                     await this.sleep(Math.random() * 300 + 200); // 200-500ms thinking pause
@@ -1341,17 +1649,17 @@ export class YellowPagesScraperProcess {
         try {
             // Random scroll amount (100-500px)
             const scrollAmount = Math.random() * 400 + 100;
-            
+
             // Random scroll direction (mostly down, occasionally up)
             const direction = Math.random() < 0.9 ? 1 : -1;
-            
+
             await page.evaluate((amount, dir) => {
                 window.scrollBy(0, amount * dir);
             }, scrollAmount, direction);
-            
+
             // Pause after scrolling
             await this.sleep(Math.random() * 300 + 200);
-            
+
         } catch (error) {
             // Ignore scroll errors
         }
@@ -1402,9 +1710,9 @@ export class YellowPagesScraperProcess {
             }
 
             // Wait for navigation
-            await this.page.waitForNavigation({ 
+            await this.page.waitForNavigation({
                 waitUntil: 'networkidle2',
-                timeout: 15000 
+                timeout: 15000
             });
 
         } catch (error) {
@@ -1435,7 +1743,7 @@ export class YellowPagesScraperProcess {
      */
     private adapterSupportsFeature(feature: string): boolean {
         if (!this.adapter) return false;
-        
+
         switch (feature) {
             case 'custom-search':
                 return this.adapter.searchBusinesses !== BasePlatformAdapter.prototype.searchBusinesses;
@@ -1457,12 +1765,12 @@ export class YellowPagesScraperProcess {
         }
 
         const capabilities: string[] = ['class-based'];
-        
+
         // Check what methods the adapter provides
         if (this.adapter.searchBusinesses !== BasePlatformAdapter.prototype.searchBusinesses) capabilities.push('custom-search');
         if (this.adapter.extractBusinessData !== BasePlatformAdapter.prototype.extractBusinessData) capabilities.push('custom-extraction');
         if (this.adapter.handlePagination !== BasePlatformAdapter.prototype.handlePagination) capabilities.push('custom-pagination');
-        
+
         return capabilities;
     }
 }
@@ -1476,7 +1784,7 @@ process.parentPort.on('message', async (e) => {
     console.log(e);
     const message = JSON.parse(e.data);
     console.log('📨 Received message:', message.type);
-    
+
     if (message.type === 'START' && message.taskData && message.platformInfo) {
         console.log('🚀 Starting scraper with data:', {
             taskId: message.taskData.taskId,
@@ -1484,10 +1792,10 @@ process.parentPort.on('message', async (e) => {
             hasAdapter: !!message.platformInfo.adapterClass,
             adapterClass: message.platformInfo.adapterClass?.className || 'None'
         });
-        
+
         const scraper = new YellowPagesScraperProcess(message.taskData, message.platformInfo);
         globalScraper = scraper; // Store reference for pause/resume operations
-        
+
         // Set up callbacks for IPC communication
         scraper.onProgress((progress) => {
             const progressMessage: ProgressMessage = {

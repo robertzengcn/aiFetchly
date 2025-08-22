@@ -19,7 +19,7 @@ export class YelpComAdapter extends BasePlatformAdapter {
     /**
      * Custom search implementation for Yelp.com
      */
-    async searchBusinesses(keywords: string[], location: string): Promise<SearchResult[]> {
+    async searchBusinesses(page: Page, keywords: string[], location: string): Promise<SearchResult[]> {
         const searchUrl = this.buildSearchUrl(keywords, location, 1);
         console.log(`Searching Yelp.com: ${searchUrl}`);
         return [];

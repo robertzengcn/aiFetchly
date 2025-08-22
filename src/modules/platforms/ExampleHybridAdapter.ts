@@ -43,7 +43,7 @@ export class ExampleHybridAdapter implements IBasePlatformAdapter {
     /**
      * Hybrid search implementation - uses configuration with custom enhancements
      */
-    async searchBusinesses(keywords: string[], location: string): Promise<any[]> {
+    async searchBusinesses(page: Page, keywords: string[], location: string): Promise<any[]> {
         // Use configuration-based search as base
         const baseResults = await this.configurationBasedSearch(keywords, location);
         

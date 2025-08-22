@@ -42,7 +42,7 @@ export abstract class BasePlatformAdapter implements IBasePlatformAdapter {
     /**
      * Abstract method - must be implemented by subclasses
      */
-    abstract searchBusinesses(keywords: string[], location: string): Promise<SearchResult[]>;
+    abstract searchBusinesses(page: Page, keywords: string[], location: string): Promise<SearchResult[]>;
 
     /**
      * Abstract method - must be implemented by subclasses

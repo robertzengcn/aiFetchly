@@ -19,7 +19,7 @@ export class ComAdapter192 extends BasePlatformAdapter {
     /**
      * Custom search implementation for 192.com
      */
-    async searchBusinesses(keywords: string[], location: string): Promise<SearchResult[]> {
+    async searchBusinesses(page: Page, keywords: string[], location: string): Promise<SearchResult[]> {
         const searchUrl = this.buildSearchUrl(keywords, location, 1);
         console.log(`Searching 192.com: ${searchUrl}`);
         return [];
