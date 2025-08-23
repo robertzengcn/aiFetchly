@@ -67,7 +67,8 @@ export const Platform_yell_com: PlatformConfig = {
         yearEstablished: '.business--established, .established--year',
         numberOfEmployees: '.business--employees, .employees--count',
         paymentMethods: '.business--payment, .payment--methods',
-        specialties: '.business--specialties, .specialties--list'
+        specialties: '.business--specialties, .specialties--list',
+        website: '.business--website a, .website--link, a[href*="http"]'
       }
     },
     

@@ -11,7 +11,7 @@ export const constantRoutes: RouteRecordRaw[] = [
     meta: {
       visible: false,
       title: 'Dashboard',
-      icon: 'mdi-gauge',
+      icon: 'mdi-view-dashboard',
     },
     component: Layout,
     children: [
@@ -21,7 +21,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         name: 'home',
           meta: {
               title: 'Home',
-              icon: 'mdi-alpha-s',
+              icon: 'mdi-home',
               keepAlive: false,
               visible: false,
           },
@@ -36,7 +36,7 @@ export const constantRoutes: RouteRecordRaw[] = [
     meta: {
       visible: false,
       title: 'System Setting',
-      icon: 'mdi-gauge',
+      icon: 'mdi-cog',
     },
     component: Layout,
     children: [
@@ -45,7 +45,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         name: 'system_setting_index',
           meta: {
               title: 'System Setting',
-              icon: 'mdi-alpha-s',
+              icon: 'mdi-cog-outline',
               keepAlive: false,
               visible: true,
           },
@@ -61,7 +61,7 @@ export const constantRoutes: RouteRecordRaw[] = [
     meta: {
       visible: false,
       title: 'Campaign',
-      icon: 'mdi-cube-scan',
+      icon: 'mdi-bullhorn',
     },
     component: Layout,
     children: [
@@ -83,7 +83,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         meta: {
           visible: true,
           title: 'campaignList',
-          icon: 'list'
+          icon: 'mdi-format-list-bulleted'
         }
       }
     ]
@@ -94,7 +94,7 @@ export const constantRoutes: RouteRecordRaw[] = [
     meta: {
       // visible: true,
       title: 'Social Task',
-      icon: 'mdi-cube-scan',
+      icon: 'mdi-account-group',
     },
     component: Layout,
     children: [
@@ -127,7 +127,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         name: 'SocialtaskList',
         meta: {
           title: 'socialtaskList',
-          icon: 'list'
+          icon: 'mdi-format-list-bulleted'
         }
       },
       {
@@ -136,7 +136,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         name: 'Runtask',
         meta: {
           title: 'Socialtask Run',
-          icon: 'list'
+          icon: 'mdi-play-circle'
         }
       }, {
         path: 'taskrunlist/:id(\\d+)',
@@ -144,7 +144,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         name: 'Task-run-list',
         meta: {
           title: 'Social task Run List',
-          icon: 'list'
+          icon: 'mdi-playlist-play'
         }
       },
       {
@@ -153,7 +153,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         name: 'Task-result-list',
         meta: {
           title: 'Social task Result List',
-          icon: 'list'
+          icon: 'mdi-chart-line'
         }
       }
     ]
@@ -164,7 +164,7 @@ export const constantRoutes: RouteRecordRaw[] = [
     meta: {
       visible: true,
       title: 'Social Account',
-      icon: 'mdi-paw-off'
+      icon: 'mdi-account-multiple'
     },
     component: Layout,
     children: [
@@ -175,7 +175,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         meta: {
           visible: true,
           title: 'Account List',
-          icon: 'list'
+          icon: 'mdi-format-list-bulleted'
         }
       },
       {
@@ -185,7 +185,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         meta: {
           visible: false,
           title: 'Edit Account',
-          icon: 'list'
+          icon: 'mdi-account-edit'
         }
       },
       {
@@ -195,7 +195,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         meta: {
           visible: false,
           title: 'Add Account',
-          icon: 'list'
+          icon: 'mdi-account-plus'
         }
       },
     ]
@@ -217,7 +217,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         meta: {
           visible: true,
           title: 'Schedule List',
-          icon: 'list'
+          icon: 'mdi-format-list-bulleted'
         }
       },
       {
@@ -227,7 +227,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         meta: {
           visible: false,
           title: 'Create Schedule',
-          icon: 'add'
+          icon: 'mdi-plus'
         }
       },
       {
@@ -237,7 +237,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         meta: {
           visible: false,
           title: 'Edit Schedule',
-          icon: 'edit'
+          icon: 'mdi-pencil'
         }
       },
       {
@@ -247,7 +247,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         meta: {
           visible: false,
           title: 'Schedule Detail',
-          icon: 'view'
+          icon: 'mdi-file-document-outline'
         }
       }
     ]
@@ -258,7 +258,7 @@ export const constantRoutes: RouteRecordRaw[] = [
     meta: {
       visible: true,
       title: 'Proxy',
-      icon: 'mdi-paw-off'
+      icon: 'mdi-shield-outline'
     },
     component: Layout, 
     children: [
@@ -269,7 +269,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         meta: {
           visible: true,
           title: 'Proxy List',
-          icon: 'list'
+          icon: 'mdi-format-list-bulleted'
         }
       },
       {
@@ -279,7 +279,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         meta: {
           visible: false,
           title: 'Edit Proxy',
-          icon: 'list'
+          icon: 'mdi-pencil'
         }
       },
       {
@@ -289,7 +289,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         meta: {
           visible: false,
           title: 'Add Proxy',
-          icon: 'list'
+          icon: 'mdi-plus'
         }
       },
       {
@@ -299,7 +299,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         meta: {
           visible: true,
           title: 'Parse Proxy',
-          icon: 'list'
+          icon: 'mdi-code-braces'
         }
       }
     ]
@@ -332,7 +332,7 @@ export const constantRoutes: RouteRecordRaw[] = [
     meta: {
       visible: true,
       title: 'Search',
-      icon: 'mdi-paw-off'
+      icon: 'mdi-magnify'
     },
     component: Layout, 
     children: [
@@ -343,7 +343,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         meta: {
           visible: true,
           title: 'Search Scraper',
-          icon: 'list'
+          icon: 'mdi-web'
         }
       },
       {
@@ -353,7 +353,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         meta: {
           visible: true,
           title: 'Search Task list',
-          icon: 'list'
+          icon: 'mdi-format-list-bulleted'
         }
       },
       {
@@ -363,7 +363,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         meta: {
           visible: false,
           title: 'Search Task Detail',
-          icon: 'list'
+          icon: 'mdi-file-document-outline'
         }
       },
       {
@@ -373,7 +373,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         meta: {
           visible: false,
           title: 'Edit Search Task',
-          icon: 'edit'
+          icon: 'mdi-pencil'
         }
       }
     ]
@@ -384,7 +384,7 @@ export const constantRoutes: RouteRecordRaw[] = [
     meta: {
       visible: true,
       title: 'Email Extraction',
-      icon: 'mdi-paw-off'
+      icon: 'mdi-email-search'
     },
     component: Layout, 
     children: [
@@ -395,7 +395,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         meta: {
           visible: true,
           title: 'Email Extraction',
-          icon: 'list'
+          icon: 'mdi-form-select'
         }
       },
       {
@@ -405,7 +405,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         meta: {
           visible: false,
           title: 'Edit Email Extraction Task',
-          icon: 'edit'
+          icon: 'mdi-pencil'
         }
       },
       {
@@ -415,7 +415,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         meta: {
           visible: true,
           title: 'Email Extraction Task list',
-          icon: 'list'
+          icon: 'mdi-format-list-bulleted'
         }
       },
       {
@@ -425,7 +425,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         meta: {
           visible: false,
           title: 'Email Extraction Detail',
-          icon: 'list'
+          icon: 'mdi-file-document-outline'
         }
       }
     ]
@@ -447,7 +447,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         meta: {
           visible: true,
           title: 'Task List',
-          icon: 'list'
+          icon: 'mdi-format-list-bulleted'
         }
       },
       {
@@ -457,7 +457,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         meta: {
           visible: false,
           title: 'Create Task',
-          icon: 'add'
+          icon: 'mdi-plus'
         }
       },
       {
@@ -467,7 +467,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         meta: {
           visible: false,
           title: 'Edit Task',
-          icon: 'edit'
+          icon: 'mdi-pencil'
         }
       },
       {
@@ -477,7 +477,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         meta: {
           visible: false,
           title: 'Task Detail',
-          icon: 'view'
+          icon: 'mdi-file-document-outline'
         }
       },
       {
@@ -487,7 +487,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         meta: {
           visible: false,
           title: 'Task Results',
-          icon: 'data'
+          icon: 'mdi-chart-bar'
         }
       }
     ]
@@ -498,7 +498,7 @@ export const constantRoutes: RouteRecordRaw[] = [
     meta: {
       visible: true,
       title: 'Email Marketing',
-      icon: 'mdi-paw-off'
+      icon: 'mdi-email-multiple'
     },
     component: Layout, 
     children: [
@@ -509,7 +509,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         meta:   {
           visible: true,
           title: 'Bulk email task list',
-          icon: 'list'
+          icon: 'mdi-format-list-bulleted'
         }
       },
       {
@@ -519,7 +519,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         meta:   {
           visible: false,
           title: 'email send log',
-          icon: 'list'
+          icon: 'mdi-file-document-multiple'
         }
       },
       {
@@ -529,7 +529,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         meta: {
           visible: false,
           title: 'Sending bulk emails',
-          icon: 'list'
+          icon: 'mdi-email-send'
         }
       },
       {
@@ -539,7 +539,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         meta: {
           visible: true,
           title: 'Email Template',
-          icon: 'list'
+          icon: 'mdi-file-document-edit'
         }
       },
       {
@@ -549,7 +549,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         meta: {
           visible: false,
           title: 'Email Template',
-          icon: 'list'
+          icon: 'mdi-file-document-outline'
         }
       },
       {
@@ -559,7 +559,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         meta: {
           visible: false,
           title: 'Create Email Template',
-          icon: 'list'
+          icon: 'mdi-plus'
         }
       },
       {
@@ -568,7 +568,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         meta: {
           visible: true,
           title: 'Email Filter',
-          icon: 'list'
+          icon: 'mdi-filter'
         },
         component: () => import(/* webpackChunkName: "staff-list" */ '@/views/pages/emailfilter/list.vue'),
         
@@ -579,7 +579,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         meta: {
           visible: false,
           title: 'Email Filter Create',
-          icon: 'list'
+          icon: 'mdi-plus'
         },
         component: () => import(/* webpackChunkName: "staff-list" */ '@/views/pages/emailfilter/filterdetail.vue'),
         
@@ -590,7 +590,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         meta: {
           visible: false,
           title: 'Email Filter Edit',
-          icon: 'list'
+          icon: 'mdi-pencil'
         },
         component: () => import(/* webpackChunkName: "staff-list" */ '@/views/pages/emailfilter/filterdetail.vue'),
         
@@ -601,7 +601,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         meta: {
           visible: true,
           title: 'Email Service',
-          icon: 'list'
+          icon: 'mdi-email-sync'
         },
         component: () => import(/* webpackChunkName: "staff-list" */ '@/views/pages/emailservice/list.vue'),
         
@@ -612,7 +612,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         meta: {
           visible: false,
           title: 'Email Service Create',
-          icon: 'list'
+          icon: 'mdi-plus'
         },
         component: () => import(/* webpackChunkName: "staff-list" */ '@/views/pages/emailservice/servicedetail.vue'),
         
@@ -623,7 +623,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         meta: {
           visible: false,
           title: 'Email Service Edit',
-          icon: 'list'
+          icon: 'mdi-pencil'
         },
         component: () => import(/* webpackChunkName: "staff-list" */ '@/views/pages/emailservice/servicedetail.vue'),
         
@@ -645,7 +645,7 @@ export const constantRoutes: RouteRecordRaw[] = [
   {
     path: '/404',
     name: '404',
-    meta: { keepAlive: false, title: 'Not found', icon: 'mdi-paw-off', visible: false },
+    meta: { keepAlive: false, title: 'Not found', icon: 'mdi-alert-circle-outline', visible: false },
     component: Layout,
     children: [
       {

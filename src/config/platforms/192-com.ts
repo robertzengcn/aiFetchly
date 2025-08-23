@@ -59,7 +59,8 @@ export const Platform_192_com: PlatformConfig = {
                 yearEstablished: '.year-established, .established-date',
                 numberOfEmployees: '.employee-count, .staff-size',
                 paymentMethods: '.payment-methods, .accepted-payments',
-                specialties: '.business-specialties, .specialty-list'
+                specialties: '.business-specialties, .specialty-list',
+                website: '.business-website a, .website-link, a[href*="http"]'
             }
         }
     },

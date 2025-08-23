@@ -8,8 +8,8 @@ import { Platform_paginegialle_it } from './paginegialle-it';
 import { Platform_pagesjaunes_fr } from './pagesjaunes-fr';
 import { Platform_yelp_com } from './yelp-com';
 import { Platform_yellowpages_com } from './yellowpages-com';
-import { Platform_example } from './example-platform';
-import { Platform_api_key_example } from './api-key-example';
+// import { Platform_example } from './example-platform';
+// import { Platform_api_key_example } from './api-key-example';
 import { Platform_oauth_example } from './oauth-example';
 
 /**
@@ -36,8 +36,8 @@ export const platforms: PlatformConfig[] = [
   Platform_pagesjaunes_fr,
   Platform_yelp_com,
   Platform_yellowpages_com,
-  Platform_example,
-  Platform_api_key_example,
+  // Platform_example,
+  // Platform_api_key_example,
   Platform_oauth_example,
 ];
 

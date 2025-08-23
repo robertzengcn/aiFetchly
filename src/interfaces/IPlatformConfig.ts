@@ -317,6 +317,8 @@ export type SelectorValue =
               paymentMethods?: string;
               /** Business specialties */
               specialties?: string;
+              /** Website URL on detail page */
+              website?: string;
           };
       };
 
@@ -553,6 +555,8 @@ export interface PlatformSelectors {
             paymentMethods?: string;
             /** Business specialties */
             specialties?: string;
+            /** Website URL on detail page */
+            website?: string;
         };
     };
 

@@ -142,6 +142,7 @@ interface PlatformInfo {
                 numberOfEmployees?: string;
                 paymentMethods?: string;
                 specialties?: string;
+                website?: string;
             };
         };
     };
@@ -1285,13 +1286,22 @@ export class YellowPagesScraperProcess {
         const enhancedResult = { ...basicResult };
 
         try {
-            // Extract enhanced business name if available
-            if (detailSelectors.businessName) {
-                const enhancedName = await this.extractTextFromPage(detailSelectors.businessName);
-                if (enhancedName) enhancedResult.business_name = enhancedName;
-            }
+                    // Extract enhanced business name if available
+        if (detailSelectors.businessName) {
+            const enhancedName = await this.extractTextFromPage(detailSelectors.businessName);
+            if (enhancedName) enhancedResult.business_name = enhancedName;
+        }
 
-            // Extract full address if available
+        // Extract website from detail page if available (this takes precedence over list page)
+        if (detailSelectors.website) {
+            const website = await this.extractAttributeFromPage(detailSelectors.website, 'href');
+            if (website) {
+                enhancedResult.website = website;
+                console.log(`📱 Extracted website from detail page: ${website}`);
+            }
+        }
+
+        // Extract full address if available
             if (detailSelectors.fullAddress) {
                 const fullAddress = await this.extractTextFromPage(detailSelectors.fullAddress);
                 if (fullAddress) {
@@ -1398,6 +1408,24 @@ export class YellowPagesScraperProcess {
             const element = await this.page.$(selector);
             if (element) {
                 return await element.evaluate(el => el.textContent?.trim());
+            }
+        } catch (error) {
+            // Ignore extraction errors
+        }
+        return undefined;
+    }
+
+    /**
+     * Extract attribute from current page using selector
+     */
+    private async extractAttributeFromPage(selector: string, attribute: string): Promise<string | undefined> {
+        if (!this.page) return undefined;
+
+        try {
+            const element = await this.page.$(selector);
+            if (element) {
+                const attrValue = await element.evaluate((el, attr) => el.getAttribute(attr), attribute);
+                return attrValue || undefined;
             }
         } catch (error) {
             // Ignore extraction errors

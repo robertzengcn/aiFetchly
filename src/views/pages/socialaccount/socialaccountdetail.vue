@@ -41,6 +41,7 @@
         class="mt-3"
         v-model="social_type_id"
         :items="platformitems"
+         density="comfortable"
         item-title="displayName"
         item-value="id"
         :label="t('socialaccount.platform')"
@@ -51,7 +52,7 @@
         :menu-props="{ maxHeight: 400 }"
         no-data-text="No platforms available"
       >
-        <template v-slot:item="{ props, item }">
+        <!-- <template v-slot:item="{ props, item }">
           <v-list-item v-bind="props">
             <template v-slot:title>
               <div class="d-flex align-center">
@@ -70,7 +71,7 @@
               <span class="text-caption text-grey">{{ (item as unknown as PlatformItem).url }}</span>
             </template>
           </v-list-item>
-        </template>
+        </template> -->
       </v-autocomplete>
       <v-text-field
         v-model="name"
