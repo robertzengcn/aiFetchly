@@ -8,6 +8,34 @@ export interface TrainingDataPoint {
   action: string; // Puppeteer action (e.g., "click('#search-submit')")
 }
 
+export interface DetailPageTrainingData {
+  businessName: string;
+  url: string;
+  timestamp: string;
+  pageMetadata: {
+    title: string;
+    description: string;
+    keywords: string;
+    viewport: string;
+    language: string;
+    timestamp: string;
+  };
+  pageStructure: {
+    totalElements: number;
+    bodyTextLength: number;
+    hasForms: boolean;
+    hasImages: boolean;
+    hasLinks: boolean;
+    structureInfo: Record<string, any>;
+  };
+  rawHtml: string;
+  htmlLength: number;
+  taskId: number;
+  platform: string;
+  keywords: string[];
+  location: string;
+}
+
 export interface SessionRecord {
   taskId: number;
   platform: string;
@@ -18,6 +46,7 @@ export interface SessionRecord {
   trainingData: TrainingDataPoint[];
   expectedOutput: any[];
   sessionFilePath: string;
+  detailPageTrainingData?: DetailPageTrainingData[];
 }
 
 /**
@@ -98,6 +127,24 @@ export class SessionRecordingManager {
   }
 
   /**
+   * Add detail page training data for AI model training
+   * This method captures comprehensive detail page information for training purposes
+   */
+  addDetailPageTrainingData(data: DetailPageTrainingData): void {
+    if (!this.isRecording || !this.currentSession) {
+      return;
+    }
+
+    // Store detail page training data separately from regular action training data
+    if (!this.currentSession.detailPageTrainingData) {
+      this.currentSession.detailPageTrainingData = [];
+    }
+
+    this.currentSession.detailPageTrainingData.push(data);
+    console.log(`Added detail page training data for: ${data.businessName} (total detail pages: ${this.currentSession.detailPageTrainingData.length})`);
+  }
+
+  /**
    * Capture current page state for training
    */
   async capturePageState(page: Page): Promise<string> {
@@ -150,6 +197,11 @@ export class SessionRecordingManager {
     this.currentSession.resultsCount = resultsCount;
     this.currentSession.expectedOutput = expectedOutput;
     this.currentSession.trainingData = [...this.trainingData];
+    
+    // Ensure detail page training data is preserved
+    if (!this.currentSession.detailPageTrainingData) {
+      this.currentSession.detailPageTrainingData = [];
+    }
 
     this.isRecording = false;
     
@@ -196,7 +248,8 @@ export class SessionRecordingManager {
         resultsCount: this.currentSession.resultsCount,
         timestamp: this.currentSession.timestamp.toISOString(),
         trainingData: this.currentSession.trainingData,
-        expectedOutput: this.currentSession.expectedOutput
+        expectedOutput: this.currentSession.expectedOutput,
+        detailPageTrainingData: this.currentSession.detailPageTrainingData || []
       };
 
       fs.writeFileSync(filePath, JSON.stringify(sessionData, null, 2));
@@ -224,7 +277,7 @@ export class SessionRecordingManager {
   /**
    * Get current session info
    */
-  getCurrentSessionInfo(): Partial<SessionRecord> & { trainingDataPoints: number } | null {
+  getCurrentSessionInfo(): Partial<SessionRecord> & { trainingDataPoints: number; detailPageTrainingDataPoints: number } | null {
     if (!this.currentSession) {
       return null;
     }
@@ -233,7 +286,8 @@ export class SessionRecordingManager {
       taskId: this.currentSession.taskId,
       platform: this.currentSession.platform,
       resultsCount: this.currentSession.resultsCount,
-      trainingDataPoints: this.trainingData.length
+      trainingDataPoints: this.trainingData.length,
+      detailPageTrainingDataPoints: this.currentSession.detailPageTrainingData?.length || 0
     };
   }
 

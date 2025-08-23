@@ -1255,6 +1255,11 @@ export class YellowPagesScraperProcess {
                 }
             }
 
+            // Capture detail page content for AI training if session recording is enabled
+            if (this.sessionManager.getRecordingStatus() && this.page) {
+                await this.captureDetailPageForTraining(basicResult.business_name);
+            }
+
             // Extract enhanced data from detail page
             const enhancedResult = await this.extractEnhancedDataFromDetailPage(basicResult, selectors);
 
@@ -1431,6 +1436,118 @@ export class YellowPagesScraperProcess {
             // Ignore extraction errors
         }
         return undefined;
+    }
+
+    /**
+     * Capture detail page content for AI training purposes
+     * This method captures the raw HTML and page state for training data
+     */
+    private async captureDetailPageForTraining(businessName: string): Promise<void> {
+        if (!this.page) return;
+
+        try {
+            console.log(`📹 Capturing detail page content for AI training: ${businessName}`);
+
+            // Capture the current URL
+            const currentUrl = this.page.url();
+            
+            // Capture the raw HTML content
+            const rawHtml = await this.page.content();
+            
+            // Capture page metadata
+            const pageMetadata = await this.page.evaluate(() => {
+                return {
+                    title: document.title,
+                    description: document.querySelector('meta[name="description"]')?.getAttribute('content') || '',
+                    keywords: document.querySelector('meta[name="keywords"]')?.getAttribute('content') || '',
+                    viewport: document.querySelector('meta[name="viewport"]')?.getAttribute('content') || '',
+                    language: document.documentElement.lang || 'en',
+                    timestamp: new Date().toISOString()
+                };
+            });
+
+            // Capture page structure information
+            const pageStructure = await this.page.evaluate(() => {
+                const getElementInfo = (selector: string) => {
+                    const element = document.querySelector(selector);
+                    if (!element) return null;
+                    
+                    // Cast to HTMLElement to access offsetWidth and offsetHeight
+                    const htmlElement = element as HTMLElement;
+                    
+                    return {
+                        exists: true,
+                        text: element.textContent?.trim().substring(0, 200) || '',
+                        classes: Array.from(element.classList),
+                        id: element.id || '',
+                        tagName: element.tagName.toLowerCase(),
+                        isVisible: htmlElement.offsetWidth > 0 && htmlElement.offsetHeight > 0
+                    };
+                };
+
+                // Common selectors to check for business information
+                const selectors = [
+                    'h1', 'h2', 'h3', // Headers
+                    '.business-name', '.company-name', '.title',
+                    '.address', '.contact', '.phone', '.email', '.website',
+                    '.description', '.about', '.services',
+                    '.hours', '.schedule', '.open',
+                    '.rating', '.reviews', '.stars',
+                    '.categories', '.tags', '.specialties'
+                ];
+
+                const structureInfo: Record<string, any> = {};
+                selectors.forEach(selector => {
+                    const info = getElementInfo(selector);
+                    if (info) {
+                        structureInfo[selector] = info;
+                    }
+                });
+
+                return {
+                    totalElements: document.querySelectorAll('*').length,
+                    bodyTextLength: document.body.textContent?.length || 0,
+                    hasForms: document.querySelectorAll('form').length > 0,
+                    hasImages: document.querySelectorAll('img').length > 0,
+                    hasLinks: document.querySelectorAll('a').length > 0,
+                    structureInfo
+                };
+            });
+
+            // Create training data object
+            const trainingData = {
+                businessName,
+                url: currentUrl,
+                timestamp: new Date().toISOString(),
+                pageMetadata,
+                pageStructure,
+                rawHtml: rawHtml.substring(0, 50000), // Limit HTML size for storage
+                htmlLength: rawHtml.length,
+                taskId: this.taskData.taskId,
+                platform: this.taskData.platform,
+                keywords: this.taskData.keywords,
+                location: this.taskData.location
+            };
+
+            // Log the training data capture
+            console.log(`📊 Detail page training data captured:`, {
+                businessName,
+                url: currentUrl,
+                htmlLength: rawHtml.length,
+                hasBusinessInfo: !!pageStructure.structureInfo['h1'] || !!pageStructure.structureInfo['.business-name'],
+                timestamp: trainingData.timestamp
+            });
+
+            // Store the training data in the session manager
+            if (this.sessionManager.getRecordingStatus()) {
+                // Add to session data for later processing
+                this.sessionManager.addDetailPageTrainingData(trainingData);
+            }
+
+        } catch (error) {
+            console.warn('⚠️ Error capturing detail page for training:', error);
+            // Don't fail the scraping process if training capture fails
+        }
     }
 
     /**
