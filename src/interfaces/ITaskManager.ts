@@ -104,7 +104,7 @@ export interface YellowPagesTaskData {
     name: string;
     platform: string;
     keywords: string[];
-    location: string;
+    location?: string;
     max_pages?: number;
     concurrency?: number;
     account_id?: number;
@@ -176,7 +176,7 @@ export interface YellowPagesTask {
     name: string;
     platform: string;
     keywords: string[];
-    location: string;
+    location?: string;
     max_pages: number;
     concurrency: number;
     status: TaskStatus;

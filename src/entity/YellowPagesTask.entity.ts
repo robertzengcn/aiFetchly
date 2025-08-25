@@ -15,8 +15,8 @@ export class YellowPagesTaskEntity extends AuditableEntity {
     @Column("text", { nullable: false })
     keywords: string; // JSON string of keywords array
 
-    @Column("text", { nullable: false })
-    location: string;
+    @Column("text", { nullable: true })
+    location?: string;
 
     @Column("integer", { nullable: false, default: 1 })
     max_pages: number;

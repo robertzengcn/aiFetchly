@@ -48,7 +48,7 @@ export class YellowPagesTaskModel extends BaseDb {
     name: string;
     platform: string;
     keywords: string[];
-    location: string;
+    location?: string;
     max_pages?: number;
     concurrency?: number;
     account_id?: number;
@@ -60,7 +60,7 @@ export class YellowPagesTaskModel extends BaseDb {
     taskEntity.name = taskData.name;
     taskEntity.platform = taskData.platform;
     taskEntity.keywords = JSON.stringify(taskData.keywords);
-    taskEntity.location = taskData.location;
+    taskEntity.location = taskData.location || '';
     taskEntity.max_pages = taskData.max_pages || 1;
     taskEntity.concurrency = taskData.concurrency || 1;
     taskEntity.status = YellowPagesTaskStatus.Pending;
@@ -128,7 +128,7 @@ export class YellowPagesTaskModel extends BaseDb {
   async clearTaskPID(taskId: number): Promise<void> {
     await this.repository.update(
       { id: taskId },
-      { pid: undefined }
+      { pid: 0 }
     );
   }
 

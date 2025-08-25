@@ -469,9 +469,7 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
             throw new Error('At least one keyword is required');
         }
 
-        if (!taskData.location || taskData.location.trim().length === 0) {
-            throw new Error('Location is required');
-        }
+
 
         if (taskData.max_pages && taskData.max_pages < 1) {
             throw new Error('Max pages must be at least 1');

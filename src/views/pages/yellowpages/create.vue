@@ -104,10 +104,8 @@
                 <v-col cols="12" md="6">
                   <v-text-field
                     v-model="taskForm.location"
-                    :label="$t('home.location') + ' *'"
+                    :label="$t('home.location')"
                     :placeholder="$t('home.location_placeholder')"
-                    :rules="[v => !!v || $t('home.location_required')]"
-                    required
                     clearable
                   />
                 </v-col>
@@ -840,9 +838,7 @@ const validateForm = async () => {
         }
       }
       
-      if (!taskForm.location || taskForm.location.trim() === '') {
-        fieldErrors.push($t('home.location_required'))
-      }
+
       
       // Check conditional validations
       if (useAccount.value && selectedAccounts.value.length === 0) {

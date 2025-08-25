@@ -1,4 +1,4 @@
-import { utilityProcess, MessageChannelMain } from 'electron';
+import { utilityProcess, MessageChannelMain, app } from 'electron';
 import type { UtilityProcess } from 'electron';
 import { YellowPagesTaskModel, YellowPagesTaskStatus } from "@/model/YellowPagesTask.model";
 import { YellowPagesResultModel } from "@/model/YellowPagesResult.model";
@@ -126,11 +126,12 @@ export class YellowPagesProcessManager extends BaseModule {
                 taskId: taskId,
                 platform: task.platform,
                 keywords: keywords,
-                location: task.location,
+                location: task.location || '',
                 max_pages: task.max_pages,
                 delay_between_requests: task.delay_between_requests,
                 account_id: task.account_id,
-                headless: task.headless !== undefined ? task.headless : true // Use task configuration or default to headless
+                headless: task.headless !== undefined ? task.headless : true, // Use task configuration or default to headless
+                userDataPath: app.getPath('userData') // Add user data path for child process
             };
 
             // Add adapter class information if available

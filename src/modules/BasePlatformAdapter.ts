@@ -16,10 +16,10 @@ import { BusinessData } from '@/interfaces/IDataExtractor';
  * Base platform adapter that provides default implementations for all platform types
  * This class serves as the foundation for configuration-only, class-based, and hybrid platforms
  * 
- * Note: The searchBusinesses method now has a default implementation and is optional to override.
- * Subclasses only need to implement extractBusinessData, handlePagination, and applyCookies.
+ * Note: All methods now have default implementations and are optional to override.
+ * Subclasses can override any method to provide custom behavior, or use the defaults.
  */
-export abstract class BasePlatformAdapter implements IBasePlatformAdapter {
+export class BasePlatformAdapter implements IBasePlatformAdapter {
     protected _config: PlatformConfig;
 
     constructor(config: PlatformConfig) {
@@ -52,19 +52,28 @@ export abstract class BasePlatformAdapter implements IBasePlatformAdapter {
     }
 
     /**
-     * Abstract method - must be implemented by subclasses
+     * Extract business data from a page
+     * Default implementation uses selectors - can be overridden by subclasses
      */
-    abstract extractBusinessData(page: Page): Promise<BusinessData>;
+    async extractBusinessData(page: Page): Promise<BusinessData> {
+        return this.defaultExtractBusinessData(page);
+    }
 
     /**
-     * Abstract method - must be implemented by subclasses
+     * Handle pagination on the current page
+     * Default implementation uses selectors - can be overridden by subclasses
      */
-    abstract handlePagination(page: Page, maxPages: number): Promise<void>;
+    async handlePagination(page: Page, maxPages: number): Promise<void> {
+        return this.defaultHandlePagination(page, maxPages);
+    }
 
     /**
-     * Abstract method - must be implemented by subclasses
+     * Apply cookies to the page for authentication
+     * Default implementation handles basic cookie application - can be overridden by subclasses
      */
-    abstract applyCookies(page: Page, cookies: any): Promise<void>;
+    async applyCookies(page: Page, cookies: any): Promise<void> {
+        return this.defaultApplyCookies(page, cookies);
+    }
 
     /**
      * Get platform selectors

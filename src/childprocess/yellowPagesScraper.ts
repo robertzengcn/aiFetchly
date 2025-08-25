@@ -70,6 +70,7 @@ interface TaskData {
     account_id?: number;
     cookies?: any[];
     headless?: boolean;
+    userDataPath?: string; // Add user data path from parent process
     adapterClass?: {
         className: string;
         modulePath: string;
@@ -181,7 +182,10 @@ export class YellowPagesScraperProcess {
     constructor(taskData: TaskData, platformInfo: PlatformInfo) {
         this.taskData = taskData;
         this.platformInfo = platformInfo;
-        this.sessionManager = new SessionRecordingManager();
+        
+        // Use userDataPath from taskData if available, otherwise use a default path
+        const userDataPath = this.taskData.userDataPath || process.cwd();
+        this.sessionManager = new SessionRecordingManager(userDataPath);
 
         // Log headless setting
         const headlessMode = this.taskData.headless !== undefined ? this.taskData.headless : true;
@@ -918,6 +922,8 @@ export class YellowPagesScraperProcess {
                         const currentState = await this.sessionManager.capturePageState(this.page);
                         this.sessionManager.logAction(currentState, `type('${searchForm.keywordInput}', '${keyword}')`);
                     }
+                    // Scroll the page to bring the keyword field into view
+                    await keywordField.evaluate((el) => el.scrollIntoView({ behavior: 'smooth', block: 'center' }));
 
                     // Clear field first
                     await keywordField.click({ clickCount: 3 });
@@ -997,7 +1003,14 @@ export class YellowPagesScraperProcess {
                     const currentState = await this.sessionManager.capturePageState(this.page);
                     this.sessionManager.logAction(currentState, `keyboard.press('Enter')`);
                 }
-
+                // INSERT_YOUR_CODE
+                // Scroll the search button into view before clicking or pressing Enter
+                if (searchForm.searchButton) {
+                    const submitButton = await this.page.$(searchForm.searchButton);
+                    if (submitButton) {
+                        await submitButton.evaluate((el: Element) => el.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+                    }
+                }
                 await this.page.keyboard.press('Enter');
                 console.log('Submitted search form using Enter key (no button selector)');
             }
@@ -2113,10 +2126,20 @@ process.parentPort.on('message', async (e) => {
             hasAdapter: !!message.platformInfo.adapterClass,
             adapterClass: message.platformInfo.adapterClass?.className || 'None'
         });
-
-        const scraper = new YellowPagesScraperProcess(message.taskData, message.platformInfo);
+        let scraper: YellowPagesScraperProcess;
+        try{
+        scraper = new YellowPagesScraperProcess(message.taskData, message.platformInfo);
         globalScraper = scraper; // Store reference for pause/resume operations
-
+        } catch (error) {
+            console.error('Error initializing scraper:', error);
+            const errorMessage: ErrorMessage = {
+                type: 'ERROR',
+                taskId: message.taskData.taskId,
+                error: error instanceof Error ? error.message : String(error)
+            };
+            process.parentPort?.postMessage(errorMessage);
+            return;
+        }
         // Set up callbacks for IPC communication
         scraper.onProgress((progress) => {
             const progressMessage: ProgressMessage = {
@@ -2146,6 +2169,7 @@ process.parentPort.on('message', async (e) => {
         });
 
         try {
+            console.log('🚀 Starting scraper real');
             await scraper.start();
         } catch (error) {
             const errorMessage: ErrorMessage = {

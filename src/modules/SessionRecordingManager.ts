@@ -1,7 +1,8 @@
 import { Page } from 'puppeteer';
 import * as fs from 'fs';
 import * as path from 'path';
-import { app } from 'electron';
+// Remove electron import since it's not available in child processes
+// import { app } from 'electron';
 
 export interface TrainingDataPoint {
   state: string; // DOM snapshot or simplified representation
@@ -61,9 +62,8 @@ export class SessionRecordingManager {
   private trainingData: TrainingDataPoint[] = [];
   private sessionsDirectory: string;
 
-  constructor() {
-    // Create sessions directory in user data path
-    const userDataPath = app.getPath('userData');
+  constructor(userDataPath: string) {
+    // Use the provided user data path instead of calling app.getPath('userData')
     this.sessionsDirectory = path.join(userDataPath, 'sessions');
     this.ensureSessionsDirectory();
   }

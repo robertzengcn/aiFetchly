@@ -290,10 +290,21 @@ export class YellowPagesController {
                 
                 console.log(`Successfully killed process ${pid} for task ${taskId}`);
                 
+                // Update task status to reflect that it's no longer running
+                if (taskId) {
+                    try {
+                        await this.taskModule.updateTaskStatus(taskId, TaskStatus.Pending);
+                        console.log(`Updated task ${taskId} status to Pending after killing process`);
+                    } catch (statusUpdateError) {
+                        console.warn(`Failed to update task ${taskId} status:`, statusUpdateError);
+                        // Don't fail the entire operation if status update fails
+                    }
+                }
+                
                 return {
                     success: true,
                     taskId,
-                    message: `Process ${pid} killed successfully`
+                    message: `Process ${pid} killed successfully and task status updated`
                 };
             } else {
                 return {
@@ -553,9 +564,7 @@ export class YellowPagesController {
             throw new Error('At least one keyword is required');
         }
 
-        if (!taskData.location || taskData.location.trim().length === 0) {
-            throw new Error('Location is required');
-        }
+
 
         if (taskData.max_pages && taskData.max_pages < 1) {
             throw new Error('Max pages must be at least 1');

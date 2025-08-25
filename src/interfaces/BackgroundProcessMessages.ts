@@ -23,12 +23,13 @@ export interface StartTaskMessage extends BaseBackgroundMessage {
         taskId: number;
         platform: string;
         keywords: string[];
-        location: string;
+        location?: string;
         max_pages: number;
         delay_between_requests: number;
         account_id?: number;
         cookies?: any[];
         headless?: boolean;
+        userDataPath?: string; // Add user data path from parent process
         adapterClass?: {
             className: string;
             modulePath: string;

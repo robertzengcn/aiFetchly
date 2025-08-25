@@ -654,7 +654,7 @@ const stopTask = async (task: any) => {
     console.log(`Stopping task ${task.id} with PID ${task.pid}`);
     
     // Show confirmation dialog
-    if (!confirm(`Are you sure you want to stop task "${task.name}" (PID: ${task.pid})?`)) {
+    if (!confirm(`Are you sure you want to stop task "${task.name}" (PID: ${task.pid})?\n\nThis will terminate the running process and update the task status.`)) {
       return;
     }
     
@@ -663,10 +663,25 @@ const stopTask = async (task: any) => {
     
     if (result.success) {
       console.log(`Successfully stopped process for task ${task.id}: ${result.message}`);
+      
       // Show success message
-      alert(`Successfully stopped task "${task.name}"`);
+      alert(`Successfully stopped task "${task.name}"!\n\nTask status has been updated to "Pending" and the table will refresh to show the changes.`);
+      
       // Refresh the task list to show updated status
       await loadTasks();
+      
+      // Also update the local task status immediately for better UX
+      const taskIndex = tasks.value.findIndex(t => t.id === task.id);
+      if (taskIndex !== -1) {
+        tasks.value[taskIndex].status = TaskStatus.Pending;
+        tasks.value[taskIndex].pid = undefined; // Clear the PID since process is killed
+        // Update statistics
+        updateTaskStats();
+        console.log(`Updated local task ${task.id} status to Pending`);
+      } else {
+        console.log(`Task ${task.id} not found in local array, will be updated when table refreshes`);
+      }
+      
     } else {
       console.error(`Failed to stop process for task ${task.id}: ${result.message}`);
       // Show error message to user

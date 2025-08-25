@@ -8,6 +8,7 @@ import { YellowPagesComAdapter } from './YellowPagesComAdapter';
 import { YelpComAdapter } from './YelpComAdapter';
 import { YellowPagesCaAdapter } from './YellowPagesCaAdapter';
 import { ExampleClassBasedAdapter } from './ExampleClassBasedAdapter';
+import { Adapter11880 } from './11880Adapter';
 
 /**
  * Factory class for creating platform adapters
@@ -44,6 +45,9 @@ export class PlatformAdapterFactory {
             case 'ExampleClassBasedAdapter':
                 return new ExampleClassBasedAdapter(platformConfig) as unknown as BasePlatformAdapter;
                 
+            case 'Adapter11880':
+                return new Adapter11880(platformConfig);
+                
             default:
                 throw new Error(`Unknown adapter class: ${className}. Available classes: ${PlatformAdapterFactory.getAvailableAdapters().join(', ')}`);
         }
@@ -62,7 +66,8 @@ export class PlatformAdapterFactory {
             'YellowPagesComAdapter',
             'YelpComAdapter',
             'YellowPagesCaAdapter',
-            'ExampleClassBasedAdapter'
+            'ExampleClassBasedAdapter',
+            'Adapter11880'
         ];
         return availableClasses.includes(className);
     }
@@ -79,7 +84,8 @@ export class PlatformAdapterFactory {
             'YellowPagesComAdapter',
             'YelpComAdapter',
             'YellowPagesCaAdapter',
-            'ExampleClassBasedAdapter'
+            'ExampleClassBasedAdapter',
+            'Adapter11880'
         ];
     }
     
@@ -110,6 +116,9 @@ export class PlatformAdapterFactory {
                 
             case 'ExampleClassBasedAdapter':
                 return ExampleClassBasedAdapter as unknown as new (config: PlatformConfig) => BasePlatformAdapter;
+                
+            case 'Adapter11880':
+                return Adapter11880;
                 
             default:
                 throw new Error(`Unknown adapter class: ${className}. Available classes: ${PlatformAdapterFactory.getAvailableAdapters().join(', ')}`);

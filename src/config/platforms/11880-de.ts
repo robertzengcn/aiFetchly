@@ -1,4 +1,5 @@
 import { PlatformConfig, PlatformFeature } from '@/interfaces/IPlatformConfig';
+import { Adapter11880 } from '@/modules/platforms/11880Adapter';
 
 export const Platform_11880_de: PlatformConfig = {
   id: '11880-de',
@@ -9,7 +10,8 @@ export const Platform_11880_de: PlatformConfig = {
   language: 'de',
   is_active: true,
   version: '1.0.0',
-  type: 'configuration',
+  type: 'class',
+  adapter_class: Adapter11880, // Direct class reference
   documentation: 'https://docs.yellowpages-scraper.com/platforms/11880-de',
   maintainer: 'Platform Development Team',
   rate_limit: 100,
