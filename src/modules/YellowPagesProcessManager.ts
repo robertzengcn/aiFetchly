@@ -402,6 +402,15 @@ export class YellowPagesProcessManager extends BaseModule {
                 case 'SCRAPING_CAPTCHA_DETECTED':
                     console.log(`Task ${taskId}: CAPTCHA detected, may need manual intervention`);
                     break;
+                case 'SCRAPING_CLOUDFLARE_DETECTED':
+                    console.log(`Task ${taskId}: Cloudflare protection detected at ${message.details?.url || 'unknown URL'}`);
+                    console.log(`Additional info: ${message.details?.additionalInfo || 'No additional info available'}`);
+                    // Log to error log for user notification
+                    if (processInfo?.logFiles) {
+                        const cloudflareMessage = `[${new Date().toISOString()}] CLOUDFLARE DETECTED: URL: ${message.details?.url || 'unknown'}, Timestamp: ${message.details?.timestamp || 'unknown'}, Info: ${message.details?.additionalInfo || 'No additional info'}`;
+                        WriteLog(processInfo.logFiles.errorLog, cloudflareMessage);
+                    }
+                    break;
                 case 'TASK_PAUSED':
                     console.log(`Task ${taskId} paused successfully`);
                     break;

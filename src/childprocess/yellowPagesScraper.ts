@@ -599,6 +599,9 @@ export class YellowPagesScraperProcess {
                             };
                             this.reportProgress(progress);
 
+                            // Check for Cloudflare protection after processing each page
+                            await this.handleCloudflareDetection();
+
                             // Check if paused after each major operation
                             if (this.isPaused) {
                                 console.log(`Task ${this.taskData.taskId} is paused, waiting for resume...`);
@@ -734,6 +737,9 @@ export class YellowPagesScraperProcess {
                 };
                 this.reportProgress(progress);
 
+                // Check for Cloudflare protection after processing each page
+                await this.handleCloudflareDetection();
+
                 // Check if paused after each major operation
                 if (this.isPaused) {
                     console.log(`Task ${this.taskData.taskId} is paused, waiting for resume...`);
@@ -783,6 +789,12 @@ export class YellowPagesScraperProcess {
             // Wait for page to load completely
             await this.sleep(2000);
 
+            // Check for Cloudflare protection after page load and handle with retry
+            const cloudflareHandled = await this.handleCloudflareWithRetry();
+            if (!cloudflareHandled) {
+                console.log('⚠️ Cloudflare protection could not be resolved, but continuing with scraping...');
+            }
+
             // Check if platform has search form selectors defined
             const hasSearchFormSelectors = this.platformInfo.selectors.searchForm &&
                 typeof this.platformInfo.selectors.searchForm === 'object' &&
@@ -830,6 +842,9 @@ export class YellowPagesScraperProcess {
                     console.log('No search form found, using URL-based navigation');
                     const searchUrl = this.buildFallbackSearchUrl(keyword, location, pageNum);
                     await this.page.goto(searchUrl, { waitUntil: 'networkidle2' });
+                    
+                    // Check for Cloudflare protection after URL-based navigation
+                    await this.handleCloudflareDetection();
                 }
             }
 
@@ -1086,6 +1101,9 @@ export class YellowPagesScraperProcess {
                 timeout: 15000
             });
 
+            // Check for Cloudflare protection after form submission
+            await this.handleCloudflareDetection();
+
         } catch (error) {
             console.error('Error submitting search form with platform selector:', error);
         }
@@ -1137,6 +1155,10 @@ export class YellowPagesScraperProcess {
                         timeout: 15000
                     });
                     console.log(`Navigated to page ${pageNum} using platform selector`);
+                    
+                    // Check for Cloudflare protection after navigation
+                    await this.handleCloudflareDetection();
+                    
                     return;
                 }
             }
@@ -1185,6 +1207,9 @@ export class YellowPagesScraperProcess {
                     timeout: 15000
                 });
                 console.log(`Navigated to page ${pageNum}`);
+                
+                // Check for Cloudflare protection after navigation
+                await this.handleCloudflareDetection();
             } else {
                 console.log(`Could not find page ${pageNum} link, staying on current page`);
             }
@@ -1228,6 +1253,9 @@ export class YellowPagesScraperProcess {
             // Wait for business list to load
             await this.page.waitForSelector(selectors.businessList, { timeout: 10000 });
 
+            // Check for Cloudflare protection before proceeding with data extraction
+            await this.handleCloudflareDetection();
+
             // Log data extraction action for AI training
             if (this.sessionManager.getRecordingStatus() && this.page) {
                 const currentState = await this.sessionManager.capturePageState(this.page);
@@ -1237,30 +1265,98 @@ export class YellowPagesScraperProcess {
             // Extract all business listings
             const businessElements = await this.page.$$(selectors.businessItem);
             console.log(`Found ${businessElements.length} business listings`);
-            for (const element of businessElements) {
+            
+            // Store selectors for re-querying after page re-renders
+            const businessSelectors = {
+                businessItem: selectors.businessItem,
+                businessList: selectors.businessList,
+                businessName: selectors.businessName,
+                email: selectors.email,
+                phone: selectors.phone,
+                website: selectors.website,
+                address: selectors.address,
+                address_city: selectors.address_city,
+                address_state: selectors.address_state,
+                address_zip: selectors.address_zip,
+                address_country: selectors.address_country,
+                socialMedia: selectors.socialMedia,
+                categories: selectors.categories,
+                businessHours: selectors.businessHours,
+                description: selectors.description,
+                rating: selectors.rating,
+                reviewCount: selectors.reviewCount,
+                faxNumber: selectors.faxNumber,
+                contactPerson: selectors.contactPerson,
+                yearEstablished: selectors.yearEstablished,
+                numberOfEmployees: selectors.numberOfEmployees,
+                paymentMethods: selectors.paymentMethods,
+                specialties: selectors.specialties,
+                navigation: selectors.navigation
+            };
+            
+            for (let i = 0; i < businessElements.length; i++) {
                 if (!this.isRunning) break;
 
                 try {
-                    const result = await this.extractBusinessFromElement(element, selectors);
-                    console.log('extra result', result);
-                    if (result) {
-                        // Check if navigation to detail page is available
-                        if (selectors.navigation?.detailLink) {
-                            console.log('Navigating to detail page');
-                            console.log('detailLink', selectors.navigation.detailLink);
-                            const enhancedResult = await this.navigateToDetailPageAndExtract(element, selectors, result);
-                            if (enhancedResult) {
-                                results.push(enhancedResult);
-                            }
+                    // Log current item being processed
+                    const itemNumber = i + 1; // Convert to 1-based indexing for user-friendly display
+                    console.log(`\n📋 Processing business item ${itemNumber}/${businessElements.length}`);
+                    
+                    // Re-query the element after each detail page navigation to handle page re-renders
+                    let currentElement = businessElements[i];
+                    
+                    // Check if element is still valid, if not, re-query it
+                    try {
+                        await currentElement.evaluate(el => el.isConnected);
+                    } catch (error) {
+                        console.log(`Element ${itemNumber} became stale, re-querying...`);
+                        const freshElements = await this.page!.$$(businessSelectors.businessItem);
+                        if (freshElements[i]) {
+                            currentElement = freshElements[i];
+                            console.log(`✅ Successfully re-queried element ${itemNumber}`);
                         } else {
-                            // const result = await this.extractBusinessFromElement(element, selectors);
-                            // if (result) {
-                                results.push(result);
-                            // }
+                            console.error(`❌ Could not re-query element ${itemNumber}, skipping`);
+                            continue;
                         }
                     }
+                    
+                    const result = await this.extractBusinessFromElement(currentElement, businessSelectors);
+                    console.log(`📊 Extraction result for item ${itemNumber}:`, result?.business_name || 'No business name found');
+                    if (result) {
+                        // Check if navigation to detail page is available
+                        if (businessSelectors.navigation?.detailLink) {
+                            console.log(`🔗 Navigating to detail page for item ${itemNumber}`);
+                            console.log('detailLink', businessSelectors.navigation.detailLink);
+                            const enhancedResult = await this.navigateToDetailPageAndExtract(currentElement, businessSelectors, result);
+                            if (enhancedResult) {
+                                results.push(enhancedResult);
+                                console.log(`✅ Enhanced data extracted for item ${itemNumber}: ${enhancedResult.business_name}`);
+                            } else {
+                                console.log(`⚠️ No enhanced data for item ${itemNumber}, using basic result`);
+                                results.push(result);
+                            }
+                            
+                            // After returning from detail page, re-query all elements to handle page re-render
+                            console.log(`🔄 Re-querying business elements after detail page navigation for item ${itemNumber}...`);
+                            const refreshedElements = await this.page!.$$(businessSelectors.businessItem);
+                            if (refreshedElements.length > 0) {
+                                // Update the businessElements array with fresh references
+                                businessElements.splice(0, businessElements.length, ...refreshedElements);
+                                console.log(`✅ Refreshed ${businessElements.length} business elements after item ${itemNumber}`);
+                            }
+                        } else {
+                            results.push(result);
+                            console.log(`✅ Basic data extracted for item ${itemNumber}: ${result.business_name}`);
+                        }
+                    } else {
+                        console.log(`⚠️ No data extracted for item ${itemNumber}`);
+                    }
+                    
+                    // Log progress summary
+                    console.log(`📈 Progress: ${results.length}/${businessElements.length} items processed successfully`);
+                    
                 } catch (error) {
-                    console.error('Error extracting business data:', error);
+                    console.error(`❌ Error processing item ${i + 1}:`, error);
                     // Continue with next element
                 }
             }
@@ -1328,6 +1424,9 @@ export class YellowPagesScraperProcess {
             // Wait for page to load
             await this.sleep(selectors.navigation.delayAfterNavigation || 2000);
 
+            // Check for Cloudflare protection after detail page navigation
+            await this.handleCloudflareDetection();
+
             // Call custom onPageLoad method if it exists in the adapter
             if (this.adapter && typeof this.adapter.onPageLoad === 'function') {
                 try {
@@ -1353,6 +1452,10 @@ export class YellowPagesScraperProcess {
 
             // Wait for search results to reload
             await this.page.waitForSelector(selectors.businessList, { timeout: 10000 });
+            
+            // Check for Cloudflare protection after returning to search results
+            await this.handleCloudflareDetection();
+            
             console.log('enhancedResult', enhancedResult);
             return enhancedResult;
 
@@ -2009,6 +2112,254 @@ export class YellowPagesScraperProcess {
     }
 
     /**
+     * Detect if the current page is blocked by Cloudflare protection
+     * @returns true if Cloudflare protection is detected, false otherwise
+     */
+    private async detectCloudflareProtection(): Promise<boolean> {
+        if (!this.page) return false;
+
+        try {
+            // Common Cloudflare protection indicators
+            const cloudflareSelectors = [
+                // Cloudflare challenge page
+                '#challenge-form',
+                '#challenge-running',
+                '.cf-browser-verification',
+                '.cf-wrapper',
+                '#cf-please-wait',
+                '.cf-error-code',
+                // Cloudflare error pages
+                '.cf-error-title',
+                '.cf-error-description',
+                // Cloudflare security check
+                '#cf-wrapper',
+                '.cf-browser-verification',
+                // Additional indicators
+                'iframe[src*="cloudflare"]',
+                'script[src*="cloudflare"]',
+                // Text content indicators
+                'text="Checking your browser"',
+                'text="Please wait while we verify"',
+                'text="DDoS protection by Cloudflare"',
+                'text="Security check by Cloudflare"',
+                'text="Just a moment"',
+                'text="Checking if the site connection is secure"',
+                'text="Please complete the security check"',
+                'text="One more step"',
+                'text="Please wait"',
+                'text="Verifying you are human"',
+                'text="Turn on JavaScript"',
+                'text="Enable JavaScript and cookies"'
+            ];
+
+            // Check for Cloudflare-specific elements
+            for (const selector of cloudflareSelectors) {
+                try {
+                    if (selector.startsWith('text=')) {
+                        // Check for text content
+                        const text = selector.replace('text=', '');
+                        const hasText = await this.page!.evaluate((searchText) => {
+                            return document.body.innerText.includes(searchText) || 
+                                   document.title.includes(searchText) ||
+                                   document.documentElement.innerText.includes(searchText);
+                        }, text);
+                        if (hasText) {
+                            console.log(`🔒 Cloudflare protection detected via text: "${text}"`);
+                            return true;
+                        }
+                    } else {
+                        // Check for element existence
+                        const element = await this.page!.$eval(selector, () => true).catch(() => false);
+                        if (element) {
+                            console.log(`🔒 Cloudflare protection detected via selector: ${selector}`);
+                            return true;
+                        }
+                    }
+                } catch (error) {
+                    // Continue checking other selectors if one fails
+                    continue;
+                }
+            }
+
+            // Check page title for Cloudflare indicators
+            const pageTitle = await this.page!.title();
+            const cloudflareTitlePatterns = [
+                /cloudflare/i,
+                /checking your browser/i,
+                /please wait/i,
+                /security check/i,
+                /ddos protection/i,
+                /browser verification/i,
+                /just a moment/i,
+                /verifying you are human/i,
+                /one more step/i,
+                /turn on javascript/i,
+                /enable javascript/i
+            ];
+
+            for (const pattern of cloudflareTitlePatterns) {
+                if (pattern.test(pageTitle)) {
+                    console.log(`🔒 Cloudflare protection detected via page title: "${pageTitle}"`);
+                    return true;
+                }
+            }
+
+            // Check URL for Cloudflare indicators
+            const currentUrl = this.page!.url();
+            if (currentUrl.includes('cloudflare') || 
+                currentUrl.includes('challenge') || 
+                currentUrl.includes('cf-') ||
+                currentUrl.includes('security-check')) {
+                console.log(`🔒 Cloudflare protection detected via URL: ${currentUrl}`);
+                return true;
+            }
+
+            // Check for Cloudflare-specific HTTP headers (if accessible)
+            try {
+                const response = await this.page!.evaluate(() => {
+                    // This might not work in all contexts, but worth trying
+                    return (window as any).performance?.getEntriesByType?.('resource') || [];
+                });
+                
+                // Look for Cloudflare resources in performance entries
+                const hasCloudflareResources = response.some((entry: any) => 
+                    entry.name && (
+                        entry.name.includes('cloudflare') ||
+                        entry.name.includes('cf-') ||
+                        entry.name.includes('challenge')
+                    )
+                );
+                
+                if (hasCloudflareResources) {
+                    console.log('🔒 Cloudflare protection detected via resource loading');
+                    return true;
+                }
+            } catch (error) {
+                // Performance API might not be available, continue
+            }
+
+            // Check for common Cloudflare page structure patterns
+            try {
+                const hasCloudflareStructure = await this.page!.evaluate(() => {
+                    // Check for common Cloudflare page structures
+                    const bodyText = document.body.innerText.toLowerCase();
+                    const hasChallengeForm = document.getElementById('challenge-form') !== null;
+                    const hasCfWrapper = document.querySelector('.cf-wrapper') !== null;
+                    const hasSecurityCheck = bodyText.includes('security check') || 
+                                           bodyText.includes('verifying') ||
+                                           bodyText.includes('just a moment');
+                    
+                    return hasChallengeForm || hasCfWrapper || hasSecurityCheck;
+                });
+                
+                if (hasCloudflareStructure) {
+                    console.log('🔒 Cloudflare protection detected via page structure analysis');
+                    return true;
+                }
+            } catch (error) {
+                // Continue if evaluation fails
+            }
+
+            return false;
+        } catch (error) {
+            console.warn('Error detecting Cloudflare protection:', error);
+            return false;
+        }
+    }
+
+    /**
+     * Handle Cloudflare protection detection and notify parent process
+     */
+    private async handleCloudflareDetection(): Promise<void> {
+        if (!this.page) return;
+
+        try {
+            const isBlocked = await this.detectCloudflareProtection();
+            if (isBlocked) {
+                console.log('🚨 Cloudflare protection detected! Notifying parent process...');
+                
+                // Get additional context for the notification
+                const currentUrl = this.page.url();
+                const userAgent = await this.page.evaluate(() => navigator.userAgent);
+                const timestamp = new Date().toISOString();
+                
+                // Try to get more detailed information about the Cloudflare page
+                let additionalInfo = '';
+                try {
+                    const pageInfo = await this.page.evaluate(() => {
+                        const title = document.title;
+                        const bodyText = document.body.innerText.substring(0, 500); // First 500 chars
+                        const hasChallengeForm = !!document.getElementById('challenge-form');
+                        const hasCfWrapper = !!document.querySelector('.cf-wrapper');
+                        
+                        return {
+                            title,
+                            bodyText,
+                            hasChallengeForm,
+                            hasCfWrapper
+                        };
+                    });
+                    
+                    additionalInfo = `Page Title: "${pageInfo.title}", Challenge Form: ${pageInfo.hasChallengeForm}, CF Wrapper: ${pageInfo.hasCfWrapper}`;
+                } catch (error) {
+                    additionalInfo = 'Unable to extract additional page information';
+                }
+                
+                // Create Cloudflare detection message
+                const cloudflareMessage = {
+                    type: 'SCRAPING_CLOUDFLARE_DETECTED',
+                    taskId: this.taskData.taskId,
+                    details: {
+                        url: currentUrl,
+                        timestamp: timestamp,
+                        userAgent: userAgent,
+                        additionalInfo: additionalInfo
+                    }
+                };
+
+                // Send message to parent process via IPC
+                if (process.send) {
+                    process.send(cloudflareMessage);
+                    console.log('✅ Cloudflare detection message sent to parent process');
+                } else {
+                    console.warn('⚠️ Cannot send Cloudflare message: process.send not available');
+                }
+
+                // Log the detection for debugging
+                console.log('🔒 Cloudflare protection details:', {
+                    url: currentUrl,
+                    timestamp: timestamp,
+                    userAgent: userAgent,
+                    additionalInfo: additionalInfo
+                });
+
+                // Provide user guidance
+                console.log('💡 Cloudflare Protection Detected - User Guidance:');
+                console.log('   • The target website is protected by Cloudflare');
+                console.log('   • This may be due to:');
+                console.log('     - High request frequency');
+                console.log('     - Suspicious traffic patterns');
+                console.log('     - Geographic restrictions');
+                console.log('     - Browser fingerprinting');
+                console.log('   • Recommended actions:');
+                console.log('     - Wait before retrying (15-30 minutes)');
+                console.log('     - Use different proxy/VPN if available');
+                console.log('     - Reduce scraping frequency');
+                console.log('     - Check if manual access works in browser');
+                
+                // Optionally pause the scraping process to allow manual intervention
+                if (this.isRunning) {
+                    console.log('⏸️ Pausing scraping process due to Cloudflare protection...');
+                    // Don't actually pause here, just log - let the user decide
+                    // The parent process will handle the notification
+                }
+            }
+        } catch (error) {
+            console.error('Error handling Cloudflare detection:', error);
+        }
+    }
+
+    /**
      * Human-like mouse movement with natural curves
      */
     private async humanLikeMouseMove(page: Page, targetX: number, targetY: number): Promise<void> {
@@ -2219,6 +2570,9 @@ export class YellowPagesScraperProcess {
                 timeout: 15000
             });
 
+            // Check for Cloudflare protection after form submission
+            await this.handleCloudflareDetection();
+
         } catch (error) {
             console.error('Error submitting search form:', error);
         }
@@ -2311,6 +2665,97 @@ export class YellowPagesScraperProcess {
             specialties: businessData.specialties || undefined
         };
         return result;
+    }
+
+    /**
+     * Wait for Cloudflare challenge to complete (if possible)
+     * @param maxWaitTime Maximum time to wait in milliseconds (default: 30 seconds)
+     * @returns true if Cloudflare challenge appears to be resolved, false otherwise
+     */
+    private async waitForCloudflareChallenge(maxWaitTime: number = 30000): Promise<boolean> {
+        if (!this.page) return false;
+
+        console.log(`⏳ Waiting for Cloudflare challenge to complete (max: ${maxWaitTime}ms)...`);
+        
+        const startTime = Date.now();
+        const checkInterval = 2000; // Check every 2 seconds
+        
+        while (Date.now() - startTime < maxWaitTime) {
+            try {
+                // Check if Cloudflare protection is still active
+                const isStillBlocked = await this.detectCloudflareProtection();
+                
+                if (!isStillBlocked) {
+                    console.log('✅ Cloudflare challenge appears to be resolved');
+                    return true;
+                }
+                
+                // Wait before next check
+                await this.sleep(checkInterval);
+                
+                // Log progress
+                const elapsed = Date.now() - startTime;
+                const remaining = maxWaitTime - elapsed;
+                console.log(`⏳ Still waiting... (${Math.round(remaining / 1000)}s remaining)`);
+                
+            } catch (error) {
+                console.warn('Error while waiting for Cloudflare challenge:', error);
+                await this.sleep(checkInterval);
+            }
+        }
+        
+        console.log('⏰ Timeout waiting for Cloudflare challenge to complete');
+        return false;
+    }
+
+    /**
+     * Attempt to handle Cloudflare protection with retry logic
+     * @param maxRetries Maximum number of retry attempts
+     * @returns true if Cloudflare protection was handled successfully, false otherwise
+     */
+    private async handleCloudflareWithRetry(maxRetries: number = 3): Promise<boolean> {
+        if (!this.page) return false;
+
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            console.log(`🔄 Cloudflare handling attempt ${attempt}/${maxRetries}`);
+            
+            try {
+                // Check if Cloudflare protection is detected
+                const isBlocked = await this.detectCloudflareProtection();
+                
+                if (!isBlocked) {
+                    console.log('✅ No Cloudflare protection detected, continuing...');
+                    return true;
+                }
+                
+                // Notify parent process about the detection
+                await this.handleCloudflareDetection();
+                
+                // Wait for challenge to complete
+                const challengeResolved = await this.waitForCloudflareChallenge();
+                
+                if (challengeResolved) {
+                    console.log('✅ Cloudflare challenge resolved, continuing with scraping...');
+                    return true;
+                }
+                
+                // If challenge not resolved, try refreshing the page
+                if (attempt < maxRetries) {
+                    console.log(`🔄 Attempting page refresh (attempt ${attempt + 1}/${maxRetries})`);
+                    await this.page.reload({ waitUntil: 'networkidle2' });
+                    await this.sleep(5000); // Wait 5 seconds after refresh
+                }
+                
+            } catch (error) {
+                console.error(`Error in Cloudflare handling attempt ${attempt}:`, error);
+                if (attempt < maxRetries) {
+                    await this.sleep(5000); // Wait before retry
+                }
+            }
+        }
+        
+        console.log('❌ Failed to handle Cloudflare protection after all retry attempts');
+        return false;
     }
 }
 console.log('🚀 YellowPagesScraperProcess loaded');

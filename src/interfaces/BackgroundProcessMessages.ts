@@ -228,6 +228,20 @@ export interface ScrapingCaptchaDetectedMessage extends BaseBackgroundMessage {
 }
 
 /**
+ * Message sent from background process when Cloudflare protection is detected
+ */
+export interface ScrapingCloudflareDetectedMessage extends BaseBackgroundMessage {
+    type: 'SCRAPING_CLOUDFLARE_DETECTED';
+    details: {
+        url: string;
+        timestamp: string;
+        userAgent?: string;
+        ipAddress?: string;
+        additionalInfo?: string;
+    };
+}
+
+/**
  * Message sent from main process to pause a task
  */
 export interface PauseTaskMessage extends BaseBackgroundMessage {
@@ -276,6 +290,7 @@ export type BackgroundProcessMessage =
     | ScrapingResultFoundMessage
     | ScrapingRateLimitedMessage
     | ScrapingCaptchaDetectedMessage
+    | ScrapingCloudflareDetectedMessage
     | PauseTaskMessage
     | ResumeTaskMessage
     | TaskPausedMessage
@@ -308,4 +323,11 @@ export function isCompletedMessage(message: any): message is CompletedMessage {
  */
 export function isErrorMessage(message: any): message is ErrorMessage {
     return message && message.type === 'ERROR' && message.error;
+}
+
+/**
+ * Type guard to check if a message is a ScrapingCloudflareDetectedMessage
+ */
+export function isScrapingCloudflareDetectedMessage(message: any): message is ScrapingCloudflareDetectedMessage {
+    return message && message.type === 'SCRAPING_CLOUDFLARE_DETECTED' && message.details;
 }
