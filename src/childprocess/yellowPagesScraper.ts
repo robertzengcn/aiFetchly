@@ -51,7 +51,6 @@ interface ScrapingResult {
     description?: string;
     rating?: number;
     review_count?: number;
-    raw_data?: object;
     fax_number?: string;
     contact_person?: string;
     year_established?: number;
@@ -1243,15 +1242,21 @@ export class YellowPagesScraperProcess {
 
                 try {
                     const result = await this.extractBusinessFromElement(element, selectors);
+                    console.log('extra result', result);
                     if (result) {
-                        // Check if navigation to detail page is required
-                        if (selectors.navigation?.required && selectors.navigation.detailLink) {
+                        // Check if navigation to detail page is available
+                        if (selectors.navigation?.detailLink) {
+                            console.log('Navigating to detail page');
+                            console.log('detailLink', selectors.navigation.detailLink);
                             const enhancedResult = await this.navigateToDetailPageAndExtract(element, selectors, result);
                             if (enhancedResult) {
                                 results.push(enhancedResult);
                             }
                         } else {
-                            results.push(result);
+                            // const result = await this.extractBusinessFromElement(element, selectors);
+                            // if (result) {
+                                results.push(result);
+                            // }
                         }
                     }
                 } catch (error) {
@@ -1280,6 +1285,7 @@ export class YellowPagesScraperProcess {
         try {
             // Find the detail page link
             const detailLink = await element.$(selectors.navigation.detailLink);
+            console.log('detailLink2', detailLink);
             if (!detailLink) {
                 console.log('Detail link not found, using basic result');
                 return basicResult;
@@ -1347,7 +1353,7 @@ export class YellowPagesScraperProcess {
 
             // Wait for search results to reload
             await this.page.waitForSelector(selectors.businessList, { timeout: 10000 });
-
+            console.log('enhancedResult', enhancedResult);
             return enhancedResult;
 
         } catch (error) {
@@ -1367,6 +1373,7 @@ export class YellowPagesScraperProcess {
         if (!this.page || !selectors.navigation?.detailPage) return basicResult;
 
         const detailSelectors = selectors.navigation.detailPage;
+        console.log('detailSelectors', detailSelectors);
         const enhancedResult = { ...basicResult };
 
         try {
@@ -1434,7 +1441,12 @@ export class YellowPagesScraperProcess {
             // Extract additional email addresses if available
             if (detailSelectors.additionalEmail) {
                 const additionalEmail = await this.extractTextFromPage(detailSelectors.additionalEmail);
-                if (additionalEmail) enhancedResult.email = additionalEmail;
+                if (additionalEmail && this.isValidEmail(additionalEmail)) {
+                    enhancedResult.email = additionalEmail;
+                    console.log(`📧 Valid email extracted from detail page: ${additionalEmail}`);
+                } else if (additionalEmail) {
+                    console.log(`⚠️ Invalid email format from detail page: ${additionalEmail}`);
+                }
             }
 
             // Extract social media links if available
@@ -1685,6 +1697,14 @@ export class YellowPagesScraperProcess {
     }
 
     /**
+     * Validate email format
+     */
+    private isValidEmail(email: string): boolean {
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        return emailRegex.test(email.trim());
+    }
+
+    /**
      * Parse contact information text for additional fields
      */
     private parseContactInfo(contactText: string): { contactPerson?: string; faxNumber?: string } {
@@ -1710,7 +1730,19 @@ export class YellowPagesScraperProcess {
      */
     private async extractBusinessFromElement(element: any, selectors: PlatformInfo['selectors']): Promise<ScrapingResult | null> {
         try {
+            // Wait for page to finish loading before extracting data
+            if (this.page) {
+                await this.page.waitForSelector('body', { timeout: 10000 });
+            }
+            
             const business_name = await this.extractText(element, selectors.businessName);
+            console.log('element', element);
+            console.log('selectors', selectors.businessName);
+            console.log('business_name', business_name);
+            if (this.page) {
+                const currentUrl = this.page.url();
+                console.log('Current page URL:', currentUrl);
+            }
             if (!business_name) return null;
 
             const result: ScrapingResult = {
@@ -1731,7 +1763,6 @@ export class YellowPagesScraperProcess {
                 description: selectors.description ? await this.extractText(element, selectors.description) : undefined,
                 rating: selectors.rating ? await this.extractNumber(element, selectors.rating) : undefined,
                 review_count: selectors.reviewCount ? await this.extractNumber(element, selectors.reviewCount) : undefined,
-                raw_data: await this.extractRawData(element),
                 fax_number: selectors.faxNumber ? await this.extractText(element, selectors.faxNumber) : undefined,
                 contact_person: selectors.contactPerson ? await this.extractText(element, selectors.contactPerson) : undefined,
                 year_established: selectors.yearEstablished ? await this.extractNumber(element, selectors.yearEstablished) : undefined,
@@ -1755,10 +1786,40 @@ export class YellowPagesScraperProcess {
         try {
             const textElement = await element.$(selector);
             if (textElement) {
-                return await textElement.evaluate(el => el.textContent?.trim());
+                // Check if element is still valid before evaluating
+                const isValid = await textElement.evaluate(el => {
+                    try {
+                        // Test if element is still connected to DOM
+                        return el.isConnected && el.offsetParent !== null;
+                    } catch {
+                        return false;
+                    }
+                });
+                
+                if (isValid) {
+                    return await textElement.evaluate(el => el.textContent?.trim());
+                } else {
+                    console.log('Element is no longer valid in DOM', selector);
+                }
+            } else {
+                console.log('textElement not found', selector);
             }
         } catch (error) {
-            // Ignore extraction errors
+            // Log specific error types for debugging
+            if (error.message?.includes('Protocol error') || error.message?.includes('Could not find object')) {
+                console.log('DOM element became stale, retrying...', selector);
+                // Try to re-find the element
+                try {
+                    const retryElement = await element.$(selector);
+                    if (retryElement) {
+                        return await retryElement.evaluate(el => el.textContent?.trim());
+                    }
+                } catch (retryError) {
+                    console.log('Retry failed:', retryError.message);
+                }
+            } else {
+                console.log('error extracting text', error.message);
+            }
         }
         return undefined;
     }
@@ -2163,7 +2224,6 @@ export class YellowPagesScraperProcess {
             description: businessData.description || undefined,
             rating: businessData.rating?.score || businessData.rating || undefined,
             review_count: businessData.rating?.review_count || businessData.review_count || undefined,
-            raw_data: businessData,
             fax_number: businessData.fax_number || undefined,
             contact_person: businessData.contact_person || undefined,
             year_established: businessData.year_established || undefined,

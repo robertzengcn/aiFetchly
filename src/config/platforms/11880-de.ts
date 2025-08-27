@@ -25,7 +25,7 @@ export const Platform_11880_de: PlatformConfig = {
       formContainer: '#form-search-and-find',
     },
     businessList: '#html-search-result-list',
-    businessItem: '#html-search-result-list > li',
+    businessItem: '#html-search-result-list > li.result-list-entry',
     businessName: 'h2',
     phone: 'span.result-list-entry-phone-number__label',
     email: '',
