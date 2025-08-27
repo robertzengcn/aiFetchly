@@ -1779,83 +1779,162 @@ export class YellowPagesScraperProcess {
     }
 
     /**
-     * Extract text from element
+     * Extract text from element - handles page re-rendering
      */
     private async extractText(element: any, selector: string): Promise<string | undefined> {
         if (!selector) return undefined;
-        try {
-            const textElement = await element.$(selector);
-            if (textElement) {
-                // Check if element is still valid before evaluating
-                const isValid = await textElement.evaluate(el => {
-                    try {
-                        // Test if element is still connected to DOM
-                        return el.isConnected && el.offsetParent !== null;
-                    } catch {
-                        return false;
+        
+        // Add small delay to handle page re-rendering
+        await this.sleep(100);
+        
+        // Retry logic with fresh element queries
+        for (let attempt = 0; attempt < 3; attempt++) {
+            try {
+                // Always get a fresh element reference to avoid stale DOM references
+                const textElement = await element.$(selector);
+                if (textElement) {
+                    // Immediately extract text without validation to avoid additional DOM queries
+                    const text = await textElement.evaluate(el => {
+                        try {
+                            return el.textContent?.trim() || '';
+                        } catch {
+                            return '';
+                        }
+                    });
+                    
+                    if (text) {
+                        return text;
                     }
-                });
-                
-                if (isValid) {
-                    return await textElement.evaluate(el => el.textContent?.trim());
                 } else {
-                    console.log('Element is no longer valid in DOM', selector);
+                    console.error('textElement not found', selector);
                 }
-            } else {
-                console.log('textElement not found', selector);
-            }
-        } catch (error) {
-            // Log specific error types for debugging
-            if (error.message?.includes('Protocol error') || error.message?.includes('Could not find object')) {
-                console.log('DOM element became stale, retrying...', selector);
-                // Try to re-find the element
-                try {
-                    const retryElement = await element.$(selector);
-                    if (retryElement) {
-                        return await retryElement.evaluate(el => el.textContent?.trim());
-                    }
-                } catch (retryError) {
-                    console.log('Retry failed:', retryError.message);
+            } catch (error) {
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                
+                if (errorMessage.includes('Protocol error') || errorMessage.includes('Could not find object')) {
+                    console.log(`DOM re-rendering detected, attempt ${attempt + 1}/3 for selector: ${selector}`);
+                    
+                    // Wait longer between retries to allow page to stabilize
+                    await this.sleep(200 * (attempt + 1));
+                    
+                    // Continue to next attempt
+                    continue;
+                } else {
+                    console.error('error extracting text', errorMessage);
+                    break;
                 }
-            } else {
-                console.log('error extracting text', error.message);
             }
         }
+        
         return undefined;
     }
 
     /**
-     * Extract attribute from element
+     * Extract attribute from element - handles page re-rendering
      */
     private async extractAttribute(element: any, selector: string, attribute: string): Promise<string | undefined> {
         if (!selector) return undefined;
-        try {
-            const attrElement = await element.$(selector);
-            if (attrElement) {
-                return await attrElement.evaluate((el, attr) => el.getAttribute(attr), attribute);
+        
+        // Add small delay to handle page re-rendering
+        await this.sleep(100);
+        
+        // Retry logic with fresh element queries
+        for (let attempt = 0; attempt < 3; attempt++) {
+            try {
+                // Always get a fresh element reference to avoid stale DOM references
+                const attrElement = await element.$(selector);
+                if (attrElement) {
+                    // Immediately extract attribute without validation to avoid additional DOM queries
+                    const attrValue = await attrElement.evaluate((el, attr) => {
+                        try {
+                            return el.getAttribute(attr);
+                        } catch {
+                            return null;
+                        }
+                    }, attribute);
+                    
+                    if (attrValue) {
+                        return attrValue;
+                    }
+                } else {
+                    console.error('attrElement not found', selector);
+                }
+            } catch (error) {
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                
+                if (errorMessage.includes('Protocol error') || errorMessage.includes('Could not find object')) {
+                    console.log(`DOM re-rendering detected, attempt ${attempt + 1}/3 for attribute selector: ${selector}`);
+                    
+                    // Wait longer between retries to allow page to stabilize
+                    await this.sleep(200 * (attempt + 1));
+                    
+                    // Continue to next attempt
+                    continue;
+                } else {
+                    console.error('error extracting attribute', errorMessage);
+                    break;
+                }
             }
-        } catch (error) {
-            // Ignore extraction errors
         }
+        
         return undefined;
     }
 
     /**
-     * Extract array from element
+     * Extract array from element - handles page re-rendering
      */
     private async extractArray(element: any, selector: string): Promise<string[] | undefined> {
         if (!selector) return undefined;
-        try {
-            const elements = await element.$$(selector);
-            const array: string[] = [];
-            for (const el of elements) {
-                const text = await el.evaluate(element => element.textContent?.trim());
-                if (text) array.push(text);
+        
+        // Add small delay to handle page re-rendering
+        await this.sleep(100);
+        
+        // Retry logic with fresh element queries
+        for (let attempt = 0; attempt < 3; attempt++) {
+            try {
+                // Always get fresh element references to avoid stale DOM references
+                const elements = await element.$$(selector);
+                const array: string[] = [];
+                
+                for (const el of elements) {
+                    try {
+                        const text = await el.evaluate(element => {
+                            try {
+                                return element.textContent?.trim() || '';
+                            } catch {
+                                return '';
+                            }
+                        });
+                        if (text) array.push(text);
+                    } catch (elementError) {
+                        // Skip this element if it becomes stale
+                        const elementErrorMessage = elementError instanceof Error ? elementError.message : String(elementError);
+                        if (elementErrorMessage.includes('Protocol error') || elementErrorMessage.includes('Could not find object')) {
+                            console.log('Skipping stale element in array extraction');
+                            continue;
+                        }
+                    }
+                }
+                
+                return array.length > 0 ? array : undefined;
+            } catch (error) {
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                
+                if (errorMessage.includes('Protocol error') || errorMessage.includes('Could not find object')) {
+                    console.log(`DOM re-rendering detected, attempt ${attempt + 1}/3 for array selector: ${selector}`);
+                    
+                    // Wait longer between retries to allow page to stabilize
+                    await this.sleep(200 * (attempt + 1));
+                    
+                    // Continue to next attempt
+                    continue;
+                } else {
+                    console.error('error extracting array', errorMessage);
+                    break;
+                }
             }
-            return array.length > 0 ? array : undefined;
-        } catch (error) {
-            // Ignore extraction errors
         }
+        
         return undefined;
     }
 
