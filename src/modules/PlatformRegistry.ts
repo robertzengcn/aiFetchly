@@ -223,7 +223,7 @@ export class PlatformRegistry extends BaseModule {
                     );
                 }
             }
-            console.log(`📋 Loaded ${this.platforms.size} platform configurations (TS)`);
+            // console.log(`📋 Loaded ${this.platforms.size} platform configurations (TS)`);
             return;
         }
 

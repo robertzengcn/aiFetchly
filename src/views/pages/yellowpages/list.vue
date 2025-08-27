@@ -20,6 +20,25 @@
         >
           {{ t('home.new_task') }}
         </v-btn>
+        <v-btn
+          color="info"
+          prepend-icon="mdi-refresh"
+          @click="manualRefresh"
+          class="mr-2"
+          :loading="loading"
+          title="Manual refresh"
+        >
+          {{ t('home.refresh') || 'Refresh' }}
+        </v-btn>
+        <v-btn
+          :color="autoRefreshEnabled ? (isPageVisible ? 'success' : 'warning') : 'secondary'"
+          :prepend-icon="autoRefreshEnabled ? (isPageVisible ? 'mdi-refresh' : 'mdi-pause') : 'mdi-refresh-off'"
+          @click="toggleAutoRefresh"
+          class="mr-2"
+          :title="autoRefreshEnabled ? (isPageVisible ? 'Auto-refresh enabled (5s)' : 'Auto-refresh paused (page not visible)') : 'Auto-refresh disabled'"
+        >
+          {{ autoRefreshEnabled ? (isPageVisible ? 'Auto-refresh ON' : 'Auto-refresh PAUSED') : 'Auto-refresh OFF' }}
+        </v-btn>
         <!-- <v-btn
           color="secondary"
           prepend-icon="mdi-import"
@@ -45,6 +64,17 @@
           <v-card-title class="d-flex align-center flex-wrap">
             <v-icon class="mr-2 mb-1">mdi-chart-line</v-icon>
             <span class="text-wrap">{{ t('home.task_overview') }}</span>
+            <v-spacer></v-spacer>
+            <div class="d-flex align-center">
+              <v-icon class="mr-1" size="small">mdi-clock-outline</v-icon>
+              <span class="text-caption text-medium-emphasis">
+                Last updated: {{ lastRefreshTime.toLocaleTimeString() }}
+              </span>
+              <v-divider vertical class="mx-2"></v-divider>
+              <span class="text-caption text-medium-emphasis">
+                Auto-refresh: {{ autoRefreshIntervalMs / 1000 }}s
+              </span>
+            </div>
           </v-card-title>
           <v-card-text>
             <v-row class="task-stats-row">
@@ -312,7 +342,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed, watch } from 'vue'
+import { ref, reactive, onMounted, onUnmounted, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import YellowPagesTaskTable from './components/YellowPagesTaskTable.vue'
@@ -338,6 +368,14 @@ const totalUnfiltered = ref(0) // Track total unfiltered count
 const tasks = ref<TaskSummary[]>([])
 const platforms = ref<PlatformSummary[]>([])
 
+// Auto-refresh functionality
+const autoRefreshInterval = ref<NodeJS.Timeout | null>(null)
+const autoRefreshEnabled = ref(true)
+const autoRefreshIntervalMs = 5000 // 5 seconds
+
+// Page visibility handling for auto-refresh
+const isPageVisible = ref(true)
+
 // Task statistics
 const taskStats = reactive({
   total: 0,
@@ -347,6 +385,9 @@ const taskStats = reactive({
   failed: 0,
   successRate: 0
 })
+
+// Last refresh timestamp
+const lastRefreshTime = ref<Date>(new Date())
 
 // Filter options
 const statusOptions = [
@@ -440,6 +481,9 @@ const loadTasks = async () => {
       totalUnfiltered.value = 0
       updateTaskStats()
     }
+    
+    // Update last refresh time
+    lastRefreshTime.value = new Date()
   } catch (error) {
     console.error('Failed to load tasks:', error)
     // Fallback to empty state on error
@@ -635,7 +679,19 @@ const startTask = async (task: any) => {
   try {
     // TODO: Replace with actual API call
     await startYellowPagesTask(task.id)
+    // Temporarily pause auto-refresh to avoid conflicts
+    const wasAutoRefreshEnabled = autoRefreshEnabled.value
+    autoRefreshEnabled.value = false
+    
     await loadTasks()
+    
+    // Resume auto-refresh after a short delay
+    setTimeout(() => {
+      autoRefreshEnabled.value = wasAutoRefreshEnabled
+      if (autoRefreshEnabled.value) {
+        startAutoRefresh()
+      }
+    }, 2000) // 2 second delay
   } catch (error) {
     console.error('Failed to start task:', error)
   }
@@ -667,6 +723,10 @@ const stopTask = async (task: any) => {
       // Show success message
       alert(`Successfully stopped task "${task.name}"!\n\nTask status has been updated to "Pending" and the table will refresh to show the changes.`);
       
+      // Temporarily pause auto-refresh to avoid conflicts
+      const wasAutoRefreshEnabled = autoRefreshEnabled.value
+      autoRefreshEnabled.value = false
+      
       // Refresh the task list to show updated status
       await loadTasks();
       
@@ -681,6 +741,14 @@ const stopTask = async (task: any) => {
       } else {
         console.log(`Task ${task.id} not found in local array, will be updated when table refreshes`);
       }
+      
+      // Resume auto-refresh after a short delay
+      setTimeout(() => {
+        autoRefreshEnabled.value = wasAutoRefreshEnabled
+        if (autoRefreshEnabled.value) {
+          startAutoRefresh()
+        }
+      }, 2000) // 2 second delay
       
     } else {
       console.error(`Failed to stop process for task ${task.id}: ${result.message}`);
@@ -757,10 +825,65 @@ const confirmAction = () => {
   }
 }
 
+// Auto-refresh methods
+const startAutoRefresh = () => {
+  if (autoRefreshEnabled.value && !autoRefreshInterval.value) {
+    autoRefreshInterval.value = setInterval(async () => {
+      try {
+        // Only refresh if not currently loading and page is visible
+        if (!loading.value && isPageVisible.value) {
+          await loadTasks()
+        }
+      } catch (error) {
+        console.error('Auto-refresh failed:', error)
+      }
+    }, autoRefreshIntervalMs)
+  }
+}
+
+const stopAutoRefresh = () => {
+  if (autoRefreshInterval.value) {
+    clearInterval(autoRefreshInterval.value)
+    autoRefreshInterval.value = null
+  }
+}
+
+const toggleAutoRefresh = () => {
+  autoRefreshEnabled.value = !autoRefreshEnabled.value
+  if (autoRefreshEnabled.value) {
+    startAutoRefresh()
+  } else {
+    stopAutoRefresh()
+  }
+}
+
+const manualRefresh = async () => {
+  try {
+    await loadTasks()
+  } catch (error) {
+    console.error('Manual refresh failed:', error)
+  }
+}
+
+// Page visibility change handler
+const handleVisibilityChange = () => {
+  isPageVisible.value = !document.hidden
+}
+
 // Lifecycle
 onMounted(() => {
   loadPlatforms()
   loadTasks()
+  startAutoRefresh()
+  
+  // Add page visibility listener
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+})
+
+onUnmounted(() => {
+  stopAutoRefresh()
+  // Remove page visibility listener
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
 })
 </script>
 
@@ -797,6 +920,21 @@ onMounted(() => {
   flex-direction: column;
   justify-content: center;
   align-items: center;
+}
+
+/* Auto-refresh button animations */
+.v-btn[color="success"] {
+  transition: all 0.3s ease;
+}
+
+.v-btn[color="warning"] {
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0% { opacity: 1; }
+  50% { opacity: 0.7; }
+  100% { opacity: 1; }
 }
 
 @media (max-width: 600px) {

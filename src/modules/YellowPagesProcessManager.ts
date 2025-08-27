@@ -21,6 +21,7 @@ import {
     ResumeTaskMessage,
     TaskPausedMessage,
     TaskResumedMessage,
+    ExitTaskMessage,
     isStartTaskMessage,
     isProgressMessage,
     isCompletedMessage,
@@ -163,9 +164,11 @@ export class YellowPagesProcessManager extends BaseModule {
                 settings: platform.settings || {},
                 selectors: {
                     businessList: platform.selectors?.businessList || '',
+                    businessItem: platform.selectors?.businessItem || '',
                     businessName: platform.selectors?.businessName || '',
-                    email: platform.selectors?.email,
+                    detailPageLink: platform.selectors?.detailPageLink,
                     phone: platform.selectors?.phone,
+                    email: platform.selectors?.email,
                     website: platform.selectors?.website,
                     address: platform.selectors?.address,
                     address_city: platform.selectors?.address_city,
@@ -184,8 +187,43 @@ export class YellowPagesProcessManager extends BaseModule {
                     numberOfEmployees: platform.selectors?.numberOfEmployees,
                     paymentMethods: platform.selectors?.paymentMethods,
                     specialties: platform.selectors?.specialties,
+                    logo: platform.selectors?.logo,
+                    photos: platform.selectors?.photos,
+                    businessImage: platform.selectors?.businessImage,
+                    businessUrl: platform.selectors?.businessUrl,
+                    map: platform.selectors?.map,
+                    status: platform.selectors?.status,
+                    priceRange: platform.selectors?.priceRange,
+                    certifications: platform.selectors?.certifications,
+                    licenses: platform.selectors?.licenses,
+                    insurance: platform.selectors?.insurance,
+                    associations: platform.selectors?.associations,
+                    awards: platform.selectors?.awards,
+                    hours: platform.selectors?.hours && typeof platform.selectors.hours === 'object' && 'container' in platform.selectors.hours ? platform.selectors.hours : undefined,
+                    services: platform.selectors?.services,
+                    products: platform.selectors?.products,
+                    team: platform.selectors?.team,
+                    testimonials: platform.selectors?.testimonials,
+                    reviews: platform.selectors?.reviews && typeof platform.selectors.reviews === 'object' && 'container' in platform.selectors.reviews ? platform.selectors.reviews : undefined,
+                    events: platform.selectors?.events,
+                    news: platform.selectors?.news,
+                    blog: platform.selectors?.blog,
+                    gallery: platform.selectors?.gallery,
+                    videos: platform.selectors?.videos,
+                    contactForm: platform.selectors?.contactForm,
+                    appointmentBooking: platform.selectors?.appointmentBooking,
+                    onlineOrdering: platform.selectors?.onlineOrdering,
+                    paymentOptions: platform.selectors?.paymentOptions,
+                    accessibility: platform.selectors?.accessibility,
+                    parking: platform.selectors?.parking,
+                    wifi: platform.selectors?.wifi,
+                    petPolicy: platform.selectors?.petPolicy,
+                    smokingPolicy: platform.selectors?.smokingPolicy,
+                    dressCode: platform.selectors?.dressCode,
+                    ageRestrictions: platform.selectors?.ageRestrictions,
                     searchForm: platform.selectors?.searchForm && typeof platform.selectors.searchForm === 'object' && 'keywordInput' in platform.selectors.searchForm ? platform.selectors.searchForm : undefined,
-                    pagination: platform.selectors?.pagination && typeof platform.selectors.pagination === 'object' && 'nextButton' in platform.selectors.pagination ? platform.selectors.pagination : undefined
+                    pagination: platform.selectors?.pagination && typeof platform.selectors.pagination === 'object' && 'nextButton' in platform.selectors.pagination ? platform.selectors.pagination : undefined,
+                    navigation: platform.selectors?.navigation && typeof platform.selectors.navigation === 'object' && 'detailLink' in platform.selectors.navigation ? platform.selectors.navigation : undefined
                 },
                 adapterClass: taskData.adapterClass
             };
@@ -370,6 +408,10 @@ export class YellowPagesProcessManager extends BaseModule {
                 case 'TASK_RESUMED':
                     console.log(`Task ${taskId} resumed successfully`);
                     break;
+                case 'EXIT':
+                    console.log(`Task ${taskId} received exit request`);
+                    // The child process should handle this and exit gracefully
+                    break;
                 default:
                     console.log(`Unknown message type from task ${taskId}:`, message.type);
             }
@@ -402,30 +444,26 @@ export class YellowPagesProcessManager extends BaseModule {
                 }
             }
             
-            // Update task status based on exit code
-            // Only update if the process is still in 'running' state to avoid overwriting
-            // successful completion statuses that might have been set via IPC messages
-            if (code !== 0) {
-                console.error(`Child process exited with code ${code}`);
-                // Only update status if not already completed or failed
-                if (processInfo?.status === 'running') {
+            // Only update task status if not already handled by IPC messages
+            // This prevents overwriting successful completion statuses set via COMPLETED messages
+            if (processInfo?.status === 'running') {
+                if (code !== 0) {
+                    console.error(`Child process exited with code ${code} - updating task status to Failed`);
                     this.taskModel.updateTaskStatus(taskId, YellowPagesTaskStatus.Failed).catch(err => {
                         console.error(`Failed to update task status for task ${taskId}:`, err);
                     });
                 } else {
-                    console.log(`Task ${taskId} already has status: ${processInfo?.status}, not updating to Failed`);
-                }
-            } else {
-                console.log('Child process exited successfully');
-                // Only update status if not already completed
-                if (processInfo?.status === 'running') {
+                    console.log(`Child process exited successfully - updating task status to Completed`);
                     this.taskModel.updateTaskStatus(taskId, YellowPagesTaskStatus.Completed).catch(err => {
                         console.error(`Failed to update task status for task ${taskId}:`, err);
                     });
-                } else {
-                    console.log(`Task ${taskId} already has status: ${processInfo?.status}, not updating to Completed`);
                 }
+            } else {
+                console.log(`Task ${taskId} already has status: ${processInfo?.status}, not updating from exit code`);
             }
+            
+            // Log the final process status for debugging
+            console.log(`Final process status for task ${taskId}: ${processInfo?.status}, exit code: ${code}`);
             
             // Handle process exit (cleanup, etc.)
             this.handleProcessExit(taskId, code, null);
@@ -469,18 +507,18 @@ export class YellowPagesProcessManager extends BaseModule {
         try {
             // Save results to database
             if (results && results.length > 0) {
-                const resultIds = await this.resultModel.saveMultipleResults(
+                const saveResult = await this.resultModel.saveMultipleResults(
                     results.map(result => ({
                         ...result,
                         task_id: taskId,
                         platform: processInfo?.process ? 'yellowpages' : 'unknown'
                     }))
                 );
-                console.log(`Saved ${resultIds.length} results for task ${taskId}`);
+                console.log(`Saved ${saveResult.createdIds.length} results for task ${taskId} (${saveResult.duplicateCount} duplicates found)`);
                 
                 // Log results saved to runtime log file
                 if (processInfo?.logFiles) {
-                    const resultsMessage = `[${new Date().toISOString()}] Saved ${resultIds.length} results to database`;
+                    const resultsMessage = `[${new Date().toISOString()}] Saved ${saveResult.createdIds.length} results to database (${saveResult.duplicateCount} duplicates found)`;
                     WriteLog(processInfo.logFiles.runtimeLog, resultsMessage);
                 }
             }
@@ -491,6 +529,8 @@ export class YellowPagesProcessManager extends BaseModule {
             
             // Clear the PID since task is completed
             await this.taskModel.clearTaskPID(taskId);
+            
+            console.log(`Task ${taskId} status updated to Completed in database`);
         } catch (error) {
             console.error(`Failed to save results or update task ${taskId} status:`, error);
             // Update task status to failed if saving results fails
@@ -504,8 +544,34 @@ export class YellowPagesProcessManager extends BaseModule {
             }
         }
 
-        // Clean up process
-        this.cleanupProcess(taskId);
+        // Terminate the child process gracefully after completion
+        if (processInfo?.process) {
+            try {
+                console.log(`Terminating completed child process for task ${taskId}`);
+                
+                // First try to send an exit message for graceful shutdown
+                await this.requestProcessExit(taskId);
+                
+                // Wait a moment for graceful exit, then force kill if needed
+                setTimeout(() => {
+                    console.log(`Force killing process for task ${taskId}`);
+                    processInfo.process.kill();
+                    
+                    // Clean up after termination
+                    setTimeout(() => {
+                        this.cleanupProcess(taskId);
+                    }, 500);
+                }, 2000);
+                
+            } catch (terminateError) {
+                console.error(`Failed to terminate completed process for task ${taskId}:`, terminateError);
+                // Clean up immediately if termination fails
+                this.cleanupProcess(taskId);
+            }
+        } else {
+            // Clean up immediately if no process info
+            this.cleanupProcess(taskId);
+        }
     }
 
     /**
@@ -532,6 +598,8 @@ export class YellowPagesProcessManager extends BaseModule {
             
             // Clear the PID since task is failed
             await this.taskModel.clearTaskPID(taskId);
+            
+            console.log(`Task ${taskId} status updated to Failed in database`);
         } catch (dbError) {
             console.error(`Failed to update task ${taskId} error status:`, dbError);
             
@@ -542,8 +610,34 @@ export class YellowPagesProcessManager extends BaseModule {
             }
         }
 
-        // Clean up process
-        this.cleanupProcess(taskId);
+        // Terminate the child process gracefully after error handling
+        if (processInfo?.process) {
+            try {
+                console.log(`Terminating failed child process for task ${taskId}`);
+                
+                // First try to send an exit message for graceful shutdown
+                await this.requestProcessExit(taskId);
+                
+                // Wait a moment for graceful exit, then force kill if needed
+                setTimeout(() => {
+                    console.log(`Force killing failed process for task ${taskId}`);
+                    processInfo.process.kill();
+                    
+                    // Clean up after termination
+                    setTimeout(() => {
+                        this.cleanupProcess(taskId);
+                    }, 500);
+                }, 2000);
+                
+            } catch (terminateError) {
+                console.error(`Failed to terminate failed process for task ${taskId}:`, terminateError);
+                // Clean up immediately if termination fails
+                this.cleanupProcess(taskId);
+            }
+        } else {
+            // Clean up immediately if no process info
+            this.cleanupProcess(taskId);
+        }
     }
 
     /**
@@ -667,6 +761,22 @@ export class YellowPagesProcessManager extends BaseModule {
     isProcessRunning(taskId: number): boolean {
         const processInfo = this.activeProcesses.get(taskId);
         return processInfo?.status === 'running';
+    }
+
+    /**
+     * Check if a task has been completed via IPC messages
+     */
+    isTaskCompleted(taskId: number): boolean {
+        const processInfo = this.activeProcesses.get(taskId);
+        return processInfo?.status === 'completed';
+    }
+
+    /**
+     * Check if a task has failed via IPC messages
+     */
+    isTaskFailed(taskId: number): boolean {
+        const processInfo = this.activeProcesses.get(taskId);
+        return processInfo?.status === 'failed';
     }
 
     /**
@@ -880,6 +990,38 @@ export class YellowPagesProcessManager extends BaseModule {
             
         } catch (error) {
             console.error(`Failed to resume Yellow Pages task ${taskId}:`, error);
+            throw error;
+        }
+    }
+
+    /**
+     * Send exit message to child process to request graceful shutdown
+     * @param taskId ID of the task to exit
+     * @returns Promise that resolves when the exit message is sent
+     */
+    async requestProcessExit(taskId: number): Promise<void> {
+        try {
+            console.log(`Requesting graceful exit for task ${taskId}`);
+            
+            const processInfo = this.activeProcesses.get(taskId);
+            if (!processInfo) {
+                console.log(`No active process found for task ${taskId}`);
+                return;
+            }
+
+            // Send exit message to child process
+            const exitMessage: ExitTaskMessage = {
+                type: 'EXIT',
+                taskId: taskId,
+                reason: 'Task completed successfully'
+            };
+            
+            processInfo.process.postMessage(JSON.stringify(exitMessage));
+            
+            console.log(`Exit message sent to task ${taskId}`);
+            
+        } catch (error) {
+            console.error(`Failed to send exit message for task ${taskId}:`, error);
             throw error;
         }
     }

@@ -18,10 +18,33 @@ export class YellowPagesResultModule extends BaseModule {
      * @returns The ID of the created result
      */
     async createResult(result: YellowPagesResult): Promise<number> {
-        // Convert result data to entity format
-        const resultEntity = this.convertResultToEntity(result);
-        // TODO: Implement create method in YellowPagesResultModel
-        throw new Error("create method not implemented in YellowPagesResultModel");
+        try {
+            // Convert result data to entity format
+            const resultEntity = this.convertResultToEntity(result);
+            
+            // Use the model's saveYellowPagesResult method
+            const saveResult = await this.yellowPagesResultModel.saveYellowPagesResult({
+                task_id: result.task_id,
+                business_name: result.business_name,
+                email: result.email,
+                phone: result.phone,
+                website: result.website,
+                address: result.address,
+                social_media: result.social_media,
+                categories: result.categories,
+                business_hours: result.business_hours,
+                description: result.description,
+                rating: result.rating,
+                review_count: result.review_count,
+                platform: result.platform,
+                raw_data: result.raw_data
+            });
+            
+            return saveResult.id;
+        } catch (error) {
+            console.error('Error creating result:', error);
+            throw new Error(`Failed to create result: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
     }
 
     /**
@@ -30,8 +53,13 @@ export class YellowPagesResultModule extends BaseModule {
      * @returns The result entity
      */
     async getResultById(id: number): Promise<YellowPagesResultEntity | undefined> {
-        // TODO: Implement read method in YellowPagesResultModel
-        throw new Error("read method not implemented in YellowPagesResultModel");
+        try {
+            const result = await this.yellowPagesResultModel.getResultById(id);
+            return result || undefined;
+        } catch (error) {
+            console.error('Error getting result by ID:', error);
+            throw new Error(`Failed to get result by ID: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
     }
 
     /**
@@ -40,15 +68,20 @@ export class YellowPagesResultModule extends BaseModule {
      * @param updates The result updates
      */
     async updateResult(id: number, updates: Partial<YellowPagesResultEntity>): Promise<void> {
-        const existingResult = await this.getResultById(id);
-        if (!existingResult) {
-            throw new Error(`Result with ID ${id} not found`);
-        }
+        try {
+            const existingResult = await this.getResultById(id);
+            if (!existingResult) {
+                throw new Error(`Result with ID ${id} not found`);
+            }
 
-        // Merge existing result with updates
-        const updatedResult = { ...existingResult, ...updates };
-        // TODO: Implement update method in YellowPagesResultModel
-        throw new Error("update method not implemented in YellowPagesResultModel");
+            // For now, we'll need to implement an update method in the model
+            // Since the model doesn't have an update method yet, we'll throw an error
+            // TODO: Implement update method in YellowPagesResultModel
+            throw new Error("update method not implemented in YellowPagesResultModel");
+        } catch (error) {
+            console.error('Error updating result:', error);
+            throw new Error(`Failed to update result ${id}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
     }
 
     /**
@@ -56,8 +89,15 @@ export class YellowPagesResultModule extends BaseModule {
      * @param id The result ID
      */
     async deleteResult(id: number): Promise<void> {
-        // TODO: Implement delete method in YellowPagesResultModel
-        throw new Error("delete method not implemented in YellowPagesResultModel");
+        try {
+            const success = await this.yellowPagesResultModel.deleteResult(id);
+            if (!success) {
+                throw new Error('Failed to delete result');
+            }
+        } catch (error) {
+            console.error('Error deleting result:', error);
+            throw new Error(`Failed to delete result ${id}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
     }
 
     /**
@@ -66,8 +106,13 @@ export class YellowPagesResultModule extends BaseModule {
      * @returns Array of results for the specified task
      */
     async getResultsByTaskId(taskId: number): Promise<YellowPagesResult[]> {
-        // TODO: Implement getResultsByTaskId method in YellowPagesResultModel
-        throw new Error("getResultsByTaskId method not implemented in YellowPagesResultModel");
+        try {
+            const resultEntities = await this.yellowPagesResultModel.getResultsByTaskId(taskId);
+            return resultEntities.map(entity => this.convertEntityToResult(entity));
+        } catch (error) {
+            console.error('Error getting results by task ID:', error);
+            throw new Error(`Failed to get results for task ${taskId}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
     }
 
     /**
@@ -76,8 +121,13 @@ export class YellowPagesResultModule extends BaseModule {
      * @returns Array of results for the specified platform
      */
     async getResultsByPlatform(platform: string): Promise<YellowPagesResult[]> {
-        // TODO: Implement getResultsByPlatform method in YellowPagesResultModel
-        throw new Error("getResultsByPlatform method not implemented in YellowPagesResultModel");
+        try {
+            const resultEntities = await this.yellowPagesResultModel.getResultsByPlatform(platform);
+            return resultEntities.map(entity => this.convertEntityToResult(entity));
+        } catch (error) {
+            console.error('Error getting results by platform:', error);
+            throw new Error(`Failed to get results for platform ${platform}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
     }
 
     /**
@@ -86,8 +136,13 @@ export class YellowPagesResultModule extends BaseModule {
      * @returns Array of matching results
      */
     async searchResults(searchTerm: string): Promise<YellowPagesResult[]> {
-        // TODO: Implement searchResults method in YellowPagesResultModel
-        throw new Error("searchResults method not implemented in YellowPagesResultModel");
+        try {
+            const resultEntities = await this.yellowPagesResultModel.searchByBusinessName(searchTerm);
+            return resultEntities.map(entity => this.convertEntityToResult(entity));
+        } catch (error) {
+            console.error('Error searching results:', error);
+            throw new Error(`Failed to search results for term "${searchTerm}": ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
     }
 
     /**
@@ -96,8 +151,12 @@ export class YellowPagesResultModule extends BaseModule {
      * @returns Number of results for the specified task
      */
     async getResultsCountByTaskId(taskId: number): Promise<number> {
-        // TODO: Implement getResultsCountByTaskId method in YellowPagesResultModel
-        throw new Error("getResultsCountByTaskId method not implemented in YellowPagesResultModel");
+        try {
+            return await this.yellowPagesResultModel.getResultCountByTaskId(taskId);
+        } catch (error) {
+            console.error('Error getting results count by task ID:', error);
+            throw new Error(`Failed to get results count for task ${taskId}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
     }
 
     /**
@@ -105,8 +164,12 @@ export class YellowPagesResultModule extends BaseModule {
      * @returns Total count of results
      */
     async countResults(): Promise<number> {
-        // TODO: Implement countResults method in YellowPagesResultModel
-        throw new Error("countResults method not implemented in YellowPagesResultModel");
+        try {
+            return await this.yellowPagesResultModel.getResultTotal();
+        } catch (error) {
+            console.error('Error counting results:', error);
+            throw new Error(`Failed to count results: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
     }
 
     /**
@@ -117,8 +180,14 @@ export class YellowPagesResultModule extends BaseModule {
      * @returns Array of result entities
      */
     async listResults(page: number = 0, size: number = 50, sort?: SortBy): Promise<YellowPagesResultEntity[]> {
-        // TODO: Implement listResults method in YellowPagesResultModel
-        throw new Error("listResults method not implemented in YellowPagesResultModel");
+        try {
+            // Convert from 0-based to 1-based pagination for the model
+            const modelPage = page + 1;
+            return await this.yellowPagesResultModel.listResults(modelPage, size, sort);
+        } catch (error) {
+            console.error('Error listing results:', error);
+            throw new Error(`Failed to list results: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
     }
 
     /**
@@ -128,8 +197,18 @@ export class YellowPagesResultModule extends BaseModule {
      * @returns Array of results within the date range
      */
     async getResultsByDateRange(startDate: Date, endDate: Date): Promise<YellowPagesResult[]> {
-        // TODO: Implement getResultsByDateRange method in YellowPagesResultModel
-        throw new Error("getResultsByDateRange method not implemented in YellowPagesResultModel");
+        try {
+            // Get all results and filter those within the date range
+            const allResults = await this.yellowPagesResultModel.listResults(1, 10000); // Get a large number to cover all results
+            const resultsByDateRange = allResults.filter(result => {
+                const scrapedDate = new Date(result.scraped_at);
+                return scrapedDate >= startDate && scrapedDate <= endDate;
+            });
+            return resultsByDateRange.map(entity => this.convertEntityToResult(entity));
+        } catch (error) {
+            console.error('Error getting results by date range:', error);
+            throw new Error(`Failed to get results by date range: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
     }
 
     /**
@@ -138,8 +217,25 @@ export class YellowPagesResultModule extends BaseModule {
      * @returns Array of results for the specified category
      */
     async getResultsByCategory(category: string): Promise<YellowPagesResult[]> {
-        // TODO: Implement getResultsByCategory method in YellowPagesResultModel
-        throw new Error("getResultsByCategory method not implemented in YellowPagesResultModel");
+        try {
+            // Get all results and filter those with the specified category
+            const allResults = await this.yellowPagesResultModel.listResults(1, 10000); // Get a large number to cover all results
+            const resultsByCategory = allResults.filter(result => {
+                if (!result.categories) return false;
+                try {
+                    const categories = JSON.parse(result.categories);
+                    return Array.isArray(categories) && categories.some(cat => 
+                        cat.toLowerCase().includes(category.toLowerCase())
+                    );
+                } catch (e) {
+                    return result.categories.toLowerCase().includes(category.toLowerCase());
+                }
+            });
+            return resultsByCategory.map(entity => this.convertEntityToResult(entity));
+        } catch (error) {
+            console.error('Error getting results by category:', error);
+            throw new Error(`Failed to get results for category "${category}": ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
     }
 
     /**
@@ -148,8 +244,26 @@ export class YellowPagesResultModule extends BaseModule {
      * @returns Array of results for the specified location
      */
     async getResultsByLocation(location: string): Promise<YellowPagesResult[]> {
-        // TODO: Implement getResultsByLocation method in YellowPagesResultModel
-        throw new Error("getResultsByLocation method not implemented in YellowPagesResultModel");
+        try {
+            // Get all results and filter those with the specified location
+            const allResults = await this.yellowPagesResultModel.listResults(1, 10000); // Get a large number to cover all results
+            const resultsByLocation = allResults.filter(result => {
+                const city = result.address_city?.toLowerCase() || '';
+                const state = result.address_state?.toLowerCase() || '';
+                const zip = result.address_zip?.toLowerCase() || '';
+                const country = result.address_country?.toLowerCase() || '';
+                const searchLocation = location.toLowerCase();
+                
+                return city.includes(searchLocation) || 
+                       state.includes(searchLocation) || 
+                       zip.includes(searchLocation) || 
+                       country.includes(searchLocation);
+            });
+            return resultsByLocation.map(entity => this.convertEntityToResult(entity));
+        } catch (error) {
+            console.error('Error getting results by location:', error);
+            throw new Error(`Failed to get results for location "${location}": ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
     }
 
     /**
@@ -157,8 +271,15 @@ export class YellowPagesResultModule extends BaseModule {
      * @returns Array of results that have email addresses
      */
     async getResultsWithEmails(): Promise<YellowPagesResult[]> {
-        // TODO: Implement getResultsWithEmails method in YellowPagesResultModel
-        throw new Error("getResultsWithEmails method not implemented in YellowPagesResultModel");
+        try {
+            // Get all results and filter those with emails
+            const allResults = await this.yellowPagesResultModel.listResults(1, 10000); // Get a large number to cover all results
+            const resultsWithEmails = allResults.filter(result => result.email && result.email.trim() !== '');
+            return resultsWithEmails.map(entity => this.convertEntityToResult(entity));
+        } catch (error) {
+            console.error('Error getting results with emails:', error);
+            throw new Error(`Failed to get results with emails: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
     }
 
     /**
@@ -166,8 +287,15 @@ export class YellowPagesResultModule extends BaseModule {
      * @returns Array of results that have phone numbers
      */
     async getResultsWithPhones(): Promise<YellowPagesResult[]> {
-        // TODO: Implement getResultsWithPhones method in YellowPagesResultModel
-        throw new Error("getResultsWithPhones method not implemented in YellowPagesResultModel");
+        try {
+            // Get all results and filter those with phone numbers
+            const allResults = await this.yellowPagesResultModel.listResults(1, 10000); // Get a large number to cover all results
+            const resultsWithPhones = allResults.filter(result => result.phone && result.phone.trim() !== '');
+            return resultsWithPhones.map(entity => this.convertEntityToResult(entity));
+        } catch (error) {
+            console.error('Error getting results with phones:', error);
+            throw new Error(`Failed to get results with phones: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
     }
 
     /**
@@ -175,8 +303,15 @@ export class YellowPagesResultModule extends BaseModule {
      * @returns Array of results that have websites
      */
     async getResultsWithWebsites(): Promise<YellowPagesResult[]> {
-        // TODO: Implement getResultsWithWebsites method in YellowPagesResultModel
-        throw new Error("getResultsWithWebsites method not implemented in YellowPagesResultModel");
+        try {
+            // Get all results and filter those with websites
+            const allResults = await this.yellowPagesResultModel.listResults(1, 10000); // Get a large number to cover all results
+            const resultsWithWebsites = allResults.filter(result => result.website && result.website.trim() !== '');
+            return resultsWithWebsites.map(entity => this.convertEntityToResult(entity));
+        } catch (error) {
+            console.error('Error getting results with websites:', error);
+            throw new Error(`Failed to get results with websites: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
     }
 
     /**
@@ -196,9 +331,42 @@ export class YellowPagesResultModule extends BaseModule {
         const withPhones = (await this.getResultsWithPhones()).length;
         const withWebsites = (await this.getResultsWithWebsites()).length;
 
-        // TODO: Implement platform and category statistics
+        // Calculate platform and category statistics
         const byPlatform: Record<string, number> = {};
         const byCategory: Record<string, number> = {};
+        
+        try {
+            // Get all results for statistics
+            const allResults = await this.yellowPagesResultModel.listResults(1, 10000);
+            
+            // Calculate platform statistics
+            allResults.forEach(result => {
+                const platform = result.platform || 'Unknown';
+                byPlatform[platform] = (byPlatform[platform] || 0) + 1;
+            });
+            
+            // Calculate category statistics
+            allResults.forEach(result => {
+                if (result.categories) {
+                    try {
+                        const categories = JSON.parse(result.categories);
+                        if (Array.isArray(categories)) {
+                            categories.forEach(category => {
+                                const cat = category.trim();
+                                if (cat) {
+                                    byCategory[cat] = (byCategory[cat] || 0) + 1;
+                                }
+                            });
+                        }
+                    } catch (e) {
+                        // If categories can't be parsed, skip
+                    }
+                }
+            });
+        } catch (error) {
+            console.warn('Error calculating detailed statistics:', error);
+            // Continue with empty statistics if there's an error
+        }
 
         return {
             total,
@@ -216,8 +384,22 @@ export class YellowPagesResultModule extends BaseModule {
      * @returns Number of results deleted
      */
     async deleteResultsByTaskId(taskId: number): Promise<number> {
-        // TODO: Implement deleteResultsByTaskId method in YellowPagesResultModel
-        throw new Error("deleteResultsByTaskId method not implemented in YellowPagesResultModel");
+        try {
+            // First get the count of results to be deleted
+            const count = await this.yellowPagesResultModel.getResultCountByTaskId(taskId);
+            
+            // Delete the results
+            const success = await this.yellowPagesResultModel.deleteResultsByTaskId(taskId);
+            
+            if (success) {
+                return count;
+            } else {
+                throw new Error('Failed to delete results');
+            }
+        } catch (error) {
+            console.error('Error deleting results by task ID:', error);
+            throw new Error(`Failed to delete results for task ${taskId}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
     }
 
     /**
@@ -226,11 +408,28 @@ export class YellowPagesResultModule extends BaseModule {
      * @returns Number of results cleaned up
      */
     async cleanupOldResults(daysOld: number = 90): Promise<number> {
-        const cutoffDate = new Date();
-        cutoffDate.setDate(cutoffDate.getDate() - daysOld);
-        
-        // TODO: Implement cleanupOldResults method in YellowPagesResultModel
-        throw new Error("cleanupOldResults method not implemented in YellowPagesResultModel");
+        try {
+            const cutoffDate = new Date();
+            cutoffDate.setDate(cutoffDate.getDate() - daysOld);
+            
+            // Get all results and filter those older than the cutoff date
+            const allResults = await this.yellowPagesResultModel.listResults(1, 10000); // Get a large number to cover all results
+            const oldResults = allResults.filter(result => result.scraped_at < cutoffDate);
+            
+            // Delete old results
+            let deletedCount = 0;
+            for (const result of oldResults) {
+                const success = await this.yellowPagesResultModel.deleteResult(result.id);
+                if (success) {
+                    deletedCount++;
+                }
+            }
+            
+            return deletedCount;
+        } catch (error) {
+            console.error('Error cleaning up old results:', error);
+            throw new Error(`Failed to cleanup old results: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
     }
 
     /**

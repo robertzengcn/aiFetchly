@@ -45,11 +45,13 @@ export interface StartTaskMessage extends BaseBackgroundMessage {
         };
         selectors: {
             businessList: string;
-            businessName: string;
-            email?: string;
-            phone?: string;
-            website?: string;
-            address?: string;
+            businessItem?: string;
+                            businessName: string;
+                detailPageLink?: string;
+                phone?: string;
+                email?: string;
+                website?: string;
+                address?: string;
             address_city?: string;
             address_state?: string;
             address_zip?: string;
@@ -66,6 +68,51 @@ export interface StartTaskMessage extends BaseBackgroundMessage {
             numberOfEmployees?: string;
             paymentMethods?: string;
             specialties?: string;
+            logo?: string;
+                            photos?: string;
+                businessImage?: string;
+                businessUrl?: string;
+                map?: string;
+                status?: string;
+            priceRange?: string;
+            certifications?: string;
+            licenses?: string;
+            insurance?: string;
+            associations?: string;
+            awards?: string;
+            hours?: {
+                container?: string;
+                day?: string;
+                time?: string;
+                status?: string;
+            };
+            services?: string;
+            products?: string;
+            team?: string;
+            testimonials?: string;
+            reviews?: {
+                container?: string;
+                text?: string;
+                author?: string;
+                date?: string;
+                rating?: string;
+            };
+            events?: string;
+            news?: string;
+            blog?: string;
+            gallery?: string;
+            videos?: string;
+            contactForm?: string;
+            appointmentBooking?: string;
+            onlineOrdering?: string;
+            paymentOptions?: string;
+            accessibility?: string;
+            parking?: string;
+            wifi?: string;
+            petPolicy?: string;
+            smokingPolicy?: string;
+            dressCode?: string;
+            ageRestrictions?: string;
             searchForm?: {
                 keywordInput?: string;
                 locationInput?: string;
@@ -81,6 +128,31 @@ export interface StartTaskMessage extends BaseBackgroundMessage {
                 previousButton?: string;
                 pageNumbers?: string;
                 container?: string;
+            };
+            navigation?: {
+                detailLink?: string;
+                alternatives?: string[];
+                required?: boolean;
+                delayAfterNavigation?: number;
+                detailPage?: {
+                    businessName?: string;
+                    fullAddress?: string;
+                    businessHours?: string;
+                    description?: string;
+                    contactInfo?: string;
+                    services?: string;
+                    photos?: string;
+                    map?: string;
+                    additionalPhone?: string;
+                    additionalEmail?: string;
+                    socialMedia?: string;
+                    categories?: string;
+                    yearEstablished?: string;
+                    numberOfEmployees?: string;
+                    paymentMethods?: string;
+                    specialties?: string;
+                    website?: string;
+                };
             };
         };
         adapterClass?: {
@@ -184,9 +256,17 @@ export interface TaskResumedMessage extends BaseBackgroundMessage {
 }
 
 /**
+ * Message sent from main process to request graceful exit
+ */
+export interface ExitTaskMessage extends BaseBackgroundMessage {
+    type: 'EXIT';
+    reason: string;
+}
+
+/**
  * Union type for all possible background process messages
  */
-export type BackgroundProcessMessage = 
+export type BackgroundProcessMessage =
     | StartTaskMessage
     | ProgressMessage
     | CompletedMessage
@@ -199,7 +279,8 @@ export type BackgroundProcessMessage =
     | PauseTaskMessage
     | ResumeTaskMessage
     | TaskPausedMessage
-    | TaskResumedMessage;
+    | TaskResumedMessage
+    | ExitTaskMessage;
 
 /**
  * Type guard to check if a message is a StartTaskMessage

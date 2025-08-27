@@ -195,6 +195,10 @@ export default {
         medium:"中",
         low:"低",
         paused:"已暂停",
+        // Table column headers
+        progress:"进度",
+        updated_time:"更新时间",
+        actions:"操作",
         // Task Results Page
         task_results:"任务结果",
         task_summary:"任务摘要",

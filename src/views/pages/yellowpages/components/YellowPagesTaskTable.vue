@@ -61,16 +61,7 @@
         </div>
       </template>
 
-      <!-- Priority Column -->
-      <template v-slot:item.priority="{ item }">
-        <v-chip
-          color="grey"
-          size="small"
-          variant="outlined"
-        >
-          N/A
-        </v-chip>
-      </template>
+
 
       <!-- Results Column -->
       <template v-slot:item.results_count="{ item }">
@@ -211,6 +202,7 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { TaskSummary, TaskStatus } from '@/interfaces/ITaskManager'
 
 // Props
@@ -220,6 +212,9 @@ interface Props {
 }
 
 const props = defineProps<Props>()
+
+// i18n
+const { t } = useI18n()
 
 // Emits
 const emit = defineEmits<{
@@ -233,18 +228,17 @@ const emit = defineEmits<{
   'view-details': [task: TaskSummary]
 }>()
 
-// Table headers
-const headers = [
-  { title: 'Task Name', key: 'name', sortable: true },
-  { title: 'Platform', key: 'platform', sortable: true },
-  { title: 'Status', key: 'status', sortable: true },
-  { title: 'Progress', key: 'progress', sortable: true },
-  { title: 'Priority', key: 'priority', sortable: true },
-  { title: 'Results (Click to View)', key: 'results_count', sortable: true },
-  { title: 'Created', key: 'created_at', sortable: true },
-  { title: 'Updated', key: 'updated_at', sortable: true },
-  { title: 'Actions', key: 'actions', sortable: false }
-]
+// Table headers - computed to support language switching
+const headers = computed(() => [
+  { title: t('home.task_name'), key: 'name', sortable: true },
+  { title: t('home.platform'), key: 'platform', sortable: true },
+  { title: t('home.status'), key: 'status', sortable: true },
+  { title: t('home.progress'), key: 'progress', sortable: true },
+  { title: t('home.results'), key: 'results_count', sortable: true },
+  { title: t('home.created_time'), key: 'created_at', sortable: true },
+  { title: t('home.updated_time'), key: 'updated_at', sortable: true },
+  { title: t('home.actions'), key: 'actions', sortable: false }
+])
 
 // Methods
 const getPlatformColor = (platform?: string) => {
@@ -311,15 +305,7 @@ const getProgressColor = (status?: TaskStatus) => {
   return 'warning'
 }
 
-const getPriorityColor = (priority?: string) => {
-  if (!priority) return 'grey'
-  const colors = {
-    high: 'error',
-    medium: 'warning',
-    low: 'success'
-  }
-  return colors[priority] || 'grey'
-}
+
 
 const formatDate = (date: Date | string) => {
   if (!date) return 'N/A'

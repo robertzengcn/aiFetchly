@@ -12,9 +12,50 @@ export class YellowPagesResultModel extends BaseDb {
   }
 
   /**
-   * Save a new yellow pages result
+   * Check if a result already exists to avoid duplicates
+   * @param resultData The result data to check
+   * @returns The existing result entity if found, null otherwise
+   */
+  private async checkForDuplicate(resultData: {
+    task_id: number;
+    business_name: string;
+    email?: string;
+    phone?: string;
+    website?: string;
+  }): Promise<YellowPagesResultEntity | null> {
+    // Build query conditions for duplicate detection
+    const conditions: any[] = [
+      { task_id: resultData.task_id, business_name: resultData.business_name }
+    ];
+
+    // Add email-based duplicate check if email exists
+    if (resultData.email && resultData.email.trim()) {
+      conditions.push({ task_id: resultData.task_id, email: resultData.email.trim() });
+    }
+
+    // Add phone-based duplicate check if phone exists
+    if (resultData.phone && resultData.phone.trim()) {
+      conditions.push({ task_id: resultData.task_id, phone: resultData.phone.trim() });
+    }
+
+    // Add website-based duplicate check if website exists
+    if (resultData.website && resultData.website.trim()) {
+      conditions.push({ task_id: resultData.task_id, website: resultData.website.trim() });
+    }
+
+    // Check for duplicates using OR conditions
+    const existingResult = await this.repository.findOne({
+      where: conditions,
+      order: { scraped_at: 'DESC' }
+    });
+
+    return existingResult;
+  }
+
+  /**
+   * Save a new yellow pages result with duplicate detection
    * @param resultData The result data
-   * @returns The ID of the created result
+   * @returns The ID of the created result, or existing result ID if duplicate found
    */
   async saveYellowPagesResult(resultData: {
     task_id: number;
@@ -43,7 +84,19 @@ export class YellowPagesResultModel extends BaseDb {
     number_of_employees?: string;
     payment_methods?: string[];
     specialties?: string[];
-  }): Promise<number> {
+  }): Promise<{ id: number; isDuplicate: boolean; existingResult?: YellowPagesResultEntity }> {
+    // Check for duplicates first
+    const duplicate = await this.checkForDuplicate(resultData);
+    
+    if (duplicate) {
+      return {
+        id: duplicate.id,
+        isDuplicate: true,
+        existingResult: duplicate
+      };
+    }
+
+    // No duplicate found, create new result
     const resultEntity = new YellowPagesResultEntity();
     resultEntity.task_id = resultData.task_id;
     resultEntity.business_name = resultData.business_name;
@@ -72,13 +125,16 @@ export class YellowPagesResultModel extends BaseDb {
     resultEntity.specialties = resultData.specialties ? JSON.stringify(resultData.specialties) : undefined;
     
     const savedResult = await this.repository.save(resultEntity);
-    return savedResult.id;
+    return {
+      id: savedResult.id,
+      isDuplicate: false
+    };
   }
 
   /**
-   * Save multiple results at once
+   * Save multiple results at once with duplicate detection
    * @param resultsData Array of result data
-   * @returns Array of created result IDs
+   * @returns Object with created and duplicate counts
    */
   async saveMultipleResults(resultsData: Array<{
     task_id: number;
@@ -107,39 +163,24 @@ export class YellowPagesResultModel extends BaseDb {
     number_of_employees?: string;
     payment_methods?: string[];
     specialties?: string[];
-  }>): Promise<number[]> {
-    const resultEntities = resultsData.map(data => {
-      const resultEntity = new YellowPagesResultEntity();
-      resultEntity.task_id = data.task_id;
-      resultEntity.business_name = data.business_name;
-      resultEntity.email = data.email;
-      resultEntity.phone = data.phone;
-      resultEntity.website = data.website;
-      resultEntity.address_street = data.address?.street;
-      resultEntity.address_city = data.address?.city;
-      resultEntity.address_state = data.address?.state;
-      resultEntity.address_zip = data.address?.zip;
-      resultEntity.address_country = data.address?.country;
-      resultEntity.social_media = data.social_media ? JSON.stringify(data.social_media) : undefined;
-      resultEntity.categories = data.categories ? JSON.stringify(data.categories) : undefined;
-      resultEntity.business_hours = data.business_hours ? JSON.stringify(data.business_hours) : undefined;
-      resultEntity.description = data.description;
-      resultEntity.rating = data.rating;
-      resultEntity.review_count = data.review_count;
-      resultEntity.scraped_at = new Date();
-      resultEntity.platform = data.platform;
-      resultEntity.raw_data = data.raw_data ? JSON.stringify(data.raw_data) : undefined;
-      resultEntity.fax_number = data.fax_number;
-      resultEntity.contact_person = data.contact_person;
-      resultEntity.year_established = data.year_established;
-      resultEntity.number_of_employees = data.number_of_employees;
-      resultEntity.payment_methods = data.payment_methods ? JSON.stringify(data.payment_methods) : undefined;
-      resultEntity.specialties = data.specialties ? JSON.stringify(data.specialties) : undefined;
-      return resultEntity;
-    });
+  }>): Promise<{ createdIds: number[]; duplicateCount: number; totalProcessed: number }> {
+    const createdIds: number[] = [];
+    let duplicateCount = 0;
 
-    const savedResults = await this.repository.save(resultEntities);
-    return savedResults.map(result => result.id);
+    for (const data of resultsData) {
+      const result = await this.saveYellowPagesResult(data);
+      if (result.isDuplicate) {
+        duplicateCount++;
+      } else {
+        createdIds.push(result.id);
+      }
+    }
+
+    return {
+      createdIds,
+      duplicateCount,
+      totalProcessed: resultsData.length
+    };
   }
 
   /**
@@ -273,5 +314,98 @@ export class YellowPagesResultModel extends BaseDb {
       take: size,
       order: { scraped_at: 'DESC' }
     });
+  }
+
+  /**
+   * Find potential duplicates within a task
+   * @param taskId The task ID
+   * @returns Array of duplicate groups
+   */
+  async findDuplicatesInTask(taskId: number): Promise<Array<{
+    businessName: string;
+    phone?: string;
+    website?: string;
+    count: number;
+    results: YellowPagesResultEntity[];
+  }>> {
+    const results = await this.repository.find({
+      where: { task_id: taskId },
+      order: { business_name: 'ASC', scraped_at: 'DESC' }
+    });
+
+    const duplicateGroups = new Map<string, YellowPagesResultEntity[]>();
+
+    results.forEach(result => {
+      // Create a key based on business name, email, phone, and website
+      const key = `${result.business_name}|${result.email || ''}|${result.phone || ''}|${result.website || ''}`;
+      
+      if (!duplicateGroups.has(key)) {
+        duplicateGroups.set(key, []);
+      }
+      duplicateGroups.get(key)!.push(result);
+    });
+
+    // Filter only groups with more than one result
+    return Array.from(duplicateGroups.entries())
+      .filter(([_, results]) => results.length > 1)
+      .map(([key, results]) => {
+        const [businessName, email, phone, website] = key.split('|');
+        return {
+          businessName,
+          email: email || undefined,
+          phone: phone || undefined,
+          website: website || undefined,
+          count: results.length,
+          results
+        };
+      })
+      .sort((a, b) => b.count - a.count);
+  }
+
+  /**
+   * Remove duplicate results, keeping only the most recent one
+   * @param taskId The task ID
+   * @returns Number of duplicates removed
+   */
+  async removeDuplicatesInTask(taskId: number): Promise<number> {
+    const duplicates = await this.findDuplicatesInTask(taskId);
+    let removedCount = 0;
+
+    for (const group of duplicates) {
+      // Keep the most recent result (first in the array due to DESC ordering)
+      const toRemove = group.results.slice(1);
+      
+      for (const duplicate of toRemove) {
+        await this.repository.remove(duplicate);
+        removedCount++;
+      }
+    }
+
+    return removedCount;
+  }
+
+  /**
+   * Get duplicate statistics for a task
+   * @param taskId The task ID
+   * @returns Duplicate statistics
+   */
+  async getDuplicateStats(taskId: number): Promise<{
+    totalResults: number;
+    uniqueResults: number;
+    duplicateCount: number;
+    duplicateGroups: number;
+  }> {
+    const totalResults = await this.getResultCountByTaskId(taskId);
+    const duplicates = await this.findDuplicatesInTask(taskId);
+    
+    const duplicateCount = duplicates.reduce((sum, group) => sum + (group.count - 1), 0);
+    const uniqueResults = totalResults - duplicateCount;
+
+    return {
+      totalResults,
+      uniqueResults,
+      duplicateCount,
+      duplicateGroups: duplicates.length
+    };
   }
 } 

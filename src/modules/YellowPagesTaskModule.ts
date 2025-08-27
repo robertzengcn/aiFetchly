@@ -5,13 +5,16 @@ import { YellowPagesTaskEntity } from "@/entity/YellowPagesTask.entity";
 import { YellowPagesTaskData, TaskStatus, TaskFilters, TaskSummary } from "@/interfaces/ITaskManager";
 import { YellowPagesTaskStatus } from "@/model/YellowPagesTask.model";
 import { YellowPagesTaskUpdateFields } from "@/model/YellowPagesTask.model";
+import { YellowPagesResultModule } from "@/modules/YellowPagesResultModule";
 
 export class YellowPagesTaskModule extends BaseModule {
     private yellowPagesTaskModel: YellowPagesTaskModel;
+    private yellowPagesResultModule: YellowPagesResultModule;
 
     constructor() {
         super();
         this.yellowPagesTaskModel = new YellowPagesTaskModel(this.dbpath);
+        this.yellowPagesResultModule = new YellowPagesResultModule();
     }
 
     /**
@@ -138,8 +141,8 @@ export class YellowPagesTaskModule extends BaseModule {
             // Get tasks from the model
             const tasks = await this.yellowPagesTaskModel.listTasks(modelPage, size, sort);
             
-            // Convert entities to task summaries
-            const taskSummaries = tasks.map(task => this.convertEntityToTaskSummary(task));
+            // Convert entities to task summaries (now async)
+            const taskSummaries = await Promise.all(tasks.map(task => this.convertEntityToTaskSummary(task)));
             
             // Apply filters if provided
             if (filters) {
@@ -399,7 +402,16 @@ export class YellowPagesTaskModule extends BaseModule {
      * @param entity The task entity
      * @returns The task summary
      */
-    private convertEntityToTaskSummary(entity: YellowPagesTaskEntity): TaskSummary {
+    private async convertEntityToTaskSummary(entity: YellowPagesTaskEntity): Promise<TaskSummary> {
+        // Get the actual results count from the results module
+        let resultsCount = 0;
+        try {
+            resultsCount = await this.yellowPagesResultModule.getResultsCountByTaskId(entity.id);
+        } catch (error) {
+            console.warn(`Failed to get results count for task ${entity.id}:`, error);
+            // Fallback to 0 if we can't get the count
+        }
+
         return {
             id: entity.id,
             name: entity.name,
@@ -408,7 +420,7 @@ export class YellowPagesTaskModule extends BaseModule {
             created_at: entity.createdAt || new Date(),
             completed_at: entity.completed_at,
             progress_percentage: this.calculateProgress(entity),
-            results_count: 0, // This should come from results model
+            results_count: resultsCount,
             pid: entity.pid // Include PID for process management
         };
     }

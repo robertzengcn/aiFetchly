@@ -86,6 +86,7 @@ interface PlatformInfo {
         searchUrlPattern?: string;
     };
     selectors: {
+        businessItem: string;
         businessList: string;
         businessName: string;
         email?: string;
@@ -549,30 +550,32 @@ export class YellowPagesScraperProcess {
 
             console.log(`Scraping keyword: ${keyword} in ${location}`);
 
-            for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
-                if (!this.isRunning) break;
-
-                // Wait if paused
-                while (this.isPaused && this.isRunning) {
-                    await this.sleep(1000);
-                }
-
+            // For each keyword, we'll handle it differently based on the approach
+            if (hasCustomSearch && hasCustomExtraction) {
+                // Use platform-specific adapter methods for complete control
+                console.log(`🔧 Using platform-specific adapter for keyword: ${keyword}`);
+                
                 try {
-                    let results: ScrapingResult[] = [];
+                    // Use adapter's custom search method - this should handle the keyword input once
+                    const searchResults = await this.adapter!.searchBusinesses(
+                        this.page!, 
+                        [keyword], 
+                        location
+                    );
+                    
+                    console.log(`🔍 Adapter search returned ${searchResults.length} results`);
+                    
+                    // Now loop through pages for this keyword
+                    for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
+                        if (!this.isRunning) break;
 
-                    if (hasCustomSearch && hasCustomExtraction) {
-                        // Use platform-specific adapter methods for complete control
-                        console.log(`🔧 Using platform-specific adapter for keyword: ${keyword}, page: ${pageNum}`);
-                        
+                        // Wait if paused
+                        while (this.isPaused && this.isRunning) {
+                            await this.sleep(1000);
+                        }
+
                         try {
-                            // Use adapter's custom search method
-                            const searchResults = await this.adapter!.searchBusinesses(
-                                this.page!, 
-                                [keyword], 
-                                location
-                            );
-                            
-                            console.log(`🔍 Adapter search returned ${searchResults.length} results`);
+                            let results: ScrapingResult[] = [];
                             
                             // Use adapter's custom data extraction method
                             if (searchResults.length > 0) {
@@ -582,103 +585,65 @@ export class YellowPagesScraperProcess {
                                 results = [this.convertBusinessDataToScrapingResult(businessData)];
                             }
                             
+                            // Add results to total
+                            if (results.length > 0) {
+                                totalResults = totalResults.concat(results);
+                                console.log(`Found ${results.length} results from page ${pageNum}`);
+                            }
+
+                            // Report progress
+                            const progress: ScrapingProgress = {
+                                currentPage: pageNum,
+                                totalPages: maxPages,
+                                resultsCount: totalResults.length,
+                                percentage: (pageNum / maxPages) * 100
+                            };
+                            this.reportProgress(progress);
+
+                            // Check if paused after each major operation
+                            if (this.isPaused) {
+                                console.log(`Task ${this.taskData.taskId} is paused, waiting for resume...`);
+                                try {
+                                    await this.pause();
+                                } catch (error) {
+                                    console.log(`Task ${this.taskData.taskId} was stopped while paused`);
+                                    break;
+                                }
+                            }
+
                             // Handle pagination using adapter if available
                             if (hasCustomPagination && pageNum < maxPages) {
                                 console.log(`📄 Using adapter pagination for page ${pageNum}`);
                                 await this.adapter!.handlePagination(this.page!, maxPages);
                             }
-                        } catch (error) {
-                            console.error(`❌ Error using platform-specific adapter:`, error);
-                            console.log(`🔄 Falling back to generic scraping logic`);
-                            // Fallback to generic method
-                            await this.navigateToSearchPage(keyword, location, pageNum);
-                            while (this.isPaused && this.isRunning) {
-                                await this.sleep(1000);
+
+                            // Delay between requests
+                            if (pageNum < maxPages) {
+                                await this.sleep(delayBetweenRequests);
                             }
-                            results = await this.extractBusinessData();
-                        }
-                        
-                    } else if (hasCustomExtraction) {
-                        // Use adapter's custom data extraction but generic navigation
-                        console.log(`🔧 Using hybrid approach: generic navigation + custom extraction for keyword: ${keyword}, page: ${pageNum}`);
-                        
-                        try {
-                            // Navigate to search page using generic method
-                            await this.navigateToSearchPage(keyword, location, pageNum);
-                            
-                            // Wait if paused
-                            while (this.isPaused && this.isRunning) {
-                                await this.sleep(1000);
-                            }
-                            
-                            // Use adapter's custom data extraction
-                            const businessData = await this.adapter!.extractBusinessData(this.page!);
-                            console.log(`📊 Adapter extracted business data:`, businessData.business_name);
-                            results = [this.convertBusinessDataToScrapingResult(businessData)];
-                            
-                            // Handle pagination using adapter if available
-                            if (hasCustomPagination && pageNum < maxPages) {
-                                console.log(`📄 Using adapter pagination for page ${pageNum}`);
-                                await this.adapter!.handlePagination(this.page!, maxPages);
-                            }
+
                         } catch (error) {
-                            console.error(`❌ Error using hybrid approach:`, error);
-                            console.log(`🔄 Falling back to generic scraping logic`);
-                            // Fallback to generic method
-                            results = await this.extractBusinessData();
-                        }
-                        
-                    } else {
-                        // Fallback to generic scraping logic
-                        console.log(`🔧 Using generic scraping logic for keyword: ${keyword}, page: ${pageNum}`);
-                        
-                        // Navigate to search page using human-like interaction
-                        await this.navigateToSearchPage(keyword, location, pageNum);
-                        
-                        // Wait if paused
-                        while (this.isPaused && this.isRunning) {
-                            await this.sleep(1000);
-                        }
-                        
-                        // Extract business data using generic method
-                        results = await this.extractBusinessData();
-                    }
-
-                    // Add results to total
-                    if (results.length > 0) {
-                        totalResults = totalResults.concat(results);
-                        console.log(`Found ${results.length} results from page ${pageNum}`);
-                    }
-
-                    // Report progress
-                    const progress: ScrapingProgress = {
-                        currentPage: pageNum,
-                        totalPages: maxPages,
-                        resultsCount: totalResults.length,
-                        percentage: (pageNum / maxPages) * 100
-                    };
-                    this.reportProgress(progress);
-
-                    // Check if paused after each major operation
-                    if (this.isPaused) {
-                        console.log(`Task ${this.taskData.taskId} is paused, waiting for resume...`);
-                        try {
-                            await this.pause();
-                        } catch (error) {
-                            console.log(`Task ${this.taskData.taskId} was stopped while paused`);
-                            break;
+                            console.error(`Error scraping page ${pageNum}:`, error);
+                            // Continue with next page
                         }
                     }
-
-                    // Delay between requests (only for generic approach or when not using custom pagination)
-                    if (pageNum < maxPages && (!hasCustomPagination || !hasCustomSearch)) {
-                        await this.sleep(delayBetweenRequests);
-                    }
-
+                    
                 } catch (error) {
-                    console.error(`Error scraping page ${pageNum}:`, error);
-                    // Continue with next page
+                    console.error(`❌ Error using platform-specific adapter:`, error);
+                    console.log(`🔄 Falling back to generic scraping logic`);
+                    // Fallback to generic method
+                    await this.scrapeKeywordWithGenericMethod(keyword, location, maxPages, delayBetweenRequests, totalResults);
                 }
+                
+            } else if (hasCustomExtraction) {
+                // Use adapter's custom data extraction but generic navigation
+                console.log(`🔧 Using hybrid approach: generic navigation + custom extraction for keyword: ${keyword}`);
+                await this.scrapeKeywordWithGenericMethod(keyword, location, maxPages, delayBetweenRequests, totalResults, true);
+                
+            } else {
+                // Fallback to generic scraping logic
+                console.log(`🔧 Using generic scraping logic for keyword: ${keyword}`);
+                await this.scrapeKeywordWithGenericMethod(keyword, location, maxPages, delayBetweenRequests, totalResults);
             }
         }
 
@@ -690,6 +655,107 @@ export class YellowPagesScraperProcess {
         }
 
         return totalResults;
+    }
+
+    /**
+     * Helper method to scrape a keyword using generic methods
+     * This method inputs the keyword once, then loops through pages
+     */
+    private async scrapeKeywordWithGenericMethod(
+        keyword: string, 
+        location: string, 
+        maxPages: number, 
+        delayBetweenRequests: number, 
+        totalResults: ScrapingResult[],
+        useCustomExtraction: boolean = false
+    ): Promise<void> {
+        // Input the keyword once for this keyword
+        await this.navigateToSearchPage(keyword, location, 1);
+        
+        // Wait if paused
+        while (this.isPaused && this.isRunning) {
+            await this.sleep(1000);
+        }
+
+        // Now loop through pages for this keyword without re-inputting
+        for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
+            if (!this.isRunning) break;
+
+            // Wait if paused
+            while (this.isPaused && this.isRunning) {
+                await this.sleep(1000);
+            }
+
+            try {
+                let results: ScrapingResult[] = [];
+
+                if (pageNum === 1) {
+                    // For first page, we're already on the search results
+                    if (useCustomExtraction && this.adapter) {
+                        // Use adapter's custom data extraction
+                        const businessData = await this.adapter.extractBusinessData(this.page!);
+                        console.log(`📊 Adapter extracted business data:`, businessData.business_name);
+                        results = [this.convertBusinessDataToScrapingResult(businessData)];
+                    } else {
+                        // Extract business data using generic method
+                        results = await this.extractBusinessData();
+                    }
+                } else {
+                    // For subsequent pages, navigate to the page without re-inputting keyword
+                    await this.navigateToPage(pageNum);
+                    
+                    // Wait if paused
+                    while (this.isPaused && this.isRunning) {
+                        await this.sleep(1000);
+                    }
+                    
+                    if (useCustomExtraction && this.adapter) {
+                        // Use adapter's custom data extraction
+                        const businessData = await this.adapter.extractBusinessData(this.page!);
+                        console.log(`📊 Adapter extracted business data:`, businessData.business_name);
+                        results = [this.convertBusinessDataToScrapingResult(businessData)];
+                    } else {
+                        // Extract business data using generic method
+                        results = await this.extractBusinessData();
+                    }
+                }
+
+                // Add results to total
+                if (results.length > 0) {
+                    totalResults.push(...results);
+                    console.log(`Found ${results.length} results from page ${pageNum}`);
+                }
+
+                // Report progress
+                const progress: ScrapingProgress = {
+                    currentPage: pageNum,
+                    totalPages: maxPages,
+                    resultsCount: totalResults.length,
+                    percentage: (pageNum / maxPages) * 100
+                };
+                this.reportProgress(progress);
+
+                // Check if paused after each major operation
+                if (this.isPaused) {
+                    console.log(`Task ${this.taskData.taskId} is paused, waiting for resume...`);
+                    try {
+                        await this.pause();
+                    } catch (error) {
+                        console.log(`Task ${this.taskData.taskId} was stopped while paused`);
+                        break;
+                    }
+                }
+
+                // Delay between requests
+                if (pageNum < maxPages) {
+                    await this.sleep(delayBetweenRequests);
+                }
+
+            } catch (error) {
+                console.error(`Error scraping page ${pageNum}:`, error);
+                // Continue with next page
+            }
+        }
     }
 
     /**
@@ -1168,10 +1234,10 @@ export class YellowPagesScraperProcess {
                 const currentState = await this.sessionManager.capturePageState(this.page);
                 this.sessionManager.logAction(currentState, `extract('${selectors.businessList}')`);
             }
-
+            console.log('selectors.businessItem', selectors.businessItem);
             // Extract all business listings
-            const businessElements = await this.page.$$(selectors.businessList);
-
+            const businessElements = await this.page.$$(selectors.businessItem);
+            console.log(`Found ${businessElements.length} business listings`);
             for (const element of businessElements) {
                 if (!this.isRunning) break;
 

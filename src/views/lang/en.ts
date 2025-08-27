@@ -203,6 +203,10 @@ export default {
         medium:"Medium",
         low:"Low",
         paused:"Paused",
+        // Table column headers
+        progress:"Progress",
+        updated_time:"Updated",
+        actions:"Actions",
         // Task Results Page
         task_results:"Task Results",
         task_summary:"Task Summary",

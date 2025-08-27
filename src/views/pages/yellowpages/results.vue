@@ -35,7 +35,7 @@
             <v-row>
               <v-col cols="12" md="3">
                 <div class="text-center">
-                  <div class="text-h6 font-weight-bold text-primary">{{ taskDetails.platform }}</div>
+                  <div class="text-h6 font-weight-bold text-primary">{{ taskDetails?.task?.platform }}</div>
                   <div class="text-caption">{{ t('home.platform') }}</div>
                 </div>
               </v-col>
@@ -56,7 +56,7 @@
               <v-col cols="12" md="3">
                 <div class="text-center">
                   <div class="text-h6 font-weight-bold text-info">
-                    {{ formatDate(taskDetails.created_at) }}
+                    {{ formatDate(taskDetails?.task?.created_at) }}
                   </div>
                   <div class="text-caption">{{ t('home.created_at') }}</div>
                 </div>
@@ -73,7 +73,7 @@
                 </div>
                 <div class="ml-8">
                   <v-chip
-                    v-for="keyword in taskDetails.keywords"
+                    v-for="keyword in keywords"
                     :key="keyword"
                     size="small"
                     color="primary"
@@ -89,7 +89,7 @@
                   <v-icon class="mr-2" size="small">mdi-map-marker</v-icon>
                   <strong>{{ t('home.location') }}:</strong>
                 </div>
-                <div class="ml-8">{{ taskDetails.location }}</div>
+                <div class="ml-8">{{ taskDetails?.task?.location }}</div>
               </v-col>
             </v-row>
           </v-card-text>
@@ -270,6 +270,10 @@ const hasActiveFilters = computed(() => {
   return !!(searchQuery.value || categoryFilter.value)
 })
 
+const keywords = computed(() => {
+  return taskDetails.value?.task?.keywords || []
+})
+
 const categoryOptions = computed(() => {
   const categories = new Set<string>()
   results.value.forEach(result => {
@@ -337,13 +341,14 @@ const paginatedResults = computed(() => {
 
 // Methods
 const goBack = () => {
-  router.push('/yellowpages')
+  router.go(-1)
 }
 
 const loadTaskDetails = async () => {
   try {
     const response = await getYellowPagesTaskDetail(taskId)
     if (response) {
+      console.log(response)
       taskDetails.value = response
     }
   } catch (error) {

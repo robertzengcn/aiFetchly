@@ -326,8 +326,14 @@ export interface PlatformSelectors {
     /** Selector for business list container */
     businessList: string;
 
+    /** Selector for business item container */
+    businessItem?: string;
+
     /** Selector for business name */
     businessName: string;
+
+    /** Selector for detail page link */
+    detailPageLink?: string;
 
     /** Selector for phone number */
     phone?: string;
@@ -394,6 +400,12 @@ export interface PlatformSelectors {
 
     /** Selector for business photos */
     photos?: string;
+
+    /** Selector for business image */
+    businessImage?: string;
+
+    /** Selector for business URL */
+    businessUrl?: string;
 
     /** Selector for map/location widget */
     map?: string;

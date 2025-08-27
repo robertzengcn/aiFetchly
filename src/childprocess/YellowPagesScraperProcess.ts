@@ -357,6 +357,7 @@ export class YellowPagesScraperProcess {
                     base_url: 'https://www.yellowpages.com',
                     settings: {},
                     selectors: {
+                        businessItem: '.result',
                         businessList: '.result',
                         businessName: '.business-name',
                         searchForm: {
@@ -435,6 +436,7 @@ export class YellowPagesScraperProcess {
                     base_url: 'https://www.yellowpages.com',
                     settings: {},
                     selectors: {
+                        businessItem: '.result',
                         businessList: '.result',
                         businessName: '.business-name',
                         searchForm: {
