@@ -1,5 +1,5 @@
 import { PlatformConfig, PlatformFeature } from '@/interfaces/IPlatformConfig';
-import { YelpComAdapter } from '@/modules/platforms/YelpComAdapter';
+// import { YelpComAdapter } from '@/modules/platforms/YelpComAdapter';
 
 export const Platform_yelp_com: PlatformConfig = {
   id: 'yelp-com',
@@ -11,7 +11,7 @@ export const Platform_yelp_com: PlatformConfig = {
   is_active: true,
   version: '1.0.0',
   type: 'class',
-  adapter_class: YelpComAdapter, // Direct class reference
+  // adapter_class: YelpComAdapter, // Direct class reference
   documentation: 'https://www.yelp.com/developers',
   maintainer: 'AI Agent',
 

@@ -26,7 +26,8 @@ import {
     TaskFilters, 
     TaskSummary, 
     TaskProgress, 
-    YellowPagesResult 
+    YellowPagesResult,
+    PaginatedResponse
 } from '@/interfaces/ITaskManager';
 import { PlatformSummary } from '@/interfaces/IPlatformConfig';
 
@@ -336,13 +337,14 @@ export function registerYellowPagesIpcHandlers(): void {
         }
     });
 
-    ipcMain.handle(YELLOW_PAGES_RESULTS, async (event, data): Promise<CommonMessage<YellowPagesResult[] | null>> => {
+    ipcMain.handle(YELLOW_PAGES_RESULTS, async (event, data): Promise<CommonMessage<PaginatedResponse<YellowPagesResult> | null>> => {
         try {
             const yellowPagesCtrl = new YellowPagesController();
-            const { id } = JSON.parse(data) as { id: number };
-            const results = await yellowPagesCtrl.getTaskResults(id);
+            const { id, page = 0, size = 20 } = JSON.parse(data) as { id: number; page?: number; size?: number };
+           
+            const results = await yellowPagesCtrl.getTaskResults(id, { page, size });
             
-            const response: CommonMessage<YellowPagesResult[]> = {
+            const response: CommonMessage<PaginatedResponse<YellowPagesResult>> = {
                 status: true,
                 msg: "yellow_pages.task_results_retrieved_successfully",
                 data: results

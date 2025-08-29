@@ -27,7 +27,8 @@ import {
     TaskFilters, 
     TaskSummary, 
     TaskProgress, 
-    YellowPagesResult 
+    YellowPagesResult,
+    PaginatedResponse
 } from '@/interfaces/ITaskManager'
 // import { PlatformConfig } from '@/interfaces/IPlatformConfig'
 import { PlatformSummary } from '@/interfaces/IPlatformConfig';
@@ -179,8 +180,17 @@ export async function getYellowPagesTaskProgress(id: number): Promise<TaskProgre
     return resp
 }
 
-export async function getYellowPagesTaskResults(id: number): Promise<YellowPagesResult[] | null> {
-    const resp = await windowInvoke(YELLOW_PAGES_RESULTS, { id })
+export async function getYellowPagesTaskResults(
+    id: number, 
+    page: number = 0, 
+    size: number = 20
+): Promise<PaginatedResponse<YellowPagesResult> | null> {
+    console.log("getYellowPagesTaskResults")
+    console.log(page, size)
+    // if(page>1){
+    //     page = page - 1;
+    // }
+    const resp = await windowInvoke(YELLOW_PAGES_RESULTS, { id, page, size })
     
     if (!resp) {
         throw new Error("Unknown error")

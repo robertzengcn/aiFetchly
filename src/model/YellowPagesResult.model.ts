@@ -190,8 +190,11 @@ export class YellowPagesResultModel extends BaseDb {
    * @param size Page size
    * @returns Array of result entities
    */
-  async getResultsByTaskId(taskId: number, page: number = 1, size: number = 50): Promise<YellowPagesResultEntity[]> {
-    const skip = (page - 1) * size;
+  async getResultsByTaskId(taskId: number, page: number = 0, size: number = 50): Promise<YellowPagesResultEntity[]> {
+    if(page>1){
+        page = page - 1;
+    }
+    const skip =page * size;
     return await this.repository.find({
       where: { task_id: taskId },
       skip,
@@ -222,13 +225,13 @@ export class YellowPagesResultModel extends BaseDb {
 
   /**
    * List all results with pagination
-   * @param page Page number (1-based)
+   * @param page Page number (0-based)
    * @param size Page size
    * @param sort Sort options
    * @returns Array of result entities
    */
-  async listResults(page: number = 1, size: number = 50, sort?: SortBy): Promise<YellowPagesResultEntity[]> {
-    const skip = (page - 1) * size;
+  async listResults(page: number = 0, size: number = 50, sort?: SortBy): Promise<YellowPagesResultEntity[]> {
+    const skip = page * size;
     const orderBy: any = {};
     
     if (sort) {
@@ -289,8 +292,8 @@ export class YellowPagesResultModel extends BaseDb {
    * @param size Page size
    * @returns Array of result entities
    */
-  async searchByBusinessName(businessName: string, page: number = 1, size: number = 50): Promise<YellowPagesResultEntity[]> {
-    const skip = (page - 1) * size;
+  async searchByBusinessName(businessName: string, page: number = 0, size: number = 50): Promise<YellowPagesResultEntity[]> {
+    const skip = page * size;
     return await this.repository.find({
       where: { business_name: businessName },
       skip,
@@ -302,12 +305,12 @@ export class YellowPagesResultModel extends BaseDb {
   /**
    * Get results by platform
    * @param platform The platform name
-   * @param page Page number (1-based)
+   * @param page Page number (0-based)
    * @param size Page size
    * @returns Array of result entities
    */
-  async getResultsByPlatform(platform: string, page: number = 1, size: number = 50): Promise<YellowPagesResultEntity[]> {
-    const skip = (page - 1) * size;
+  async getResultsByPlatform(platform: string, page: number = 0, size: number = 50): Promise<YellowPagesResultEntity[]> {
+    const skip = page * size;
     return await this.repository.find({
       where: { platform },
       skip,

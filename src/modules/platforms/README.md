@@ -10,7 +10,7 @@ The `PlatformAdapterFactory` provides a static factory method approach to create
 
 - `ExampleHybridAdapter` - Example hybrid platform adapter
 - `ComAdapter192` - 192.com (UK) platform adapter
-- `YellComAdapter` - Yell.com (UK) platform adapter
+<!-- - `YellComAdapter` - Yell.com (UK) platform adapter -->
 - `YellowPagesComAdapter` - YellowPages.com platform adapter
 - `YelpComAdapter` - Yelp.com platform adapter
 - `YellowPagesCaAdapter` - YellowPages.ca platform adapter

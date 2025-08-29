@@ -3,9 +3,9 @@ import { IBasePlatformAdapter } from '@/interfaces/IBasePlatformAdapter';
 import { PlatformConfig } from '@/interfaces/IPlatformConfig';
 import { ExampleHybridAdapter } from './ExampleHybridAdapter';
 import { ComAdapter192 } from './192ComAdapter';
-import { YellComAdapter } from './YellComAdapter';
+// import { YellComAdapter } from './YellComAdapter';
 import { YellowPagesComAdapter } from './YellowPagesComAdapter';
-import { YelpComAdapter } from './YelpComAdapter';
+// import { YelpComAdapter } from './YelpComAdapter';
 import { YellowPagesCaAdapter } from './YellowPagesCaAdapter';
 import { ExampleClassBasedAdapter } from './ExampleClassBasedAdapter';
 import { Adapter11880 } from './11880Adapter';
@@ -30,14 +30,14 @@ export class PlatformAdapterFactory {
             case 'ComAdapter192':
                 return new ComAdapter192(platformConfig);
                 
-            case 'YellComAdapter':
-                return new YellComAdapter(platformConfig);
+            // case 'YellComAdapter':
+            //     return new YellComAdapter(platformConfig);
                 
             case 'YellowPagesComAdapter':
                 return new YellowPagesComAdapter(platformConfig);
                 
-            case 'YelpComAdapter':
-                return new YelpComAdapter(platformConfig);
+            // case 'YelpComAdapter':
+            //     return new YelpComAdapter(platformConfig);
                 
             case 'YellowPagesCaAdapter':
                 return new YellowPagesCaAdapter(platformConfig);
@@ -62,7 +62,7 @@ export class PlatformAdapterFactory {
         const availableClasses = [
             'ExampleHybridAdapter',
             'ComAdapter192',
-            'YellComAdapter',
+            // 'YellComAdapter',
             'YellowPagesComAdapter',
             'YelpComAdapter',
             'YellowPagesCaAdapter',
@@ -80,7 +80,7 @@ export class PlatformAdapterFactory {
         return [
             'ExampleHybridAdapter',
             'ComAdapter192',
-            'YellComAdapter',
+            // 'YellComAdapter',
             'YellowPagesComAdapter',
             'YelpComAdapter',
             'YellowPagesCaAdapter',
@@ -102,14 +102,14 @@ export class PlatformAdapterFactory {
             case 'ComAdapter192':
                 return ComAdapter192;
                 
-            case 'YellComAdapter':
-                return YellComAdapter;
+            // case 'YellComAdapter':
+            //     return YellComAdapter;
                 
             case 'YellowPagesComAdapter':
                 return YellowPagesComAdapter;
                 
-            case 'YelpComAdapter':
-                return YelpComAdapter;
+            // case 'YelpComAdapter':
+            //     return YelpComAdapter;
                 
             case 'YellowPagesCaAdapter':
                 return YellowPagesCaAdapter;

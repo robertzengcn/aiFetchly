@@ -1,5 +1,5 @@
 import { PlatformConfig, PlatformFeature } from '@/interfaces/IPlatformConfig';
-import { YellComAdapter } from '@/modules/platforms/YellComAdapter';
+// import { YellComAdapter } from '@/modules/platforms/YellComAdapter';
 
 export const Platform_yell_com: PlatformConfig = {
   id: 'yell-com',
@@ -11,7 +11,7 @@ export const Platform_yell_com: PlatformConfig = {
   is_active: true,
   version: '1.0.0',
   type: 'class',
-  adapter_class: YellComAdapter, // Direct class reference
+  // adapter_class: YellComAdapter, // Direct class reference
   documentation: 'https://docs.yellowpages-scraper.com/platforms/yell-com',
   maintainer: 'UK Platform Scraper Team',
   description:
@@ -25,10 +25,11 @@ export const Platform_yell_com: PlatformConfig = {
     searchForm:{
       keywordInput: '#search_keyword',
       locationInput: '#search_location',
-      searchButton: '#searchBoxForm > fieldset > div:nth-child(7) > div > button',
+      searchButton: '#searchBoxForm  .searchBar--submit',
       formContainer: '#searchBoxForm',
     },
-    businessList: '.businessCapsule',
+    businessList: '.results--capsuleList',
+    businessItem:'article.businessCapsule',
     businessName: 'h2.businessCapsule--name',
     phone: 'span.business--telephoneNumber',
     email: '',
@@ -43,7 +44,7 @@ export const Platform_yell_com: PlatformConfig = {
     
     // Navigation configuration for detail page extraction
     navigation: {
-      detailLink: 'h2.businessCapsule--name a, .businessCapsule--name a',
+      detailLink: '.businessCapsule--moreInfoBtn',
       alternatives: [
         'a.businessCapsule--name',
         '.businessCapsule a[href*="/business/"]',
@@ -52,23 +53,23 @@ export const Platform_yell_com: PlatformConfig = {
       required: true, // Navigation is required for full data
       delayAfterNavigation: 2000,
       detailPage: {
-        businessName: 'h1.business--name, .business--name',
-        fullAddress: '.business--full-address, .address--complete',
-        businessHours: '.business--hours, .hours--detailed',
-        description: '.business--description, .description--full',
-        contactInfo: '.business--contact, .contact--info',
-        services: '.business--services, .services--list',
-        photos: '.business--photos, .gallery--images',
-        map: '.business--map, .location--map',
-        additionalPhone: '.business--phone, .phone--additional',
-        additionalEmail: '.business--email, .email--additional',
-        socialMedia: '.business--social, .social--links',
-        categories: '.business--categories, .categories--detailed',
-        yearEstablished: '.business--established, .established--year',
-        numberOfEmployees: '.business--employees, .employees--count',
-        paymentMethods: '.business--payment, .payment--methods',
-        specialties: '.business--specialties, .specialties--list',
-        website: '.business--website a, .website--link, a[href*="http"]'
+        businessName: 'h1.businessCard--businessName',
+        fullAddress: 'span.address',
+        businessHours: 'div.businessCard--openingHours',
+        description: 'div.business--aboutUs',
+        contactInfo: '',
+        services: '',
+        photos: '',
+        map: '',
+        additionalPhone: 'span.business--telephoneNumber',
+        additionalEmail: '',
+        socialMedia: '',
+        categories: '',
+        yearEstablished: '',
+        numberOfEmployees: '',
+        paymentMethods: '',
+        specialties: '',
+        website: 'a.businessCard--callToAction'
       }
     },
     

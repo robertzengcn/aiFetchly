@@ -13,7 +13,9 @@ import {
     TaskFilters, 
     TaskSummary, 
     YellowPagesTask, 
-    YellowPagesResult 
+    YellowPagesResult,
+    PaginationParams,
+    PaginatedResponse
 } from "@/interfaces/ITaskManager";
 import { PlatformSummary } from "@/interfaces/IPlatformConfig";
 
@@ -359,15 +361,36 @@ export class YellowPagesController {
     }
 
     /**
-     * Get task results
+     * Get task results with pagination
      * @param taskId ID of the task
-     * @returns Promise resolving to array of task results
+     * @param pagination Pagination parameters
+     * @returns Promise resolving to paginated task results
      */
-    async getTaskResults(taskId: number): Promise<YellowPagesResult[]> {
+    async getTaskResults(taskId: number, pagination?: PaginationParams): Promise<PaginatedResponse<YellowPagesResult>> {
         try {
-            // Use the result module to get results
-            const results = await this.resultModule.getResultsByTaskId(taskId);
-            return results;
+            // Use the result module to get paginated results
+            const page = pagination?.page || 0;
+            const size = pagination?.size || 20;
+            
+            // Get total count first
+            const total = await this.resultModule.getResultsCountByTaskId(taskId);
+            
+            // Get paginated results
+            const results = await this.resultModule.getResultsByTaskId(taskId, page, size);
+            
+            const totalPages = Math.ceil(total / size);
+            
+            return {
+                data: results,
+                pagination: {
+                    page,
+                    size,
+                    total,
+                    totalPages,
+                    hasNext: page < totalPages - 1,
+                    hasPrev: page > 0
+                }
+            };
         } catch (error) {
             console.error(`Failed to get results for task ${taskId}:`, error);
             throw error;

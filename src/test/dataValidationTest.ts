@@ -12,7 +12,7 @@
  */
 
 import { YellowPagesComAdapter } from '../modules/platforms/YellowPagesComAdapter';
-import { YelpComAdapter } from '../modules/platforms/YelpComAdapter';
+// import { YelpComAdapter } from '../modules/platforms/YelpComAdapter';
 import { YellowPagesCaAdapter } from '../modules/platforms/YellowPagesCaAdapter';
 import { PlatformConfig } from '../interfaces/IPlatformConfig';
 
@@ -347,9 +347,9 @@ class DataValidationTest {
                 case 'yellowpages.com':
                     adapter = new YellowPagesComAdapter(platformConfig);
                     break;
-                case 'yelp.com':
-                    adapter = new YelpComAdapter(platformConfig);
-                    break;
+                // case 'yelp.com':
+                //     adapter = new YelpComAdapter(platformConfig);
+                //     break;
                 case 'yellowpages.ca':
                     adapter = new YellowPagesCaAdapter(platformConfig);
                     break;

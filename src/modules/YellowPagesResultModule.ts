@@ -101,13 +101,16 @@ export class YellowPagesResultModule extends BaseModule {
     }
 
     /**
-     * Get results by task ID
+     * Get results by task ID with pagination
      * @param taskId The task ID
+     * @param page Page number (0-based)
+     * @param size Page size
      * @returns Array of results for the specified task
      */
-    async getResultsByTaskId(taskId: number): Promise<YellowPagesResult[]> {
+    async getResultsByTaskId(taskId: number, page: number = 0, size: number = 20): Promise<YellowPagesResult[]> {
         try {
-            const resultEntities = await this.yellowPagesResultModel.getResultsByTaskId(taskId);
+            // The model now expects 0-based pagination, so pass page directly
+            const resultEntities = await this.yellowPagesResultModel.getResultsByTaskId(taskId, page, size);
             return resultEntities.map(entity => this.convertEntityToResult(entity));
         } catch (error) {
             console.error('Error getting results by task ID:', error);
@@ -116,13 +119,15 @@ export class YellowPagesResultModule extends BaseModule {
     }
 
     /**
-     * Get results by platform
+     * Get results by platform with pagination
      * @param platform The platform to filter by
+     * @param page Page number (0-based)
+     * @param size Page size
      * @returns Array of results for the specified platform
      */
-    async getResultsByPlatform(platform: string): Promise<YellowPagesResult[]> {
+    async getResultsByPlatform(platform: string, page: number = 0, size: number = 20): Promise<YellowPagesResult[]> {
         try {
-            const resultEntities = await this.yellowPagesResultModel.getResultsByPlatform(platform);
+            const resultEntities = await this.yellowPagesResultModel.getResultsByPlatform(platform, page, size);
             return resultEntities.map(entity => this.convertEntityToResult(entity));
         } catch (error) {
             console.error('Error getting results by platform:', error);
@@ -131,13 +136,15 @@ export class YellowPagesResultModule extends BaseModule {
     }
 
     /**
-     * Search results by business name or other criteria
+     * Search results by business name or other criteria with pagination
      * @param searchTerm The search term
+     * @param page Page number (0-based)
+     * @param size Page size
      * @returns Array of matching results
      */
-    async searchResults(searchTerm: string): Promise<YellowPagesResult[]> {
+    async searchResults(searchTerm: string, page: number = 0, size: number = 20): Promise<YellowPagesResult[]> {
         try {
-            const resultEntities = await this.yellowPagesResultModel.searchByBusinessName(searchTerm);
+            const resultEntities = await this.yellowPagesResultModel.searchByBusinessName(searchTerm, page, size);
             return resultEntities.map(entity => this.convertEntityToResult(entity));
         } catch (error) {
             console.error('Error searching results:', error);
@@ -174,16 +181,15 @@ export class YellowPagesResultModule extends BaseModule {
 
     /**
      * List results with pagination and sorting
-     * @param page Page number (offset)
+     * @param page Page number (0-based)
      * @param size Page size (limit)
      * @param sort Sort parameters (optional)
      * @returns Array of result entities
      */
     async listResults(page: number = 0, size: number = 50, sort?: SortBy): Promise<YellowPagesResultEntity[]> {
         try {
-            // Convert from 0-based to 1-based pagination for the model
-            const modelPage = page + 1;
-            return await this.yellowPagesResultModel.listResults(modelPage, size, sort);
+            // The model now expects 0-based pagination, so pass page directly
+            return await this.yellowPagesResultModel.listResults(page, size, sort);
         } catch (error) {
             console.error('Error listing results:', error);
             throw new Error(`Failed to list results: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -199,7 +205,7 @@ export class YellowPagesResultModule extends BaseModule {
     async getResultsByDateRange(startDate: Date, endDate: Date): Promise<YellowPagesResult[]> {
         try {
             // Get all results and filter those within the date range
-            const allResults = await this.yellowPagesResultModel.listResults(1, 10000); // Get a large number to cover all results
+            const allResults = await this.yellowPagesResultModel.listResults(0, 10000); // Get a large number to cover all results
             const resultsByDateRange = allResults.filter(result => {
                 const scrapedDate = new Date(result.scraped_at);
                 return scrapedDate >= startDate && scrapedDate <= endDate;
@@ -219,7 +225,7 @@ export class YellowPagesResultModule extends BaseModule {
     async getResultsByCategory(category: string): Promise<YellowPagesResult[]> {
         try {
             // Get all results and filter those with the specified category
-            const allResults = await this.yellowPagesResultModel.listResults(1, 10000); // Get a large number to cover all results
+            const allResults = await this.yellowPagesResultModel.listResults(0, 10000); // Get a large number to cover all results
             const resultsByCategory = allResults.filter(result => {
                 if (!result.categories) return false;
                 try {
@@ -246,7 +252,7 @@ export class YellowPagesResultModule extends BaseModule {
     async getResultsByLocation(location: string): Promise<YellowPagesResult[]> {
         try {
             // Get all results and filter those with the specified location
-            const allResults = await this.yellowPagesResultModel.listResults(1, 10000); // Get a large number to cover all results
+            const allResults = await this.yellowPagesResultModel.listResults(0, 10000); // Get a large number to cover all results
             const resultsByLocation = allResults.filter(result => {
                 const city = result.address_city?.toLowerCase() || '';
                 const state = result.address_state?.toLowerCase() || '';
@@ -273,7 +279,7 @@ export class YellowPagesResultModule extends BaseModule {
     async getResultsWithEmails(): Promise<YellowPagesResult[]> {
         try {
             // Get all results and filter those with emails
-            const allResults = await this.yellowPagesResultModel.listResults(1, 10000); // Get a large number to cover all results
+            const allResults = await this.yellowPagesResultModel.listResults(0, 10000); // Get a large number to cover all results
             const resultsWithEmails = allResults.filter(result => result.email && result.email.trim() !== '');
             return resultsWithEmails.map(entity => this.convertEntityToResult(entity));
         } catch (error) {
@@ -289,7 +295,7 @@ export class YellowPagesResultModule extends BaseModule {
     async getResultsWithPhones(): Promise<YellowPagesResult[]> {
         try {
             // Get all results and filter those with phone numbers
-            const allResults = await this.yellowPagesResultModel.listResults(1, 10000); // Get a large number to cover all results
+            const allResults = await this.yellowPagesResultModel.listResults(0, 10000); // Get a large number to cover all results
             const resultsWithPhones = allResults.filter(result => result.phone && result.phone.trim() !== '');
             return resultsWithPhones.map(entity => this.convertEntityToResult(entity));
         } catch (error) {
@@ -305,7 +311,7 @@ export class YellowPagesResultModule extends BaseModule {
     async getResultsWithWebsites(): Promise<YellowPagesResult[]> {
         try {
             // Get all results and filter those with websites
-            const allResults = await this.yellowPagesResultModel.listResults(1, 10000); // Get a large number to cover all results
+            const allResults = await this.yellowPagesResultModel.listResults(0, 10000); // Get a large number to cover all results
             const resultsWithWebsites = allResults.filter(result => result.website && result.website.trim() !== '');
             return resultsWithWebsites.map(entity => this.convertEntityToResult(entity));
         } catch (error) {
@@ -337,7 +343,7 @@ export class YellowPagesResultModule extends BaseModule {
         
         try {
             // Get all results for statistics
-            const allResults = await this.yellowPagesResultModel.listResults(1, 10000);
+            const allResults = await this.yellowPagesResultModel.listResults(0, 10000);
             
             // Calculate platform statistics
             allResults.forEach(result => {
@@ -413,7 +419,7 @@ export class YellowPagesResultModule extends BaseModule {
             cutoffDate.setDate(cutoffDate.getDate() - daysOld);
             
             // Get all results and filter those older than the cutoff date
-            const allResults = await this.yellowPagesResultModel.listResults(1, 10000); // Get a large number to cover all results
+            const allResults = await this.yellowPagesResultModel.listResults(0, 10000); // Get a large number to cover all results
             const oldResults = allResults.filter(result => result.scraped_at < cutoffDate);
             
             // Delete old results

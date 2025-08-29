@@ -4,7 +4,6 @@
       :headers="headers"
       :items="results"
       :loading="loading"
-      :items-per-page="20"
       class="elevation-1"
       item-key="id"
     >

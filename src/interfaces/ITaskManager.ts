@@ -142,6 +142,31 @@ export interface TaskProgress {
 }
 
 /**
+ * Pagination parameters
+ */
+export interface PaginationParams {
+    page: number;
+    size: number;
+    sortBy?: string;
+    sortOrder?: 'asc' | 'desc';
+}
+
+/**
+ * Paginated response wrapper
+ */
+export interface PaginatedResponse<T> {
+    data: T[];
+    pagination: {
+        page: number;
+        size: number;
+        total: number;
+        totalPages: number;
+        hasNext: boolean;
+        hasPrev: boolean;
+    };
+}
+
+/**
  * Task filters for listing tasks
  */
 export interface TaskFilters {
@@ -151,6 +176,8 @@ export interface TaskFilters {
     createdBefore?: Date;
     limit?: number;
     offset?: number;
+    page?: number;
+    size?: number;
 }
 
 /**

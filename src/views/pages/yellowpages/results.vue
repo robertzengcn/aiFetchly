@@ -154,18 +154,18 @@
         <v-card>
           <v-card-title class="d-flex justify-space-between align-center">
             <div>
-              <span>{{ t('home.results') }} ({{ filteredResults.length }})</span>
+              <span>{{ t('home.results') }} ({{ totalResults }})</span>
               <v-chip
                 v-if="hasActiveFilters"
                 color="info"
                 size="small"
                 class="ml-2"
               >
-                {{ filteredResults.length }} of {{ results.length }} results match filters
+                {{ filteredResults.length }} of {{ totalResults }} results match filters
               </v-chip>
             </div>
             <v-chip color="info" size="small">
-              {{ t('home.page') }} {{ currentPage + 1 }} {{ t('home.of') }} {{ Math.ceil(filteredResults.length / pageSize) }}
+              {{ t('home.page') }} {{ currentPage + 1 }} {{ t('home.of') }} {{ totalPages }}
             </v-chip>
           </v-card-title>
           <v-card-text>
@@ -202,11 +202,11 @@
     </v-row>
 
     <!-- Pagination -->
-    <v-row class="mt-4" v-if="filteredResults.length > pageSize">
+    <v-row class="mt-4" v-if="totalPages > 1">
       <v-col cols="12" class="d-flex justify-center">
         <v-pagination
           v-model="currentPage"
-          :length="Math.ceil(filteredResults.length / pageSize)"
+          :length="totalPages"
           :total-visible="7"
           @update:model-value="handlePageChange"
         />
@@ -258,6 +258,8 @@ const currentPage = ref(0)
 const pageSize = ref(20)
 const results = ref<YellowPagesResult[]>([])
 const taskDetails = ref<any>(null)
+const totalResults = ref(0)
+const totalPages = ref(0)
 
 // Dialog states
 const resultDetailsDialog = reactive({
@@ -334,9 +336,8 @@ const filteredResults = computed(() => {
 })
 
 const paginatedResults = computed(() => {
-  const start = currentPage.value * pageSize.value
-  const end = start + pageSize.value
-  return filteredResults.value.slice(start, end)
+  // Since we're now getting paginated data from backend, just return the current results
+  return filteredResults.value
 })
 
 // Methods
@@ -356,25 +357,32 @@ const loadTaskDetails = async () => {
   }
 }
 
-const loadResults = async () => {
+const loadResults = async (page: number = 0) => {
   loading.value = true
   try {
-    const response = await getYellowPagesTaskResults(taskId)
+    const response = await getYellowPagesTaskResults(taskId, page, pageSize.value)
     if (response) {
-      results.value = response
+      results.value = response.data
+      totalResults.value = response.pagination.total
+      totalPages.value = response.pagination.totalPages
+      currentPage.value = response.pagination.page
     } else {
       results.value = []
+      totalResults.value = 0
+      totalPages.value = 0
     }
   } catch (error) {
     console.error('Failed to load results:', error)
     results.value = []
+    totalResults.value = 0
+    totalPages.value = 0
   } finally {
     loading.value = false
   }
 }
 
 const refreshResults = async () => {
-  await loadResults()
+  await loadResults(currentPage.value)
   await loadTaskDetails()
 }
 
@@ -453,8 +461,9 @@ const clearFilters = () => {
   currentPage.value = 0
 }
 
-const handlePageChange = (page: number) => {
+const handlePageChange = async (page: number) => {
   currentPage.value = page
+  await loadResults(page)
 }
 
 const viewResultDetails = (result: YellowPagesResult) => {
@@ -499,7 +508,10 @@ const formatDate = (date: string | Date) => {
 
 // Watch for filter changes
 watch([searchQuery, categoryFilter], () => {
-  currentPage.value = 0
+  // Reset to first page when filters change
+  // currentPage.value = 0
+  // Reload results with new filters
+  // loadResults(0)
 })
 
 // Lifecycle
