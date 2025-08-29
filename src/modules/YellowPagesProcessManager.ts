@@ -403,13 +403,32 @@ export class YellowPagesProcessManager extends BaseModule {
                     console.log(`Task ${taskId}: CAPTCHA detected, may need manual intervention`);
                     break;
                 case 'SCRAPING_CLOUDFLARE_DETECTED':
-                    console.log(`Task ${taskId}: Cloudflare protection detected at ${message.details?.url || 'unknown URL'}`);
-                    console.log(`Additional info: ${message.details?.additionalInfo || 'No additional info available'}`);
+                    if (message.type === 'SCRAPING_CLOUDFLARE_DETECTED') {
+                        console.log(`Task ${taskId}: Cloudflare protection detected at ${message.details?.url || 'unknown URL'}`);
+                        console.log(`Additional info: ${message.details?.additionalInfo || 'No additional info available'}`);
+                        // Log to error log for user notification
+                        if (processInfo?.logFiles) {
+                            const cloudflareMessage = `[${new Date().toISOString()}] CLOUDFLARE DETECTED: URL: ${message.details?.url || 'unknown'}, Timestamp: ${message.details?.timestamp || 'unknown'}, Info: ${message.details?.additionalInfo || 'No additional info'}`;
+                            WriteLog(processInfo.logFiles.errorLog, cloudflareMessage);
+                        }
+                    }
+                    break;
+                case 'SCRAPING_PAUSED_CLOUDFLARE':
+                    console.log(`Task ${taskId}: Scraping paused due to Cloudflare protection`);
                     // Log to error log for user notification
                     if (processInfo?.logFiles) {
-                        const cloudflareMessage = `[${new Date().toISOString()}] CLOUDFLARE DETECTED: URL: ${message.details?.url || 'unknown'}, Timestamp: ${message.details?.timestamp || 'unknown'}, Info: ${message.details?.additionalInfo || 'No additional info'}`;
-                        WriteLog(processInfo.logFiles.errorLog, cloudflareMessage);
+                        const cloudflarePauseMessage = `[${new Date().toISOString()}] CLOUDFLARE PAUSE: Scraping paused due to Cloudflare protection. Manual intervention required - wait 15-30 minutes before retrying.`;
+                        WriteLog(processInfo.logFiles.errorLog, cloudflarePauseMessage);
                     }
+                    // Update task status to paused due to Cloudflare protection
+                    this.taskModel.updateTaskStatus(taskId, YellowPagesTaskStatus.Paused).catch(err => {
+                        console.error(`Failed to update task status to paused for task ${taskId}:`, err);
+                    });
+                    // Update task error log with Cloudflare pause information
+                    const cloudflarePauseErrorLog = `Scraping paused due to Cloudflare protection. Manual intervention required - wait 15-30 minutes before retrying.`;
+                    this.taskModel.updateTaskErrorLog(taskId, cloudflarePauseErrorLog).catch(err => {
+                        console.error(`Failed to update error log for task ${taskId}:`, err);
+                    });
                     break;
                 case 'TASK_PAUSED':
                     console.log(`Task ${taskId} paused successfully`);
@@ -1032,6 +1051,26 @@ export class YellowPagesProcessManager extends BaseModule {
         } catch (error) {
             console.error(`Failed to send exit message for task ${taskId}:`, error);
             throw error;
+        }
+    }
+
+    /**
+     * Send system message to frontend
+     */
+    private sendSystemMessage(message: { status: boolean; data: { title: string; content: string } }): void {
+        try {
+            // Import the system message constant
+            const { SYSTEM_MESSAGE } = require('@/config/channellist');
+            
+            // Send message to all renderer processes
+            const windows = require('electron').BrowserWindow.getAllWindows();
+            windows.forEach((window: any) => {
+                if (window.webContents && !window.webContents.isDestroyed()) {
+                    window.webContents.send(SYSTEM_MESSAGE, JSON.stringify(message));
+                }
+            });
+        } catch (error) {
+            console.error('Failed to send system message:', error);
         }
     }
 }

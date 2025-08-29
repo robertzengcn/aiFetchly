@@ -57,7 +57,7 @@ export const Platform_11880_de: PlatformConfig = {
         contactInfo: '',
         services: '',
         additionalPhone: '.phone-numbers .phone, .contact-phone',
-        additionalEmail: '#entry > div.detail-information-grid-start > div.item-detail-information > div > div:nth-child(1) > a > div.entry-detail-list__label',
+        additionalEmail: '#box-email-link > div.entry-detail-list__label > span',
         socialMedia: '',
         categories: '',
         yearEstablished: '',

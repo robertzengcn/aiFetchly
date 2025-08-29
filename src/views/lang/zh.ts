@@ -49,6 +49,20 @@ export default {
         log_content:"日志内容",
         optional:"可选",
     },
+    notifications: {
+        cloudflare_protection_detected: "检测到Cloudflare保护",
+        recommendations: "建议",
+        wait_before_retry: "重试前等待15-30分钟",
+        use_different_proxy: "如果可用，使用不同的代理/VPN",
+        reduce_frequency: "降低抓取频率",
+        check_manual_access: "检查手动访问是否有效",
+        task_id: "任务ID",
+        dismiss: "关闭",
+        view_task: "查看任务",
+        cloudflare_detected: "检测到Cloudflare保护",
+        scraping_paused: "由于Cloudflare保护，抓取已暂停",
+        manual_intervention_required: "需要手动干预"
+    },
     home:{
         search:"搜索提取",
         search_scraper:"搜索抓取器",

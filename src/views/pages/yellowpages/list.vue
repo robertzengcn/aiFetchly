@@ -338,6 +338,27 @@
         </v-card-text>
       </v-card>
     </v-dialog>
+
+    <!-- Cloudflare Protection Alert -->
+    <v-snackbar
+      v-model="cloudflareAlert.show"
+      :timeout="6000"
+      color="warning"
+      rounded="lg"
+      variant="tonal"
+      top
+    >
+      {{ cloudflareAlert.message }}
+      <template v-slot:actions>
+        <v-btn
+          color="white"
+          variant="text"
+          @click="dismissCloudflareAlert"
+        >
+          {{ t('home.dismiss') }}
+        </v-btn>
+      </template>
+    </v-snackbar>
   </v-container>
 </template>
 
@@ -430,6 +451,24 @@ const taskDetailsDialog = reactive({
   show: false,
   task: null as any
 })
+
+// Cloudflare protection alert state
+const cloudflareAlert = reactive({
+  show: false,
+  message: '',
+  recommendation: ''
+})
+
+// Cloudflare protection alert methods
+const showCloudflareAlert = (message: string, recommendation: string) => {
+  cloudflareAlert.message = message
+  cloudflareAlert.recommendation = recommendation
+  cloudflareAlert.show = true
+}
+
+const dismissCloudflareAlert = () => {
+  cloudflareAlert.show = false
+}
 
 // Debounced search functionality
 let searchTimeout: NodeJS.Timeout | null = null

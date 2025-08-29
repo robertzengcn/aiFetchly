@@ -57,6 +57,20 @@ export default {
        log_content:"log content",
        optional:"optional",
     },
+    notifications: {
+        cloudflare_protection_detected: "Cloudflare Protection Detected",
+        recommendations: "Recommendations",
+        wait_before_retry: "Wait 15-30 minutes before retrying",
+        use_different_proxy: "Use different proxy/VPN if available",
+        reduce_frequency: "Reduce scraping frequency",
+        check_manual_access: "Check if manual access works in browser",
+        task_id: "Task ID",
+        dismiss: "Dismiss",
+        view_task: "View Task",
+        cloudflare_detected: "Cloudflare protection detected",
+        scraping_paused: "Scraping paused due to Cloudflare protection",
+        manual_intervention_required: "Manual intervention required"
+    },
     home:{
         search:"Search Extraction",
         search_scraper:"Search Scraper",

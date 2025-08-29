@@ -2318,11 +2318,11 @@ export class YellowPagesScraperProcess {
                 };
 
                 // Send message to parent process via IPC
-                if (process.send) {
-                    process.send(cloudflareMessage);
+                if (process.parentPort) {
+                    process.parentPort.postMessage(cloudflareMessage);
                     console.log('✅ Cloudflare detection message sent to parent process');
                 } else {
-                    console.warn('⚠️ Cannot send Cloudflare message: process.send not available');
+                    console.warn('⚠️ Cannot send Cloudflare message: process.parentPort not available');
                 }
 
                 // Log the detection for debugging
@@ -2347,11 +2347,33 @@ export class YellowPagesScraperProcess {
                 console.log('     - Reduce scraping frequency');
                 console.log('     - Check if manual access works in browser');
                 
-                // Optionally pause the scraping process to allow manual intervention
+                // Pause the scraping process due to Cloudflare protection
                 if (this.isRunning) {
                     console.log('⏸️ Pausing scraping process due to Cloudflare protection...');
-                    // Don't actually pause here, just log - let the user decide
-                    // The parent process will handle the notification
+                    try {
+                        await this.pause();
+                        console.log('✅ Scraping paused successfully due to Cloudflare protection');
+                        
+                        // Send additional pause notification to parent
+                        const pauseNotificationMessage = {
+                            type: 'SCRAPING_PAUSED_CLOUDFLARE',
+                            taskId: this.taskData.taskId,
+                            details: {
+                                reason: 'Cloudflare protection detected',
+                                url: currentUrl,
+                                timestamp: timestamp,
+                                recommendation: 'Manual intervention required - wait 15-30 minutes before retrying'
+                            }
+                        };
+                        
+                        if (process.parentPort) {
+                            process.parentPort.postMessage(pauseNotificationMessage);
+                            console.log('✅ Cloudflare pause notification sent to parent process');
+                        }
+                        
+                    } catch (pauseError) {
+                        console.error('❌ Failed to pause scraping due to Cloudflare protection:', pauseError);
+                    }
                 }
             }
         } catch (error) {

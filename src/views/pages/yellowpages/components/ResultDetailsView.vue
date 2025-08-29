@@ -283,17 +283,7 @@
               </v-col>
             </v-row>
             
-            <div v-if="result.raw_data" class="mt-4">
-              <div class="text-caption text-grey-darken-1">{{ t('home.raw_data') }}</div>
-              <v-expansion-panels>
-                <v-expansion-panel>
-                  <v-expansion-panel-title>{{ t('home.view_raw_data') }}</v-expansion-panel-title>
-                  <v-expansion-panel-text>
-                    <pre class="text-body-2" style="white-space: pre-wrap; font-family: monospace; background: #f5f5f5; padding: 16px; border-radius: 4px; max-height: 300px; overflow-y: auto;">{{ typeof result.raw_data === 'string' ? formatRawData(result.raw_data) : JSON.stringify(result.raw_data, null, 2) }}</pre>
-                  </v-expansion-panel-text>
-                </v-expansion-panel>
-              </v-expansion-panels>
-            </div>
+
           </v-card-text>
         </v-card>
       </v-col>
@@ -374,7 +364,7 @@ const hasAddress = computed(() => {
 })
 
 const hasAdditionalInfo = computed(() => {
-  return !!(props.result.social_media || props.result.payment_methods || props.result.raw_data)
+  return !!(props.result.social_media || props.result.payment_methods)
 })
 
 // Methods
@@ -410,14 +400,7 @@ const formatBusinessHours = (hours: string): string => {
   }
 }
 
-const formatRawData = (rawData: string): string => {
-  try {
-    const parsed = JSON.parse(rawData)
-    return JSON.stringify(parsed, null, 2)
-  } catch (e) {
-    return rawData
-  }
-}
+
 
 const formatDate = (date: string | Date): string => {
   if (!date) return 'N/A'

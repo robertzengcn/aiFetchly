@@ -167,6 +167,8 @@ const permanent = computed(() => {
     return !mainStore.isMobile;
 });
 const showNotice = ref(false);
+const showCloudflareNotification = ref(false);
+const currentCloudflareNotification = ref<CommonDialogMsg | null>(null);
 const {t,locale} = useI18n();
 const location="end"
 type languageType = {
