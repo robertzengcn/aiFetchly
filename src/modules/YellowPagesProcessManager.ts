@@ -27,7 +27,7 @@ import {
     isCompletedMessage,
     isErrorMessage
 } from "@/interfaces/BackgroundProcessMessages";
-import { WriteLog, getApplogspath, getRandomValues, getRecorddatetime } from "@/modules/lib/function";
+import { WriteLog, getApplogspath, getRandomValues, getRecorddatetime, sendSystemMessage } from "@/modules/lib/function";
 import { USERLOGPATH, USEREMAIL } from '@/config/usersetting';
 import { Token } from "@/modules/token";
 import { v4 as uuidv4 } from 'uuid';
@@ -432,9 +432,25 @@ export class YellowPagesProcessManager extends BaseModule {
                     break;
                 case 'TASK_PAUSED':
                     console.log(`Task ${taskId} paused successfully`);
+                    // Send system message to frontend to notify user
+                    sendSystemMessage({
+                        status: true,
+                        data: {
+                            title: 'Task Paused',
+                            content: `Yellow Pages task ${taskId} has been paused successfully.`
+                        }
+                    });
                     break;
                 case 'TASK_RESUMED':
                     console.log(`Task ${taskId} resumed successfully`);
+                    // Send system message to frontend to notify user
+                    sendSystemMessage({
+                        status: true,
+                        data: {
+                            title: 'Task Resumed',
+                            content: `Yellow Pages task ${taskId} has been resumed successfully.`
+                        }
+                    });
                     break;
                 case 'EXIT':
                     console.log(`Task ${taskId} received exit request`);
@@ -711,7 +727,7 @@ export class YellowPagesProcessManager extends BaseModule {
     /**
      * Terminate a specific process
      */
-    async terminateProcess(taskId: number): Promise<void> {
+    async terminateProcess(taskId: number): Promise<boolean> {
         const processInfo = this.activeProcesses.get(taskId);
         if (processInfo) {
             console.log(`Terminating process for task ${taskId}`);
@@ -723,19 +739,51 @@ export class YellowPagesProcessManager extends BaseModule {
             }
             
             try {
-                processInfo.process.kill();
-                processInfo.status = 'stopped';
-                
-                // Update task status
-                await this.taskModel.updateTaskStatus(taskId, YellowPagesTaskStatus.Paused);
-                
-                // Clear the PID since process is terminated
-                await this.taskModel.clearTaskPID(taskId);
-                
-                // Clean up after a short delay
-                setTimeout(() => {
-                    this.cleanupProcess(taskId);
-                }, 1000);
+                const killResult = processInfo.process.kill();
+                console.log(`killResult: ${killResult}`);
+                if (killResult) {
+                    console.log(`Process for task ${taskId} terminated successfully`);
+                    processInfo.status = 'stopped';
+                    
+                    // Update task status
+                    await this.taskModel.updateTaskStatus(taskId, YellowPagesTaskStatus.Paused);
+                    
+                    // Clear the PID since process is terminated
+                    await this.taskModel.clearTaskPID(taskId);
+                    
+                    // Clean up after a short delay
+                    setTimeout(() => {
+                        this.cleanupProcess(taskId);
+                    }, 1000);
+                    
+                    // Send success notification to frontend
+                    sendSystemMessage({
+                        status: true,
+                        data: {
+                            title: 'Process Terminated',
+                            content: `Process for Yellow Pages task ${taskId} has been terminated successfully.`
+                        }
+                    });
+                    return true;
+                } else {
+                    console.warn(`Process kill() returned false for task ${taskId} - process may not have been terminated`);
+                    
+                    // Log warning to error log file
+                    if (processInfo.logFiles) {
+                        const warningMessage = `[${new Date().toISOString()}] Process kill() returned false - process termination may have failed`;
+                        WriteLog(processInfo.logFiles.errorLog, warningMessage);
+                    }
+                    
+                    // Send warning notification to frontend
+                    sendSystemMessage({
+                        status: false,
+                        data: {
+                            title: 'Process Termination Warning',
+                            content: `Process termination for Yellow Pages task ${taskId} may not have completed successfully.`
+                        }
+                    });
+                    return false;
+                }
                 
             } catch (error) {
                 console.error(`Failed to terminate process for task ${taskId}:`, error);
@@ -745,6 +793,16 @@ export class YellowPagesProcessManager extends BaseModule {
                     const errorMessage = `[${new Date().toISOString()}] Failed to terminate process: ${error}`;
                     WriteLog(processInfo.logFiles.errorLog, errorMessage);
                 }
+                
+                // Send error notification to frontend
+                sendSystemMessage({
+                    status: false,
+                    data: {
+                        title: 'Process Termination Failed',
+                        content: `Failed to terminate process for Yellow Pages task ${taskId}: ${error instanceof Error ? error.message : 'Unknown error'}`
+                    }
+                });
+                return false;
             }
         } else {
             console.log(`No active process found for task ${taskId}`);
@@ -1054,23 +1112,5 @@ export class YellowPagesProcessManager extends BaseModule {
         }
     }
 
-    /**
-     * Send system message to frontend
-     */
-    private sendSystemMessage(message: { status: boolean; data: { title: string; content: string } }): void {
-        try {
-            // Import the system message constant
-            const { SYSTEM_MESSAGE } = require('@/config/channellist');
-            
-            // Send message to all renderer processes
-            const windows = require('electron').BrowserWindow.getAllWindows();
-            windows.forEach((window: any) => {
-                if (window.webContents && !window.webContents.isDestroyed()) {
-                    window.webContents.send(SYSTEM_MESSAGE, JSON.stringify(message));
-                }
-            });
-        } catch (error) {
-            console.error('Failed to send system message:', error);
-        }
-    }
+
 }

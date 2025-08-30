@@ -359,6 +359,14 @@
         </v-btn>
       </template>
     </v-snackbar>
+
+    <!-- Notification Snackbar -->
+    <NoticeSnackbar
+      v-model="notification.show"
+      :message="notification.message"
+      :type="notification.type"
+      :timeout="notification.timeout"
+    />
   </v-container>
 </template>
 
@@ -368,6 +376,7 @@ import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import YellowPagesTaskTable from './components/YellowPagesTaskTable.vue'
 import TaskDetailsView from './components/TaskDetailsView.vue'
+import NoticeSnackbar from '@/views/components/widgets/noticeSnackbar.vue'
 import { getYellowPagesTaskList, getYellowPagesPlatforms, killProcessByPID, startYellowPagesTask, pauseYellowPagesTask, resumeYellowPagesTask } from '@/views/api/yellowpages'
 import { TaskStatus, TaskSummary } from '@/interfaces/ITaskManager'
 import { PlatformSummary } from '@/interfaces/IPlatformConfig'
@@ -468,6 +477,22 @@ const showCloudflareAlert = (message: string, recommendation: string) => {
 
 const dismissCloudflareAlert = () => {
   cloudflareAlert.show = false
+}
+
+// Notification system state
+const notification = reactive({
+  show: false,
+  message: '',
+  type: 'info' as 'success' | 'error' | 'warning' | 'info',
+  timeout: 3000
+})
+
+// Notification methods
+const showNotification = (message: string, type: 'success' | 'error' | 'warning' | 'info' = 'info', timeout: number = 3000) => {
+  notification.message = message
+  notification.type = type
+  notification.timeout = timeout
+  notification.show = true
 }
 
 // Debounced search functionality
@@ -807,8 +832,11 @@ const pauseTask = async (task: any) => {
     // TODO: Replace with actual API call
     await pauseYellowPagesTask(task.id)
     await loadTasks()
+    //showNotification(`Task "${task.name}" paused successfully`, 'success')
   } catch (error) {
     console.error('Failed to pause task:', error)
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred'
+    showNotification(`Failed to pause task "${task.name}": ${errorMessage}`, 'error', 5000)
   }
 }
 
@@ -817,8 +845,11 @@ const resumeTask = async (task: any) => {
     // TODO: Replace with actual API call
     await resumeYellowPagesTask(task.id)
     await loadTasks()
+    showNotification(`Task "${task.name}" resumed successfully`, 'success')
   } catch (error) {
     console.error('Failed to resume task:', error)
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred'
+    showNotification(`Failed to resume task "${task.name}": ${errorMessage}`, 'error', 5000)
   }
 }
 

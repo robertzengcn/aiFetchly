@@ -1,6 +1,6 @@
 import path from "path";
 import { execSync, exec } from 'child_process';
-import { Notification, app } from 'electron'
+import { Notification, app, BrowserWindow } from 'electron'
 // import * as yaml from 'js-yaml';
 import * as fs from 'fs';
 // import { CommonDialogMsg } from "@/entityTypes/commonType";
@@ -18,6 +18,7 @@ import { USERLOGPATH, USEREMAIL } from '@/config/usersetting';
 import { v4 as uuidv4 } from 'uuid';
 import {LanguageConfig} from '@/config/LanguageConfig'
 import {LanguageItem} from '@/entityTypes/commonType'
+import { SYSTEM_MESSAGE } from'@/config/channellist';
 // import { contextIsolated } from "process";
 //import { utilityProcess, MessageChannelMain} from "electron";
 export type queryParams = {
@@ -996,4 +997,25 @@ export function getFirefoxExcutepath(): string | undefined {
     default:
       return undefined;
   }
+}
+
+/**
+ * Send system message to frontend
+ * @param message System message object with status and data
+ */
+export function sendSystemMessage(message: { status: boolean; data: { title: string; content: string } }): void {
+    try {
+        // Import the system message constant
+        
+        
+        // Send message to all renderer processes
+        const windows = BrowserWindow.getAllWindows();
+        windows.forEach((window) => {
+            if (window.webContents && !window.webContents.isDestroyed()) {
+                window.webContents.send(SYSTEM_MESSAGE, JSON.stringify(message));
+            }
+        });
+    } catch (error) {
+        console.error('Failed to send system message:', error);
+    }
 }
