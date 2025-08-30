@@ -58,7 +58,7 @@
                   <div class="text-h6 font-weight-bold text-info">
                     {{ formatDate(taskDetails?.task?.created_at) }}
                   </div>
-                  <div class="text-caption">{{ t('home.created_at') }}</div>
+                  <div class="text-caption">{{ t('common.created_time') }}</div>
                 </div>
               </v-col>
             </v-row>

@@ -317,6 +317,7 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
                     platform: task.platform,
                     status: task.status as TaskStatus,
                     created_at: task.createdAt || new Date(),
+                    updated_at: task.updatedAt || task.createdAt || new Date(),
                     completed_at: task.completed_at || undefined,
                     results_count: resultsCount,
                     progress_percentage: processInfo?.progress?.percentage || 0,

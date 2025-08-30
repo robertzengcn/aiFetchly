@@ -418,6 +418,7 @@ export class YellowPagesTaskModule extends BaseModule {
             platform: entity.platform,
             status: entity.status as TaskStatus, // Cast the number status to TaskStatus enum
             created_at: entity.createdAt || new Date(),
+            updated_at: entity.updatedAt || entity.createdAt || new Date(),
             completed_at: entity.completed_at,
             progress_percentage: this.calculateProgress(entity),
             results_count: resultsCount,
