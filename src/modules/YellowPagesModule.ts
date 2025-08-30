@@ -32,7 +32,7 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
         super();
         this.taskModel = new YellowPagesTaskModel(this.dbpath);
         this.resultModel = new YellowPagesResultModel(this.dbpath);
-        this.processManager = new YellowPagesProcessManager();
+        this.processManager = YellowPagesProcessManager.getInstance();
         this.browserManager = new BrowserManager();
         this.accountCookiesModule = new AccountCookiesModule();
         this.platformRegistry = new PlatformRegistry();

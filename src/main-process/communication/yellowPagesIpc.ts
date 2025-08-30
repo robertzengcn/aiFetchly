@@ -37,7 +37,7 @@ export function registerYellowPagesIpcHandlers(): void {
     // Task Management
     ipcMain.handle(YELLOW_PAGES_CREATE, async (event, data): Promise<CommonMessage<number | null>> => {
         try {
-            const yellowPagesCtrl = new YellowPagesController();
+            const yellowPagesCtrl = YellowPagesController.getInstance();
             const taskData = JSON.parse(data) as YellowPagesTaskData;
             const taskId = await yellowPagesCtrl.createTask(taskData);
             
@@ -60,7 +60,7 @@ export function registerYellowPagesIpcHandlers(): void {
     // update yellow pages task
     ipcMain.handle(YELLOW_PAGES_UPDATE, async (event, data): Promise<CommonMessage<number|void>> => {
         try {
-            const yellowPagesCtrl = new YellowPagesController();
+            const yellowPagesCtrl = YellowPagesController.getInstance();
             const { id, ...taskData } = JSON.parse(data) as { id: number } & Partial<YellowPagesTask>;
             await yellowPagesCtrl.updateTask(id, taskData);
             
@@ -82,7 +82,7 @@ export function registerYellowPagesIpcHandlers(): void {
 
     ipcMain.handle(YELLOW_PAGES_DELETE, async (event, data): Promise<CommonMessage<void>> => {
         try {
-            const yellowPagesCtrl = new YellowPagesController();
+            const yellowPagesCtrl = YellowPagesController.getInstance();
             const { id } = JSON.parse(data) as { id: number };
             await yellowPagesCtrl.deleteTask(id);
             
@@ -104,7 +104,7 @@ export function registerYellowPagesIpcHandlers(): void {
     // Task Control Operations
     ipcMain.handle(YELLOW_PAGES_START, async (event, data): Promise<CommonMessage<number>> => {
         try {
-            const yellowPagesCtrl = new YellowPagesController();
+            const yellowPagesCtrl = YellowPagesController.getInstance();
             const { id } = JSON.parse(data) as { id: number };
             await yellowPagesCtrl.startTask(id);
             
@@ -127,7 +127,7 @@ export function registerYellowPagesIpcHandlers(): void {
 
     ipcMain.handle(YELLOW_PAGES_STOP, async (event, data): Promise<CommonMessage<void>> => {
         try {
-            const yellowPagesCtrl = new YellowPagesController();
+            const yellowPagesCtrl = YellowPagesController.getInstance();
             const { id } = JSON.parse(data) as { id: number };
             await yellowPagesCtrl.stopTask(id);
             
@@ -148,7 +148,7 @@ export function registerYellowPagesIpcHandlers(): void {
 
     ipcMain.handle(YELLOW_PAGES_PAUSE, async (event, data): Promise<CommonMessage<void>> => {
         try {
-            const yellowPagesCtrl = new YellowPagesController();
+            const yellowPagesCtrl = YellowPagesController.getInstance();
             const { id } = JSON.parse(data) as { id: number };
             await yellowPagesCtrl.pauseTask(id);
             
@@ -169,7 +169,7 @@ export function registerYellowPagesIpcHandlers(): void {
 
     ipcMain.handle(YELLOW_PAGES_RESUME, async (event, data): Promise<CommonMessage<void>> => {
         try {
-            const yellowPagesCtrl = new YellowPagesController();
+            const yellowPagesCtrl = YellowPagesController.getInstance();
             const { id } = JSON.parse(data) as { id: number };
             await yellowPagesCtrl.resumeTask(id);
             
@@ -194,7 +194,7 @@ export function registerYellowPagesIpcHandlers(): void {
         message: string;
     }>> => {
         try {
-            const yellowPagesCtrl = new YellowPagesController();
+            const yellowPagesCtrl = YellowPagesController.getInstance();
             const { pid } = JSON.parse(data) as { pid: number };
             const result = await yellowPagesCtrl.killProcessByPID(pid);
             
@@ -233,7 +233,7 @@ export function registerYellowPagesIpcHandlers(): void {
         error?: string;
     }>> => {
         try {
-            const yellowPagesCtrl = new YellowPagesController();
+            const yellowPagesCtrl = YellowPagesController.getInstance();
             const { pid } = JSON.parse(data) as { pid: number };
             const result = await yellowPagesCtrl.getProcessStatusByPID(pid);
             
@@ -270,7 +270,7 @@ export function registerYellowPagesIpcHandlers(): void {
     // list yellow pages tasks
     ipcMain.handle(YELLOW_PAGES_LIST, async (event, data): Promise<CommonMessage<TaskSummary[] | null>> => {
         try {
-            const yellowPagesCtrl = new YellowPagesController();
+            const yellowPagesCtrl = YellowPagesController.getInstance();
             const filters = data ? JSON.parse(data) as TaskFilters : undefined;
             const tasks = await yellowPagesCtrl.listTasks(filters);
             
@@ -293,7 +293,7 @@ export function registerYellowPagesIpcHandlers(): void {
 
     ipcMain.handle(YELLOW_PAGES_DETAIL, async (event, data): Promise<CommonMessage<any | null>> => {
         try {
-            const yellowPagesCtrl = new YellowPagesController();
+            const yellowPagesCtrl = YellowPagesController.getInstance();
             const { id } = JSON.parse(data) as { id: number };
             const taskDetails = await yellowPagesCtrl.getTask(id);
             
@@ -316,7 +316,7 @@ export function registerYellowPagesIpcHandlers(): void {
 
     ipcMain.handle(YELLOW_PAGES_PROGRESS, async (event, data): Promise<CommonMessage<TaskProgress | null>> => {
         try {
-            const yellowPagesCtrl = new YellowPagesController();
+            const yellowPagesCtrl = YellowPagesController.getInstance();
             const { id } = JSON.parse(data) as { id: number };
             const progress = await yellowPagesCtrl.getTaskProgress(id);
             
@@ -339,7 +339,7 @@ export function registerYellowPagesIpcHandlers(): void {
 
     ipcMain.handle(YELLOW_PAGES_RESULTS, async (event, data): Promise<CommonMessage<PaginatedResponse<YellowPagesResult> | null>> => {
         try {
-            const yellowPagesCtrl = new YellowPagesController();
+            const yellowPagesCtrl = YellowPagesController.getInstance();
             const { id, page = 0, size = 20 } = JSON.parse(data) as { id: number; page?: number; size?: number };
            
             const results = await yellowPagesCtrl.getTaskResults(id, { page, size });
@@ -363,7 +363,7 @@ export function registerYellowPagesIpcHandlers(): void {
 
     ipcMain.handle(YELLOW_PAGES_EXPORT, async (event, data): Promise<CommonMessage<any | null>> => {
         try {
-            const yellowPagesCtrl = new YellowPagesController();
+            const yellowPagesCtrl = YellowPagesController.getInstance();
             const { id, format = 'json' } = JSON.parse(data) as { id: number; format?: 'json' | 'csv' };
             const exportData = await yellowPagesCtrl.exportTaskResults(id, format);
             
@@ -387,7 +387,7 @@ export function registerYellowPagesIpcHandlers(): void {
     // Bulk Operations
     ipcMain.handle(YELLOW_PAGES_BULK, async (event, data): Promise<CommonMessage<any | null>> => {
         try {
-            const yellowPagesCtrl = new YellowPagesController();
+            const yellowPagesCtrl = YellowPagesController.getInstance();
             const { operation, taskIds } = JSON.parse(data) as { 
                 operation: 'start' | 'stop' | 'pause' | 'delete'; 
                 taskIds: number[] 
@@ -414,7 +414,7 @@ export function registerYellowPagesIpcHandlers(): void {
     // System Operations
     ipcMain.handle(YELLOW_PAGES_HEALTH, async (event): Promise<CommonMessage<any | null>> => {
         try {
-            const yellowPagesCtrl = new YellowPagesController();
+            const yellowPagesCtrl = YellowPagesController.getInstance();
             const healthStatus = await yellowPagesCtrl.getHealthStatus();
             
             const response: CommonMessage<any> = {
@@ -436,7 +436,7 @@ export function registerYellowPagesIpcHandlers(): void {
 
     ipcMain.handle(YELLOW_PAGES_PLATFORMS, async (event): Promise<CommonMessage<PlatformSummary[] | null>> => {
         try {
-            const yellowPagesCtrl = new YellowPagesController();
+            const yellowPagesCtrl = YellowPagesController.getInstance();
             const platforms = await yellowPagesCtrl.getAvailablePlatforms();
             
             const response: CommonMessage<PlatformSummary[]> = {
@@ -458,7 +458,7 @@ export function registerYellowPagesIpcHandlers(): void {
 
     ipcMain.handle(YELLOW_PAGES_STATISTICS, async (event): Promise<CommonMessage<any | null>> => {
         try {
-            const yellowPagesCtrl = new YellowPagesController();
+            const yellowPagesCtrl = YellowPagesController.getInstance();
             const statistics = await yellowPagesCtrl.getTaskStatistics();
             
             const response: CommonMessage<any> = {

@@ -45,7 +45,7 @@ export class YellowPagesOrchestrator extends BaseModule implements ITaskManager 
         
         // Initialize all modules
         this.yellowPagesModule = new YellowPagesModule();
-        this.processManager = new YellowPagesProcessManager();
+        this.processManager = YellowPagesProcessManager.getInstance();
         this.browserManager = new BrowserManager();
         this.accountCookiesModule = new AccountCookiesModule();
         this.taskModel = new YellowPagesTaskModel(this.dbpath);

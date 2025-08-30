@@ -71,7 +71,7 @@ Core business logic for:
 
 ### Creating a Task
 ```typescript
-const controller = new YellowPagesController();
+const controller = YellowPagesController.getInstance();
 
 const taskData: YellowPagesTaskData = {
     name: "Restaurant Search - NYC",

@@ -32,8 +32,16 @@ import { PlatformSummary } from "@/interfaces/IPlatformConfig";
  * - BrowserManager for Puppeteer instance management
  * - AccountCookiesModule for authentication
  * - Database models for data persistence
+ * 
+ * Implemented as a Singleton to ensure:
+ * - Single instance across the application
+ * - Shared state for browser instances and process management
+ * - Consistent resource allocation
+ * - Centralized control over Yellow Pages operations
  */
 export class YellowPagesController {
+    private static instance: YellowPagesController | null = null;
+    
     private yellowPagesModule: YellowPagesModule;
     private taskModule: YellowPagesTaskModule;
     private resultModule: YellowPagesResultModule;
@@ -42,14 +50,46 @@ export class YellowPagesController {
     private browserManager: BrowserManager;
     private accountCookiesModule: AccountCookiesModule;
 
-    constructor() {
+    /**
+     * Private constructor to prevent direct instantiation
+     * Use getInstance() method to access the singleton instance
+     */
+    private constructor() {
         this.yellowPagesModule = new YellowPagesModule();
         this.taskModule = new YellowPagesTaskModule();
         this.resultModule = new YellowPagesResultModule();
         this.platformModule = new YellowPagesPlatformModule();
-        this.processManager = new YellowPagesProcessManager();
-        this.browserManager = new BrowserManager();
+        this.processManager = YellowPagesProcessManager.getInstance();
+        //this.browserManager = new BrowserManager();
         this.accountCookiesModule = new AccountCookiesModule();
+    }
+
+    /**
+     * Get the singleton instance of YellowPagesController
+     * Creates a new instance if one doesn't exist
+     * @returns The singleton instance of YellowPagesController
+     */
+    public static getInstance(): YellowPagesController {
+        if (YellowPagesController.instance === null) {
+            YellowPagesController.instance = new YellowPagesController();
+        }
+        return YellowPagesController.instance;
+    }
+
+    /**
+     * Reset the singleton instance (useful for testing or cleanup)
+     * @private - Use with caution, mainly for testing purposes
+     */
+    public static resetInstance(): void {
+        YellowPagesController.instance = null;
+    }
+
+    /**
+     * Check if a singleton instance exists
+     * @returns true if an instance exists, false otherwise
+     */
+    public static hasInstance(): boolean {
+        return YellowPagesController.instance !== null;
     }
 
     /**

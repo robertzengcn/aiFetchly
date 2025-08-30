@@ -52,19 +52,65 @@ interface ProcessInfo {
 type TaskData = StartTaskMessage['taskData'];
 type PlatformInfo = StartTaskMessage['platformInfo'];
 
+/**
+ * Yellow Pages Process Manager
+ * 
+ * Manages child processes for Yellow Pages scraping tasks.
+ * Handles process spawning, termination, and IPC communication.
+ * 
+ * Implemented as a Singleton to ensure:
+ * - Single instance across the application
+ * - Shared process state and management
+ * - Consistent process lifecycle control
+ * - Centralized process resource management
+ */
 export class YellowPagesProcessManager extends BaseModule {
+    private static instance: YellowPagesProcessManager | null = null;
+    
     private activeProcesses: Map<number, ProcessInfo> = new Map();
     private taskModel: YellowPagesTaskModel;
     private resultModel: YellowPagesResultModel;
     private platformRegistry: PlatformRegistry;
     private accountCookiesModule: AccountCookiesModule;
 
-    constructor() {
+    /**
+     * Private constructor to prevent direct instantiation
+     * Use getInstance() method to access the singleton instance
+     */
+    private constructor() {
         super();
         this.taskModel = new YellowPagesTaskModel(this.dbpath);
         this.resultModel = new YellowPagesResultModel(this.dbpath);
         this.platformRegistry = new PlatformRegistry();
         this.accountCookiesModule = new AccountCookiesModule();
+    }
+
+    /**
+     * Get the singleton instance of YellowPagesProcessManager
+     * Creates a new instance if one doesn't exist
+     * @returns The singleton instance of YellowPagesProcessManager
+     */
+    public static getInstance(): YellowPagesProcessManager {
+        if (YellowPagesProcessManager.instance === null) {
+            YellowPagesProcessManager.instance = new YellowPagesProcessManager();
+        }
+        return YellowPagesProcessManager.instance;
+    }
+
+    /**
+     * Reset the singleton instance (useful for testing or cleanup)
+     * @private - Use with caution, mainly for testing purposes
+     */
+    public static resetInstance(): void {
+        YellowPagesProcessManager.instance = null;
+    }
+
+    /**
+     * Check if a singleton instance exists
+     * @returns true if an instance exists, false otherwise
+     */
+    public static hasInstance(): boolean {
+        return YellowPagesProcessManager.instance !== null;
     }
 
     /**
@@ -806,6 +852,7 @@ export class YellowPagesProcessManager extends BaseModule {
             }
         } else {
             console.log(`No active process found for task ${taskId}`);
+            return false;
         }
     }
 

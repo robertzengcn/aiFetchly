@@ -8,7 +8,7 @@ export class YellowPagesHealthCheck extends BaseModule {
 
     constructor() {
         super();
-        this.processManager = new YellowPagesProcessManager();
+        this.processManager = YellowPagesProcessManager.getInstance();
         this.taskModel = new YellowPagesTaskModel(this.dbpath);
     }
 

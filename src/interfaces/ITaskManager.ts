@@ -189,6 +189,7 @@ export interface TaskSummary {
     platform: string;
     status: TaskStatus;
     created_at: Date;
+    updated_at?: Date;
     completed_at?: Date;
     results_count?: number;
     progress_percentage?: number;

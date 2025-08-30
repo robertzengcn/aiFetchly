@@ -22,13 +22,13 @@
                 size="x-small"
                 color="success"
                 class="ml-2"
-                :title="`${item.results_count} results available`"
+                :title="`${item.results_count} ${t('home.results_available')}`"
               >
-                {{ item.results_count }} results
+                {{ item.results_count }} {{ t('home.results') }}
               </v-chip>
             </div>
             <div class="text-caption text-medium-emphasis">
-              Platform: {{ item.platform }}
+              {{ t('home.platform') }}: {{ item.platform }}
             </div>
           </div>
         </div>
@@ -74,7 +74,7 @@
               color="primary"
               class="px-0 text-body-2 font-weight-medium results-button"
               @click="$emit('view-results', item)"
-              :title="`View ${item.results_count} results`"
+              :title="`${t('home.view_results')} ${item.results_count} ${t('home.results')}`"
             >
               <v-chip
                 size="x-small"
@@ -84,11 +84,11 @@
               >
                 {{ item.results_count }}
               </v-chip>
-              View Results
+              {{ t('home.view_results') }}
             </v-btn>
           </div>
           <div v-else class="text-caption text-grey-darken-1">
-            {{ item.status === TaskStatus.InProgress ? 'Collecting...' : 'No results' }}
+            {{ item.status === TaskStatus.InProgress ? t('home.collecting') : t('home.no_results') }}
           </div>
         </div>
       </template>
@@ -103,7 +103,7 @@
       <!-- Updated Date Column -->
       <template v-slot:item.updated_at="{ item }">
         <div class="text-caption">
-          {{ formatDate(item.created_at) }}
+          {{ item.updated_at ? formatDate(item.updated_at) : t('home.not_available') }}
         </div>
       </template>
 
@@ -122,7 +122,7 @@
 
           <!-- Start/Stop Button -->
           <v-btn
-            v-if="item.status === TaskStatus.Pending || item.status === TaskStatus.Paused||item.status === TaskStatus.Failed||item.status === TaskStatus.Completed"
+            v-if="item.status === TaskStatus.Pending ||item.status === TaskStatus.Failed||item.status === TaskStatus.Completed"
             icon="mdi-play"
             size="small"
             variant="text"
@@ -150,7 +150,7 @@
             color="warning"
             @click="$emit('pause', item)"
             class="mr-1"
-            title="Pause Task"
+            :title="t('home.pause_task')"
           ></v-btn>
 
           <v-btn
@@ -161,11 +161,11 @@
             color="success"
             @click="$emit('resume', item)"
             class="mr-1"
-            title="Resume Task"
+            :title="t('home.resume_task')"
           ></v-btn>
 
           <!-- View Results -->
-          <v-btn
+          <!-- <v-btn
             v-if="item.results_count && item.results_count > 0"
             icon="mdi-chart-bar"
             size="small"
@@ -173,8 +173,8 @@
             color="primary"
             @click="$emit('view-results', item)"
             class="mr-1"
-            :title="`View ${item.results_count} results`"
-          ></v-btn>
+                          :title="`${t('home.view_results')} ${item.results_count} ${t('home.results')}`"
+          ></v-btn> -->
 
           <!-- Edit Button -->
           <v-btn
@@ -235,7 +235,7 @@ const headers = computed(() => [
   { title: t('home.status'), key: 'status', sortable: true },
   { title: t('home.progress'), key: 'progress', sortable: true },
   { title: t('home.results'), key: 'results_count', sortable: true },
-  { title: t('home.created_time'), key: 'created_at', sortable: true },
+  { title: t('common.created_time'), key: 'created_at', sortable: true },
   { title: t('home.updated_time'), key: 'updated_at', sortable: true },
   { title: t('home.actions'), key: 'actions', sortable: false }
 ])
@@ -286,13 +286,13 @@ const getStatusIcon = (status?: TaskStatus) => {
 }
 
 const getStatusText = (status?: TaskStatus) => {
-  if (!status) return 'Unknown'
+  if (!status) return t('home.unknown')
   const texts = {
-    [TaskStatus.Pending]: 'Pending',
-    [TaskStatus.InProgress]: 'Running',
-    [TaskStatus.Completed]: 'Completed',
-    [TaskStatus.Failed]: 'Failed',
-    [TaskStatus.Paused]: 'Paused'
+    [TaskStatus.Pending]: t('home.pending'),
+    [TaskStatus.InProgress]: t('home.running'),
+    [TaskStatus.Completed]: t('home.completed'),
+    [TaskStatus.Failed]: t('home.failed'),
+    [TaskStatus.Paused]: t('home.paused')
   }
   return texts[status] || status
 }
@@ -308,12 +308,12 @@ const getProgressColor = (status?: TaskStatus) => {
 
 
 const formatDate = (date: Date | string) => {
-  if (!date) return 'N/A'
+  if (!date) return t('home.not_available')
   try {
     const dateObj = typeof date === 'string' ? new Date(date) : date
     return dateObj.toLocaleDateString()
   } catch {
-    return 'Invalid Date'
+    return t('home.invalid_date')
   }
 }
 </script>
