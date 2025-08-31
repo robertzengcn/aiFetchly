@@ -516,6 +516,12 @@ export class YellowPagesProcessManager extends BaseModule {
                 case 'TASK_PAUSED':
                     const pausedMessage = message.content || `Task ${taskId} paused successfully`;
                     console.log(pausedMessage);
+                    
+                    // Update task status to paused
+                    this.taskModel.updateTaskStatus(taskId, YellowPagesTaskStatus.Paused).catch(err => {
+                        console.error(`Failed to update task status to paused for task ${taskId}:`, err);
+                    });
+                    
                     // Send system message to frontend to notify user
                     sendSystemMessage({
                         status: true,
@@ -1111,7 +1117,23 @@ export class YellowPagesProcessManager extends BaseModule {
             
             const processInfo = this.activeProcesses.get(taskId);
             if (!processInfo) {
-                throw new Error(`No active process found for task ${taskId}`);
+                // Check if the task exists and what its current status is
+                try {
+                    const task = await this.taskModel.getTaskById(taskId);
+                    if (!task) {
+                        throw new Error(`Task ${taskId} not found`);
+                    }
+                    
+                    if (task.status === YellowPagesTaskStatus.Completed) {
+                        throw new Error(`Cannot pause task ${taskId} - task is already completed`);
+                    } else if (task.status === YellowPagesTaskStatus.Failed) {
+                        throw new Error(`Cannot pause task ${taskId} - task has failed and cannot be paused`);
+                    } else {
+                        throw new Error(`No active process found for task ${taskId} (status: ${task.status}). The task may have been terminated or crashed.`);
+                    }
+                } catch (statusError) {
+                    throw new Error(`No active process found for task ${taskId}: ${statusError instanceof Error ? statusError.message : String(statusError)}`);
+                }
             }
 
             // Send pause message to child process
@@ -1144,7 +1166,33 @@ export class YellowPagesProcessManager extends BaseModule {
             
             const processInfo = this.activeProcesses.get(taskId);
             if (!processInfo) {
-                throw new Error(`No active process found for task ${taskId}`);
+                console.log(`No active process found for task ${taskId}, attempting to restart the task`);
+                
+                // Check task status to ensure it can be resumed
+                try {
+                    const task = await this.taskModel.getTaskById(taskId);
+                    if (!task) {
+                        throw new Error(`Task ${taskId} not found`);
+                    }
+                    
+                    // Only restart if task is in a resumable state
+                    if (task.status === YellowPagesTaskStatus.Paused || 
+                        task.status === YellowPagesTaskStatus.Failed || 
+                        task.status === YellowPagesTaskStatus.InProgress) {
+                        
+                        console.log(`Task ${taskId} is in resumable state (${task.status}), restarting...`);
+                        
+                        // Try to restart the task by spawning a new process
+                        await this.spawnScraperProcess(taskId);
+                        console.log(`Successfully restarted Yellow Pages task ${taskId}`);
+                        return;
+                    } else {
+                        throw new Error(`Task ${taskId} is in state '${task.status}' which cannot be resumed`);
+                    }
+                } catch (restartError) {
+                    console.error(`Failed to restart task ${taskId}:`, restartError);
+                    throw new Error(`No active process found for task ${taskId} and failed to restart: ${restartError instanceof Error ? restartError.message : String(restartError)}`);
+                }
             }
 
             // Send resume message to child process

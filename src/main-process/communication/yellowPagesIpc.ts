@@ -168,22 +168,24 @@ export function registerYellowPagesIpcHandlers(): void {
         }
     });
 
-    ipcMain.handle(YELLOW_PAGES_RESUME, async (event, data): Promise<CommonMessage<void>> => {
+    ipcMain.handle(YELLOW_PAGES_RESUME, async (event, data): Promise<CommonMessage<number>> => {
         try {
             const yellowPagesCtrl = YellowPagesController.getInstance();
             const { id } = JSON.parse(data) as { id: number };
             await yellowPagesCtrl.resumeTask(id);
             
-            const response: CommonMessage<void> = {
+            const response: CommonMessage<number> = {
                 status: true,
-                msg: "yellow_pages.task_resumed_successfully"
+                msg: "yellow_pages.task_resumed_successfully",
+                data: id
             };
             return response;
         } catch (error) {
             console.error('Yellow Pages task resume error:', error);
-            const errorResponse: CommonMessage<void> = {
+            const errorResponse: CommonMessage<number> = {
                 status: false,
-                msg: error instanceof Error ? error.message : "Unknown error occurred"
+                msg: error instanceof Error ? error.message : "Unknown error occurred",
+                data: 0
             };
             return errorResponse;
         }

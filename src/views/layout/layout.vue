@@ -105,6 +105,18 @@
                 <div style="position: fixed; right: 20px; bottom: 100px; z-index: 99999">
                     <v-btn icon="mdi-cog" />
                 </div>
+                
+                <!-- Test button for multiple messages (remove in production) -->
+                <div style="position: fixed; right: 20px; bottom: 160px; z-index: 99999">
+                    <v-btn 
+                        color="primary" 
+                        size="small" 
+                        @click="testMultipleMessages"
+                        title="Test Multiple Messages"
+                    >
+                        Test Messages
+                    </v-btn>
+                </div>
             </header>
             <div class="router">
                 <RouterView />
@@ -118,6 +130,30 @@
               </v-card-text>
             </v-card>
           </v-dialog> -->
+          
+          <!-- Multiple Messages Display -->
+          <div class="messages-container">
+            <div
+              v-for="(msg, index) in messages"
+              :key="msg.id"
+              class="message-item"
+              :class="msg.type"
+            >
+              <div class="message-content">
+                <v-icon :icon="getMessageIcon(msg.type)" class="me-2" />
+                <span>{{ msg.message }}</span>
+                <v-btn
+                  variant="text"
+                  icon="mdi-close"
+                  size="small"
+                  @click="removeMessage(msg.id)"
+                  class="ms-2"
+                ></v-btn>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Legacy single message snackbar (can be removed later) -->
           <NoticeSnackbar
           v-model="showNotice"
           :message="noticeMessage"
@@ -147,12 +183,21 @@ import { getAppName } from '@/views/api/app'
 
 // import {ref, watchEffect} from "vue";
 type NoticeType = 'success' | 'error' | 'warning' | 'info';
+
+interface MessageItem {
+  id: string;
+  message: string;
+  type: NoticeType;
+  timestamp: number;
+}
+
 const dialogStatus=ref(false)
 const noticeMessage=ref('')
 const noticeType=ref<NoticeType>('info')
 const userName=ref('')
 const appName=ref('Social Marketing')
 const snaptimeout=ref<number>(10000)
+const messages = ref<MessageItem[]>([]);
 // const dialogTitle=ref('')
 // const dialogContent=ref('')
 const mainStore = useMainStore();
@@ -226,6 +271,54 @@ const getTranslatedTitle = (title: string): string => {
     }
     return title;
 }
+
+const getMessageIcon = (type: NoticeType): string => {
+    const icons = {
+        success: 'mdi-check-circle',
+        error: 'mdi-alert-circle',
+        warning: 'mdi-alert',
+        info: 'mdi-information'
+    };
+    return icons[type];
+};
+
+const removeMessage = (id: string) => {
+    const index = messages.value.findIndex(msg => msg.id === id);
+    if (index > -1) {
+        messages.value.splice(index, 1);
+    }
+};
+
+const addMessage = (type: NoticeType, content: string) => {
+    const message: MessageItem = {
+        id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
+        message: content,
+        type: type,
+        timestamp: Date.now()
+    };
+    messages.value.push(message);
+    
+    // Auto-remove message after timeout
+    setTimeout(() => {
+        removeMessage(message.id);
+    }, snaptimeout.value);
+};
+
+// Helper functions for different message types
+// Usage: Call these functions from anywhere in the component to show messages
+// Multiple messages will be displayed vertically without covering each other
+const showSuccessMessage = (content: string) => addMessage('success', content);
+const showErrorMessage = (content: string) => addMessage('error', content);
+const showWarningMessage = (content: string) => addMessage('warning', content);
+const showInfoMessage = (content: string) => addMessage('info', content);
+
+// Test function to demonstrate multiple messages (remove in production)
+const testMultipleMessages = () => {
+    showInfoMessage('Processing your request...');
+    setTimeout(() => showWarningMessage('This is a warning message'), 1000);
+    setTimeout(() => showSuccessMessage('Operation completed successfully!'), 2000);
+    setTimeout(() => showErrorMessage('This is an error message for testing'), 3000);
+};
 onMounted(async () => {
     await GetloginUserInfo().then(res=>{
         console.log(res)
@@ -252,9 +345,11 @@ onMounted(async () => {
 }
 )
 const showDialog=(status:boolean, content:string)=>{
-    // dialogTitle.value=title  
-    // dialogContent.value=content
-    // dialogStatus.value=status;
+    // Use the new message system for multiple messages
+    const messageType: NoticeType = status ? 'success' : 'error';
+    addMessage(messageType, content);
+    
+    // Keep the legacy single message system for backward compatibility
     showNotice.value=true
     if(status){
         noticeType.value='success'
@@ -262,7 +357,6 @@ const showDialog=(status:boolean, content:string)=>{
         noticeType.value='error'
     }
     noticeMessage.value=content
-
 
 //   setTimeout(() => {
 //     dialogStatus.value= false
@@ -272,5 +366,69 @@ const showDialog=(status:boolean, content:string)=>{
 <style scoped lang="scss">
 .dialog-bottom-right {
     bottom: 0;
-  }
+}
+
+.messages-container {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    z-index: 9999;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    max-width: 400px;
+    pointer-events: none;
+}
+
+.message-item {
+    pointer-events: auto;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    animation: slideInRight 0.3s ease-out;
+    transition: all 0.3s ease;
+    
+    &.success {
+        background-color: #4caf50;
+        color: white;
+    }
+    
+    &.error {
+        background-color: #f44336;
+        color: white;
+    }
+    
+    &.warning {
+        background-color: #ff9800;
+        color: white;
+    }
+    
+    &.info {
+        background-color: #2196f3;
+        color: white;
+    }
+}
+
+.message-content {
+    display: flex;
+    align-items: center;
+    padding: 12px 16px;
+    font-size: 14px;
+    line-height: 1.4;
+}
+
+@keyframes slideInRight {
+    from {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+.message-item:hover {
+    transform: translateX(-4px);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
+}
 </style>
