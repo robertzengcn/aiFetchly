@@ -9,6 +9,7 @@ import { YellowPagesComAdapter } from './YellowPagesComAdapter';
 import { YellowPagesCaAdapter } from './YellowPagesCaAdapter';
 import { ExampleClassBasedAdapter } from './ExampleClassBasedAdapter';
 import { Adapter11880 } from './11880Adapter';
+import { AdapterGelbeseiten } from './GelbeseitenAdapter';
 
 /**
  * Factory class for creating platform adapters
@@ -48,6 +49,9 @@ export class PlatformAdapterFactory {
             case 'Adapter11880':
                 return new Adapter11880(platformConfig);
                 
+            case 'AdapterGelbeseiten':
+                return new AdapterGelbeseiten(platformConfig);
+                
             default:
                 throw new Error(`Unknown adapter class: ${className}. Available classes: ${PlatformAdapterFactory.getAvailableAdapters().join(', ')}`);
         }
@@ -67,7 +71,8 @@ export class PlatformAdapterFactory {
             'YelpComAdapter',
             'YellowPagesCaAdapter',
             'ExampleClassBasedAdapter',
-            'Adapter11880'
+            'Adapter11880',
+            'AdapterGelbeseiten'
         ];
         return availableClasses.includes(className);
     }
@@ -85,7 +90,8 @@ export class PlatformAdapterFactory {
             'YelpComAdapter',
             'YellowPagesCaAdapter',
             'ExampleClassBasedAdapter',
-            'Adapter11880'
+            'Adapter11880',
+            'AdapterGelbeseiten'
         ];
     }
     
@@ -119,6 +125,9 @@ export class PlatformAdapterFactory {
                 
             case 'Adapter11880':
                 return Adapter11880;
+                
+            case 'AdapterGelbeseiten':
+                return AdapterGelbeseiten;
                 
             default:
                 throw new Error(`Unknown adapter class: ${className}. Available classes: ${PlatformAdapterFactory.getAvailableAdapters().join(', ')}`);

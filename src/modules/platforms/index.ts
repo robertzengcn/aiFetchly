@@ -7,6 +7,7 @@ export { YellowPagesComAdapter } from './YellowPagesComAdapter';
 export { YellowPagesCaAdapter } from './YellowPagesCaAdapter';
 export { ExampleClassBasedAdapter } from './ExampleClassBasedAdapter';
 export { Adapter11880 } from './11880Adapter';
+export { AdapterGelbeseiten } from './GelbeseitenAdapter';
 
 // Export the factory
 export { PlatformAdapterFactory } from './PlatformAdapterFactory';

@@ -1,0 +1,33 @@
+{
+  "id": "gelbeseiten",
+  "name": "Gelbeseiten",
+  "display_name": "Gelbeseiten.de",
+  "base_url": "https://www.gelbeseiten.de",
+  "country": "Germany",
+  "language": "de",
+  "is_active": true,
+  "version": "1.0.0",
+  "rate_limit": 100,
+  "delay_between_requests": 1000,
+  "max_concurrent_requests": 1,
+  "type": "class",
+  "class_name": "AdapterGelbeseiten",
+  "description": "German business directory platform for scraping business data",
+  "maintainer": "aiFetchly Team",
+  "documentation": "https://github.com/your-repo/aiFetchly",
+  "settings": {
+    "max_pages": 5,
+    "timeout": 10000,
+    "wait_for_network_idle": true
+  },
+  "metadata": {
+    "tags": ["german", "business-directory", "yellow-pages"],
+    "supported_features": [
+      "cookie_handling",
+      "location_services",
+      "german_language",
+      "business_data_extraction",
+      "pagination"
+    ]
+  }
+}
