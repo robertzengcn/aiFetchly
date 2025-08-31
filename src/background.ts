@@ -269,6 +269,22 @@ function initialize() {
       } catch (error) {
         log.error('Failed to initialize ScheduleManager:', error);
       }
+
+      // Check for orphaned Yellow Pages processes on startup
+      try {
+        const { YellowPagesController } = await import('./controller/YellowPagesController');
+        const yellowPagesCtrl = YellowPagesController.getInstance();
+        
+        // Handle tasks from previous session first
+        const previousSessionCount = await yellowPagesCtrl.handleTasksFromPreviousSession();
+        log.info(`Yellow Pages previous session tasks handled: ${previousSessionCount} tasks marked as failed`);
+        
+        // Then check for orphaned processes
+        const orphanedCheckResult = await yellowPagesCtrl.checkForOrphanedProcesses();
+        log.info('Yellow Pages orphaned process check completed:', orphanedCheckResult);
+      } catch (error) {
+        log.error('Failed to check for orphaned Yellow Pages processes:', error);
+      }
     }
     if(win){
     registerCommunicationIpcHandlers(win);

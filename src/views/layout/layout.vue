@@ -242,7 +242,7 @@ onMounted(async () => {
     }
     
     receiveSystemMessage((res:CommonDialogMsg)=>{
-       
+       console.log(res)
         //revice system message
         if(res.data){
             console.log(t(res.data.title))

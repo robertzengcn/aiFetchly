@@ -398,6 +398,53 @@ export class YellowPagesTaskModule extends BaseModule {
     }
 
     /**
+     * Handle tasks that were running before application restart
+     * This method should be called on application startup to identify
+     * and mark tasks that were in progress but are no longer running
+     * @returns Promise resolving to the number of tasks marked as failed
+     */
+    async handleTasksFromPreviousSession(): Promise<number> {
+        try {
+            console.log('Checking for tasks from previous application session...');
+            
+            // Get all tasks with status "InProgress" that have PIDs
+            const runningTasks = await this.getTasksByStatus(TaskStatus.InProgress);
+            const tasksWithPID = runningTasks.filter(task => task.pid && task.pid > 0);
+            
+            console.log(`Found ${tasksWithPID.length} tasks with PIDs from previous session`);
+            
+            let failedCount = 0;
+            
+            for (const task of tasksWithPID) {
+                try {
+                    // Mark task as failed since the process is no longer running
+                    await this.updateTaskStatus(task.id, TaskStatus.Failed);
+                    
+                    // Clear the PID since process is dead
+                    await this.yellowPagesTaskModel.clearTaskPID(task.id);
+                    
+                    // Add error log entry
+                    const errorMessage = `Task was running when application was restarted/crashed. Process PID: ${task.pid}. Task marked as failed.`;
+                    await this.yellowPagesTaskModel.updateTaskErrorLog(task.id, errorMessage);
+                    
+                    failedCount++;
+                    console.log(`Marked task ${task.id} (${task.name}) as failed due to application restart`);
+                    
+                } catch (error) {
+                    console.error(`Failed to handle task ${task.id} from previous session:`, error);
+                }
+            }
+            
+            console.log(`Successfully handled ${failedCount} tasks from previous session`);
+            return failedCount;
+            
+        } catch (error) {
+            console.error('Failed to handle tasks from previous session:', error);
+            throw new Error(`Failed to handle tasks from previous session: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+    }
+
+    /**
      * Convert entity to task summary format
      * @param entity The task entity
      * @returns The task summary

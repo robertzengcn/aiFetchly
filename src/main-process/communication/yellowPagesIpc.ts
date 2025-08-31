@@ -16,7 +16,8 @@ import {
     YELLOW_PAGES_HEALTH,
     YELLOW_PAGES_PLATFORMS,
     YELLOW_PAGES_STATISTICS,
-    YELLOW_PAGES_KILL_PROCESS
+    YELLOW_PAGES_KILL_PROCESS,
+    YELLOW_PAGES_CHECK_ORPHANED_PROCESSES
 } from '@/config/channellist';
 import { YellowPagesController } from '@/controller/YellowPagesController';
 import { CommonMessage } from "@/entityTypes/commonType";
@@ -469,6 +470,60 @@ export function registerYellowPagesIpcHandlers(): void {
             return response;
         } catch (error) {
             console.error('Yellow Pages statistics error:', error);
+            const errorResponse: CommonMessage<null> = {
+                status: false,
+                msg: error instanceof Error ? error.message : "Unknown error occurred",
+                data: null
+            };
+            return errorResponse;
+        }
+    });
+
+    // Check for orphaned processes on startup
+    ipcMain.handle(YELLOW_PAGES_CHECK_ORPHANED_PROCESSES, async (event): Promise<CommonMessage<{
+        totalChecked: number;
+        orphanedFound: number;
+        failedUpdates: number;
+    } | null>> => {
+        try {
+            const yellowPagesCtrl = YellowPagesController.getInstance();
+            const result = await yellowPagesCtrl.checkForOrphanedProcesses();
+            
+            const response: CommonMessage<{
+                totalChecked: number;
+                orphanedFound: number;
+                failedUpdates: number;
+            }> = {
+                status: true,
+                msg: "yellow_pages.orphaned_processes_checked_successfully",
+                data: result
+            };
+            return response;
+        } catch (error) {
+            console.error('Yellow Pages orphaned process check error:', error);
+            const errorResponse: CommonMessage<null> = {
+                status: false,
+                msg: error instanceof Error ? error.message : "Unknown error occurred",
+                data: null
+            };
+            return errorResponse;
+        }
+    });
+
+    // Handle tasks from previous session on startup
+    ipcMain.handle('yellow_pages:handle_previous_session', async (event): Promise<CommonMessage<number | null>> => {
+        try {
+            const yellowPagesCtrl = YellowPagesController.getInstance();
+            const failedCount = await yellowPagesCtrl.handleTasksFromPreviousSession();
+            
+            const response: CommonMessage<number> = {
+                status: true,
+                msg: "yellow_pages.previous_session_handled_successfully",
+                data: failedCount
+            };
+            return response;
+        } catch (error) {
+            console.error('Yellow Pages previous session handling error:', error);
             const errorResponse: CommonMessage<null> = {
                 status: false,
                 msg: error instanceof Error ? error.message : "Unknown error occurred",

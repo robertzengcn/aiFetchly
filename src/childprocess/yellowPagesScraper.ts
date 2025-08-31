@@ -381,7 +381,8 @@ export class YellowPagesScraperProcess {
         if (process.parentPort) {
             const pauseMessage = {
                 type: 'TASK_PAUSED',
-                taskId: this.taskData.taskId
+                taskId: this.taskData.taskId,
+                content: 'Task has been paused successfully'
             };
             process.parentPort.postMessage(pauseMessage);
         }
@@ -405,7 +406,8 @@ export class YellowPagesScraperProcess {
         if (process.parentPort) {
             const resumeMessage = {
                 type: 'TASK_RESUMED',
-                taskId: this.taskData.taskId
+                taskId: this.taskData.taskId,
+                content: 'Task has been resumed successfully'
             };
             process.parentPort.postMessage(resumeMessage);
         }
@@ -655,8 +657,12 @@ export class YellowPagesScraperProcess {
             await this.sessionManager.endSession(totalResults.length, totalResults);
             await this.sessionManager.saveSession();
         }
-
-        return totalResults;
+        
+        // Filter out duplicate results before returning
+        const uniqueResults = this.filterDuplicateResults(totalResults);
+        console.log(`🔍 Filtered ${totalResults.length} results to ${uniqueResults.length} unique results`);
+        
+        return uniqueResults;
     }
 
     /**
@@ -2309,6 +2315,7 @@ export class YellowPagesScraperProcess {
                 const cloudflareMessage = {
                     type: 'SCRAPING_CLOUDFLARE_DETECTED',
                     taskId: this.taskData.taskId,
+                    content: `Cloudflare protection detected at ${currentUrl}. Scraping has been automatically paused to avoid blocking. Manual intervention may be required.`,
                     details: {
                         url: currentUrl,
                         timestamp: timestamp,
@@ -2358,6 +2365,7 @@ export class YellowPagesScraperProcess {
                         const pauseNotificationMessage = {
                             type: 'SCRAPING_PAUSED_CLOUDFLARE',
                             taskId: this.taskData.taskId,
+                            content: `Scraping paused due to Cloudflare protection at ${currentUrl}. Please wait 15-30 minutes before retrying or manually verify the site is accessible.`,
                             details: {
                                 reason: 'Cloudflare protection detected',
                                 url: currentUrl,
@@ -2658,6 +2666,58 @@ export class YellowPagesScraperProcess {
     }
 
     /**
+     * Filter out duplicate results based on business name and other identifying fields
+     */
+    private filterDuplicateResults(results: ScrapingResult[]): ScrapingResult[] {
+        if (results.length <= 1) {
+            return results;
+        }
+
+        const uniqueResults: ScrapingResult[] = [];
+        const seenBusinesses = new Set<string>();
+
+        for (const result of results) {
+            if (!result.business_name) {
+                continue; // Skip results without business names
+            }
+
+            // Create a unique key for this business
+            const businessKey = this.createBusinessKey(result);
+            
+            if (!seenBusinesses.has(businessKey)) {
+                seenBusinesses.add(businessKey);
+                uniqueResults.push(result);
+            } else {
+                console.log(`🔄 Duplicate business filtered out: ${result.business_name}`);
+            }
+        }
+
+        return uniqueResults;
+    }
+
+    /**
+     * Create a unique key for a business to identify duplicates
+     */
+    private createBusinessKey(result: ScrapingResult): string {
+        const businessName = result.business_name.toLowerCase().trim();
+        
+        // Include location information if available to distinguish businesses with same name in different locations
+        let locationKey = '';
+        if (result.address) {
+            const city = result.address.city?.toLowerCase().trim() || '';
+            const state = result.address.state?.toLowerCase().trim() || '';
+            const zip = result.address.zip?.toLowerCase().trim() || '';
+            locationKey = `${city}${state}${zip}`;
+        }
+        
+        // Include phone number if available for additional uniqueness
+        const phoneKey = result.phone?.replace(/\D/g, '') || '';
+        
+        // Combine all identifying information
+        return `${businessName}|${locationKey}|${phoneKey}`;
+    }
+
+    /**
      * Convert BusinessData to ScrapingResult
      */
     private convertBusinessDataToScrapingResult(businessData: any): ScrapingResult {
@@ -2807,6 +2867,7 @@ process.parentPort.on('message', async (e) => {
             const errorMessage: ErrorMessage = {
                 type: 'ERROR',
                 taskId: message.taskData.taskId,
+                content: `Failed to initialize scraper: ${error instanceof Error ? error.message : String(error)}`,
                 error: error instanceof Error ? error.message : String(error)
             };
             process.parentPort?.postMessage(errorMessage);
@@ -2817,6 +2878,7 @@ process.parentPort.on('message', async (e) => {
             const progressMessage: ProgressMessage = {
                 type: 'PROGRESS',
                 taskId: message.taskData.taskId,
+                content: `Scraping progress: Page ${progress.currentPage}/${progress.totalPages} (${progress.percentage.toFixed(1)}%) - ${progress.resultsCount} results found`,
                 progress
             };
             process.parentPort?.postMessage(progressMessage);
@@ -2826,6 +2888,7 @@ process.parentPort.on('message', async (e) => {
             const completedMessage: CompletedMessage = {
                 type: 'COMPLETED',
                 taskId: message.taskData.taskId,
+                content: `Scraping completed successfully. Found ${results.length} business results.`,
                 results
             };
             process.parentPort?.postMessage(completedMessage);
@@ -2835,6 +2898,7 @@ process.parentPort.on('message', async (e) => {
             const errorMessage: ErrorMessage = {
                 type: 'ERROR',
                 taskId: message.taskData.taskId,
+                content: `Scraping failed with error: ${error.message}`,
                 error: error.message
             };
             process.parentPort?.postMessage(errorMessage);
@@ -2847,6 +2911,7 @@ process.parentPort.on('message', async (e) => {
             const errorMessage: ErrorMessage = {
                 type: 'ERROR',
                 taskId: message.taskData.taskId,
+                content: `Failed to start scraping: ${error instanceof Error ? error.message : String(error)}`,
                 error: error instanceof Error ? error.message : String(error)
             };
             process.parentPort?.postMessage(errorMessage);

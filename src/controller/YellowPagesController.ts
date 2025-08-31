@@ -296,12 +296,13 @@ export class YellowPagesController {
         try {
             console.log(`Resuming Yellow Pages task ${taskId}`);
             
-            // Update task status to running
-            await this.taskModule.updateTaskStatus(taskId, TaskStatus.InProgress);
             
             // Resume the task using the main module
             await this.yellowPagesModule.resumeTask(taskId);
             
+               // Update task status to running
+               await this.taskModule.updateTaskStatus(taskId, TaskStatus.InProgress);
+         
             console.log(`Successfully resumed Yellow Pages task ${taskId}`);
         } catch (error) {
             console.error(`Failed to resume Yellow Pages task ${taskId}:`, error);
@@ -709,5 +710,45 @@ export class YellowPagesController {
         entityUpdates.updated_at = new Date();
 
         return entityUpdates;
+    }
+
+    /**
+     * Check for orphaned processes on application startup
+     * This method should be called when the application starts to identify
+     * tasks that were running before a restart/crash and mark them as failed
+     * @returns Promise resolving to orphaned process check results
+     */
+    async checkForOrphanedProcesses(): Promise<{
+        totalChecked: number;
+        orphanedFound: number;
+        failedUpdates: number;
+    }> {
+        try {
+            console.log('YellowPagesController: Checking for orphaned processes...');
+            const result = await this.processManager.checkForOrphanedProcesses();
+            console.log('YellowPagesController: Orphaned process check completed:', result);
+            return result;
+        } catch (error) {
+            console.error('YellowPagesController: Failed to check for orphaned processes:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Handle tasks that were running before application restart
+     * This method should be called on application startup to identify
+     * and mark tasks that were in progress but are no longer running
+     * @returns Promise resolving to the number of tasks marked as failed
+     */
+    async handleTasksFromPreviousSession(): Promise<number> {
+        try {
+            console.log('YellowPagesController: Handling tasks from previous session...');
+            const failedCount = await this.taskModule.handleTasksFromPreviousSession();
+            console.log(`YellowPagesController: Successfully handled ${failedCount} tasks from previous session`);
+            return failedCount;
+        } catch (error) {
+            console.error('YellowPagesController: Failed to handle tasks from previous session:', error);
+            throw error;
+        }
     }
 }

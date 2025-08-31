@@ -447,29 +447,66 @@ export class YellowPagesProcessManager extends BaseModule {
                     break;
                 case 'SCRAPING_CAPTCHA_DETECTED':
                     console.log(`Task ${taskId}: CAPTCHA detected, may need manual intervention`);
+                    // Send system message to frontend to notify user
+                    sendSystemMessage({
+                        status: true,
+                        data: {
+                            title: 'CAPTCHA Detected',
+                            content: `Yellow Pages task ${taskId} has detected a CAPTCHA challenge. Manual intervention may be required to continue scraping.`
+                        }
+                    });
+                    // Log to error log for user notification
+                    if (processInfo?.logFiles) {
+                        const captchaMessage = `[${new Date().toISOString()}] CAPTCHA DETECTED: Task ${taskId} has detected a CAPTCHA challenge. Manual intervention may be required.`;
+                        WriteLog(processInfo.logFiles.errorLog, captchaMessage);
+                    }
                     break;
                 case 'SCRAPING_CLOUDFLARE_DETECTED':
                     if (message.type === 'SCRAPING_CLOUDFLARE_DETECTED') {
-                        console.log(`Task ${taskId}: Cloudflare protection detected at ${message.details?.url || 'unknown URL'}`);
+                        const contentMessage = message.content || `Cloudflare protection detected at ${message.details?.url || 'unknown URL'}`;
+                        console.log(`Task ${taskId}: ${contentMessage}`);
                         console.log(`Additional info: ${message.details?.additionalInfo || 'No additional info available'}`);
+                        
+                        // Send system message to frontend to notify user
+                        sendSystemMessage({
+                            status: true,
+                            data: {
+                                title: 'Cloudflare Protection Detected',
+                                content: `Yellow Pages task ${taskId} has detected Cloudflare protection. This may temporarily block scraping. URL: ${message.details?.url || 'unknown'}`
+                            }
+                        });
+                        
                         // Log to error log for user notification
                         if (processInfo?.logFiles) {
-                            const cloudflareMessage = `[${new Date().toISOString()}] CLOUDFLARE DETECTED: URL: ${message.details?.url || 'unknown'}, Timestamp: ${message.details?.timestamp || 'unknown'}, Info: ${message.details?.additionalInfo || 'No additional info'}`;
+                            const cloudflareMessage = `[${new Date().toISOString()}] CLOUDFLARE DETECTED: ${contentMessage}. URL: ${message.details?.url || 'unknown'}, Timestamp: ${message.details?.timestamp || 'unknown'}, Info: ${message.details?.additionalInfo || 'No additional info'}`;
                             WriteLog(processInfo.logFiles.errorLog, cloudflareMessage);
                         }
                     }
                     break;
                 case 'SCRAPING_PAUSED_CLOUDFLARE':
-                    console.log(`Task ${taskId}: Scraping paused due to Cloudflare protection`);
+                    const pauseContentMessage = message.content || 'Scraping paused due to Cloudflare protection';
+                    console.log(`Task ${taskId}: ${pauseContentMessage}`);
+                    
+                    // Send system message to frontend to notify user
+                    sendSystemMessage({
+                        status: true,
+                        data: {
+                            title: 'Scraping Paused - Cloudflare Protection',
+                            content: `Yellow Pages task ${taskId} has been paused due to Cloudflare protection. The task will remain paused until manually resumed.`
+                        }
+                    });
+                    
                     // Log to error log for user notification
                     if (processInfo?.logFiles) {
-                        const cloudflarePauseMessage = `[${new Date().toISOString()}] CLOUDFLARE PAUSE: Scraping paused due to Cloudflare protection. Manual intervention required - wait 15-30 minutes before retrying.`;
+                        const cloudflarePauseMessage = `[${new Date().toISOString()}] CLOUDFLARE PAUSE: ${pauseContentMessage}`;
                         WriteLog(processInfo.logFiles.errorLog, cloudflarePauseMessage);
                     }
+                    
                     // Update task status to paused due to Cloudflare protection
                     this.taskModel.updateTaskStatus(taskId, YellowPagesTaskStatus.Paused).catch(err => {
                         console.error(`Failed to update task status to paused for task ${taskId}:`, err);
                     });
+                    
                     // Update task error log with Cloudflare pause information
                     const cloudflarePauseErrorLog = `Scraping paused due to Cloudflare protection. Manual intervention required - wait 15-30 minutes before retrying.`;
                     this.taskModel.updateTaskErrorLog(taskId, cloudflarePauseErrorLog).catch(err => {
@@ -477,24 +514,26 @@ export class YellowPagesProcessManager extends BaseModule {
                     });
                     break;
                 case 'TASK_PAUSED':
-                    console.log(`Task ${taskId} paused successfully`);
+                    const pausedMessage = message.content || `Task ${taskId} paused successfully`;
+                    console.log(pausedMessage);
                     // Send system message to frontend to notify user
                     sendSystemMessage({
                         status: true,
                         data: {
                             title: 'Task Paused',
-                            content: `Yellow Pages task ${taskId} has been paused successfully.`
+                            content: message.content || `Yellow Pages task ${taskId} has been paused successfully.`
                         }
                     });
                     break;
                 case 'TASK_RESUMED':
-                    console.log(`Task ${taskId} resumed successfully`);
+                    const resumedMessage = message.content || `Task ${taskId} resumed successfully`;
+                    console.log(resumedMessage);
                     // Send system message to frontend to notify user
                     sendSystemMessage({
                         status: true,
                         data: {
                             title: 'Task Resumed',
-                            content: `Yellow Pages task ${taskId} has been resumed successfully.`
+                            content: message.content || `Yellow Pages task ${taskId} has been resumed successfully.`
                         }
                     });
                     break;
@@ -1155,6 +1194,154 @@ export class YellowPagesProcessManager extends BaseModule {
             
         } catch (error) {
             console.error(`Failed to send exit message for task ${taskId}:`, error);
+            throw error;
+        }
+    }
+
+    /**
+     * Check for orphaned processes on application startup
+     * This method should be called when the application starts to identify
+     * tasks that were running before a restart/crash and mark them as failed
+     */
+    async checkForOrphanedProcesses(): Promise<{
+        totalChecked: number;
+        orphanedFound: number;
+        failedUpdates: number;
+    }> {
+        try {
+            console.log('Checking for orphaned Yellow Pages processes...');
+            
+            // Get all tasks with status "InProgress" that have PIDs
+            const runningTasks = await this.taskModel.getTasksByStatus(YellowPagesTaskStatus.InProgress);
+            console.log(`Running tasks: ${runningTasks.length}`);
+            
+            // Separate tasks by PID status
+            const tasksWithValidPID = runningTasks.filter(task => task.pid !== undefined && task.pid !== null && task.pid > 0);
+            const tasksWithZeroPID = runningTasks.filter(task => task.pid === 0);
+            const tasksWithInvalidPID = runningTasks.filter(task => task.pid === undefined || task.pid === null);
+            
+            console.log(`Found ${tasksWithValidPID.length} tasks with valid PIDs to check`);
+            console.log(`Found ${tasksWithZeroPID.length} tasks with PID = 0 to handle`);
+            console.log(`Found ${tasksWithInvalidPID.length} tasks with undefined/null PID to handle`);
+            
+            let orphanedFound = 0;
+            let failedUpdates = 0;
+            
+            // Handle tasks with undefined/null PID - mark them as failed directly
+            for (const task of tasksWithInvalidPID) {
+                try {
+                    console.log(`Task ${task.id} has undefined/null PID, marking as failed directly`);
+                    
+                    // Mark task as failed
+                    await this.taskModel.updateTaskStatus(task.id, YellowPagesTaskStatus.Failed);
+                    
+                    // Clear the PID since it's invalid
+                    await this.taskModel.clearTaskPID(task.id);
+                    
+                    // Add error log entry
+                    const errorMessage = `Task marked as failed due to missing PID (PID is undefined/null). This indicates a task state corruption or initialization failure.`;
+                    await this.taskModel.updateTaskErrorLog(task.id, errorMessage);
+                    
+                    orphanedFound++;
+                    
+                    // Send system notification
+                    sendSystemMessage({
+                        status: true,
+                        data: {
+                            title: 'Missing PID Process Detected',
+                            content: `Task "${task.name}" (ID: ${task.id}) was marked as failed due to missing PID (undefined/null).`
+                        }
+                    });
+                } catch (error) {
+                    console.error(`Failed to update task ${task.id} with undefined/null PID:`, error);
+                    failedUpdates++;
+                }
+            }
+            
+            // Handle tasks with PID = 0 - mark them as failed directly
+            for (const task of tasksWithZeroPID) {
+                try {
+                    console.log(`Task ${task.id} has PID = 0, marking as failed directly`);
+                    
+                    // Mark task as failed
+                    await this.taskModel.updateTaskStatus(task.id, YellowPagesTaskStatus.Failed);
+                    
+                    // Clear the PID since it's invalid
+                    await this.taskModel.clearTaskPID(task.id);
+                    
+                    // Add error log entry
+                    const errorMessage = `Task marked as failed due to invalid PID (PID = 0). This indicates a process initialization failure.`;
+                    await this.taskModel.updateTaskErrorLog(task.id, errorMessage);
+                    
+                    orphanedFound++;
+                    
+                    // Send system notification
+                    sendSystemMessage({
+                        status: true,
+                        data: {
+                            title: 'Invalid PID Process Detected',
+                            content: `Task "${task.name}" (ID: ${task.id}) was marked as failed due to invalid PID (PID = 0).`
+                        }
+                    });
+                } catch (error) {
+                    console.error(`Failed to update task ${task.id} with PID = 0:`, error);
+                    failedUpdates++;
+                }
+            }
+            
+            // Handle tasks with valid PIDs - check if they're still running
+            for (const task of tasksWithValidPID) {
+                try {
+                    // Type guard to ensure PID is defined
+                    if (task.pid === undefined || task.pid === null) {
+                        console.warn(`Task ${task.id} has undefined/null PID, skipping`);
+                        continue;
+                    }
+                    
+                    // Check if the process is still running
+                    const isRunning = await this.checkProcessStatusByPID(task.pid);
+                    
+                    if (!isRunning.isRunning) {
+                        console.log(`Task ${task.id} (PID: ${task.pid}) process is no longer running, marking as failed`);
+                        
+                        // Mark task as failed
+                        await this.taskModel.updateTaskStatus(task.id, YellowPagesTaskStatus.Failed);
+                        
+                        // Clear the PID since process is dead
+                        await this.taskModel.clearTaskPID(task.id);
+                        
+                        // Add error log entry
+                        const errorMessage = `Process terminated unexpectedly (likely due to application restart/crash). PID: ${task.pid}`;
+                        await this.taskModel.updateTaskErrorLog(task.id, errorMessage);
+                        
+                        orphanedFound++;
+                        
+                        // Send system notification
+                        sendSystemMessage({
+                            status: true,
+                            data: {
+                                title: 'Orphaned Process Detected',
+                                content: `Task "${task.name}" (ID: ${task.id}) was marked as failed due to unexpected process termination.`
+                            }
+                        });
+                    }
+                } catch (error) {
+                    console.error(`Failed to check process ${task.pid} for task ${task.id}:`, error);
+                    failedUpdates++;
+                }
+            }
+            
+            const result = {
+                totalChecked: tasksWithValidPID.length + tasksWithZeroPID.length + tasksWithInvalidPID.length,
+                orphanedFound,
+                failedUpdates
+            };
+            
+            console.log(`Orphaned process check completed:`, result);
+            return result;
+            
+        } catch (error) {
+            console.error('Failed to check for orphaned processes:', error);
             throw error;
         }
     }

@@ -12,6 +12,7 @@ import { ScrapingProgress } from './IPCMessage';
 export interface BaseBackgroundMessage {
     type: string;
     taskId: number;
+    content?: string; // Optional descriptive content about the event
 }
 
 /**
