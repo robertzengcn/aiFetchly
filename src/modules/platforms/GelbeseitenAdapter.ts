@@ -182,4 +182,171 @@ export class AdapterGelbeseiten extends BasePlatformAdapter {
         });
     }
 
+    /**
+     * Extract email from detail page using Gelbeseiten-specific logic
+     * Handles complex patterns like data-link attributes containing mailto links
+     */
+    async extractEmailFromDetailPage(page: Page): Promise<string | undefined> {
+        try {
+            console.log('🔍 Attempting to extract email using Gelbeseiten-specific method');
+            
+            // Method 1: Look for email in data-link attributes (most common pattern)
+            const emailFromDataLink = await page.evaluate(() => {
+                // Find elements with data-link containing mailto
+                const elements = document.querySelectorAll('[data-link*="mailto:"]');
+                
+                for (const element of elements) {
+                    const dataLink = element.getAttribute('data-link');
+                    if (dataLink) {
+                        // Extract email from mailto: link
+                        const mailtoMatch = dataLink.match(/mailto:([^?&\s]+)/);
+                        if (mailtoMatch && mailtoMatch[1]) {
+                            console.log(`Found email in data-link: ${mailtoMatch[1]}`);
+                            return mailtoMatch[1];
+                        }
+                    }
+                }
+                return null;
+            });
+
+            if (emailFromDataLink) {
+                console.log(`📧 Extracted email from data-link: ${emailFromDataLink}`);
+                return emailFromDataLink;
+            }
+
+            // Method 2: Look for email button containers with specific IDs/classes
+            const emailFromButton = await page.evaluate(() => {
+                // Common Gelbeseiten email button patterns
+                const emailButtonSelectors = [
+                    '#email_versenden',
+                    '.email-button',
+                    '[data-wipe-realview*="e-mail-button"]',
+                    '[class*="email"]',
+                    '[id*="email"]'
+                ];
+
+                for (const selector of emailButtonSelectors) {
+                    const element = document.querySelector(selector);
+                    if (element) {
+                        // Check for data-link attribute
+                        const dataLink = element.getAttribute('data-link');
+                        if (dataLink && dataLink.includes('mailto:')) {
+                            const mailtoMatch = dataLink.match(/mailto:([^?&\s]+)/);
+                            if (mailtoMatch && mailtoMatch[1]) {
+                                console.log(`Found email in button data-link: ${mailtoMatch[1]}`);
+                                return mailtoMatch[1];
+                            }
+                        }
+
+                        // Check for href attribute
+                        const href = element.getAttribute('href');
+                        if (href && href.includes('mailto:')) {
+                            const mailtoMatch = href.match(/mailto:([^?&\s]+)/);
+                            if (mailtoMatch && mailtoMatch[1]) {
+                                console.log(`Found email in button href: ${mailtoMatch[1]}`);
+                                return mailtoMatch[1];
+                            }
+                        }
+
+                        // Check for onclick attribute
+                        const onclick = element.getAttribute('onclick');
+                        if (onclick && onclick.includes('mailto:')) {
+                            const mailtoMatch = onclick.match(/mailto:([^?&\s]+)/);
+                            if (mailtoMatch && mailtoMatch[1]) {
+                                console.log(`Found email in onclick: ${mailtoMatch[1]}`);
+                                return mailtoMatch[1];
+                            }
+                        }
+                    }
+                }
+                return null;
+            });
+
+            if (emailFromButton) {
+                console.log(`📧 Extracted email from button: ${emailFromButton}`);
+                return emailFromButton;
+            }
+
+            // Method 3: Look for encoded or obfuscated emails in script tags
+            const emailFromScript = await page.evaluate(() => {
+                const scripts = document.querySelectorAll('script');
+                
+                for (const script of scripts) {
+                    const scriptContent = script.textContent || script.innerHTML;
+                    if (scriptContent) {
+                        // Look for mailto patterns in JavaScript
+                        const mailtoMatches = scriptContent.match(/mailto:([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/g);
+                        if (mailtoMatches && mailtoMatches.length > 0) {
+                            const email = mailtoMatches[0].replace('mailto:', '');
+                            console.log(`Found email in script: ${email}`);
+                            return email;
+                        }
+
+                        // Look for email patterns in JavaScript variables
+                        const emailMatches = scriptContent.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g);
+                        if (emailMatches && emailMatches.length > 0) {
+                            console.log(`Found email pattern in script: ${emailMatches[0]}`);
+                            return emailMatches[0];
+                        }
+                    }
+                }
+                return null;
+            });
+
+            if (emailFromScript) {
+                console.log(`📧 Extracted email from script: ${emailFromScript}`);
+                return emailFromScript;
+            }
+
+            // Method 4: Look for hidden form fields or data attributes
+            const emailFromHiddenFields = await page.evaluate(() => {
+                // Check for hidden inputs with email values
+                const hiddenInputs = document.querySelectorAll('input[type="hidden"]');
+                
+                for (const input of hiddenInputs) {
+                    const value = input.getAttribute('value') || '';
+                    const name = input.getAttribute('name') || '';
+                    
+                    if (name.toLowerCase().includes('email') || value.includes('@')) {
+                        const emailMatch = value.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+                        if (emailMatch) {
+                            console.log(`Found email in hidden field: ${emailMatch[0]}`);
+                            return emailMatch[0];
+                        }
+                    }
+                }
+
+                // Check for data attributes containing emails
+                const allElements = document.querySelectorAll('*');
+                for (const element of allElements) {
+                    const attributes = element.attributes;
+                    for (let i = 0; i < attributes.length; i++) {
+                        const attr = attributes[i];
+                        if (attr.name.toLowerCase().includes('email') || attr.value.includes('@')) {
+                            const emailMatch = attr.value.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+                            if (emailMatch) {
+                                console.log(`Found email in data attribute: ${emailMatch[0]}`);
+                                return emailMatch[0];
+                            }
+                        }
+                    }
+                }
+
+                return null;
+            });
+
+            if (emailFromHiddenFields) {
+                console.log(`📧 Extracted email from hidden fields: ${emailFromHiddenFields}`);
+                return emailFromHiddenFields;
+            }
+
+            console.log('❌ No email found using Gelbeseiten-specific extraction methods');
+            return undefined;
+
+        } catch (error) {
+            console.error('Error in Gelbeseiten email extraction:', error);
+            return undefined;
+        }
+    }
+
 }

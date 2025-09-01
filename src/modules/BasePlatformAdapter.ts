@@ -147,6 +147,17 @@ export class BasePlatformAdapter implements IBasePlatformAdapter {
     }
 
     /**
+     * Extract email from detail page using platform-specific logic
+     * Default implementation returns undefined - can be overridden by subclasses
+     * This method should handle complex email extraction patterns like data attributes
+     */
+    async extractEmailFromDetailPage(page: Page): Promise<string | undefined> {
+        // Default implementation - no custom email extraction
+        // Subclasses can override this for platform-specific email extraction
+        return undefined;
+    }
+
+    /**
      * Build search URL for the platform
      */
     buildSearchUrl(keywords: string[], location: string, pageNum: number = 1): string {
@@ -283,7 +294,9 @@ export class BasePlatformAdapter implements IBasePlatformAdapter {
             console.log('No next page button found');
             return;
         }
-
+        await nextButton.evaluate((btn) => {
+            btn.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+        });
         await Promise.all([
             page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }),
             nextButton.click()

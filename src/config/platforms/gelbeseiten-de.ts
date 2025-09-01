@@ -16,7 +16,57 @@ export const Platform_gelbeseiten_de: PlatformConfig = {
   rate_limit: 100,
   delay_between_requests: 2000,
   max_concurrent_requests: 1,
-  // Selectors are now handled by the AdapterGelbeseiten class
+  selectors: {
+    searchForm: {
+      keywordInput: '#what_search',
+      locationInput: '#what_search',
+      searchButton: 'button.search_go',
+      formContainer: 'form[name="startpageForm"]',
+    },
+    businessList: '#gs_treffer',
+    businessItem: 'article.mod.mod-Treffer',
+    businessName: 'h2',
+    phone: '',
+    email: '',
+    website: '',
+    address: '',
+    address_city: '',
+    address_state: '',
+    address_zip: '',
+    address_country: '',
+    categories: '',
+    rating: '',
+    reviewCount: '',
+    description: '',
+    detailPageLink: '',
+    pagination: {
+      nextButton: '#mod-LoadMore--button',
+      currentPage: '',
+      maxPages: '',
+    },
+    navigation: {
+      required: true,
+      detailLink: 'h2',
+      delayAfterNavigation: 2000,
+      detailPage: {
+        businessName: 'h1',
+        fullAddress: 'address.mod-TeilnehmerKopf__adresse',
+        businessHours: '',
+        description: 'div.mod-Beschreibung',
+        contactInfo: '',
+        services: '',
+        additionalPhone: 'div.contains-icon-big-tel',
+        additionalEmail: '',
+        socialMedia: '',
+        categories: '',
+        yearEstablished: '',
+        numberOfEmployees: '',
+        paymentMethods: '',
+        specialties: '',
+        website: 'div.contains-icon-big-homepage a'
+      }
+    }
+  },
   // This configuration uses the class-based approach for better maintainability
   settings: {
     requiresAuthentication: false,
@@ -35,7 +85,7 @@ export const Platform_gelbeseiten_de: PlatformConfig = {
       PlatformFeature.BUSINESS_HOURS,
       PlatformFeature.CATEGORIES,
     ],
-    custom: {
+    custom: { 
       shadowRootCookieHandling: true,
       germanLanguageSupport: true,
       maxRetries: 3,

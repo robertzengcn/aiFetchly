@@ -525,12 +525,14 @@ export class YellowPagesScraperProcess {
         const hasCustomExtraction = this.adapter && this.adapterSupportsFeature('custom-extraction');
         const hasCustomPagination = this.adapter && this.adapterSupportsFeature('custom-pagination');
         const hasCustomPageLoad = this.adapter && this.adapterSupportsFeature('custom-page-load');
+        const hasCustomEmailExtraction = this.adapter && this.adapterSupportsFeature('custom-email-extraction');
 
         console.log(`🔧 Platform capabilities:`, {
             customSearch: hasCustomSearch,
             customExtraction: hasCustomExtraction,
             customPagination: hasCustomPagination,
             customPageLoad: hasCustomPageLoad,
+            customEmailExtraction: hasCustomEmailExtraction,
             adapterClass: this.platformInfo.adapterClass?.className || 'None'
         });
 
@@ -540,7 +542,8 @@ export class YellowPagesScraperProcess {
                 searchBusinesses: hasCustomSearch ? 'Custom' : 'Default',
                 extractBusinessData: hasCustomExtraction ? 'Custom' : 'Default',
                 handlePagination: hasCustomPagination ? 'Custom' : 'Default',
-                onPageLoad: hasCustomPageLoad ? 'Custom' : 'Default'
+                onPageLoad: hasCustomPageLoad ? 'Custom' : 'Default',
+                extractEmailFromDetailPage: hasCustomEmailExtraction ? 'Custom' : 'Default'
             });
         } else {
             console.log(`🔧 No platform adapter available, using configuration-based approach`);
@@ -1548,13 +1551,34 @@ export class YellowPagesScraperProcess {
             }
 
             // Extract additional email addresses if available
-            if (detailSelectors.additionalEmail) {
+            let emailExtracted = false;
+            
+            // First try adapter-specific email extraction if available
+            if (this.adapter && typeof this.adapter.extractEmailFromDetailPage === 'function') {
+                try {
+                    console.log('🔧 Using adapter-specific email extraction method');
+                    const adapterEmail = await this.adapter.extractEmailFromDetailPage(this.page!);
+                    if (adapterEmail && this.isValidEmail(adapterEmail)) {
+                        enhancedResult.email = adapterEmail;
+                        emailExtracted = true;
+                        console.log(`📧 Valid email extracted using adapter method: ${adapterEmail}`);
+                    } else if (adapterEmail) {
+                        console.log(`⚠️ Invalid email format from adapter method: ${adapterEmail}`);
+                    }
+                } catch (error) {
+                    console.warn('⚠️ Error in adapter email extraction method:', error);
+                }
+            }
+            
+            // If adapter method didn't find email, try standard selector-based extraction
+            if (!emailExtracted && detailSelectors.additionalEmail) {
+                console.log('🔧 Falling back to selector-based email extraction');
                 const additionalEmail = await this.extractTextFromPage(detailSelectors.additionalEmail);
                 if (additionalEmail && this.isValidEmail(additionalEmail)) {
                     enhancedResult.email = additionalEmail;
-                    console.log(`📧 Valid email extracted from detail page: ${additionalEmail}`);
+                    console.log(`📧 Valid email extracted from detail page selector: ${additionalEmail}`);
                 } else if (additionalEmail) {
-                    console.log(`⚠️ Invalid email format from detail page: ${additionalEmail}`);
+                    console.log(`⚠️ Invalid email format from detail page selector: ${additionalEmail}`);
                 }
             }
 
@@ -2641,6 +2665,8 @@ export class YellowPagesScraperProcess {
                 return this.adapter.handlePagination !== BasePlatformAdapter.prototype.handlePagination;
             case 'custom-page-load':
                 return this.adapter.onPageLoad !== BasePlatformAdapter.prototype.onPageLoad;
+            case 'custom-email-extraction':
+                return this.adapter.extractEmailFromDetailPage !== BasePlatformAdapter.prototype.extractEmailFromDetailPage;
             default:
                 return false;
         }
@@ -2661,6 +2687,7 @@ export class YellowPagesScraperProcess {
         if (this.adapter.extractBusinessData !== BasePlatformAdapter.prototype.extractBusinessData) capabilities.push('custom-extraction');
         if (this.adapter.handlePagination !== BasePlatformAdapter.prototype.handlePagination) capabilities.push('custom-pagination');
         if (this.adapter.onPageLoad !== BasePlatformAdapter.prototype.onPageLoad) capabilities.push('custom-page-load');
+        if (this.adapter.extractEmailFromDetailPage !== BasePlatformAdapter.prototype.extractEmailFromDetailPage) capabilities.push('custom-email-extraction');
 
         return capabilities;
     }
