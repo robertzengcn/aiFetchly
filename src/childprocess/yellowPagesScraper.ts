@@ -688,10 +688,11 @@ export class YellowPagesScraperProcess {
             await this.sleep(1000);
         }
 
-        // Now loop through pages for this keyword without re-inputting
-        for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
-            if (!this.isRunning) break;
-
+        // Enhanced pagination loop that supports both traditional pagination and "load more" functionality
+        let currentPage = 1;
+        let hasMoreContent = true;
+        
+        while (currentPage <= maxPages && hasMoreContent && this.isRunning) {
             // Wait if paused
             while (this.isPaused && this.isRunning) {
                 await this.sleep(1000);
@@ -700,7 +701,7 @@ export class YellowPagesScraperProcess {
             try {
                 let results: ScrapingResult[] = [];
 
-                if (pageNum === 1) {
+                if (currentPage === 1) {
                     // For first page, we're already on the search results
                     if (useCustomExtraction && this.adapter) {
                         // Use adapter's custom data extraction
@@ -712,8 +713,13 @@ export class YellowPagesScraperProcess {
                         results = await this.extractBusinessData();
                     }
                 } else {
-                    // For subsequent pages, navigate to the page without re-inputting keyword
-                    await this.navigateToPage(pageNum);
+                    // For subsequent pages, use enhanced pagination handling
+                    hasMoreContent = await this.handleEnhancedPagination(currentPage - 1, maxPages);
+                    
+                    if (!hasMoreContent) {
+                        console.log(`⚠️ No more content available, stopping pagination`);
+                        break;
+                    }
                     
                     // Wait if paused
                     while (this.isPaused && this.isRunning) {
@@ -734,15 +740,15 @@ export class YellowPagesScraperProcess {
                 // Add results to total
                 if (results.length > 0) {
                     totalResults.push(...results);
-                    console.log(`Found ${results.length} results from page ${pageNum}`);
+                    console.log(`Found ${results.length} results from page ${currentPage}`);
                 }
 
                 // Report progress
                 const progress: ScrapingProgress = {
-                    currentPage: pageNum,
+                    currentPage: currentPage,
                     totalPages: maxPages,
                     resultsCount: totalResults.length,
-                    percentage: (pageNum / maxPages) * 100
+                    percentage: (currentPage / maxPages) * 100
                 };
                 this.reportProgress(progress);
 
@@ -760,14 +766,17 @@ export class YellowPagesScraperProcess {
                     }
                 }
 
-                // Delay between requests
-                if (pageNum < maxPages) {
+                // Delay between requests and increment page counter
+                if (currentPage < maxPages && hasMoreContent) {
                     await this.sleep(delayBetweenRequests);
                 }
+                
+                currentPage++;
 
             } catch (error) {
-                console.error(`Error scraping page ${pageNum}:`, error);
+                console.error(`Error scraping page ${currentPage}:`, error);
                 // Continue with next page
+                currentPage++;
             }
         }
     }
@@ -1275,6 +1284,9 @@ export class YellowPagesScraperProcess {
             const businessElements = await this.page.$$(selectors.businessItem);
             console.log(`Found ${businessElements.length} business listings`);
             
+            // Track processed businesses to prevent duplicates when platforms add more results to current page
+            const processedBusinessIds = new Set<string>();
+            
             // Store selectors for re-querying after page re-renders
             const businessSelectors = {
                 businessItem: selectors.businessItem,
@@ -1329,6 +1341,18 @@ export class YellowPagesScraperProcess {
                         }
                     }
                     
+                    // Generate a unique identifier for this business to prevent duplicates
+                    const businessId = await this.generateBusinessIdentifier(currentElement, businessSelectors);
+                    
+                    // Check if this business has already been processed
+                    if (processedBusinessIds.has(businessId)) {
+                        console.log(`🔄 Skipping duplicate business: ${businessId}`);
+                        continue;
+                    }
+                    
+                    // Mark this business as processed
+                    processedBusinessIds.add(businessId);
+                    
                     const result = await this.extractBusinessFromElement(currentElement, businessSelectors);
                     console.log(`📊 Extraction result for item ${itemNumber}:`, result?.business_name || 'No business name found');
                     if (result) {
@@ -1352,6 +1376,11 @@ export class YellowPagesScraperProcess {
                                 // Update the businessElements array with fresh references
                                 businessElements.splice(0, businessElements.length, ...refreshedElements);
                                 console.log(`✅ Refreshed ${businessElements.length} business elements after item ${itemNumber}`);
+                                
+                                // Check if new businesses were added (indicating "load more" functionality)
+                                if (refreshedElements.length > processedBusinessIds.size) {
+                                    console.log(`🆕 Detected ${refreshedElements.length - processedBusinessIds.size} new businesses added to page`);
+                                }
                             }
                         } else {
                             results.push(result);
@@ -1375,6 +1404,337 @@ export class YellowPagesScraperProcess {
         }
 
         return results;
+    }
+
+    /**
+     * Generate a unique identifier for a business to prevent duplicate extraction
+     * Uses business name, phone, and address to create a reliable identifier
+     */
+    private async generateBusinessIdentifier(element: any, selectors: any): Promise<string> {
+        try {
+            const identifierParts: string[] = [];
+            
+            // Extract business name
+            if (selectors.businessName) {
+                const name = await element.$(selectors.businessName);
+                if (name) {
+                    const nameText = await name.evaluate(el => el.textContent?.trim() || '');
+                    if (nameText) {
+                        identifierParts.push(`name:${nameText.toLowerCase()}`);
+                    }
+                }
+            }
+            
+            // Extract phone number
+            if (selectors.phone) {
+                const phone = await element.$(selectors.phone);
+                if (phone) {
+                    const phoneText = await phone.evaluate(el => el.textContent?.trim() || '');
+                    if (phoneText) {
+                        // Clean phone number to standardize format
+                        const cleanPhone = phoneText.replace(/[^\d+]/g, '');
+                        if (cleanPhone) {
+                            identifierParts.push(`phone:${cleanPhone}`);
+                        }
+                    }
+                }
+            }
+            
+            // Extract address
+            if (selectors.address) {
+                const address = await element.$(selectors.address);
+                if (address) {
+                    const addressText = await address.evaluate(el => el.textContent?.trim() || '');
+                    if (addressText) {
+                        identifierParts.push(`addr:${addressText.toLowerCase()}`);
+                    }
+                }
+            }
+            
+            // Extract website URL
+            if (selectors.website) {
+                const website = await element.$(selectors.website);
+                if (website) {
+                    const websiteUrl = await website.evaluate(el => el.getAttribute('href') || '');
+                    if (websiteUrl) {
+                        identifierParts.push(`url:${websiteUrl.toLowerCase()}`);
+                    }
+                }
+            }
+            
+            // If we have enough data, create a hash-like identifier
+            if (identifierParts.length > 0) {
+                return identifierParts.join('|');
+            }
+            
+            // Fallback: use element position and basic text content
+            const fallbackText = await element.evaluate(el => el.textContent?.trim() || '');
+            const elementIndex = await element.evaluate(el => {
+                const parent = el.parentElement;
+                if (parent) {
+                    return Array.from(parent.children).indexOf(el);
+                }
+                return 0;
+            });
+            
+            return `fallback:${elementIndex}:${fallbackText.substring(0, 50).toLowerCase()}`;
+            
+        } catch (error) {
+            console.warn('Error generating business identifier:', error);
+            // Ultimate fallback: use timestamp and element reference
+            return `error:${Date.now()}:${Math.random()}`;
+        }
+    }
+
+    /**
+     * Check if the platform uses "load more" functionality instead of traditional pagination
+     * This helps prevent duplicate extraction when new results are added to the current page
+     */
+    private async detectLoadMoreFunctionality(): Promise<boolean> {
+        if (!this.page) return false;
+
+        try {
+            // Common "load more" button selectors
+            const loadMoreSelectors = [
+                'button[data-testid="load-more"]',
+                'button[data-testid="loadMore"]',
+                'button[data-testid="show-more"]',
+                'button[data-testid="showMore"]',
+                'button:contains("Load More")',
+                'button:contains("Show More")',
+                'button:contains("Load more")',
+                'button:contains("Show more")',
+                'a[data-testid="load-more"]',
+                'a[data-testid="loadMore"]',
+                'a:contains("Load More")',
+                'a:contains("Show More")',
+                '.load-more',
+                '.loadMore',
+                '.show-more',
+                '.showMore',
+                '[class*="load-more"]',
+                '[class*="loadMore"]',
+                '[class*="show-more"]',
+                '[class*="showMore"]'
+            ];
+
+            for (const selector of loadMoreSelectors) {
+                try {
+                    const loadMoreButton = await this.page.$(selector);
+                    if (loadMoreButton) {
+                        const isVisible = await loadMoreButton.isVisible();
+                        if (isVisible) {
+                            console.log(`🔍 Detected "Load More" functionality with selector: ${selector}`);
+                            return true;
+                        }
+                    }
+                } catch (error) {
+                    continue;
+                }
+            }
+
+            // Check for infinite scroll indicators
+            const infiniteScrollIndicators = [
+                '[data-testid="infinite-scroll"]',
+                '[class*="infinite-scroll"]',
+                '[class*="infiniteScroll"]',
+                '.infinite-scroll',
+                '.infiniteScroll'
+            ];
+
+            for (const selector of infiniteScrollIndicators) {
+                try {
+                    const indicator = await this.page.$(selector);
+                    if (indicator) {
+                        console.log(`🔍 Detected infinite scroll functionality with selector: ${selector}`);
+                        return true;
+                    }
+                } catch (error) {
+                    continue;
+                }
+            }
+
+            return false;
+        } catch (error) {
+            console.warn('Error detecting load more functionality:', error);
+            return false;
+        }
+    }
+
+    /**
+     * Handle "load more" functionality by clicking the load more button and waiting for new content
+     */
+    private async handleLoadMoreFunctionality(): Promise<boolean> {
+        if (!this.page) return false;
+
+        try {
+            // Common "load more" button selectors
+            const loadMoreSelectors = [
+                'button[data-testid="load-more"]',
+                'button[data-testid="loadMore"]',
+                'button[data-testid="show-more"]',
+                'button[data-testid="showMore"]',
+                'button:contains("Load More")',
+                'button:contains("Show More")',
+                'button:contains("Load more")',
+                'button:contains("Show more")',
+                'a[data-testid="load-more"]',
+                'a[data-testid="loadMore"]',
+                'a:contains("Load More")',
+                'a:contains("Show More")',
+                '.load-more',
+                '.loadMore',
+                '.show-more',
+                '.showMore',
+                '[class*="load-more"]',
+                '[class*="loadMore"]',
+                '[class*="show-more"]',
+                '[class*="showMore"]'
+            ];
+
+            for (const selector of loadMoreSelectors) {
+                try {
+                    const loadMoreButton = await this.page.$(selector);
+                    if (loadMoreButton) {
+                        const isVisible = await loadMoreButton.isVisible();
+                        const isClickable = await loadMoreButton.evaluate(el => {
+                            const rect = el.getBoundingClientRect();
+                            const style = window.getComputedStyle(el);
+                            const htmlEl = el as HTMLElement;
+                            const buttonEl = el as HTMLButtonElement;
+                            return rect.width > 0 && 
+                                   rect.height > 0 && 
+                                   style.display !== 'none' && 
+                                   style.visibility !== 'hidden' && 
+                                   !buttonEl.disabled &&
+                                   htmlEl.offsetParent !== null;
+                        });
+
+                        if (isVisible && isClickable) {
+                            console.log(`🔄 Clicking "Load More" button with selector: ${selector}`);
+                            
+                            // Store current number of business elements
+                            const currentBusinessCount = await this.page.$$(this.platformInfo.selectors.businessItem).then(elements => elements.length);
+                            
+                            // Click the load more button
+                            await loadMoreButton.click();
+                            
+                            // Wait for new content to load
+                            await this.sleep(3000);
+                            
+                            // Wait for new business elements to appear
+                            await this.page.waitForFunction(
+                                (selector, previousCount) => {
+                                    const elements = document.querySelectorAll(selector);
+                                    return elements.length > previousCount;
+                                },
+                                { timeout: 10000 },
+                                this.platformInfo.selectors.businessItem,
+                                currentBusinessCount
+                            );
+                            
+                            // Get new count
+                            const newBusinessCount = await this.page.$$(this.platformInfo.selectors.businessItem).then(elements => elements.length);
+                            const newBusinesses = newBusinessCount - currentBusinessCount;
+                            
+                            console.log(`✅ Loaded ${newBusinesses} new businesses (${currentBusinessCount} → ${newBusinessCount})`);
+                            return true;
+                        }
+                    }
+                } catch (error) {
+                    continue;
+                }
+            }
+
+            return false;
+        } catch (error) {
+            console.warn('Error handling load more functionality:', error);
+            return false;
+        }
+    }
+
+    /**
+     * Enhanced pagination handling that supports both traditional pagination and "load more" functionality
+     */
+    private async handleEnhancedPagination(currentPage: number, maxPages: number): Promise<boolean> {
+        if (!this.page) return false;
+
+        try {
+            // First, check if this platform uses "load more" functionality
+            const usesLoadMore = await this.detectLoadMoreFunctionality();
+            
+            if (usesLoadMore) {
+                console.log(`🔄 Platform uses "Load More" functionality instead of traditional pagination`);
+                
+                // Try to load more content
+                const loadedMore = await this.handleLoadMoreFunctionality();
+                if (loadedMore) {
+                    return true; // Successfully loaded more content
+                } else {
+                    console.log(`⚠️ No more content to load or load more button not available`);
+                    return false; // No more content available
+                }
+            } else {
+                // Use traditional pagination
+                console.log(`📄 Using traditional pagination for page ${currentPage + 1}`);
+                return await this.navigateToNextPage();
+            }
+        } catch (error) {
+            console.error('Error in enhanced pagination handling:', error);
+            return false;
+        }
+    }
+
+    /**
+     * Navigate to next page using traditional pagination
+     */
+    private async navigateToNextPage(): Promise<boolean> {
+        if (!this.page) return false;
+
+        try {
+            const selectors = this.platformInfo.selectors;
+            
+            // Check if platform has pagination selectors defined
+            if (selectors.pagination && typeof selectors.pagination === 'object' && selectors.pagination.nextButton) {
+                const nextButton = await this.page.$(selectors.pagination.nextButton);
+                if (nextButton) {
+                    const isClickable = await nextButton.evaluate(el => {
+                        const rect = el.getBoundingClientRect();
+                        const style = window.getComputedStyle(el);
+                        const htmlEl = el as HTMLElement;
+                        const buttonEl = el as HTMLButtonElement;
+                        return rect.width > 0 && 
+                               rect.height > 0 && 
+                               style.display !== 'none' && 
+                               style.visibility !== 'hidden' && 
+                               !buttonEl.disabled &&
+                               htmlEl.offsetParent !== null;
+                    });
+
+                    if (isClickable) {
+                        console.log(`🔄 Clicking next page button: ${selectors.pagination.nextButton}`);
+                        await nextButton.click();
+                        
+                        // Wait for navigation to complete
+                        await this.page.waitForNavigation({
+                            waitUntil: 'networkidle2',
+                            timeout: 30000
+                        });
+                        
+                        // Wait for new results to load
+                        await this.page.waitForSelector(selectors.businessList, { timeout: 10000 });
+                        
+                        console.log(`✅ Successfully navigated to next page`);
+                        return true;
+                    }
+                }
+            }
+            
+            return false;
+        } catch (error) {
+            console.error('Error navigating to next page:', error);
+            return false;
+        }
     }
 
     /**
