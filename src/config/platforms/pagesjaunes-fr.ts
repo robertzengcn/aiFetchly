@@ -26,7 +26,7 @@ export const Platform_pagesjaunes_fr: PlatformConfig = {
     },
     businessList: 'div.main-content',
     businessItem: '#listResults ul li.bi',
-    businessName: 'div.bi-header-title',
+    businessName: 'h3',
     phone: '',
     email: '',
     website: '',

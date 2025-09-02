@@ -534,6 +534,12 @@ export class YellowPagesProcessManager extends BaseModule {
                 case 'TASK_RESUMED':
                     const resumedMessage = message.content || `Task ${taskId} resumed successfully`;
                     console.log(resumedMessage);
+                    
+                    // Update task status to in-progress
+                    this.taskModel.updateTaskStatus(taskId, YellowPagesTaskStatus.InProgress).catch(err => {
+                        console.error(`Failed to update task status to in-progress for task ${taskId}:`, err);
+                    });
+                    
                     // Send system message to frontend to notify user
                     sendSystemMessage({
                         status: true,

@@ -10,6 +10,8 @@ import { YellowPagesCaAdapter } from './YellowPagesCaAdapter';
 import { ExampleClassBasedAdapter } from './ExampleClassBasedAdapter';
 import { Adapter11880 } from './11880Adapter';
 import { AdapterGelbeseiten } from './GelbeseitenAdapter';
+import { PagesJaunesAdapter } from './PagesJaunesAdapter';
+import { PagineGialleItAdapter } from './PagineGialleItAdapter';
 
 /**
  * Factory class for creating platform adapters
@@ -52,6 +54,12 @@ export class PlatformAdapterFactory {
             case 'AdapterGelbeseiten':
                 return new AdapterGelbeseiten(platformConfig);
                 
+            case 'PagesJaunesAdapter':
+                return new PagesJaunesAdapter(platformConfig);
+                
+            case 'PagineGialleItAdapter':
+                return new PagineGialleItAdapter(platformConfig);
+                
             default:
                 throw new Error(`Unknown adapter class: ${className}. Available classes: ${PlatformAdapterFactory.getAvailableAdapters().join(', ')}`);
         }
@@ -72,7 +80,9 @@ export class PlatformAdapterFactory {
             'YellowPagesCaAdapter',
             'ExampleClassBasedAdapter',
             'Adapter11880',
-            'AdapterGelbeseiten'
+            'AdapterGelbeseiten',
+            'PagesJaunesAdapter',
+            'PagineGialleItAdapter'
         ];
         return availableClasses.includes(className);
     }
@@ -91,7 +101,9 @@ export class PlatformAdapterFactory {
             'YellowPagesCaAdapter',
             'ExampleClassBasedAdapter',
             'Adapter11880',
-            'AdapterGelbeseiten'
+            'AdapterGelbeseiten',
+            'PagesJaunesAdapter',
+            'PagineGialleItAdapter'
         ];
     }
     
@@ -128,6 +140,12 @@ export class PlatformAdapterFactory {
                 
             case 'AdapterGelbeseiten':
                 return AdapterGelbeseiten;
+                
+            case 'PagesJaunesAdapter':
+                return PagesJaunesAdapter;
+                
+            case 'PagineGialleItAdapter':
+                return PagineGialleItAdapter;
                 
             default:
                 throw new Error(`Unknown adapter class: ${className}. Available classes: ${PlatformAdapterFactory.getAvailableAdapters().join(', ')}`);

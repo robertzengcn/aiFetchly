@@ -527,6 +527,7 @@ export class YellowPagesScraperProcess {
         const hasCustomPageLoad = this.adapter && this.adapterSupportsFeature('custom-page-load');
         const hasCustomEmailExtraction = this.adapter && this.adapterSupportsFeature('custom-email-extraction');
         const hasCustomPhoneExtraction = this.adapter && this.adapterSupportsFeature('custom-phone-extraction');
+        const hasCustomWebsiteExtraction = this.adapter && this.adapterSupportsFeature('custom-website-extraction');
 
         console.log(`🔧 Platform capabilities:`, {
             customSearch: hasCustomSearch,
@@ -535,6 +536,7 @@ export class YellowPagesScraperProcess {
             customPageLoad: hasCustomPageLoad,
             customEmailExtraction: hasCustomEmailExtraction,
             customPhoneExtraction: hasCustomPhoneExtraction,
+            customWebsiteExtraction: hasCustomWebsiteExtraction,
             adapterClass: this.platformInfo.adapterClass?.className || 'None'
         });
 
@@ -546,7 +548,8 @@ export class YellowPagesScraperProcess {
                 handlePagination: hasCustomPagination ? 'Custom' : 'Default',
                 onPageLoad: hasCustomPageLoad ? 'Custom' : 'Default',
                 extractEmailFromDetailPage: hasCustomEmailExtraction ? 'Custom' : 'Default',
-                extractPhoneNumberWithReveal: hasCustomPhoneExtraction ? 'Custom' : 'Default'
+                extractPhoneNumberWithReveal: hasCustomPhoneExtraction ? 'Custom' : 'Default',
+                extractWebsiteWithReveal: hasCustomWebsiteExtraction ? 'Custom' : 'Default'
             });
         } else {
             console.log(`🔧 No platform adapter available, using configuration-based approach`);
@@ -1428,20 +1431,9 @@ export class YellowPagesScraperProcess {
                 }
             }
             
-            // Extract phone number using adapter method if available
+            // Extract phone number for identifier (basic extraction only)
             let phoneText: string | undefined = undefined;
-            
-            // First try adapter-specific phone extraction if available
-            if (this.adapter && typeof this.adapter.extractPhoneNumberWithReveal === 'function') {
-                try {
-                    phoneText = await this.adapter.extractPhoneNumberWithReveal(this.page!, element);
-                } catch (error) {
-                    console.warn('Error extracting phone for identifier using adapter:', error);
-                }
-            }
-            
-            // Fallback to basic phone extraction if adapter method didn't work
-            if (!phoneText && selectors.phone) {
+            if (selectors.phone) {
                 const phone = await element.$(selectors.phone);
                 if (phone) {
                     phoneText = await phone.evaluate(el => el.textContent?.trim() || '');
@@ -1880,6 +1872,22 @@ export class YellowPagesScraperProcess {
             }
         }
 
+        // Use adapter-specific website extraction if available (for detail page)
+        if (this.adapter && typeof this.adapter.extractWebsiteWithReveal === 'function') {
+            try {
+                console.log('🔧 Using adapter-specific website extraction method on detail page');
+                const adapterWebsite = await this.adapter.extractWebsiteWithReveal(this.page!, null);
+                if (adapterWebsite && this.isValidWebsiteUrl(adapterWebsite)) {
+                    enhancedResult.website = adapterWebsite;
+                    console.log(`🌐 Valid website extracted using adapter method on detail page: ${adapterWebsite}`);
+                } else if (adapterWebsite) {
+                    console.log(`⚠️ Invalid website format from adapter method on detail page: ${adapterWebsite}`);
+                }
+            } catch (error) {
+                console.warn('⚠️ Error in adapter website extraction method on detail page:', error);
+            }
+        }
+
         // Extract full address if available
             if (detailSelectors.fullAddress) {
                 const fullAddress = await this.extractTextFromPage(detailSelectors.fullAddress);
@@ -1924,6 +1932,22 @@ export class YellowPagesScraperProcess {
             if (detailSelectors.additionalPhone) {
                 const additionalPhone = await this.extractTextFromPage(detailSelectors.additionalPhone);
                 if (additionalPhone) enhancedResult.phone = additionalPhone;
+            }
+
+            // Use adapter-specific phone extraction if available (for detail page)
+            if (this.adapter && typeof this.adapter.extractPhoneNumberWithReveal === 'function') {
+                try {
+                    console.log('🔧 Using adapter-specific phone extraction method on detail page');
+                    const adapterPhone = await this.adapter.extractPhoneNumberWithReveal(this.page!, null);
+                    if (adapterPhone && this.isValidPhoneNumber(adapterPhone)) {
+                        enhancedResult.phone = adapterPhone;
+                        console.log(`📞 Valid phone extracted using adapter method on detail page: ${adapterPhone}`);
+                    } else if (adapterPhone) {
+                        console.log(`⚠️ Invalid phone format from adapter method on detail page: ${adapterPhone}`);
+                    }
+                } catch (error) {
+                    console.warn('⚠️ Error in adapter phone extraction method on detail page:', error);
+                }
             }
 
             // Extract additional email addresses if available
@@ -2254,6 +2278,21 @@ export class YellowPagesScraperProcess {
     }
 
     /**
+     * Validate website URL format
+     */
+    private isValidWebsiteUrl(url: string): boolean {
+        if (!url || url.trim() === '') return false;
+        
+        try {
+            // Check if it's a valid URL format
+            const urlPattern = /^https?:\/\/.+/i;
+            return urlPattern.test(url);
+        } catch (error) {
+            return false;
+        }
+    }
+
+    /**
      * Extract business data from a single element
      */
     private async extractBusinessFromElement(element: any, selectors: PlatformInfo['selectors']): Promise<ScrapingResult | null> {
@@ -2273,35 +2312,23 @@ export class YellowPagesScraperProcess {
             }
             if (!business_name) return null;
 
-            // Use adapter-specific phone extraction if available, otherwise use standard extraction
+            // Extract phone number from list page (basic extraction only)
             let phoneNumber: string | undefined = undefined;
-            
-            // First try adapter-specific phone extraction if available
-            if (this.adapter && typeof this.adapter.extractPhoneNumberWithReveal === 'function') {
-                try {
-                    console.log('🔧 Using adapter-specific phone extraction method');
-                    phoneNumber = await this.adapter.extractPhoneNumberWithReveal(this.page!, element);
-                    if (phoneNumber && this.isValidPhoneNumber(phoneNumber)) {
-                        console.log(`📞 Valid phone extracted using adapter method: ${phoneNumber}`);
-                    } else if (phoneNumber) {
-                        console.log(`⚠️ Invalid phone format from adapter method: ${phoneNumber}`);
-                        phoneNumber = undefined;
-                    }
-                } catch (error) {
-                    console.warn('⚠️ Error in adapter phone extraction method:', error);
-                }
-            }
-            
-            // Fallback to standard phone extraction if adapter method didn't work
-            if (!phoneNumber && selectors.phone) {
+            if (selectors.phone) {
                 phoneNumber = await this.extractText(element, selectors.phone);
             }
             
+            // Extract website URL from list page (basic extraction only)
+            let websiteUrl: string | undefined = undefined;
+            if (selectors.website) {
+                websiteUrl = await this.extractAttribute(element, selectors.website, 'href');
+            }
+
             const result: ScrapingResult = {
                 business_name,
                 email: selectors.email ? await this.extractText(element, selectors.email) : undefined,
                 phone: phoneNumber,
-                website: selectors.website ? await this.extractAttribute(element, selectors.website, 'href') : undefined,
+                website: websiteUrl,
                 address: {
                     street: selectors.address ? await this.extractText(element, selectors.address) : undefined,
                     city: selectors.address_city ? await this.extractText(element, selectors.address_city) : undefined,
@@ -3088,6 +3115,8 @@ export class YellowPagesScraperProcess {
                 return this.adapter.extractEmailFromDetailPage !== BasePlatformAdapter.prototype.extractEmailFromDetailPage;
             case 'custom-phone-extraction':
                 return this.adapter.extractPhoneNumberWithReveal !== BasePlatformAdapter.prototype.extractPhoneNumberWithReveal;
+            case 'custom-website-extraction':
+                return this.adapter.extractWebsiteWithReveal !== BasePlatformAdapter.prototype.extractWebsiteWithReveal;
             default:
                 return false;
         }
@@ -3110,6 +3139,7 @@ export class YellowPagesScraperProcess {
         if (this.adapter.onPageLoad !== BasePlatformAdapter.prototype.onPageLoad) capabilities.push('custom-page-load');
         if (this.adapter.extractEmailFromDetailPage !== BasePlatformAdapter.prototype.extractEmailFromDetailPage) capabilities.push('custom-email-extraction');
         if (this.adapter.extractPhoneNumberWithReveal !== BasePlatformAdapter.prototype.extractPhoneNumberWithReveal) capabilities.push('custom-phone-extraction');
+        if (this.adapter.extractWebsiteWithReveal !== BasePlatformAdapter.prototype.extractWebsiteWithReveal) capabilities.push('custom-website-extraction');
 
         return capabilities;
     }

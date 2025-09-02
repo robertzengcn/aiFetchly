@@ -124,6 +124,18 @@ export interface IBasePlatformAdapter {
     extractPhoneNumberWithReveal?(page: Page, businessElement: any): Promise<string | undefined>;
     
     /**
+     * Extract website URL with reveal interaction for platforms that hide website URLs behind click buttons (optional)
+     * This method handles website reveal interactions like clicking encoded data attributes
+     * @param page - Puppeteer page object
+     * @param businessElement - Business element to extract website from
+     * @returns Promise resolving to website URL string or undefined
+     * 
+     * Note: This method is optional and has a default implementation that returns undefined.
+     * Subclasses can override it for platform-specific website reveal extraction.
+     */
+    extractWebsiteWithReveal?(page: Page, businessElement: any): Promise<string | undefined>;
+    
+    /**
      * Build search URL for the platform
      * @param keywords - Search keywords
      * @param location - Search location

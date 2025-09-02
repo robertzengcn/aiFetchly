@@ -42,11 +42,29 @@ export class PagesJaunesAdapter extends BasePlatformAdapter {
             // Try to find the phone reveal button within the business element
             for (const selector of phoneRevealSelectors) {
                 try {
-                    phoneRevealButton = await businessElement.$(selector);
-                    if (phoneRevealButton) {
-                        usedSelector = selector;
-                        console.log(`📞 Found phone reveal button with selector: ${selector}`);
-                        break;
+                    const phoneRevealButtons = await page.$$(selector);
+                    if (phoneRevealButtons.length > 0) {
+                        // Try each button until we find one that's clickable
+                        for (const button of phoneRevealButtons) {
+                            const isClickable = await button.evaluate((el: Element) => {
+                                const rect = el.getBoundingClientRect();
+                                const style = window.getComputedStyle(el);
+                                const htmlEl = el as HTMLElement;
+                                return rect.width > 0 && 
+                                       rect.height > 0 && 
+                                       style.display !== 'none' && 
+                                       style.visibility !== 'hidden' && 
+                                       htmlEl.offsetParent !== null;
+                            });
+                            
+                            if (isClickable) {
+                                phoneRevealButton = button;
+                                usedSelector = selector;
+                                console.log(`📞 Found clickable phone reveal button with selector: ${selector} (${phoneRevealButtons.length} total found)`);
+                                break;
+                            }
+                        }
+                        if (phoneRevealButton) break;
                     }
                 } catch (error) {
                     continue;
@@ -54,24 +72,7 @@ export class PagesJaunesAdapter extends BasePlatformAdapter {
             }
 
             if (!phoneRevealButton) {
-                console.log('📞 No phone reveal button found, trying direct phone extraction');
-                return await this.extractDirectPhoneNumber(businessElement);
-            }
-
-            // Check if button is clickable
-            const isClickable = await phoneRevealButton.evaluate((el: Element) => {
-                const rect = el.getBoundingClientRect();
-                const style = window.getComputedStyle(el);
-                const htmlEl = el as HTMLElement;
-                return rect.width > 0 && 
-                       rect.height > 0 && 
-                       style.display !== 'none' && 
-                       style.visibility !== 'hidden' && 
-                       htmlEl.offsetParent !== null;
-            });
-
-            if (!isClickable) {
-                console.log('📞 Phone reveal button is not clickable, trying direct extraction');
+                console.log('📞 No clickable phone reveal button found, trying direct phone extraction');
                 return await this.extractDirectPhoneNumber(businessElement);
             }
 
@@ -101,7 +102,8 @@ export class PagesJaunesAdapter extends BasePlatformAdapter {
                 '.telephone-numero',
                 'span[class*="phone"]',
                 'span[class*="numero"]',
-                'span[class*="telephone"]'
+                'span[class*="telephone"]',
+                'span.coord-numero'
             ];
 
             let phoneNumber: string | undefined = undefined;
@@ -231,7 +233,7 @@ export class PagesJaunesAdapter extends BasePlatformAdapter {
     }
 
     /**
-     * Validate phone number format
+     * Validate phone number format - enhanced for French phone numbers
      */
     private isValidPhoneNumber(phone: string): boolean {
         if (!phone || phone.trim() === '') return false;
@@ -244,134 +246,25 @@ export class PagesJaunesAdapter extends BasePlatformAdapter {
         const isReasonableLength = cleanPhone.length >= 8 && cleanPhone.length <= 15;
         const isNotJustText = !/^[a-zA-Z\s]+$/.test(phone);
         
-        return hasDigits && isReasonableLength && isNotJustText;
-    }
-
-    /**
-     * Override the extractBusinessData method to use phone reveal functionality
-     */
-    async extractBusinessData(page: Page): Promise<any> {
-        console.log('📊 Extracting business data using PagesJaunes.fr custom method');
+        // Additional validation for French phone numbers
+        // French mobile numbers: 06, 07, 08
+        // French landline: 01, 02, 03, 04, 05
+        const frenchPhonePattern = /^(0[1-8]|0[6-8])\d{8}$/;
+        const isFrenchFormat = frenchPhonePattern.test(cleanPhone);
         
-        try {
-            // Wait for business results to load
-            await page.waitForSelector('.bi-list-results, .search-results, .results-list', { timeout: 15000 });
-            
-            // Get all business elements
-            const businessElements = await page.$$('.bi-item, .result-item, .business-item, article[data-testid="business-item"]');
-            
-            if (businessElements.length === 0) {
-                console.log('📊 No business elements found');
-                return this.createEmptyBusinessData();
-            }
-
-            // Extract data from the first business element
-            const firstBusiness = businessElements[0];
-            
-            // Extract basic information
-            const businessName = await this.extractText(firstBusiness, 'h3 a, .bi-denomination a, .business-name a, h2 a') || '';
-            const website = await this.extractAttribute(firstBusiness, 'h3 a, .bi-denomination a, .business-name a, h2 a', 'href') || null;
-            const address = await this.extractText(firstBusiness, '.bi-address, .business-address, .contact-address') || null;
-            const categories = await this.extractArray(firstBusiness, '.bi-activite, .business-category, .categories') || [];
-
-            // Use special phone extraction method
-            const phone = await this.extractPhoneNumberWithReveal(page, firstBusiness);
-
-            // Parse address components
-            const addressComponents = this.parseAddressComponents(address || '');
-
-            return {
-                business_name: businessName,
-                email: null, // Email usually requires detail page navigation
-                phone: phone,
-                website: website,
-                address: addressComponents,
-                categories: categories,
-                rating: null,
-                business_hours: null,
-                description: null,
-                social_media: null,
-                year_established: null,
-                number_of_employees: null,
-                payment_methods: null,
-                specialties: null
-            };
-
-        } catch (error) {
-            console.error('📊 Error extracting business data:', error);
-            return this.createEmptyBusinessData();
-        }
+        // Also accept international format starting with +33
+        const internationalFrenchPattern = /^\+33[1-8]\d{8}$/;
+        const isInternationalFrench = internationalFrenchPattern.test(cleanPhone);
+        
+        // Basic validation: has digits, reasonable length, not just text
+        const basicValidation = hasDigits && isReasonableLength && isNotJustText;
+        
+        // Return true if it passes basic validation OR matches French patterns
+        return basicValidation || isFrenchFormat || isInternationalFrench;
     }
 
-    /**
-     * Parse address string into components for French addresses
-     */
-    private parseAddressComponents(addressString: string): any {
-        const components = {
-            street: '',
-            city: '',
-            state: '',
-            zipCode: '',
-            country: 'France'
-        };
+    
 
-        if (!addressString) return components;
-
-        try {
-            // French address pattern: "Street, Postal Code City"
-            const parts = addressString.split(',').map(part => part.trim());
-            
-            if (parts.length >= 2) {
-                components.street = parts[0];
-                
-                // Last part usually contains postal code and city
-                const lastPart = parts[parts.length - 1];
-                const zipCityMatch = lastPart.match(/^(\d{5})\s+(.+)$/);
-                
-                if (zipCityMatch) {
-                    components.zipCode = zipCityMatch[1];
-                    components.city = zipCityMatch[2];
-                } else {
-                    components.city = lastPart;
-                }
-            } else {
-                components.street = addressString;
-            }
-        } catch (error) {
-            console.warn('Error parsing address components:', error);
-            components.street = addressString;
-        }
-
-        return components;
-    }
-
-    /**
-     * Create empty business data structure
-     */
-    private createEmptyBusinessData(): any {
-        return {
-            business_name: '',
-            email: null,
-            phone: null,
-            website: null,
-            address: {
-                street: '',
-                city: '',
-                state: '',
-                zipCode: '',
-                country: 'France'
-            },
-            categories: [],
-            rating: null,
-            business_hours: null,
-            description: null,
-            social_media: null,
-            year_established: null,
-            number_of_employees: null,
-            payment_methods: null,
-            specialties: null
-        };
-    }
 
     /**
      * Enhanced text extraction method that handles stale DOM references
@@ -392,182 +285,10 @@ export class PagesJaunesAdapter extends BasePlatformAdapter {
         return null;
     }
 
-    /**
-     * Enhanced attribute extraction method
-     */
-    private async extractAttribute(element: ElementHandle, selector: string, attribute: string): Promise<string | null> {
-        if (!selector) return null;
-        
-        try {
-            const targetElement = await element.$(selector);
-            if (targetElement) {
-                const attrValue = await targetElement.evaluate((el: Element, attr: string) => 
-                    el.getAttribute(attr), attribute);
-                return attrValue || null;
-            }
-        } catch (error) {
-            console.warn(`Error extracting attribute ${attribute} with selector ${selector}:`, error);
-        }
-        
-        return null;
-    }
 
-    /**
-     * Enhanced array extraction method
-     */
-    private async extractArray(element: ElementHandle, selector: string): Promise<string[]> {
-        if (!selector) return [];
-        
-        try {
-            const elements = await element.$$(selector);
-            const array: string[] = [];
-            
-            for (const el of elements) {
-                try {
-                    const text = await el.evaluate((element: Element) => element.textContent?.trim() || '');
-                    if (text) array.push(text);
-                } catch (error) {
-                    continue;
-                }
-            }
-            
-            return array;
-        } catch (error) {
-            console.warn(`Error extracting array with selector ${selector}:`, error);
-            return [];
-        }
-    }
+    
 
-    /**
-     * Override searchBusinesses to handle location requirement validation
-     */
-    async searchBusinesses(page: Page, keywords: string[], location: string): Promise<any[]> {
-        // Validate location requirement for PagesJaunes.fr
-        if (!location || location.trim() === '') {
-            throw new Error('Location is required for PagesJaunes.fr searches');
-        }
 
-        console.log('🔍 Starting custom search for PagesJaunes.fr');
-        console.log(`Keywords: ${keywords.join(', ')}, Location: ${location}`);
-
-        try {
-            // Navigate to search page with the first keyword
-            const searchUrl = this.buildSearchUrl(keywords, location, 1);
-            console.log(`🌐 Navigating to: ${searchUrl}`);
-            
-            await page.goto(searchUrl, { 
-                waitUntil: 'networkidle2', 
-                timeout: 30000 
-            });
-
-            // Handle page load (cookies, popups, etc.)
-            await this.handlePageLoad(page);
-
-            // Wait for search results to load
-            await page.waitForSelector('.bi-list-results, .search-results, .results-list', { 
-                timeout: 15000 
-            });
-
-            // Extract search results with phone reveal functionality
-            return await this.extractSearchResultsWithPhoneReveal(page);
-
-        } catch (error) {
-            console.error('🚨 Error during PagesJaunes.fr search:', error);
-            throw error;
-        }
-    }
-
-    /**
-     * Extract search results with phone reveal functionality
-     */
-    private async extractSearchResultsWithPhoneReveal(page: Page): Promise<any[]> {
-        const results: any[] = [];
-
-        try {
-            // Get all business elements
-            const businessElements = await page.$$('.bi-item, .result-item, .business-item, article[data-testid="business-item"]');
-            console.log(`📋 Found ${businessElements.length} business elements`);
-
-            for (let i = 0; i < businessElements.length; i++) {
-                try {
-                    console.log(`📊 Processing business ${i + 1}/${businessElements.length}`);
-                    
-                    // Re-query element to avoid stale references
-                    const currentElements = await page.$$('.bi-item, .result-item, .business-item, article[data-testid="business-item"]');
-                    if (i >= currentElements.length) {
-                        console.log(`⚠️ Business element ${i + 1} no longer exists, skipping`);
-                        continue;
-                    }
-                    
-                    const businessElement = currentElements[i];
-                    
-                    // Extract basic information
-                    const businessName = await this.extractText(businessElement, 'h3 a, .bi-denomination a, .business-name a, h2 a');
-                    
-                    if (!businessName) {
-                        console.log(`⚠️ No business name found for element ${i + 1}, skipping`);
-                        continue;
-                    }
-
-                    const website = await this.extractAttribute(businessElement, 'h3 a, .bi-denomination a, .business-name a, h2 a', 'href');
-                    const address = await this.extractText(businessElement, '.bi-address, .business-address, .contact-address');
-                    const categories = await this.extractArray(businessElement, '.bi-activite, .business-category, .categories');
-
-                    // Use special phone extraction method with reveal
-                    console.log(`📞 Extracting phone for: ${businessName}`);
-                    const phone = await this.extractPhoneNumberWithReveal(page, businessElement);
-
-                    const result = {
-                        id: `pj-${Date.now()}-${i}`,
-                        name: businessName,
-                        url: website || '',
-                        phone: phone,
-                        address: address,
-                        categories: categories || []
-                    };
-
-                    results.push(result);
-                    console.log(`✅ Extracted: ${businessName} ${phone ? `(Phone: ${phone})` : '(No phone)'}`);
-
-                    // Small delay between extractions to avoid overwhelming the page
-                    await this.sleep(500);
-
-                } catch (error) {
-                    console.error(`❌ Error processing business element ${i + 1}:`, error);
-                    continue;
-                }
-            }
-
-        } catch (error) {
-            console.error('🚨 Error extracting search results:', error);
-        }
-
-        console.log(`📊 Total extracted: ${results.length} businesses`);
-        return results;
-    }
-
-    /**
-     * Build search URL for PagesJaunes.fr with proper encoding
-     */
-    buildSearchUrl(keywords: string[], location: string, page: number = 1): string {
-        if (!location || location.trim() === '') {
-            throw new Error('Location is required for PagesJaunes.fr searches');
-        }
-
-        const keywordString = keywords.join(' ');
-        const baseUrl = this.baseUrl;
-        
-        // Use the searchUrlPattern from config or default pattern
-        let searchUrl = this.config.settings?.searchUrlPattern || 
-            `${baseUrl}/recherche?quoiqui={keywords}&ou={location}&page={page}`;
-        
-        searchUrl = searchUrl
-            .replace('{keywords}', encodeURIComponent(keywordString))
-            .replace('{location}', encodeURIComponent(location))
-            .replace('{page}', page.toString());
-
-        return searchUrl;
-    }
 
     /**
      * Handle page load events (cookies, popups, etc.)
@@ -655,6 +376,197 @@ export class PagesJaunesAdapter extends BasePlatformAdapter {
             }
         } catch (error) {
             console.log('📱 No popups to close');
+        }
+    }
+
+    /**
+     * Extract website URL with reveal interaction for PagesJaunes.fr
+     * This method handles the special case where website URLs are hidden in encoded data attributes
+     */
+    async extractWebsiteWithReveal(page: Page, businessElement: any): Promise<string | undefined> {
+        try {
+            console.log('🌐 Attempting to extract website URL with reveal method for PagesJaunes.fr');
+
+            // Look for website reveal elements with encoded data attributes
+            const websiteRevealSelectors = [
+                'a[data-pjlb]',
+                'a[data-pjstats*="TEASER-VOIR-SITE"]',
+                'a[title*="Site internet du professionnel"]',
+                'a[title*="nouvelle fenêtre"]',
+                'a.pj-lb[href="#"]',
+                '.teaser-item.black-icon.pj-lb',
+                'a[data-pjlb*="url"]',
+                '.lvs-container a[data-pjlb]',
+                'div.lvs-container.marg-btm-s a.teaser-item.black-icon.pj-lb.pj-link'
+            ];
+
+            let websiteRevealElement: any = null;
+            let usedSelector = '';
+
+            // Try to find the website reveal element within the business element
+            for (const selector of websiteRevealSelectors) {
+                try {
+                    websiteRevealElement = await page.$(selector);
+                    if (websiteRevealElement) {
+                        usedSelector = selector;
+                        console.log(`🌐 Found website reveal element with selector: ${selector}`);
+                        break;
+                    }
+                } catch (error) {
+                    continue;
+                }
+            }
+
+            if (!websiteRevealElement) {
+                console.log('🌐 No website reveal element found, trying direct website extraction');
+                return await this.extractDirectWebsite(page);
+            }
+
+            // Extract the encoded URL from data-pjlb attribute
+            const encodedData = await websiteRevealElement.evaluate((el: Element) => {
+                const pjlbAttr = el.getAttribute('data-pjlb');
+                if (pjlbAttr) {
+                    try {
+                        const decoded = JSON.parse(pjlbAttr);
+                        return decoded.url;
+                    } catch (error) {
+                        console.warn('Failed to parse data-pjlb JSON:', error);
+                        return null;
+                    }
+                }
+                return null;
+            });
+
+            if (!encodedData) {
+                console.log('🌐 No encoded URL data found, trying direct extraction');
+                return await this.extractDirectWebsite(page);
+            }
+
+            // Decode the base64 encoded URL
+            let websiteUrl: string | undefined = undefined;
+            try {
+                websiteUrl = Buffer.from(encodedData, 'base64').toString('utf-8');
+                console.log(`🌐 Successfully decoded website URL: ${websiteUrl}`);
+            } catch (error) {
+                console.warn('🌐 Failed to decode base64 URL:', error);
+                return await this.extractDirectWebsite(page);
+            }
+
+            // Validate the URL
+            if (websiteUrl && this.isValidWebsiteUrl(websiteUrl)) {
+                console.log(`🌐 Successfully extracted website URL: ${websiteUrl}`);
+                return websiteUrl;
+            } else {
+                console.log('🌐 Invalid website URL format, trying direct extraction');
+                return await this.extractDirectWebsite(page);
+            }
+
+        } catch (error) {
+            console.error('🌐 Error in website URL reveal extraction:', error);
+            // Fallback to direct extraction
+            return await this.extractDirectWebsite(page);
+        }
+    }
+
+    /**
+     * Extract website URL directly without reveal interaction (fallback method)
+     */
+    private async extractDirectWebsite(businessElement: Page): Promise<string | undefined> {
+        try {
+            // First try to extract from span.value elements (PagesJaunes specific)
+            const valueSpanSelectors = [
+                'div.lvs-container.marg-btm-s a.teaser-item.black-icon.pj-lb.pj-link span.value',
+                // 'a .value',
+                // 'span.value',
+                // '.lvs-container a span.value',
+                // 'a[title*="Site internet"] span.value',
+                // 'a[data-pjstats*="TEASER-VOIR-SITE"] span.value'
+            ];
+
+            for (const selector of valueSpanSelectors) {
+                try {
+                    const valueElement = await businessElement.$(selector);
+                    if (valueElement) {
+                        const websiteUrl = await valueElement.evaluate((el: Element) => {
+                            const text = el.textContent?.trim();
+                            if (text && text.length > 0) {
+                                // Add http:// if not present
+                                if (!text.startsWith('http://') && !text.startsWith('https://')) {
+                                    return `http://${text}`;
+                                }
+                                return text;
+                            }
+                            return null;
+                        });
+                        
+                        if (websiteUrl) {
+                            console.log(`🌐 Extracted website URL from span.value: ${websiteUrl}`);
+                            return websiteUrl;
+                        }
+                    }
+                } catch (error) {
+                    continue;
+                }
+            }
+
+            // Fallback to standard href extraction
+            const directWebsiteSelectors = [
+                'a[href^="http"]',
+                'a[href^="https"]',
+                'a[href^="www"]',
+                '.website-link',
+                '.business-website',
+                'a[title*="website"]',
+                'a[title*="site"]',
+                'a[title*="internet"]',
+                '.lvs-container a[href^="http"]'
+            ];
+
+            for (const selector of directWebsiteSelectors) {
+                try {
+                    const websiteElement = await businessElement.$(selector);
+                    if (websiteElement) {
+                        const websiteUrl = await websiteElement.evaluate((el: Element) => {
+                            const href = (el as HTMLAnchorElement).href;
+                            if (href && (href.startsWith('http://') || href.startsWith('https://'))) {
+                                return href;
+                            }
+                            return null;
+                        });
+                        
+                        if (websiteUrl && this.isValidWebsiteUrl(websiteUrl)) {
+                            console.log(`🌐 Extracted direct website URL from href: ${websiteUrl}`);
+                            return websiteUrl;
+                        }
+                    }
+                } catch (error) {
+                    continue;
+                }
+            }
+
+            console.log('🌐 No direct website URL found');
+            return undefined;
+        } catch (error) {
+            console.error('🌐 Error in direct website extraction:', error);
+            return undefined;
+        }
+    }
+
+    /**
+     * Validate website URL format - enhanced for PagesJaunes.fr
+     */
+    private isValidWebsiteUrl(url: string): boolean {
+        if (!url || url.trim() === '') return false;
+        
+        try {
+            // Check if it's a valid URL format (with or without protocol)
+            const urlWithProtocol = /^https?:\/\/.+/i;
+            const urlWithoutProtocol = /^[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]*\.[a-zA-Z]{2,}/i;
+            
+            return urlWithProtocol.test(url) || urlWithoutProtocol.test(url);
+        } catch (error) {
+            console.error('🌐 Error in website URL validation:', error);
+            return false;
         }
     }
 
