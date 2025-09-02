@@ -16,7 +16,7 @@
  * - Adapter methods take precedence over configuration-based selectors
  */
 
-import { Page, Browser } from 'puppeteer';
+import { Page, Browser, ElementHandle } from 'puppeteer';
 import { BrowserManager } from '@/modules/browserManager';
 import { ChildProcessAdapterFactory } from '@/modules/ChildProcessAdapterFactory';
 import { BasePlatformAdapter } from '@/modules/BasePlatformAdapter';
@@ -526,6 +526,7 @@ export class YellowPagesScraperProcess {
         const hasCustomPagination = this.adapter && this.adapterSupportsFeature('custom-pagination');
         const hasCustomPageLoad = this.adapter && this.adapterSupportsFeature('custom-page-load');
         const hasCustomEmailExtraction = this.adapter && this.adapterSupportsFeature('custom-email-extraction');
+        const hasCustomPhoneExtraction = this.adapter && this.adapterSupportsFeature('custom-phone-extraction');
 
         console.log(`🔧 Platform capabilities:`, {
             customSearch: hasCustomSearch,
@@ -533,6 +534,7 @@ export class YellowPagesScraperProcess {
             customPagination: hasCustomPagination,
             customPageLoad: hasCustomPageLoad,
             customEmailExtraction: hasCustomEmailExtraction,
+            customPhoneExtraction: hasCustomPhoneExtraction,
             adapterClass: this.platformInfo.adapterClass?.className || 'None'
         });
 
@@ -543,7 +545,8 @@ export class YellowPagesScraperProcess {
                 extractBusinessData: hasCustomExtraction ? 'Custom' : 'Default',
                 handlePagination: hasCustomPagination ? 'Custom' : 'Default',
                 onPageLoad: hasCustomPageLoad ? 'Custom' : 'Default',
-                extractEmailFromDetailPage: hasCustomEmailExtraction ? 'Custom' : 'Default'
+                extractEmailFromDetailPage: hasCustomEmailExtraction ? 'Custom' : 'Default',
+                extractPhoneNumberWithReveal: hasCustomPhoneExtraction ? 'Custom' : 'Default'
             });
         } else {
             console.log(`🔧 No platform adapter available, using configuration-based approach`);
@@ -813,6 +816,20 @@ export class YellowPagesScraperProcess {
                 console.log('⚠️ Cloudflare protection could not be resolved, but continuing with scraping...');
             }
 
+            // Call custom onPageLoad method if it exists in the adapter (BEFORE any form interaction)
+            if (this.adapter && typeof this.adapter.onPageLoad === 'function') {
+                try {
+                    console.log('🔧 Calling custom onPageLoad method from adapter (before form interaction)');
+                    await this.adapter.onPageLoad(this.page!);
+                    console.log('✅ Custom onPageLoad method completed successfully');
+                } catch (error) {
+                    console.warn('⚠️ Error in custom onPageLoad method:', error);
+                    // Don't fail the scraping process if onPageLoad fails
+                }
+            } else {
+                console.log('🔧 No custom onPageLoad method found, continuing with default flow');
+            }
+
             // Check if platform has search form selectors defined
             const hasSearchFormSelectors = this.platformInfo.selectors.searchForm &&
                 typeof this.platformInfo.selectors.searchForm === 'object' &&
@@ -868,20 +885,6 @@ export class YellowPagesScraperProcess {
 
             // Wait for content to settle
             await this.sleep(1000);
-
-            // Call custom onPageLoad method if it exists in the adapter
-            if (this.adapter && typeof this.adapter.onPageLoad === 'function') {
-                try {
-                    console.log('🔧 Calling custom onPageLoad method from adapter');
-                    await this.adapter.onPageLoad(this.page!);
-                    console.log('✅ Custom onPageLoad method completed successfully');
-                } catch (error) {
-                    console.warn('⚠️ Error in custom onPageLoad method:', error);
-                    // Don't fail the scraping process if onPageLoad fails
-                }
-            } else {
-                console.log('🔧 No custom onPageLoad method found, continuing with default flow');
-            }
 
         } catch (error) {
             console.error('Error navigating to search page:', error);
@@ -1425,18 +1428,31 @@ export class YellowPagesScraperProcess {
                 }
             }
             
-            // Extract phone number
-            if (selectors.phone) {
+            // Extract phone number using adapter method if available
+            let phoneText: string | undefined = undefined;
+            
+            // First try adapter-specific phone extraction if available
+            if (this.adapter && typeof this.adapter.extractPhoneNumberWithReveal === 'function') {
+                try {
+                    phoneText = await this.adapter.extractPhoneNumberWithReveal(this.page!, element);
+                } catch (error) {
+                    console.warn('Error extracting phone for identifier using adapter:', error);
+                }
+            }
+            
+            // Fallback to basic phone extraction if adapter method didn't work
+            if (!phoneText && selectors.phone) {
                 const phone = await element.$(selectors.phone);
                 if (phone) {
-                    const phoneText = await phone.evaluate(el => el.textContent?.trim() || '');
-                    if (phoneText) {
-                        // Clean phone number to standardize format
-                        const cleanPhone = phoneText.replace(/[^\d+]/g, '');
-                        if (cleanPhone) {
-                            identifierParts.push(`phone:${cleanPhone}`);
-                        }
-                    }
+                    phoneText = await phone.evaluate(el => el.textContent?.trim() || '');
+                }
+            }
+            
+            if (phoneText) {
+                // Clean phone number to standardize format
+                const cleanPhone = phoneText.replace(/[^\d+]/g, '');
+                if (cleanPhone) {
+                    identifierParts.push(`phone:${cleanPhone}`);
                 }
             }
             
@@ -2218,6 +2234,25 @@ export class YellowPagesScraperProcess {
         return result;
     }
 
+
+
+    /**
+     * Validate phone number format
+     */
+    private isValidPhoneNumber(phone: string): boolean {
+        if (!phone || phone.trim() === '') return false;
+        
+        // Remove common phone number formatting
+        const cleanPhone = phone.replace(/[\s\-\(\)\+\.]/g, '');
+        
+        // Check if it contains mostly digits and has reasonable length
+        const hasDigits = /\d/.test(cleanPhone);
+        const isReasonableLength = cleanPhone.length >= 8 && cleanPhone.length <= 15;
+        const isNotJustText = !/^[a-zA-Z\s]+$/.test(phone);
+        
+        return hasDigits && isReasonableLength && isNotJustText;
+    }
+
     /**
      * Extract business data from a single element
      */
@@ -2238,10 +2273,34 @@ export class YellowPagesScraperProcess {
             }
             if (!business_name) return null;
 
+            // Use adapter-specific phone extraction if available, otherwise use standard extraction
+            let phoneNumber: string | undefined = undefined;
+            
+            // First try adapter-specific phone extraction if available
+            if (this.adapter && typeof this.adapter.extractPhoneNumberWithReveal === 'function') {
+                try {
+                    console.log('🔧 Using adapter-specific phone extraction method');
+                    phoneNumber = await this.adapter.extractPhoneNumberWithReveal(this.page!, element);
+                    if (phoneNumber && this.isValidPhoneNumber(phoneNumber)) {
+                        console.log(`📞 Valid phone extracted using adapter method: ${phoneNumber}`);
+                    } else if (phoneNumber) {
+                        console.log(`⚠️ Invalid phone format from adapter method: ${phoneNumber}`);
+                        phoneNumber = undefined;
+                    }
+                } catch (error) {
+                    console.warn('⚠️ Error in adapter phone extraction method:', error);
+                }
+            }
+            
+            // Fallback to standard phone extraction if adapter method didn't work
+            if (!phoneNumber && selectors.phone) {
+                phoneNumber = await this.extractText(element, selectors.phone);
+            }
+            
             const result: ScrapingResult = {
                 business_name,
                 email: selectors.email ? await this.extractText(element, selectors.email) : undefined,
-                phone: selectors.phone ? await this.extractText(element, selectors.phone) : undefined,
+                phone: phoneNumber,
                 website: selectors.website ? await this.extractAttribute(element, selectors.website, 'href') : undefined,
                 address: {
                     street: selectors.address ? await this.extractText(element, selectors.address) : undefined,
@@ -3027,6 +3086,8 @@ export class YellowPagesScraperProcess {
                 return this.adapter.onPageLoad !== BasePlatformAdapter.prototype.onPageLoad;
             case 'custom-email-extraction':
                 return this.adapter.extractEmailFromDetailPage !== BasePlatformAdapter.prototype.extractEmailFromDetailPage;
+            case 'custom-phone-extraction':
+                return this.adapter.extractPhoneNumberWithReveal !== BasePlatformAdapter.prototype.extractPhoneNumberWithReveal;
             default:
                 return false;
         }
@@ -3048,6 +3109,7 @@ export class YellowPagesScraperProcess {
         if (this.adapter.handlePagination !== BasePlatformAdapter.prototype.handlePagination) capabilities.push('custom-pagination');
         if (this.adapter.onPageLoad !== BasePlatformAdapter.prototype.onPageLoad) capabilities.push('custom-page-load');
         if (this.adapter.extractEmailFromDetailPage !== BasePlatformAdapter.prototype.extractEmailFromDetailPage) capabilities.push('custom-email-extraction');
+        if (this.adapter.extractPhoneNumberWithReveal !== BasePlatformAdapter.prototype.extractPhoneNumberWithReveal) capabilities.push('custom-phone-extraction');
 
         return capabilities;
     }

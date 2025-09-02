@@ -551,6 +551,7 @@ export class YellowPagesController {
                 language: p.language,
                 rate_limit: p.rate_limit,
                 is_active: p.is_active,
+                locationRequired: p.locationRequired,
                 authentication: p.settings?.authentication ? {
                     requiresAuthentication: p.settings.requiresAuthentication,
                     requiresCookies: p.settings.authentication.requiresCookies,

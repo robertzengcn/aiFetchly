@@ -1,5 +1,5 @@
 import { PlatformConfig, PlatformFeature } from '@/interfaces/IPlatformConfig';
-
+import { AdapterGelbeseiten } from '@/modules/platforms/GelbeseitenAdapter';
 export const Platform_gelbeseiten_de: PlatformConfig = {
   id: 'gelbeseiten-de',
   name: 'GelbeSeiten.de',
@@ -10,7 +10,7 @@ export const Platform_gelbeseiten_de: PlatformConfig = {
   is_active: true,
   version: '1.0.0',
   type: 'class',
-  class_name: 'AdapterGelbeseiten',
+  adapter_class: AdapterGelbeseiten,
   documentation: 'https://docs.yellowpages-scraper.com/platforms/gelbeseiten-de',
   maintainer: 'Platform Development Team',
   rate_limit: 100,

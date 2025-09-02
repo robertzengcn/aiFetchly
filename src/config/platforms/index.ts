@@ -10,7 +10,7 @@ import { Platform_yelp_com } from './yelp-com';
 import { Platform_yellowpages_com } from './yellowpages-com';
 // import { Platform_example } from './example-platform';
 // import { Platform_api_key_example } from './api-key-example';
-import { Platform_oauth_example } from './oauth-example';
+// import { Platform_oauth_example } from './oauth-example';
 
 /**
  * Platform configurations array
@@ -38,7 +38,7 @@ export const platforms: PlatformConfig[] = [
   Platform_yellowpages_com,
   // Platform_example,
   // Platform_api_key_example,
-  Platform_oauth_example,
+  // Platform_oauth_example,
 ];
 
 export const platformsById: Record<string, PlatformConfig> = Object.fromEntries(

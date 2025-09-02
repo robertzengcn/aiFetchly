@@ -104,8 +104,10 @@
                 <v-col cols="12" md="6">
                   <v-text-field
                     v-model="taskForm.location"
-                    :label="$t('home.location')"
+                    :label="$t('home.location') + (selectedPlatform?.locationRequired ? ' *' : '')"
                     :placeholder="$t('home.location_placeholder')"
+                    :rules="selectedPlatform?.locationRequired ? [v => !!v || $t('home.location_required')] : []"
+                    :required="selectedPlatform?.locationRequired"
                     clearable
                   />
                 </v-col>
@@ -536,6 +538,23 @@
                   </v-chip>
                 </div>
               </div>
+              
+              <!-- Location Requirement Information -->
+              <div v-if="selectedPlatform.locationRequired" class="mt-3 pt-3 border-top">
+                <div class="mb-2">
+                  <v-chip
+                    color="error"
+                    size="small"
+                    class="mr-2"
+                  >
+                    <v-icon size="small" class="mr-1">mdi-map-marker</v-icon>
+                    Location Required
+                  </v-chip>
+                  <span class="text-caption text-medium-emphasis">
+                    This platform requires a location for search
+                  </span>
+                </div>
+              </div>
             </div>
           </v-card-text>
         </v-card>
@@ -848,6 +867,11 @@ const validateForm = async () => {
       // Check if platform requires cookies but no account is selected
       if (selectedPlatform.value?.authentication?.requiresCookies && selectedAccounts.value.length === 0) {
         fieldErrors.push(`Account required for platform: ${selectedPlatform.value.display_name}`)
+      }
+      
+      // Check if platform requires location but location is empty
+      if (selectedPlatform.value?.locationRequired && (!taskForm.location || taskForm.location.trim() === '')) {
+        fieldErrors.push($t('home.location_required'))
       }
       
       if (useProxy.value && proxyValue.value.length === 0) {

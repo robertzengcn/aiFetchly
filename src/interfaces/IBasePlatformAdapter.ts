@@ -112,6 +112,18 @@ export interface IBasePlatformAdapter {
     onPageLoad?(page: Page): Promise<void>;
     
     /**
+     * Extract phone number with reveal interaction for platforms that hide phone numbers behind click buttons (optional)
+     * This method handles phone reveal interactions like clicking "Afficher le N°" buttons
+     * @param page - Puppeteer page object
+     * @param businessElement - Business element to extract phone from
+     * @returns Promise resolving to phone number string or undefined
+     * 
+     * Note: This method is optional and has a default implementation that returns undefined.
+     * Subclasses can override it for platform-specific phone reveal extraction.
+     */
+    extractPhoneNumberWithReveal?(page: Page, businessElement: any): Promise<string | undefined>;
+    
+    /**
      * Build search URL for the platform
      * @param keywords - Search keywords
      * @param location - Search location

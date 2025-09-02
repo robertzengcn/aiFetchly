@@ -158,6 +158,17 @@ export class BasePlatformAdapter implements IBasePlatformAdapter {
     }
 
     /**
+     * Extract phone number with reveal interaction for platforms that hide phone numbers behind click buttons
+     * Default implementation returns undefined - can be overridden by subclasses
+     * This method should handle phone reveal interactions like clicking "Afficher le N°" buttons
+     */
+    async extractPhoneNumberWithReveal(page: Page, businessElement: any): Promise<string | undefined> {
+        // Default implementation - no custom phone reveal extraction
+        // Subclasses can override this for platform-specific phone reveal extraction
+        return undefined;
+    }
+
+    /**
      * Build search URL for the platform
      */
     buildSearchUrl(keywords: string[], location: string, pageNum: number = 1): string {

@@ -1,4 +1,5 @@
 import { PlatformConfig, PlatformFeature } from '@/interfaces/IPlatformConfig';
+import { PagesJaunesAdapter } from '@/modules/platforms/PagesJaunesAdapter';
 
 export const Platform_pagesjaunes_fr: PlatformConfig = {
   id: 'pagesjaunes-fr',
@@ -9,32 +10,63 @@ export const Platform_pagesjaunes_fr: PlatformConfig = {
   language: 'fr',
   is_active: true,
   version: '1.0.0',
-  type: 'configuration',
+  type: 'class',
+  adapter_class: PagesJaunesAdapter,
   documentation: 'https://docs.yellowpages-scraper.com/platforms/pagesjaunes-fr',
   maintainer: 'Platform Development Team',
   rate_limit: 100,
   delay_between_requests: 2000,
   max_concurrent_requests: 1,
   selectors: {
-    businessList: 'div.bi-list, .bi-list-item, .result-item',
-    businessName: 'h3.bi-name, .bi-name a, .result-name',
-    phone: '.bi-phone, .phone-number, .result-phone',
-    email: '.bi-email, .email-address, .result-email',
-    website: '.bi-website, .website-link, .result-website',
-    address: '.bi-address, .address-text, .result-address',
-    address_city: '.bi-city, .city-name, .result-city',
-    address_state: '.bi-region, .region-name, .result-region',
-    address_zip: '.bi-postal, .postal-code, .result-postal',
-    address_country: '.bi-country, .country-name, .result-country',
-    categories: '.bi-categories, .business-categories, .result-categories',
-    rating: '.bi-rating, .rating-stars, .result-rating',
-    reviewCount: '.bi-reviews, .review-count, .result-reviews',
-    description: '.bi-description, .business-description, .result-description',
-    pagination: {
-      nextButton: '.pagination-next, .next-page, a[rel=\'next\']',
-      currentPage: '.pagination-current, .current-page, .page-number',
-      maxPages: '.pagination-total, .total-pages, .page-count',
+    searchForm: {
+      keywordInput: '#quoiqui',
+      locationInput: '#ou',
+      searchButton: '#findId',
+      formContainer: '#form_motor_pagesjaunes',
     },
+    businessList: 'div.main-content',
+    businessItem: '#listResults ul li.bi',
+    businessName: 'div.bi-header-title',
+    phone: '',
+    email: '',
+    website: '',
+    address: '',
+    address_city: '',
+    address_state: '',
+    address_zip: '',
+    address_country: '',
+    categories: '',
+    rating: '',
+    reviewCount: '',
+    description: '',
+    detailPageLink: '',
+    pagination: {
+      nextButton: '#pagination-next',
+      currentPage: '',
+      maxPages: '',
+    },
+    navigation: {
+      required: true,
+      detailLink: 'h3',
+      delayAfterNavigation: 2000,
+      detailPage: {
+        businessName: 'h1',
+        fullAddress: 'div.address-container',
+        businessHours: '',
+        description: 'div.zone-activites',
+        contactInfo: '',
+        services: '',
+        additionalPhone: '',
+        additionalEmail: '',
+        socialMedia: '',
+        categories: '',
+        yearEstablished: '',
+        numberOfEmployees: '',
+        paymentMethods: '',
+        specialties: '',
+        website: 'div.lvs-container.marg-btm-s'
+      }
+    }
   },
   settings: {
     requiresAuthentication: false,
@@ -49,12 +81,13 @@ export const Platform_pagesjaunes_fr: PlatformConfig = {
       PlatformFeature.DETAILED_EXTRACTION,
     ],
   },
+  locationRequired: true,
   metadata: {
     lastUpdated: new Date('2024-01-15T10:30:00.000Z'),
     version: '1.0.0',
     category: 'business-directory',
     priority: 'medium',
-    tags: ['france', 'business-directory', 'yellow-pages'],
+    tags: ['france', 'business-directory', 'yellow-pages', 'class-based', 'location-required'],
     statistics: {
       totalBusinesses: 0,
       lastScraped: new Date('2024-01-15T10:30:00.000Z'),
@@ -62,7 +95,7 @@ export const Platform_pagesjaunes_fr: PlatformConfig = {
     },
   },
   description:
-    'Platform configuration for PagesJaunes.fr - French Yellow Pages directory',
+    'Platform configuration for PagesJaunes.fr using PagesJaunesAdapter class - French Yellow Pages directory with location requirement validation',
 };
 
 

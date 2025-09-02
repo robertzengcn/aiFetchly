@@ -126,6 +126,9 @@ export interface PlatformConfig<T extends BasePlatformAdapter = BasePlatformAdap
     
     /** Documentation URL */
     documentation?: string;
+    
+    /** Whether the platform requires a location for search */
+    locationRequired?: boolean;
 }
 
 /**
@@ -173,6 +176,9 @@ export interface PlatformSummary {
         /** Type of authentication required */
         type?: 'login' | 'api_key' | 'oauth' | 'session' | 'cookie' | 'none';
     };
+    
+    /** Whether the platform requires a location for search */
+    locationRequired?: boolean;
 }
 
 /**
