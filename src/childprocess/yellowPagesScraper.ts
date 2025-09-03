@@ -1795,7 +1795,7 @@ export class YellowPagesScraperProcess {
             // Wait for navigation to complete
             await this.page.waitForNavigation({
                 waitUntil: 'networkidle2',
-                timeout: 30000
+                timeout: 50000
             });
 
             // Wait for page to load
