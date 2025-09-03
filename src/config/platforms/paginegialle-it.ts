@@ -24,7 +24,7 @@ export const Platform_paginegialle_it: PlatformConfig = {
       searchButton: '#searchSubmit',
       formContainer: '#extendedSearch',
     },
-    businessList: 'div.search__cnt',
+    businessList: 'div.listing__col--cn',
     businessItem: 'div.search-itm',
     businessName: 'h2',
     phone: '',

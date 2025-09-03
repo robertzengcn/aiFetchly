@@ -172,6 +172,7 @@ export class YellowPagesScraperProcess {
     private isPaused: boolean = false;
     private adapter: BasePlatformAdapter | null = null;
     private sessionManager: SessionRecordingManager;
+    private isInNewTab: boolean = false;
 
     // IPC integration
     private onProgressCallback?: (progress: ScrapingProgress) => void;
@@ -182,7 +183,8 @@ export class YellowPagesScraperProcess {
     constructor(taskData: TaskData, platformInfo: PlatformInfo) {
         this.taskData = taskData;
         this.platformInfo = platformInfo;
-        
+        this.isInNewTab = false;
+
         // Use userDataPath from taskData if available, otherwise use a default path
         const userDataPath = this.taskData.userDataPath || process.cwd();
         this.sessionManager = new SessionRecordingManager(userDataPath);
@@ -564,17 +566,17 @@ export class YellowPagesScraperProcess {
             if (hasCustomSearch && hasCustomExtraction) {
                 // Use platform-specific adapter methods for complete control
                 console.log(`🔧 Using platform-specific adapter for keyword: ${keyword}`);
-                
+
                 try {
                     // Use adapter's custom search method - this should handle the keyword input once
                     const searchResults = await this.adapter!.searchBusinesses(
-                        this.page!, 
-                        [keyword], 
+                        this.page!,
+                        [keyword],
                         location
                     );
-                    
+
                     console.log(`🔍 Adapter search returned ${searchResults.length} results`);
-                    
+
                     // Now loop through pages for this keyword
                     for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
                         if (!this.isRunning) break;
@@ -586,7 +588,7 @@ export class YellowPagesScraperProcess {
 
                         try {
                             let results: ScrapingResult[] = [];
-                            
+
                             // Use adapter's custom data extraction method
                             if (searchResults.length > 0) {
                                 const businessData = await this.adapter!.extractBusinessData(this.page!);
@@ -594,7 +596,7 @@ export class YellowPagesScraperProcess {
                                 // Convert BusinessData to ScrapingResult format
                                 results = [this.convertBusinessDataToScrapingResult(businessData)];
                             }
-                            
+
                             // Add results to total
                             if (results.length > 0) {
                                 totalResults = totalResults.concat(results);
@@ -640,19 +642,19 @@ export class YellowPagesScraperProcess {
                             // Continue with next page
                         }
                     }
-                    
+
                 } catch (error) {
                     console.error(`❌ Error using platform-specific adapter:`, error);
                     console.log(`🔄 Falling back to generic scraping logic`);
                     // Fallback to generic method
                     await this.scrapeKeywordWithGenericMethod(keyword, location, maxPages, delayBetweenRequests, totalResults);
                 }
-                
+
             } else if (hasCustomExtraction) {
                 // Use adapter's custom data extraction but generic navigation
                 console.log(`🔧 Using hybrid approach: generic navigation + custom extraction for keyword: ${keyword}`);
                 await this.scrapeKeywordWithGenericMethod(keyword, location, maxPages, delayBetweenRequests, totalResults, true);
-                
+
             } else {
                 // Fallback to generic scraping logic
                 console.log(`🔧 Using generic scraping logic for keyword: ${keyword}`);
@@ -666,11 +668,11 @@ export class YellowPagesScraperProcess {
             await this.sessionManager.endSession(totalResults.length, totalResults);
             await this.sessionManager.saveSession();
         }
-        
+
         // Filter out duplicate results before returning
         const uniqueResults = this.filterDuplicateResults(totalResults);
         console.log(`🔍 Filtered ${totalResults.length} results to ${uniqueResults.length} unique results`);
-        
+
         return uniqueResults;
     }
 
@@ -679,16 +681,16 @@ export class YellowPagesScraperProcess {
      * This method inputs the keyword once, then loops through pages
      */
     private async scrapeKeywordWithGenericMethod(
-        keyword: string, 
-        location: string, 
-        maxPages: number, 
-        delayBetweenRequests: number, 
+        keyword: string,
+        location: string,
+        maxPages: number,
+        delayBetweenRequests: number,
         totalResults: ScrapingResult[],
         useCustomExtraction: boolean = false
     ): Promise<void> {
         // Input the keyword once for this keyword
         await this.navigateToSearchPage(keyword, location, 1);
-        
+
         // Wait if paused
         while (this.isPaused && this.isRunning) {
             await this.sleep(1000);
@@ -697,7 +699,7 @@ export class YellowPagesScraperProcess {
         // Enhanced pagination loop that supports both traditional pagination and "load more" functionality
         let currentPage = 1;
         let hasMoreContent = true;
-        
+
         while (currentPage <= maxPages && hasMoreContent && this.isRunning) {
             // Wait if paused
             while (this.isPaused && this.isRunning) {
@@ -721,17 +723,17 @@ export class YellowPagesScraperProcess {
                 } else {
                     // For subsequent pages, use enhanced pagination handling
                     hasMoreContent = await this.handleEnhancedPagination(currentPage - 1, maxPages);
-                    
+
                     if (!hasMoreContent) {
                         console.log(`⚠️ No more content available, stopping pagination`);
                         break;
                     }
-                    
+
                     // Wait if paused
                     while (this.isPaused && this.isRunning) {
                         await this.sleep(1000);
                     }
-                    
+
                     if (useCustomExtraction && this.adapter) {
                         // Use adapter's custom data extraction
                         const businessData = await this.adapter.extractBusinessData(this.page!);
@@ -776,7 +778,7 @@ export class YellowPagesScraperProcess {
                 if (currentPage < maxPages && hasMoreContent) {
                     await this.sleep(delayBetweenRequests);
                 }
-                
+
                 currentPage++;
 
             } catch (error) {
@@ -880,7 +882,7 @@ export class YellowPagesScraperProcess {
                     console.log('No search form found, using URL-based navigation');
                     const searchUrl = this.buildFallbackSearchUrl(keyword, location, pageNum);
                     await this.page.goto(searchUrl, { waitUntil: 'networkidle2' });
-                    
+
                     // Check for Cloudflare protection after URL-based navigation
                     await this.handleCloudflareDetection();
                 }
@@ -1179,10 +1181,10 @@ export class YellowPagesScraperProcess {
                         timeout: 15000
                     });
                     console.log(`Navigated to page ${pageNum} using platform selector`);
-                    
+
                     // Check for Cloudflare protection after navigation
                     await this.handleCloudflareDetection();
-                    
+
                     return;
                 }
             }
@@ -1231,7 +1233,7 @@ export class YellowPagesScraperProcess {
                     timeout: 15000
                 });
                 console.log(`Navigated to page ${pageNum}`);
-                
+
                 // Check for Cloudflare protection after navigation
                 await this.handleCloudflareDetection();
             } else {
@@ -1289,10 +1291,10 @@ export class YellowPagesScraperProcess {
             // Extract all business listings
             const businessElements = await this.page.$$(selectors.businessItem);
             console.log(`Found ${businessElements.length} business listings`);
-            
+
             // Track processed businesses to prevent duplicates when platforms add more results to current page
             const processedBusinessIds = new Set<string>();
-            
+
             // Store selectors for re-querying after page re-renders
             const businessSelectors = {
                 businessItem: selectors.businessItem,
@@ -1320,7 +1322,7 @@ export class YellowPagesScraperProcess {
                 specialties: selectors.specialties,
                 navigation: selectors.navigation
             };
-            
+
             for (let i = 0; i < businessElements.length; i++) {
                 if (!this.isRunning) break;
 
@@ -1328,10 +1330,10 @@ export class YellowPagesScraperProcess {
                     // Log current item being processed
                     const itemNumber = i + 1; // Convert to 1-based indexing for user-friendly display
                     console.log(`\n📋 Processing business item ${itemNumber}/${businessElements.length}`);
-                    
+
                     // Re-query the element after each detail page navigation to handle page re-renders
                     let currentElement = businessElements[i];
-                    
+
                     // Check if element is still valid, if not, re-query it
                     try {
                         await currentElement.evaluate(el => el.isConnected);
@@ -1346,19 +1348,19 @@ export class YellowPagesScraperProcess {
                             continue;
                         }
                     }
-                    
+
                     // Generate a unique identifier for this business to prevent duplicates
                     const businessId = await this.generateBusinessIdentifier(currentElement, businessSelectors);
-                    
+
                     // Check if this business has already been processed
                     if (processedBusinessIds.has(businessId)) {
                         console.log(`🔄 Skipping duplicate business: ${businessId}`);
                         continue;
                     }
-                    
+
                     // Mark this business as processed
                     processedBusinessIds.add(businessId);
-                    
+
                     const result = await this.extractBusinessFromElement(currentElement, businessSelectors);
                     console.log(`📊 Extraction result for item ${itemNumber}:`, result?.business_name || 'No business name found');
                     if (result) {
@@ -1374,7 +1376,7 @@ export class YellowPagesScraperProcess {
                                 console.log(`⚠️ No enhanced data for item ${itemNumber}, using basic result`);
                                 results.push(result);
                             }
-                            
+
                             // After returning from detail page, re-query all elements to handle page re-render
                             console.log(`🔄 Re-querying business elements after detail page navigation for item ${itemNumber}...`);
                             const refreshedElements = await this.page!.$$(businessSelectors.businessItem);
@@ -1382,7 +1384,7 @@ export class YellowPagesScraperProcess {
                                 // Update the businessElements array with fresh references
                                 businessElements.splice(0, businessElements.length, ...refreshedElements);
                                 console.log(`✅ Refreshed ${businessElements.length} business elements after item ${itemNumber}`);
-                                
+
                                 // Check if new businesses were added (indicating "load more" functionality)
                                 if (refreshedElements.length > processedBusinessIds.size) {
                                     console.log(`🆕 Detected ${refreshedElements.length - processedBusinessIds.size} new businesses added to page`);
@@ -1395,10 +1397,10 @@ export class YellowPagesScraperProcess {
                     } else {
                         console.log(`⚠️ No data extracted for item ${itemNumber}`);
                     }
-                    
+
                     // Log progress summary
                     console.log(`📈 Progress: ${results.length}/${businessElements.length} items processed successfully`);
-                    
+
                 } catch (error) {
                     console.error(`❌ Error processing item ${i + 1}:`, error);
                     // Continue with next element
@@ -1419,7 +1421,7 @@ export class YellowPagesScraperProcess {
     private async generateBusinessIdentifier(element: any, selectors: any): Promise<string> {
         try {
             const identifierParts: string[] = [];
-            
+
             // Extract business name
             if (selectors.businessName) {
                 const name = await element.$(selectors.businessName);
@@ -1430,7 +1432,7 @@ export class YellowPagesScraperProcess {
                     }
                 }
             }
-            
+
             // Extract phone number for identifier (basic extraction only)
             let phoneText: string | undefined = undefined;
             if (selectors.phone) {
@@ -1439,7 +1441,7 @@ export class YellowPagesScraperProcess {
                     phoneText = await phone.evaluate(el => el.textContent?.trim() || '');
                 }
             }
-            
+
             if (phoneText) {
                 // Clean phone number to standardize format
                 const cleanPhone = phoneText.replace(/[^\d+]/g, '');
@@ -1447,7 +1449,7 @@ export class YellowPagesScraperProcess {
                     identifierParts.push(`phone:${cleanPhone}`);
                 }
             }
-            
+
             // Extract address
             if (selectors.address) {
                 const address = await element.$(selectors.address);
@@ -1458,7 +1460,7 @@ export class YellowPagesScraperProcess {
                     }
                 }
             }
-            
+
             // Extract website URL
             if (selectors.website) {
                 const website = await element.$(selectors.website);
@@ -1469,12 +1471,12 @@ export class YellowPagesScraperProcess {
                     }
                 }
             }
-            
+
             // If we have enough data, create a hash-like identifier
             if (identifierParts.length > 0) {
                 return identifierParts.join('|');
             }
-            
+
             // Fallback: use element position and basic text content
             const fallbackText = await element.evaluate(el => el.textContent?.trim() || '');
             const elementIndex = await element.evaluate(el => {
@@ -1484,9 +1486,9 @@ export class YellowPagesScraperProcess {
                 }
                 return 0;
             });
-            
+
             return `fallback:${elementIndex}:${fallbackText.substring(0, 50).toLowerCase()}`;
-            
+
         } catch (error) {
             console.warn('Error generating business identifier:', error);
             // Ultimate fallback: use timestamp and element reference
@@ -1516,6 +1518,7 @@ export class YellowPagesScraperProcess {
                 'a[data-testid="loadMore"]',
                 'a:contains("Load More")',
                 'a:contains("Show More")',
+                'a.next-page-btn',
                 '.load-more',
                 '.loadMore',
                 '.show-more',
@@ -1610,26 +1613,26 @@ export class YellowPagesScraperProcess {
                             const style = window.getComputedStyle(el);
                             const htmlEl = el as HTMLElement;
                             const buttonEl = el as HTMLButtonElement;
-                            return rect.width > 0 && 
-                                   rect.height > 0 && 
-                                   style.display !== 'none' && 
-                                   style.visibility !== 'hidden' && 
-                                   !buttonEl.disabled &&
-                                   htmlEl.offsetParent !== null;
+                            return rect.width > 0 &&
+                                rect.height > 0 &&
+                                style.display !== 'none' &&
+                                style.visibility !== 'hidden' &&
+                                !buttonEl.disabled &&
+                                htmlEl.offsetParent !== null;
                         });
 
                         if (isVisible && isClickable) {
                             console.log(`🔄 Clicking "Load More" button with selector: ${selector}`);
-                            
+
                             // Store current number of business elements
                             const currentBusinessCount = await this.page.$$(this.platformInfo.selectors.businessItem).then(elements => elements.length);
-                            
+
                             // Click the load more button
                             await loadMoreButton.click();
-                            
+
                             // Wait for new content to load
                             await this.sleep(3000);
-                            
+
                             // Wait for new business elements to appear
                             await this.page.waitForFunction(
                                 (selector, previousCount) => {
@@ -1640,11 +1643,11 @@ export class YellowPagesScraperProcess {
                                 this.platformInfo.selectors.businessItem,
                                 currentBusinessCount
                             );
-                            
+
                             // Get new count
                             const newBusinessCount = await this.page.$$(this.platformInfo.selectors.businessItem).then(elements => elements.length);
                             const newBusinesses = newBusinessCount - currentBusinessCount;
-                            
+
                             console.log(`✅ Loaded ${newBusinesses} new businesses (${currentBusinessCount} → ${newBusinessCount})`);
                             return true;
                         }
@@ -1668,24 +1671,41 @@ export class YellowPagesScraperProcess {
         if (!this.page) return false;
 
         try {
-            // First, check if this platform uses "load more" functionality
-            const usesLoadMore = await this.detectLoadMoreFunctionality();
-            
-            if (usesLoadMore) {
-                console.log(`🔄 Platform uses "Load More" functionality instead of traditional pagination`);
-                
-                // Try to load more content
-                const loadedMore = await this.handleLoadMoreFunctionality();
-                if (loadedMore) {
-                    return true; // Successfully loaded more content
-                } else {
-                    console.log(`⚠️ No more content to load or load more button not available`);
-                    return false; // No more content available
-                }
+
+            // Scroll the page down to trigger any lazy-loaded "load more" buttons or infinite scroll
+            await this.page.evaluate(() => {
+                window.scrollTo(0, document.body.scrollHeight);
+            });
+            // Give the page a moment to load new content if applicable
+            await this.sleep(1000);
+            // First, try traditional pagination
+            console.log(`📄 Attempting traditional pagination for page ${currentPage + 1}`);
+            const traditionalPaginationWorked = await this.navigateToNextPage();
+
+            if (traditionalPaginationWorked) {
+                console.log(`✅ Traditional pagination successful for page ${currentPage + 1}`);
+                return true;
             } else {
-                // Use traditional pagination
-                console.log(`📄 Using traditional pagination for page ${currentPage + 1}`);
-                return await this.navigateToNextPage();
+                console.log(`⚠️ Traditional pagination failed, checking for "Load More" functionality`);
+
+                // Fallback: Check if this platform uses "load more" functionality
+                const usesLoadMore = await this.detectLoadMoreFunctionality();
+
+                if (usesLoadMore) {
+                    console.log(`🔄 Platform uses "Load More" functionality as fallback`);
+
+                    // Try to load more content
+                    const loadedMore = await this.handleLoadMoreFunctionality();
+                    if (loadedMore) {
+                        return true; // Successfully loaded more content
+                    } else {
+                        console.log(`⚠️ No more content to load or load more button not available`);
+                        return false; // No more content available
+                    }
+                } else {
+                    console.log(`⚠️ No pagination or load more functionality available`);
+                    return false; // No pagination available
+                }
             }
         } catch (error) {
             console.error('Error in enhanced pagination handling:', error);
@@ -1701,43 +1721,45 @@ export class YellowPagesScraperProcess {
 
         try {
             const selectors = this.platformInfo.selectors;
-            
+
             // Check if platform has pagination selectors defined
             if (selectors.pagination && typeof selectors.pagination === 'object' && selectors.pagination.nextButton) {
+                console.log(`📄 Checking for next page button: ${selectors.pagination.nextButton}`);
                 const nextButton = await this.page.$(selectors.pagination.nextButton);
+
                 if (nextButton) {
                     const isClickable = await nextButton.evaluate(el => {
                         const rect = el.getBoundingClientRect();
                         const style = window.getComputedStyle(el);
                         const htmlEl = el as HTMLElement;
                         const buttonEl = el as HTMLButtonElement;
-                        return rect.width > 0 && 
-                               rect.height > 0 && 
-                               style.display !== 'none' && 
-                               style.visibility !== 'hidden' && 
-                               !buttonEl.disabled &&
-                               htmlEl.offsetParent !== null;
+                        return rect.width > 0 &&
+                            rect.height > 0 &&
+                            style.display !== 'none' &&
+                            style.visibility !== 'hidden' &&
+                            !buttonEl.disabled &&
+                            htmlEl.offsetParent !== null;
                     });
 
                     if (isClickable) {
                         console.log(`🔄 Clicking next page button: ${selectors.pagination.nextButton}`);
                         await nextButton.click();
-                        
+
                         // Wait for navigation to complete
                         await this.page.waitForNavigation({
                             waitUntil: 'networkidle2',
                             timeout: 30000
                         });
-                        
+
                         // Wait for new results to load
                         await this.page.waitForSelector(selectors.businessList, { timeout: 10000 });
-                        
+
                         console.log(`✅ Successfully navigated to next page`);
                         return true;
                     }
                 }
             }
-            
+
             return false;
         } catch (error) {
             console.error('Error navigating to next page:', error);
@@ -1768,12 +1790,12 @@ export class YellowPagesScraperProcess {
             const isClickable = await detailLink.evaluate(el => {
                 const rect = el.getBoundingClientRect();
                 const style = window.getComputedStyle(el);
-                return rect.width > 0 && 
-                       rect.height > 0 && 
-                       style.display !== 'none' && 
-                       style.visibility !== 'hidden' && 
-                       !el.disabled &&
-                       el.offsetParent !== null;
+                return rect.width > 0 &&
+                    rect.height > 0 &&
+                    style.display !== 'none' &&
+                    style.visibility !== 'hidden' &&
+                    !el.disabled &&
+                    el.offsetParent !== null;
             });
 
             if (!isClickable) {
@@ -1789,14 +1811,8 @@ export class YellowPagesScraperProcess {
                 this.sessionManager.logAction(currentState, `click('${selectors.navigation.detailLink}')`);
             }
 
-            // Click the detail link to navigate naturally
-            await detailLink.click();
-
-            // Wait for navigation to complete
-            await this.page.waitForNavigation({
-                waitUntil: 'networkidle2',
-                timeout: 50000
-            });
+            // Click the detail link and handle both same-tab and new-tab scenarios
+            await this.handleDetailLinkClick(detailLink);
 
             // Wait for page to load
             await this.sleep(selectors.navigation.delayAfterNavigation || 2000);
@@ -1825,14 +1841,8 @@ export class YellowPagesScraperProcess {
             const enhancedResult = await this.extractEnhancedDataFromDetailPage(basicResult, selectors);
 
             // Navigate back to search results (if needed)
-            await this.page.goBack({ waitUntil: 'networkidle2' });
+            await this.navigateBackToSearchResults(selectors);
 
-            // Wait for search results to reload
-            await this.page.waitForSelector(selectors.businessList, { timeout: 10000 });
-            
-            // Check for Cloudflare protection after returning to search results
-            await this.handleCloudflareDetection();
-            
             console.log('enhancedResult', enhancedResult);
             return enhancedResult;
 
@@ -1840,6 +1850,226 @@ export class YellowPagesScraperProcess {
             console.error('Error navigating to detail page:', error);
             // Return basic result if navigation fails
             return basicResult;
+        }
+    }
+
+    /**
+     * Handle detail link click with automatic detection of new tab vs same-tab navigation
+     */
+    private async handleDetailLinkClick(detailLink: any): Promise<void> {
+        if (!this.page) return;
+
+        try {
+            // Get current page count and URL before clicking
+            const pagesBefore = await this.page.browser()?.pages() || [];
+            const initialPageCount = pagesBefore.length;
+            const initialUrl = this.page.url();
+
+            console.log(`📄 Pages before click: ${initialPageCount}`);
+            console.log(`🌐 Current URL: ${initialUrl}`);
+
+            // Set up promises to wait for both navigation scenarios
+            const navigationPromise = this.page.waitForNavigation({
+                waitUntil: 'networkidle2',
+                timeout: 8000 // Shorter timeout for same-tab navigation
+            }).catch(() => null); // Don't throw if no navigation occurs
+
+            // This promise waits for a new browser tab (page) to be opened after clicking the detail link.
+            // It uses Puppeteer's waitForTarget to detect when a new 'page' target appears.
+            // We'll wait for any new page target, then validate if it's different from current page.
+            const newPagePromise = new Promise<any>((resolve) => {
+                const browser = this.page?.browser();
+                if (!browser) {
+                    resolve(null);
+                    return;
+                }
+
+                const timeout = setTimeout(() => resolve(null), 8000);
+
+                browser.on('targetcreated', async (target) => {
+                    if (target.type() === 'page') {
+                        try {
+                            const newPage = await target.page();
+                            if (newPage && newPage !== this.page) {
+                                clearTimeout(timeout);
+                                console.log(`🆕 New page detected: ${newPage.url()}`);
+                                resolve(newPage);
+                            }
+                        } catch (error) {
+                            // Continue waiting
+                        }
+                    }
+                });
+            });
+
+            // Click the detail link
+            await detailLink.click();
+            console.log('🖱️ Detail link clicked');
+
+            // Small delay to allow the browser to process the click
+            await this.sleep(500);
+
+            // Wait for either navigation or new page with a race condition
+            const [navigationResult, newPageResult] = await Promise.allSettled([
+                navigationPromise,
+                newPagePromise
+            ]);
+
+            // Check the results and determine what happened
+            const pagesAfter = await this.page.browser()?.pages() || [];
+            const finalPageCount = pagesAfter.length;
+            const currentUrl = this.page.url();
+
+            console.log(`📄 Pages after click: ${finalPageCount} (was ${initialPageCount})`);
+            console.log(`🌐 Current URL after click: ${currentUrl}`);
+            console.log(`🌐 Initial URL: ${initialUrl}`);
+
+            // Debug: Show all page URLs
+            const allPages = await this.page.browser()?.pages() || [];
+            console.log('📄 All page URLs:', allPages.map((p, i) => `${i}: ${p.url()}`));
+
+            // Determine the navigation type based on results
+            let newTabOpened = finalPageCount > initialPageCount &&
+                newPageResult.status === 'fulfilled' &&
+                newPageResult.value !== null;
+            const sameTabNavigated = navigationResult.status === 'fulfilled' && navigationResult.value !== null;
+            const urlChanged = currentUrl !== initialUrl;
+
+            console.log(`🔍 Detection results: newTab=${newTabOpened}, sameTab=${sameTabNavigated}, urlChanged=${urlChanged}`);
+
+            // Fallback: If event-based detection failed, manually check for new pages
+            if (!newTabOpened && finalPageCount > initialPageCount) {
+                console.log('🔍 Event detection failed, manually checking for new pages...');
+                const allPages = await this.page.browser()?.pages() || [];
+                const newPage = allPages.find(p =>
+                    p !== this.page &&
+                    p.url() !== initialUrl &&
+                    p.url() !== 'about:blank' &&
+                    !p.isClosed()
+                );
+
+                if (newPage) {
+                    console.log('🆕 Found new page manually:', newPage.url());
+                    newTabOpened = true;
+                    // Update the result for the following logic
+                    (newPageResult as any).value = newPage;
+                    (newPageResult as any).status = 'fulfilled';
+                }
+            }
+
+            if (newTabOpened) {
+                // New tab was opened
+                console.log('🆕 New tab detected, switching to it');
+                const newPageInstance = (newPageResult as PromiseFulfilledResult<any>).value;
+
+                // Mark that we're in a new tab scenario (for return navigation)
+                this.isInNewTab = true;
+
+                // Switch to the new detail page (search results page remains open automatically)
+                this.page = newPageInstance;
+
+                // Wait for the new page to load completely
+                if (this.page) {
+                    await this.page.waitForFunction(() => document.readyState === 'complete', { timeout: 30000 });
+                    console.log(`🌐 New tab URL: ${this.page.url()}`);
+                }
+
+                console.log('✅ Successfully switched to new tab');
+            } else if (sameTabNavigated || urlChanged) {
+                // Same tab navigation occurred
+                console.log('🔄 Same tab navigation detected');
+
+                // Wait a bit more for the page to stabilize
+                await this.sleep(1000);
+
+                console.log('✅ Same tab navigation completed');
+            } else {
+                // No clear navigation occurred - this might be a JavaScript-based page update
+                console.log('⚠️ No clear navigation detected, checking for dynamic content updates');
+
+                // Wait a bit for any dynamic content to load
+                await this.sleep(2000);
+
+                // Check if the page content has changed (indicating a dynamic update)
+                const hasContentChanged = await this.page.evaluate(() => {
+                    // Simple check for common dynamic content indicators
+                    return document.querySelector('.loading, .spinner') === null &&
+                        document.querySelector('[data-loaded="true"]') !== null ||
+                        document.readyState === 'complete';
+                });
+
+                if (hasContentChanged) {
+                    console.log('✅ Dynamic content update detected');
+                } else {
+                    console.log('⚠️ No navigation or content update detected, continuing with current page');
+                }
+            }
+
+        } catch (error) {
+            console.error('❌ Error handling detail link click:', error);
+            // Don't throw - let the process continue
+        }
+    }
+
+    /**
+     * Navigate back to search results, handling both same-tab and new-tab scenarios
+     */
+    private async navigateBackToSearchResults(selectors: PlatformInfo['selectors']): Promise<void> {
+        if (!this.page) return;
+
+        try {
+            // Check if we're in a new tab scenario
+            const isInNewTab = this.isInNewTab;
+
+            if (isInNewTab) {
+                // We're in a new tab - simply close it to return to search results
+                console.log('🆕 In new tab scenario, closing detail page to return to search results');
+
+                // Close the current detail page
+                await this.page.close();
+
+                // Browser will automatically focus back to the search results page
+                // We need to find and reference that page
+                const browser = this.page.browser();
+                if (browser) {
+                    const pages = await browser.pages();
+                    // Get the remaining page (should be the search results page)
+                    const searchResultsPage = pages.find(page => !page.isClosed());
+
+                    if (searchResultsPage) {
+                        this.page = searchResultsPage;
+                        console.log(`🔍 Switched back to search results page: ${this.page.url()}`);
+
+                        // Wait for search results to be ready
+                        await this.page.waitForSelector(selectors.businessList, { timeout: 10000 });
+
+                        // Check for Cloudflare protection
+                        await this.handleCloudflareDetection();
+
+                        // Clear the new tab flag
+                        this.isInNewTab = false;
+
+                        console.log('✅ Successfully closed detail page and returned to search results');
+                    } else {
+                        console.log('⚠️ Could not find search results page after closing detail tab');
+                    }
+                }
+            } else {
+                // Same tab scenario - use normal back navigation
+                console.log('🔄 Same tab scenario, navigating back to search results');
+                await this.page.goBack({ waitUntil: 'networkidle2' });
+
+                // Wait for search results to reload
+                await this.page.waitForSelector(selectors.businessList, { timeout: 10000 });
+
+                // Check for Cloudflare protection after returning to search results
+                await this.handleCloudflareDetection();
+
+                console.log('✅ Successfully navigated back to search results');
+            }
+        } catch (error) {
+            console.error('❌ Error navigating back to search results:', error);
+            // Don't throw - let the process continue
         }
     }
 
@@ -1857,38 +2087,38 @@ export class YellowPagesScraperProcess {
         const enhancedResult = { ...basicResult };
 
         try {
-                    // Extract enhanced business name if available
-        if (detailSelectors.businessName) {
-            const enhancedName = await this.extractTextFromPage(detailSelectors.businessName);
-            if (enhancedName) enhancedResult.business_name = enhancedName;
-        }
-
-        // Extract website from detail page if available (this takes precedence over list page)
-        if (detailSelectors.website) {
-            const website = await this.extractAttributeFromPage(detailSelectors.website, 'href');
-            if (website) {
-                enhancedResult.website = website;
-                console.log(`📱 Extracted website from detail page: ${website}`);
+            // Extract enhanced business name if available
+            if (detailSelectors.businessName) {
+                const enhancedName = await this.extractTextFromPage(detailSelectors.businessName);
+                if (enhancedName) enhancedResult.business_name = enhancedName;
             }
-        }
 
-        // Use adapter-specific website extraction if available (for detail page)
-        if (this.adapter && typeof this.adapter.extractWebsiteWithReveal === 'function') {
-            try {
-                console.log('🔧 Using adapter-specific website extraction method on detail page');
-                const adapterWebsite = await this.adapter.extractWebsiteWithReveal(this.page!, null);
-                if (adapterWebsite && this.isValidWebsiteUrl(adapterWebsite)) {
-                    enhancedResult.website = adapterWebsite;
-                    console.log(`🌐 Valid website extracted using adapter method on detail page: ${adapterWebsite}`);
-                } else if (adapterWebsite) {
-                    console.log(`⚠️ Invalid website format from adapter method on detail page: ${adapterWebsite}`);
+            // Extract website from detail page if available (this takes precedence over list page)
+            if (detailSelectors.website) {
+                const website = await this.extractAttributeFromPage(detailSelectors.website, 'href');
+                if (website) {
+                    enhancedResult.website = website;
+                    console.log(`📱 Extracted website from detail page: ${website}`);
                 }
-            } catch (error) {
-                console.warn('⚠️ Error in adapter website extraction method on detail page:', error);
             }
-        }
 
-        // Extract full address if available
+            // Use adapter-specific website extraction if available (for detail page)
+            if (this.adapter && typeof this.adapter.extractWebsiteWithReveal === 'function') {
+                try {
+                    console.log('🔧 Using adapter-specific website extraction method on detail page');
+                    const adapterWebsite = await this.adapter.extractWebsiteWithReveal(this.page!, null);
+                    if (adapterWebsite && this.isValidWebsiteUrl(adapterWebsite)) {
+                        enhancedResult.website = adapterWebsite;
+                        console.log(`🌐 Valid website extracted using adapter method on detail page: ${adapterWebsite}`);
+                    } else if (adapterWebsite) {
+                        console.log(`⚠️ Invalid website format from adapter method on detail page: ${adapterWebsite}`);
+                    }
+                } catch (error) {
+                    console.warn('⚠️ Error in adapter website extraction method on detail page:', error);
+                }
+            }
+
+            // Extract full address if available
             if (detailSelectors.fullAddress) {
                 const fullAddress = await this.extractTextFromPage(detailSelectors.fullAddress);
                 if (fullAddress) {
@@ -1952,7 +2182,7 @@ export class YellowPagesScraperProcess {
 
             // Extract additional email addresses if available
             let emailExtracted = false;
-            
+
             // First try adapter-specific email extraction if available
             if (this.adapter && typeof this.adapter.extractEmailFromDetailPage === 'function') {
                 try {
@@ -1969,7 +2199,7 @@ export class YellowPagesScraperProcess {
                     console.warn('⚠️ Error in adapter email extraction method:', error);
                 }
             }
-            
+
             // If adapter method didn't find email, try standard selector-based extraction
             if (!emailExtracted && detailSelectors.additionalEmail) {
                 console.log('🔧 Falling back to selector-based email extraction');
@@ -2074,10 +2304,10 @@ export class YellowPagesScraperProcess {
 
             // Capture the current URL
             const currentUrl = this.page.url();
-            
+
             // Capture the raw HTML content
             const rawHtml = await this.page.content();
-            
+
             // Capture page metadata
             const pageMetadata = await this.page.evaluate(() => {
                 return {
@@ -2095,10 +2325,10 @@ export class YellowPagesScraperProcess {
                 const getElementInfo = (selector: string) => {
                     const element = document.querySelector(selector);
                     if (!element) return null;
-                    
+
                     // Cast to HTMLElement to access offsetWidth and offsetHeight
                     const htmlElement = element as HTMLElement;
-                    
+
                     return {
                         exists: true,
                         text: element.textContent?.trim().substring(0, 200) || '',
@@ -2265,15 +2495,15 @@ export class YellowPagesScraperProcess {
      */
     private isValidPhoneNumber(phone: string): boolean {
         if (!phone || phone.trim() === '') return false;
-        
+
         // Remove common phone number formatting
         const cleanPhone = phone.replace(/[\s\-\(\)\+\.]/g, '');
-        
+
         // Check if it contains mostly digits and has reasonable length
         const hasDigits = /\d/.test(cleanPhone);
         const isReasonableLength = cleanPhone.length >= 8 && cleanPhone.length <= 15;
         const isNotJustText = !/^[a-zA-Z\s]+$/.test(phone);
-        
+
         return hasDigits && isReasonableLength && isNotJustText;
     }
 
@@ -2282,7 +2512,7 @@ export class YellowPagesScraperProcess {
      */
     private isValidWebsiteUrl(url: string): boolean {
         if (!url || url.trim() === '') return false;
-        
+
         try {
             // Check if it's a valid URL format
             const urlPattern = /^https?:\/\/.+/i;
@@ -2301,7 +2531,7 @@ export class YellowPagesScraperProcess {
             if (this.page) {
                 await this.page.waitForSelector('body', { timeout: 10000 });
             }
-            
+
             const business_name = await this.extractText(element, selectors.businessName);
             console.log('element', element);
             console.log('selectors', selectors.businessName);
@@ -2317,7 +2547,7 @@ export class YellowPagesScraperProcess {
             if (selectors.phone) {
                 phoneNumber = await this.extractText(element, selectors.phone);
             }
-            
+
             // Extract website URL from list page (basic extraction only)
             let websiteUrl: string | undefined = undefined;
             if (selectors.website) {
@@ -2362,10 +2592,10 @@ export class YellowPagesScraperProcess {
      */
     private async extractText(element: any, selector: string): Promise<string | undefined> {
         if (!selector) return undefined;
-        
+
         // Add small delay to handle page re-rendering
         await this.sleep(100);
-        
+
         // Retry logic with fresh element queries
         for (let attempt = 0; attempt < 3; attempt++) {
             try {
@@ -2380,7 +2610,7 @@ export class YellowPagesScraperProcess {
                             return '';
                         }
                     });
-                    
+
                     if (text) {
                         return text;
                     }
@@ -2389,13 +2619,13 @@ export class YellowPagesScraperProcess {
                 }
             } catch (error) {
                 const errorMessage = error instanceof Error ? error.message : String(error);
-                
+
                 if (errorMessage.includes('Protocol error') || errorMessage.includes('Could not find object')) {
                     console.log(`DOM re-rendering detected, attempt ${attempt + 1}/3 for selector: ${selector}`);
-                    
+
                     // Wait longer between retries to allow page to stabilize
                     await this.sleep(200 * (attempt + 1));
-                    
+
                     // Continue to next attempt
                     continue;
                 } else {
@@ -2404,7 +2634,7 @@ export class YellowPagesScraperProcess {
                 }
             }
         }
-        
+
         return undefined;
     }
 
@@ -2413,10 +2643,10 @@ export class YellowPagesScraperProcess {
      */
     private async extractAttribute(element: any, selector: string, attribute: string): Promise<string | undefined> {
         if (!selector) return undefined;
-        
+
         // Add small delay to handle page re-rendering
         await this.sleep(100);
-        
+
         // Retry logic with fresh element queries
         for (let attempt = 0; attempt < 3; attempt++) {
             try {
@@ -2431,7 +2661,7 @@ export class YellowPagesScraperProcess {
                             return null;
                         }
                     }, attribute);
-                    
+
                     if (attrValue) {
                         return attrValue;
                     }
@@ -2440,13 +2670,13 @@ export class YellowPagesScraperProcess {
                 }
             } catch (error) {
                 const errorMessage = error instanceof Error ? error.message : String(error);
-                
+
                 if (errorMessage.includes('Protocol error') || errorMessage.includes('Could not find object')) {
                     console.log(`DOM re-rendering detected, attempt ${attempt + 1}/3 for attribute selector: ${selector}`);
-                    
+
                     // Wait longer between retries to allow page to stabilize
                     await this.sleep(200 * (attempt + 1));
-                    
+
                     // Continue to next attempt
                     continue;
                 } else {
@@ -2455,7 +2685,7 @@ export class YellowPagesScraperProcess {
                 }
             }
         }
-        
+
         return undefined;
     }
 
@@ -2464,17 +2694,17 @@ export class YellowPagesScraperProcess {
      */
     private async extractArray(element: any, selector: string): Promise<string[] | undefined> {
         if (!selector) return undefined;
-        
+
         // Add small delay to handle page re-rendering
         await this.sleep(100);
-        
+
         // Retry logic with fresh element queries
         for (let attempt = 0; attempt < 3; attempt++) {
             try {
                 // Always get fresh element references to avoid stale DOM references
                 const elements = await element.$$(selector);
                 const array: string[] = [];
-                
+
                 for (const el of elements) {
                     try {
                         const text = await el.evaluate(element => {
@@ -2494,17 +2724,17 @@ export class YellowPagesScraperProcess {
                         }
                     }
                 }
-                
+
                 return array.length > 0 ? array : undefined;
             } catch (error) {
                 const errorMessage = error instanceof Error ? error.message : String(error);
-                
+
                 if (errorMessage.includes('Protocol error') || errorMessage.includes('Could not find object')) {
                     console.log(`DOM re-rendering detected, attempt ${attempt + 1}/3 for array selector: ${selector}`);
-                    
+
                     // Wait longer between retries to allow page to stabilize
                     await this.sleep(200 * (attempt + 1));
-                    
+
                     // Continue to next attempt
                     continue;
                 } else {
@@ -2513,7 +2743,7 @@ export class YellowPagesScraperProcess {
                 }
             }
         }
-        
+
         return undefined;
     }
 
@@ -2635,9 +2865,9 @@ export class YellowPagesScraperProcess {
                         // Check for text content
                         const text = selector.replace('text=', '');
                         const hasText = await this.page!.evaluate((searchText) => {
-                            return document.body.innerText.includes(searchText) || 
-                                   document.title.includes(searchText) ||
-                                   document.documentElement.innerText.includes(searchText);
+                            return document.body.innerText.includes(searchText) ||
+                                document.title.includes(searchText) ||
+                                document.documentElement.innerText.includes(searchText);
                         }, text);
                         if (hasText) {
                             console.log(`🔒 Cloudflare protection detected via text: "${text}"`);
@@ -2682,8 +2912,8 @@ export class YellowPagesScraperProcess {
 
             // Check URL for Cloudflare indicators
             const currentUrl = this.page!.url();
-            if (currentUrl.includes('cloudflare') || 
-                currentUrl.includes('challenge') || 
+            if (currentUrl.includes('cloudflare') ||
+                currentUrl.includes('challenge') ||
                 currentUrl.includes('cf-') ||
                 currentUrl.includes('security-check')) {
                 console.log(`🔒 Cloudflare protection detected via URL: ${currentUrl}`);
@@ -2696,16 +2926,16 @@ export class YellowPagesScraperProcess {
                     // This might not work in all contexts, but worth trying
                     return (window as any).performance?.getEntriesByType?.('resource') || [];
                 });
-                
+
                 // Look for Cloudflare resources in performance entries
-                const hasCloudflareResources = response.some((entry: any) => 
+                const hasCloudflareResources = response.some((entry: any) =>
                     entry.name && (
                         entry.name.includes('cloudflare') ||
                         entry.name.includes('cf-') ||
                         entry.name.includes('challenge')
                     )
                 );
-                
+
                 if (hasCloudflareResources) {
                     console.log('🔒 Cloudflare protection detected via resource loading');
                     return true;
@@ -2721,13 +2951,13 @@ export class YellowPagesScraperProcess {
                     const bodyText = document.body.innerText.toLowerCase();
                     const hasChallengeForm = document.getElementById('challenge-form') !== null;
                     const hasCfWrapper = document.querySelector('.cf-wrapper') !== null;
-                    const hasSecurityCheck = bodyText.includes('security check') || 
-                                           bodyText.includes('verifying') ||
-                                           bodyText.includes('just a moment');
-                    
+                    const hasSecurityCheck = bodyText.includes('security check') ||
+                        bodyText.includes('verifying') ||
+                        bodyText.includes('just a moment');
+
                     return hasChallengeForm || hasCfWrapper || hasSecurityCheck;
                 });
-                
+
                 if (hasCloudflareStructure) {
                     console.log('🔒 Cloudflare protection detected via page structure analysis');
                     return true;
@@ -2753,12 +2983,12 @@ export class YellowPagesScraperProcess {
             const isBlocked = await this.detectCloudflareProtection();
             if (isBlocked) {
                 console.log('🚨 Cloudflare protection detected! Notifying parent process...');
-                
+
                 // Get additional context for the notification
                 const currentUrl = this.page.url();
                 const userAgent = await this.page.evaluate(() => navigator.userAgent);
                 const timestamp = new Date().toISOString();
-                
+
                 // Try to get more detailed information about the Cloudflare page
                 let additionalInfo = '';
                 try {
@@ -2767,7 +2997,7 @@ export class YellowPagesScraperProcess {
                         const bodyText = document.body.innerText.substring(0, 500); // First 500 chars
                         const hasChallengeForm = !!document.getElementById('challenge-form');
                         const hasCfWrapper = !!document.querySelector('.cf-wrapper');
-                        
+
                         return {
                             title,
                             bodyText,
@@ -2775,12 +3005,12 @@ export class YellowPagesScraperProcess {
                             hasCfWrapper
                         };
                     });
-                    
+
                     additionalInfo = `Page Title: "${pageInfo.title}", Challenge Form: ${pageInfo.hasChallengeForm}, CF Wrapper: ${pageInfo.hasCfWrapper}`;
                 } catch (error) {
                     additionalInfo = 'Unable to extract additional page information';
                 }
-                
+
                 // Create Cloudflare detection message
                 const cloudflareMessage = {
                     type: 'SCRAPING_CLOUDFLARE_DETECTED',
@@ -2823,14 +3053,14 @@ export class YellowPagesScraperProcess {
                 console.log('     - Use different proxy/VPN if available');
                 console.log('     - Reduce scraping frequency');
                 console.log('     - Check if manual access works in browser');
-                
+
                 // Pause the scraping process due to Cloudflare protection
                 if (this.isRunning) {
                     console.log('⏸️ Pausing scraping process due to Cloudflare protection...');
                     try {
                         await this.pause();
                         console.log('✅ Scraping paused successfully due to Cloudflare protection');
-                        
+
                         // Send additional pause notification to parent
                         const pauseNotificationMessage = {
                             type: 'SCRAPING_PAUSED_CLOUDFLARE',
@@ -2843,12 +3073,12 @@ export class YellowPagesScraperProcess {
                                 recommendation: 'Manual intervention required - wait 15-30 minutes before retrying'
                             }
                         };
-                        
+
                         if (process.parentPort) {
                             process.parentPort.postMessage(pauseNotificationMessage);
                             console.log('✅ Cloudflare pause notification sent to parent process');
                         }
-                        
+
                     } catch (pauseError) {
                         console.error('❌ Failed to pause scraping due to Cloudflare protection:', pauseError);
                     }
@@ -3162,7 +3392,7 @@ export class YellowPagesScraperProcess {
 
             // Create a unique key for this business
             const businessKey = this.createBusinessKey(result);
-            
+
             if (!seenBusinesses.has(businessKey)) {
                 seenBusinesses.add(businessKey);
                 uniqueResults.push(result);
@@ -3179,7 +3409,7 @@ export class YellowPagesScraperProcess {
      */
     private createBusinessKey(result: ScrapingResult): string {
         const businessName = result.business_name.toLowerCase().trim();
-        
+
         // Include location information if available to distinguish businesses with same name in different locations
         let locationKey = '';
         if (result.address) {
@@ -3188,10 +3418,10 @@ export class YellowPagesScraperProcess {
             const zip = result.address.zip?.toLowerCase().trim() || '';
             locationKey = `${city}${state}${zip}`;
         }
-        
+
         // Include phone number if available for additional uniqueness
         const phoneKey = result.phone?.replace(/\D/g, '') || '';
-        
+
         // Combine all identifying information
         return `${businessName}|${locationKey}|${phoneKey}`;
     }
@@ -3237,34 +3467,34 @@ export class YellowPagesScraperProcess {
         if (!this.page) return false;
 
         console.log(`⏳ Waiting for Cloudflare challenge to complete (max: ${maxWaitTime}ms)...`);
-        
+
         const startTime = Date.now();
         const checkInterval = 2000; // Check every 2 seconds
-        
+
         while (Date.now() - startTime < maxWaitTime) {
             try {
                 // Check if Cloudflare protection is still active
                 const isStillBlocked = await this.detectCloudflareProtection();
-                
+
                 if (!isStillBlocked) {
                     console.log('✅ Cloudflare challenge appears to be resolved');
                     return true;
                 }
-                
+
                 // Wait before next check
                 await this.sleep(checkInterval);
-                
+
                 // Log progress
                 const elapsed = Date.now() - startTime;
                 const remaining = maxWaitTime - elapsed;
                 console.log(`⏳ Still waiting... (${Math.round(remaining / 1000)}s remaining)`);
-                
+
             } catch (error) {
                 console.warn('Error while waiting for Cloudflare challenge:', error);
                 await this.sleep(checkInterval);
             }
         }
-        
+
         console.log('⏰ Timeout waiting for Cloudflare challenge to complete');
         return false;
     }
@@ -3279,34 +3509,34 @@ export class YellowPagesScraperProcess {
 
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
             console.log(`🔄 Cloudflare handling attempt ${attempt}/${maxRetries}`);
-            
+
             try {
                 // Check if Cloudflare protection is detected
                 const isBlocked = await this.detectCloudflareProtection();
-                
+
                 if (!isBlocked) {
                     console.log('✅ No Cloudflare protection detected, continuing...');
                     return true;
                 }
-                
+
                 // Notify parent process about the detection
                 await this.handleCloudflareDetection();
-                
+
                 // Wait for challenge to complete
                 const challengeResolved = await this.waitForCloudflareChallenge();
-                
+
                 if (challengeResolved) {
                     console.log('✅ Cloudflare challenge resolved, continuing with scraping...');
                     return true;
                 }
-                
+
                 // If challenge not resolved, try refreshing the page
                 if (attempt < maxRetries) {
                     console.log(`🔄 Attempting page refresh (attempt ${attempt + 1}/${maxRetries})`);
                     await this.page.reload({ waitUntil: 'networkidle2' });
                     await this.sleep(5000); // Wait 5 seconds after refresh
                 }
-                
+
             } catch (error) {
                 console.error(`Error in Cloudflare handling attempt ${attempt}:`, error);
                 if (attempt < maxRetries) {
@@ -3314,7 +3544,7 @@ export class YellowPagesScraperProcess {
                 }
             }
         }
-        
+
         console.log('❌ Failed to handle Cloudflare protection after all retry attempts');
         return false;
     }
@@ -3338,9 +3568,9 @@ process.parentPort.on('message', async (e) => {
             adapterClass: message.platformInfo.adapterClass?.className || 'None'
         });
         let scraper: YellowPagesScraperProcess;
-        try{
-        scraper = new YellowPagesScraperProcess(message.taskData, message.platformInfo);
-        globalScraper = scraper; // Store reference for pause/resume operations
+        try {
+            scraper = new YellowPagesScraperProcess(message.taskData, message.platformInfo);
+            globalScraper = scraper; // Store reference for pause/resume operations
         } catch (error) {
             console.error('Error initializing scraper:', error);
             const errorMessage: ErrorMessage = {
