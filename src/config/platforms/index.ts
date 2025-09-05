@@ -1,6 +1,6 @@
 import { PlatformConfig } from '@/interfaces/IPlatformConfig';
 
-import { Platform_192_com } from './192-com';
+// import { Platform_192_com } from './192-com';
 import { Platform_yell_com } from './yell-com';
 import { Platform_11880_de } from './11880-de';
 import { Platform_gelbeseiten_de } from './gelbeseiten-de';
@@ -28,7 +28,7 @@ import { Platform_yellowpages_com } from './yellowpages-com';
  * - Platform_oauth_example: Demonstrates OAuth authentication
  */
 export const platforms: PlatformConfig[] = [
-  Platform_192_com,
+  // Platform_192_com,
   Platform_yell_com,
   Platform_11880_de,
   Platform_gelbeseiten_de,

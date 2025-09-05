@@ -12,6 +12,7 @@ import { Adapter11880 } from './11880Adapter';
 import { AdapterGelbeseiten } from './GelbeseitenAdapter';
 import { PagesJaunesAdapter } from './PagesJaunesAdapter';
 import { PagineGialleItAdapter } from './PagineGialleItAdapter';
+import { YelpComAdapter } from './YelpComAdapter';
 
 /**
  * Factory class for creating platform adapters
@@ -39,8 +40,8 @@ export class PlatformAdapterFactory {
             case 'YellowPagesComAdapter':
                 return new YellowPagesComAdapter(platformConfig);
                 
-            // case 'YelpComAdapter':
-            //     return new YelpComAdapter(platformConfig);
+            case 'YelpComAdapter':
+                return new YelpComAdapter(platformConfig);
                 
             case 'YellowPagesCaAdapter':
                 return new YellowPagesCaAdapter(platformConfig);
@@ -126,8 +127,8 @@ export class PlatformAdapterFactory {
             case 'YellowPagesComAdapter':
                 return YellowPagesComAdapter;
                 
-            // case 'YelpComAdapter':
-            //     return YelpComAdapter;
+            case 'YelpComAdapter':
+                return YelpComAdapter;
                 
             case 'YellowPagesCaAdapter':
                 return YellowPagesCaAdapter;

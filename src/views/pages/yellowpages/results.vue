@@ -201,8 +201,8 @@
       </v-col>
     </v-row>
 
-    <!-- Pagination -->
-    <v-row class="mt-4" v-if="totalPages > 1">
+   
+   <v-row class="mt-4" v-if="totalPages > 1">
       <v-col cols="12" class="d-flex justify-center">
         <v-pagination
           v-model="currentPage"
@@ -360,6 +360,9 @@ const loadTaskDetails = async () => {
 const loadResults = async (page: number = 0) => {
   loading.value = true
   try {
+    if(page==0){
+      page = 1;
+    }
     const response = await getYellowPagesTaskResults(taskId, page, pageSize.value)
     if (response) {
       results.value = response.data

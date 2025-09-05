@@ -1,5 +1,5 @@
 import { PlatformConfig, PlatformFeature } from '@/interfaces/IPlatformConfig';
-// import { YelpComAdapter } from '@/modules/platforms/YelpComAdapter';
+import { YelpComAdapter } from '@/modules/platforms/YelpComAdapter';
 
 export const Platform_yelp_com: PlatformConfig = {
   id: 'yelp-com',
@@ -11,7 +11,7 @@ export const Platform_yelp_com: PlatformConfig = {
   is_active: true,
   version: '1.0.0',
   type: 'class',
-  // adapter_class: YelpComAdapter, // Direct class reference
+  adapter_class: YelpComAdapter, // Direct class reference
   documentation: 'https://www.yelp.com/developers',
   maintainer: 'AI Agent',
 
@@ -20,24 +20,55 @@ export const Platform_yelp_com: PlatformConfig = {
   max_concurrent_requests: 1,
 
   selectors: {
-    businessList: '[data-testid="serp-ia-card"]',
-    businessName: 'h3 a',
-    phone: 'p[class*="css-1p9ibgf"]',
-    email: 'a[href^="mailto:"]',
-    website: 'a[href*="biz_redir"]',
-    address: 'address p',
-    categories: '[class*="priceCategory"] button',
-    socialMedia: '[data-testid="services-actions-component"] p[class*="tagText"]',
-    rating: '[class^="five-stars"]',
-    reviewCount: 'span[class*="css-1fdy0l5"]',
-    businessImage: '[data-lcp-target-id="SCROLLABLE_PHOTO_BOX"] img',
-    businessUrl: 'h3 a',
-    priceRange: '[class^="priceRange"]',
-    pagination: {
-      nextButton: '[class^="pagination-links"] a',
-      currentPage: '.pagination .current',
-      maxPages: '.pagination__09f24__VRjN4 .css-chan6m',
+    searchForm: {
+      keywordInput: '#search_description',
+      locationInput: '#search_location',
+      searchButton: 'button[aria-label="Search"].ewsdu8x6',
+      formContainer: 'div.y-css-4h0q8r',
     },
+    businessList: '#main-content',
+    businessItem: 'div.y-css-pwt8yl',
+    businessName: 'h3',
+    phone: '',
+    email: '',
+    website: '',
+    address: '',
+    address_city: '',
+    address_state: '',
+    address_zip: '',
+    address_country: '',
+    categories: '',
+    rating: '',
+    reviewCount: '',
+    description: '',
+    detailPageLink: '',
+    pagination: {
+      nextButton: 'button.pagination-button__09f24__kbFYf',
+      currentPage: '',
+      maxPages: '',
+    },
+    navigation: {
+      required: true,
+      detailLink: 'h3',
+      delayAfterNavigation: 2000,
+      detailPage: {
+        businessName: 'h1.y-css-olzveb',
+        fullAddress: '',
+        businessHours: '',
+        description: '',
+        contactInfo: '',
+        services: '',
+        additionalPhone: '',
+        additionalEmail: '',
+        socialMedia: '',
+        categories: '',
+        yearEstablished: '',
+        numberOfEmployees: '',
+        paymentMethods: '',
+        specialties: '',
+        website: ''
+      }
+    }
   },
 
   settings: {

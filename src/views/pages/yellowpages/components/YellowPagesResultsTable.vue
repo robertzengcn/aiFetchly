@@ -6,7 +6,11 @@
       :loading="loading"
       class="elevation-1"
       item-key="id"
+      disable-pagination
+      :hide-default-footer="true"
+     :items-per-page="0"
     >
+    <template #bottom></template>
       <!-- Business Name Column -->
       <template v-slot:item.business_name="{ item }">
         <div class="d-flex align-center">
@@ -179,6 +183,9 @@
           </p>
         </div>
       </template>
+
+      <!-- Custom Footer - Empty to hide pagination -->
+      
     </v-data-table>
   </div>
 </template>

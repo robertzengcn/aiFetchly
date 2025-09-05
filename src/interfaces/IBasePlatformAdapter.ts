@@ -112,6 +112,17 @@ export interface IBasePlatformAdapter {
     onPageLoad?(page: Page): Promise<void>;
     
     /**
+     * Extract email from detail page using platform-specific logic (optional)
+     * This method handles complex email extraction patterns like data attributes
+     * @param page - Puppeteer page object
+     * @returns Promise resolving to email string or undefined
+     * 
+     * Note: This method is optional and has a default implementation that returns undefined.
+     * Subclasses can override it for platform-specific email extraction.
+     */
+    extractEmailFromDetailPage?(page: Page): Promise<string | undefined>;
+    
+    /**
      * Extract phone number with reveal interaction for platforms that hide phone numbers behind click buttons (optional)
      * This method handles phone reveal interactions like clicking "Afficher le N°" buttons
      * @param page - Puppeteer page object
@@ -134,6 +145,17 @@ export interface IBasePlatformAdapter {
      * Subclasses can override it for platform-specific website reveal extraction.
      */
     extractWebsiteWithReveal?(page: Page, businessElement: any): Promise<string | undefined>;
+    
+    /**
+     * Extract address from business section using platform-specific logic (optional)
+     * This method handles complex address extraction patterns from business information sections
+     * @param page - Puppeteer page object
+     * @returns Promise resolving to address string or undefined
+     * 
+     * Note: This method is optional and has a default implementation that returns undefined.
+     * Subclasses can override it for platform-specific address extraction.
+     */
+    extractAddressFromBusinessSection?(page: Page): Promise<string | undefined>;
     
     /**
      * Build search URL for the platform

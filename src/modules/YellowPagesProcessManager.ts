@@ -17,6 +17,9 @@ import {
     ScrapingResultFoundMessage,
     ScrapingRateLimitedMessage,
     ScrapingCaptchaDetectedMessage,
+    ScrapingCloudflareDetectedMessage,
+    ScrapingPausedCloudflareMessage,
+    ScrapingRobotVerificationDetectedMessage,
     PauseTaskMessage,
     ResumeTaskMessage,
     TaskPausedMessage,
@@ -512,6 +515,39 @@ export class YellowPagesProcessManager extends BaseModule {
                     this.taskModel.updateTaskErrorLog(taskId, cloudflarePauseErrorLog).catch(err => {
                         console.error(`Failed to update error log for task ${taskId}:`, err);
                     });
+                    break;
+                case 'SCRAPING_ROBOT_VERIFICATION_DETECTED':
+                    if (message.type === 'SCRAPING_ROBOT_VERIFICATION_DETECTED') {
+                        const robotContentMessage = message.content || `Robot verification challenge detected at ${message.details?.url || 'unknown URL'}`;
+                        console.log(`Task ${taskId}: ${robotContentMessage}`);
+                        console.log(`Additional info: ${message.details?.additionalInfo || 'No additional info available'}`);
+                        
+                        // Send system message to frontend to notify user
+                        sendSystemMessage({
+                            status: true,
+                            data: {
+                                title: 'Robot Verification Challenge Detected',
+                                content: `Yellow Pages task ${taskId} has detected a robot verification challenge. The task has been paused and requires manual intervention to complete the verification. URL: ${message.details?.url || 'unknown'}`
+                            }
+                        });
+                        
+                        // Log to error log for user notification
+                        if (processInfo?.logFiles) {
+                            const robotVerificationMessage = `[${new Date().toISOString()}] ROBOT VERIFICATION DETECTED: ${robotContentMessage}. URL: ${message.details?.url || 'unknown'}, Timestamp: ${message.details?.timestamp || 'unknown'}, Info: ${message.details?.additionalInfo || 'No additional info'}`;
+                            WriteLog(processInfo.logFiles.errorLog, robotVerificationMessage);
+                        }
+                        
+                        // Update task status to paused due to robot verification challenge
+                        this.taskModel.updateTaskStatus(taskId, YellowPagesTaskStatus.Paused).catch(err => {
+                            console.error(`Failed to update task status to paused for task ${taskId}:`, err);
+                        });
+                        
+                        // Update task error log with robot verification pause information
+                        const robotVerificationPauseErrorLog = `Scraping paused due to robot verification challenge. Manual intervention required - complete the verification and resume the task.`;
+                        this.taskModel.updateTaskErrorLog(taskId, robotVerificationPauseErrorLog).catch(err => {
+                            console.error(`Failed to update error log for task ${taskId}:`, err);
+                        });
+                    }
                     break;
                 case 'TASK_PAUSED':
                     const pausedMessage = message.content || `Task ${taskId} paused successfully`;

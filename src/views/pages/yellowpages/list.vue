@@ -297,17 +297,7 @@
       </v-col>
     </v-row>
 
-    <!-- Pagination -->
-    <v-row class="mt-4">
-      <v-col cols="12" class="d-flex justify-center">
-        <v-pagination
-          v-model="currentPage"
-          :length="Math.ceil(total / pageSize)"
-          :total-visible="7"
-          @update:model-value="handlePageChange"
-        />
-      </v-col>
-    </v-row>
+    
 
     <!-- Confirmation Dialog -->
     <v-dialog v-model="confirmDialog.show" max-width="400">

@@ -173,6 +173,7 @@ export class YellowPagesScraperProcess {
     private adapter: BasePlatformAdapter | null = null;
     private sessionManager: SessionRecordingManager;
     private isInNewTab: boolean = false;
+    private searchPageUrl: string | null = null;
 
     // IPC integration
     private onProgressCallback?: (progress: ScrapingProgress) => void;
@@ -530,6 +531,7 @@ export class YellowPagesScraperProcess {
         const hasCustomEmailExtraction = this.adapter && this.adapterSupportsFeature('custom-email-extraction');
         const hasCustomPhoneExtraction = this.adapter && this.adapterSupportsFeature('custom-phone-extraction');
         const hasCustomWebsiteExtraction = this.adapter && this.adapterSupportsFeature('custom-website-extraction');
+        const hasCustomAddressExtraction = this.adapter && this.adapterSupportsFeature('custom-address-extraction');
 
         console.log(`🔧 Platform capabilities:`, {
             customSearch: hasCustomSearch,
@@ -539,6 +541,7 @@ export class YellowPagesScraperProcess {
             customEmailExtraction: hasCustomEmailExtraction,
             customPhoneExtraction: hasCustomPhoneExtraction,
             customWebsiteExtraction: hasCustomWebsiteExtraction,
+            customAddressExtraction: hasCustomAddressExtraction,
             adapterClass: this.platformInfo.adapterClass?.className || 'None'
         });
 
@@ -551,7 +554,8 @@ export class YellowPagesScraperProcess {
                 onPageLoad: hasCustomPageLoad ? 'Custom' : 'Default',
                 extractEmailFromDetailPage: hasCustomEmailExtraction ? 'Custom' : 'Default',
                 extractPhoneNumberWithReveal: hasCustomPhoneExtraction ? 'Custom' : 'Default',
-                extractWebsiteWithReveal: hasCustomWebsiteExtraction ? 'Custom' : 'Default'
+                extractWebsiteWithReveal: hasCustomWebsiteExtraction ? 'Custom' : 'Default',
+                extractAddressFromBusinessSection: hasCustomAddressExtraction ? 'Custom' : 'Default'
             });
         } else {
             console.log(`🔧 No platform adapter available, using configuration-based approach`);
@@ -615,6 +619,9 @@ export class YellowPagesScraperProcess {
                             // Check for Cloudflare protection after processing each page
                             await this.handleCloudflareDetection();
 
+                            // Check for robot verification challenge after processing each page
+                            await this.handleRobotVerificationDetection();
+
                             // Check if paused after each major operation
                             if (this.isPaused) {
                                 console.log(`Task ${this.taskData.taskId} is paused, waiting for resume...`);
@@ -625,6 +632,18 @@ export class YellowPagesScraperProcess {
                                     break;
                                 }
                             }
+
+                             // Wait if paused
+                             while (this.isPaused && this.isRunning) {
+                                await this.sleep(1000);
+                            }
+
+                            // Check if robot verification was detected and paused the task
+                            if (!this.isRunning) {
+                                console.log(`Task ${this.taskData.taskId} stopped due to robot verification challenge`);
+                                break;
+                            }
+                           
 
                             // Handle pagination using adapter if available
                             if (hasCustomPagination && pageNum < maxPages) {
@@ -763,6 +782,9 @@ export class YellowPagesScraperProcess {
                 // Check for Cloudflare protection after processing each page
                 await this.handleCloudflareDetection();
 
+                // Check for robot verification challenge after processing each page
+                await this.handleRobotVerificationDetection();
+
                 // Check if paused after each major operation
                 if (this.isPaused) {
                     console.log(`Task ${this.taskData.taskId} is paused, waiting for resume...`);
@@ -773,6 +795,15 @@ export class YellowPagesScraperProcess {
                         break;
                     }
                 }
+
+                while (this.isPaused) {
+                    await this.sleep(1000);
+                }
+                // Check if robot verification was detected and paused the task
+                // if (!this.isRunning) {
+                //     console.log(`Task ${this.taskData.taskId} stopped due to robot verification challenge`);
+                //     break;
+                // }
 
                 // Delay between requests and increment page counter
                 if (currentPage < maxPages && hasMoreContent) {
@@ -809,7 +840,7 @@ export class YellowPagesScraperProcess {
 
             await this.page.goto(this.platformInfo.base_url, {
                 waitUntil: 'networkidle2',
-                timeout: 30000
+                timeout: 60000
             });
 
             // Wait for page to load completely
@@ -853,6 +884,10 @@ export class YellowPagesScraperProcess {
                     timeout: 15000
                 });
 
+                // Capture search page URL for later reference
+                this.searchPageUrl = this.page.url();
+                console.log(`📝 Captured search page URL: ${this.searchPageUrl}`);
+
                 // Navigate to specific page if needed
                 if (pageNum > 1) {
                     await this.navigateToPage(pageNum);
@@ -873,6 +908,10 @@ export class YellowPagesScraperProcess {
                         timeout: 15000
                     });
 
+                    // Capture search page URL for later reference
+                    this.searchPageUrl = this.page.url();
+                    console.log(`📝 Captured search page URL: ${this.searchPageUrl}`);
+
                     // Navigate to specific page if needed
                     if (pageNum > 1) {
                         await this.navigateToPage(pageNum);
@@ -883,8 +922,15 @@ export class YellowPagesScraperProcess {
                     const searchUrl = this.buildFallbackSearchUrl(keyword, location, pageNum);
                     await this.page.goto(searchUrl, { waitUntil: 'networkidle2' });
 
+                    // Capture search page URL for later reference
+                    this.searchPageUrl = this.page.url();
+                    console.log(`📝 Captured search page URL: ${this.searchPageUrl}`);
+
                     // Check for Cloudflare protection after URL-based navigation
                     await this.handleCloudflareDetection();
+
+                    // Check for robot verification challenge after URL-based navigation
+                    await this.handleRobotVerificationDetection();
                 }
             }
 
@@ -1130,6 +1176,9 @@ export class YellowPagesScraperProcess {
             // Check for Cloudflare protection after form submission
             await this.handleCloudflareDetection();
 
+            // Check for robot verification challenge after form submission
+            await this.handleRobotVerificationDetection();
+
         } catch (error) {
             console.error('Error submitting search form with platform selector:', error);
         }
@@ -1185,6 +1234,9 @@ export class YellowPagesScraperProcess {
                     // Check for Cloudflare protection after navigation
                     await this.handleCloudflareDetection();
 
+                    // Check for robot verification challenge after navigation
+                    await this.handleRobotVerificationDetection();
+
                     return;
                 }
             }
@@ -1236,6 +1288,9 @@ export class YellowPagesScraperProcess {
 
                 // Check for Cloudflare protection after navigation
                 await this.handleCloudflareDetection();
+
+                // Check for robot verification challenge after navigation
+                await this.handleRobotVerificationDetection();
             } else {
                 console.log(`Could not find page ${pageNum} link, staying on current page`);
             }
@@ -1281,6 +1336,15 @@ export class YellowPagesScraperProcess {
 
             // Check for Cloudflare protection before proceeding with data extraction
             await this.handleCloudflareDetection();
+
+            // Check for robot verification challenge before proceeding with data extraction
+            await this.handleRobotVerificationDetection();
+
+            // Check if robot verification was detected and paused the task
+            // Wait if paused
+            while (this.isPaused && this.isRunning) {
+                await this.sleep(1000);
+            }
 
             // Log data extraction action for AI training
             if (this.sessionManager.getRecordingStatus() && this.page) {
@@ -1671,11 +1735,50 @@ export class YellowPagesScraperProcess {
         if (!this.page) return false;
 
         try {
+            // Check if we're currently in a new tab (detail page) and need to switch back to search page
+            if (this.isInNewTab) {
+                console.log('🆕 Currently in new tab, switching back to search page for pagination');
+
+                // Close the current detail page
+                await this.page.close();
+
+                // Find and switch to the search results page
+                const browser = this.page.browser();
+                if (browser) {
+                    const pages = await browser.pages();
+                    const searchResultsPage = await this.findSearchResultsPage(pages);
+
+                    if (searchResultsPage) {
+                        this.page = searchResultsPage;
+                        console.log(`🔍 Switched back to search results page: ${searchResultsPage.url()}`);
+
+                        // Wait for search results to be ready
+                        await searchResultsPage.waitForSelector(this.platformInfo.selectors.businessList, { timeout: 10000 });
+
+                        // Update captured search page URL
+                        this.searchPageUrl = searchResultsPage.url();
+                        console.log(`📝 Updated search page URL: ${this.searchPageUrl}`);
+
+                        // Check for Cloudflare protection
+                        await this.handleCloudflareDetection();
+
+                        // Clear the new tab flag
+                        this.isInNewTab = false;
+
+                        console.log('✅ Successfully switched back to search page for pagination');
+                    } else {
+                        console.log('⚠️ Could not find search results page after closing detail tab');
+                        return false;
+                    }
+                }
+            }
 
             // Scroll the page down to trigger any lazy-loaded "load more" buttons or infinite scroll
-            await this.page.evaluate(() => {
-                window.scrollTo(0, document.body.scrollHeight);
-            });
+            if (this.page) {
+                await this.page.evaluate(() => {
+                    window.scrollTo(0, document.body.scrollHeight);
+                });
+            }
             // Give the page a moment to load new content if applicable
             await this.sleep(1000);
             // First, try traditional pagination
@@ -1687,6 +1790,9 @@ export class YellowPagesScraperProcess {
                 return true;
             } else {
                 console.log(`⚠️ Traditional pagination failed, checking for "Load More" functionality`);
+
+                // Save HTML content for debugging when traditional pagination fails
+                await this.savePageHtmlForDebugging(currentPage + 1, 'traditional_pagination_failed');
 
                 // Fallback: Check if this platform uses "load more" functionality
                 const usesLoadMore = await this.detectLoadMoreFunctionality();
@@ -1754,6 +1860,10 @@ export class YellowPagesScraperProcess {
                         // Wait for new results to load
                         await this.page.waitForSelector(selectors.businessList, { timeout: 10000 });
 
+                        // Update captured search page URL after successful navigation
+                        this.searchPageUrl = this.page.url();
+                        console.log(`📝 Updated search page URL after pagination: ${this.searchPageUrl}`);
+
                         console.log(`✅ Successfully navigated to next page`);
                         return true;
                     }
@@ -1819,6 +1929,15 @@ export class YellowPagesScraperProcess {
 
             // Check for Cloudflare protection after detail page navigation
             await this.handleCloudflareDetection();
+
+            // Check for robot verification challenge after detail page navigation
+            await this.handleRobotVerificationDetection();
+
+            // Check if robot verification was detected and paused the task
+            // Wait if paused
+            while (this.isPaused && this.isRunning) {
+                await this.sleep(1000);
+            }
 
             // Call custom onPageLoad method if it exists in the adapter
             if (this.adapter && typeof this.adapter.onPageLoad === 'function') {
@@ -2012,6 +2131,173 @@ export class YellowPagesScraperProcess {
     }
 
     /**
+     * Calculate URL similarity score between two URLs
+     * Returns a score from 0 to 10 based on how similar the URLs are
+     */
+    private calculateUrlSimilarity(url1: string, url2: string): number {
+        try {
+            const parsedUrl1 = new URL(url1);
+            const parsedUrl2 = new URL(url2);
+            let score = 0;
+
+            // Same hostname (most important)
+            if (parsedUrl1.hostname === parsedUrl2.hostname) {
+                score += 4;
+            }
+
+            // Same pathname base (without page numbers)
+            const path1 = parsedUrl1.pathname.replace(/\/page\/\d+|\/p\/\d+|\?.*page=\d+/, '');
+            const path2 = parsedUrl2.pathname.replace(/\/page\/\d+|\/p\/\d+|\?.*page=\d+/, '');
+            if (path1 === path2) {
+                score += 3;
+            }
+
+            // Similar query parameters (ignoring page numbers)
+            const params1 = new URLSearchParams(parsedUrl1.search);
+            const params2 = new URLSearchParams(parsedUrl2.search);
+
+            // Remove page-related parameters for comparison
+            ['page', 'p', 'offset', 'start'].forEach(param => {
+                params1.delete(param);
+                params2.delete(param);
+            });
+
+            const params1Str = params1.toString();
+            const params2Str = params2.toString();
+
+            if (params1Str === params2Str) {
+                score += 2;
+            } else if (params1Str && params2Str) {
+                // Partial match for query parameters
+                const sharedParams = Array.from(params1.keys()).filter(key => params2.has(key));
+                if (sharedParams.length > 0) {
+                    score += 1;
+                }
+            }
+
+            // Same protocol
+            if (parsedUrl1.protocol === parsedUrl2.protocol) {
+                score += 0.5;
+            }
+
+            return Math.min(score, 10); // Cap at 10
+        } catch (error) {
+            console.log(`⚠️ Error calculating URL similarity: ${error}`);
+            return 0;
+        }
+    }
+
+    /**
+     * Find the search results page among open browser pages
+     * Uses multiple criteria to identify the correct search results page and avoid error pages
+     */
+    private async findSearchResultsPage(pages: any[]): Promise<any | null> {
+        if (!pages || pages.length === 0) return null;
+
+        console.log('🔍 Searching for search results page among open tabs...');
+
+        if (this.searchPageUrl) {
+            console.log(`📝 Using captured search page URL for similarity matching: ${this.searchPageUrl}`);
+        }
+
+        // Score each page based on multiple criteria
+        const pageScores = await Promise.all(
+            pages.map(async (page) => {
+                if (page.isClosed()) return { page, score: -1 };
+
+                try {
+                    const url = page.url();
+                    let score = 0;
+
+                    // Skip about:blank and chrome:// pages
+                    if (url === 'about:blank' || url.startsWith('chrome://')) {
+                        return { page, score: -1 };
+                    }
+
+                    // PRIMARY CRITERION: URL similarity to captured search page URL
+                    if (this.searchPageUrl) {
+                        const similarityScore = this.calculateUrlSimilarity(url, this.searchPageUrl);
+                        score += similarityScore; // This can be up to 10 points
+                        console.log(`🔗 URL similarity to search page: ${similarityScore} (${url})`);
+                    }
+
+                    // SECONDARY CRITERIA (lower weights since URL similarity is primary)
+
+                    // Check if URL contains base domain
+                    if (url.includes(new URL(this.platformInfo.base_url).hostname)) {
+                        score += 2; // Reduced from 3
+                    }
+
+                    // Check if URL contains search-related keywords
+                    const searchKeywords = ['search', 'results', 'find', 'directory', 'listing'];
+                    if (searchKeywords.some(keyword => url.toLowerCase().includes(keyword))) {
+                        score += 1; // Reduced from 2
+                    }
+
+                    // Check if URL contains query parameters (typical for search results)
+                    if (url.includes('?') && (url.includes('q=') || url.includes('query=') || url.includes('keyword='))) {
+                        score += 1; // Reduced from 2
+                    }
+
+                    // Try to check if page contains business list selector
+                    try {
+                        const hasBusinessList = await page.$(this.platformInfo.selectors.businessList);
+                        if (hasBusinessList) {
+                            score += 3; // Reduced from 5 since URL similarity is primary
+                        }
+                    } catch (error) {
+                        // Page might not be ready, don't penalize
+                        console.log(`⚠️ Could not check business list selector on page ${url}: ${error}`);
+                    }
+
+                    // Penalize obvious error pages
+                    const errorKeywords = ['error', '404', '500', 'not found', 'access denied', 'blocked'];
+                    if (errorKeywords.some(keyword => url.toLowerCase().includes(keyword))) {
+                        score -= 5;
+                    }
+
+                    // Try to check page title for search-related content
+                    try {
+                        const title = await page.title();
+                        if (title && searchKeywords.some(keyword => title.toLowerCase().includes(keyword))) {
+                            score += 0.5; // Reduced from 1
+                        }
+                    } catch (error) {
+                        // Title check failed, continue without penalty
+                    }
+
+                    console.log(`📊 Page ${url} scored: ${score}`);
+                    return { page, score };
+
+                } catch (error) {
+                    console.log(`⚠️ Error evaluating page: ${error}`);
+                    return { page, score: -1 };
+                }
+            })
+        );
+
+        // Find the page with the highest score
+        const bestMatch = pageScores
+            .filter(result => result.score > 0)
+            .sort((a, b) => b.score - a.score)[0];
+
+        if (bestMatch) {
+            console.log(`✅ Found best search results page with score ${bestMatch.score}: ${bestMatch.page.url()}`);
+            return bestMatch.page;
+        }
+
+        // Fallback: if no page scored positively, return the first non-closed page
+        const fallbackPage = pages.find(page => !page.isClosed());
+        if (fallbackPage) {
+            console.log(`⚠️ No ideal search results page found, using fallback: ${fallbackPage.url()}`);
+            return fallbackPage;
+        }
+
+        console.log('❌ No suitable search results page found');
+        return null;
+    }
+
+    /**
      * Navigate back to search results, handling both same-tab and new-tab scenarios
      */
     private async navigateBackToSearchResults(selectors: PlatformInfo['selectors']): Promise<void> {
@@ -2033,15 +2319,19 @@ export class YellowPagesScraperProcess {
                 const browser = this.page.browser();
                 if (browser) {
                     const pages = await browser.pages();
-                    // Get the remaining page (should be the search results page)
-                    const searchResultsPage = pages.find(page => !page.isClosed());
+                    // Use improved search results page detection
+                    const searchResultsPage = await this.findSearchResultsPage(pages);
 
                     if (searchResultsPage) {
                         this.page = searchResultsPage;
-                        console.log(`🔍 Switched back to search results page: ${this.page.url()}`);
+                        console.log(`🔍 Switched back to search results page: ${searchResultsPage.url()}`);
 
                         // Wait for search results to be ready
-                        await this.page.waitForSelector(selectors.businessList, { timeout: 10000 });
+                        await searchResultsPage.waitForSelector(selectors.businessList, { timeout: 10000 });
+
+                        // Update captured search page URL
+                        this.searchPageUrl = searchResultsPage.url();
+                        console.log(`📝 Updated search page URL: ${this.searchPageUrl}`);
 
                         // Check for Cloudflare protection
                         await this.handleCloudflareDetection();
@@ -2061,6 +2351,10 @@ export class YellowPagesScraperProcess {
 
                 // Wait for search results to reload
                 await this.page.waitForSelector(selectors.businessList, { timeout: 10000 });
+
+                // Update captured search page URL
+                this.searchPageUrl = this.page.url();
+                console.log(`📝 Updated search page URL after back navigation: ${this.searchPageUrl}`);
 
                 // Check for Cloudflare protection after returning to search results
                 await this.handleCloudflareDetection();
@@ -2126,6 +2420,25 @@ export class YellowPagesScraperProcess {
                         ...enhancedResult.address,
                         street: fullAddress
                     };
+                }
+            }
+
+            // Use adapter-specific address extraction if available (for detail page)
+            if (this.adapter && typeof this.adapter.extractAddressFromBusinessSection === 'function') {
+                try {
+                    console.log('🔧 Using adapter-specific address extraction method on detail page');
+                    const adapterAddress = await this.adapter.extractAddressFromBusinessSection(this.page!);
+                    if (adapterAddress && adapterAddress.trim() !== '') {
+                        // Parse the address string into components if needed
+                        const addressParts = this.parseAddressString(adapterAddress);
+                        enhancedResult.address = {
+                            ...enhancedResult.address,
+                            ...addressParts
+                        };
+                        console.log(`📍 Valid address extracted using adapter method on detail page: ${adapterAddress}`);
+                    }
+                } catch (error) {
+                    console.warn('⚠️ Error in adapter address extraction method on detail page:', error);
                 }
             }
 
@@ -2486,6 +2799,62 @@ export class YellowPagesScraperProcess {
         }
 
         return result;
+    }
+
+    /**
+     * Parse address string into components
+     */
+    private parseAddressString(addressString: string): {
+        street?: string;
+        city?: string;
+        state?: string;
+        zip?: string;
+    } {
+        if (!addressString || addressString.trim() === '') {
+            return {};
+        }
+
+        const result: { street?: string; city?: string; state?: string; zip?: string } = {};
+
+        try {
+            // Clean the address string
+            const cleanAddress = addressString.trim();
+
+            // For full address strings, try to parse components
+            // Common format: "123 Main St, City, State 12345"
+            const addressRegex = /^(.+?),\s*([^,]+),\s*([A-Z]{2})\s+(\d{5}(?:-\d{4})?)$/i;
+            const match = cleanAddress.match(addressRegex);
+
+            if (match) {
+                result.street = match[1].trim();
+                result.city = match[2].trim();
+                result.state = match[3].trim().toUpperCase();
+                result.zip = match[4].trim();
+            } else {
+                // If regex doesn't match, treat the whole string as street address
+                result.street = cleanAddress;
+
+                // Try to extract ZIP code from the end
+                const zipMatch = cleanAddress.match(/\b(\d{5}(?:-\d{4})?)\b$/);
+                if (zipMatch) {
+                    result.zip = zipMatch[1];
+                    result.street = cleanAddress.replace(/\s*\b\d{5}(?:-\d{4})?\b$/, '').trim();
+                }
+
+                // Try to extract state abbreviation
+                const stateMatch = cleanAddress.match(/\b([A-Z]{2})\s*\d{5}(?:-\d{4})?\b$/i);
+                if (stateMatch) {
+                    result.state = stateMatch[1].toUpperCase();
+                    result.street = cleanAddress.replace(/\s*\b[A-Z]{2}\s*\d{5}(?:-\d{4})?\b$/i, '').trim();
+                }
+            }
+
+            return result;
+        } catch (error) {
+            console.warn('Error parsing address string:', error);
+            // Fallback: return the whole string as street address
+            return { street: addressString };
+        }
     }
 
 
@@ -2974,6 +3343,321 @@ export class YellowPagesScraperProcess {
     }
 
     /**
+     * Check if an element is visible on the page
+     * @param element - The element to check
+     * @returns true if the element is visible, false otherwise
+     */
+    private async isElementVisible(element: any): Promise<boolean> {
+        try {
+            return await element.evaluate((el: Element) => {
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+
+                return (
+                    style.display !== 'none' &&
+                    style.visibility !== 'hidden' &&
+                    style.opacity !== '0' &&
+                    rect.width > 0 &&
+                    rect.height > 0 &&
+                    rect.top >= 0 &&
+                    rect.left >= 0 &&
+                    rect.bottom <= window.innerHeight &&
+                    rect.right <= window.innerWidth
+                );
+            });
+        } catch (error) {
+            return false;
+        }
+    }
+
+    /**
+     * Detect if the page shows robot verification challenge
+     * @returns true if robot verification is detected, false otherwise
+     */
+    private async detectRobotVerification(): Promise<boolean> {
+        if (!this.page) return false;
+
+        try {
+            // Check for robot verification text and elements
+            const robotVerificationIndicators = [
+                'We want to make sure you are not a robot',
+                'Please verify you are human',
+                'Verify you are not a robot',
+                'Robot verification',
+                'Human verification',
+                'Security check',
+                'Anti-bot verification',
+                // 'Captcha verification',
+                'reCAPTCHA',
+                //'hCaptcha',
+                'Please complete the security check',
+                'Verify your identity',
+                'Security verification required',
+                'Complete the verification',
+                'Prove you are human',
+                'Anti-robot verification',
+                'Bot detection',
+                'Automated access blocked',
+                'You have been blocked'
+            ];
+            // Wait for the page to be fully loaded before evaluating
+            await this.page.waitForFunction(() => document.readyState === 'complete');
+            // Check page content for robot verification text (only visible text)
+            const hasRobotText = await this.page.evaluate((indicators) => {
+                // Get all text content from visible elements only
+                const walker = document.createTreeWalker(
+                    document.body,
+                    NodeFilter.SHOW_TEXT,
+                    {
+                        acceptNode: (node) => {
+                            const element = node.parentElement;
+                            if (!element) return NodeFilter.FILTER_REJECT;
+
+                            const style = window.getComputedStyle(element);
+                            const rect = element.getBoundingClientRect();
+
+                            // Check if the element containing the text is visible
+                            const isVisible = (
+                                style.display !== 'none' &&
+                                style.visibility !== 'hidden' &&
+                                style.opacity !== '0' &&
+                                rect.width > 0 &&
+                                rect.height > 0
+                            );
+
+                            return isVisible ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+                        }
+                    }
+                );
+
+                let visibleText = '';
+                let node;
+                while (node = walker.nextNode()) {
+                    visibleText += node.textContent + ' ';
+                }
+
+                // Check if any robot verification indicators are in the visible text
+                const foundIndicator = indicators.find(indicator =>
+                    visibleText.toLowerCase().includes(indicator.toLowerCase())
+                );
+
+                if (foundIndicator) {
+                    return {
+                        found: true,
+                        indicator: foundIndicator,
+                        visibleText: visibleText.trim().substring(0, 500) // First 500 chars for debugging
+                    };
+                }
+
+                return { found: false };
+            }, robotVerificationIndicators);
+
+            if (hasRobotText.found) {
+                console.log('🤖 Robot verification challenge detected in visible page content');
+                console.log(`🔍 Found indicator: "${hasRobotText.indicator}"`);
+                console.log(`📝 Visible text context: "${hasRobotText.visibleText}"`);
+                return true;
+            }
+
+            // Additional check: Look for specific visible elements that might contain robot verification text
+            const visibleRobotElements = await this.page.evaluate((indicators) => {
+                const elements = document.querySelectorAll('*');
+                for (const element of elements) {
+                    const style = window.getComputedStyle(element);
+                    const rect = element.getBoundingClientRect();
+
+                    // Check if element is visible
+                    const isVisible = (
+                        style.display !== 'none' &&
+                        style.visibility !== 'hidden' &&
+                        style.opacity !== '0' &&
+                        rect.width > 0 &&
+                        rect.height > 0
+                    );
+
+                    if (isVisible && element.textContent) {
+                        const text = element.textContent.toLowerCase();
+                        const foundIndicator = indicators.find(indicator => text.includes(indicator.toLowerCase()));
+                        if (foundIndicator) {
+                            return {
+                                found: true,
+                                indicator: foundIndicator,
+                                elementText: element.textContent.trim().substring(0, 200) // First 200 chars for debugging
+                            };
+                        }
+                    }
+                }
+                return { found: false };
+            }, robotVerificationIndicators);
+
+            if (visibleRobotElements.found) {
+                console.log(`🤖 Robot verification challenge detected in visible elements`);
+                console.log(`🔍 Found indicator: "${visibleRobotElements.indicator}"`);
+                console.log(`📝 Element text: "${visibleRobotElements.elementText}"`);
+                return true;
+            }
+
+            // Check for robot verification specific selectors
+            const robotVerificationSelectors = [
+                '[data-testid*="captcha"]',
+                '[data-testid*="robot"]',
+                '[data-testid*="verification"]',
+                '.captcha',
+                '.recaptcha',
+                '.hcaptcha',
+                '.robot-verification',
+                '.human-verification',
+                '.security-check',
+                '.verification-challenge',
+                '#captcha',
+                '#recaptcha',
+                '#hcaptcha',
+                'iframe[src*="recaptcha"]',
+                'iframe[src*="hcaptcha"]',
+                'iframe[src*="captcha"]',
+                '.g-recaptcha',
+                '.h-captcha',
+                '[class*="captcha"]',
+                '[class*="robot"]',
+                '[class*="verification"]'
+            ];
+
+            for (const selector of robotVerificationSelectors) {
+                try {
+                    const element = await this.page.$(selector);
+                    if (element) {
+                        // Check if the element is visible
+                        const isVisible = await this.isElementVisible(element);
+
+                        if (isVisible) {
+                            console.log(`🤖 Robot verification detected with visible selector: ${selector}`);
+                            return true;
+                        }
+                    }
+                } catch (error) {
+                    // Continue checking other selectors if one fails
+                    continue;
+                }
+            }
+
+            // Check for common captcha/verification iframe patterns
+            const iframes = await this.page.$$('iframe');
+            for (const iframe of iframes) {
+                const src = await iframe.evaluate(el => el.getAttribute('src') || '');
+                if (src && (
+                    src.includes('recaptcha') ||
+                    src.includes('hcaptcha') ||
+                    src.includes('captcha') ||
+                    src.includes('verification') ||
+                    src.includes('robot')
+                )) {
+                    // Check if the iframe is visible
+                    const isVisible = await this.isElementVisible(iframe);
+
+                    if (isVisible) {
+                        console.log(`🤖 Robot verification iframe detected and visible: ${src}`);
+                        return true;
+                    }
+                }
+            }
+
+            // Check page title for robot verification indicators
+            const pageTitle = await this.page.title();
+            const robotTitlePatterns = [
+                /robot/i,
+                /captcha/i,
+                /verification/i,
+                /human verification/i,
+                /security check/i,
+                /prove you are human/i,
+                /anti-bot/i,
+                /bot detection/i
+            ];
+
+            for (const pattern of robotTitlePatterns) {
+                if (pattern.test(pageTitle)) {
+                    console.log(`🤖 Robot verification detected via page title: "${pageTitle}"`);
+                    return true;
+                }
+            }
+
+            return false;
+        } catch (error) {
+            console.warn('Error detecting robot verification:', error);
+            return false;
+        }
+    }
+
+    /**
+     * Handle robot verification detection and notify parent process
+     */
+    private async handleRobotVerificationDetection(): Promise<void> {
+        if (!this.page) return;
+
+        try {
+            const isRobotVerification = await this.detectRobotVerification();
+            if (isRobotVerification) {
+                console.log('🤖 Robot verification challenge detected! Notifying parent process...');
+
+                // Get additional context for the notification
+                const currentUrl = this.page.url();
+                const userAgent = await this.page.evaluate(() => navigator.userAgent);
+                const timestamp = new Date().toISOString();
+
+                // Try to get more detailed information about the verification page
+                let additionalInfo = '';
+                try {
+                    const pageInfo = await this.page.evaluate(() => {
+                        const title = document.title;
+                        const bodyText = document.body.innerText.substring(0, 500); // First 500 chars
+                        const hasCaptcha = !!document.querySelector('.captcha, .recaptcha, .hcaptcha, [class*="captcha"]');
+                        const hasVerificationForm = !!document.querySelector('[class*="verification"], [class*="robot"]');
+
+                        return {
+                            title,
+                            bodyText,
+                            hasCaptcha,
+                            hasVerificationForm
+                        };
+                    });
+
+                    additionalInfo = `Page Title: "${pageInfo.title}", Has Captcha: ${pageInfo.hasCaptcha}, Has Verification Form: ${pageInfo.hasVerificationForm}`;
+                } catch (error) {
+                    additionalInfo = 'Unable to extract additional page information';
+                }
+
+                // Create robot verification detection message
+                const robotVerificationMessage = {
+                    type: 'SCRAPING_ROBOT_VERIFICATION_DETECTED',
+                    taskId: this.taskData.taskId,
+                    content: `Robot verification challenge detected at ${currentUrl}. Scraping has been automatically paused. Manual intervention is required to complete the verification.`,
+                    details: {
+                        url: currentUrl,
+                        timestamp: timestamp,
+                        userAgent: userAgent,
+                        additionalInfo: additionalInfo,
+                        platform: this.platformInfo.name,
+                        message: 'The scraping process has been paused due to a robot verification challenge. Please complete the verification manually and resume the task.'
+                    }
+                };
+
+                // Send message to parent process
+                if (process.parentPort) {
+                    process.parentPort.postMessage(robotVerificationMessage);
+                }
+
+                // Pause the scraping process
+                console.log('⏸️ Pausing scraping due to robot verification challenge...');
+                this.pause();
+
+                console.log('✅ Robot verification detection notification sent to parent process');
+            }
+        } catch (error) {
+            console.error('Error handling robot verification detection:', error);
+        }
+    }
+
+    /**
      * Handle Cloudflare protection detection and notify parent process
      */
     private async handleCloudflareDetection(): Promise<void> {
@@ -3347,6 +4031,8 @@ export class YellowPagesScraperProcess {
                 return this.adapter.extractPhoneNumberWithReveal !== BasePlatformAdapter.prototype.extractPhoneNumberWithReveal;
             case 'custom-website-extraction':
                 return this.adapter.extractWebsiteWithReveal !== BasePlatformAdapter.prototype.extractWebsiteWithReveal;
+            case 'custom-address-extraction':
+                return this.adapter.extractAddressFromBusinessSection !== BasePlatformAdapter.prototype.extractAddressFromBusinessSection;
             default:
                 return false;
         }
@@ -3370,6 +4056,7 @@ export class YellowPagesScraperProcess {
         if (this.adapter.extractEmailFromDetailPage !== BasePlatformAdapter.prototype.extractEmailFromDetailPage) capabilities.push('custom-email-extraction');
         if (this.adapter.extractPhoneNumberWithReveal !== BasePlatformAdapter.prototype.extractPhoneNumberWithReveal) capabilities.push('custom-phone-extraction');
         if (this.adapter.extractWebsiteWithReveal !== BasePlatformAdapter.prototype.extractWebsiteWithReveal) capabilities.push('custom-website-extraction');
+        if (this.adapter.extractAddressFromBusinessSection !== BasePlatformAdapter.prototype.extractAddressFromBusinessSection) capabilities.push('custom-address-extraction');
 
         return capabilities;
     }
@@ -3547,6 +4234,62 @@ export class YellowPagesScraperProcess {
 
         console.log('❌ Failed to handle Cloudflare protection after all retry attempts');
         return false;
+    }
+
+    /**
+     * Save current page HTML content to ~/tmp/ directory for debugging purposes
+     */
+    private async savePageHtmlForDebugging(pageNumber: number, reason: string): Promise<void> {
+        if (!this.page) return;
+
+        try {
+            // Create ~/tmp/ directory if it doesn't exist
+            const fs = require('fs').promises;
+            const path = require('path');
+            const os = require('os');
+
+            const tmpDir = path.join(os.homedir(), 'tmp');
+            await fs.mkdir(tmpDir, { recursive: true });
+            // Also save the current page URL to a separate file for debugging
+            // const urlFilename = `debug_${platform}_task${taskId}_page${pageNumber}_${reason}_${timestamp}.url.txt`;
+            // const urlFilePath = path.join(tmpDir, urlFilename);
+            //const currentpageUrl = this.page.url();
+            // await fs.writeFile(urlFilePath, 'utf8');
+            // Generate filename with timestamp, platform, and reason
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+            const platform = this.taskData.platform;
+            const taskId = this.taskData.taskId;
+            const filename = `debug_${platform}_task${taskId}_page${pageNumber}_${reason}_${timestamp}.html`;
+            const filePath = path.join(tmpDir, filename);
+
+            // Get page HTML content
+            const htmlContent = await this.page.content();
+            const currentUrl = this.page.url();
+
+            // Create debug HTML with metadata
+            const debugHtml = `<!-- DEBUG INFO
+Platform: ${platform}
+Task ID: ${taskId}
+Page Number: ${pageNumber}
+Reason: ${reason}
+URL: ${currentUrl}
+Timestamp: ${new Date().toISOString()}
+Keywords: ${this.taskData.keywords.join(', ')}
+Location: ${this.taskData.location}
+-->
+
+${htmlContent}`;
+
+            // Save HTML content to file
+            await fs.writeFile(filePath, debugHtml, 'utf8');
+
+            console.log(`💾 Saved debug HTML to: ${filePath}`);
+            console.log(`🔍 Debug info - Platform: ${platform}, Task: ${taskId}, Page: ${pageNumber}, URL: ${currentUrl}`);
+
+        } catch (error) {
+            console.error('❌ Error saving debug HTML:', error);
+            // Don't throw - this is just for debugging
+        }
     }
 }
 console.log('🚀 YellowPagesScraperProcess loaded');

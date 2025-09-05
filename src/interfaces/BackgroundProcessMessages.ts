@@ -285,6 +285,20 @@ export interface ScrapingPausedCloudflareMessage extends BaseBackgroundMessage {
 }
 
 /**
+ * Message sent from background process when robot verification challenge is detected
+ */
+export interface ScrapingRobotVerificationDetectedMessage extends BaseBackgroundMessage {
+    type: 'SCRAPING_ROBOT_VERIFICATION_DETECTED';
+    details: {
+        url: string;
+        timestamp: string;
+        userAgent?: string;
+        ipAddress?: string;
+        additionalInfo?: string;
+    };
+}
+
+/**
  * Message sent from main process to request graceful exit
  */
 export interface ExitTaskMessage extends BaseBackgroundMessage {
@@ -307,6 +321,7 @@ export type BackgroundProcessMessage =
     | ScrapingCaptchaDetectedMessage
     | ScrapingCloudflareDetectedMessage
     | ScrapingPausedCloudflareMessage
+    | ScrapingRobotVerificationDetectedMessage
     | PauseTaskMessage
     | ResumeTaskMessage
     | TaskPausedMessage
@@ -353,4 +368,11 @@ export function isScrapingCloudflareDetectedMessage(message: any): message is Sc
  */
 export function isScrapingPausedCloudflareMessage(message: any): message is ScrapingPausedCloudflareMessage {
     return message && message.type === 'SCRAPING_PAUSED_CLOUDFLARE' && message.details;
+}
+
+/**
+ * Type guard to check if a message is a ScrapingRobotVerificationDetectedMessage
+ */
+export function isScrapingRobotVerificationDetectedMessage(message: any): message is ScrapingRobotVerificationDetectedMessage {
+    return message && message.type === 'SCRAPING_ROBOT_VERIFICATION_DETECTED' && message.details;
 }

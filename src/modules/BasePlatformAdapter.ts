@@ -179,6 +179,17 @@ export class BasePlatformAdapter implements IBasePlatformAdapter {
         return undefined;
     }
 
+    /**
+     * Extract address from business section using platform-specific logic
+     * Default implementation returns undefined - can be overridden by subclasses
+     * This method should handle complex address extraction patterns from business information sections
+     */
+    async extractAddressFromBusinessSection(page: Page): Promise<string | undefined> {
+        // Default implementation - no custom address extraction
+        // Subclasses can override this for platform-specific address extraction
+        return undefined;
+    }
+
 
 
     /**

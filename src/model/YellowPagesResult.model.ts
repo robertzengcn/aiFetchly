@@ -191,7 +191,7 @@ export class YellowPagesResultModel extends BaseDb {
    * @returns Array of result entities
    */
   async getResultsByTaskId(taskId: number, page: number = 0, size: number = 50): Promise<YellowPagesResultEntity[]> {
-    if(page>1){
+    if(page>0){
         page = page - 1;
     }
     const skip =page * size;
