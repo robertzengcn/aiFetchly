@@ -93,7 +93,7 @@ export default {
         concurrency_hint:"并发抓取进程数",
         delay_between_requests:"请求间延迟（毫秒）",
         delay_hint:"请求间延迟以避免速率限制",
-        headless_mode:"无头模式运行",
+        headless_mode:"不在浏览器中显示",
         headless_mode_hint:"启用时，浏览器在无可见UI的情况下运行（更快，资源占用更少）",
         account_optional:"账户（可选）",
         account_placeholder:"选择用于身份验证的账户",
