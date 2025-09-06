@@ -49,7 +49,7 @@ export default {
         log_content:"日志内容",
         optional:"可选",
     },
-    router: {
+    route: {
         dashboard: "仪表板",
         home: "首页",
         system_setting: "系统设置",

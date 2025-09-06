@@ -57,7 +57,7 @@ export default {
        log_content:"log content",
        optional:"optional",
     },
-    router: {
+    route: {
         dashboard: "Dashboard",
         home: "Home",
         system_setting: "System Setting",
