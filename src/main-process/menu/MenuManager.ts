@@ -60,6 +60,12 @@ export class MenuManager {
                 label: 'Help',
                 submenu: [
                     {
+                        label: 'Show Dev Console',
+                        accelerator: process.platform === 'darwin' ? 'Cmd+Option+I' : 'Ctrl+Shift+I',
+                        click: () => this.showDevConsole()
+                    },
+                    { type: 'separator' },
+                    {
                         label: 'About',
                         click: () => this.showAbout()
                     }
@@ -137,6 +143,31 @@ export class MenuManager {
     showAbout(): void {
         console.log('Showing about dialog...');
         // TODO: Implement about dialog
+    }
+
+    /**
+     * Show developer console
+     */
+    showDevConsole(): void {
+        try {
+            // Get the focused window or the first window
+            const { BrowserWindow } = require('electron');
+            const focusedWindow = BrowserWindow.getFocusedWindow();
+            const mainWindow = focusedWindow || BrowserWindow.getAllWindows()[0];
+            
+            if (mainWindow) {
+                if (mainWindow.webContents.isDevToolsOpened()) {
+                    mainWindow.webContents.closeDevTools();
+                } else {
+                    mainWindow.webContents.openDevTools();
+                }
+                console.log('Toggled developer console');
+            } else {
+                console.warn('No window available to show dev console');
+            }
+        } catch (error) {
+            console.error('Failed to show dev console:', error);
+        }
     }
 
     /**
