@@ -24,13 +24,17 @@
 import {useI18n} from "vue-i18n";
 import {homecardEntity} from "@/entityTypes/homecard-type";
 import router from "../router";
+import { computed } from 'vue';
+
 const {t} = useI18n({inheritLocale: true});
+
 const cardRouter=(link:string|undefined)=>{
   if(link){
     router.push(link)
   }
 }
-const homeCardlist: homecardEntity[] = [
+
+const homeCardlist = computed((): homecardEntity[] => [
     {
         title: t('home.search'),
         subtitle: t('home.search_scraper'),
@@ -38,12 +42,13 @@ const homeCardlist: homecardEntity[] = [
         description: t('home.search_description'),
         link:'/search/form'
     },
-    // {
-    //     title: t('home.yellowpage'),
-    //     subtitle: t('home.yellowpage_scraper'),
-    //     prependIcon: 'mdi-alarm',
-    //     description: t('home.yellowpage_description')
-    // },
+    {
+        title: t('home.yellowpage'),
+        subtitle: t('home.yellowpage_scraper'),
+        prependIcon: 'mdi-alarm',
+        description: t('home.yellowpage_description'),
+        link: '/yellowpages/list'
+    },
     // {
     //     title: t('home.socialmedia'),
     //     subtitle: t('home.socialmedia_scraper'),
@@ -97,7 +102,7 @@ const homeCardlist: homecardEntity[] = [
     //     description: t('home.account_manage_description'),
     //     link:'/socialaccount/list'
     // },
-]
+])
 </script>
 <style scoped>
 .homecard {
