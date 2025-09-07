@@ -26,12 +26,13 @@ router.beforeEach(async (to, from, next: any) => {
   let userinfo
   try{
   userinfo=await  UserModule.GetUserInfo()
-  // console.log(userinfo)
+  console.log("userinfo")
+  console.log(userinfo)
   }catch(err){
     console.log(err)
   }
   // Determine whether the user has logged in
-  if (userinfo) {
+  if (userinfo&&userinfo.email.length>0&&userinfo.name.length>0) {
     if (to.path === '/login') {
       // If is logged in, redirect to the home page
       next({ path: '/' })
