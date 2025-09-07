@@ -637,3 +637,4 @@ export const createTranslatedRoutes = (): RouteRecordRaw[] => {
   ];
 };
 
+

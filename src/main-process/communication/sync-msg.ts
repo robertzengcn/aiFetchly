@@ -245,30 +245,6 @@ export default function SyncMsg(mainWindow: BrowserWindow) {
     const reslist = socialtaskres.gettaskresultlist(qdata.id, qdata.page, qdata.size, null)
     return { status: true, msg: "", data: reslist };
   })
-  ipcMain.handle("user:Signout", async (event, data) => {
-    const userModel = new User()
-
-    const res = await userModel.Signout().then(function () {
-      return {
-        status: true,
-        msg: "login out success",
-      };
-    }).catch(function (err) {
-      console.log(err);
-      if (err instanceof Error) {
-        return {
-          status: false,
-          msg: err.message,
-        };
-      } else {
-        return {
-          status: false,
-          msg: "unknow error",
-        };
-      }
-    })
-    return res;
-  })
 
   ipcMain.handle(GET_APP_INFO, async () => {
     const appInfo = new MainProcessAppInfoModule()

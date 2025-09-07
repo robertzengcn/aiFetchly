@@ -13,18 +13,18 @@ export class Token {
 
     // private keytarService = 'SocialScraper-token';
     private store: ElectronStoreService;
-    private useSafestore: boolean;
+    // private useSafestore: boolean;
 
     constructor() {
        const option = {
-            encryptionKey: "social-market-key",//对配置文件进行加密
+            encryptionKey: "ai-fetchly-key",//对配置文件进行加密
             clearInvalidConfig: true, // 发生 SyntaxError  则清空配置,
         }
 
         //this.store = new StoreService(USERSERVICE);
         this.store = new ElectronStoreService(USERSERVICE);
         // this.useSafestore=safeStorage?.isEncryptionAvailable();  
-        this.useSafestore = false;
+        // this.useSafestore = false;
     }
     //get account name
     // private getaccountname():string{

@@ -1,6 +1,7 @@
 import { ipcMain } from 'electron';
-import {QUERY_USER_INFO,OPENLOGINPAGE,GET_LOGIN_URL} from '@/config/channellist'
+import {QUERY_USER_INFO,OPENLOGINPAGE,GET_LOGIN_URL,USER_SIGNOUT} from '@/config/channellist'
 import { UserController } from '@/controller/UserController'
+import { User } from '@/modules/user'
 import {UserInfoType} from "@/entityTypes/userType"
 import { CommonMessage } from "@/entityTypes/commonType"
 export function registerUserIpcHandlers() {
@@ -56,5 +57,30 @@ export function registerUserIpcHandlers() {
             data: null
             } as CommonMessage<null>
         }
+    })
+
+    ipcMain.handle(USER_SIGNOUT, async (event, data) => {
+        const userModel = new User()
+
+        const res = await userModel.Signout().then(function () {
+            return {
+                status: true,
+                msg: "login out success",
+            };
+        }).catch(function (err) {
+            console.log(err);
+            if (err instanceof Error) {
+                return {
+                    status: false,
+                    msg: err.message,
+                };
+            } else {
+                return {
+                    status: false,
+                    msg: "unknow error",
+                };
+            }
+        })
+        return res;
     })
 }

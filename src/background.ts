@@ -47,10 +47,57 @@ try {
 } catch (err) {
   console.error('Failed to create log directory:', err);
 }
-log.transports.file.fileName = path.join(logDir, 'logs/main.log');
 
-//override console.log
-Object.assign(console, log.functions);
+// Set the log file path and ensure it's writable
+log.transports.file.fileName = path.join(logDir, 'main.log');
+log.transports.file.maxSize = 1000000; // 1MB max file size
+
+// Override console methods to also log to file
+const originalConsole = {
+  log: console.log,
+  error: console.error,
+  warn: console.warn,
+  info: console.info,
+  debug: console.debug
+};
+
+console.log = (...args: any[]) => {
+  originalConsole.log(...args);
+  log.info(...args);
+};
+
+console.error = (...args: any[]) => {
+  originalConsole.error(...args);
+  log.error(...args);
+};
+
+console.warn = (...args: any[]) => {
+  originalConsole.warn(...args);
+  log.warn(...args);
+};
+
+console.info = (...args: any[]) => {
+  originalConsole.info(...args);
+  log.info(...args);
+};
+
+console.debug = (...args: any[]) => {
+  originalConsole.debug(...args);
+  log.debug(...args);
+};
+
+// Test the console override
+console.log('Console override test - this should appear in both terminal and log file');
+
+// Verify log file is writable
+try {
+  const logFilePath = log.transports.file.fileName;
+  console.log(`Log file path: ${logFilePath}`);
+  console.log(`Log file exists: ${fs.existsSync(logFilePath)}`);
+} catch (err) {
+  console.error('Error checking log file:', err);
+}
+
 log.info('Application starting...');
 // Handle uncaught exceptions
 process.on('uncaughtException', (error) => {
