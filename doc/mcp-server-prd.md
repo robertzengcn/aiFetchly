@@ -571,7 +571,7 @@ class AiFetchlyMCPServer {
                 title: "Create Search Task",
                 description: "Create a new search engine scraping task",
                 inputSchema: {
-                    searchEnginer: z.string().describe("Search engine (google, bing, duckduckgo, etc.)"),
+                    searchEnginer: z.string().describe("Search engine (google, bing)"),
                     keywords: z.array(z.string()).describe("Array of search keywords"),
                     num_pages: z.number().describe("Number of pages to scrape"),
                     concurrency: z.number().describe("Number of concurrent processes"),
@@ -1094,25 +1094,53 @@ class SearchEngineTool {
 ```typescript
 // Main entry point for the MCP server
 import { AiFetchlyMCPServer } from './mcp-server.js';
+import { LoginStateMonitor } from './LoginStateMonitor.js';
 
 async function main() {
     try {
-        const mcpServer = new AiFetchlyMCPServer();
+        console.log('Starting aiFetchly MCP Server...');
+        
+        // Initialize login state monitor
+        const loginStateMonitor = new LoginStateMonitor();
+        
+        // Create and start MCP server
+        const mcpServer = new AiFetchlyMCPServer(loginStateMonitor);
         await mcpServer.start();
         
         // Handle graceful shutdown
         process.on('SIGINT', async () => {
-            console.log('Shutting down MCP server...');
+            console.log('Received SIGINT, shutting down MCP Server...');
+            await mcpServer.stop();
             process.exit(0);
         });
-        
+
         process.on('SIGTERM', async () => {
-            console.log('Shutting down MCP server...');
+            console.log('Received SIGTERM, shutting down MCP Server...');
+            await mcpServer.stop();
             process.exit(0);
         });
+
+        // Handle login state changes from parent process
+        process.stdin.on('data', (data) => {
+            try {
+                const message = JSON.parse(data.toString());
+                if (message.type === 'loginStateChange') {
+                    console.log('Received login state change:', message.isLoggedIn);
+                    loginStateMonitor.updateLoginState(message.isLoggedIn);
+                }
+            } catch (error) {
+                console.error('Error parsing message from parent process:', error);
+            }
+        });
+
+        // Initialize login state from environment variable
+        const initialLoginState = process.env.AIFETCHLY_LOGIN_STATE === 'true';
+        loginStateMonitor.updateLoginState(initialLoginState);
+        
+        console.log('MCP Server started successfully');
         
     } catch (error) {
-        console.error('Failed to start MCP server:', error);
+        console.error('Failed to start MCP Server:', error);
         process.exit(1);
     }
 }
@@ -1122,52 +1150,323 @@ main().catch(console.error);
 ```
 
 #### 4.1.6 MCP Server Integration with aiFetchly
-```typescript
-// Integration point in aiFetchly main process
-import { spawn } from 'child_process';
 
-class MCPIntegration {
-    private mcpProcess: any = null;
-    
-    async startMCPServer(): Promise<void> {
-        if (this.mcpProcess) {
-            console.log('MCP server already running');
-            return;
-        }
-        
-        // Start MCP server as a child process
-        this.mcpProcess = spawn('node', ['dist/mcp-server.js'], {
-            stdio: ['pipe', 'pipe', 'pipe'],
-            cwd: process.cwd()
-        });
-        
-        this.mcpProcess.on('error', (error: Error) => {
-            console.error('MCP server error:', error);
-        });
-        
-        this.mcpProcess.on('exit', (code: number) => {
-            console.log(`MCP server exited with code ${code}`);
-            this.mcpProcess = null;
-        });
-        
-        console.log('MCP server started successfully');
+The MCP server will be automatically started when the Electron app starts and integrated into the main application lifecycle:
+
+##### 4.1.6.1 Main Process Integration
+
+```typescript
+// src/background.ts (Main Process)
+import { app, BrowserWindow, ipcMain } from 'electron';
+import { MCPIntegration } from './mcp/MCPIntegration';
+import { LoginStateMonitor } from './mcp/LoginStateMonitor';
+
+class AiFetchlyApp {
+    private mainWindow: BrowserWindow | null = null;
+    private mcpIntegration: MCPIntegration;
+    private loginStateMonitor: LoginStateMonitor;
+
+    constructor() {
+        this.mcpIntegration = new MCPIntegration();
+        this.loginStateMonitor = new LoginStateMonitor();
     }
-    
-    async stopMCPServer(): Promise<void> {
-        if (this.mcpProcess) {
-            this.mcpProcess.kill('SIGTERM');
-            this.mcpProcess = null;
-            console.log('MCP server stopped');
+
+    async initialize(): Promise<void> {
+        // Initialize the main window
+        await this.createMainWindow();
+        
+        // Start MCP server when app is ready
+        await this.startMCPServer();
+        
+        // Initialize login state monitoring
+        await this.initializeLoginStateMonitoring();
+        
+        // Set up IPC handlers for MCP communication
+        this.setupMCPIPC();
+    }
+
+    private async startMCPServer(): Promise<void> {
+        try {
+            console.log('Starting MCP Server...');
+            await this.mcpIntegration.startMCPServer();
+            console.log('MCP Server started successfully');
+        } catch (error) {
+            console.error('Failed to start MCP Server:', error);
+            // Don't fail the entire app if MCP server fails to start
+            // The app can still function without MCP server
         }
     }
-    
-    isMCPServerRunning(): boolean {
-        return this.mcpProcess !== null;
+
+    private async initializeLoginStateMonitoring(): Promise<void> {
+        // Start monitoring login state for MCP server
+        this.loginStateMonitor.startMonitoring();
+        
+        // Listen for login state changes
+        this.loginStateMonitor.on('loginStateChanged', (isLoggedIn) => {
+            console.log('Login state changed:', isLoggedIn);
+            // Notify MCP server about login state changes
+            this.mcpIntegration.notifyLoginStateChange(isLoggedIn);
+        });
+    }
+
+    private setupMCPIPC(): void {
+        // IPC handlers for MCP server communication
+        ipcMain.handle('mcp:get-status', () => {
+            return {
+                isRunning: this.mcpIntegration.isMCPServerRunning(),
+                loginState: this.loginStateMonitor.getCurrentLoginState()
+            };
+        });
+
+        ipcMain.handle('mcp:restart', async () => {
+            try {
+                await this.mcpIntegration.stopMCPServer();
+                await this.mcpIntegration.startMCPServer();
+                return { success: true };
+            } catch (error) {
+                return { success: false, error: error.message };
+            }
+        });
+    }
+
+    async shutdown(): Promise<void> {
+        // Stop MCP server when app is closing
+        await this.mcpIntegration.stopMCPServer();
+        this.loginStateMonitor.stopMonitoring();
     }
 }
 
-// Export for use in aiFetchly main process
-export { MCPIntegration };
+// App lifecycle management
+const aiFetchlyApp = new AiFetchlyApp();
+
+app.whenReady().then(async () => {
+    await aiFetchlyApp.initialize();
+});
+
+app.on('window-all-closed', async () => {
+    await aiFetchlyApp.shutdown();
+    if (process.platform !== 'darwin') {
+        app.quit();
+    }
+});
+
+app.on('activate', async () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+        await aiFetchlyApp.initialize();
+    }
+});
+
+app.on('before-quit', async () => {
+    await aiFetchlyApp.shutdown();
+});
+```
+
+##### 4.1.6.2 Enhanced MCP Integration Class
+
+```typescript
+// src/mcp/MCPIntegration.ts
+import { spawn, ChildProcess } from 'child_process';
+import { EventEmitter } from 'events';
+import * as path from 'path';
+
+export class MCPIntegration extends EventEmitter {
+    private mcpProcess: ChildProcess | null = null;
+    private isRunning = false;
+    private loginState = false;
+
+    async startMCPServer(): Promise<void> {
+        if (this.isRunning) {
+            console.log('MCP Server is already running');
+            return;
+        }
+
+        try {
+            // Get the path to the compiled MCP server
+            const mcpServerPath = path.join(__dirname, 'mcp-server', 'main.js');
+            
+            // Start the MCP server as a child process
+            this.mcpProcess = spawn('node', [mcpServerPath], {
+                stdio: ['pipe', 'pipe', 'pipe'],
+                cwd: process.cwd(),
+                env: {
+                    ...process.env,
+                    // Pass login state to MCP server
+                    AIFETCHLY_LOGIN_STATE: this.loginState.toString()
+                }
+            });
+
+            // Handle MCP server output
+            this.mcpProcess.stdout?.on('data', (data) => {
+                console.log('MCP Server:', data.toString());
+            });
+
+            this.mcpProcess.stderr?.on('data', (data) => {
+                console.error('MCP Server Error:', data.toString());
+            });
+
+            this.mcpProcess.on('error', (error) => {
+                console.error('MCP Server error:', error);
+                this.emit('error', error);
+            });
+
+            this.mcpProcess.on('exit', (code) => {
+                console.log(`MCP Server exited with code ${code}`);
+                this.isRunning = false;
+                this.emit('exit', code);
+            });
+
+            this.isRunning = true;
+            console.log('MCP Server started successfully');
+            this.emit('started');
+
+        } catch (error) {
+            console.error('Failed to start MCP Server:', error);
+            throw error;
+        }
+    }
+
+    async stopMCPServer(): Promise<void> {
+        if (!this.mcpProcess || !this.isRunning) {
+            return;
+        }
+
+        try {
+            this.mcpProcess.kill('SIGTERM');
+            this.isRunning = false;
+            console.log('MCP Server stopped');
+            this.emit('stopped');
+        } catch (error) {
+            console.error('Failed to stop MCP Server:', error);
+            throw error;
+        }
+    }
+
+    notifyLoginStateChange(isLoggedIn: boolean): void {
+        this.loginState = isLoggedIn;
+        // Send login state change to MCP server via stdin
+        if (this.mcpProcess && this.mcpProcess.stdin) {
+            this.mcpProcess.stdin.write(JSON.stringify({
+                type: 'loginStateChange',
+                isLoggedIn: isLoggedIn
+            }) + '\n');
+        }
+    }
+
+    isMCPServerRunning(): boolean {
+        return this.isRunning;
+    }
+
+    getLoginState(): boolean {
+        return this.loginState;
+    }
+}
+```
+
+##### 4.1.6.3 Application Startup Sequence
+
+The MCP server startup follows this sequence when the Electron app starts:
+
+1. **Electron App Ready**: `app.whenReady()` event fires
+2. **Main Window Creation**: Create the main BrowserWindow
+3. **MCP Server Startup**: Start MCP server as child process
+4. **Login State Monitoring**: Initialize login state monitoring
+5. **IPC Setup**: Set up IPC handlers for MCP communication
+6. **Ready State**: Application is fully ready for MCP operations
+
+**Startup Flow Diagram:**
+```
+Electron App Start
+    ↓
+App Ready Event
+    ↓
+Create Main Window
+    ↓
+Start MCP Server (Child Process)
+    ↓
+Initialize Login State Monitor
+    ↓
+Setup IPC Handlers
+    ↓
+Application Ready
+    ↓
+MCP Tools Available
+```
+
+##### 4.1.6.4 Build Configuration
+
+The MCP server will be built as part of the main application build process:
+
+```json
+// package.json
+{
+  "scripts": {
+    "build": "npm run build:main && npm run build:renderer && npm run build:mcp-server",
+    "build:mcp-server": "tsc -p tsconfig.mcp-server.json",
+    "dev": "concurrently \"npm run dev:main\" \"npm run dev:renderer\" \"npm run dev:mcp-server\"",
+    "dev:mcp-server": "tsc -p tsconfig.mcp-server.json --watch"
+  }
+}
+```
+
+```json
+// tsconfig.mcp-server.json
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "./dist/mcp-server",
+    "rootDir": "./src/mcp-server",
+    "module": "ESNext",
+    "target": "ES2020"
+  },
+  "include": ["src/mcp-server/**/*"],
+  "exclude": ["node_modules", "dist"]
+}
+```
+
+##### 4.1.6.5 Error Handling and Recovery
+
+The MCP server includes robust error handling and recovery mechanisms:
+
+```typescript
+// Error handling in MCPIntegration
+class MCPIntegration extends EventEmitter {
+    private retryCount = 0;
+    private maxRetries = 3;
+    private retryDelay = 5000; // 5 seconds
+
+    async startMCPServer(): Promise<void> {
+        try {
+            // ... existing startup code ...
+        } catch (error) {
+            console.error('Failed to start MCP Server:', error);
+            
+            // Implement retry logic
+            if (this.retryCount < this.maxRetries) {
+                this.retryCount++;
+                console.log(`Retrying MCP Server startup (${this.retryCount}/${this.maxRetries})...`);
+                
+                setTimeout(() => {
+                    this.startMCPServer();
+                }, this.retryDelay);
+            } else {
+                console.error('Max retries reached. MCP Server will not start.');
+                this.emit('failed', error);
+            }
+        }
+    }
+
+    // Auto-restart on unexpected exit
+    private setupAutoRestart(): void {
+        this.mcpProcess?.on('exit', (code) => {
+            if (code !== 0) {
+                console.log('MCP Server exited unexpectedly, attempting restart...');
+                setTimeout(() => {
+                    this.startMCPServer();
+                }, this.retryDelay);
+            }
+        });
+    }
+}
 ```
 
 ### 4.2 Integration with Existing Controllers

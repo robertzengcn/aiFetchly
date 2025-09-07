@@ -47,6 +47,8 @@ try {
 } catch (err) {
   console.error('Failed to create log directory:', err);
 }
+
+// Set the log file path BEFORE overriding console functions
 log.transports.file.fileName = path.join(logDir, 'logs/main.log');
 
 //override console.log

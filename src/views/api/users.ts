@@ -5,7 +5,7 @@ export {};
 // import {ipcRenderer as ipc} from 'electron-better-ipc'
 import {Iresponse} from '@/views/api/types'
 import {windowInvoke,windowSend,windowReceive} from '@/views/utils/apirequest'
-import {QUERY_USER_INFO, GET_LOGIN_URL,USER_CHECK_LOGIN} from "@/config/channellist";
+import {QUERY_USER_INFO, GET_LOGIN_URL,USER_CHECK_LOGIN,USER_SIGNOUT} from "@/config/channellist";
 import {UserInfoType} from "@/entityTypes/userType"
 import {OPENLOGINPAGE} from "@/config/channellist";
 import {NativateDatatype} from "@/entityTypes/commonType"
@@ -37,7 +37,7 @@ export const login = (data: any) =>
   // })
 
 export const Signout = async() =>
-await windowInvoke("user:Signout")
+await windowInvoke(USER_SIGNOUT)
 
 export async function GetloginUserInfo():Promise<UserInfoType>{
     const res=await windowInvoke(QUERY_USER_INFO)
