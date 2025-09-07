@@ -2,11 +2,16 @@
 // import keytar from 'keytar'
 
 import Store  from "electron-store"
+import { app } from 'electron'
+
 export class ElectronStoreService {
     private store:Store;
     // private service:string;
     constructor(service:string){
-        this.store = new Store({name:service});
+        // Get app name and combine with service name
+        const appName = app.getName();
+        const serviceName = `${appName}:${service}`;
+        this.store = new Store({name: serviceName});
     }
     public setValue(key, value:string){
         this.store.set(key,value);

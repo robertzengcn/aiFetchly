@@ -80,3 +80,4 @@ router: {
 - Routes are added dynamically to avoid conflicts with static routes
 - All route metadata (titles, icons) are properly translated and reactive
 
+
