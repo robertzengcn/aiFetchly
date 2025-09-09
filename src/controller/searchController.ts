@@ -27,6 +27,23 @@ import {SortBy} from "@/entityTypes/commonType";
 // import {twocaptchagroup,twocaptchatoken,twocaptcha_enabled,chrome_path,firefox_path,external_system} from '@/config/settinggroupInit'
 // import { AccountCookiesModule } from "@/modules/accountCookiesModule"
 // import {CookiesType} from "@/entityTypes/cookiesType"
+import { 
+    MCPRequest, 
+    MCPResponse, 
+    MCPSearchRequest, 
+    MCPSearchData, 
+    MCPSearchResult, 
+    MCPSearchMetadata,
+    MCPTaskCreateRequest,
+    MCPTaskUpdateRequest,
+    MCPTask,
+    MCPTaskListData,
+    MCPPaginationParams,
+    createMCPSuccessResponse,
+    createMCPErrorResponse,
+    createMCPError,
+    MCPErrorCode
+} from '@/mcp-server/types/mcpTypes';
 export class SearchController {
     private searchModel:SearchModule;
     // private accountCookiesModule: AccountCookiesModule;
@@ -453,6 +470,391 @@ export class SearchController {
         }
 
         return await this.searchModel.getTaskDetailsForEdit(taskId);
+    }
+
+    /**
+     * Handle MCP requests for search functionality
+     * This method acts as an adapter between MCP requests and the existing search business logic
+     */
+    public async handleMCPRequest(request: MCPRequest): Promise<MCPResponse> {
+        try {
+            const { tool, parameters } = request;
+
+            switch (tool) {
+                case 'search_google':
+                case 'search_bing':
+                    return await this.handleSearchRequest(parameters as MCPSearchRequest, tool);
+                
+                case 'create_search_task':
+                    return await this.handleCreateTaskRequest(parameters as MCPTaskCreateRequest);
+                
+                case 'list_search_tasks':
+                    return await this.handleListTasksRequest(parameters as MCPPaginationParams);
+                
+                case 'get_search_task':
+                    return await this.handleGetTaskRequest(parameters.taskId as number);
+                
+                case 'update_search_task':
+                    return await this.handleUpdateTaskRequest(parameters as MCPTaskUpdateRequest);
+                
+                case 'get_search_results':
+                    return await this.handleGetSearchResultsRequest(parameters as { taskId: number } & MCPPaginationParams);
+                
+                case 'retry_search_task':
+                    return await this.handleRetryTaskRequest(parameters.taskId as number);
+                
+                case 'get_task_error_log':
+                    return await this.handleGetTaskErrorLogRequest(parameters.taskId as number);
+                
+                case 'get_task_details_for_edit':
+                    return await this.handleGetTaskDetailsForEditRequest(parameters.taskId as number);
+                
+                default:
+                    return createMCPErrorResponse(
+                        createMCPError(MCPErrorCode.INVALID_PARAMETERS, `Unknown search tool: ${tool}`),
+                        'Invalid search tool requested'
+                    );
+            }
+        } catch (error) {
+            console.error('Error in SearchController.handleMCPRequest:', error);
+            return createMCPErrorResponse(
+                createMCPError(
+                    MCPErrorCode.INTERNAL_ERROR,
+                    'Internal error occurred while processing search request',
+                    error instanceof Error ? error.message : String(error),
+                    error instanceof Error ? error.stack : undefined
+                ),
+                'Failed to process search request'
+            );
+        }
+    }
+
+    /**
+     * Handle search engine requests (Google/Bing)
+     */
+    private async handleSearchRequest(params: MCPSearchRequest, engine: string): Promise<MCPResponse<MCPSearchData>> {
+        try {
+            // Convert MCP search parameters to internal format
+            const searchParams: Usersearchdata = {
+                searchEnginer: engine === 'search_google' ? 'google' : 'bing',
+                keywords: [params.query], // Convert single query to array
+                num_pages: params.pages || 1,
+                concurrency: 1, // Default concurrency
+                notShowBrowser: true, // Default to headless
+                localBrowser: 'chrome' // Default browser
+            };
+
+            // Create and run the search task
+            const taskId = await this.createTask({
+                engine: engine === 'search_google' ? 'google' : 'bing',
+                keywords: [params.query]
+            } as SearchDataParam);
+
+            await this.runSearchTask(taskId);
+
+            // Get the search results
+            const results = await this.listtaskSearchResult(taskId, 1, 100); // Get first 100 results
+
+            // Convert to MCP format
+            const mcpResults: MCPSearchResult[] = results.record.map((record, index) => ({
+                title: record.title || '',
+                url: record.link || '',
+                description: record.snippet || '',
+                position: index + 1,
+                domain: record.link ? new URL(record.link).hostname : '',
+                type: 'organic' as const,
+                snippet: record.snippet || undefined,
+                publishedDate: record.record_time || undefined
+            }));
+
+            const mcpSearchData: MCPSearchData = {
+                results: mcpResults,
+                metadata: {
+                    query: params.query,
+                    totalResults: results.total,
+                    processingTime: 0, // This would need to be tracked
+                    page: 1,
+                    engine: engine,
+                    timestamp: new Date().toISOString()
+                }
+            };
+
+            return createMCPSuccessResponse(mcpSearchData, 'Search completed successfully');
+        } catch (error) {
+            throw error;
+        }
+    }
+
+    /**
+     * Handle create task requests
+     */
+    private async handleCreateTaskRequest(params: MCPTaskCreateRequest): Promise<MCPResponse<MCPTask>> {
+        try {
+            // Convert MCP task parameters to internal format
+            const searchData: SearchDataParam = {
+                engine: params.parameters.engine as string,
+                keywords: params.parameters.keywords as string[] || []
+            };
+
+            const taskId = await this.createTask(searchData);
+
+            // Convert to MCP task format
+            const mcpTask: MCPTask = {
+                id: taskId.toString(),
+                name: params.name,
+                description: params.description,
+                type: params.type,
+                status: 'pending',
+                parameters: params.parameters,
+                priority: params.priority || 'medium',
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString()
+            };
+
+            return createMCPSuccessResponse(mcpTask, 'Task created successfully');
+        } catch (error) {
+            throw error;
+        }
+    }
+
+    /**
+     * Handle list tasks requests
+     */
+    private async handleListTasksRequest(params: MCPPaginationParams): Promise<MCPResponse<MCPTaskListData>> {
+        try {
+            const page = params.page || 1;
+            const size = params.size || 20;
+            const sortBy: SortBy | undefined = params.sortBy ? {
+                key: params.sortBy,
+                order: params.sortOrder || 'desc'
+            } : undefined;
+
+            const result = await this.listSearchresult(page, size, sortBy);
+
+            // Convert to MCP format
+            const mcpTasks: MCPTask[] = result.records.map(task => ({
+                id: task.id.toString(),
+                name: `Search Task ${task.id}`,
+                description: `Keywords: ${task.keywords.join(', ')}`,
+                type: 'search',
+                status: this.mapTaskStatus(task.status),
+                parameters: {
+                    keywords: task.keywords,
+                    engine: task.enginer_name
+                },
+                priority: 'medium',
+                createdAt: task.record_time || new Date().toISOString(),
+                updatedAt: task.record_time || new Date().toISOString()
+            }));
+
+            const taskListData: MCPTaskListData = {
+                tasks: mcpTasks,
+                pagination: {
+                    items: mcpTasks,
+                    total: result.total,
+                    page: page,
+                    size: size,
+                    totalPages: Math.ceil(result.total / size)
+                }
+            };
+
+            return createMCPSuccessResponse(taskListData, 'Tasks retrieved successfully');
+        } catch (error) {
+            throw error;
+        }
+    }
+
+    /**
+     * Handle get task requests
+     */
+    private async handleGetTaskRequest(taskId: number): Promise<MCPResponse<MCPTask>> {
+        try {
+            const taskDetails = await this.getTaskDetailsForEdit(taskId);
+            
+            const mcpTask: MCPTask = {
+                id: taskId.toString(),
+                name: `Search Task ${taskId}`,
+                description: `Keywords: ${taskDetails.keywords.join(', ')}`,
+                type: 'search',
+                status: this.mapTaskStatus(taskDetails.status.toString()),
+                parameters: {
+                    keywords: taskDetails.keywords,
+                    engine: taskDetails.engineName,
+                    concurrency: taskDetails.concurrency,
+                    numPages: taskDetails.num_pages,
+                    showBrowser: !taskDetails.notShowBrowser
+                },
+                priority: 'medium',
+                createdAt: taskDetails.record_time || new Date().toISOString(),
+                updatedAt: taskDetails.record_time || new Date().toISOString()
+            };
+
+            return createMCPSuccessResponse(mcpTask, 'Task retrieved successfully');
+        } catch (error) {
+            throw error;
+        }
+    }
+
+    /**
+     * Handle update task requests
+     */
+    private async handleUpdateTaskRequest(params: MCPTaskUpdateRequest): Promise<MCPResponse<MCPTask>> {
+        try {
+            const taskId = parseInt(params.taskId);
+            
+            // Convert MCP update parameters to internal format
+            const updates: any = {};
+            if (params.name) updates.name = params.name;
+            if (params.description) updates.description = params.description;
+            if (params.parameters) {
+                if (params.parameters.keywords) updates.keywords = params.parameters.keywords;
+                if (params.parameters.concurrency) updates.concurrency = params.parameters.concurrency;
+                if (params.parameters.numPages) updates.num_pages = params.parameters.numPages;
+                if (params.parameters.showBrowser !== undefined) updates.notShowBrowser = !params.parameters.showBrowser;
+            }
+
+            await this.updateSearchTask(taskId, updates);
+
+            // Get updated task details
+            const taskDetails = await this.getTaskDetailsForEdit(taskId);
+            
+            const mcpTask: MCPTask = {
+                id: taskId.toString(),
+                name: params.name || `Search Task ${taskId}`,
+                description: params.description || `Keywords: ${taskDetails.keywords.join(', ')}`,
+                type: 'search',
+                status: this.mapTaskStatus(taskDetails.status.toString()),
+                parameters: {
+                    keywords: taskDetails.keywords,
+                    engine: taskDetails.engineName,
+                    concurrency: taskDetails.concurrency,
+                    numPages: taskDetails.num_pages,
+                    showBrowser: !taskDetails.notShowBrowser
+                },
+                priority: 'medium',
+                createdAt: taskDetails.record_time || new Date().toISOString(),
+                updatedAt: new Date().toISOString()
+            };
+
+            return createMCPSuccessResponse(mcpTask, 'Task updated successfully');
+        } catch (error) {
+            throw error;
+        }
+    }
+
+    /**
+     * Handle get search results requests
+     */
+    private async handleGetSearchResultsRequest(params: { taskId: number } & MCPPaginationParams): Promise<MCPResponse<MCPSearchData>> {
+        try {
+            const page = params.page || 1;
+            const size = params.size || 20;
+            
+            const results = await this.listtaskSearchResult(params.taskId, page, size);
+
+            // Convert to MCP format
+            const mcpResults: MCPSearchResult[] = results.record.map((record, index) => ({
+                title: record.title || '',
+                url: record.link || '',
+                description: record.snippet || '',
+                position: (page - 1) * size + index + 1,
+                domain: record.link ? new URL(record.link).hostname : '',
+                type: 'organic' as const,
+                snippet: record.snippet || undefined,
+                publishedDate: record.record_time || undefined
+            }));
+
+            const searchData: MCPSearchData = {
+                results: mcpResults,
+                metadata: {
+                    query: '', // This would need to be retrieved from task details
+                    totalResults: results.total,
+                    processingTime: 0,
+                    page: page,
+                    engine: 'unknown',
+                    timestamp: new Date().toISOString()
+                }
+            };
+
+            return createMCPSuccessResponse(searchData, 'Search results retrieved successfully');
+        } catch (error) {
+            throw error;
+        }
+    }
+
+    /**
+     * Handle retry task requests
+     */
+    private async handleRetryTaskRequest(taskId: number): Promise<MCPResponse> {
+        try {
+            await this.retryTask(taskId);
+            return createMCPSuccessResponse(null, 'Task retry initiated successfully');
+        } catch (error) {
+            throw error;
+        }
+    }
+
+    /**
+     * Handle get task error log requests
+     */
+    private async handleGetTaskErrorLogRequest(taskId: number): Promise<MCPResponse<{ log: string }>> {
+        try {
+            const log = await this.getTaskErrorlog(taskId);
+            return createMCPSuccessResponse({ log }, 'Error log retrieved successfully');
+        } catch (error) {
+            throw error;
+        }
+    }
+
+    /**
+     * Handle get task details for edit requests
+     */
+    private async handleGetTaskDetailsForEditRequest(taskId: number): Promise<MCPResponse<TaskDetailsForEdit>> {
+        try {
+            const taskDetails = await this.getTaskDetailsForEdit(taskId);
+            return createMCPSuccessResponse(taskDetails, 'Task details retrieved successfully');
+        } catch (error) {
+            throw error;
+        }
+    }
+
+    /**
+     * Helper method to map internal engine names to IDs
+     */
+    private getEngineId(engine: string): number {
+        switch (engine.toLowerCase()) {
+            case 'google':
+                return 1;
+            case 'bing':
+                return 2;
+            default:
+                return 1; // Default to Google
+        }
+    }
+
+    /**
+     * Helper method to map internal task status to MCP status
+     */
+    private mapTaskStatus(status: string): 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' {
+        switch (status.toLowerCase()) {
+            case 'notstart':
+            case 'pending':
+                return 'pending';
+            case 'processing':
+            case 'running':
+                return 'running';
+            case 'complete':
+            case 'completed':
+                return 'completed';
+            case 'error':
+            case 'failed':
+                return 'failed';
+            case 'cancel':
+            case 'cancelled':
+                return 'cancelled';
+            default:
+                return 'pending';
+        }
     }
 
 

@@ -56,7 +56,8 @@ export type jwtUser = {
   // account_id:number
   name: string,
   email: string,
-  // token:string
+  token: string,
+  expiresAt?: string,
   roles: Array<string>,
 }
 type jwtTokenUser = {
@@ -360,7 +361,7 @@ export class RemoteSource {
       // account_id: decoded.AccountId,
       email: decoded.Email,
       name:decoded.Name,
-      // token:token,
+      token: token,
       roles: decoded.Roles ? decoded.Roles : [],
     }
     return jwtuser;

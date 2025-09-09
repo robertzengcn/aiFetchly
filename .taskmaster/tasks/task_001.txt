@@ -1,0 +1,43 @@
+# Task ID: 1
+# Title: Implement Core MCP Server and Automatic Startup
+# Status: done
+# Dependencies: None
+# Priority: high
+# Description: Set up the basic MCP server using the '@modelcontextprotocol/sdk' and integrate it into the aiFetchly Electron application. The server must start automatically as a child process when the main application launches.
+# Details:
+This task involves creating the core `AiFetchlyMCPServer` class, using `StdioServerTransport` for communication, and implementing the `MCPIntegration` class within the Electron main process to spawn and manage the server lifecycle. The build process must be configured to compile the MCP server code separately (e.g., using `tsconfig.mcp-server.json`).
+
+# Test Strategy:
+Verify the MCP server process starts within 5 seconds of the Electron app launch by checking process lists and application logs. Use a simple MCP client to send a basic request (e.g., for system status) and confirm a valid response is received.
+
+# Subtasks:
+## 1. Configure Separate Build Process for MCP Server [done]
+### Dependencies: None
+### Description: Set up the necessary build configuration to compile the MCP server TypeScript code into a separate JavaScript executable script.
+### Details:
+Create a `tsconfig.mcp-server.json` file that extends the base tsconfig. Update the build scripts in `package.json` to add a new command that uses this configuration to compile the server source files into the application's distribution directory.
+
+## 2. Implement Core AiFetchlyMCPServer Class [done]
+### Dependencies: None
+### Description: Create the main server class using the '@modelcontextprotocol/sdk' that initializes the server and listens for requests via standard I/O.
+### Details:
+Define the `AiFetchlyMCPServer` class. In its main execution block, instantiate the `MCPServer` from the SDK, configuring it to use `StdioServerTransport`. This class will be the entry point for the child process.
+
+## 3. Implement MCPIntegration Class to Spawn Server Process [done]
+### Dependencies: None
+### Description: Develop the `MCPIntegration` class within the Electron main process to handle the spawning and management of the MCP server child process.
+### Details:
+Create the `MCPIntegration` class. Implement a `startServer` method that uses Node.js's `child_process.spawn` to execute the compiled MCP server script. The method should capture the child process's `stdout`, `stderr`, and `exit` events for logging.
+
+## 4. Integrate Automatic Server Startup on App Launch [done]
+### Dependencies: None
+### Description: Integrate the `MCPIntegration` class into the Electron application's startup sequence to ensure the server starts automatically when the app launches.
+### Details:
+In the main Electron entry file (e.g., `main.ts`), import and instantiate the `MCPIntegration` class. After the Electron `app` emits the 'ready' event, call the `startServer` method. Implement logic to gracefully terminate the server process when the application quits.
+
+## 5. Establish and Verify Basic IPC Communication [done]
+### Dependencies: None
+### Description: Implement a basic client-side request to confirm that the Electron main process can successfully communicate with the spawned MCP server over stdio.
+### Details:
+Add a placeholder tool (e.g., `get_server_status`) to the `AiFetchlyMCPServer`. In the `MCPIntegration` class, create a method to send a JSON-RPC request for this tool to the child process's `stdin` and listen for a response on its `stdout`.
+

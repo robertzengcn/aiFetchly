@@ -1,0 +1,73 @@
+# Task ID: 8
+# Title: Refactor Existing Controllers for Seamless MCP Integration
+# Status: done
+# Dependencies: 1
+# Priority: high
+# Description: Adapt existing controllers (e.g., `SearchController`, `EmailController`) to handle requests originating from the MCP server, ensuring they can process parameters and return data in a consistent, MCP-compatible format.
+# Details:
+This is a cross-cutting task. It involves creating `handleMCPRequest` adapter methods in the existing controllers. This ensures a clean separation of concerns, where the MCP tool implementation is a thin layer that calls into the core business logic without duplicating it.
+
+# Test Strategy:
+Write unit tests for each controller's adapter method, mocking MCP-style input and asserting that the correct underlying business logic is invoked. Integration tests are covered by the individual tool tests (Tasks 3-7).
+
+# Subtasks:
+## 1. Define TypeScript Interfaces for MCP Requests and Responses [done]
+### Dependencies: None
+### Description: Create and standardize TypeScript interfaces (e.g., `MCPRequest`, `MCPSuccessResponse`, `MCPErrorResponse`) to ensure type safety and consistency for data exchanged between the MCP server and the refactored controllers.
+### Details:
+These interfaces will define the structure for tool parameters, success payloads, and standardized error objects. Place them in a shared types directory.
+<info added on 2025-09-08T13:56:11.450Z>
+The comprehensive MCP type definitions have been implemented in `src/mcp-server/types/mcpTypes.ts`. This file establishes the foundational types for all MCP interactions, including:
+- Base request/response interfaces and associated Zod schemas for runtime validation.
+- Specific types for all major functionality areas (search, email extraction, yellow pages, task management, system status, user management).
+- A standardized error handling structure with defined error codes.
+- Utility functions for creating consistent success and error responses.
+- Pagination support for list operations.
+</info added on 2025-09-08T13:56:11.450Z>
+
+## 2. Implement `handleMCPRequest` for Search and Email Extraction Controllers [done]
+### Dependencies: 8.1
+### Description: Refactor `SearchController` and `EmailextractionController` to include an `handleMCPRequest` adapter method. This method will translate MCP-style parameters into calls to the existing business logic.
+### Details:
+The adapter will handle parameter mapping, invoke the core search/extraction functions, and format the results and any errors into the standard MCP response format defined in the new interfaces.
+<info added on 2025-09-08T14:03:16.216Z>
+`handleMCPRequest` methods have been successfully implemented for both `SearchController` and `EmailextractionController`.
+
+**SearchController:**
+- An MCP adapter method has been added to handle 9 different tool types (search_google, search_bing, create_search_task, list_search_tasks, get_search_task, update_search_task, get_search_results, retry_search_task, get_task_error_log, get_task_details_for_edit).
+- Implemented parameter mapping between the MCP format and internal controller methods, along with helper methods for engine ID mapping and task status conversion.
+
+**EmailextractionController:**
+- An MCP adapter method has been added to handle 9 different tool types (extract_emails_from_website, create_email_extraction_task, list_email_extraction_tasks, get_email_extraction_task, update_email_extraction_task, delete_email_extraction_task, get_email_extraction_results, get_email_task_error_log, get_email_task_count).
+- Implemented parameter mapping and helper methods for task status conversion.
+
+Both adapters provide a clean interface between MCP requests and the existing business logic, ensuring standardized MCP responses with proper error handling and type safety.
+</info added on 2025-09-08T14:03:16.216Z>
+
+## 3. Implement `handleMCPRequest` for YellowPagesController [done]
+### Dependencies: 8.1
+### Description: Adapt the `YellowPagesController` by adding an `handleMCPRequest` method to process MCP tool requests for yellow pages scraping.
+### Details:
+This method will parse MCP parameters (e.g., platform, search term, location), call the existing scraping logic, and return the data or errors in the MCP-compatible format.
+<info added on 2025-09-08T14:09:34.440Z>
+The `handleMCPRequest` adapter method has been implemented, supporting 17 different tool types. This includes `scrape_yellow_pages` as well as a full suite for task management (e.g., `create_yellow_pages_task`, `list_yellow_pages_tasks`, `get_yellow_pages_task_progress`), data export, and status checks (`get_yellow_pages_health_status`, `get_yellow_pages_statistics`). The implementation involved creating proper parameter mapping from the MCP format to internal methods, adding helper functions to convert internal `TaskStatus` enums to MCP status strings, and updating the `MCPBusinessListing` interface to be more flexible. The new adapter provides a clean, type-safe interface to the core business logic, ensuring standardized MCP responses and error handling.
+</info added on 2025-09-08T14:09:34.440Z>
+
+## 4. Implement `handleMCPRequest` for TaskController [done]
+### Dependencies: 8.1
+### Description: Refactor the `TaskController` to add an `handleMCPRequest` adapter for handling CRUD operations on tasks originating from MCP tools.
+### Details:
+The adapter will differentiate between create, read, update, and delete operations based on the MCP request parameters, call the corresponding business logic, and format the response.
+
+## 5. Implement `handleMCPRequest` for User and SystemSetting Controllers [done]
+### Dependencies: 8.1
+### Description: Add `handleMCPRequest` adapter methods to the `UserController` and `SystemSettingController` to manage user/system settings via MCP.
+### Details:
+These adapters will process requests for fetching or updating settings, call the relevant service methods, and ensure the response conforms to the MCP standard.
+
+## 6. Update AiFetchlyController to Delegate to New Adapters [done]
+### Dependencies: 8.2, 8.3, 8.4, 8.5
+### Description: Modify the `AiFetchlyController`, which acts as the central entry point for MCP tools, to use the new `handleMCPRequest` methods on the respective controllers instead of calling their business logic methods directly.
+### Details:
+This change centralizes the MCP interaction logic within each controller, simplifying the `AiFetchlyController` and adhering to the separation of concerns principle. The controller will now act as a router, passing the MCP request to the appropriate controller's adapter.
+

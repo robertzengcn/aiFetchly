@@ -1,0 +1,43 @@
+# Task ID: 7
+# Title: Develop General Task and Resource Management Tools
+# Status: pending
+# Dependencies: 3, 4, 5
+# Priority: low
+# Description: Create high-level tools for managing scraping tasks (`create_scraping_task`, `get_task_status`) and monitoring system health (`get_system_status`).
+# Details:
+The `create_scraping_task` tool will be a generic wrapper for creating different types of tasks. The `get_system_status` tool will aggregate data from the `LoginStateMonitor` and other system metrics to provide a health overview as defined in the `MCPSystemStatusResponse` format.
+
+# Test Strategy:
+Call `get_system_status` and verify all fields are populated correctly (uptime, browser instances, etc.). Create a task using `create_scraping_task` and then poll its status with `get_task_status` to check for progress updates.
+
+# Subtasks:
+## 1. Design and Implement User Authentication Database Schema [pending]
+### Dependencies: None
+### Description: Create the necessary database tables to store user information, including credentials and session data.
+### Details:
+Create a `users` table with columns like `id`, `username`, `email`, `password_hash`, `created_at`, and `updated_at`. The `password_hash` column must store a securely hashed password (e.g., using bcrypt or Argon2), not plaintext. Use a database migration tool to manage schema changes.
+
+## 2. Develop User Registration API Endpoint [pending]
+### Dependencies: None
+### Description: Create a public API endpoint (e.g., POST /api/auth/register) that allows new users to create an account.
+### Details:
+The endpoint must accept user details (e.g., username, email, password). It must validate the input, checking for existing usernames/emails and enforcing password complexity rules. Securely hash the password before storing it in the database. Return a success message or appropriate error codes (e.g., 201 Created, 400 Bad Request, 409 Conflict).
+
+## 3. Develop User Login API Endpoint [pending]
+### Dependencies: None
+### Description: Create an API endpoint (e.g., POST /api/auth/login) for users to authenticate and receive a session token.
+### Details:
+The endpoint should accept user credentials (e.g., email and password). Retrieve the user from the database and compare the provided password with the stored hash. If successful, generate and return a session token (e.g., a JSON Web Token - JWT) with an appropriate expiration time. If unsuccessful, return a 401 Unauthorized error.
+
+## 4. Implement Authentication Middleware for Protected Routes [pending]
+### Dependencies: None
+### Description: Create middleware to verify the session token on incoming requests to protected API endpoints, denying access to unauthenticated users.
+### Details:
+The middleware should extract the token from the request headers (e.g., `Authorization: Bearer <token>`). It must validate the token's signature and check for expiration. If the token is valid, attach the authenticated user's information to the request object for use by subsequent handlers. If the token is invalid or missing, return a 401 Unauthorized error.
+
+## 5. Develop User Logout API Endpoint [pending]
+### Dependencies: None
+### Description: Create an API endpoint (e.g., POST /api/auth/logout) to invalidate the user's current session.
+### Details:
+The implementation depends on the session strategy. For stateless JWTs, implement a server-side token blocklist (e.g., in Redis) to store invalidated tokens until they expire. The endpoint will add the current token's ID to this list. The authentication middleware must be updated to check this blocklist.
+

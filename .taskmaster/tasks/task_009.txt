@@ -1,0 +1,43 @@
+# Task ID: 9
+# Title: Implement Robust Error Handling and Server Recovery
+# Status: done
+# Dependencies: 1
+# Priority: medium
+# Description: Enhance the MCP server and its integration with robust error handling, including standardized error responses and an automatic restart mechanism for the server process.
+# Details:
+Implement the `LoginStateError` response format for authentication and application state failures. In the `MCPIntegration` class, add logic to monitor the child process and automatically restart it with a delay if it exits with a non-zero code. Implement retry logic for the initial server startup.
+
+# Test Strategy:
+Test error paths by calling a tool when logged out to verify the error JSON. Manually kill the MCP server process (`kill -9`) and confirm that the main Electron app automatically restarts it after a short delay.
+
+# Subtasks:
+## 1. Implement `LoginStateError` Response Format [done]
+### Dependencies: None
+### Description: Define and implement a standardized JSON error structure for authentication and application state failures, as per the `LoginStateError` specification.
+### Details:
+Create a standardized error class or factory function in the MCP server that generates a consistent JSON response for authentication errors. This response should include a unique error code (e.g., 'AUTH_REQUIRED'), a human-readable message, and a type field. This will be used when `validateLoginState` fails.
+
+## 2. Implement Retry Logic for Initial Server Startup [done]
+### Dependencies: None
+### Description: Add a retry mechanism with backoff to the `MCPIntegration` class for cases where the MCP server fails to start on the initial attempt.
+### Details:
+In the `MCPIntegration` class, wrap the server spawning logic in a function that can be retried. If the child process fails to start or exits with an error code immediately, implement a retry loop (e.g., 3 attempts) with an exponential backoff delay (e.g., 2s, 4s, 8s) to handle transient startup issues.
+
+## 3. Add MCP Server Process Monitoring and Auto-Restart [done]
+### Dependencies: 9.2
+### Description: Implement logic in the `MCPIntegration` class to monitor the health of the MCP server child process and automatically restart it if it crashes unexpectedly.
+### Details:
+Attach an 'exit' event listener to the spawned child process. If the process exits with a non-zero code after it has been running successfully, log the crash and initiate a restart sequence. Use a fixed delay (e.g., 5 seconds) to avoid a tight restart loop.
+
+## 4. Enhance General Error Handling in `MCPIntegration` [done]
+### Dependencies: 9.2, 9.3
+### Description: Improve the error handling within the `MCPIntegration` class to gracefully manage communication errors and other unexpected issues between the main app and the server.
+### Details:
+Add `try...catch` blocks around IPC communication points (e.g., writing to stdin). Handle potential errors like a closed pipe if the server crashes during a write. Ensure that errors from the child process's stderr are captured, logged, and potentially surfaced to the user or a developer console.
+
+## 5. Implement Comprehensive Error Logging [done]
+### Dependencies: 9.1, 9.2, 9.3, 9.4
+### Description: Integrate a structured logging mechanism for all error-related events, including server crashes, restart attempts, and standardized error responses.
+### Details:
+Use a logging library (e.g., Winston, Pino) in both the Electron main process and the MCP server. Log all server start/stop/crash/restart events with timestamps and context. Log all generated `LoginStateError` responses and any caught exceptions in the `MCPIntegration` class to a dedicated log file for easier debugging.
+

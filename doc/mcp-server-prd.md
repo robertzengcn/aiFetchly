@@ -12,6 +12,7 @@ The MCP (Model Context Protocol) Server Integration System is a comprehensive AI
 - Implement email extraction and scraping from websites
 - Develop email marketing automation capabilities
 - Integrate with existing aiFetchly infrastructure (browser management, database, scheduling)
+- **Automatically start MCP server when aiFetchly application starts**
 - Ensure aiFetchly application is logged in and running for MCP server operation
 - Ensure compliance with web scraping best practices and rate limiting
 - Maintain high performance and reliability standards
@@ -24,6 +25,7 @@ The MCP (Model Context Protocol) Server Integration System is a comprehensive AI
 - Deliver email marketing campaigns with 98%+ deliverability
 - Maintain sub-500ms response time for MCP tool calls
 - Achieve 99.9% uptime for MCP server operations
+- **MCP server starts automatically within 5 seconds of aiFetchly application startup**
 - Ensure aiFetchly application remains logged in and accessible during MCP operations
 - Maintain seamless integration between MCP server and aiFetchly login state
 
@@ -98,7 +100,7 @@ The MCP (Model Context Protocol) Server Integration System is a comprehensive AI
 - **ErrorHandler**: Standardized error handling and reporting
 
 #### 2.2.2 MCP Tool Categories
-- **Search Engine Tools**: Google, Bing, DuckDuckGo, Yandex scraping tools
+- **Search Engine Tools**: Google, Bing, scraping tools
 - **Yellow Pages Tools**: Business directory scraping and data extraction
 - **Email Tools**: Email extraction, validation, and marketing automation
 - **Task Management Tools**: Task creation, monitoring, and result retrieval
@@ -128,6 +130,7 @@ The MCP (Model Context Protocol) Server Integration System is a comprehensive AI
 
 #### 2.3.3 Login State Requirements
 - **Application Running**: aiFetchly must be running and accessible
+- **MCP Server Running**: MCP server must be automatically started with the application
 - **User Logged In**: A user must be logged into aiFetchly application
 - **Session Active**: Current session must be valid and not expired
 - **Resources Available**: Browser instances and database connections must be available
@@ -163,9 +166,26 @@ interface IMCPController {
 
 ## 3. MCP Tools Specification
 
-### 3.1 Login State Requirements
+### 3.1 MCP Response Format
 
-#### 3.1.1 MCP Request Format
+All MCP tools follow a consistent response pattern similar to the YellowPagesController:
+
+```typescript
+interface MCPResponse<T> {
+    status: boolean;
+    msg: string;
+    data?: T | null;
+}
+```
+
+Where:
+- `status`: Boolean indicating success (true) or failure (false)
+- `msg`: Descriptive message about the operation result
+- `data`: The actual response data, or null if there was an error
+
+### 3.2 Login State Requirements
+
+#### 3.2.1 MCP Request Format
 MCP tool calls use standard MCP protocol without authentication headers:
 
 ```typescript
@@ -176,7 +196,7 @@ interface MCPRequest {
 }
 ```
 
-#### 3.1.2 Login State Error Response
+#### 3.2.2 Login State Error Response
 When aiFetchly is not logged in or running, MCP requests will receive an error response:
 
 ```typescript
@@ -193,7 +213,7 @@ interface LoginStateError {
 }
 ```
 
-#### 3.1.3 User Context from aiFetchly
+#### 3.2.3 User Context from aiFetchly
 MCP tools will use the current logged-in user context from aiFetchly:
 
 ```typescript
@@ -215,95 +235,142 @@ interface UserContext {
 }
 ```
 
-### 3.2 Search Engine Scraping Tools
+### 3.3 Search Engine Scraping Tools
 
-#### 3.2.1 `search_google`
+#### 3.3.1 `search_google`
 **Description**: Scrape Google search results with advanced filtering options
 **Parameters**:
 - `query` (required): Search query string
 - `pages` (optional): Number of pages to scrape (default: 1, max: 10)
 - `language` (optional): Search language (default: "en")
-- `country` (optional): Country code for localized results
-- `safe_search` (optional): Safe search setting
 - `result_type` (optional): "organic", "ads", "all"
 
 **Response Format**:
 ```typescript
-interface GoogleSearchResult {
-    query: string;
-    total_results: number;
-    results: {
-        title: string;
-        url: string;
-        description: string;
-        position: number;
-        domain: string;
-        type: "organic" | "ad";
-    }[];
-    related_searches: string[];
-    search_metadata: {
-        timestamp: string;
-        processing_time: number;
-        page: number;
-    };
+interface MCPGoogleSearchResponse {
+    status: boolean;
+    msg: string;
+    data?: {
+        query: string;
+        total_results: number;
+        results: {
+            title: string;
+            url: string;
+            description: string;
+            position: number;
+            domain: string;
+            type: "organic" | "ad";
+        }[];
+        related_searches: string[];
+        search_metadata: {
+            timestamp: string;
+            processing_time: number;
+            page: number;
+        };
+    } | null;
 }
 ```
 
-#### 3.2.2 `search_bing`
+#### 3.3.2 `search_bing`
 **Description**: Scrape Bing search results
 **Parameters**: Similar to `search_google`
-**Response Format**: Similar structure to Google results
+**Response Format**: 
+```typescript
+interface MCPBingSearchResponse {
+    status: boolean;
+    msg: string;
+    data?: {
+        query: string;
+        total_results: number;
+        results: {
+            title: string;
+            url: string;
+            description: string;
+            position: number;
+            domain: string;
+            type: "organic" | "ad";
+        }[];
+        related_searches: string[];
+        search_metadata: {
+            timestamp: string;
+            processing_time: number;
+            page: number;
+        };
+    } | null;
+}
+```
 
 
-### 3.3 Yellow Pages Scraping Tools
+### 3.4 Yellow Pages Scraping Tools
 
-#### 3.3.1 `scrape_yellow_pages`
+#### 3.4.1 `scrape_yellow_pages`
 **Description**: Extract business information from yellow pages platforms
 **Parameters**:
 - `platform` (required): "yellowpages.com", "yelp.com", "paginegialle.it", etc.
 - `search_term` (required): Business category or name
 - `location` (required): City, state, or coordinates
-- `radius` (optional): Search radius in miles/km
 - `max_results` (optional): Maximum results to return (default: 50)
-- `include_reviews` (optional): Include customer reviews (default: false)
+
 
 **Response Format**:
 ```typescript
+interface MCPYellowPagesResponse {
+    status: boolean;
+    msg: string;
+    data?: {
+        businesses: YellowPagesResult[];
+        search_metadata: {
+            platform: string;
+            search_term: string;
+            location: string;
+            total_found: number;
+            timestamp: string;
+        };
+    } | null;
+}
+
 interface YellowPagesResult {
-    businesses: {
-        name: string;
-        address: string;
-        phone: string;
-        website?: string;
-        email?: string;
-        rating?: number;
-        review_count?: number;
-        categories: string[];
-        hours?: { [day: string]: string };
-        coordinates?: { lat: number, lng: number };
-        reviews?: { author: string, rating: number, text: string, date: string }[];
-    }[];
-    search_metadata: {
-        platform: string;
-        search_term: string;
-        location: string;
-        total_found: number;
-        timestamp: string;
+    id: number;
+    task_id: number;
+    business_name: string;
+    email?: string;
+    phone?: string;
+    website?: string;
+    address?: {
+        street?: string;
+        city?: string;
+        state?: string;
+        zip?: string;
+        country?: string;
     };
+    social_media?: string[];
+    categories?: string[];
+    business_hours?: object;
+    description?: string;
+    rating?: number;
+    review_count?: number;
+    scraped_at: Date;
+    platform: string;
+    raw_data?: object;
+    fax_number?: string;
+    contact_person?: string;
+    year_established?: number;
+    number_of_employees?: string;
+    payment_methods?: string[];
+    specialties?: string[];
 }
 ```
 
-#### 3.3.2 `get_business_details`
+#### 3.4.2 `get_business_details`
 **Description**: Get detailed information for a specific business
 **Parameters**:
 - `business_url` (required): Direct URL to business listing
 - `platform` (required): Platform identifier
-- `include_reviews` (optional): Include all reviews
 - `include_photos` (optional): Include photo URLs
 
-### 3.4 Email Scraping Tools
+### 3.5 Email Scraping Tools
 
-#### 3.4.1 `extract_emails_from_website`
+#### 3.5.1 `extract_emails_from_website`
 **Description**: Extract email addresses from websites
 **Parameters**:
 - `urls` (required): Array of website URLs
@@ -315,31 +382,35 @@ interface YellowPagesResult {
 
 **Response Format**:
 ```typescript
-interface EmailExtractionResult {
-    results: {
-        url: string;
-        emails: {
-            email: string;
-            context: string; // Surrounding text
-            page_url: string;
-            is_valid: boolean;
-            confidence_score: number;
+interface MCPEmailExtractionResponse {
+    status: boolean;
+    msg: string;
+    data?: {
+        results: {
+            url: string;
+            emails: {
+                email: string;
+                context: string; // Surrounding text
+                page_url: string;
+                is_valid: boolean;
+                confidence_score: number;
+            }[];
+            pages_processed: number;
+            processing_time: number;
+            errors?: string[];
         }[];
-        pages_processed: number;
-        processing_time: number;
-        errors?: string[];
-    }[];
-    summary: {
-        total_emails: number;
-        unique_emails: number;
-        valid_emails: number;
-        domains: { [domain: string]: number };
-        timestamp: string;
-    };
+        summary: {
+            total_emails: number;
+            unique_emails: number;
+            valid_emails: number;
+            domains: { [domain: string]: number };
+            timestamp: string;
+        };
+    } | null;
 }
 ```
 
-#### 3.4.2 `validate_email_list`
+#### 3.5.2 `validate_email_list`
 **Description**: Validate a list of email addresses
 **Parameters**:
 - `emails` (required): Array of email addresses
@@ -347,9 +418,36 @@ interface EmailExtractionResult {
 - `check_disposable` (optional): Check for disposable email services
 - `check_role_based` (optional): Identify role-based emails
 
-### 3.5 Email Marketing Tools
+**Response Format**:
+```typescript
+interface MCPEmailValidationResponse {
+    status: boolean;
+    msg: string;
+    data?: {
+        results: {
+            email: string;
+            is_valid: boolean;
+            mx_record_exists: boolean;
+            is_disposable: boolean;
+            is_role_based: boolean;
+            confidence_score: number;
+            validation_errors: string[];
+        }[];
+        summary: {
+            total_emails: number;
+            valid_emails: number;
+            invalid_emails: number;
+            disposable_emails: number;
+            role_based_emails: number;
+            timestamp: string;
+        };
+    } | null;
+}
+```
 
-#### 3.5.1 `create_email_task`
+### 3.6 Email Marketing Tools
+
+#### 3.6.1 `create_email_task`
 **Description**: Create a new email marketing task
 **Parameters**:
 - `task_name` (required): Name of the email marketing task
@@ -358,17 +456,21 @@ interface EmailExtractionResult {
 
 **Response Format**:
 ```typescript
-interface EmailTaskResult {
-    task_id: number;
-    task_name: string;
-    task_desc?: string;
-    status: number;
-    record_time: string;
-    created_at: string;
+interface MCPEmailTaskResponse {
+    status: boolean;
+    msg: string;
+    data?: {
+        task_id: number;
+        task_name: string;
+        task_desc?: string;
+        status: number;
+        record_time: string;
+        created_at: string;
+    } | null;
 }
 ```
 
-#### 3.5.2 `get_email_task`
+#### 3.6.2 `get_email_task`
 **Description**: Get email marketing task by ID
 **Parameters**:
 - `id` (required): Task ID to retrieve
@@ -384,7 +486,7 @@ interface EmailTaskDetails {
 }
 ```
 
-#### 3.5.3 `update_email_task`
+#### 3.6.3 `update_email_task`
 **Description**: Update an existing email marketing task
 **Parameters**:
 - `id` (required): Task ID to update
@@ -401,7 +503,7 @@ interface UpdateResult {
 }
 ```
 
-#### 3.5.4 `delete_email_task`
+#### 3.6.4 `delete_email_task`
 **Description**: Delete an email marketing task
 **Parameters**:
 - `id` (required): Task ID to delete
@@ -414,7 +516,7 @@ interface DeleteResult {
 }
 ```
 
-#### 3.5.5 `update_email_task_status`
+#### 3.6.5 `update_email_task_status`
 **Description**: Update the status of an email marketing task
 **Parameters**:
 - `id` (required): Task ID to update
@@ -430,9 +532,9 @@ interface StatusUpdateResult {
 }
 ```
 
-### 3.6 Task Management Tools
+### 3.7 Task Management Tools
 
-#### 3.6.1 `create_scraping_task`
+#### 3.7.1 `create_scraping_task`
 **Description**: Create a new scraping task with scheduling
 **Parameters**:
 - `task_type` (required): "search_engine", "yellow_pages", "email_extraction"
@@ -441,46 +543,50 @@ interface StatusUpdateResult {
 - `priority` (optional): Task priority level
 - `notifications` (optional): Notification settings
 
-#### 3.6.2 `get_task_status`
+#### 3.7.2 `get_task_status`
 **Description**: Get current status of a scraping task
 **Parameters**:
 - `task_id` (required): Task identifier
 
-#### 3.6.3 `get_task_results`
+#### 3.7.3 `get_task_results`
 **Description**: Retrieve results from completed task
 **Parameters**:
 - `task_id` (required): Task identifier
 - `format` (optional): "json", "csv", "xlsx"
 
-### 3.7 Resource Management Tools
+### 3.8 Resource Management Tools
 
-#### 3.7.1 `get_system_status`
+#### 3.8.1 `get_system_status`
 **Description**: Get MCP server and system health status
 **Response Format**:
 ```typescript
-interface SystemStatus {
-    mcp_server: {
-        status: "healthy" | "degraded" | "down";
-        uptime: number;
-        active_connections: number;
-        tools_registered: number;
-    };
-    aifetchly: {
-        browser_instances: number;
-        active_tasks: number;
-        database_status: "connected" | "disconnected";
-        memory_usage: number;
-        cpu_usage: number;
-    };
-    last_updated: string;
+interface MCPSystemStatusResponse {
+    status: boolean;
+    msg: string;
+    data?: {
+        mcp_server: {
+            status: "healthy" | "degraded" | "down";
+            uptime: number;
+            active_connections: number;
+            tools_registered: number;
+        };
+        aifetchly: {
+            browser_instances: number;
+            active_tasks: number;
+            database_status: "connected" | "disconnected";
+            memory_usage: number;
+            cpu_usage: number;
+        };
+        last_updated: string;
+    } | null;
 }
 ```
 
-#### 3.7.2 `export_data`
+#### 3.8.2 `export_data`
 **Description**: Export data in various formats
 **Parameters**:
 - `data_type` (required): "search_results", "business_data", "emails", "campaigns"
-- `format` (required): "json", "csv", "xlsx", "pdf"
+- `format` (required): "csv"
 - `filter` (optional): Data filtering options
 - `date_range` (optional): Date range for data export
 
@@ -901,8 +1007,7 @@ class AiFetchlyMCPServer {
                 description: "Create a new email marketing task",
                 inputSchema: {
                     task_name: z.string().describe("Name of the email marketing task"),
-                    task_desc: z.string().optional().describe("Description of the email marketing task"),
-                    status: z.number().optional().default(1).describe("Task status (1=Processing, 2=Complete, 3=Error)")
+                    task_desc: z.string().optional().describe("Description of the email marketing task")
                 }
             },
             async (params) => {
@@ -1175,7 +1280,8 @@ class AiFetchlyApp {
         // Initialize the main window
         await this.createMainWindow();
         
-        // Start MCP server when app is ready
+        // **AUTOMATICALLY START MCP SERVER** when app is ready
+        // This ensures MCP server is always available when aiFetchly starts
         await this.startMCPServer();
         
         // Initialize login state monitoring
@@ -1187,13 +1293,16 @@ class AiFetchlyApp {
 
     private async startMCPServer(): Promise<void> {
         try {
-            console.log('Starting MCP Server...');
+            console.log('Starting MCP Server automatically...');
             await this.mcpIntegration.startMCPServer();
             console.log('MCP Server started successfully');
         } catch (error) {
             console.error('Failed to start MCP Server:', error);
-            // Don't fail the entire app if MCP server fails to start
-            // The app can still function without MCP server
+            // Retry MCP server startup after a delay
+            setTimeout(() => {
+                console.log('Retrying MCP Server startup...');
+                this.startMCPServer();
+            }, 5000);
         }
     }
 
@@ -1368,10 +1477,11 @@ The MCP server startup follows this sequence when the Electron app starts:
 
 1. **Electron App Ready**: `app.whenReady()` event fires
 2. **Main Window Creation**: Create the main BrowserWindow
-3. **MCP Server Startup**: Start MCP server as child process
+3. **MCP Server Auto-Start**: **Automatically start MCP server as child process**
 4. **Login State Monitoring**: Initialize login state monitoring
 5. **IPC Setup**: Set up IPC handlers for MCP communication
 6. **Ready State**: Application is fully ready for MCP operations
+7. **MCP Tools Available**: All MCP tools are immediately available to external AI assistants
 
 **Startup Flow Diagram:**
 ```
@@ -1381,7 +1491,7 @@ App Ready Event
     ↓
 Create Main Window
     ↓
-Start MCP Server (Child Process)
+AUTO-START MCP Server (Child Process)
     ↓
 Initialize Login State Monitor
     ↓
@@ -1389,7 +1499,7 @@ Setup IPC Handlers
     ↓
 Application Ready
     ↓
-MCP Tools Available
+MCP Tools Available to AI Assistants
 ```
 
 ##### 4.1.6.4 Build Configuration
@@ -1551,39 +1661,25 @@ class MCPController {
 
 ### 4.3 Login State Management Implementation
 
-#### 4.3.1 LoginStateMonitor
+#### 4.3.1 Leverage Existing Authentication System
+Instead of creating new login state management, integrate with existing aiFetchly authentication:
+
 ```typescript
-class LoginStateMonitor {
-    private aiFetchlyApp: AiFetchlyApplication;
-    private userContext: UserContext | null = null;
-    private loginStateListeners: ((isLoggedIn: boolean) => void)[] = [];
-    
-    constructor() {
-        this.aiFetchlyApp = AiFetchlyApplication.getInstance();
-        this.setupLoginStateMonitoring();
-    }
+class MCPLoginStateMonitor {
+    constructor(
+        private existingAuthModule: AccountCookiesModule,
+        private existingUserModule: UserModule,
+        private existingBrowserManager: BrowserManager
+    ) {}
     
     async checkLoginState(): Promise<boolean> {
         try {
-            // Check if aiFetchly application is running
-            const isRunning = await this.aiFetchlyApp.isRunning();
-            if (!isRunning) {
-                return false;
-            }
+            // Use existing authentication system
+            const isLoggedIn = await this.existingAuthModule.isUserLoggedIn();
+            const isDbConnected = await this.existingUserModule.isDatabaseConnected();
+            const hasBrowserInstances = this.existingBrowserManager.getActiveInstanceCount() > 0;
             
-            // Check if user is logged in
-            const isLoggedIn = await this.aiFetchlyApp.isUserLoggedIn();
-            if (!isLoggedIn) {
-                return false;
-            }
-            
-            // Check if database is connected
-            const isDbConnected = await this.aiFetchlyApp.isDatabaseConnected();
-            if (!isDbConnected) {
-                return false;
-            }
-            
-            return true;
+            return isLoggedIn && isDbConnected && hasBrowserInstances;
         } catch (error) {
             console.error('Error checking login state:', error);
             return false;
@@ -1597,11 +1693,11 @@ class LoginStateMonitor {
                 return null;
             }
             
-            // Get current user info from aiFetchly
-            const userInfo = await this.aiFetchlyApp.getCurrentUserInfo();
-            const appState = await this.aiFetchlyApp.getApplicationState();
+            // Use existing user management
+            const userInfo = await this.existingUserModule.getCurrentUser();
+            const appState = await this.getApplicationState();
             
-            this.userContext = {
+            return {
                 user_id: userInfo.id,
                 username: userInfo.username,
                 subscription_tier: userInfo.subscription_tier,
@@ -1610,154 +1706,121 @@ class LoginStateMonitor {
                     expires_at: userInfo.session_expires_at,
                     last_activity: userInfo.last_activity
                 },
-                application_state: {
-                    is_running: appState.is_running,
-                    is_logged_in: appState.is_logged_in,
-                    browser_instances: appState.browser_instances,
-                    database_connected: appState.database_connected
-                }
+                application_state: appState
             };
-            
-            return this.userContext;
         } catch (error) {
             console.error('Error getting user context:', error);
             return null;
         }
     }
     
-    private setupLoginStateMonitoring(): void {
-        // Listen for login state changes from aiFetchly
-        this.aiFetchlyApp.onLoginStateChange((isLoggedIn) => {
-            this.notifyLoginStateChange(isLoggedIn);
-        });
-        
-        // Periodic check for login state
-        setInterval(async () => {
-            const isLoggedIn = await this.checkLoginState();
-            if (this.userContext && !isLoggedIn) {
-                this.notifyLoginStateChange(false);
-            }
-        }, 30000); // Check every 30 seconds
-    }
-    
-    onLoginStateChange(callback: (isLoggedIn: boolean) => void): void {
-        this.loginStateListeners.push(callback);
-    }
-    
-    private notifyLoginStateChange(isLoggedIn: boolean): void {
-        this.loginStateListeners.forEach(callback => callback(isLoggedIn));
-    }
-}
-```
-
-#### 4.3.2 AiFetchlyApplication Integration
-```typescript
-class AiFetchlyApplication {
-    private static instance: AiFetchlyApplication;
-    private loginStateListeners: ((isLoggedIn: boolean) => void)[] = [];
-    
-    static getInstance(): AiFetchlyApplication {
-        if (!this.instance) {
-            this.instance = new AiFetchlyApplication();
-        }
-        return this.instance;
-    }
-    
-    async isRunning(): Promise<boolean> {
-        // Check if the Electron main process is running
-        return process.uptime() > 0;
-    }
-    
-    async isUserLoggedIn(): Promise<boolean> {
-        // Check with existing aiFetchly login system
-        // This would integrate with your existing authentication
-        const accountCookiesModule = new AccountCookiesModule();
-        return await accountCookiesModule.isUserLoggedIn();
-    }
-    
-    async isDatabaseConnected(): Promise<boolean> {
-        // Check database connection status
-        try {
-            // This would check your existing database connection
-            return true; // Simplified for example
-        } catch (error) {
-            return false;
-        }
-    }
-    
-    async getCurrentUserInfo(): Promise<any> {
-        // Get current user information from aiFetchly
-        const accountCookiesModule = new AccountCookiesModule();
-        return await accountCookiesModule.getCurrentUserInfo();
-    }
-    
-    async getApplicationState(): Promise<any> {
-        const browserManager = new BrowserManager();
-        
+    private async getApplicationState(): Promise<any> {
         return {
-            is_running: await this.isRunning(),
-            is_logged_in: await this.isUserLoggedIn(),
-            browser_instances: browserManager.getActiveInstanceCount(),
-            database_connected: await this.isDatabaseConnected()
+            is_running: true, // MCP server only runs when app is running
+            is_logged_in: await this.existingAuthModule.isUserLoggedIn(),
+            browser_instances: this.existingBrowserManager.getActiveInstanceCount(),
+            database_connected: await this.existingUserModule.isDatabaseConnected()
         };
     }
-    
-    onLoginStateChange(callback: (isLoggedIn: boolean) => void): void {
-        this.loginStateListeners.push(callback);
-    }
-    
-    notifyLoginStateChange(isLoggedIn: boolean): void {
-        this.loginStateListeners.forEach(callback => callback(isLoggedIn));
-    }
 }
 ```
 
-### 4.4 New Controller Implementations
-
-#### 4.4.1 Search Engine Controller
+#### 4.3.2 Integration with Existing Modules
 ```typescript
-class SearchEngineController extends BaseController {
-    private searchEngineModule: SearchEngineModule;
-    private browserManager: BrowserManager;
+class MCPIntegrationAdapter {
+    constructor(
+        private existingControllers: {
+            searchController: SearchController;
+            emailController: EmailController;
+            yellowPagesController: YellowPagesController;
+            taskController: TaskController;
+        },
+        private existingModules: {
+            authModule: AccountCookiesModule;
+            userModule: UserModule;
+            browserManager: BrowserManager;
+        }
+    ) {}
     
-    async searchGoogle(parameters: GoogleSearchParameters): Promise<GoogleSearchResult> {
-        // Implement Google search logic
-    }
-    
-    async searchBing(parameters: BingSearchParameters): Promise<BingSearchResult> {
-        // Implement Bing search logic
-    }
-    
-    async searchDuckDuckGo(parameters: DuckDuckGoSearchParameters): Promise<DuckDuckGoSearchResult> {
-        // Implement DuckDuckGo search logic
+    // Create MCP-compatible wrapper for existing functionality
+    async handleMCPRequest(toolName: string, params: any): Promise<MCPResponse> {
+        // Validate login state using existing modules
+        const isLoggedIn = await this.existingModules.authModule.isUserLoggedIn();
+        if (!isLoggedIn) {
+            return {
+                status: false,
+                msg: "User not logged in",
+                data: null
+            };
+        }
+        
+        // Route to appropriate existing controller
+        const controller = this.getControllerForTool(toolName);
+        const result = await controller.handleRequest(toolName, params);
+        
+        // Format response for MCP protocol
+        return this.formatMCPResponse(result);
     }
 }
 ```
 
-#### 4.4.2 Email Marketing Controller
+### 4.4 MCP Controller Integration
+
+#### 4.4.1 Extend Existing Controllers
+Rather than creating new controllers, extend existing aiFetchly controllers to support MCP operations:
+
 ```typescript
-class EmailMarketingController extends BaseController {
-    private emailMarketingModule: EmailMarketingModule;
-    private emailTemplateModule: EmailTemplateModule;
-    private campaignAnalyticsModule: CampaignAnalyticsModule;
+class MCPControllerAdapter {
+    constructor(
+        private existingSearchController: SearchController,
+        private existingEmailController: EmailController,
+        private existingTaskController: TaskController,
+        private existingYellowPagesController: YellowPagesController
+    ) {}
     
-    async createCampaign(parameters: CreateCampaignParameters): Promise<EmailCampaignResult> {
-        // Implement campaign creation logic
+    // Delegate search operations to existing search controller
+    async handleSearchEngine(toolName: string, params: any) {
+        return await this.existingSearchController.handleMCPRequest(toolName, params);
     }
     
-    async sendCampaign(campaignId: string): Promise<SendCampaignResult> {
-        // Implement campaign sending logic
+    // Delegate email operations to existing email controller
+    async handleEmailMarketing(toolName: string, params: any) {
+        return await this.existingEmailController.handleMCPRequest(toolName, params);
     }
     
-    async getCampaignAnalytics(campaignId: string): Promise<CampaignAnalytics> {
-        // Implement analytics retrieval
+    // Delegate yellow pages operations to existing controller
+    async handleYellowPages(toolName: string, params: any) {
+        return await this.existingYellowPagesController.handleMCPRequest(toolName, params);
+    }
+    
+    // Use existing task management for all operations
+    async handleTaskManagement(toolName: string, params: any) {
+        return await this.existingTaskController.handleMCPRequest(toolName, params);
     }
 }
 ```
 
-### 4.5 Database Schema Extensions
+#### 4.4.2 MCP-Specific Extensions
+Only add MCP-specific functionality where absolutely necessary:
 
-#### 4.5.1 MCP Request Logging
+```typescript
+class MCPResponseFormatter {
+    // Format existing controller responses for MCP protocol
+    formatResponse(controllerResponse: any): MCPResponse {
+        return {
+            status: controllerResponse.success,
+            msg: controllerResponse.message,
+            data: controllerResponse.data
+        };
+    }
+}
+```
+
+### 4.5 Minimal Database Extensions
+
+#### 4.5.1 MCP Request Logging (Optional)
+Only add minimal logging if not already covered by existing audit systems:
+
 ```typescript
 @Entity()
 export class MCPRequestLog {
@@ -1770,137 +1833,60 @@ export class MCPRequestLog {
     @Column()
     tool_name: string;
     
-    @Column("json")
-    parameters: any;
-    
-    @Column("json", { nullable: true })
-    response: any;
-    
     @Column()
     status: "success" | "error" | "login_required" | "app_not_running";
-    
-    @Column({ nullable: true })
-    error_message: string;
     
     @Column()
     processing_time: number;
     
-    @Column()
-    login_state: {
-        is_running: boolean;
-        is_logged_in: boolean;
-        database_connected: boolean;
-        browser_instances: number;
-    };
-    
     @CreateDateColumn()
     created_at: Date;
 }
 ```
 
-#### 4.5.2 Login State Monitoring
-```typescript
-@Entity()
-export class LoginStateLog {
-    @PrimaryGeneratedColumn()
-    id: number;
-    
-    @Column()
-    user_id: string;
-    
-    @Column()
-    event_type: "login" | "logout" | "app_start" | "app_stop" | "session_expired";
-    
-    @Column("json")
-    application_state: {
-        is_running: boolean;
-        is_logged_in: boolean;
-        database_connected: boolean;
-        browser_instances: number;
-    };
-    
-    @Column({ nullable: true })
-    error_message: string;
-    
-    @CreateDateColumn()
-    created_at: Date;
-}
-```
+#### 4.5.2 Integration with Existing Systems
+- **User Management**: Use existing user tables and session management
+- **Task Management**: Leverage existing task system for all MCP operations
+- **Email System**: Use existing email marketing infrastructure
+- **Logging**: Extend existing audit logging rather than creating new systems
 
-### 4.6 Database Schema Extensions
+### 4.6 Database Integration
 
-#### 4.6.1 Search Engine Results
-```typescript
-@Entity()
-export class SearchEngineResult {
-    @PrimaryGeneratedColumn()
-    id: number;
-    
-    @Column()
-    taskId: number;
-    
-    @Column()
-    searchEngine: string;
-    
-    @Column()
-    query: string;
-    
-    @Column("json")
-    results: any;
-    
-    @Column()
-    totalResults: number;
-    
-    @CreateDateColumn()
-    createdAt: Date;
-    
-    @UpdateDateColumn()
-    updatedAt: Date;
-}
-```
+#### 4.6.1 Leverage Existing Database Schema
+The MCP server will integrate with the existing aiFetchly database schema rather than creating new tables:
 
-#### 4.6.2 Email Campaigns
+- **Search Engine Results**: Use existing task and result tables with appropriate extensions
+- **Email Campaigns**: Leverage existing email marketing tables and task management system
+- **MCP Request Logging**: Add minimal logging tables for MCP-specific operations
+- **Login State Monitoring**: Use existing user session and application state tables
+
+#### 4.6.2 Database Integration Strategy
 ```typescript
-@Entity()
-export class EmailCampaign {
-    @PrimaryGeneratedColumn()
-    id: number;
+// Extend existing controllers to support MCP operations
+class MCPDatabaseIntegration {
+    constructor(
+        private existingTaskController: TaskController,
+        private existingEmailController: EmailController,
+        private existingUserController: UserController
+    ) {}
     
-    @Column()
-    name: string;
+    // Use existing task management for search engine operations
+    async createSearchTask(params: SearchTaskParams) {
+        return await this.existingTaskController.createTask({
+            type: 'search_engine',
+            ...params
+        });
+    }
     
-    @Column()
-    subject: string;
+    // Use existing email system for marketing campaigns
+    async createEmailCampaign(params: EmailCampaignParams) {
+        return await this.existingEmailController.createCampaign(params);
+    }
     
-    @Column("text")
-    template: string;
-    
-    @Column("json")
-    recipients: string[];
-    
-    @Column("json")
-    senderConfig: any;
-    
-    @Column({
-        type: "enum",
-        enum: ["created", "scheduled", "sending", "completed", "failed"]
-    })
-    status: string;
-    
-    @Column({ nullable: true })
-    scheduledAt: Date;
-    
-    @Column({ nullable: true })
-    sentAt: Date;
-    
-    @Column("json", { nullable: true })
-    analytics: any;
-    
-    @CreateDateColumn()
-    createdAt: Date;
-    
-    @UpdateDateColumn()
-    updatedAt: Date;
+    // Leverage existing user management for login state
+    async getCurrentUserContext() {
+        return await this.existingUserController.getCurrentUser();
+    }
 }
 ```
 
@@ -1976,7 +1962,6 @@ interface MCPServerConfig {
 
 ### 5.3 Web Scraping Ethics and Legal Compliance
 - **Rate Limiting**: Implement respectful rate limiting for all platforms
-- **Robots.txt Compliance**: Respect website scraping policies
 - **Terms of Service**: Ensure compliance with platform ToS
 - **User Agent Identification**: Use appropriate user agent strings
 - **IP Rotation**: Implement IP rotation to avoid blocking
@@ -1993,8 +1978,6 @@ interface MCPServerConfig {
 ### 6.1 Performance Requirements
 - **MCP Response Time**: Sub-500ms for simple tool calls
 - **Concurrent Requests**: Support 50+ concurrent MCP connections
-- **Scraping Performance**: Process 1000+ pages per hour per browser instance
-- **Email Sending**: Send 10,000+ emails per hour with proper throttling
 - **Memory Usage**: Optimize for <2GB memory usage per browser instance
 
 ### 6.2 Scalability Architecture
@@ -2018,10 +2001,12 @@ interface MCPServerConfig {
 - Implement core MCP server protocol
 - Create basic tool registry and request handling
 - Integrate with existing aiFetchly architecture
+- **Implement automatic MCP server startup with application**
 - Implement basic search engine scraping tools
 
 **Deliverables:**
 - MCP server core implementation
+- **Automatic MCP server startup integration**
 - Basic search engine tools (Google, Bing)
 - Integration with existing browser manager
 - Basic error handling and logging
@@ -2029,6 +2014,7 @@ interface MCPServerConfig {
 
 **Success Criteria:**
 - MCP server responds to basic protocol requests
+- **MCP server starts automatically when aiFetchly application starts**
 - Google and Bing search tools functional
 - Integration with existing architecture complete
 - Basic performance benchmarks met
@@ -2141,6 +2127,7 @@ interface MCPServerConfig {
 - **System Uptime**: 99.9% uptime target
 - **Error Rate**: <1% error rate for all tool calls
 - **Concurrent Users**: Support 50+ concurrent MCP connections
+- **MCP Server Auto-Start**: <5 seconds to start MCP server after app launch
 - **Login State Detection**: <100ms average login state check time
 - **State Recovery**: <5 seconds to recover when login state is restored
 - **Monitoring Accuracy**: >99% accurate login state detection
@@ -2167,6 +2154,7 @@ The integration leverages the existing robust architecture of aiFetchly, includi
 
 Key benefits of this implementation include:
 - **Standardized Integration**: MCP protocol enables seamless integration with AI assistants
+- **Automatic Startup**: MCP server starts automatically with aiFetchly application
 - **Extended Functionality**: New search engine and email marketing capabilities
 - **Scalable Architecture**: Built on proven aiFetchly infrastructure
 - **Compliance Focus**: Strong emphasis on legal and ethical compliance

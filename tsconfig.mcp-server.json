@@ -1,0 +1,54 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "./dist/mcp-server",
+    "target": "es2022",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "removeComments": false,
+    "noImplicitAny": false,
+    "noImplicitThis": false,
+    "strictPropertyInitialization": false,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "isolatedModules": true,
+    "useDefineForClassFields": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    },
+    "types": ["node"]
+  },
+  "include": [
+    "src/mcp-server/index.ts",
+    "src/mcp-server/standalone.ts",
+    "typings/**/*.d.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "test",
+    "tests",
+    "src/views",
+    "src/assets",
+    "src/childprocess",
+    "src/controller",
+    "src/main-process",
+    "src/scripts",
+    "src/sql",
+    "src/taskCode.ts",
+    "src/utilityCode.ts",
+    "src/background.ts",
+    "src/preload.ts",
+    "src/buckEmail.ts",
+    "src/mcp-server/backup"
+  ]
+}

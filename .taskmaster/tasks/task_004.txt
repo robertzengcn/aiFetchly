@@ -1,0 +1,43 @@
+# Task ID: 4
+# Title: Develop MCP Tools for Yellow Pages Scraping
+# Status: done
+# Dependencies: 1, 2
+# Priority: medium
+# Description: Integrate the existing yellow pages scraping functionality into the MCP server by creating tools such as `scrape_yellow_pages` and `get_business_details`.
+# Details:
+Define Zod schemas for the yellow pages tools based on the PRD. The implementation will act as an adapter, calling methods on the existing `YellowPagesController`, and formatting the results into the specified `MCPYellowPagesResponse` format.
+
+# Test Strategy:
+Call the `scrape_yellow_pages` tool with parameters for platform (e.g., 'yelp.com'), search term, and location. Validate the structure and content of the returned business data against the `YellowPagesResult` interface.
+
+# Subtasks:
+## 1. Create Zod Schemas for Yellow Pages Tools [done]
+### Dependencies: None
+### Description: Define Zod schemas for the yellow pages MCP tools including scrape_yellow_pages and get_business_details with proper validation for parameters like platform, query, location, and maxResults.
+### Details:
+Create schemas that validate the MCPYellowPagesRequest interface parameters including platform (yelp, yellowpages, google_business), query string, location, maxResults, radius, and sortBy options.
+
+## 2. Implement Yellow Pages Response Formatter [done]
+### Dependencies: None
+### Description: Create a utility function to format the raw output from YellowPagesController into the standardized MCPYellowPagesResponse format.
+### Details:
+Develop a formatter that converts YellowPagesController results to MCPBusinessListing format, ensuring consistent response structure with proper field mapping and data validation.
+
+## 3. Implement scrape_yellow_pages Tool Handler [done]
+### Dependencies: 4.1, 4.2
+### Description: Create the MCP tool handler for scrape_yellow_pages that validates login state, calls YellowPagesController, and formats the response.
+### Details:
+Implement a handler that calls validateLoginState, delegates to YellowPagesController.handleMCPRequest, and uses the response formatter to return properly structured MCPYellowPagesData.
+
+## 4. Implement get_business_details Tool Handler [done]
+### Dependencies: 4.1, 4.2
+### Description: Create the MCP tool handler for get_business_details that retrieves detailed information about a specific business listing.
+### Details:
+Implement a handler that takes a business ID or URL, validates login state, calls YellowPagesController to get detailed business information, and formats the response as MCPBusinessListing.
+
+## 5. Register Yellow Pages Tools with MCP Server [done]
+### Dependencies: 4.3, 4.4
+### Description: Register the yellow pages tools with the MCP server's tool registry to make them available to MCP clients.
+### Details:
+Combine the Zod schemas and handler functions to create complete tool objects for scrape_yellow_pages and get_business_details, then register them with the MCP server.
+

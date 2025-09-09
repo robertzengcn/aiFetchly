@@ -1,0 +1,37 @@
+# Task ID: 6
+# Title: Develop MCP Tools for Email Marketing Task Management
+# Status: done
+# Dependencies: 1, 2
+# Priority: medium
+# Description: Implement a set of MCP tools for managing email marketing tasks, providing full CRUD (Create, Read, Update, Delete) functionality.
+# Details:
+Create tools: `create_email_task`, `get_email_task`, `update_email_task`, and `delete_email_task`. These tools will interface with the existing `EmailMarketingController` and the corresponding database models for tasks.
+
+# Test Strategy:
+Perform a full CRUD lifecycle test: 1. Create a task. 2. Retrieve it to verify creation. 3. Update its name/status. 4. Retrieve it again to verify the update. 5. Delete the task and confirm it's no longer retrievable.
+
+# Subtasks:
+## 1. Create Zod Schemas for Email Marketing Task Tools [done]
+### Dependencies: None
+### Description: Define Zod schemas for the email marketing task MCP tools including create_email_task, get_email_task, update_email_task, and delete_email_task with proper validation for task parameters.
+### Details:
+Create schemas that validate email marketing task parameters including task name, description, status, priority, scheduledAt, and other relevant fields for CRUD operations.
+
+## 2. Implement Email Marketing Task Response Formatter [done]
+### Dependencies: None
+### Description: Create a utility function to format the raw output from EmailMarketingController into standardized MCP response formats.
+### Details:
+Develop a formatter that converts EmailMarketingController results to MCPTask format, ensuring consistent response structure with proper field mapping and data validation.
+
+## 3. Implement CRUD Tool Handlers for Email Marketing Tasks [done]
+### Dependencies: 6.1, 6.2
+### Description: Create MCP tool handlers for create_email_task, get_email_task, update_email_task, and delete_email_task that validate login state and call EmailMarketingController.
+### Details:
+Implement handlers that call validateLoginState, delegate to EmailMarketingController.handleMCPRequest for each CRUD operation, and use the response formatter to return properly structured MCPTask data.
+
+## 4. Register Email Marketing Task Tools with MCP Server [done]
+### Dependencies: 6.3
+### Description: Register the email marketing task tools with the MCP server's tool registry to make them available to MCP clients.
+### Details:
+Combine the Zod schemas and handler functions to create complete tool objects for all CRUD operations, then register them with the MCP server.
+

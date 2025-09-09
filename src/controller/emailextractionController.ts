@@ -12,6 +12,22 @@ import {readLogFile} from "@/modules/lib/function"
 import { SortBy } from "@/entityTypes/commonType"
 // import { SystemSettingGroupModule } from '@/modules/SystemSettingGroupModule';
 // import {twocaptchagroup,twocaptchatoken,twocaptcha_enabled} from '@/config/settinggroupInit'
+import { 
+    MCPRequest, 
+    MCPResponse, 
+    MCPEmailExtractionRequest, 
+    MCPEmailExtractionData, 
+    MCPExtractedEmail,
+    MCPTaskCreateRequest,
+    MCPTaskUpdateRequest,
+    MCPTask,
+    MCPTaskListData,
+    MCPPaginationParams,
+    createMCPSuccessResponse,
+    createMCPErrorResponse,
+    createMCPError,
+    MCPErrorCode
+} from '@/mcp-server/types/mcpTypes';
 
 
 export class EmailextractionController {
@@ -256,6 +272,367 @@ export class EmailextractionController {
         // Delete the task
         await this.emailSeachTaskModule.deleteTask(taskId)
     }
-  
-    
+
+    /**
+     * Handle MCP requests for email extraction functionality
+     * This method acts as an adapter between MCP requests and the existing email extraction business logic
+     */
+    public async handleMCPRequest(request: MCPRequest): Promise<MCPResponse> {
+        try {
+            const { tool, parameters } = request;
+
+            switch (tool) {
+                case 'extract_emails_from_website':
+                    return await this.handleExtractEmailsRequest(parameters as MCPEmailExtractionRequest);
+                
+                case 'create_email_extraction_task':
+                    return await this.handleCreateEmailTaskRequest(parameters as MCPTaskCreateRequest);
+                
+                case 'list_email_extraction_tasks':
+                    return await this.handleListEmailTasksRequest(parameters as MCPPaginationParams);
+                
+                case 'get_email_extraction_task':
+                    return await this.handleGetEmailTaskRequest(parameters.taskId as number);
+                
+                case 'update_email_extraction_task':
+                    return await this.handleUpdateEmailTaskRequest(parameters as MCPTaskUpdateRequest);
+                
+                case 'delete_email_extraction_task':
+                    return await this.handleDeleteEmailTaskRequest(parameters.taskId as number);
+                
+                case 'get_email_extraction_results':
+                    return await this.handleGetEmailResultsRequest(parameters as { taskId: number } & MCPPaginationParams);
+                
+                case 'get_email_task_error_log':
+                    return await this.handleGetEmailTaskErrorLogRequest(parameters.taskId as number);
+                
+                case 'get_email_task_count':
+                    return await this.handleGetEmailTaskCountRequest(parameters.taskId as number);
+                
+                default:
+                    return createMCPErrorResponse(
+                        createMCPError(MCPErrorCode.INVALID_PARAMETERS, `Unknown email extraction tool: ${tool}`),
+                        'Invalid email extraction tool requested'
+                    );
+            }
+        } catch (error) {
+            console.error('Error in EmailextractionController.handleMCPRequest:', error);
+            return createMCPErrorResponse(
+                createMCPError(
+                    MCPErrorCode.INTERNAL_ERROR,
+                    'Internal error occurred while processing email extraction request',
+                    error instanceof Error ? error.message : String(error),
+                    error instanceof Error ? error.stack : undefined
+                ),
+                'Failed to process email extraction request'
+            );
+        }
+    }
+
+    /**
+     * Handle extract emails from website requests
+     */
+    private async handleExtractEmailsRequest(params: MCPEmailExtractionRequest): Promise<MCPResponse<MCPEmailExtractionData>> {
+        try {
+            // Convert MCP parameters to internal format
+            const emailData: EmailsControldata = {
+                validUrls: params.websites,
+                concurrency: 1, // Default concurrency
+                pagelength: params.maxDepth || 1,
+                notShowBrowser: true, // Default to headless
+                type: 'website' as any, // Assuming this is a valid type
+                processTimeout: params.timeout || 30000, // 30 seconds default
+                maxPageNumber: params.maxDepth || 1
+            };
+
+            // Create and run the email extraction task
+            const taskId = await this.emailSeachTaskModule.saveSearchtask(emailData);
+            await this.emailSeachTaskModule.searchEmail(taskId);
+
+            // Get the results
+            const results = await this.Emailtaskresult(taskId, 1, 1000); // Get up to 1000 results
+
+            // Convert to MCP format
+            const extractedEmails: MCPExtractedEmail[] = results.map(result => ({
+                email: result.emails[0] || '', // Take first email if multiple
+                website: result.url,
+                context: result.pageTitle,
+                confidence: 0.8, // Default confidence
+                source: 'website_scraping'
+            }));
+
+            const emailExtractionData: MCPEmailExtractionData = {
+                emails: extractedEmails,
+                totalFound: extractedEmails.length,
+                processedWebsites: params.websites.length,
+                failedWebsites: [], // This would need to be tracked
+                processingTime: 0 // This would need to be tracked
+            };
+
+            return createMCPSuccessResponse(emailExtractionData, 'Email extraction completed successfully');
+        } catch (error) {
+            throw error;
+        }
+    }
+
+    /**
+     * Handle create email extraction task requests
+     */
+    private async handleCreateEmailTaskRequest(params: MCPTaskCreateRequest): Promise<MCPResponse<MCPTask>> {
+        try {
+            // Convert MCP task parameters to internal format
+            const emailData: EmailsControldata = {
+                validUrls: params.parameters.websites as string[] || [],
+                concurrency: params.parameters.concurrency as number || 1,
+                pagelength: params.parameters.maxDepth as number || 1,
+                notShowBrowser: !(params.parameters.showBrowser as boolean) || true,
+                type: 'website' as any,
+                processTimeout: params.parameters.timeout as number || 30000,
+                maxPageNumber: params.parameters.maxDepth as number || 1
+            };
+
+            const taskId = await this.emailSeachTaskModule.saveSearchtask(emailData);
+
+            // Convert to MCP task format
+            const mcpTask: MCPTask = {
+                id: taskId.toString(),
+                name: params.name,
+                description: params.description,
+                type: params.type,
+                status: 'pending',
+                parameters: params.parameters,
+                priority: params.priority || 'medium',
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString()
+            };
+
+            return createMCPSuccessResponse(mcpTask, 'Email extraction task created successfully');
+        } catch (error) {
+            throw error;
+        }
+    }
+
+    /**
+     * Handle list email extraction tasks requests
+     */
+    private async handleListEmailTasksRequest(params: MCPPaginationParams): Promise<MCPResponse<MCPTaskListData>> {
+        try {
+            const page = params.page || 1;
+            const size = params.size || 20;
+            const sortBy: SortBy | undefined = params.sortBy ? {
+                key: params.sortBy,
+                order: params.sortOrder || 'desc'
+            } : undefined;
+
+            const result = await this.listEmailSearchtasks(page, size, sortBy);
+
+            // Convert to MCP format
+            const mcpTasks: MCPTask[] = result.records.map(task => ({
+                id: task.id.toString(),
+                name: `Email Extraction Task ${task.id}`,
+                description: `URLs: ${task.urls.join(', ')}`,
+                type: 'email_extraction',
+                status: this.mapTaskStatus(task.statusName),
+                parameters: {
+                    urls: task.urls,
+                    type: task.typeName
+                },
+                priority: 'medium',
+                createdAt: task.record_time || new Date().toISOString(),
+                updatedAt: task.record_time || new Date().toISOString()
+            }));
+
+            const taskListData: MCPTaskListData = {
+                tasks: mcpTasks,
+                pagination: {
+                    items: mcpTasks,
+                    total: result.total,
+                    page: page,
+                    size: size,
+                    totalPages: Math.ceil(result.total / size)
+                }
+            };
+
+            return createMCPSuccessResponse(taskListData, 'Email extraction tasks retrieved successfully');
+        } catch (error) {
+            throw error;
+        }
+    }
+
+    /**
+     * Handle get email extraction task requests
+     */
+    private async handleGetEmailTaskRequest(taskId: number): Promise<MCPResponse<MCPTask>> {
+        try {
+            const task = await this.getEmailSearchTask(taskId);
+            
+            const mcpTask: MCPTask = {
+                id: taskId.toString(),
+                name: `Email Extraction Task ${taskId}`,
+                description: `Type: ${task.typeName}`,
+                type: 'email_extraction',
+                status: this.mapTaskStatus(task.statusName),
+                parameters: {
+                    urls: task.urls || [],
+                    type: task.typeName,
+                    concurrency: task.concurrency,
+                    pagelength: task.pagelength,
+                    showBrowser: !task.notShowBrowser,
+                    processTimeout: task.processTimeout,
+                    maxPageNumber: task.maxPageNumber
+                },
+                priority: 'medium',
+                createdAt: task.record_time || new Date().toISOString(),
+                updatedAt: task.record_time || new Date().toISOString()
+            };
+
+            return createMCPSuccessResponse(mcpTask, 'Email extraction task retrieved successfully');
+        } catch (error) {
+            throw error;
+        }
+    }
+
+    /**
+     * Handle update email extraction task requests
+     */
+    private async handleUpdateEmailTaskRequest(params: MCPTaskUpdateRequest): Promise<MCPResponse<MCPTask>> {
+        try {
+            const taskId = parseInt(params.taskId);
+            
+            // Convert MCP update parameters to internal format
+            const emailData: EmailsControldata = {
+                validUrls: params.parameters?.websites as string[] || [],
+                concurrency: params.parameters?.concurrency as number || 1,
+                pagelength: params.parameters?.maxDepth as number || 1,
+                notShowBrowser: !(params.parameters?.showBrowser as boolean) || true,
+                type: 'website' as any,
+                processTimeout: params.parameters?.timeout as number || 30000,
+                maxPageNumber: params.parameters?.maxDepth as number || 1
+            };
+
+            await this.updateEmailSearchTask(taskId, emailData);
+
+            // Get updated task details
+            const task = await this.getEmailSearchTask(taskId);
+            
+            const mcpTask: MCPTask = {
+                id: taskId.toString(),
+                name: params.name || `Email Extraction Task ${taskId}`,
+                description: params.description || `Type: ${task.typeName}`,
+                type: 'email_extraction',
+                status: this.mapTaskStatus(task.statusName),
+                parameters: {
+                    urls: task.urls || [],
+                    type: task.typeName,
+                    concurrency: task.concurrency,
+                    pagelength: task.pagelength,
+                    showBrowser: !task.notShowBrowser,
+                    processTimeout: task.processTimeout,
+                    maxPageNumber: task.maxPageNumber
+                },
+                priority: 'medium',
+                createdAt: task.record_time || new Date().toISOString(),
+                updatedAt: new Date().toISOString()
+            };
+
+            return createMCPSuccessResponse(mcpTask, 'Email extraction task updated successfully');
+        } catch (error) {
+            throw error;
+        }
+    }
+
+    /**
+     * Handle delete email extraction task requests
+     */
+    private async handleDeleteEmailTaskRequest(taskId: number): Promise<MCPResponse> {
+        try {
+            await this.deleteEmailSearchTask(taskId);
+            return createMCPSuccessResponse(null, 'Email extraction task deleted successfully');
+        } catch (error) {
+            throw error;
+        }
+    }
+
+    /**
+     * Handle get email extraction results requests
+     */
+    private async handleGetEmailResultsRequest(params: { taskId: number } & MCPPaginationParams): Promise<MCPResponse<MCPEmailExtractionData>> {
+        try {
+            const page = params.page || 1;
+            const size = params.size || 20;
+            
+            const results = await this.Emailtaskresult(params.taskId, page, size);
+
+            // Convert to MCP format
+            const extractedEmails: MCPExtractedEmail[] = results.map(result => ({
+                email: result.emails[0] || '', // Take first email if multiple
+                website: result.url,
+                context: result.pageTitle,
+                confidence: 0.8, // Default confidence
+                source: 'website_scraping'
+            }));
+
+            const emailExtractionData: MCPEmailExtractionData = {
+                emails: extractedEmails,
+                totalFound: extractedEmails.length,
+                processedWebsites: 1, // This would need to be tracked
+                failedWebsites: [],
+                processingTime: 0
+            };
+
+            return createMCPSuccessResponse(emailExtractionData, 'Email extraction results retrieved successfully');
+        } catch (error) {
+            throw error;
+        }
+    }
+
+    /**
+     * Handle get email task error log requests
+     */
+    private async handleGetEmailTaskErrorLogRequest(taskId: number): Promise<MCPResponse<{ log: string }>> {
+        try {
+            const log = await this.readTaskErrorlog(taskId);
+            return createMCPSuccessResponse({ log }, 'Error log retrieved successfully');
+        } catch (error) {
+            throw error;
+        }
+    }
+
+    /**
+     * Handle get email task count requests
+     */
+    private async handleGetEmailTaskCountRequest(taskId: number): Promise<MCPResponse<{ count: number }>> {
+        try {
+            const count = await this.EmailtaskresultCount(taskId);
+            return createMCPSuccessResponse({ count }, 'Email count retrieved successfully');
+        } catch (error) {
+            throw error;
+        }
+    }
+
+    /**
+     * Helper method to map internal task status to MCP status
+     */
+    private mapTaskStatus(status: string): 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' {
+        switch (status.toLowerCase()) {
+            case 'notstart':
+            case 'pending':
+                return 'pending';
+            case 'processing':
+            case 'running':
+                return 'running';
+            case 'complete':
+            case 'completed':
+                return 'completed';
+            case 'error':
+            case 'failed':
+                return 'failed';
+            case 'cancel':
+            case 'cancelled':
+                return 'cancelled';
+            default:
+                return 'pending';
+        }
+    }
+
 }

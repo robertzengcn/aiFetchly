@@ -1,0 +1,43 @@
+# Task ID: 3
+# Title: Develop MCP Tools for Search Engine Scraping
+# Status: done
+# Dependencies: 1, 2
+# Priority: high
+# Description: Create and register MCP tools for scraping search engines like Google and Bing, integrating with the existing `SearchEngineController` or equivalent business logic.
+# Details:
+Define the Zod schemas for `search_google` and `search_bing` tools as specified in the PRD. The tool's handler function will first call `validateLoginState`, then delegate the scraping logic to the existing `aiFetchlyController`, and finally format the output to match the `MCPGoogleSearchResponse` interface.
+
+# Test Strategy:
+Execute the `search_google` tool via an MCP client with a test query. Verify the response format matches the specification and that the data (titles, URLs, descriptions) is accurate. Test with optional parameters like `pages` and `language`.
+
+# Subtasks:
+## 1. Define Zod Schemas for Search Tools [done]
+### Dependencies: None
+### Description: Create and export the Zod schemas for the `search_google` and `search_bing` tool input parameters. These schemas must align with the specifications in the PRD, defining fields like `query`, `pages`, and `language` with appropriate types and validation.
+### Details:
+The schemas will serve as the single source of truth for validating inputs to the search engine tools. Ensure they are defined in a shared location accessible by the tool definition files.
+
+## 2. Implement a Standardized Response Formatter [done]
+### Dependencies: None
+### Description: Develop a dedicated utility function that takes the raw output from the `aiFetchlyController` and transforms it into the strict `MCPGoogleSearchResponse` interface format. This ensures consistent output structure for all search engine tools.
+### Details:
+The function should handle mapping fields, cleaning up data, and ensuring all required properties of the `MCPGoogleSearchResponse` interface are present. It should gracefully handle cases where the controller returns partial or empty data.
+
+## 3. Implement the `search_google` Tool Handler [done]
+### Dependencies: 3.1, 3.2
+### Description: Create the handler function for the `search_google` tool. The handler must first call `validateLoginState`, then delegate the scraping logic to the `aiFetchlyController` with Google-specific parameters, and finally use the standardized formatter to shape the response.
+### Details:
+The handler will receive the validated input from the Zod schema. It will be responsible for orchestrating the call flow and handling any errors from the controller or validation steps.
+
+## 4. Implement the `search_bing` Tool Handler [done]
+### Dependencies: 3.1, 3.2
+### Description: Create the handler function for the `search_bing` tool, mirroring the structure of the Google handler. It will call `validateLoginState`, delegate to the `aiFetchlyController` with Bing-specific parameters, and use the same standardized formatter for the response.
+### Details:
+This implementation should reuse as much logic as possible from the `search_google` handler, primarily changing the parameters passed to the `aiFetchlyController` to target the Bing search engine.
+
+## 5. Register Search Tools with MCP Server [done]
+### Dependencies: 3.3, 3.4
+### Description: Combine the Zod schemas and their corresponding handler functions to create the complete `search_google` and `search_bing` tool objects. Register these new tools with the MCP server's tool registry to make them available to the MCP client.
+### Details:
+This final step involves updating the main tool registry file, importing the newly created tools, and adding them to the list of available MCP tools. This makes the functionality live on the server.
+

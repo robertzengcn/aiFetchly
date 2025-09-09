@@ -1,0 +1,43 @@
+# Task ID: 2
+# Title: Implement Login State Monitoring and IPC Communication
+# Status: done
+# Dependencies: 1
+# Priority: high
+# Description: Develop the mechanism for the main aiFetchly application to monitor its login state and communicate any changes to the MCP server child process via Inter-Process Communication (IPC).
+# Details:
+Create a `LoginStateMonitor` in the Electron main process. The `MCPIntegration` class will use IPC (e.g., writing to the child process's stdin) to send JSON messages about login state changes. The MCP server must listen for these messages, update its internal state, and implement a `validateLoginState` check to be called before executing any tool.
+
+# Test Strategy:
+Manually log in and out of the aiFetchly app and verify the MCP server logs the state change. Attempt to call a protected tool while logged out and confirm the correct `USER_NOT_LOGGED_IN` error response is returned as per the PRD specification.
+
+# Subtasks:
+## 1. Create LoginStateMonitor in Electron Main Process [done]
+### Dependencies: None
+### Description: Implement the `LoginStateMonitor` class in the main Electron process to detect and emit events for user login and logout actions.
+### Details:
+This class must hook into the existing aiFetchly authentication flow. When the user's login status changes, it should emit a 'loginStateChanged' event with the new state payload (e.g., { isLoggedIn: true, user: '...' }).
+
+## 2. Send Login State via IPC from MCPIntegration [done]
+### Dependencies: 2.1
+### Description: Modify the `MCPIntegration` class to listen for state changes from the `LoginStateMonitor` and forward them to the MCP server child process via its standard input.
+### Details:
+Subscribe to the 'loginStateChanged' event from the monitor. Upon receiving an event, serialize the state payload into a JSON string and write it to the child process's `stdin` stream, ensuring each message is terminated with a newline character.
+
+## 3. Implement IPC Message Listener in MCP Server [done]
+### Dependencies: None
+### Description: Configure the MCP server to listen on its standard input (`stdin`) for incoming JSON messages from the main Electron process.
+### Details:
+The `StdioServerTransport` or a dedicated handler within the `AiFetchlyMCPServer` must be configured to read data from `process.stdin`. It needs to handle data chunking, buffer incoming data until a newline delimiter is found, and then parse the complete line as a JSON object.
+
+## 4. Manage Internal Login State in MCP Server [done]
+### Dependencies: 2.3
+### Description: Implement a state management mechanism within the MCP server to store and update the login status received via IPC.
+### Details:
+Create a variable or a simple state object within the server's scope (e.g., in the server's context or a dedicated state module). This state should be updated whenever a valid login state message is parsed from stdin. The initial state must default to logged-out.
+
+## 5. Implement `validateLoginState` Pre-execution Check [done]
+### Dependencies: 2.4
+### Description: Create a `validateLoginState` function that tool handlers can call to enforce authentication before executing their logic.
+### Details:
+This function will check the internal login state managed in the previous subtask. If the state indicates the user is not logged in, the function must throw a specific error (e.g., `LoginStateError`) that the MCP framework can catch and translate into the `USER_NOT_LOGGED_IN` error response.
+

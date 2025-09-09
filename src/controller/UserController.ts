@@ -16,6 +16,17 @@ import { shell } from "electron";
 // const packageJson = require('../../../package.json');
 import {app} from 'electron'
 // import {Token} from "@/modules/token"
+import { 
+    MCPRequest, 
+    MCPResponse, 
+    MCPUserLoginRequest,
+    MCPUserInfo,
+    MCPUserLoginResponse,
+    createMCPSuccessResponse,
+    createMCPErrorResponse,
+    createMCPError,
+    MCPErrorCode
+} from '@/mcp-server/types/mcpTypes';
 
 // const debug = require('debug')('user-controller');
 export type userlogin = {
@@ -300,6 +311,186 @@ export class UserController {
                 return null;
             });
         return userInfo;
+    }
+
+    /**
+     * Handle MCP requests for user management functionality
+     * This method acts as an adapter between MCP requests and the existing user management business logic
+     */
+    public async handleMCPRequest(request: MCPRequest): Promise<MCPResponse> {
+        try {
+            const { tool, parameters } = request;
+
+            switch (tool) {
+                case 'user_login':
+                    return await this.handleUserLoginRequest(parameters as MCPUserLoginRequest);
+                
+                case 'get_user_info':
+                    return await this.handleGetUserInfoRequest();
+                
+                case 'check_login_status':
+                    return await this.handleCheckLoginStatusRequest();
+                
+                case 'update_user_info':
+                    return await this.handleUpdateUserInfoRequest();
+                
+                case 'get_login_url':
+                    return await this.handleGetLoginUrlRequest();
+                
+                case 'open_login_page':
+                    return await this.handleOpenLoginPageRequest();
+                
+                default:
+                    return createMCPErrorResponse(
+                        createMCPError(MCPErrorCode.INVALID_PARAMETERS, `Unknown user management tool: ${tool}`),
+                        'Invalid user management tool requested'
+                    );
+            }
+        } catch (error) {
+            console.error('Error in UserController.handleMCPRequest:', error);
+            return createMCPErrorResponse(
+                createMCPError(
+                    MCPErrorCode.INTERNAL_ERROR,
+                    'Internal error occurred while processing user management request',
+                    error instanceof Error ? error.message : String(error),
+                    error instanceof Error ? error.stack : undefined
+                ),
+                'Failed to process user management request'
+            );
+        }
+    }
+
+    /**
+     * Handle user login requests
+     */
+    private async handleUserLoginRequest(params: MCPUserLoginRequest): Promise<MCPResponse<MCPUserLoginResponse>> {
+        try {
+            const loginData: userlogin = {
+                user: params.username,
+                pass: params.password
+            };
+
+            const jwtUser = await this.login(loginData);
+
+            // Convert to MCP format
+            const mcpUserInfo: MCPUserInfo = {
+                name: jwtUser.name,
+                email: jwtUser.email,
+                roles: jwtUser.roles || [],
+                isAuthenticated: true
+            };
+
+            const loginResponse: MCPUserLoginResponse = {
+                user: mcpUserInfo,
+                token: jwtUser.token,
+                expiresAt: jwtUser.expiresAt
+            };
+
+            return createMCPSuccessResponse(loginResponse, 'User logged in successfully');
+        } catch (error) {
+            throw error;
+        }
+    }
+
+    /**
+     * Handle get user info requests
+     */
+    private async handleGetUserInfoRequest(): Promise<MCPResponse<MCPUserInfo>> {
+        try {
+            const userInfo = this.getUserInfo();
+            
+            const mcpUserInfo: MCPUserInfo = {
+                name: userInfo.name,
+                email: userInfo.email,
+                roles: userInfo.roles || [],
+                isAuthenticated: !!(userInfo.email && userInfo.name)
+            };
+
+            return createMCPSuccessResponse(mcpUserInfo, 'User information retrieved successfully');
+        } catch (error) {
+            throw error;
+        }
+    }
+
+    /**
+     * Handle check login status requests
+     */
+    private async handleCheckLoginStatusRequest(): Promise<MCPResponse<MCPUserInfo>> {
+        try {
+            const jwtUser = await this.checklogin();
+            
+            if (!jwtUser) {
+                const mcpUserInfo: MCPUserInfo = {
+                    name: '',
+                    email: '',
+                    roles: [],
+                    isAuthenticated: false
+                };
+                return createMCPSuccessResponse(mcpUserInfo, 'User is not logged in');
+            }
+
+            const mcpUserInfo: MCPUserInfo = {
+                name: jwtUser.name,
+                email: jwtUser.email,
+                roles: jwtUser.roles || [],
+                isAuthenticated: true
+            };
+
+            return createMCPSuccessResponse(mcpUserInfo, 'User login status checked successfully');
+        } catch (error) {
+            throw error;
+        }
+    }
+
+    /**
+     * Handle update user info requests
+     */
+    private async handleUpdateUserInfoRequest(): Promise<MCPResponse<MCPUserInfo>> {
+        try {
+            const jwtUser = await this.updateUserInfo();
+            
+            if (!jwtUser) {
+                return createMCPErrorResponse(
+                    createMCPError(MCPErrorCode.AUTHENTICATION_REQUIRED, 'Failed to update user information'),
+                    'User information update failed'
+                );
+            }
+
+            const mcpUserInfo: MCPUserInfo = {
+                name: jwtUser.name,
+                email: jwtUser.email,
+                roles: jwtUser.roles || [],
+                isAuthenticated: true
+            };
+
+            return createMCPSuccessResponse(mcpUserInfo, 'User information updated successfully');
+        } catch (error) {
+            throw error;
+        }
+    }
+
+    /**
+     * Handle get login URL requests
+     */
+    private async handleGetLoginUrlRequest(): Promise<MCPResponse<{ loginUrl: string }>> {
+        try {
+            const loginUrl = this.getLoginPageUrl();
+            return createMCPSuccessResponse({ loginUrl }, 'Login URL retrieved successfully');
+        } catch (error) {
+            throw error;
+        }
+    }
+
+    /**
+     * Handle open login page requests
+     */
+    private async handleOpenLoginPageRequest(): Promise<MCPResponse> {
+        try {
+            this.openLoginPage();
+            return createMCPSuccessResponse(null, 'Login page opened successfully');
+        } catch (error) {
+            throw error;
+        }
     }
 
 }

@@ -19,6 +19,7 @@ import { UserController } from '@/controller/UserController';
 import {NATIVATECOMMAND} from '@/config/channellist'
 import {NativateDatatype} from '@/entityTypes/commonType'
 import { ScheduleManager } from '@/modules/ScheduleManager';
+import { MCPIntegration } from './main-process/MCPIntegration';
 
 // import { createProtocol } from 'electron';
 const isDevelopment = process.env.NODE_ENV !== 'production'
@@ -246,6 +247,16 @@ function initialize() {
     } catch (error) {
       log.error('Failed to shutdown ScheduleManager:', error);
     }
+    
+    // Stop MCP server gracefully
+    try {
+      if (global.mcpIntegration) {
+        await global.mcpIntegration.stopServer();
+        log.info('MCP server shutdown completed');
+      }
+    } catch (error) {
+      log.error('Failed to shutdown MCP server:', error);
+    }
   })
 
   app.on('activate', () => {
@@ -287,6 +298,37 @@ function initialize() {
     Menu.setApplicationMenu(menu);
 
     createWindow();
+
+    // Initialize and start MCP server
+    try {
+      const mcpIntegration = new MCPIntegration();
+      
+      // Store globally for shutdown access
+      (global as any).mcpIntegration = mcpIntegration;
+      
+      // Set up event handlers
+      mcpIntegration.on('started', () => {
+        log.info('MCP server started successfully');
+      });
+      
+      mcpIntegration.on('error', (error) => {
+        log.error('MCP server error:', error);
+      });
+      
+      mcpIntegration.on('stopped', () => {
+        log.info('MCP server stopped');
+      });
+      
+      // Start the MCP server
+      const mcpStarted = await mcpIntegration.startServer();
+      if (mcpStarted) {
+        log.info('MCP server integration initialized successfully');
+      } else {
+        log.error('Failed to start MCP server');
+      }
+    } catch (error) {
+      log.error('Failed to initialize MCP integration:', error);
+    }
 
     const userdataPath = tokenService.getValue(USERSDBPATH)
     if (userdataPath && userdataPath.length > 0) {

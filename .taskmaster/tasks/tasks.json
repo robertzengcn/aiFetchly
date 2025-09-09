@@ -2,683 +2,667 @@
   "master": {
     "tasks": [
       {
-        "id": 11,
-        "title": "Setup Core Architecture and Database Schema",
-        "description": "Implement the foundational multi-process architecture (Main/Child) and define/create the SQLite database schema for YellowPagesTask, YellowPagesResult, and YellowPagesPlatform entities as specified in the PRD.",
-        "details": "This task involves setting up the Electron multi-process structure with a Main Process for management and Child Processes for scraping. It also includes creating the necessary database tables using the schemas defined in section 5 of the PRD.",
-        "testStrategy": "Unit test database migration scripts. Verify process isolation by ensuring a child process crash does not affect the main process. Validate database schema against PRD requirements.",
+        "id": 1,
+        "title": "Implement Core MCP Server and Automatic Startup",
+        "description": "Set up the basic MCP server using the '@modelcontextprotocol/sdk' and integrate it into the aiFetchly Electron application. The server must start automatically as a child process when the main application launches.",
+        "details": "This task involves creating the core `AiFetchlyMCPServer` class, using `StdioServerTransport` for communication, and implementing the `MCPIntegration` class within the Electron main process to spawn and manage the server lifecycle. The build process must be configured to compile the MCP server code separately (e.g., using `tsconfig.mcp-server.json`).",
+        "testStrategy": "Verify the MCP server process starts within 5 seconds of the Electron app launch by checking process lists and application logs. Use a simple MCP client to send a basic request (e.g., for system status) and confirm a valid response is received.",
         "priority": "high",
         "dependencies": [],
         "status": "done",
         "subtasks": [
           {
             "id": 1,
-            "title": "Initialize Electron Application Shell and Main Process",
-            "description": "Set up the basic file structure for the Electron application, including the main process entry point that creates a browser window and handles basic application lifecycle events.",
+            "title": "Configure Separate Build Process for MCP Server",
+            "description": "Set up the necessary build configuration to compile the MCP server TypeScript code into a separate JavaScript executable script.",
             "dependencies": [],
-            "details": "Create the package.json, main.js, and index.html files. The main.js should handle the 'ready' and 'window-all-closed' app events and create a basic BrowserWindow.",
+            "details": "Create a `tsconfig.mcp-server.json` file that extends the base tsconfig. Update the build scripts in `package.json` to add a new command that uses this configuration to compile the server source files into the application's distribution directory.",
             "status": "done",
-            "testStrategy": "Run the application to ensure a window appears on screen without any console errors."
+            "testStrategy": "Run the new build command and verify that the compiled server JavaScript file is created in the expected output directory without errors."
           },
           {
             "id": 2,
-            "title": "Define Database Entity Models in Code",
-            "description": "Translate the schemas for YellowPagesTask, YellowPagesResult, and YellowPagesPlatform from the PRD into code-based models or interfaces (e.g., using TypeScript or an ORM's entity definition).",
+            "title": "Implement Core AiFetchlyMCPServer Class",
+            "description": "Create the main server class using the '@modelcontextprotocol/sdk' that initializes the server and listens for requests via standard I/O.",
             "dependencies": [],
-            "details": "Create files (e.g., models/task.js) that define the structure, field names, and data types for each of the three required database entities. This step does not involve writing SQL or connecting to a database.",
+            "details": "Define the `AiFetchlyMCPServer` class. In its main execution block, instantiate the `MCPServer` from the SDK, configuring it to use `StdioServerTransport`. This class will be the entry point for the child process.",
             "status": "done",
-            "testStrategy": "Perform a code review to validate that the defined models perfectly match the specifications in section 5 of the PRD."
+            "testStrategy": "Execute the compiled server script directly from the command line. Verify it runs without crashing and waits for input, indicating the transport layer is active."
           },
           {
             "id": 3,
-            "title": "Implement Database Initialization and Schema Migration",
-            "description": "Write the logic to connect to the SQLite database and execute the `CREATE TABLE` statements based on the models defined in the previous subtask. This script should run on application startup.",
-            "dependencies": [
-              2
-            ],
-            "details": "Create a database module that uses a library like 'sqlite3' or 'better-sqlite3'. The initialization logic should be idempotent, checking for the existence of tables before attempting to create them.",
+            "title": "Implement MCPIntegration Class to Spawn Server Process",
+            "description": "Develop the `MCPIntegration` class within the Electron main process to handle the spawning and management of the MCP server child process.",
+            "dependencies": [],
+            "details": "Create the `MCPIntegration` class. Implement a `startServer` method that uses Node.js's `child_process.spawn` to execute the compiled MCP server script. The method should capture the child process's `stdout`, `stderr`, and `exit` events for logging.",
             "status": "done",
-            "testStrategy": "Unit test the migration script. After running the application, inspect the generated SQLite file with a database browser to verify all tables and columns are created correctly."
+            "testStrategy": "Instantiate and call `startServer` from a test script. Verify that the MCP server process appears in the system's process list."
           },
           {
             "id": 4,
-            "title": "Implement Child Process Spawning Mechanism",
-            "description": "Create the basic entry point script for a child process and implement the logic within the main process to spawn this script using Node.js's `child_process.fork()`.",
-            "dependencies": [
-              1
-            ],
-            "details": "The main process will have a function or class (e.g., ChildProcessManager) that is responsible for starting a new child process. The child process script itself can be a simple stub for now.",
+            "title": "Integrate Automatic Server Startup on App Launch",
+            "description": "Integrate the `MCPIntegration` class into the Electron application's startup sequence to ensure the server starts automatically when the app launches.",
+            "dependencies": [],
+            "details": "In the main Electron entry file (e.g., `main.ts`), import and instantiate the `MCPIntegration` class. After the Electron `app` emits the 'ready' event, call the `startServer` method. Implement logic to gracefully terminate the server process when the application quits.",
             "status": "done",
-            "testStrategy": "Trigger the spawning mechanism and verify via console logs and the operating system's task manager that a new Node.js process is successfully created by the main Electron process."
+            "testStrategy": "Launch the full Electron application. Check application logs and the system process list to confirm the MCP server process starts automatically within 5 seconds of launch."
           },
           {
             "id": 5,
-            "title": "Verify Process Isolation and Basic IPC Health Check",
-            "description": "Establish a minimal IPC channel to confirm the main process can communicate with a child and that a child process crash does not terminate the main process.",
-            "dependencies": [
-              4
-            ],
-            "details": "Implement logic for the main process to listen for the 'exit' event on the child process object. Add a simple 'ping' message from main to child and a 'pong' response from child to main to verify communication. Intentionally crash the child to test the 'exit' handler.",
+            "title": "Establish and Verify Basic IPC Communication",
+            "description": "Implement a basic client-side request to confirm that the Electron main process can successfully communicate with the spawned MCP server over stdio.",
+            "dependencies": [],
+            "details": "Add a placeholder tool (e.g., `get_server_status`) to the `AiFetchlyMCPServer`. In the `MCPIntegration` class, create a method to send a JSON-RPC request for this tool to the child process's `stdin` and listen for a response on its `stdout`.",
             "status": "done",
-            "testStrategy": "Confirm the main process receives the 'pong' message. Trigger a child process crash and verify the main process logs the event but remains fully responsive and does not crash."
+            "testStrategy": "After the server starts, trigger the test request. Verify that the main process logs show a valid success response received from the MCP server, confirming the end-to-end communication channel is working."
           }
         ]
       },
       {
-        "id": 12,
-        "title": "Define Core System Interfaces and Factories",
-        "description": "Create the TypeScript interfaces for the core design patterns: IScraperEngine, IPlatformAdapter, IDataExtractor, ITaskManager, IProgressReporter, and the associated Factory interfaces (IScraperFactory, IPlatformFactory).",
-        "details": "Based on section 7.1 of the PRD, this task focuses on establishing the contracts for the entire system. This interface-first approach is critical for ensuring loose coupling, testability, and extensibility.",
-        "testStrategy": "Code review to ensure interfaces accurately reflect the PRD. Create mock implementations for each interface to be used in future unit tests.",
+        "id": 2,
+        "title": "Implement Login State Monitoring and IPC Communication",
+        "description": "Develop the mechanism for the main aiFetchly application to monitor its login state and communicate any changes to the MCP server child process via Inter-Process Communication (IPC).",
+        "details": "Create a `LoginStateMonitor` in the Electron main process. The `MCPIntegration` class will use IPC (e.g., writing to the child process's stdin) to send JSON messages about login state changes. The MCP server must listen for these messages, update its internal state, and implement a `validateLoginState` check to be called before executing any tool.",
+        "testStrategy": "Manually log in and out of the aiFetchly app and verify the MCP server logs the state change. Attempt to call a protected tool while logged out and confirm the correct `USER_NOT_LOGGED_IN` error response is returned as per the PRD specification.",
         "priority": "high",
         "dependencies": [
-          11
+          1
         ],
         "status": "done",
         "subtasks": [
           {
             "id": 1,
-            "title": "Define Core Scraping Logic Interfaces",
-            "description": "Create the TypeScript interfaces for the primary scraping components: IScraperEngine, IPlatformAdapter, and IDataExtractor. These will define the contracts for orchestrating a scrape, interacting with a specific website, and extracting structured data from a page.",
+            "title": "Create LoginStateMonitor in Electron Main Process",
+            "description": "Implement the `LoginStateMonitor` class in the main Electron process to detect and emit events for user login and logout actions.",
             "dependencies": [],
-            "details": "The IScraperEngine interface should define methods for running and managing a scraping job. The IPlatformAdapter will abstract platform-specific logic like pagination and selector targeting. The IDataExtractor will define the contract for parsing raw page content into structured data.",
+            "details": "This class must hook into the existing aiFetchly authentication flow. When the user's login status changes, it should emit a 'loginStateChanged' event with the new state payload (e.g., { isLoggedIn: true, user: '...' }).",
             "status": "done",
-            "testStrategy": "Code review against PRD section 7.1 to ensure method signatures and properties are correctly defined."
+            "testStrategy": "Manually log in and out of the application and use console logs in the main process to verify that the monitor emits the correct event and payload."
           },
           {
             "id": 2,
-            "title": "Define Task and Progress Management Interfaces",
-            "description": "Create the TypeScript interfaces for ITaskManager and IProgressReporter. These will establish the contracts for managing the lifecycle of scraping tasks and for communicating status updates, respectively.",
-            "dependencies": [],
-            "details": "ITaskManager will define how tasks are queued, started, paused, and stopped. IProgressReporter will define a standardized way to emit progress events (e.g., percentage complete, items found), errors, and final completion signals, which is critical for IPC in Task 14.",
+            "title": "Send Login State via IPC from MCPIntegration",
+            "description": "Modify the `MCPIntegration` class to listen for state changes from the `LoginStateMonitor` and forward them to the MCP server child process via its standard input.",
+            "dependencies": [
+              "2.1"
+            ],
+            "details": "Subscribe to the 'loginStateChanged' event from the monitor. Upon receiving an event, serialize the state payload into a JSON string and write it to the child process's `stdin` stream, ensuring each message is terminated with a newline character.",
             "status": "done",
-            "testStrategy": "Review to ensure the interfaces support all states required for robust task control and reporting as outlined in the PRD."
+            "testStrategy": "Observe the main process logs to confirm that a JSON message is prepared and an attempt to write to the child process's stdin is made immediately after a login state change."
           },
           {
             "id": 3,
-            "title": "Define Core Factory Interfaces",
-            "description": "Create the TypeScript interfaces for the factory patterns: IScraperFactory and IPlatformFactory. These interfaces are central to the system's extensibility and loose coupling.",
-            "dependencies": [
-              1
-            ],
-            "details": "The IScraperFactory will define a contract for creating different types of scraper engines. The IPlatformFactory will define the contract for dynamically instantiating IPlatformAdapter implementations, which is a prerequisite for the Unified Platform Extensibility Framework (Task 13).",
+            "title": "Implement IPC Message Listener in MCP Server",
+            "description": "Configure the MCP server to listen on its standard input (`stdin`) for incoming JSON messages from the main Electron process.",
+            "dependencies": [],
+            "details": "The `StdioServerTransport` or a dedicated handler within the `AiFetchlyMCPServer` must be configured to read data from `process.stdin`. It needs to handle data chunking, buffer incoming data until a newline delimiter is found, and then parse the complete line as a JSON object.",
             "status": "done",
-            "testStrategy": "Verify that the factory interfaces are generic enough to support the creation of all components defined in subtask 1."
+            "testStrategy": "In a standalone test, run the MCP server and manually pipe a valid JSON string (e.g., '{\"isLoggedIn\":true}\\n') to its stdin. Verify the server logs that it has successfully parsed the object."
           },
           {
             "id": 4,
-            "title": "Develop Mock Implementations for All Interfaces",
-            "description": "Create a basic, in-memory mock implementation for each of the six core interfaces and two factory interfaces defined in the previous subtasks. These mocks are essential for future unit testing.",
+            "title": "Manage Internal Login State in MCP Server",
+            "description": "Implement a state management mechanism within the MCP server to store and update the login status received via IPC.",
             "dependencies": [
-              1,
+              "2.3"
+            ],
+            "details": "Create a variable or a simple state object within the server's scope (e.g., in the server's context or a dedicated state module). This state should be updated whenever a valid login state message is parsed from stdin. The initial state must default to logged-out.",
+            "status": "done",
+            "testStrategy": "After the server parses an IPC message (as in the previous subtask's test), add a log to print the server's internal login state variable to confirm it has been updated correctly."
+          },
+          {
+            "id": 5,
+            "title": "Implement `validateLoginState` Pre-execution Check",
+            "description": "Create a `validateLoginState` function that tool handlers can call to enforce authentication before executing their logic.",
+            "dependencies": [
+              "2.4"
+            ],
+            "details": "This function will check the internal login state managed in the previous subtask. If the state indicates the user is not logged in, the function must throw a specific error (e.g., `LoginStateError`) that the MCP framework can catch and translate into the `USER_NOT_LOGGED_IN` error response.",
+            "status": "done",
+            "testStrategy": "Create a dummy tool that calls this validator. Attempt to execute the tool via an MCP client while the server's state is 'logged-out' and confirm the client receives the specified `USER_NOT_LOGGED_IN` error JSON."
+          }
+        ]
+      },
+      {
+        "id": 3,
+        "title": "Develop MCP Tools for Search Engine Scraping",
+        "description": "Create and register MCP tools for scraping search engines like Google and Bing, integrating with the existing `SearchEngineController` or equivalent business logic.",
+        "details": "Define the Zod schemas for `search_google` and `search_bing` tools as specified in the PRD. The tool's handler function will first call `validateLoginState`, then delegate the scraping logic to the existing `aiFetchlyController`, and finally format the output to match the `MCPGoogleSearchResponse` interface.",
+        "testStrategy": "Execute the `search_google` tool via an MCP client with a test query. Verify the response format matches the specification and that the data (titles, URLs, descriptions) is accurate. Test with optional parameters like `pages` and `language`.",
+        "priority": "high",
+        "dependencies": [
+          1,
+          2
+        ],
+        "status": "done",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Define Zod Schemas for Search Tools",
+            "description": "Create and export the Zod schemas for the `search_google` and `search_bing` tool input parameters. These schemas must align with the specifications in the PRD, defining fields like `query`, `pages`, and `language` with appropriate types and validation.",
+            "dependencies": [],
+            "details": "The schemas will serve as the single source of truth for validating inputs to the search engine tools. Ensure they are defined in a shared location accessible by the tool definition files.",
+            "status": "done",
+            "testStrategy": "Write unit tests to validate that the schemas correctly accept valid input objects and reject objects with missing or malformed data."
+          },
+          {
+            "id": 2,
+            "title": "Implement a Standardized Response Formatter",
+            "description": "Develop a dedicated utility function that takes the raw output from the `aiFetchlyController` and transforms it into the strict `MCPGoogleSearchResponse` interface format. This ensures consistent output structure for all search engine tools.",
+            "dependencies": [],
+            "details": "The function should handle mapping fields, cleaning up data, and ensuring all required properties of the `MCPGoogleSearchResponse` interface are present. It should gracefully handle cases where the controller returns partial or empty data.",
+            "status": "done",
+            "testStrategy": "Unit test the formatter with mock data from the `aiFetchlyController` to verify it produces a correctly structured `MCPGoogleSearchResponse`."
+          },
+          {
+            "id": 3,
+            "title": "Implement the `search_google` Tool Handler",
+            "description": "Create the handler function for the `search_google` tool. The handler must first call `validateLoginState`, then delegate the scraping logic to the `aiFetchlyController` with Google-specific parameters, and finally use the standardized formatter to shape the response.",
+            "dependencies": [
+              "3.1",
+              "3.2"
+            ],
+            "details": "The handler will receive the validated input from the Zod schema. It will be responsible for orchestrating the call flow and handling any errors from the controller or validation steps.",
+            "status": "done",
+            "testStrategy": "Execute the handler directly with test data and mock the `aiFetchlyController` and `validateLoginState` functions to verify the logic flow and response formatting."
+          },
+          {
+            "id": 4,
+            "title": "Implement the `search_bing` Tool Handler",
+            "description": "Create the handler function for the `search_bing` tool, mirroring the structure of the Google handler. It will call `validateLoginState`, delegate to the `aiFetchlyController` with Bing-specific parameters, and use the same standardized formatter for the response.",
+            "dependencies": [
+              "3.1",
+              "3.2"
+            ],
+            "details": "This implementation should reuse as much logic as possible from the `search_google` handler, primarily changing the parameters passed to the `aiFetchlyController` to target the Bing search engine.",
+            "status": "done",
+            "testStrategy": "Similar to the Google handler, execute this handler with test data and mocks to ensure it correctly calls the controller for Bing and formats the output."
+          },
+          {
+            "id": 5,
+            "title": "Register Search Tools with MCP Server",
+            "description": "Combine the Zod schemas and their corresponding handler functions to create the complete `search_google` and `search_bing` tool objects. Register these new tools with the MCP server's tool registry to make them available to the MCP client.",
+            "dependencies": [
+              "3.3",
+              "3.4"
+            ],
+            "details": "This final step involves updating the main tool registry file, importing the newly created tools, and adding them to the list of available MCP tools. This makes the functionality live on the server.",
+            "status": "done",
+            "testStrategy": "Start the MCP server and use an MCP client to call the `search_google` tool with a test query. Verify a successful response is received and its format matches the `MCPGoogleSearchResponse` specification."
+          }
+        ]
+      },
+      {
+        "id": 4,
+        "title": "Develop MCP Tools for Yellow Pages Scraping",
+        "description": "Integrate the existing yellow pages scraping functionality into the MCP server by creating tools such as `scrape_yellow_pages` and `get_business_details`.",
+        "details": "Define Zod schemas for the yellow pages tools based on the PRD. The implementation will act as an adapter, calling methods on the existing `YellowPagesController`, and formatting the results into the specified `MCPYellowPagesResponse` format.",
+        "testStrategy": "Call the `scrape_yellow_pages` tool with parameters for platform (e.g., 'yelp.com'), search term, and location. Validate the structure and content of the returned business data against the `YellowPagesResult` interface.",
+        "priority": "medium",
+        "dependencies": [
+          1,
+          2
+        ],
+        "status": "done",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Create Zod Schemas for Yellow Pages Tools",
+            "description": "Define Zod schemas for the yellow pages MCP tools including scrape_yellow_pages and get_business_details with proper validation for parameters like platform, query, location, and maxResults.",
+            "details": "Create schemas that validate the MCPYellowPagesRequest interface parameters including platform (yelp, yellowpages, google_business), query string, location, maxResults, radius, and sortBy options.",
+            "status": "done",
+            "dependencies": [],
+            "parentTaskId": 4
+          },
+          {
+            "id": 2,
+            "title": "Implement Yellow Pages Response Formatter",
+            "description": "Create a utility function to format the raw output from YellowPagesController into the standardized MCPYellowPagesResponse format.",
+            "details": "Develop a formatter that converts YellowPagesController results to MCPBusinessListing format, ensuring consistent response structure with proper field mapping and data validation.",
+            "status": "done",
+            "dependencies": [],
+            "parentTaskId": 4
+          },
+          {
+            "id": 3,
+            "title": "Implement scrape_yellow_pages Tool Handler",
+            "description": "Create the MCP tool handler for scrape_yellow_pages that validates login state, calls YellowPagesController, and formats the response.",
+            "details": "Implement a handler that calls validateLoginState, delegates to YellowPagesController.handleMCPRequest, and uses the response formatter to return properly structured MCPYellowPagesData.",
+            "status": "done",
+            "dependencies": [
+              "4.1",
+              "4.2"
+            ],
+            "parentTaskId": 4
+          },
+          {
+            "id": 4,
+            "title": "Implement get_business_details Tool Handler",
+            "description": "Create the MCP tool handler for get_business_details that retrieves detailed information about a specific business listing.",
+            "details": "Implement a handler that takes a business ID or URL, validates login state, calls YellowPagesController to get detailed business information, and formats the response as MCPBusinessListing.",
+            "status": "done",
+            "dependencies": [
+              "4.1",
+              "4.2"
+            ],
+            "parentTaskId": 4
+          },
+          {
+            "id": 5,
+            "title": "Register Yellow Pages Tools with MCP Server",
+            "description": "Register the yellow pages tools with the MCP server's tool registry to make them available to MCP clients.",
+            "details": "Combine the Zod schemas and handler functions to create complete tool objects for scrape_yellow_pages and get_business_details, then register them with the MCP server.",
+            "status": "done",
+            "dependencies": [
+              "4.3",
+              "4.4"
+            ],
+            "parentTaskId": 4
+          }
+        ]
+      },
+      {
+        "id": 5,
+        "title": "Develop MCP Tools for Website Email Extraction",
+        "description": "Create MCP tools for extracting email addresses from a list of websites, including `extract_emails_from_website` and `validate_email_list`.",
+        "details": "Implement the tool logic, which will leverage the existing `BrowserManager` and `EmailExtractionController`. Define the Zod schemas for the tool parameters. Ensure the response format strictly matches the `MCPEmailExtractionResponse` and `MCPEmailValidationResponse` specifications.",
+        "testStrategy": "Provide a list of test URLs to `extract_emails_from_website` and verify that the tool correctly crawls the sites, extracts emails, and returns them in the specified format. Test the `validate_email_list` tool with a mix of valid, invalid, and disposable emails to check accuracy.",
+        "priority": "medium",
+        "dependencies": [
+          1,
+          2
+        ],
+        "status": "done",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Create Zod Schemas for Email Extraction Tools",
+            "description": "Define Zod schemas for the email extraction MCP tools including extract_emails_from_website and validate_email_list with proper validation for parameters like websites, maxDepth, and email validation options.",
+            "details": "Create schemas that validate the MCPEmailExtractionRequest interface parameters including websites array, maxDepth, includeSubdomains, excludePatterns, and timeout options. Also create schemas for email validation parameters.",
+            "status": "done",
+            "dependencies": [],
+            "parentTaskId": 5
+          },
+          {
+            "id": 2,
+            "title": "Implement Email Extraction Response Formatter",
+            "description": "Create a utility function to format the raw output from EmailExtractionController into the standardized MCPEmailExtractionResponse format.",
+            "details": "Develop a formatter that converts EmailExtractionController results to MCPExtractedEmail format, ensuring consistent response structure with proper field mapping and data validation.",
+            "status": "done",
+            "dependencies": [],
+            "parentTaskId": 5
+          },
+          {
+            "id": 3,
+            "title": "Implement extract_emails_from_website Tool Handler",
+            "description": "Create the MCP tool handler for extract_emails_from_website that validates login state, calls EmailExtractionController, and formats the response.",
+            "details": "Implement a handler that calls validateLoginState, delegates to EmailExtractionController.handleMCPRequest, and uses the response formatter to return properly structured MCPEmailExtractionData.",
+            "status": "done",
+            "dependencies": [
+              "5.1",
+              "5.2"
+            ],
+            "parentTaskId": 5
+          },
+          {
+            "id": 4,
+            "title": "Implement validate_email_list Tool Handler",
+            "description": "Create the MCP tool handler for validate_email_list that validates a list of email addresses for validity and checks against disposable email services.",
+            "details": "Implement a handler that takes a list of email addresses, validates their format, checks against known disposable email services, and returns validation results with confidence scores.",
+            "status": "done",
+            "dependencies": [
+              "5.1",
+              "5.2"
+            ],
+            "parentTaskId": 5
+          },
+          {
+            "id": 5,
+            "title": "Register Email Extraction Tools with MCP Server",
+            "description": "Register the email extraction tools with the MCP server's tool registry to make them available to MCP clients.",
+            "details": "Combine the Zod schemas and handler functions to create complete tool objects for extract_emails_from_website and validate_email_list, then register them with the MCP server.",
+            "status": "done",
+            "dependencies": [
+              "5.3",
+              "5.4"
+            ],
+            "parentTaskId": 5
+          }
+        ]
+      },
+      {
+        "id": 6,
+        "title": "Develop MCP Tools for Email Marketing Task Management",
+        "description": "Implement a set of MCP tools for managing email marketing tasks, providing full CRUD (Create, Read, Update, Delete) functionality.",
+        "details": "Create tools: `create_email_task`, `get_email_task`, `update_email_task`, and `delete_email_task`. These tools will interface with the existing `EmailMarketingController` and the corresponding database models for tasks.",
+        "testStrategy": "Perform a full CRUD lifecycle test: 1. Create a task. 2. Retrieve it to verify creation. 3. Update its name/status. 4. Retrieve it again to verify the update. 5. Delete the task and confirm it's no longer retrievable.",
+        "priority": "medium",
+        "dependencies": [
+          1,
+          2
+        ],
+        "status": "done",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Create Zod Schemas for Email Marketing Task Tools",
+            "description": "Define Zod schemas for the email marketing task MCP tools including create_email_task, get_email_task, update_email_task, and delete_email_task with proper validation for task parameters.",
+            "details": "Create schemas that validate email marketing task parameters including task name, description, status, priority, scheduledAt, and other relevant fields for CRUD operations.",
+            "status": "done",
+            "dependencies": [],
+            "parentTaskId": 6
+          },
+          {
+            "id": 2,
+            "title": "Implement Email Marketing Task Response Formatter",
+            "description": "Create a utility function to format the raw output from EmailMarketingController into standardized MCP response formats.",
+            "details": "Develop a formatter that converts EmailMarketingController results to MCPTask format, ensuring consistent response structure with proper field mapping and data validation.",
+            "status": "done",
+            "dependencies": [],
+            "parentTaskId": 6
+          },
+          {
+            "id": 3,
+            "title": "Implement CRUD Tool Handlers for Email Marketing Tasks",
+            "description": "Create MCP tool handlers for create_email_task, get_email_task, update_email_task, and delete_email_task that validate login state and call EmailMarketingController.",
+            "details": "Implement handlers that call validateLoginState, delegate to EmailMarketingController.handleMCPRequest for each CRUD operation, and use the response formatter to return properly structured MCPTask data.",
+            "status": "done",
+            "dependencies": [
+              "6.1",
+              "6.2"
+            ],
+            "parentTaskId": 6
+          },
+          {
+            "id": 4,
+            "title": "Register Email Marketing Task Tools with MCP Server",
+            "description": "Register the email marketing task tools with the MCP server's tool registry to make them available to MCP clients.",
+            "details": "Combine the Zod schemas and handler functions to create complete tool objects for all CRUD operations, then register them with the MCP server.",
+            "status": "done",
+            "dependencies": [
+              "6.3"
+            ],
+            "parentTaskId": 6
+          }
+        ]
+      },
+      {
+        "id": 7,
+        "title": "Develop General Task and Resource Management Tools",
+        "description": "Create high-level tools for managing scraping tasks (`create_scraping_task`, `get_task_status`) and monitoring system health (`get_system_status`).",
+        "details": "The `create_scraping_task` tool will be a generic wrapper for creating different types of tasks. The `get_system_status` tool will aggregate data from the `LoginStateMonitor` and other system metrics to provide a health overview as defined in the `MCPSystemStatusResponse` format.",
+        "testStrategy": "Call `get_system_status` and verify all fields are populated correctly (uptime, browser instances, etc.). Create a task using `create_scraping_task` and then poll its status with `get_task_status` to check for progress updates.",
+        "priority": "low",
+        "dependencies": [
+          3,
+          4,
+          5
+        ],
+        "status": "done",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Design and Implement User Authentication Database Schema",
+            "description": "Create the necessary database tables to store user information, including credentials and session data.",
+            "dependencies": [],
+            "details": "Create a `users` table with columns like `id`, `username`, `email`, `password_hash`, `created_at`, and `updated_at`. The `password_hash` column must store a securely hashed password (e.g., using bcrypt or Argon2), not plaintext. Use a database migration tool to manage schema changes.",
+            "status": "done",
+            "testStrategy": "Write unit tests for the data models. Manually inspect the database schema after running migrations to ensure it matches the design. Verify constraints like `UNIQUE` on email/username."
+          },
+          {
+            "id": 2,
+            "title": "Develop User Registration API Endpoint",
+            "description": "Create a public API endpoint (e.g., POST /api/auth/register) that allows new users to create an account.",
+            "dependencies": [],
+            "details": "The endpoint must accept user details (e.g., username, email, password). It must validate the input, checking for existing usernames/emails and enforcing password complexity rules. Securely hash the password before storing it in the database. Return a success message or appropriate error codes (e.g., 201 Created, 400 Bad Request, 409 Conflict).",
+            "status": "done",
+            "testStrategy": "Write integration tests simulating POST requests. Test success cases with valid data, and failure cases like duplicate emails, weak passwords, and missing fields. Verify that the user is correctly created in the database with a properly hashed password."
+          },
+          {
+            "id": 3,
+            "title": "Develop User Login API Endpoint",
+            "description": "Create an API endpoint (e.g., POST /api/auth/login) for users to authenticate and receive a session token.",
+            "dependencies": [],
+            "details": "The endpoint should accept user credentials (e.g., email and password). Retrieve the user from the database and compare the provided password with the stored hash. If successful, generate and return a session token (e.g., a JSON Web Token - JWT) with an appropriate expiration time. If unsuccessful, return a 401 Unauthorized error.",
+            "status": "done",
+            "testStrategy": "Write integration tests for the login endpoint. Test with valid credentials to ensure a valid JWT is returned. Test with invalid credentials (wrong password, non-existent user) to ensure a 401 error is returned."
+          },
+          {
+            "id": 4,
+            "title": "Implement Authentication Middleware for Protected Routes",
+            "description": "Create middleware to verify the session token on incoming requests to protected API endpoints, denying access to unauthenticated users.",
+            "dependencies": [],
+            "details": "The middleware should extract the token from the request headers (e.g., `Authorization: Bearer <token>`). It must validate the token's signature and check for expiration. If the token is valid, attach the authenticated user's information to the request object for use by subsequent handlers. If the token is invalid or missing, return a 401 Unauthorized error.",
+            "status": "done",
+            "testStrategy": "Create a dummy protected endpoint. Write integration tests that call this endpoint with a valid token, an invalid/malformed token, an expired token, and no token. Verify that the correct HTTP status code (e.g., 200 OK or 401 Unauthorized) is returned in each case."
+          },
+          {
+            "id": 5,
+            "title": "Develop User Logout API Endpoint",
+            "description": "Create an API endpoint (e.g., POST /api/auth/logout) to invalidate the user's current session.",
+            "dependencies": [],
+            "details": "The implementation depends on the session strategy. For stateless JWTs, implement a server-side token blocklist (e.g., in Redis) to store invalidated tokens until they expire. The endpoint will add the current token's ID to this list. The authentication middleware must be updated to check this blocklist.",
+            "status": "done",
+            "testStrategy": "Write an integration test: 1. Log in a user to get a token. 2. Call the logout endpoint with that token. 3. Attempt to use the same token to access a protected route and verify that access is denied with a 401 Unauthorized error."
+          }
+        ]
+      },
+      {
+        "id": 8,
+        "title": "Refactor Existing Controllers for Seamless MCP Integration",
+        "description": "Adapt existing controllers (e.g., `SearchController`, `EmailController`) to handle requests originating from the MCP server, ensuring they can process parameters and return data in a consistent, MCP-compatible format.",
+        "status": "done",
+        "dependencies": [
+          1
+        ],
+        "priority": "high",
+        "details": "This is a cross-cutting task. It involves creating `handleMCPRequest` adapter methods in the existing controllers. This ensures a clean separation of concerns, where the MCP tool implementation is a thin layer that calls into the core business logic without duplicating it.",
+        "testStrategy": "Write unit tests for each controller's adapter method, mocking MCP-style input and asserting that the correct underlying business logic is invoked. Integration tests are covered by the individual tool tests (Tasks 3-7).",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Define TypeScript Interfaces for MCP Requests and Responses",
+            "description": "Create and standardize TypeScript interfaces (e.g., `MCPRequest`, `MCPSuccessResponse`, `MCPErrorResponse`) to ensure type safety and consistency for data exchanged between the MCP server and the refactored controllers.",
+            "status": "done",
+            "dependencies": [],
+            "details": "These interfaces will define the structure for tool parameters, success payloads, and standardized error objects. Place them in a shared types directory.\n<info added on 2025-09-08T13:56:11.450Z>\nThe comprehensive MCP type definitions have been implemented in `src/mcp-server/types/mcpTypes.ts`. This file establishes the foundational types for all MCP interactions, including:\n- Base request/response interfaces and associated Zod schemas for runtime validation.\n- Specific types for all major functionality areas (search, email extraction, yellow pages, task management, system status, user management).\n- A standardized error handling structure with defined error codes.\n- Utility functions for creating consistent success and error responses.\n- Pagination support for list operations.\n</info added on 2025-09-08T13:56:11.450Z>",
+            "testStrategy": "Code review and static analysis to ensure interfaces are comprehensive and correctly applied in subsequent subtasks."
+          },
+          {
+            "id": 2,
+            "title": "Implement `handleMCPRequest` for Search and Email Extraction Controllers",
+            "description": "Refactor `SearchController` and `EmailextractionController` to include an `handleMCPRequest` adapter method. This method will translate MCP-style parameters into calls to the existing business logic.",
+            "status": "done",
+            "dependencies": [
+              1
+            ],
+            "details": "The adapter will handle parameter mapping, invoke the core search/extraction functions, and format the results and any errors into the standard MCP response format defined in the new interfaces.\n<info added on 2025-09-08T14:03:16.216Z>\n`handleMCPRequest` methods have been successfully implemented for both `SearchController` and `EmailextractionController`.\n\n**SearchController:**\n- An MCP adapter method has been added to handle 9 different tool types (search_google, search_bing, create_search_task, list_search_tasks, get_search_task, update_search_task, get_search_results, retry_search_task, get_task_error_log, get_task_details_for_edit).\n- Implemented parameter mapping between the MCP format and internal controller methods, along with helper methods for engine ID mapping and task status conversion.\n\n**EmailextractionController:**\n- An MCP adapter method has been added to handle 9 different tool types (extract_emails_from_website, create_email_extraction_task, list_email_extraction_tasks, get_email_extraction_task, update_email_extraction_task, delete_email_extraction_task, get_email_extraction_results, get_email_task_error_log, get_email_task_count).\n- Implemented parameter mapping and helper methods for task status conversion.\n\nBoth adapters provide a clean interface between MCP requests and the existing business logic, ensuring standardized MCP responses with proper error handling and type safety.\n</info added on 2025-09-08T14:03:16.216Z>",
+            "testStrategy": "Write unit tests for `handleMCPRequest` in both controllers, mocking MCP input and asserting that the correct underlying service methods are called with the right arguments and the response is correctly formatted."
+          },
+          {
+            "id": 3,
+            "title": "Implement `handleMCPRequest` for YellowPagesController",
+            "description": "Adapt the `YellowPagesController` by adding an `handleMCPRequest` method to process MCP tool requests for yellow pages scraping.",
+            "status": "done",
+            "dependencies": [
+              1
+            ],
+            "details": "This method will parse MCP parameters (e.g., platform, search term, location), call the existing scraping logic, and return the data or errors in the MCP-compatible format.\n<info added on 2025-09-08T14:09:34.440Z>\nThe `handleMCPRequest` adapter method has been implemented, supporting 17 different tool types. This includes `scrape_yellow_pages` as well as a full suite for task management (e.g., `create_yellow_pages_task`, `list_yellow_pages_tasks`, `get_yellow_pages_task_progress`), data export, and status checks (`get_yellow_pages_health_status`, `get_yellow_pages_statistics`). The implementation involved creating proper parameter mapping from the MCP format to internal methods, adding helper functions to convert internal `TaskStatus` enums to MCP status strings, and updating the `MCPBusinessListing` interface to be more flexible. The new adapter provides a clean, type-safe interface to the core business logic, ensuring standardized MCP responses and error handling.\n</info added on 2025-09-08T14:09:34.440Z>",
+            "testStrategy": "Unit test the adapter method by providing mock MCP requests for Yelp/other platforms and verifying the response structure and the delegation to the correct internal scraping functions."
+          },
+          {
+            "id": 4,
+            "title": "Implement `handleMCPRequest` for TaskController",
+            "description": "Refactor the `TaskController` to add an `handleMCPRequest` adapter for handling CRUD operations on tasks originating from MCP tools.",
+            "status": "done",
+            "dependencies": [
+              1
+            ],
+            "details": "The adapter will differentiate between create, read, update, and delete operations based on the MCP request parameters, call the corresponding business logic, and format the response.",
+            "testStrategy": "Create unit tests for each CRUD action via the `handleMCPRequest` method. For example, test creating a task and assert the response format. Mock database interactions."
+          },
+          {
+            "id": 5,
+            "title": "Implement `handleMCPRequest` for User and SystemSetting Controllers",
+            "description": "Add `handleMCPRequest` adapter methods to the `UserController` and `SystemSettingController` to manage user/system settings via MCP.",
+            "status": "done",
+            "dependencies": [
+              1
+            ],
+            "details": "These adapters will process requests for fetching or updating settings, call the relevant service methods, and ensure the response conforms to the MCP standard.",
+            "testStrategy": "Write unit tests for the adapter methods, simulating MCP requests to get/set settings and asserting the correct logic is invoked and the response is properly structured."
+          },
+          {
+            "id": 6,
+            "title": "Update AiFetchlyController to Delegate to New Adapters",
+            "description": "Modify the `AiFetchlyController`, which acts as the central entry point for MCP tools, to use the new `handleMCPRequest` methods on the respective controllers instead of calling their business logic methods directly.",
+            "status": "done",
+            "dependencies": [
+              2,
+              3,
+              4,
+              5
+            ],
+            "details": "This change centralizes the MCP interaction logic within each controller, simplifying the `AiFetchlyController` and adhering to the separation of concerns principle. The controller will now act as a router, passing the MCP request to the appropriate controller's adapter.",
+            "testStrategy": "Integration tests for this are covered by the individual tool tests (Tasks 3-7). Manually review the `AiFetchlyController` to ensure all direct calls are replaced with calls to `handleMCPRequest`."
+          }
+        ]
+      },
+      {
+        "id": 9,
+        "title": "Implement Robust Error Handling and Server Recovery",
+        "description": "Enhance the MCP server and its integration with robust error handling, including standardized error responses and an automatic restart mechanism for the server process.",
+        "status": "done",
+        "dependencies": [
+          1
+        ],
+        "priority": "medium",
+        "details": "Implement the `LoginStateError` response format for authentication and application state failures. In the `MCPIntegration` class, add logic to monitor the child process and automatically restart it with a delay if it exits with a non-zero code. Implement retry logic for the initial server startup.",
+        "testStrategy": "Test error paths by calling a tool when logged out to verify the error JSON. Manually kill the MCP server process (`kill -9`) and confirm that the main Electron app automatically restarts it after a short delay.",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Implement `LoginStateError` Response Format",
+            "description": "Define and implement a standardized JSON error structure for authentication and application state failures, as per the `LoginStateError` specification.",
+            "status": "done",
+            "dependencies": [],
+            "details": "Create a standardized error class or factory function in the MCP server that generates a consistent JSON response for authentication errors. This response should include a unique error code (e.g., 'AUTH_REQUIRED'), a human-readable message, and a type field. This will be used when `validateLoginState` fails.",
+            "testStrategy": "Write a unit test to verify that calling a protected function without the required state produces the exact `LoginStateError` JSON format. Manually test by logging out of the app and calling a tool, confirming the error is received by the client."
+          },
+          {
+            "id": 2,
+            "title": "Implement Retry Logic for Initial Server Startup",
+            "description": "Add a retry mechanism with backoff to the `MCPIntegration` class for cases where the MCP server fails to start on the initial attempt.",
+            "status": "done",
+            "dependencies": [],
+            "details": "In the `MCPIntegration` class, wrap the server spawning logic in a function that can be retried. If the child process fails to start or exits with an error code immediately, implement a retry loop (e.g., 3 attempts) with an exponential backoff delay (e.g., 2s, 4s, 8s) to handle transient startup issues.",
+            "testStrategy": "Introduce a temporary bug in the MCP server's startup code to make it crash. Launch the Electron app and monitor the logs to confirm that it attempts to restart the server multiple times with increasing delays before failing permanently."
+          },
+          {
+            "id": 3,
+            "title": "Add MCP Server Process Monitoring and Auto-Restart",
+            "description": "Implement logic in the `MCPIntegration` class to monitor the health of the MCP server child process and automatically restart it if it crashes unexpectedly.",
+            "status": "done",
+            "dependencies": [
+              2
+            ],
+            "details": "Attach an 'exit' event listener to the spawned child process. If the process exits with a non-zero code after it has been running successfully, log the crash and initiate a restart sequence. Use a fixed delay (e.g., 5 seconds) to avoid a tight restart loop.",
+            "testStrategy": "Once the server is running, find its process ID and terminate it forcefully (`kill -9 <pid>`). Verify that the main Electron application detects the termination and automatically relaunches the MCP server process after the configured delay."
+          },
+          {
+            "id": 4,
+            "title": "Enhance General Error Handling in `MCPIntegration`",
+            "description": "Improve the error handling within the `MCPIntegration` class to gracefully manage communication errors and other unexpected issues between the main app and the server.",
+            "status": "done",
+            "dependencies": [
               2,
               3
             ],
-            "details": "These mock classes (e.g., MockPlatformAdapter, MockTaskManager) will implement the interfaces but return hardcoded, predictable data. They will not perform any real I/O or processing, enabling isolated unit tests for dependent components like the ChildProcessManager (Task 14).",
-            "status": "done",
-            "testStrategy": "Create a test file that instantiates each mock to ensure it conforms to its interface without compilation errors."
+            "details": "Add `try...catch` blocks around IPC communication points (e.g., writing to stdin). Handle potential errors like a closed pipe if the server crashes during a write. Ensure that errors from the child process's stderr are captured, logged, and potentially surfaced to the user or a developer console.",
+            "testStrategy": "Write unit tests for the `MCPIntegration` class, mocking the child process to simulate errors like a write failure or receiving an error on stderr. Verify that these errors are caught and logged appropriately without crashing the main application."
           },
           {
             "id": 5,
-            "title": "Add TSDoc and Conduct Final Peer Review",
-            "description": "Add comprehensive TSDoc comments to all newly created interfaces, detailing the purpose of each interface, method, parameter, and return value. Conduct a final peer review of all interfaces and mocks.",
-            "dependencies": [
-              4
-            ],
-            "details": "The documentation is crucial for developers who will implement these interfaces later. The peer review will serve as a final quality gate, ensuring the contracts are robust, extensible, and accurately reflect the system architecture described in the PRD before dependent tasks begin.",
+            "title": "Implement Comprehensive Error Logging",
+            "description": "Integrate a structured logging mechanism for all error-related events, including server crashes, restart attempts, and standardized error responses.",
             "status": "done",
-            "testStrategy": "The review process will check for clarity, completeness, and correctness against PRD section 7.1. An automated tool can be used to check for TSDoc coverage."
-          }
-        ]
-      },
-      {
-        "id": 13,
-        "title": "Develop Unified Platform Extensibility Framework",
-        "description": "Implement the system to support configuration-only (JSON), class-based, and hybrid platform additions. This includes the UnifiedPlatformFactory for dynamically loading and creating platform adapters and the PlatformRegistry for managing platform configurations.",
-        "details": "This task covers the core innovation of the project as described in sections 2.3 and 7.2.3. The factory must be able to dynamically load and instantiate adapters based on a platform's 'type' property (configuration, class, or hybrid).",
-        "testStrategy": "Unit test the PlatformFactory by registering and creating adapters of all three types. Test hot-reloading of platform configurations. Validate that new platforms can be added via JSON without restarting the application.",
-        "priority": "high",
-        "dependencies": [
-          12
-        ],
-        "status": "done",
-        "subtasks": [
-          {
-            "id": 1,
-            "title": "Define Core Platform Interfaces and Data Models",
-            "description": "Establish the fundamental contracts for the extensibility framework. This includes defining the `IPlatformAdapter` interface that all class-based adapters must implement, and specifying the JSON schema for platform configurations.",
-            "dependencies": [],
-            "details": "The `IPlatformAdapter` should define methods for core operations like searching, data extraction, and pagination. The JSON schema must include a mandatory 'type' property ('configuration', 'class', 'hybrid') and a 'classPath' property for class-based and hybrid types.",
-            "status": "done",
-            "testStrategy": "Review the interface and schema definitions to ensure they cover all required functionality for the three platform types."
-          },
-          {
-            "id": 2,
-            "title": "Implement the PlatformRegistry for Configuration Management",
-            "description": "Create the `PlatformRegistry` service responsible for discovering, loading, and managing platform configuration files from the filesystem. It must provide an interface to access configurations and support hot-reloading.",
-            "dependencies": [
-              1
-            ],
-            "details": "The registry should scan a designated directory for platform JSON files. Implement a file system watcher to detect new, modified, or deleted configurations and update the in-memory registry without requiring an application restart. Provide methods like `getPlatformConfig(platformId)` and `getAllConfigs()`.",
-            "status": "done",
-            "testStrategy": "Unit test the registry's ability to load initial configurations. Test the hot-reloading feature by adding, modifying, and deleting a JSON file in the watched directory and verifying the registry state is updated correctly."
-          },
-          {
-            "id": 3,
-            "title": "Implement Factory Logic for Configuration-Only Platforms",
-            "description": "Develop the initial version of the `UnifiedPlatformFactory` to handle the creation of 'configuration-only' platform adapters. This involves creating a generic adapter instance that is configured entirely by the JSON data.",
             "dependencies": [
               1,
-              2
-            ],
-            "details": "The factory will receive a platform ID, retrieve the corresponding configuration from the `PlatformRegistry`, and if the 'type' is 'configuration', it will instantiate a generic, pre-defined `ConfigurablePlatformAdapter` class, passing the JSON configuration to its constructor.",
-            "status": "done",
-            "testStrategy": "Unit test the factory's `createAdapter` method. Provide a mock registry with a 'configuration-only' platform definition and assert that the correct generic adapter is instantiated and configured properly."
-          },
-          {
-            "id": 4,
-            "title": "Extend Factory to Support Class-Based and Hybrid Platforms",
-            "description": "Enhance the `UnifiedPlatformFactory` to dynamically load and instantiate custom adapter classes for 'class-based' and 'hybrid' platforms.",
-            "dependencies": [
-              3
-            ],
-            "details": "When the platform 'type' is 'class' or 'hybrid', the factory must use the 'classPath' property from the configuration to dynamically import the specified module/class. For 'hybrid' types, the factory must pass the associated JSON configuration to the custom class instance after creation.",
-            "status": "done",
-            "testStrategy": "Create mock class-based and hybrid platform adapters. Unit test the factory's ability to dynamically load and instantiate these classes. Verify that for hybrid types, the configuration object is correctly passed to the instance."
-          },
-          {
-            "id": 5,
-            "title": "Integrate and Test the Full Extensibility Framework",
-            "description": "Integrate the `PlatformRegistry` and the complete `UnifiedPlatformFactory` and perform end-to-end validation using sample platforms of all three types.",
-            "dependencies": [
               2,
-              4
-            ],
-            "details": "Ensure the factory correctly uses the registry to get configurations before creating adapters. Create one sample platform for each type: a simple JSON-only configuration, a custom class file, and a hybrid example. Write integration tests that trigger the creation of each sample platform to validate the entire workflow.",
-            "status": "done",
-            "testStrategy": "Execute a test suite that requests adapters for all three sample platforms. Validate that the correct adapter type is returned and is functional. Confirm that adding a new JSON-only platform file is recognized and usable without a restart, fulfilling a key requirement."
-          }
-        ]
-      },
-      {
-        "id": 14,
-        "title": "Implement Child Process Scraping Engine and IPC Communication",
-        "description": "Develop the child process logic (YellowPagesScraperProcess) responsible for running Puppeteer. Implement the IPC protocol for communication between the main process (YellowPagesModule, ChildProcessManager) and the child process.",
-        "details": "This involves implementing the child process entry point and the main process's ChildProcessManager. The IPC communication protocol (section 6.4) must handle messages for task control (START, STOP, PAUSE) and reporting (PROGRESS, COMPLETED, ERROR).",
-        "testStrategy": "Integration test the IPC communication by sending commands from main to child and verifying responses. Test error propagation from child to main. Monitor process memory usage to ensure it stays within the limits defined in section 4.2.3.",
-        "priority": "high",
-        "dependencies": [
-          12
-        ],
-        "status": "done",
-        "subtasks": [
-          {
-            "id": 1,
-            "title": "Define and Document the IPC Message Protocol",
-            "description": "Establish a clear, typed contract for all messages exchanged between the main and child processes. This includes defining the structure for control messages (START, STOP, PAUSE) and reporting messages (PROGRESS, COMPLETED, ERROR).",
-            "dependencies": [],
-            "details": "Create a shared module or type definition file (e.g., `ipc-protocol.ts`) that specifies the exact payload for each message type. The START message payload should contain all necessary task parameters, while reporting messages should include relevant data like progress percentage or error details.",
-            "status": "done",
-            "testStrategy": "Code review the protocol definition to ensure it's comprehensive and covers all data points mentioned in section 6.4. Ensure types are strict to prevent runtime errors."
-          },
-          {
-            "id": 2,
-            "title": "Implement the Child Process Entry Point and Command Handler",
-            "description": "Create the `YellowPagesScraperProcess` script which will be the entry point for the forked process. This script must initialize its environment and set up a listener to receive and handle incoming IPC commands from the main process.",
-            "dependencies": [
-              1
-            ],
-            "details": "Use `process.on('message', callback)` to create the main message handling loop. Implement the logic to parse incoming messages and delegate to specific functions based on the command type (e.g., a function to handle `START`, another for `STOP`).",
-            "status": "done",
-            "testStrategy": "Create a simple test harness that forks this script and sends it mock START, STOP, and PAUSE messages. Verify via console logs that the correct handlers are being invoked."
-          },
-          {
-            "id": 3,
-            "title": "Implement the Main Process's ChildProcessManager",
-            "description": "Develop the `ChildProcessManager` class within the main application. This manager will be responsible for spawning, terminating, and communicating with the `YellowPagesScraperProcess` instances.",
-            "dependencies": [
-              1
-            ],
-            "details": "Implement methods like `spawnProcess()`, `sendMessage(command, payload)`, and `killProcess()`. The `sendMessage` method will use the defined IPC protocol to send commands like START, STOP, and PAUSE to the child process it manages.",
-            "status": "done",
-            "testStrategy": "Unit test the `ChildProcessManager` by mocking Node.js's `child_process.fork`. Verify that the manager calls `fork` with the correct script path and that its `sendMessage` method calls `child.send()` with a correctly formatted message object."
-          },
-          {
-            "id": 4,
-            "title": "Integrate Puppeteer Scraping Logic into the Child Process",
-            "description": "Flesh out the `START` command handler in the `YellowPagesScraperProcess` to launch and control a Puppeteer instance. This involves implementing the core scraping functionality that the child process is responsible for.",
-            "dependencies": [
-              2
-            ],
-            "details": "Within the `START` handler, add the code to launch Puppeteer, navigate to a URL provided in the message payload, and perform data extraction. The logic must be designed to be gracefully interruptible by `STOP` or `PAUSE` commands.",
-            "status": "done",
-            "testStrategy": "Test the child process script in isolation by running it directly and passing a hard-coded task configuration. Verify that it successfully launches Puppeteer and scrapes a target test page."
-          },
-          {
-            "id": 5,
-            "title": "Implement Child-to-Main Status Reporting and Error Handling",
-            "description": "Enable two-way communication by implementing the reporting mechanism. The child process must send PROGRESS, COMPLETED, and ERROR messages back to the main process. The `ChildProcessManager` must listen for and act on these messages.",
-            "dependencies": [
               3,
               4
             ],
-            "details": "In the child process, use `process.send()` to emit status updates during scraping. In the `ChildProcessManager`, use `child.on('message', ...)` to receive these reports and `child.on('exit', ...)` to handle unexpected crashes. Propagate this status information to the rest of the application.",
-            "status": "done",
-            "testStrategy": "Conduct an integration test by having the `ChildProcessManager` start a real child process. Verify that the main process correctly receives and logs `PROGRESS` updates, a final `COMPLETED` message, and can correctly handle a simulated `ERROR` sent from the child."
+            "details": "Use a logging library (e.g., Winston, Pino) in both the Electron main process and the MCP server. Log all server start/stop/crash/restart events with timestamps and context. Log all generated `LoginStateError` responses and any caught exceptions in the `MCPIntegration` class to a dedicated log file for easier debugging.",
+            "testStrategy": "Perform all test strategies from the other subtasks (e.g., kill process, simulate startup failure). After the tests, inspect the log files to ensure all events were logged correctly with appropriate severity levels (e.g., INFO for startup, ERROR for crash, WARN for restart attempt)."
           }
         ]
       },
       {
-        "id": 15,
-        "title": "Implement Adapters for Phase 1 Platforms",
-        "description": "Create the specific platform adapters for YellowPages.com, Yelp.com, and YellowPages.ca using the new extensibility framework. This involves defining their selectors and any custom logic required for data extraction and pagination.",
-        "details": "This is the first practical application of the platform framework. Each platform will be implemented as a configuration or class-based adapter, populating the selectors and logic needed to scrape the required data fields from section 3.1.1.",
-        "testStrategy": "End-to-end test scraping for each platform. Validate extracted data against manual verification for 98%+ accuracy. Ensure success rate of 95%+ for target pages.",
+        "id": 10,
+        "title": "Finalize Security, Performance, and Compliance Measures",
+        "description": "Finalize the implementation by adding rate limiting, comprehensive logging, and ensuring compliance with web scraping ethics and email marketing regulations.",
+        "details": "Implement respectful rate limiting for all scraping platforms. Add audit logging for all MCP tool calls to a new `MCPRequestLog` table. Review all scraping logic to ensure it respects `robots.txt` and uses appropriate user agents. Ensure email tools include required compliance features like unsubscribe links.",
+        "testStrategy": "Conduct load testing to ensure the server meets the sub-500ms response time and 50+ concurrent connections target. Perform a security review of the code. Verify that firing rapid requests to a tool triggers a rate-limiting error.",
         "priority": "medium",
         "dependencies": [
-          13,
-          14
+          3,
+          4,
+          5,
+          6
         ],
         "status": "done",
         "subtasks": [
           {
             "id": 1,
-            "title": "Implement Adapter for YellowPages.com",
-            "description": "Create the specific adapter for YellowPages.com. This includes researching and defining the CSS selectors for all required data fields (as per section 3.1.1) and the 'next page' element for pagination.",
-            "dependencies": [],
-            "details": "Implement the adapter as a new class or configuration file using the extensibility framework. This will be the first implementation and will serve as a practical template for the other adapters. Handle any site-specific logic, such as cookie banners or lazy-loaded content.",
+            "title": "Implement Rate Limiting for MCP Tools",
+            "description": "Add rate limiting to all MCP tools to prevent abuse and ensure fair usage across all scraping platforms.",
+            "details": "Implement rate limiting middleware that tracks requests per user/IP and enforces limits (e.g., 100 requests per minute per user). Use Redis or in-memory store for tracking. Apply different limits for different tool types based on their resource intensity.",
             "status": "done",
-            "testStrategy": "Perform initial end-to-end runs to ensure the scraper can navigate pages and extract a sample of data without critical errors. Focus on selector stability."
+            "dependencies": [],
+            "parentTaskId": 10
           },
           {
             "id": 2,
-            "title": "Implement Adapter for Yelp.com",
-            "description": "Develop the platform adapter for Yelp.com. This involves defining a unique set of selectors for Yelp's page structure and implementing logic to handle its specific pagination mechanism.",
-            "dependencies": [
-              1
-            ],
-            "details": "Yelp often uses dynamic content loading and has a more complex DOM. This implementation will test the framework's flexibility. Pay special attention to selectors that may be obfuscated or tied to front-end frameworks like React.",
+            "title": "Add Comprehensive Audit Logging",
+            "description": "Implement audit logging for all MCP tool calls to track usage, errors, and security events.",
+            "details": "Create MCPRequestLog table and logging system that records all tool calls with timestamps, user info, parameters (sanitized), responses, and performance metrics. Include security events like failed authentication attempts.",
             "status": "done",
-            "testStrategy": "Test against various search queries and locations on Yelp to ensure selectors are robust. Verify extraction of all required fields, especially those that might be conditionally present."
+            "dependencies": [],
+            "parentTaskId": 10
           },
           {
             "id": 3,
-            "title": "Implement Adapter for YellowPages.ca",
-            "description": "Create the specific adapter for the Canadian Yellow Pages (YellowPages.ca). Define its selectors for data fields and pagination, noting any structural differences from the .com version.",
-            "dependencies": [
-              1
-            ],
-            "details": "While the branding is similar to YellowPages.com, the site structure, selectors, and ad placements may differ. Create a new, distinct adapter configuration/class and verify its functionality independently.\n<info added on 2025-08-08T00:08:27.139Z>\nImplementation will begin by creating a new configuration file, `yellowpages-ca.config.ts`. This file will export a constant object that conforms to the `IPlatformAdapter` interface. The initial structure will be based on the existing `yellowpages-com.config.ts` to serve as a baseline for identifying and updating the selectors and logic specific to the Canadian version. The new platform configuration will then be registered with the `PlatformFactory` to make it available to the scraping engine.\n</info added on 2025-08-08T00:08:27.139Z>\n<info added on 2025-08-08T00:11:40.140Z>\nThe implementation has been completed with the creation of `YellowPagesCaAdapter.ts`. This new class extends `BasePlatformAdapter` and provides a comprehensive solution for the Canadian platform, including robust selector fallbacks, Canadian address parsing, pagination logic, and handling for site-specific features like language selection. A separate script, `registerYellowPagesCaPlatform.ts`, has been added to register the new platform configuration with the database.\n</info added on 2025-08-08T00:11:40.140Z>",
+            "title": "Implement Web Scraping Ethics Compliance",
+            "description": "Ensure all scraping logic respects robots.txt, uses appropriate user agents, and follows ethical scraping practices.",
+            "details": "Review and update all scraping controllers to check robots.txt before scraping, use respectful user agents, implement proper delays between requests, and respect rate limits set by target websites.",
             "status": "done",
-            "testStrategy": "Run test scrapes targeting major Canadian cities to confirm the adapter works correctly for its specific geographic region and page layouts."
+            "dependencies": [],
+            "parentTaskId": 10
           },
           {
             "id": 4,
-            "title": "Refactor Common Logic from Phase 1 Adapters",
-            "description": "After implementing the first three adapters, review their code to identify common patterns, helper functions, or logic (e.g., cleaning phone numbers, parsing addresses). Abstract this common code into a shared utility or a base adapter class.",
-            "dependencies": [
-              1,
-              2,
-              3
-            ],
-            "details": "The goal is to make the framework more DRY (Don't Repeat Yourself) and simplify the process of adding new adapters in the future (e.g., for Task 19). Refine the base adapter interface based on the practical needs discovered during implementation.\n<info added on 2025-08-08T00:14:34.728Z>\nAnalysis of the `YellowPagesComAdapter`, `YelpComAdapter`, and `YellowPagesCaAdapter` has identified the following specific common patterns to be refactored into shared utilities or a base class:\n1.  Address parsing logic, with specific handling for US vs. Canadian formats.\n2.  Rating parsing logic that extracts values from CSS class names.\n3.  Cookie management and consent banner handling across different domains.\n4.  A generalized approach for handling site-specific popups or overlays.\n5.  Pagination logic that supports multiple selector fallbacks to find the \"next page\" link.\n6.  Standardized patterns for extracting core business data fields.\n7.  Common URL building and navigation patterns for search queries and detail pages.\n</info added on 2025-08-08T00:14:34.728Z>\n<info added on 2025-08-08T00:19:34.933Z>\n<info added on 2025-08-12T16:30:00.000Z>\nRefactoring successfully completed. Common logic from Phase 1 adapters has been abstracted into the following shared utility modules:\n1.  **addressParser.ts**: Handles US and Canadian address parsing with postal code support.\n2.  **ratingParser.ts**: Parses ratings from CSS classes and text across multiple platforms.\n3.  **siteFeatureHandler.ts**: Manages cookie banners, popups, language/location prompts, and newsletter sign-ups.\n4.  **paginationHandler.ts**: Handles pagination using multiple selector patterns and navigation methods.\n5.  **businessDataExtractor.ts**: Provides common patterns and fallback selectors for extracting business information.\nThese utilities are now available to all platform adapters, reducing code duplication and improving maintainability.\n</info added on 2025-08-12T16:30:00.000Z>\n</info added on 2025-08-08T00:19:34.933Z>",
+            "title": "Add Email Marketing Compliance Features",
+            "description": "Ensure email marketing tools include required compliance features like unsubscribe links and opt-out mechanisms.",
+            "details": "Update email marketing tools to include unsubscribe links, opt-out mechanisms, and compliance with CAN-SPAM Act and GDPR requirements. Add validation for required compliance fields.",
             "status": "done",
-            "testStrategy": "Run regression tests on the three existing adapters to ensure that the refactoring did not introduce any bugs or change the output data."
+            "dependencies": [],
+            "parentTaskId": 10
           },
           {
             "id": 5,
-            "title": "End-to-End Data Validation and Accuracy Testing",
-            "description": "Conduct a comprehensive end-to-end test for all three Phase 1 platforms to validate the quality and accuracy of the extracted data against the project's requirements.",
-            "dependencies": [
-              4
-            ],
-            "details": "For each platform, run a scrape of at least 100 business listings. Manually compare the scraped data against the live websites to measure accuracy. The results must meet the 98%+ data accuracy and 95%+ page success rate targets.\n<info added on 2025-08-08T04:49:32.581Z>\n**Test Results Summary:**\nThe end-to-end data validation test was conducted on all three Phase 1 platforms (100 listings each).\n- **YellowPages.ca:** PASSED. Meets the 98%+ data accuracy and 95%+ success rate targets.\n- **YellowPages.com:** FAILED. Requires improvement to meet the accuracy and success rate targets.\n- **Yelp.com:** FAILED. Requires improvement to meet the accuracy and success rate targets.\nOverall system is functional, but adapters for YellowPages.com and Yelp.com require optimization.\n</info added on 2025-08-08T04:49:32.581Z>",
+            "title": "Performance Optimization and Load Testing",
+            "description": "Optimize server performance and conduct load testing to ensure sub-500ms response times and 50+ concurrent connections.",
+            "details": "Review and optimize database queries, implement caching where appropriate, optimize response formatting, and conduct comprehensive load testing to verify performance targets are met.",
             "status": "done",
-            "testStrategy": "Document the validation results in a report, noting any discrepancies and confirming that all three adapters meet the quality assurance standards for this task."
-          }
-        ]
-      },
-      {
-        "id": 16,
-        "title": "Integrate with Scheduler, Cookie, and Browser Management Modules",
-        "description": "Connect the new Yellow Pages module with existing aiFetchly systems. Integrate with BackgroundScheduler for cron jobs, AccountCookiesModule for authentication, and BrowserManager for Puppeteer instance management.",
-        "details": "Leverage existing application infrastructure as outlined in section 3.2. This involves calling the appropriate methods from the existing modules for scheduling tasks, retrieving/rotating cookies, and managing browser instances with proxy and stealth support.",
-        "testStrategy": "Integration test each point of connection. Schedule a task and verify it runs at the correct time. Run a task that requires authentication and verify cookies are applied. Confirm that browser instances are created and cleaned up correctly.",
-        "priority": "medium",
-        "dependencies": [
-          14
-        ],
-        "status": "done",
-        "subtasks": [
-          {
-            "id": 1,
-            "title": "Integrate Yellow Pages Module with BackgroundScheduler",
-            "description": "Create the necessary adapter or entry point for the Yellow Pages module to be registered as a cron job with the BackgroundScheduler. This will allow scraping tasks to be scheduled and triggered automatically.",
             "dependencies": [],
-            "details": "Implement a job handler function that can be passed to `BackgroundScheduler.scheduleJob()`. This function will serve as the starting point for a scheduled Yellow Pages scrape and must be able to process any arguments passed from the scheduler.",
-            "status": "done",
-            "testStrategy": "Write a unit test to schedule a job that runs one minute in the future. Verify that the job handler function is called at the correct time and logs an expected message."
-          },
-          {
-            "id": 2,
-            "title": "Implement Browser Instance Management via BrowserManager",
-            "description": "Modify the core scraping logic of the Yellow Pages module to request and release Puppeteer browser instances from the central BrowserManager.",
-            "dependencies": [],
-            "details": "At the start of a scrape, call `BrowserManager.getBrowser()` to obtain a pre-configured browser instance with proxy and stealth support. Ensure `BrowserManager.releaseBrowser()` is called within a `finally` block to guarantee cleanup, even if the scrape fails.",
-            "status": "done",
-            "testStrategy": "Create an integration test that requests a browser, navigates to a public IP checking service, and confirms the browser is using a proxy IP provided by the manager. Verify the browser is released correctly."
-          },
-          {
-            "id": 3,
-            "title": "Implement Authentication via AccountCookiesModule",
-            "description": "Connect the Yellow Pages module to the AccountCookiesModule to fetch and apply authentication cookies to the browser instance before interacting with the target website.",
-            "dependencies": [],
-            "details": "Before navigating to the Yellow Pages site, call `AccountCookiesModule.getCookies('yellow-pages')` to retrieve the current valid cookies. Use Puppeteer's `page.setCookie()` method to apply these cookies to the browser page context.",
-            "status": "done",
-            "testStrategy": "Using a mock of the AccountCookiesModule that returns a predefined test cookie, run a scrape against a local test server that requires the cookie for access. Verify the page is accessed successfully."
-          },
-          {
-            "id": 4,
-            "title": "Develop Main Task Orchestration Logic",
-            "description": "Create the primary execution function within the Yellow Pages module that orchestrates the sequential calls to the BrowserManager and AccountCookiesModule before running the actual scraping logic.",
-            "dependencies": [
-              2,
-              3
-            ],
-            "details": "This orchestrator function will be the main logic block for any scrape. The sequence should be: 1) Get browser from BrowserManager. 2) Get cookies from AccountCookiesModule. 3) Apply cookies to page. 4) Execute scraping steps. 5) Release browser.",
-            "status": "done",
-            "testStrategy": "Run an integration test of the orchestrator function (without the scheduler). Mock the external modules and verify that the calls are made in the correct order and that the browser release function is always called."
-          },
-          {
-            "id": 5,
-            "title": "Create End-to-End Scheduled Task Test and Add Error Handling",
-            "description": "Develop a full end-to-end integration test that uses the BackgroundScheduler to trigger the complete, orchestrated Yellow Pages task. Implement robust error handling for each integration point.",
-            "dependencies": [
-              1,
-              4
-            ],
-            "details": "The test will schedule a real task to run in the near future and assert its successful completion. Add `try...catch` blocks around calls to external modules (Scheduler, Browser, Cookies) to log specific errors and ensure graceful failure and resource cleanup.",
-            "status": "done",
-            "testStrategy": "Execute the end-to-end test and verify the expected outcome. Create failure-path tests by forcing `BrowserManager.getBrowser()` and `AccountCookiesModule.getCookies()` to throw exceptions, and confirm the system handles the errors without crashing and still releases any acquired resources."
-          }
-        ]
-      },
-      {
-        "id": 17,
-        "title": "Develop UI for Task and Platform Management",
-        "description": "Build the user interface components for creating, viewing, and managing scraping tasks. Implement the platform management UI, including a configuration editor for adding/editing platforms via the UI.",
-        "details": "This task covers the frontend requirements from section 8. Key features include a task list with progress indicators, a form for creating new tasks, a results viewer with export options, and a visual editor for platform configurations.",
-        "testStrategy": "User acceptance testing (UAT) to ensure the UI is intuitive. Test the platform editor by creating a new simple platform entirely through the UI and running a successful scraping task with it.",
-        "priority": "medium",
-        "dependencies": [
-          13,
-          14
-        ],
-        "status": "done",
-        "subtasks": [
-          {
-            "id": 1,
-            "title": "Implement Task Dashboard and List View",
-            "description": "Create the main dashboard component that displays a list of all scraping tasks. Each item in the list should show its current status (e.g., pending, running, completed, failed) and a real-time progress indicator.",
-            "dependencies": [],
-            "details": "This view will serve as the primary interface for task management. It should fetch task data from the backend API and include controls for pausing, resuming, or deleting tasks. The UI should be clean and provide at-a-glance information.\n<info added on 2025-08-08T09:02:07.274Z>\nSuccessfully implemented the Yellow Pages Task Dashboard and List View component. Created a comprehensive task management interface with the following features:\n\n1. **Main Dashboard (list.vue)**: \n   - Task overview statistics (total, running, pending, completed, failed, success rate)\n   - Search and filter functionality (by status, platform, priority)\n   - Pagination support\n   - Action buttons for creating, importing, and exporting tasks\n\n2. **Task Table Component (YellowPagesTaskTable.vue)**:\n   - Data table with sortable columns\n   - Visual status indicators with color-coded chips\n   - Progress bars for task completion\n   - Platform-specific icons and colors\n   - Action buttons for task control (start, stop, pause, resume, edit, delete, view results)\n\n3. **Task Details Component (TaskDetailsView.vue)**:\n   - Detailed task information display\n   - Task status and progress visualization\n   - Action buttons for task management\n   - Responsive layout with cards\n\nThe implementation follows the existing application's design patterns and uses Vuetify components for consistency. The interface provides real-time task status updates and comprehensive task management capabilities.\n</info added on 2025-08-08T09:02:07.274Z>",
-            "status": "done",
-            "testStrategy": "Verify that the dashboard correctly displays tasks with different statuses and that progress bars update as expected. Test UI responsiveness and interaction with task control buttons."
-          },
-          {
-            "id": 2,
-            "title": "Build New Task Creation Form",
-            "description": "Develop a form, likely within a modal or on a separate page, for creating new scraping tasks. The form must allow users to input necessary parameters like keywords, location, and select a target platform from a dynamic list.",
-            "dependencies": [
-              1
-            ],
-            "details": "This component will be launched from the Task Dashboard. It needs to dynamically populate the 'platform' dropdown by fetching the list of available platforms from the PlatformRegistry via the API (dependency on Task 13). Implement client-side validation for all form fields.",
-            "status": "done",
-            "testStrategy": "Test form submission with valid and invalid data. Ensure the platform list is populated correctly. Confirm that a new task appears on the dashboard after successful creation."
-          },
-          {
-            "id": 3,
-            "title": "Develop Task Results Viewer with Export Options",
-            "description": "Create a detailed view to display the structured data from a completed scraping task. This view should present the results in a clear, tabular format and include functionality to export the data.",
-            "dependencies": [
-              1
-            ],
-            "details": "The results viewer will be accessed by clicking on a completed task in the dashboard. Implement export options for common formats like CSV and JSON. Include features for pagination and searching within the results.",
-            "status": "done",
-            "testStrategy": "Verify that scraped data is displayed correctly for a completed task. Test the export functionality for both CSV and JSON formats, ensuring the output files are well-formed and contain the correct data."
-          },
-          {
-            "id": 4,
-            "title": "Create Platform Management Dashboard",
-            "description": "Build the user interface for listing and managing all available scraping platforms. This dashboard will show all registered platforms and provide options to view details, edit, or add a new platform.",
-            "dependencies": [],
-            "details": "This is the entry point for platform configuration. It will list platforms sourced from the PlatformRegistry. Each platform entry should indicate its type (e.g., JSON-only, class-based) and status (e.g., valid, configuration error).",
-            "status": "done",
-            "testStrategy": "Ensure the dashboard correctly lists all platforms from the backend. Verify that the UI provides clear navigation to add a new platform or edit an existing one."
-          },
-          {
-            "id": 5,
-            "title": "Implement Visual Editor for Platform Configurations",
-            "description": "Develop a visual, form-based editor that allows users to create and modify platform configurations directly through the UI. This editor should abstract the underlying JSON structure into user-friendly fields.",
-            "dependencies": [
-              4
-            ],
-            "details": "This is the core of the platform management UI. The editor should guide the user through defining selectors, pagination rules, and data extraction logic. It should include real-time validation and feedback. For advanced users, provide an option to view/edit the raw JSON configuration.",
-            "status": "done",
-            "testStrategy": "As part of UAT, create a new, simple platform entirely through the visual editor. Save it, and then use the 'New Task Creation Form' to run a scraping task against it. The task must complete successfully and return correct data."
-          }
-        ]
-      },
-      {
-        "id": 18,
-        "title": "Create Platform Development Kit (PDK)",
-        "description": "Develop tools to simplify adding new platforms. This includes a PlatformTemplateGenerator to create boilerplate configurations and a PlatformTestingFramework to validate selectors and platform functionality before deployment.",
-        "details": "Implement the PDK as described in section 7.4. The template generator will create a valid starting configuration file. The testing framework will run a series of checks against a live URL to validate selectors, pagination, and data extraction.",
-        "testStrategy": "Use the PDK to generate a template for a new platform. Fill in the details and use the testing framework to validate it. The test should produce a report with success/failure status and recommendations.",
-        "priority": "low",
-        "dependencies": [
-          13
-        ],
-        "status": "done",
-        "subtasks": [
-          {
-            "id": 1,
-            "title": "Implement PlatformTemplateGenerator CLI",
-            "description": "Create a command-line tool that prompts for a new platform's name and generates a boilerplate platform configuration file based on the standard template.",
-            "dependencies": [],
-            "details": "The generator will produce a valid JSON or YAML configuration file with all required keys (e.g., platformName, rootUrl, selectors, pagination) present but with placeholder values. This depends on the final configuration structure from Task 13.",
-            "status": "done",
-            "testStrategy": "Run the generator and verify the output file is created, is well-formed, and contains all expected placeholder fields."
-          },
-          {
-            "id": 2,
-            "title": "Build Core Scaffolding for PlatformTestingFramework",
-            "description": "Establish the foundational structure for the testing framework, including the main test runner script, command-line argument parsing (for config file path and target URL), and the basic test execution engine.",
-            "dependencies": [],
-            "details": "This subtask focuses on creating the entry point and orchestration logic. It will load a platform configuration and a target URL and initialize a headless browser instance, but will not run specific validation checks yet.",
-            "status": "done",
-            "testStrategy": "Run the framework with a mock config and URL. Verify it starts, loads the configuration, navigates to the URL, and exits cleanly without errors."
-          },
-          {
-            "id": 3,
-            "title": "Implement Selector Existence Validation",
-            "description": "Add a test suite to the framework that validates the presence of all CSS selectors defined in the platform configuration on a given live URL.",
-            "dependencies": [
-              2
-            ],
-            "details": "The framework should load the page, iterate through all selectors in the configuration's `selectors` block, and report whether each selector successfully finds at least one element on the page.",
-            "status": "done",
-            "testStrategy": "Test against a known-good platform config and URL, ensuring all selectors are reported as 'found'. Test against a config with a deliberately incorrect selector, ensuring it's reported as 'not found'."
-          },
-          {
-            "id": 4,
-            "title": "Implement Pagination and Data Extraction Validation",
-            "description": "Extend the testing framework to validate the pagination mechanism and the data extraction process for a list of items.",
-            "dependencies": [
-              3
-            ],
-            "details": "This involves two checks: 1) Use the pagination selector to find and click the 'next' link, verifying it leads to a new page. 2) On the initial page, use the item and data selectors to extract a sample of data, verifying that the expected data fields are populated.",
-            "status": "done",
-            "testStrategy": "Run against a live search results page. The test should report success if it can navigate to page 2 and successfully extract structured data from the first page."
-          },
-          {
-            "id": 5,
-            "title": "Develop Test Report Generator and PDK Documentation",
-            "description": "Create the final user-facing components: a consolidated test report and comprehensive documentation for the entire Platform Development Kit.",
-            "dependencies": [
-              1,
-              4
-            ],
-            "details": "The report should aggregate results from all checks (selector, pagination, extraction) into a single, human-readable summary with a clear pass/fail status and recommendations. The documentation will cover using both the template generator and the testing framework.",
-            "status": "done",
-            "testStrategy": "Run the full test suite and verify that the generated report accurately reflects the test outcomes. Have a team member follow the documentation to add a new test platform to ensure clarity."
-          }
-        ]
-      },
-      {
-        "id": 19,
-        "title": "Implement Adapters for European, German, and UK Platforms",
-        "description": "Develop platform adapters for PagesJaunes.fr, PagineGialle.it, GelbeSeiten.de, 11880.com, Yell.com, and 192.com. This will test the robustness and ease of use of the platform extensibility framework.",
-        "details": "This task involves creating adapters for the Phase 2 and 3 platforms listed in the PRD. It will serve as a stress test for the PDK and the overall platform management workflow.",
-        "testStrategy": "For each new platform, perform the same end-to-end testing as in task 15. Measure the time it takes to add each new platform to evaluate the efficiency of the extensibility framework.",
-        "priority": "low",
-        "dependencies": [
-          15,
-          18
-        ],
-        "status": "done",
-        "subtasks": [
-          {
-            "id": 1,
-            "title": "Implement Adapter for French and Italian Platforms",
-            "description": "Develop the platform adapters for PagesJaunes.fr and PagineGialle.it. This will establish a baseline for European platform integration.",
-            "dependencies": [],
-            "details": "For each platform, analyze the site structure to define CSS selectors for data fields (name, address, phone, etc.) and pagination. Implement any custom logic required for handling search forms, cookie banners, and result page navigation.",
-            "status": "done",
-            "testStrategy": "Perform end-to-end scraping tests for both PagesJaunes.fr and PagineGialle.it. Validate extracted data against manual verification for accuracy."
-          },
-          {
-            "id": 2,
-            "title": "Implement Adapter for German Platform: GelbeSeiten.de",
-            "description": "Develop the platform adapter for GelbeSeiten.de, focusing on its specific structure and data presentation.",
-            "dependencies": [
-              1
-            ],
-            "details": "Create the adapter configuration or class for GelbeSeiten.de. Identify and implement selectors and logic, paying attention to any unique structural elements or anti-scraping measures compared to the French/Italian sites.\n<info added on 2025-08-09T07:10:41.093Z>\nThe platform configuration file for GelbeSeiten.de has been successfully created at `src/config/platforms/gelbeseiten-de.json`. This 'configuration' type adapter follows the established structure of the French and Italian platforms and includes comprehensive settings for metadata, CSS selectors (for listings, contact info, pagination), URL patterns, rate limiting, and anti-scraping measures like stealth mode and cookie consent handling. The configuration is now ready for testing to ensure it integrates correctly with the existing scraping infrastructure.\n</info added on 2025-08-09T07:10:41.093Z>",
-            "status": "done",
-            "testStrategy": "Execute end-to-end tests for GelbeSeiten.de. Ensure it meets the 98%+ accuracy and 95%+ success rate targets."
-          },
-          {
-            "id": 3,
-            "title": "Implement Adapter for German Platform: 11880.com",
-            "description": "Develop the platform adapter for the second German platform, 11880.com, and compare its implementation complexity with GelbeSeiten.de.",
-            "dependencies": [
-              2
-            ],
-            "details": "Build the adapter for 11880.com. Document any significant differences in implementation effort or required custom logic compared to previous adapters to provide feedback on the PDK's flexibility.\n<info added on 2025-08-09T07:14:20.276Z>\n**Implementation Summary & PDK Feedback:**\nThe adapter for 11880.com was completed using the configuration-based approach. The implementation highlighted several key differences compared to the GelbeSeiten.de adapter, demonstrating the flexibility of the Platform Development Kit (PDK).\n\n**Key Implementation Details:**\n- **URL Structure**: `/suche/{keywords}/{location}`\n- **Unique Selectors**:\n  - Business listings: `article.search-result-entry`\n  - Business name: `h2.name a`\n  - Phone: `div.phone-number a`\n  - Website: `div.homepage a`\n- **Cookie Consent**: Handled via the Usercentrics banner using the selector `button[data-testid=\"uc-accept-all-button\"]`.\n- **Pagination**: The \"next page\" link is identified by the selector `li.page-item.next a`.\n\n**Conclusion**: The PDK proved highly flexible. All platform-specific variations, including significantly different DOM structures and anti-scraping measures, were handled entirely through configuration without requiring any custom code. This validates the effectiveness of the configuration-only adapter strategy.\n</info added on 2025-08-09T07:14:20.276Z>",
-            "status": "done",
-            "testStrategy": "Run a full end-to-end test suite for 11880.com. Validate data accuracy and scraping success rate."
-          },
-          {
-            "id": 4,
-            "title": "Implement Adapters for UK Platforms (Yell.com & 192.com)",
-            "description": "Develop the platform adapters for the two UK-based platforms, Yell.com and 192.com.",
-            "dependencies": [
-              3
-            ],
-            "details": "Create the two separate adapter configurations/classes for the UK platforms. Define the necessary selectors and logic for data extraction and navigation on both sites, completing the implementation for all Phase 2/3 platforms.\n<info added on 2025-08-09T07:23:14.379Z>\nUK platform adapters for Yell.com and 192.com have been implemented. Configuration files (`yell-com.json`, `192-com.json`) and adapter classes (`YellComAdapter.ts`, `192ComAdapter.ts`) were created, following established patterns.\n\nBoth adapters include:\n*   Custom search implementations\n*   Business data extraction with UK-specific selectors\n*   Pagination handling\n*   Detailed business info extraction\n*   Site-specific feature handling (cookie consent, location popups)\n*   Address parsing for UK format\n*   Rating parsing\n*   Proper error handling and logging\n</info added on 2025-08-09T07:23:14.379Z>",
-            "status": "done",
-            "testStrategy": "Conduct individual end-to-end tests for Yell.com and 192.com, ensuring data integrity and successful scraping runs for both."
-          },
-          {
-            "id": 5,
-            "title": "Consolidated Testing and Framework Evaluation",
-            "description": "Perform final end-to-end testing on all 6 new adapters and formally evaluate the extensibility framework's efficiency and robustness.",
-            "dependencies": [
-              1,
-              4
-            ],
-            "details": "Execute the full test suite from Task 15 across all 6 new platforms. Systematically measure and document the time it took to add each new platform. Compile findings into a report on the PDK's ease of use and the overall platform management workflow.\n<info added on 2025-08-09T07:27:53.647Z>\nCompleted testing and evaluation for the UK platforms (Yell.com, 192.com). A comprehensive test suite has been created, including individual adapter tests (yellComAdapterTest.ts, 192ComAdapterTest.ts) and a consolidated test runner (ukPlatformsTestRunner.ts). Performance metrics (creation time, validation time, overhead) were collected. A preliminary framework evaluation report has been generated based on the UK platform integration, including extensibility scoring and optimization recommendations.\n</info added on 2025-08-09T07:27:53.647Z>",
-            "status": "done",
-            "testStrategy": "Run concurrent scraping tasks using a mix of the new European adapters to stress test the system. Verify that all 6 adapters consistently meet the required accuracy and success metrics."
-          }
-        ]
-      },
-      {
-        "id": 20,
-        "title": "Implement End-to-End Testing and System Documentation",
-        "description": "Conduct comprehensive testing, including unit tests for adapters, integration tests for the end-to-end scraping flow, and performance tests for concurrent tasks. Create final user and developer documentation.",
-        "details": "This final task involves a full quality assurance pass. Performance testing should verify that the system meets the requirements in section 4.2 (e.g., 100 businesses/hour, <500MB main process memory). Documentation should cover user guides and developer guides for adding new platforms.",
-        "testStrategy": "Execute a full regression test suite. Run load tests with multiple concurrent scraping tasks to check for memory leaks and ensure UI responsiveness. Review all documentation for clarity and completeness.",
-        "priority": "medium",
-        "dependencies": [
-          15,
-          16,
-          17,
-          19
-        ],
-        "status": "in-progress",
-        "subtasks": [
-          {
-            "id": 1,
-            "title": "Develop and Execute Unit and Integration Test Suites",
-            "description": "Create unit tests for all platform adapters developed in tasks 15 and 19. Develop an integration test suite to validate the end-to-end scraping flow, from task creation to data persistence, including the IPC communication between the main and child processes.",
-            "dependencies": [],
-            "details": "Unit tests should mock network requests to isolate adapter logic. Integration tests should use a small, controlled set of live or cached web pages to verify the entire data pipeline, ensuring commands (START, STOP) and data reporting (PROGRESS, COMPLETED) work as expected.\n<info added on 2025-08-09T07:37:56.900Z>\nA comprehensive unit and integration test suite (`UnitAndIntegrationTestSuite.ts`) has been successfully developed and executed. This suite validates the core system components, including the platform registry, adapter factory, task executor service, browser manager, and platform integration. With functional correctness and error handling now verified, the system is ready for performance and load testing.\n</info added on 2025-08-09T07:37:56.900Z>",
-            "status": "done",
-            "testStrategy": "Achieve >90% code coverage for adapter logic. The integration test suite must validate every IPC message type defined in section 6.4."
-          },
-          {
-            "id": 2,
-            "title": "Conduct Performance and Load Testing",
-            "description": "Execute performance and load tests to verify the system meets the non-functional requirements outlined in section 4.2. This includes testing with multiple concurrent scraping tasks to measure resource consumption and identify potential memory leaks.",
-            "dependencies": [
-              1
-            ],
-            "details": "Simulate a workload of at least 5 concurrent scraping tasks running for an extended period (e.g., 2+ hours). Use profiling tools to monitor the main process memory, ensuring it remains below the 500MB limit. Measure the overall data extraction rate to confirm it meets or exceeds the 100 businesses/hour target.",
-            "status": "in-progress",
-            "testStrategy": "Log memory and CPU usage at one-minute intervals during the load test. Analyze logs to confirm stability and adherence to performance metrics. Ensure the UI remains responsive under load."
-          },
-          {
-            "id": 3,
-            "title": "Create Final User Documentation",
-            "description": "Write a comprehensive user guide detailing the installation, configuration, and operation of the scraping application. The guide should be aimed at non-technical users and cover all primary features.",
-            "dependencies": [
-              2
-            ],
-            "details": "The documentation must include sections for system requirements, step-by-step installation, a guide to the user interface, how to start/pause/stop scraping tasks, and how to access and interpret the exported data. Use screenshots to illustrate the process.",
-            "status": "pending",
-            "testStrategy": "Have a user unfamiliar with the project attempt to install and run the application using only the draft guide. Incorporate their feedback to improve clarity and completeness."
-          },
-          {
-            "id": 4,
-            "title": "Create Developer Documentation for Platform Extensibility",
-            "description": "Write a detailed developer guide explaining the architecture of the platform extensibility framework and providing a step-by-step tutorial for adding new platform adapters.",
-            "dependencies": [
-              2
-            ],
-            "details": "Document the adapter class structure, the purpose of key configuration files (e.g., for selectors), and the workflow for developing and testing a new adapter. Explain the Platform Development Kit (PDK) and its tools. Provide a complete code example for a simple, new platform.",
-            "status": "pending",
-            "testStrategy": "Ask a developer not involved in the framework's creation to follow the guide to implement a new adapter. Verify they can complete the task successfully without needing to consult the core engine's source code."
-          },
-          {
-            "id": 5,
-            "title": "Perform Full Regression Test and Final Release Packaging",
-            "description": "Execute the complete suite of unit, integration, and performance tests to ensure no regressions were introduced during the final stages. Review all documentation for accuracy and package the application for final delivery.",
-            "dependencies": [
-              3,
-              4
-            ],
-            "details": "This final quality assurance pass involves running all automated tests and performing a manual smoke test of the main user flows described in the user guide. The final package should include the executable, all dependencies, and both the user and developer guides.",
-            "status": "pending",
-            "testStrategy": "Execute the full, automated regression test suite. Perform a final check to ensure the packaged application installs and runs correctly on a clean environment."
+            "parentTaskId": 10
           }
         ]
       }
     ],
     "metadata": {
-      "created": "2025-08-07T06:47:13.596Z",
-      "updated": "2025-08-09T07:38:14.871Z",
+      "created": "2025-09-08T07:14:03.838Z",
+      "updated": "2025-09-08T15:18:00.386Z",
       "description": "Tasks for master context"
     }
   }
