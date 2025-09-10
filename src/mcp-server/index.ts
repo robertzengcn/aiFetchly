@@ -8,6 +8,7 @@ import { StandaloneAiFetchlyMCPServer } from './standalone.js';
  */
 async function main() {
     try {
+        console.log('Starting AiFetchly MCP Server...');
         const server = new StandaloneAiFetchlyMCPServer();
         await server.start();
     } catch (error) {

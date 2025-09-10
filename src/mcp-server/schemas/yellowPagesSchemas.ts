@@ -92,3 +92,4 @@ export type YellowPagesData = z.infer<typeof YellowPagesDataSchema>;
 export type MCPYellowPagesResponse = z.infer<typeof MCPYellowPagesResponseSchema>;
 export type MCPBusinessDetailsResponse = z.infer<typeof MCPBusinessDetailsResponseSchema>;
 
+

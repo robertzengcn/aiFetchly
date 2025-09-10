@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { readFileSync } from 'fs';
+// import { readFileSync } from 'fs';
 import { stdin, stdout } from 'process';
 import { GoogleSearchSchema, BingSearchSchema } from './schemas/searchSchemas';
 import { SearchResponseFormatter } from './utils/responseFormatter';

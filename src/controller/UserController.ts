@@ -322,8 +322,8 @@ export class UserController {
             const { tool, parameters } = request;
 
             switch (tool) {
-                case 'user_login':
-                    return await this.handleUserLoginRequest(parameters as MCPUserLoginRequest);
+                // case 'user_login':
+                //     return await this.handleUserLoginRequest(parameters as MCPUserLoginRequest);
                 
                 case 'get_user_info':
                     return await this.handleGetUserInfoRequest();
@@ -363,34 +363,34 @@ export class UserController {
     /**
      * Handle user login requests
      */
-    private async handleUserLoginRequest(params: MCPUserLoginRequest): Promise<MCPResponse<MCPUserLoginResponse>> {
-        try {
-            const loginData: userlogin = {
-                user: params.username,
-                pass: params.password
-            };
+    // private async handleUserLoginRequest(params: MCPUserLoginRequest): Promise<MCPResponse<MCPUserLoginResponse>> {
+    //     try {
+    //         const loginData: userlogin = {
+    //             user: params.username,
+    //             pass: params.password
+    //         };
 
-            const jwtUser = await this.login(loginData);
+    //         const jwtUser = await this.login(loginData);
 
-            // Convert to MCP format
-            const mcpUserInfo: MCPUserInfo = {
-                name: jwtUser.name,
-                email: jwtUser.email,
-                roles: jwtUser.roles || [],
-                isAuthenticated: true
-            };
+    //         // Convert to MCP format
+    //         const mcpUserInfo: MCPUserInfo = {
+    //             name: jwtUser.name,
+    //             email: jwtUser.email,
+    //             roles: jwtUser.roles || [],
+    //             isAuthenticated: true
+    //         };
 
-            const loginResponse: MCPUserLoginResponse = {
-                user: mcpUserInfo,
-                token: jwtUser.token,
-                expiresAt: jwtUser.expiresAt
-            };
+    //         const loginResponse: MCPUserLoginResponse = {
+    //             user: mcpUserInfo,
+    //             token: jwtUser.token,
+    //             expiresAt: jwtUser.expiresAt
+    //         };
 
-            return createMCPSuccessResponse(loginResponse, 'User logged in successfully');
-        } catch (error) {
-            throw error;
-        }
-    }
+    //         return createMCPSuccessResponse(loginResponse, 'User logged in successfully');
+    //     } catch (error) {
+    //         throw error;
+    //     }
+    // }
 
     /**
      * Handle get user info requests

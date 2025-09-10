@@ -48,11 +48,11 @@ try {
 } catch (err) {
   console.error('Failed to create log directory:', err);
 }
-
+const logFilePath = path.join(logDir, 'main.log');
 // Set the log file path and ensure it's writable
-log.transports.file.fileName = path.join(logDir, 'main.log');
+log.transports.file.fileName = logFilePath;
 log.transports.file.maxSize = 1000000; // 1MB max file size
-
+console.log(`Log file path: ${logFilePath}`);
 // Override console methods to also log to file
 const originalConsole = {
   log: console.log,
