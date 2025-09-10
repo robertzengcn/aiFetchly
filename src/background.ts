@@ -414,17 +414,24 @@ async function handleDeepLink(url: string) {
       // const userInfo = await remoteser.GetUserInfo()
       // console.log('userInfo:', userInfo)
       const userController=new UserController()
-      const userInfo = await userController.updateUserInfo();
-      if (userInfo) {
-        //login success
-        
-        if (win&& !win.isDestroyed()) {
-          await win.webContents.send(NATIVATECOMMAND,{path:'Dashboard'} as NativateDatatype);
+      try {
+        const userInfo = await userController.updateUserInfo();
+        if (userInfo) {
+          //login success
+          
+          if (win&& !win.isDestroyed()) {
+            await win.webContents.send(NATIVATECOMMAND,{path:'Dashboard'} as NativateDatatype);
+          }
+        }else{
+          log.error('Failed to get user info from remote source');
+          dialog.showErrorBox('User Info Error',
+            `Failed to get user info from remote source.`);
         }
-      }else{
-        log.error('Failed to get user info from remote source');
-        dialog.showErrorBox('User Info Error',
-          `Failed to get user info from remote source.`);
+      } catch (error) {
+        log.error('Error updating user info:', error);
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        dialog.showErrorBox('User Info Update Error',
+          `Failed to update user information: ${errorMessage}`);
       }
 
     }
