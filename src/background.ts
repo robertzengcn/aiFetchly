@@ -39,6 +39,8 @@ log.initialize();
 // Configure electron-log
 log.transports.file.level = 'debug';
 const logDir = path.join(app.getPath('userData'), 'logs');
+
+// Create log directory if it doesn't exist
 try {
   if (!fs.existsSync(logDir)) {
     fs.mkdirSync(logDir, { recursive: true });
@@ -48,9 +50,16 @@ try {
   console.error('Failed to create log directory:', err);
 }
 
-// Set the log file path and ensure it's writable
-log.transports.file.fileName = path.join(logDir, 'main.log');
+// Configure file transport properly
+log.transports.file.fileName = 'main.log'; // Only the filename, not the full path
+log.transports.file.resolvePathFn = () => path.join(logDir, 'main.log'); // Set the full path
 log.transports.file.maxSize = 1000000; // 1MB max file size
+
+// Enable console transport as well to ensure all logs appear in both places
+log.transports.console.level = 'debug';
+
+// Export logDir for use in other modules
+export { logDir };
 
 // Override console methods to also log to file
 const originalConsole = {
@@ -61,39 +70,46 @@ const originalConsole = {
   debug: console.debug
 };
 
-console.log = (...args: any[]) => {
+console.log = (...args: unknown[]) => {
   originalConsole.log(...args);
   log.info(...args);
 };
 
-console.error = (...args: any[]) => {
+console.error = (...args: unknown[]) => {
   originalConsole.error(...args);
   log.error(...args);
 };
 
-console.warn = (...args: any[]) => {
+console.warn = (...args: unknown[]) => {
   originalConsole.warn(...args);
   log.warn(...args);
 };
 
-console.info = (...args: any[]) => {
+console.info = (...args: unknown[]) => {
   originalConsole.info(...args);
   log.info(...args);
 };
 
-console.debug = (...args: any[]) => {
+console.debug = (...args: unknown[]) => {
   originalConsole.debug(...args);
   log.debug(...args);
 };
+
+// Remove process.stdout/stderr redirection to prevent circular logging
+// Console methods override above is sufficient for capturing application logs
 
 // Test the console override
 console.log('Console override test - this should appear in both terminal and log file');
 
 // Verify log file is writable
 try {
-  const logFilePath = log.transports.file.fileName;
+  const logFilePath = path.join(logDir, 'main.log');
   console.log(`Log file path: ${logFilePath}`);
   console.log(`Log file exists: ${fs.existsSync(logFilePath)}`);
+  
+  // Test write to ensure the file is writable
+  log.info('Testing log file write capability...');
+  console.log('Log file write test completed');
 } catch (err) {
   console.error('Error checking log file:', err);
 }
@@ -434,6 +450,8 @@ async function handleDeepLink(url: string) {
           `Failed to update user information: ${errorMessage}`);
       }
 
+    }else{
+      console.error('No token found');
     }
 
     // Perform other actions based on the URL
@@ -445,16 +463,10 @@ async function handleDeepLink(url: string) {
 
 // makeSingleInstance()
 // createWindow()
-
-
-
-
-
-
 initialize()
 
 
 
 
 
-import { registerTaskIpcHandlers } from './main-process/communication/task-ipc'
+//import { registerTaskIpcHandlers } from './main-process/communication/task-ipc'
