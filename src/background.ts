@@ -8,7 +8,7 @@ import { registerCommunicationIpcHandlers } from "./main-process/communication/"
 import * as path from 'path';
 import { Token } from "@/modules/token"
 import { MenuManager } from "@/main-process/menu/MenuManager";
-import { USERSDBPATH} from '@/config/usersetting';
+import { USERSDBPATH } from '@/config/usersetting';
 import { SqliteDb } from "@/config/SqliteDb"
 import log from 'electron-log/main';
 import fs from 'fs';
@@ -16,8 +16,8 @@ import ProtocolRegistry from 'protocol-registry'
 import { TOKENNAME } from '@/config/usersetting';
 //import { RemoteSource } from '@/modules/remotesource'
 import { UserController } from '@/controller/UserController';
-import {NATIVATECOMMAND} from '@/config/channellist'
-import {NativateDatatype} from '@/entityTypes/commonType'
+import { NATIVATECOMMAND } from '@/config/channellist'
+import { NativateDatatype } from '@/entityTypes/commonType'
 import { ScheduleManager } from '@/modules/ScheduleManager';
 import { MCPIntegration } from './main-process/MCPIntegration';
 
@@ -134,7 +134,7 @@ function initialize() {
     console.log('protocolScheme:', protocolScheme)
     console.log('process.execPath:', process.execPath)
     console.log('path.resolve(process.argv[1]):', path.resolve(process.argv[1]))
-   // console.log('path:', path.resolve(process.argv[1]))
+    // console.log('path:', path.resolve(process.argv[1]))
     ProtocolRegistry.register(protocolScheme, `"${process.execPath}" "${path.resolve(process.argv[1])}" "$_URL_"`,
       {
         override: true,
@@ -151,7 +151,7 @@ function initialize() {
 
   async function createWindow() {
     let hiddenMenuBar = true;
-    if(isDevelopment){
+    if (isDevelopment) {
       hiddenMenuBar = false;
     }
     // Create the browser window.
@@ -215,13 +215,13 @@ function initialize() {
       await win.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL as string)
       if (!process.env.IS_TEST) win.webContents.openDevTools()
     } else {
-  //check update
-  const server = import.meta.env.UPDATESERVER as string;
-  if(server){
-    const url = `${server}/update/${process.platform}/${app.getVersion()}`
-    autoUpdater.setFeedURL({ url })
-    autoUpdater.checkForUpdates()
-  }
+      //check update
+      const server = import.meta.env.UPDATESERVER as string;
+      if (server) {
+        const url = `${server}/update/${process.platform}/${app.getVersion()}`
+        autoUpdater.setFeedURL({ url })
+        autoUpdater.checkForUpdates()
+      }
       // console.log('app://./index.html')
       // createProtocol('app')
       // Load the index.html when not in development
@@ -247,7 +247,7 @@ function initialize() {
     } catch (error) {
       log.error('Failed to shutdown ScheduleManager:', error);
     }
-    
+
     // Stop MCP server gracefully
     try {
       if (global.mcpIntegration) {
@@ -299,36 +299,7 @@ function initialize() {
 
     createWindow();
 
-    // Initialize and start MCP server
-    try {
-      const mcpIntegration = new MCPIntegration();
-      
-      // Store globally for shutdown access
-      (global as any).mcpIntegration = mcpIntegration;
-      
-      // Set up event handlers
-      mcpIntegration.on('started', () => {
-        log.info('MCP server started successfully');
-      });
-      
-      mcpIntegration.on('error', (error) => {
-        log.error('MCP server error:', error);
-      });
-      
-      mcpIntegration.on('stopped', () => {
-        log.info('MCP server stopped');
-      });
-      
-      // Start the MCP server
-      const mcpStarted = await mcpIntegration.startServer();
-      if (mcpStarted) {
-        log.info('MCP server integration initialized successfully');
-      } else {
-        log.error('Failed to start MCP server');
-      }
-    } catch (error) {
-      log.error('Failed to initialize MCP integration:', error);
-    }
+
 
     const userdataPath = tokenService.getValue(USERSDBPATH)
     if (userdataPath && userdataPath.length > 0) {
@@ -349,7 +320,7 @@ function initialize() {
       if (!appDataSource.connection.isInitialized) {
         await appDataSource.connection.initialize()
       }
-      
+
       // Initialize ScheduleManager with auto-start functionality
       try {
         const scheduleManager = ScheduleManager.getInstance();
@@ -363,11 +334,11 @@ function initialize() {
       try {
         const { YellowPagesController } = await import('./controller/YellowPagesController');
         const yellowPagesCtrl = YellowPagesController.getInstance();
-        
+
         // Handle tasks from previous session first
         const previousSessionCount = await yellowPagesCtrl.handleTasksFromPreviousSession();
         log.info(`Yellow Pages previous session tasks handled: ${previousSessionCount} tasks marked as failed`);
-        
+
         // Then check for orphaned processes
         const orphanedCheckResult = await yellowPagesCtrl.checkForOrphanedProcesses();
         log.info('Yellow Pages orphaned process check completed:', orphanedCheckResult);
@@ -375,8 +346,39 @@ function initialize() {
         log.error('Failed to check for orphaned Yellow Pages processes:', error);
       }
     }
-    if(win){
-    registerCommunicationIpcHandlers(win);
+    if (win) {
+      registerCommunicationIpcHandlers(win);
+    }
+
+    // Initialize and start MCP server
+    try {
+      const mcpIntegration = new MCPIntegration();
+
+      // Store globally for shutdown access
+      (global as any).mcpIntegration = mcpIntegration;
+
+      // Set up event handlers
+      mcpIntegration.on('started', () => {
+        log.info('MCP server started successfully');
+      });
+
+      mcpIntegration.on('error', (error) => {
+        log.error('MCP server error:', error);
+      });
+
+      mcpIntegration.on('stopped', () => {
+        log.info('MCP server stopped');
+      });
+
+      // Start the MCP server
+      const mcpStarted = await mcpIntegration.startServer();
+      if (mcpStarted) {
+        log.info('MCP server integration initialized successfully');
+      } else {
+        log.error('Failed to start MCP server');
+      }
+    } catch (error) {
+      log.error('Failed to initialize MCP integration:', error);
     }
 
     if (isDevelopment && !process.env.IS_TEST) {
@@ -405,6 +407,7 @@ function initialize() {
       })
     }
   }
+
 
 
 }
@@ -455,16 +458,16 @@ async function handleDeepLink(url: string) {
       // const remoteser = new RemoteSource()
       // const userInfo = await remoteser.GetUserInfo()
       // console.log('userInfo:', userInfo)
-      const userController=new UserController()
+      const userController = new UserController()
       try {
         const userInfo = await userController.updateUserInfo();
         if (userInfo) {
           //login success
-          
-          if (win&& !win.isDestroyed()) {
-            await win.webContents.send(NATIVATECOMMAND,{path:'Dashboard'} as NativateDatatype);
+
+          if (win && !win.isDestroyed()) {
+            await win.webContents.send(NATIVATECOMMAND, { path: 'Dashboard' } as NativateDatatype);
           }
-        }else{
+        } else {
           log.error('Failed to get user info from remote source');
           dialog.showErrorBox('User Info Error',
             `Failed to get user info from remote source.`);
