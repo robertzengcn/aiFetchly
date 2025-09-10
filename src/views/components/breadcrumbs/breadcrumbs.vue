@@ -16,17 +16,22 @@
 <script lang="ts" setup>
 import { ref, computed, watch } from 'vue';
 import { useRoute } from 'vue-router';
+import { useI18n } from 'vue-i18n';
 
 const $route = useRoute();
+const { t } = useI18n({ inheritLocale: true });
 const routes = ref();
-const pageTitle = computed(() => $route.meta.title);
+const pageTitle = computed(() => {
+    const title = $route.meta.title as string;
+    return translateRouteTitle(title);
+});
 
 function init() {
     const { matched } = $route;
     if (matched[0].path === '/dashboard') {
         routes.value = [
             {
-                title: 'Dashboard',
+                title: t('route.dashboard'),
                 disabled: false,
                 href: '/dashboard',
             },
@@ -36,12 +41,12 @@ function init() {
     if (matched[0].path === matched[1].path) {
         routes.value = [
             {
-                title: 'Index',
+                title: t('route.home'),
                 disabled: false,
                 href: '/dashboard',
             },
             {
-                title: matched[0].meta.title,
+                title: translateRouteTitle(matched[0].meta.title as string),
                 disabled: true,
                 href: matched[0].path,
             },
@@ -52,14 +57,14 @@ function init() {
     matched.forEach((route, index) => {
         if (index === matched.length - 1) {
             routes.value.push({
-                title: route.meta.title,
+                title: translateRouteTitle(route.meta.title as string),
                 exact: true,
                 disabled: false,
                 href: $route.path,
             });
         } else {
             routes.value.push({
-                title: route.meta.title,
+                title: translateRouteTitle(route.meta.title as string),
                 exact: false,
                 disabled: true,
                 href: route.path,
@@ -67,6 +72,23 @@ function init() {
         }
     });
     console.log(routes.value);
+}
+
+function translateRouteTitle(title: string | undefined): string {
+    if (!title || typeof title !== 'string') {
+        return title || '';
+    }
+    
+    // Try to translate the title using the route translation key
+    // const translationKey = `route.${title.toLowerCase().replace(/\s+/g, '_')}`;
+    const translated = t(title);
+    
+    // If translation exists and is different from the key, use it
+    if (translated !== title) {
+        return translated;
+    }
+    
+    return title;
 }
 init();
 watch($route, init);
