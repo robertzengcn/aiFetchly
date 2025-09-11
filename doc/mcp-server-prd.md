@@ -12,6 +12,10 @@ The MCP (Model Context Protocol) Server Integration System is a comprehensive AI
 - Implement email extraction and scraping from websites
 - Develop email marketing automation capabilities
 - Integrate with existing aiFetchly infrastructure (browser management, database, scheduling)
+- **Support both stdio and SSE transport modes for maximum compatibility**
+- **Enable web-based and remote client connections via HTTP/SSE**
+- **Provide real-time communication capabilities for better user experience**
+- **Support multiple concurrent client connections**
 - **Automatically start MCP server when aiFetchly application starts**
 - Ensure aiFetchly application is logged in and running for MCP server operation
 - Ensure compliance with web scraping best practices and rate limiting
@@ -25,20 +29,82 @@ The MCP (Model Context Protocol) Server Integration System is a comprehensive AI
 - Deliver email marketing campaigns with 98%+ deliverability
 - Maintain sub-500ms response time for MCP tool calls
 - Achieve 99.9% uptime for MCP server operations
+- **Support both stdio and SSE transport modes with 100% feature parity**
+- **Enable web client connections with <2s connection establishment time**
+- **Support up to 100 concurrent SSE connections**
 - **MCP server starts automatically within 5 seconds of aiFetchly application startup**
 - Ensure aiFetchly application remains logged in and accessible during MCP operations
 - Maintain seamless integration between MCP server and aiFetchly login state
+
+### 1.4 Transport Modes
+
+#### 1.4.1 StdioServerTransport (Legacy)
+- **Use Case**: Direct process-to-process communication
+- **Clients**: Local AI assistants (Cursor, Claude Desktop)
+- **Protocol**: JSON-RPC over stdin/stdout
+- **Advantages**: Simple, direct, no network overhead
+- **Limitations**: Single client, local only, no web access
+
+#### 1.4.2 SSEServerTransport (Current)
+- **Use Case**: Web-based and remote client connections
+- **Clients**: Web browsers, remote tools, multiple concurrent clients
+- **Protocol**: JSON-RPC over HTTP with Server-Sent Events
+- **Advantages**: Remote access, multiple clients, web integration, real-time updates
+- **Features**: CORS support, session management, connection pooling, health monitoring
 
 ## 2. System Architecture
 
 ### 2.1 High-Level Architecture (MCP Server Integration)
 
+#### 2.1.1 Stdio Transport (Legacy)
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                    External AI Assistants                  │
 │               (Cursor, Claude Desktop, etc.)               │
 └─────────────────────────┬───────────────────────────────────┘
                           │ MCP Protocol (JSON-RPC over stdio)
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    MCP Server Layer                        │
+├─────────────────────────────────────────────────────────────┤
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐       │
+│  │   Request   │  │   Response  │  │   Login     │       │
+│  │  Handler    │  │  Formatter  │  │  State      │       │
+│  │             │  │             │  │  Monitor    │       │
+│  └─────────────┘  └─────────────┘  └─────────────┘       │
+├─────────────────────────────────────────────────────────────┤
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐       │
+│  │   Search    │  │  YellowPages │  │    Email    │       │
+│  │   Engine    │  │   Scraper   │  │  Extraction │       │
+│  │   Tools     │  │    Tools    │  │    Tools    │       │
+│  └─────────────┘  └─────────────┘  └─────────────┘       │
+└─────────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    aiFetchly Core                          │
+│              (Browser Management, Database, etc.)          │
+└─────────────────────────────────────────────────────────────┘
+```
+
+#### 2.1.2 SSE Transport (Current)
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Web Clients                             │
+│         (Browsers, Web Apps, Remote Tools)                 │
+└─────────────────────────┬───────────────────────────────────┘
+                          │ HTTP/HTTPS + Server-Sent Events
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    HTTP Server Layer                       │
+├─────────────────────────────────────────────────────────────┤
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐       │
+│  │     SSE     │  │  Messages   │  │   Session   │       │
+│  │  Endpoint   │  │  Endpoint   │  │ Management  │       │
+│  │   (/sse)    │  │ (/messages) │  │             │       │
+│  └─────────────┘  └─────────────┘  └─────────────┘       │
+└─────────────────────────┬───────────────────────────────────┘
+                          │ MCP Protocol (JSON-RPC over SSE)
                           ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                    MCP Server Layer                        │

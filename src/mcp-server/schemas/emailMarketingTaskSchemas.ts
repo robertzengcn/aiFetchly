@@ -122,3 +122,4 @@ export type MCPEmailMarketingTaskResponse = z.infer<typeof MCPEmailMarketingTask
 export type MCPEmailMarketingTaskListResponse = z.infer<typeof MCPEmailMarketingTaskListResponseSchema>;
 
 
+

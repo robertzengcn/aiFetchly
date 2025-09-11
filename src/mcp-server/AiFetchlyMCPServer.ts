@@ -1,9 +1,11 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { AiFetchlyController } from './AiFetchlyController';
 import { LoginStateMonitor } from './LoginStateMonitor';
+import { HttpServerWrapper } from './HttpServerWrapper';
+import { SSEServerConfigOptions } from './config/SSEServerConfig.js';
 
 /**
  * AiFetchly MCP Server
@@ -19,9 +21,10 @@ export class AiFetchlyMCPServer {
     private server: Server;
     private aiFetchlyController: AiFetchlyController;
     private loginStateMonitor: LoginStateMonitor;
-    private transport: StdioServerTransport;
+    private httpServerWrapper: HttpServerWrapper;
+    private transports: Map<string, SSEServerTransport> = new Map();
     
-    constructor() {
+    constructor(options: Partial<SSEServerConfigOptions> = {}) {
         this.server = new Server({
             name: "aifetchly-mcp-server",
             version: "1.0.0"
@@ -33,10 +36,11 @@ export class AiFetchlyMCPServer {
         
         this.aiFetchlyController = new AiFetchlyController();
         this.loginStateMonitor = new LoginStateMonitor();
-        this.transport = new StdioServerTransport();
+        this.httpServerWrapper = new HttpServerWrapper(options);
         
         this.setupHandlers();
         this.registerTools();
+        this.setupSSEHandlers();
     }
     
     /**
@@ -44,10 +48,31 @@ export class AiFetchlyMCPServer {
      */
     public async start(): Promise<void> {
         try {
-            await this.server.connect(this.transport);
-            console.log('AiFetchly MCP Server started successfully');
+            // Start the HTTP server
+            await this.httpServerWrapper.start();
+            console.log('AiFetchly MCP Server started successfully with SSE transport');
         } catch (error) {
             console.error('Failed to start MCP server:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Stop the MCP server
+     */
+    public async stop(): Promise<void> {
+        try {
+            // Close all SSE connections
+            this.transports.forEach((transport, sessionId) => {
+                console.log(`Closing SSE connection: ${sessionId}`);
+                this.transports.delete(sessionId);
+            });
+
+            // Stop the HTTP server
+            await this.httpServerWrapper.stop();
+            console.log('AiFetchly MCP Server stopped successfully');
+        } catch (error) {
+            console.error('Failed to stop MCP server:', error);
             throw error;
         }
     }
@@ -136,6 +161,44 @@ export class AiFetchlyMCPServer {
     }
     
     /**
+     * Setup SSE-specific handlers
+     */
+    private setupSSEHandlers(): void {
+        // Override the HTTP server's message handler to connect MCP server to SSE transport
+        const originalHandleMessage = this.httpServerWrapper['handleMessage'].bind(this.httpServerWrapper);
+        
+        this.httpServerWrapper['handleMessage'] = async (req: any, res: any) => {
+            try {
+                const sessionId = req.query.sessionId as string;
+                
+                if (!sessionId) {
+                    res.status(400).json({ error: 'Session ID is required' });
+                    return;
+                }
+
+                // Get or create transport for this session
+                let transport = this.transports.get(sessionId);
+                if (!transport) {
+                    // Create new transport for this session
+                    transport = new SSEServerTransport(this.httpServerWrapper.getConfig().messagesEndpoint, res);
+                    this.transports.set(sessionId, transport);
+                    
+                    // Connect the MCP server to this transport
+                    await this.server.connect(transport);
+                    console.log(`MCP server connected to SSE transport for session: ${sessionId}`);
+                }
+
+                // Handle the message using the transport
+                await transport.handlePostMessage(req, res);
+
+            } catch (error) {
+                console.error('Error handling SSE message:', error);
+                res.status(500).json({ error: 'Failed to handle message' });
+            }
+        };
+    }
+
+    /**
      * Register all MCP tools
      */
     private registerTools(): void {
@@ -191,5 +254,52 @@ export class AiFetchlyMCPServer {
         if (!isLoggedIn) {
             throw new Error('User not logged in. Please log in to aiFetchly first.');
         }
+    }
+
+    /**
+     * Get server status information
+     */
+    public getServerStatus() {
+        return {
+            name: 'AiFetchly MCP Server',
+            version: '1.0.0',
+            transport: 'SSE',
+            isRunning: this.httpServerWrapper.isServerRunning(),
+            activeConnections: this.transports.size,
+            config: this.httpServerWrapper.getConfig()
+        };
+    }
+
+    /**
+     * Get active session IDs
+     */
+    public getActiveSessions(): string[] {
+        return Array.from(this.transports.keys());
+    }
+
+    /**
+     * Disconnect a specific session
+     */
+    public disconnectSession(sessionId: string): boolean {
+        if (this.transports.has(sessionId)) {
+            this.transports.delete(sessionId);
+            console.log(`Disconnected session: ${sessionId}`);
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Update server configuration
+     */
+    public updateConfig(updates: Partial<SSEServerConfigOptions>): void {
+        this.httpServerWrapper.updateConfig(updates);
+    }
+
+    /**
+     * Get server configuration
+     */
+    public getConfig() {
+        return this.httpServerWrapper.getConfig();
     }
 }

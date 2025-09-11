@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AiFetchly MCP Server - SSE Client Example</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .header {
+            text-align: center;
+            color: #333;
+            border-bottom: 2px solid #007acc;
+            padding-bottom: 10px;
+            margin-bottom: 20px;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+            font-weight: bold;
+        }
+        .status.connected {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .status.disconnected {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .status.connecting {
+            background-color: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+        }
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin: 20px 0;
+            flex-wrap: wrap;
+        }
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background-color 0.3s;
+        }
+        .btn-primary {
+            background-color: #007acc;
+            color: white;
+        }
+        .btn-primary:hover {
+            background-color: #0056b3;
+        }
+        .btn-secondary {
+            background-color: #6c757d;
+            color: white;
+        }
+        .btn-secondary:hover {
+            background-color: #545b62;
+        }
+        .btn-success {
+            background-color: #28a745;
+            color: white;
+        }
+        .btn-success:hover {
+            background-color: #1e7e34;
+        }
+        .btn-danger {
+            background-color: #dc3545;
+            color: white;
+        }
+        .btn-danger:hover {
+            background-color: #c82333;
+        }
+        .input-group {
+            margin: 10px 0;
+        }
+        .input-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        .input-group input, .input-group select {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        .log {
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 15px;
+            height: 300px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+        }
+        .log-entry {
+            margin-bottom: 5px;
+            padding: 2px 0;
+        }
+        .log-entry.info {
+            color: #007acc;
+        }
+        .log-entry.success {
+            color: #28a745;
+        }
+        .log-entry.error {
+            color: #dc3545;
+        }
+        .log-entry.warning {
+            color: #ffc107;
+        }
+        .response {
+            background-color: #e9ecef;
+            border-left: 4px solid #007acc;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 0 4px 4px 0;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        @media (max-width: 768px) {
+            .grid {
+                grid-template-columns: 1fr;
+            }
+            .controls {
+                flex-direction: column;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>AiFetchly MCP Server - SSE Client Example</h1>
+            <p>Test client for connecting to the MCP server via Server-Sent Events</p>
+        </div>
+
+        <div id="status" class="status disconnected">
+            Disconnected
+        </div>
+
+        <div class="controls">
+            <button id="connectBtn" class="btn-primary" onclick="connect()">Connect</button>
+            <button id="disconnectBtn" class="btn-danger" onclick="disconnect()" disabled>Disconnect</button>
+            <button id="clearLogBtn" class="btn-secondary" onclick="clearLog()">Clear Log</button>
+            <button id="testConnectionBtn" class="btn-success" onclick="testConnection()" disabled>Test Connection</button>
+        </div>
+
+        <div class="input-group">
+            <label for="serverUrl">Server URL:</label>
+            <input type="text" id="serverUrl" value="http://localhost:3000" placeholder="http://localhost:3000">
+        </div>
+
+        <div class="input-group">
+            <label for="toolSelect">Select Tool to Test:</label>
+            <select id="toolSelect">
+                <option value="get_system_status">Get System Status</option>
+                <option value="test_connection">Test Connection</option>
+                <option value="get_server_info">Get Server Info</option>
+                <option value="create_search_task">Create Search Task</option>
+                <option value="create_yellow_pages_task">Create Yellow Pages Task</option>
+            </select>
+        </div>
+
+        <div class="input-group">
+            <label for="toolArgs">Tool Arguments (JSON):</label>
+            <input type="text" id="toolArgs" value='{"message": "Hello from SSE client"}' placeholder='{"key": "value"}'>
+        </div>
+
+        <div class="controls">
+            <button id="callToolBtn" class="btn-success" onclick="callTool()" disabled>Call Tool</button>
+        </div>
+    </div>
+
+    <div class="grid">
+        <div class="container">
+            <h3>Connection Log</h3>
+            <div id="log" class="log"></div>
+        </div>
+
+        <div class="container">
+            <h3>Last Response</h3>
+            <div id="lastResponse" class="response">
+                No response yet
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let eventSource = null;
+        let sessionId = null;
+        let reconnectAttempts = 0;
+        const maxReconnectAttempts = 5;
+        const reconnectDelay = 3000;
+
+        function log(message, type = 'info') {
+            const logElement = document.getElementById('log');
+            const timestamp = new Date().toISOString();
+            const logEntry = document.createElement('div');
+            logEntry.className = `log-entry ${type}`;
+            logEntry.textContent = `[${timestamp}] ${message}`;
+            logElement.appendChild(logEntry);
+            logElement.scrollTop = logElement.scrollHeight;
+        }
+
+        function updateStatus(status, className) {
+            const statusElement = document.getElementById('status');
+            statusElement.textContent = status;
+            statusElement.className = `status ${className}`;
+        }
+
+        function updateButtons(connected) {
+            document.getElementById('connectBtn').disabled = connected;
+            document.getElementById('disconnectBtn').disabled = !connected;
+            document.getElementById('testConnectionBtn').disabled = !connected;
+            document.getElementById('callToolBtn').disabled = !connected;
+        }
+
+        function clearLog() {
+            document.getElementById('log').innerHTML = '';
+        }
+
+        function connect() {
+            const serverUrl = document.getElementById('serverUrl').value;
+            const sseUrl = `${serverUrl}/sse`;
+
+            log(`Connecting to ${sseUrl}...`, 'info');
+            updateStatus('Connecting...', 'connecting');
+            updateButtons(false);
+
+            try {
+                eventSource = new EventSource(sseUrl);
+
+                eventSource.onopen = function(event) {
+                    log('SSE connection opened', 'success');
+                    updateStatus('Connected', 'connected');
+                    updateButtons(true);
+                    reconnectAttempts = 0;
+                };
+
+                eventSource.onmessage = function(event) {
+                    try {
+                        const data = JSON.parse(event.data);
+                        log(`Received: ${JSON.stringify(data, null, 2)}`, 'info');
+                        
+                        if (data.type === 'connected') {
+                            sessionId = data.sessionId;
+                            log(`Session ID: ${sessionId}`, 'success');
+                        }
+                    } catch (error) {
+                        log(`Error parsing message: ${error.message}`, 'error');
+                    }
+                };
+
+                eventSource.addEventListener('error', function(event) {
+                    log(`SSE error: ${event.type}`, 'error');
+                    handleConnectionError();
+                });
+
+                eventSource.onerror = function(event) {
+                    log('SSE connection error', 'error');
+                    handleConnectionError();
+                };
+
+            } catch (error) {
+                log(`Connection error: ${error.message}`, 'error');
+                updateStatus('Connection Failed', 'disconnected');
+                updateButtons(false);
+            }
+        }
+
+        function handleConnectionError() {
+            updateStatus('Connection Lost', 'disconnected');
+            updateButtons(false);
+            
+            if (reconnectAttempts < maxReconnectAttempts) {
+                reconnectAttempts++;
+                log(`Attempting to reconnect (${reconnectAttempts}/${maxReconnectAttempts}) in ${reconnectDelay/1000}s...`, 'warning');
+                
+                setTimeout(() => {
+                    if (eventSource) {
+                        eventSource.close();
+                    }
+                    connect();
+                }, reconnectDelay);
+            } else {
+                log('Max reconnection attempts reached. Please reconnect manually.', 'error');
+                updateStatus('Disconnected', 'disconnected');
+            }
+        }
+
+        function disconnect() {
+            if (eventSource) {
+                eventSource.close();
+                eventSource = null;
+                sessionId = null;
+                log('Disconnected from server', 'info');
+                updateStatus('Disconnected', 'disconnected');
+                updateButtons(false);
+            }
+        }
+
+        function testConnection() {
+            if (!sessionId) {
+                log('No active session. Please connect first.', 'error');
+                return;
+            }
+
+            callMCPTool('test_connection', { message: 'Hello from SSE client test' });
+        }
+
+        function callTool() {
+            if (!sessionId) {
+                log('No active session. Please connect first.', 'error');
+                return;
+            }
+
+            const toolName = document.getElementById('toolSelect').value;
+            let args = {};
+
+            try {
+                const argsText = document.getElementById('toolArgs').value;
+                if (argsText.trim()) {
+                    args = JSON.parse(argsText);
+                }
+            } catch (error) {
+                log(`Error parsing tool arguments: ${error.message}`, 'error');
+                return;
+            }
+
+            callMCPTool(toolName, args);
+        }
+
+        function callMCPTool(toolName, args) {
+            if (!sessionId) {
+                log('No active session', 'error');
+                return;
+            }
+
+            const serverUrl = document.getElementById('serverUrl').value;
+            const messagesUrl = `${serverUrl}/messages?sessionId=${sessionId}`;
+
+            const mcpRequest = {
+                jsonrpc: "2.0",
+                id: Date.now(),
+                method: "tools/call",
+                params: {
+                    name: toolName,
+                    arguments: args
+                }
+            };
+
+            log(`Calling tool: ${toolName} with args: ${JSON.stringify(args)}`, 'info');
+
+            fetch(messagesUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(mcpRequest)
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                log(`Tool response: ${JSON.stringify(data, null, 2)}`, 'success');
+                document.getElementById('lastResponse').innerHTML = `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+            })
+            .catch(error => {
+                log(`Tool call error: ${error.message}`, 'error');
+                document.getElementById('lastResponse').innerHTML = `<div style="color: red;">Error: ${error.message}</div>`;
+            });
+        }
+
+        // Initialize
+        log('SSE Client Example loaded. Click Connect to start.', 'info');
+        updateButtons(false);
+
+        // Handle page unload
+        window.addEventListener('beforeunload', function() {
+            if (eventSource) {
+                eventSource.close();
+            }
+        });
+    </script>
+</body>
+</html>
+

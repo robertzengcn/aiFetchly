@@ -93,3 +93,4 @@ export type MCPYellowPagesResponse = z.infer<typeof MCPYellowPagesResponseSchema
 export type MCPBusinessDetailsResponse = z.infer<typeof MCPBusinessDetailsResponseSchema>;
 
 
+

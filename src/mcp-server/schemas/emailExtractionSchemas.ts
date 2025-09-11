@@ -110,3 +110,4 @@ export type MCPEmailExtractionResponse = z.infer<typeof MCPEmailExtractionRespon
 export type MCPEmailValidationResponse = z.infer<typeof MCPEmailValidationResponseSchema>;
 
 
+
