@@ -164,6 +164,68 @@ function initialize() {
 
 
 
+  // Helper function to try alternative HTML file paths with detailed error handling
+  async function tryAlternativePaths(win: BrowserWindow, originalPath: string, log: any, dialog: any): Promise<void> {
+    const alternativePaths = [
+      path.join(__dirname, '../.vite/renderer/main_window/index.html'),
+      path.join(__dirname, '../renderer/main_window/index.html'),
+      path.join(__dirname, './index.html'),
+      path.join(process.resourcesPath, 'app.asar', '.vite', 'renderer', 'main_window', 'index.html'),
+      path.join(process.resourcesPath, '.vite', 'renderer', 'main_window', 'index.html')
+    ];
+    
+    console.log('Trying alternative paths for HTML file...');
+    log.info('Trying alternative paths for HTML file. Original path was:', originalPath);
+    
+    let loaded = false;
+    let lastError: Error | null = null;
+    
+    for (let i = 0; i < alternativePaths.length; i++) {
+      const altPath = alternativePaths[i];
+      console.log(`Trying alternative path ${i + 1}/${alternativePaths.length}:`, altPath);
+      log.info(`Trying alternative path ${i + 1}/${alternativePaths.length}:`, altPath);
+      
+      try {
+        if (fs.existsSync(altPath)) {
+          console.log('Alternative path exists, attempting to load...');
+          log.info('Alternative path exists, attempting to load:', altPath);
+          
+          await win.loadFile(altPath);
+          console.log('Successfully loaded HTML file from alternative path:', altPath);
+          log.info('Successfully loaded HTML file from alternative path:', altPath);
+          loaded = true;
+          break;
+        } else {
+          console.log('Alternative path does not exist:', altPath);
+          log.warn('Alternative path does not exist:', altPath);
+        }
+      } catch (error) {
+        console.error(`Failed to load from alternative path ${i + 1}:`, altPath);
+        console.error('Error details:', error);
+        log.error(`Failed to load from alternative path ${i + 1}:`, altPath);
+        log.error('Error details:', error);
+        lastError = error as Error;
+      }
+    }
+    
+    if (!loaded) {
+      const errorMsg = `Could not load HTML file from any path. Tried:\nOriginal: ${originalPath}\nAlternatives:\n${alternativePaths.map((p, i) => `${i + 1}. ${p}`).join('\n')}`;
+      console.error(errorMsg);
+      log.error(errorMsg);
+      
+      if (lastError) {
+        console.error('Last error encountered:', lastError);
+        log.error('Last error encountered:', lastError);
+      }
+      
+      dialog.showErrorBox(
+        'Application Error', 
+        'Could not load the application interface. This may be due to a corrupted installation.\n\nPlease try:\n1. Reinstalling the application\n2. Running as administrator\n3. Checking antivirus software\n\nError details have been logged.'
+      );
+      app.quit();
+    }
+  }
+
   async function createWindow() {
     let hiddenMenuBar = true;
     if(isDevelopment){
@@ -240,7 +302,47 @@ function initialize() {
       // console.log('app://./index.html')
       // createProtocol('app')
       // Load the index.html when not in development
-      await win.loadFile(path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`))
+      // In production, the renderer files are in .vite/renderer/main_window/
+      const htmlPath = path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`);
+      
+      console.log('=== HTML File Loading Debug Info ===');
+      console.log('App is packaged:', app.isPackaged);
+      console.log('MAIN_WINDOW_VITE_NAME:', MAIN_WINDOW_VITE_NAME);
+      console.log('__dirname:', __dirname);
+      console.log('process.resourcesPath:', process.resourcesPath);
+      console.log('Loading HTML from:', htmlPath);
+      log.info('=== HTML File Loading Debug Info ===');
+      log.info('App is packaged:', app.isPackaged);
+      log.info('MAIN_WINDOW_VITE_NAME:', MAIN_WINDOW_VITE_NAME);
+      log.info('__dirname:', __dirname);
+      log.info('process.resourcesPath:', process.resourcesPath);
+      log.info('Loading HTML from:', htmlPath);
+      
+      // Check if file exists before loading
+      if (fs.existsSync(htmlPath)) {
+        console.log('HTML file exists, loading...');
+        log.info('Attempting to load HTML file from:', htmlPath);
+        
+        try {
+          await win.loadFile(htmlPath);
+          console.log('Successfully loaded HTML file from:', htmlPath);
+          log.info('Successfully loaded HTML file from:', htmlPath);
+        } catch (error) {
+          console.error('Failed to load HTML file from primary path:', htmlPath);
+          console.error('Error details:', error);
+          log.error('Failed to load HTML file from primary path:', htmlPath);
+          log.error('Error details:', error);
+          
+          // Try alternative paths with detailed error handling
+          await tryAlternativePaths(win, htmlPath, log, dialog);
+        }
+      } else {
+        console.error('HTML file not found at:', htmlPath);
+        log.error('HTML file not found at:', htmlPath);
+        
+        // Try alternative paths with detailed error handling
+        await tryAlternativePaths(win, htmlPath, log, dialog);
+      }
     }
   }
 
