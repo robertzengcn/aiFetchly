@@ -446,7 +446,7 @@ class BasicMCPServer {
                 // Check login state for protected tools
                 if (!this.validateLoginState()) {
                     auditLogger.logAuthFailure(request, 'User not logged in');
-                    this.sendError(request.id, -32001, 'USER_NOT_LOGGED_IN');
+                    this.sendError(request.id, -32001, 'USER_NOT_LOGGED_IN', null);
                     return;
                 }
                 
@@ -515,16 +515,16 @@ class BasicMCPServer {
                 } else if (toolName === 'list_email_tasks') {
                     this.handleListEmailTasks(request);
                 } else {
-                    this.sendError(request.id, -32601, `Unknown tool: ${toolName}`);
+                    this.sendError(request.id, -32601, `Unknown tool: ${toolName}`, null);
                 }
             } else if (request.type === 'loginStateChange') {
                 this.handleLoginStateChange(request);
             } else {
-                this.sendError(request.id, -32601, `Unknown method: ${request.method}`);
+                this.sendError(request.id, -32601, `Unknown method: ${request.method}`, null);
             }
         } catch (error) {
             console.error('Error handling request:', error);
-            this.sendError(null, -32700, 'Parse error');
+            this.sendError(null, -32700, 'Parse error', null);
         }
     }
     
@@ -580,7 +580,8 @@ class BasicMCPServer {
                         `${validatedParams.query} guide`,
                         `${validatedParams.query} examples`
                     ]
-                }
+                },
+                timestamp: new Date().toISOString()
             };
             
             const formattedResponse = SearchResponseFormatter.formatGoogleResponse(
@@ -644,7 +645,8 @@ class BasicMCPServer {
                         `${validatedParams.query} microsoft`,
                         `${validatedParams.query} bing results`
                     ]
-                }
+                },
+                timestamp: new Date().toISOString()
             };
             
             const formattedResponse = SearchResponseFormatter.formatBingResponse(
@@ -992,8 +994,8 @@ class BasicMCPServer {
                     name: validatedParams.name,
                     description: validatedParams.description || '',
                     type: validatedParams.type,
-                    status: 'pending' as const,
-                    priority: validatedParams.priority,
+                    status: 'pending' as 'pending' | 'running' | 'completed' | 'failed' | 'cancelled',
+                    priority: validatedParams.priority as 'low' | 'medium' | 'high',
                     parameters: {
                         ...validatedParams.parameters,
                         targetAudience: validatedParams.targetAudience,
@@ -1049,8 +1051,8 @@ class BasicMCPServer {
                     name: `Mock Email Task ${validatedParams.taskId}`,
                     description: 'This is a mock email marketing task',
                     type: 'email_campaign',
-                    status: 'pending' as const,
-                    priority: 'medium' as const,
+                    status: 'pending' as 'pending' | 'running' | 'completed' | 'failed' | 'cancelled',
+                    priority: 'medium' as 'low' | 'medium' | 'high',
                     parameters: {
                         targetAudience: 'All subscribers',
                         subjectLine: 'Welcome to our newsletter',
@@ -1160,8 +1162,8 @@ class BasicMCPServer {
                     name: `Deleted Email Task ${validatedParams.taskId}`,
                     description: 'This task has been deleted',
                     type: 'email_campaign',
-                    status: 'cancelled' as const,
-                    priority: 'medium' as const,
+                    status: 'cancelled' as 'pending' | 'running' | 'completed' | 'failed' | 'cancelled',
+                    priority: 'medium' as 'low' | 'medium' | 'high',
                     parameters: {},
                     createdAt: new Date(Date.now() - 86400000).toISOString(), // 1 day ago
                     updatedAt: new Date().toISOString(),
@@ -1208,8 +1210,8 @@ class BasicMCPServer {
                 name: `Mock Email Task ${index + 1}`,
                 description: `Description for task ${index + 1}`,
                 type: ['email_campaign', 'email_sequence', 'email_blast', 'email_newsletter'][index % 4],
-                status: ['pending', 'running', 'completed', 'failed'][index % 4],
-                priority: ['low', 'medium', 'high'][index % 3],
+                status: (['pending', 'running', 'completed', 'failed'][index % 4]) as 'pending' | 'running' | 'completed' | 'failed' | 'cancelled',
+                priority: (['low', 'medium', 'high'][index % 3]) as 'low' | 'medium' | 'high',
                 parameters: {
                     targetAudience: `Audience ${index + 1}`,
                     subjectLine: `Subject ${index + 1}`,

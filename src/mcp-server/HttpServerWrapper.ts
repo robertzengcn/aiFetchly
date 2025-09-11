@@ -263,7 +263,7 @@ export class HttpServerWrapper {
                 return;
             }
 
-            this.server = this.app.listen(this.config.getPort(), () => {
+            const server = this.app.listen(this.config.getPort(), () => {
                 this.isRunning = true;
                 
                 if (this.config.isLoggingEnabled()) {
@@ -281,8 +281,9 @@ export class HttpServerWrapper {
                 }
                 resolve();
             });
+            this.server = server;
 
-            this.server.on('error', (error) => {
+            server.on('error', (error) => {
                 if (this.config.isLoggingEnabled()) {
                     console.error('HTTP server error:', error);
                 }
