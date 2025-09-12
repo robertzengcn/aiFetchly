@@ -36,27 +36,118 @@ app.userAgentFallback = app.userAgentFallback.replace('Electron/' + process.vers
 // Configure log
 log.initialize();
 
-// Configure electron-log
+// Configure electron-log with date-based folder structure
+// Logs will be organized as: userData/logs/YYYY-MM-DD/main.log
+// This prevents the main.log file from becoming too large
 log.transports.file.level = 'debug';
-const logDir = path.join(app.getPath('userData'), 'logs');
 
-// Create log directory if it doesn't exist
+// Create date-based log directory structure
+const today = new Date();
+const year = today.getFullYear();
+const month = String(today.getMonth() + 1).padStart(2, '0');
+const day = String(today.getDate()).padStart(2, '0');
+const dateFolder = `${year}-${month}-${day}`;
+
+const logDir = path.join(app.getPath('userData'), 'logs');
+const dailyLogDir = path.join(logDir, dateFolder);
+
+// Create log directories if they don't exist
 try {
   if (!fs.existsSync(logDir)) {
     fs.mkdirSync(logDir, { recursive: true });
   }
+  if (!fs.existsSync(dailyLogDir)) {
+    fs.mkdirSync(dailyLogDir, { recursive: true });
+  }
   log.info(`Log directory created/verified at: ${logDir}`);
+  log.info(`Daily log directory created/verified at: ${dailyLogDir}`);
 } catch (err) {
   console.error('Failed to create log directory:', err);
 }
 
-// Configure file transport properly
+// Configure file transport with date-based path
 log.transports.file.fileName = 'main.log'; // Only the filename, not the full path
-log.transports.file.resolvePathFn = () => path.join(logDir, 'main.log'); // Set the full path
+log.transports.file.resolvePathFn = () => {
+  // Get current date for dynamic path resolution
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const currentDateFolder = `${year}-${month}-${day}`;
+  
+  const logDir = path.join(app.getPath('userData'), 'logs');
+  const currentDailyLogDir = path.join(logDir, currentDateFolder);
+  
+  // Ensure the daily log directory exists
+  if (!fs.existsSync(currentDailyLogDir)) {
+    try {
+      fs.mkdirSync(currentDailyLogDir, { recursive: true });
+    } catch (err) {
+      console.error('Failed to create daily log directory:', err);
+    }
+  }
+  
+  return path.join(currentDailyLogDir, 'main.log');
+};
 log.transports.file.maxSize = 1000000; // 1MB max file size
 
 // Enable console transport as well to ensure all logs appear in both places
 log.transports.console.level = 'debug';
+
+// Function to clean up old log directories (keep only last 30 days)
+function cleanupOldLogs() {
+  try {
+    const logDir = path.join(app.getPath('userData'), 'logs');
+    if (!fs.existsSync(logDir)) return;
+
+    const entries = fs.readdirSync(logDir, { withFileTypes: true });
+    const directories = entries
+      .filter(entry => entry.isDirectory())
+      .map(entry => entry.name)
+      .filter(name => /^\d{4}-\d{2}-\d{2}$/.test(name)) // Match YYYY-MM-DD format
+      .sort()
+      .reverse(); // Most recent first
+
+    // Keep only the last 30 days
+    if (directories.length > 30) {
+      const toDelete = directories.slice(30);
+      toDelete.forEach(dir => {
+        const dirPath = path.join(logDir, dir);
+        try {
+          fs.rmSync(dirPath, { recursive: true, force: true });
+          console.log(`Cleaned up old log directory: ${dir}`);
+        } catch (err) {
+          console.error(`Failed to delete log directory ${dir}:`, err);
+        }
+      });
+    }
+  } catch (err) {
+    console.error('Failed to cleanup old logs:', err);
+  }
+}
+
+// Schedule log cleanup to run periodically (every 24 hours)
+let cleanupInterval: NodeJS.Timeout | null = null;
+
+function scheduleLogCleanup() {
+  // Run cleanup immediately after a short delay (non-blocking)
+  setTimeout(() => {
+    cleanupOldLogs();
+  }, 5000); // 5 seconds delay
+
+  // Schedule periodic cleanup every 24 hours
+  cleanupInterval = setInterval(() => {
+    cleanupOldLogs();
+  }, 24 * 60 * 60 * 1000); // 24 hours in milliseconds
+}
+
+// Clean up interval when app is about to quit
+function stopLogCleanup() {
+  if (cleanupInterval) {
+    clearInterval(cleanupInterval);
+    cleanupInterval = null;
+  }
+}
 
 // Export logDir for use in other modules
 export { logDir };
@@ -115,6 +206,7 @@ try {
 }
 
 log.info('Application starting...');
+
 // Handle uncaught exceptions
 process.on('uncaughtException', (error) => {
   log.error('Uncaught Exception:', error);
@@ -417,6 +509,9 @@ function initialize() {
     } catch (error) {
       log.error('Failed to shutdown ScheduleManager:', error);
     }
+    
+    // Stop log cleanup interval
+    stopLogCleanup();
   })
 
   app.on('activate', () => {
@@ -458,6 +553,9 @@ function initialize() {
     Menu.setApplicationMenu(menu);
 
     createWindow();
+
+    // Schedule log cleanup (runs after 5 seconds delay, then every 24 hours)
+    scheduleLogCleanup();
 
     const userdataPath = tokenService.getValue(USERSDBPATH)
     if (userdataPath && userdataPath.length > 0) {
