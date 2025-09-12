@@ -31,7 +31,8 @@ declare const MAIN_WINDOW_VITE_NAME: string;
 
 // Get app name for protocol
 const appName = app.getName();
-const protocolScheme = appName.replace(/-/g, ''); // Remove hyphens for protocol
+const protocolScheme = appName.replace(/-/g, '').toLowerCase(); // Remove hyphens for protocol and convert to lowercase
+// const protocolScheme = appName.replace(/-/g, ''); // Remove hyphens for protocol
 app.userAgentFallback = app.userAgentFallback.replace('Electron/' + process.versions.electron, '');
 // Initialize logger (handles all logging configuration)
 const logDir = logger.getLogDir();
@@ -198,6 +199,10 @@ function initialize() {
       }
     })
 
+    if (win) {
+      registerCommunicationIpcHandlers(win);
+    }
+
     // Add event listener for window destruction
     win.on('closed', () => {
       console.log('Window closed event triggered');
@@ -242,15 +247,15 @@ function initialize() {
     if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
       // Load the url of the dev server if in development mode
       try {
-        if (win && !win.isDestroyed()) {  
-      await win.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL as string)
-      if (!process.env.IS_TEST) win.webContents.openDevTools()
+        if (win && !win.isDestroyed()) {
+          await win.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL as string)
+          if (!process.env.IS_TEST) win.webContents.openDevTools()
         }
       } catch (error) {
 
         console.error('Failed to load URL:', error);
       }
-      } else {
+    } else {
       //check update
       const server = import.meta.env.UPDATESERVER as string;
       if (server) {
@@ -399,9 +404,7 @@ function initialize() {
     // Schedule log cleanup (runs after 5 seconds delay, then every 24 hours)
     logger.scheduleLogCleanup();
 
-    if (win) {
-      registerCommunicationIpcHandlers(win);
-    }
+
 
     const userdataPath = tokenService.getValue(USERSDBPATH)
     if (userdataPath && userdataPath.length > 0) {
