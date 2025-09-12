@@ -133,7 +133,7 @@ process.on('unhandledRejection', (reason) => {
 
 let win: BrowserWindow | null;
 function initialize() {
-  console.log(import.meta.env.VITE_REMOTEADD)
+  //console.log(import.meta.env.VITE_REMOTEADD)
   // protocol.registerSchemesAsPrivileged([
 
   //   { scheme: appName, privileges: { secure: true, 
@@ -175,7 +175,7 @@ function initialize() {
     ];
     
     console.log('Trying alternative paths for HTML file...');
-    log.info('Trying alternative paths for HTML file. Original path was:', originalPath);
+    // log.info('Trying alternative paths for HTML file. Original path was:', originalPath);
     
     let loaded = false;
     let lastError: Error | null = null;
@@ -183,39 +183,54 @@ function initialize() {
     for (let i = 0; i < alternativePaths.length; i++) {
       const altPath = alternativePaths[i];
       console.log(`Trying alternative path ${i + 1}/${alternativePaths.length}:`, altPath);
-      log.info(`Trying alternative path ${i + 1}/${alternativePaths.length}:`, altPath);
+      // log.info(`Trying alternative path ${i + 1}/${alternativePaths.length}:`, altPath);
       
       try {
-        if (fs.existsSync(altPath)) {
-          console.log('Alternative path exists, attempting to load...');
-          log.info('Alternative path exists, attempting to load:', altPath);
-          
-          await win.loadFile(altPath);
-          console.log('Successfully loaded HTML file from alternative path:', altPath);
-          log.info('Successfully loaded HTML file from alternative path:', altPath);
-          loaded = true;
-          break;
+        // Check if window is still valid before attempting to load
+        if (win && !win.isDestroyed()) {
+          if (fs.existsSync(altPath)) {
+            console.log('Alternative path exists, attempting to load...');
+            // log.info('Alternative path exists, attempting to load:', altPath);
+            
+            await win.loadFile(altPath);
+            console.log('Successfully loaded HTML file from alternative path:', altPath);
+            // log.info('Successfully loaded HTML file from alternative path:', altPath);
+            loaded = true;
+            break;
+          } else {
+            console.log('Alternative path does not exist:', altPath);
+            // log.warn('Alternative path does not exist:', altPath);
+          }
         } else {
-          console.log('Alternative path does not exist:', altPath);
-          log.warn('Alternative path does not exist:', altPath);
+          console.error('Window has been destroyed, cannot load file');
+          // log.error('Window has been destroyed, cannot load file');
+          lastError = new Error('Window has been destroyed');
+          break;
         }
       } catch (error) {
         console.error(`Failed to load from alternative path ${i + 1}:`, altPath);
         console.error('Error details:', error);
-        log.error(`Failed to load from alternative path ${i + 1}:`, altPath);
-        log.error('Error details:', error);
+        // log.error(`Failed to load from alternative path ${i + 1}:`, altPath);
+        // log.error('Error details:', error);
         lastError = error as Error;
+        
+        // If the error is "Object has been destroyed", break out of the loop
+        if (error instanceof Error && error.message.includes('Object has been destroyed')) {
+          console.error('Window was destroyed during loading, stopping alternative path attempts');
+          // log.error('Window was destroyed during loading, stopping alternative path attempts');
+          break;
+        }
       }
     }
     
     if (!loaded) {
       const errorMsg = `Could not load HTML file from any path. Tried:\nOriginal: ${originalPath}\nAlternatives:\n${alternativePaths.map((p, i) => `${i + 1}. ${p}`).join('\n')}`;
       console.error(errorMsg);
-      log.error(errorMsg);
+      // log.error(errorMsg);
       
       if (lastError) {
         console.error('Last error encountered:', lastError);
-        log.error('Last error encountered:', lastError);
+        // log.error('Last error encountered:', lastError);
       }
       
       dialog.showErrorBox(
@@ -231,6 +246,14 @@ function initialize() {
     if(isDevelopment){
       hiddenMenuBar = false;
     }
+    
+    // Check if window already exists and is not destroyed
+    if (win && !win.isDestroyed()) {
+      console.log('Window already exists and is valid, focusing...');
+      win.focus();
+      return;
+    }
+    
     // Create the browser window.
     win = new BrowserWindow({
       autoHideMenuBar: hiddenMenuBar,
@@ -251,6 +274,12 @@ function initialize() {
         preload: path.join(__dirname + '/preload.js')
       }
     })
+    
+    // Add event listener for window destruction
+    win.on('closed', () => {
+      console.log('Window closed event triggered');
+      win = null;
+    });
     // In this example, only windows with the `about:blank` url will be created.
     // All other urls will be blocked.
     win.webContents.setWindowOpenHandler(({ url }) => {
@@ -324,17 +353,41 @@ function initialize() {
         log.info('Attempting to load HTML file from:', htmlPath);
         
         try {
-          await win.loadFile(htmlPath);
-          console.log('Successfully loaded HTML file from:', htmlPath);
-          log.info('Successfully loaded HTML file from:', htmlPath);
+          // Check if window is still valid before attempting to load
+          if (win && !win.isDestroyed()) {
+            await win.loadFile(htmlPath);
+            console.log('Successfully loaded HTML file from:', htmlPath);
+            log.info('Successfully loaded HTML file from:', htmlPath);
+          } else {
+            console.error('Window has been destroyed, cannot load file');
+            log.error('Window has been destroyed, cannot load file');
+            dialog.showErrorBox(
+              'Application Error', 
+              'The application window was destroyed before it could load. Please restart the application.'
+            );
+            app.quit();
+            return;
+          }
         } catch (error) {
           console.error('Failed to load HTML file from primary path:', htmlPath);
           console.error('Error details:', error);
           log.error('Failed to load HTML file from primary path:', htmlPath);
           log.error('Error details:', error);
           
+          // Check if the error is due to window destruction
+          if (error instanceof Error && error.message.includes('Object has been destroyed')) {
+            console.error('Window was destroyed during loading');
+            log.error('Window was destroyed during loading');
+            dialog.showErrorBox(
+              'Application Error', 
+              'The application window was destroyed during loading. Please restart the application.'
+            );
+            app.quit();
+            return;
+          }
+          
           // Try alternative paths with detailed error handling
-          await tryAlternativePaths(win, htmlPath, log, dialog);
+          //await tryAlternativePaths(win, htmlPath, log, dialog);
         }
       } else {
         console.error('HTML file not found at:', htmlPath);
@@ -537,8 +590,11 @@ async function handleDeepLink(url: string) {
         if (userInfo) {
           //login success
           
-          if (win&& !win.isDestroyed()) {
+          if (win && !win.isDestroyed()) {
             await win.webContents.send(NATIVATECOMMAND,{path:'Dashboard'} as NativateDatatype);
+          } else {
+            console.error('Window has been destroyed, cannot send navigation command');
+            log.error('Window has been destroyed, cannot send navigation command');
           }
         }else{
           log.error('Failed to get user info from remote source');
