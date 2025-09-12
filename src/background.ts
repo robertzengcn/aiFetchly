@@ -242,16 +242,15 @@ function initialize() {
     if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
       // Load the url of the dev server if in development mode
       try {
-        if (win && !win.isDestroyed()) {
-          await win.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL as string)
+        if (win && !win.isDestroyed()) {  
+      await win.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL as string)
+      if (!process.env.IS_TEST) win.webContents.openDevTools()
         }
-        if (!process.env.IS_TEST) win.webContents.openDevTools()
-
       } catch (error) {
 
         console.error('Failed to load URL:', error);
       }
-    } else {
+      } else {
       //check update
       const server = import.meta.env.UPDATESERVER as string;
       if (server) {
@@ -395,10 +394,14 @@ function initialize() {
     const menu = menuManager.createMenu();
     Menu.setApplicationMenu(menu);
 
-    await createWindow();
+    createWindow();
 
     // Schedule log cleanup (runs after 5 seconds delay, then every 24 hours)
     logger.scheduleLogCleanup();
+
+    if (win) {
+      registerCommunicationIpcHandlers(win);
+    }
 
     const userdataPath = tokenService.getValue(USERSDBPATH)
     if (userdataPath && userdataPath.length > 0) {
@@ -445,9 +448,7 @@ function initialize() {
         log.error('Failed to check for orphaned Yellow Pages processes:', error);
       }
     }
-    if (win) {
-      registerCommunicationIpcHandlers(win);
-    }
+
 
     if (isDevelopment && !process.env.IS_TEST) {
       // Install Vue Devtools
