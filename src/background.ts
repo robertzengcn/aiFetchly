@@ -10,7 +10,7 @@ import { Token } from "@/modules/token"
 import { MenuManager } from "@/main-process/menu/MenuManager";
 import { USERSDBPATH } from '@/config/usersetting';
 import { SqliteDb } from "@/config/SqliteDb"
-import log from 'electron-log/main';
+import { logger, log } from '@/modules/Logger';
 import fs from 'fs';
 import ProtocolRegistry from 'protocol-registry'
 import { TOKENNAME } from '@/config/usersetting';
@@ -32,90 +32,16 @@ declare const MAIN_WINDOW_VITE_NAME: string;
 
 // Get app name for protocol
 const appName = app.getName();
-const protocolScheme = appName.replace(/-/g, ''); // Remove hyphens for protocol
+const protocolScheme = appName.replace(/-/g, '').toLowerCase(); // Remove hyphens for protocol and convert to lowercase
+// const protocolScheme = appName.replace(/-/g, ''); // Remove hyphens for protocol
 app.userAgentFallback = app.userAgentFallback.replace('Electron/' + process.versions.electron, '');
-// Configure log
-log.initialize();
+// Initialize logger (handles all logging configuration)
+const logDir = logger.getLogDir();
 
-// Configure electron-log
-log.transports.file.level = 'debug';
-const logDir = path.join(app.getPath('userData'), 'logs');
-
-// Create log directory if it doesn't exist
-try {
-  if (!fs.existsSync(logDir)) {
-    fs.mkdirSync(logDir, { recursive: true });
-  }
-  log.info(`Log directory created/verified at: ${logDir}`);
-} catch (err) {
-  console.error('Failed to create log directory:', err);
-}
-
-// Configure file transport properly
-log.transports.file.fileName = 'main.log'; // Only the filename, not the full path
-log.transports.file.resolvePathFn = () => path.join(logDir, 'main.log'); // Set the full path
-log.transports.file.maxSize = 1000000; // 1MB max file size
-
-// Enable console transport as well to ensure all logs appear in both places
-log.transports.console.level = 'debug';
-
-// Export logDir for use in other modules
-export { logDir };
-
-// Override console methods to also log to file
-const originalConsole = {
-  log: console.log,
-  error: console.error,
-  warn: console.warn,
-  info: console.info,
-  debug: console.debug
-};
-
-console.log = (...args: unknown[]) => {
-  originalConsole.log(...args);
-  log.info(...args);
-};
-
-console.error = (...args: unknown[]) => {
-  originalConsole.error(...args);
-  log.error(...args);
-};
-
-console.warn = (...args: unknown[]) => {
-  originalConsole.warn(...args);
-  log.warn(...args);
-};
-
-console.info = (...args: unknown[]) => {
-  originalConsole.info(...args);
-  log.info(...args);
-};
-
-console.debug = (...args: unknown[]) => {
-  originalConsole.debug(...args);
-  log.debug(...args);
-};
-
-// Remove process.stdout/stderr redirection to prevent circular logging
-// Console methods override above is sufficient for capturing application logs
-
-// Test the console override
-console.log('Console override test - this should appear in both terminal and log file');
-
-// Verify log file is writable
-try {
-  const logFilePath = path.join(logDir, 'main.log');
-  console.log(`Log file path: ${logFilePath}`);
-  console.log(`Log file exists: ${fs.existsSync(logFilePath)}`);
-  
-  // Test write to ensure the file is writable
-  log.info('Testing log file write capability...');
-  console.log('Log file write test completed');
-} catch (err) {
-  console.error('Error checking log file:', err);
-}
+// Console override and log verification are now handled by the Logger module
 
 log.info('Application starting...');
+
 // Handle uncaught exceptions
 process.on('uncaughtException', (error) => {
   log.error('Uncaught Exception:', error);
@@ -134,7 +60,7 @@ process.on('unhandledRejection', (reason) => {
 
 let win: BrowserWindow | null;
 function initialize() {
-  console.log(import.meta.env.VITE_REMOTEADD)
+  //console.log(import.meta.env.VITE_REMOTEADD)
   // protocol.registerSchemesAsPrivileged([
 
   //   { scheme: appName, privileges: { secure: true, 
@@ -163,13 +89,96 @@ function initialize() {
   }
   makeSingleInstance()
 
+  // Helper function to try alternative HTML file paths with detailed error handling
+  async function tryAlternativePaths(win: BrowserWindow, originalPath: string, log: any, dialog: any): Promise<void> {
+    const alternativePaths = [
+      path.join(__dirname, '../.vite/renderer/main_window/index.html'),
+      path.join(__dirname, '../renderer/main_window/index.html'),
+      path.join(__dirname, './index.html'),
+      path.join(process.resourcesPath, 'app.asar', '.vite', 'renderer', 'main_window', 'index.html'),
+      path.join(process.resourcesPath, '.vite', 'renderer', 'main_window', 'index.html')
+    ];
 
+    console.log('Trying alternative paths for HTML file...');
+    // log.info('Trying alternative paths for HTML file. Original path was:', originalPath);
+
+    let loaded = false;
+    let lastError: Error | null = null;
+
+    for (let i = 0; i < alternativePaths.length; i++) {
+      const altPath = alternativePaths[i];
+      console.log(`Trying alternative path ${i + 1}/${alternativePaths.length}:`, altPath);
+      // log.info(`Trying alternative path ${i + 1}/${alternativePaths.length}:`, altPath);
+
+      try {
+        // Check if window is still valid before attempting to load
+        if (win && !win.isDestroyed()) {
+          if (fs.existsSync(altPath)) {
+            console.log('Alternative path exists, attempting to load...');
+            // log.info('Alternative path exists, attempting to load:', altPath);
+
+            await win.loadFile(altPath);
+            console.log('Successfully loaded HTML file from alternative path:', altPath);
+            // log.info('Successfully loaded HTML file from alternative path:', altPath);
+            loaded = true;
+            break;
+          } else {
+            console.log('Alternative path does not exist:', altPath);
+            // log.warn('Alternative path does not exist:', altPath);
+          }
+        } else {
+          console.error('Window has been destroyed, cannot load file');
+          // log.error('Window has been destroyed, cannot load file');
+          lastError = new Error('Window has been destroyed');
+          break;
+        }
+      } catch (error) {
+        console.error(`Failed to load from alternative path ${i + 1}:`, altPath);
+        console.error('Error details:', error);
+        // log.error(`Failed to load from alternative path ${i + 1}:`, altPath);
+        // log.error('Error details:', error);
+        lastError = error as Error;
+
+        // If the error is "Object has been destroyed", break out of the loop
+        if (error instanceof Error && error.message.includes('Object has been destroyed')) {
+          console.error('Window was destroyed during loading, stopping alternative path attempts');
+          // log.error('Window was destroyed during loading, stopping alternative path attempts');
+          break;
+        }
+      }
+    }
+
+    if (!loaded) {
+      const errorMsg = `Could not load HTML file from any path. Tried:\nOriginal: ${originalPath}\nAlternatives:\n${alternativePaths.map((p, i) => `${i + 1}. ${p}`).join('\n')}`;
+      console.error(errorMsg);
+      // log.error(errorMsg);
+
+      if (lastError) {
+        console.error('Last error encountered:', lastError);
+        // log.error('Last error encountered:', lastError);
+      }
+
+      dialog.showErrorBox(
+        'Application Error',
+        'Could not load the application interface. This may be due to a corrupted installation.\n\nPlease try:\n1. Reinstalling the application\n2. Running as administrator\n3. Checking antivirus software\n\nError details have been logged.'
+      );
+      app.quit();
+    }
+  }
 
   async function createWindow() {
     let hiddenMenuBar = true;
     if (isDevelopment) {
       hiddenMenuBar = false;
     }
+
+    // Check if window already exists and is not destroyed
+    if (win && !win.isDestroyed()) {
+      console.log('Window already exists and is valid, focusing...');
+      win.focus();
+      return;
+    }
+
     // Create the browser window.
     win = new BrowserWindow({
       autoHideMenuBar: hiddenMenuBar,
@@ -190,6 +199,16 @@ function initialize() {
         preload: path.join(__dirname + '/preload.js')
       }
     })
+
+    if (win) {
+      registerCommunicationIpcHandlers(win);
+    }
+
+    // Add event listener for window destruction
+    win.on('closed', () => {
+      console.log('Window closed event triggered');
+      win = null;
+    });
     // In this example, only windows with the `about:blank` url will be created.
     // All other urls will be blocked.
     win.webContents.setWindowOpenHandler(({ url }) => {
@@ -228,8 +247,15 @@ function initialize() {
     // console.log(process.env.WEBPACK_DEV_SERVER_UR)
     if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
       // Load the url of the dev server if in development mode
-      await win.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL as string)
-      if (!process.env.IS_TEST) win.webContents.openDevTools()
+      try {
+        if (win && !win.isDestroyed()) {
+          await win.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL as string)
+          if (!process.env.IS_TEST) win.webContents.openDevTools()
+        }
+      } catch (error) {
+
+        console.error('Failed to load URL:', error);
+      }
     } else {
       //check update
       const server = import.meta.env.UPDATESERVER as string;
@@ -241,7 +267,71 @@ function initialize() {
       // console.log('app://./index.html')
       // createProtocol('app')
       // Load the index.html when not in development
-      await win.loadFile(path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`))
+      // In production, the renderer files are in .vite/renderer/main_window/
+      const htmlPath = path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`);
+
+      // console.log('=== HTML File Loading Debug Info ===');
+      // console.log('App is packaged:', app.isPackaged);
+      // console.log('MAIN_WINDOW_VITE_NAME:', MAIN_WINDOW_VITE_NAME);
+      // console.log('__dirname:', __dirname);
+      // console.log('process.resourcesPath:', process.resourcesPath);
+      // console.log('Loading HTML from:', htmlPath);
+      // log.info('=== HTML File Loading Debug Info ===');
+      // log.info('App is packaged:', app.isPackaged);
+      // log.info('MAIN_WINDOW_VITE_NAME:', MAIN_WINDOW_VITE_NAME);
+      // log.info('__dirname:', __dirname);
+      // log.info('process.resourcesPath:', process.resourcesPath);
+      // log.info('Loading HTML from:', htmlPath);
+
+      // Check if file exists before loading
+      if (fs.existsSync(htmlPath)) {
+        //console.log('HTML file exists, loading...');
+        log.info('Attempting to load HTML file from:', htmlPath);
+
+        try {
+          // Check if window is still valid before attempting to load
+          if (win && !win.isDestroyed()) {
+            await win.loadFile(htmlPath);
+            console.log('Successfully loaded HTML file from:', htmlPath);
+            //log.info('Successfully loaded HTML file from:', htmlPath);
+          } else {
+            console.error('Window has been destroyed, cannot load file');
+            //log.error('Window has been destroyed, cannot load file');
+            dialog.showErrorBox(
+              'Application Error',
+              'The application window was destroyed before it could load. Please restart the application.'
+            );
+            app.quit();
+            return;
+          }
+        } catch (error) {
+          console.error('Failed to load HTML file from primary path:', htmlPath);
+          console.error('Error details:', error);
+          // log.error('Failed to load HTML file from primary path:', htmlPath);
+          // log.error('Error details:', error);
+
+          // Check if the error is due to window destruction
+          if (error instanceof Error && error.message.includes('Object has been destroyed')) {
+            console.error('Window was destroyed during loading');
+            //log.error('Window was destroyed during loading');
+            dialog.showErrorBox(
+              'Application Error',
+              'The application window was destroyed during loading. Please restart the application.'
+            );
+            app.quit();
+            return;
+          }
+
+          // Try alternative paths with detailed error handling
+          //await tryAlternativePaths(win, htmlPath, log, dialog);
+        }
+      } else {
+        console.error('HTML file not found at:', htmlPath);
+        //log.error('HTML file not found at:', htmlPath);
+
+        // Try alternative paths with detailed error handling
+        await tryAlternativePaths(win, htmlPath, log, dialog);
+      }
     }
   }
 
@@ -257,9 +347,13 @@ function initialize() {
   // Handle application shutdown
   app.on('before-quit', async () => {
     try {
-      const scheduleManager = ScheduleManager.getInstance();
-      await scheduleManager.handleAppShutdown();
-      log.info('ScheduleManager shutdown completed');
+      const tokenService = new Token()
+      const userdataPath = tokenService.getValue(USERSDBPATH)
+      if (userdataPath && userdataPath.length > 0) {
+        const scheduleManager = ScheduleManager.getInstance();
+        await scheduleManager.handleAppShutdown();
+        log.info('ScheduleManager shutdown completed');
+      }
     } catch (error) {
       log.error('Failed to shutdown ScheduleManager:', error);
     }
@@ -273,6 +367,8 @@ function initialize() {
     } catch (error) {
       log.error('Failed to shutdown MCP server:', error);
     }
+    // Stop log cleanup interval
+    logger.stopLogCleanup();
   })
 
   app.on('activate', () => {
@@ -314,6 +410,9 @@ function initialize() {
     Menu.setApplicationMenu(menu);
 
     createWindow();
+
+    // Schedule log cleanup (runs after 5 seconds delay, then every 24 hours)
+    logger.scheduleLogCleanup();
 
 
 
@@ -362,9 +461,9 @@ function initialize() {
         log.error('Failed to check for orphaned Yellow Pages processes:', error);
       }
     }
-    if (win) {
-      registerCommunicationIpcHandlers(win);
-    }
+    // if (win) {
+    //   registerCommunicationIpcHandlers(win);
+    // }
 
     // Initialize and start MCP server
     try {
@@ -482,6 +581,9 @@ async function handleDeepLink(url: string) {
 
           if (win && !win.isDestroyed()) {
             await win.webContents.send(NATIVATECOMMAND, { path: 'Dashboard' } as NativateDatatype);
+          } else {
+            console.error('Window has been destroyed, cannot send navigation command');
+            log.error('Window has been destroyed, cannot send navigation command');
           }
         } else {
           log.error('Failed to get user info from remote source');
@@ -495,7 +597,7 @@ async function handleDeepLink(url: string) {
           `Failed to update user information: ${errorMessage}`);
       }
 
-    }else{
+    } else {
       console.error('No token found');
     }
 
