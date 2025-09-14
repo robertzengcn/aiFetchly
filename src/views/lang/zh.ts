@@ -88,6 +88,7 @@ export default {
         search_task_list: "搜索任务列表",
         search_task_detail: "搜索任务详情",
         edit_search_task: "编辑搜索任务",
+        create_search_task: "创建搜索任务",
         email_extraction: "邮件提取",
         email_extraction_form: "邮件提取",
         email_extraction_edit: "编辑邮件提取任务",

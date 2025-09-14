@@ -96,6 +96,7 @@ export default {
         search_task_list: "Search Task List",
         search_task_detail: "Search Task Detail",
         edit_search_task: "Edit Search Task",
+        create_search_task: "Create Search Task",
         email_extraction: "Email Extraction",
         email_extraction_form: "Email Extraction",
         email_extraction_edit: "Edit Email Extraction Task",
