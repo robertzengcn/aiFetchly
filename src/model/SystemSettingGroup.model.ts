@@ -2,16 +2,19 @@ import { BaseDb } from "@/model/Basedb";
 import { Repository } from "typeorm"
 import { SystemSettingGroupEntity } from "@/entity/SystemSettingGroup.entity"
 import {SystemSettingModel} from "@/model/SystemSetting.model"
-import {settinggroupInit} from "@/config/settinggroupInit"
+import {settinggroupInit, language_preference} from "@/config/settinggroupInit"
 import { SystemSettingEntity } from "@/entity/SystemSetting.entity"
+import {SystemSettingOptionModel} from "@/model/SystemSettingOption.model"
 
 export const deepseeklocalgroup = 'Deepseek-local'
 export class SystemSettingGroupModel extends BaseDb {
     private repository: Repository<SystemSettingGroupEntity>
     private systemSettingModel:SystemSettingModel
+    private systemSettingOptionModel:SystemSettingOptionModel
     constructor(filepath: string) {
         super(filepath)
         this.systemSettingModel = new SystemSettingModel(filepath)
+        this.systemSettingOptionModel = new SystemSettingOptionModel(filepath)
         this.repository = this.sqliteDb.connection.getRepository(SystemSettingGroupEntity)
        
     }
@@ -42,7 +45,12 @@ export class SystemSettingGroupModel extends BaseDb {
                             systemSettingEntity.value = settingelement.value;
                             systemSettingEntity.description = settingelement.description? settingelement.description:'';
                             systemSettingEntity.type = settingelement.type;
-                           await this.systemSettingModel.insert(systemSettingEntity)
+                           const savedSetting = await this.systemSettingModel.insert(systemSettingEntity)
+                           
+                           // Initialize language options if this is the language preference setting
+                           if (settingelement.key === language_preference) {
+                               await this.systemSettingOptionModel.initLanguageOptions(savedSetting);
+                           }
                         }else{
                             await this.systemSettingModel.updateGroup(setting,settargroup)
                         }

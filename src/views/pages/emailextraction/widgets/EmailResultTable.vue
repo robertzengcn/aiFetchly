@@ -3,6 +3,9 @@
   <v-data-table-server v-model="selected" :items-per-page="itemsPerPage" :search="search" :headers="computedHeaders"
     :items-length="totalItems" :items="serverItems" :loading="loading" item-key="id" @update:options="loadItems"
     class="custom-data-table" show-expand :show-select="isSelectedtable" select-strategy="single" return-object>
+    <template v-slot:[`item.statusName`]="{ item }">
+      {{ getTranslatedStatus(item.statusName) }}
+    </template>
     <template v-slot:[`item.actions`]="{ item }" v-if="isSelectedtable != true">
       <v-icon size="small" class="me-2" @click="openfolder(item)">
         mdi-folder
@@ -129,7 +132,7 @@ headers.value = [
     width: '10%'
   },
   {
-    title: 'Actions',
+    title: CapitalizeFirstLetter(t("common.actions")),
     key: 'actions',
     sortable: false,
     width: '15%'
@@ -255,6 +258,21 @@ const deleteTask = async (item: EmailsearchTaskEntityDisplay) => {
     }
   }
 }
+// Function to translate status values
+const getTranslatedStatus = (status: string): string => {
+  const statusMap: { [key: string]: string } = {
+    'Error': t('common.error'),
+    'Pending': t('common.pending'),
+    'Processing': t('common.processing'),
+    'Complete': t('common.complete'),
+    'Not Start': t('common.not_start'),
+    'Failed': t('common.error'), // Map Failed to Error translation
+    'Success': t('common.complete'), // Map Success to Complete translation
+  };
+  
+  return statusMap[status] || status; // Return translated status or original if not found
+};
+
 const emit = defineEmits(['change'])
 
 onMounted(() => {

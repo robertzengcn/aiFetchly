@@ -179,6 +179,10 @@ import {CommonDialogMsg} from "@/entityTypes/commonType"
 import NoticeSnackbar from '@/views/components/widgets/noticeSnackbar.vue';
 import {GetloginUserInfo} from '@/views/api/users'
 import { getAppName } from '@/views/api/app'
+import { updateLanguagePreference, getLanguagePreference } from '@/views/api/language'
+import { initializeLanguageDetection } from '@/views/utils/browserLanguageDetection'
+import { initializeLanguageMigration } from '@/views/utils/languageMigration'
+import { initializeLanguageSynchronization } from '@/views/utils/languageSynchronization'
 
 
 // import {ref, watchEffect} from "vue";
@@ -230,12 +234,26 @@ const languages: Array<languageType> = [
 // watchEffect(() => {
 //  locale.value = languages.find((x) => x.key === selectedOption.value)!.key;
 // })
-const switchLanguage = (lang: string) => {
-    console.log(lang)
-    // i18n.locale = lang
-    locale.value=lang
-    setLanguage(lang)
-    // router.go(0)
+const switchLanguage = async (lang: string) => {
+    console.log('Switching language to:', lang)
+    
+    try {
+        // Update UI immediately for better user experience
+        locale.value = lang
+        setLanguage(lang)
+        
+        // Persist to system settings in the background
+        const success = await updateLanguagePreference(lang)
+        
+        if (success) {
+            showSuccessMessage(t('layout.language_updated_successfully') || 'Language updated successfully')
+        } else {
+            showWarningMessage(t('layout.language_update_failed') || 'Language update failed, but UI has been updated')
+        }
+    } catch (error) {
+        console.error('Error switching language:', error)
+        showErrorMessage(t('layout.language_switch_error') || 'Error switching language')
+    }
 }
 
 const gotoSystemsetting=()=>{
@@ -333,6 +351,31 @@ onMounted(async () => {
         console.error('Failed to load app name:', error)
         // Keep default value if loading fails
     }
+    
+    // Initialize language migration first
+    await initializeLanguageMigration()
+    
+    // Load language preference from system settings
+    try {
+        const systemLanguage = await getLanguagePreference()
+        if (systemLanguage && systemLanguage !== locale.value) {
+            console.log('Loading language preference from system settings:', systemLanguage)
+            locale.value = systemLanguage
+            setLanguage(systemLanguage)
+        }
+    } catch (error) {
+        console.warn('Failed to load language preference from system settings, using current locale:', error)
+        // Keep current locale if loading fails
+    }
+    
+    // Initialize browser language detection for new users
+    initializeLanguageDetection(async (selectedLanguage) => {
+        console.log('User selected language:', selectedLanguage)
+        await switchLanguage(selectedLanguage)
+    })
+    
+    // Initialize language synchronization
+    initializeLanguageSynchronization()
     
     receiveSystemMessage((res:CommonDialogMsg)=>{
        console.log(res)

@@ -19,7 +19,7 @@ import { UserController } from '@/controller/UserController';
 import { NATIVATECOMMAND } from '@/config/channellist'
 import { NativateDatatype } from '@/entityTypes/commonType'
 import { ScheduleManager } from '@/modules/ScheduleManager';
-
+import { runafterbootup } from "@/modules/bootuprun"
 // import { createProtocol } from 'electron';
 const isDevelopment = process.env.NODE_ENV !== 'production'
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string;
@@ -428,6 +428,7 @@ function initialize() {
 
       // Initialize ScheduleManager with auto-start functionality
       try {
+        await runafterbootup()
         const scheduleManager = ScheduleManager.getInstance();
         await scheduleManager.initializeWithDatabaseStatus();
         log.info('ScheduleManager initialized with auto-start functionality');

@@ -186,3 +186,7 @@ export const YELLOW_PAGES_STATISTICS = 'yellow_pages:statistics'
 export const YELLOW_PAGES_KILL_PROCESS = 'yellow_pages:kill_process'
 export const YELLOW_PAGES_CHECK_ORPHANED_PROCESSES = 'yellow_pages:check_orphaned_processes'
 export const YELLOW_PAGES_HANDLE_PREVIOUS_SESSION = 'yellow_pages:handle_previous_session'
+
+// Language Preference Channels
+export const LANGUAGE_PREFERENCE_GET = 'language:preference:get'
+export const LANGUAGE_PREFERENCE_UPDATE = 'language:preference:update'
