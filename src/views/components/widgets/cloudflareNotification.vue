@@ -35,12 +35,11 @@
       </div>
     </div>
     
-    <template v-slot:actions="{ attrs }">
+    <template v-slot:actions>
       <v-btn
         color="white"
         variant="text"
         size="small"
-        v-bind="attrs"
         @click="dismiss"
         class="mr-2"
       >
@@ -50,7 +49,6 @@
         color="primary"
         variant="text"
         size="small"
-        v-bind="attrs"
         @click="viewTaskDetails"
       >
         {{ t('notifications.view_task') }}

@@ -108,7 +108,7 @@
 
 <script setup lang="ts">
 import { getSocialAccountlist, deleteSocialAccount, socialaccountLogin, receiveAccountLoginevent, requireCookiesselecttab, cleanCookies, showPlatformpage } from '@/views/api/socialaccount'
-import { ref, onMounted, reactive } from 'vue'
+import { ref, onMounted, reactive, computed } from 'vue'
 import { SearchResult } from '@/views/api/types'
 import { SocialAccountListData } from '@/entityTypes/socialaccount-type'
 import { RequireCookiesMsgbox, RequireCookiesParam } from '@/entityTypes/cookiesType'
@@ -154,31 +154,30 @@ const FakeAPI = {
 }
 
 
-const headers: Array<any> = [
+const headers = computed(() => [
     {
-        title: 'Id',
-        align: 'start',
+        title: t('socialaccount.id'),
+        align: 'start' as const,
         sortable: false,
         key: 'id',
     },
     {
-        title: 'Type',
-        align: 'start',
+        title: t('socialaccount.type'),
+        align: 'start' as const,
         sortable: false,
         key: 'social_type',
     },
     {
-        title: 'User Name',
-        align: 'start',
+        title: t('socialaccount.user_name'),
+        align: 'start' as const,
         sortable: false,
         key: 'user',
     },
-    { title: 'Cookies', key: 'cookies', sortable: false },
-    { title: 'Proxy', key: 'proxy', sortable: false },
-    { title: 'Status', key: 'status', sortable: false },
-    { title: 'Actions', key: 'actions', sortable: false },
-
-];
+    { title: t('socialaccount.cookies'), key: 'cookies', sortable: false },
+    { title: t('socialaccount.proxy'), key: 'proxy', sortable: false },
+    { title: t('socialaccount.status'), key: 'status', sortable: false },
+    { title: t('socialaccount.actions'), key: 'actions', sortable: false },
+] as const);
 const itemsPerPage = ref(10);
 const serverItems = ref<Array<SocialAccountListData>>([]);
 const loading = ref(false);
