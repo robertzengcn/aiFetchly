@@ -29,6 +29,8 @@ export const twocaptchadescription='2captcha-description'
 export const external_system='external_system'
 export const chrome_path='chrome_path'
 export const firefox_path='firefox_path'
+export const user_preferences='user_preferences'
+export const language_preference='language_preference'
 
 export const settinggroupInit: Array<SystemSettingGroupdf> = [
     {
@@ -178,6 +180,18 @@ export const settinggroupInit: Array<SystemSettingGroupdf> = [
                 value: '',
                 description: 'firefox-path-description',
                 type: 'file',
+            }
+        ]
+    },
+    {
+        name: user_preferences,
+        description: 'user-preferences-group-description',
+        items: [
+            {
+                key: language_preference,
+                value: 'en',
+                description: 'language-preference-description',
+                type: 'select',
             }
         ]
     },

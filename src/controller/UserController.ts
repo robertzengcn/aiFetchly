@@ -9,7 +9,7 @@ import { USERSDBPATH, USERLOGPATH, USEREMAIL,USERNAME, USERROLES } from '@/confi
 import { Token } from "@/modules/token"
 //import {runAfterTableCreate} from "@/modules/lib/databaseinit"
 import { SqliteDb } from "@/config/SqliteDb"
-import { runafterbootup } from "@/modules/bootuprun"
+// import { runafterbootup } from "@/modules/bootuprun"
 import {UserInfoType} from "@/entityTypes/userType"
 //import { CommonMessage } from "@/entityTypes/commonType";
 import { shell } from "electron";
@@ -117,7 +117,7 @@ export class UserController {
                 // Insert some sample data after the sync completes
                 //  runAfterTableCreate()
 
-                await runafterbootup()
+               // await runafterbootup()
             }
             return res;
         }).catch(function (error) {
@@ -270,7 +270,7 @@ export class UserController {
                             if(!appDataSource.connection.isInitialized){
                             await appDataSource.connection.initialize()
                             }
-                            await runafterbootup()
+                            //await runafterbootup()
                             } catch (error) {
                                 console.error('Failed to initialize database connection:', error)
             

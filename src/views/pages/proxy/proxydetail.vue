@@ -3,48 +3,48 @@
     <v-form ref="form" @submit.prevent="onSubmit">
       <v-text-field
         v-model="proxyId"
-        label="Id"
+        :label="t('proxy.id')"
         type="input"
         v-show="isEdit"
         :readonly="true"
       ></v-text-field>
       <v-text-field
         v-model="host"
-        label="Host"
+        :label="t('proxy.host')"
         type="input"
-        hint="input the host"
+        :hint="t('proxy.host_hint')"
         required
         :rules="[rules.required]"
         :readonly="loading"
       ></v-text-field>
       <v-text-field
         v-model="port"
-        label="Port"
+        :label="t('proxy.port')"
         type="input"
-        hint="input the port"
+        :hint="t('proxy.port_hint')"
         required
         :rules="[rules.required]"
         :readonly="loading"
       ></v-text-field>
       <v-text-field
         v-model="user"
-        label="User"
+        :label="t('proxy.user_name')"
         type="input"
-        hint="input the name"
+        :hint="t('proxy.user_hint')"
         :readonly="loading"
       ></v-text-field>
       <v-text-field
         v-model="pass"
-        label="Pass"
+        :label="t('proxy.password')"
         type="input"
-        hint="input the pass"       
+        :hint="t('proxy.password_hint')"       
         :readonly="loading"
       ></v-text-field>
     
       <v-select
         v-model="protocol"
         :items="protollist"
-        label="Protocol"
+        :label="t('proxy.protocol')"
         required
         :readonly="loading"
         :rules="[rules.required]"
@@ -54,26 +54,25 @@
         border="start"
         variant="tonal"
         closable
-        close-label="Close Alert"
-        title="Information"
+        :close-label="t('common.close')"
+        :title="t('common.information')"
         :color="alertcolor"
       >
         {{ alertContent }}
       </v-alert>
 
-      <div class="d-flex flex-column">
+      <div class="d-flex gap-8 mt-4">
         <v-btn
           color="success"
-          class="mt-4"
-          block
+          class="flex-1"
           type="submit"
           :loading="loading"
         >
-          Submit
+          {{ t('common.submit') }}
         </v-btn>
 
-        <v-btn color="error" class="mt-4" block @click="router.go(-1)">
-          Return
+        <v-btn color="error" class="flex-1 ml-4" @click="router.go(-1)">
+          {{ t('common.return') }}
         </v-btn>
       </div>
     </v-form>
@@ -86,10 +85,12 @@ import {
 } from "@/views/api/proxy";
 
 import { useRoute, useRouter } from "vue-router";
+import { useI18n } from "vue-i18n";
 import {ProxyEntity} from "@/entityTypes/proxyType";
 // import { saveSocialTask } from "@/views/api/socialtask";
 const $route = useRoute();
 const router = useRouter();
+const { t } = useI18n();
 const FakeAPI = {
   async fetch(id: number): Promise<ProxyEntity> {
     return await getProxy(id);
@@ -114,7 +115,7 @@ const isEdit = ref(false);
 const protollist=ref(["http","https","socket5"]);
 
 const rules = {
-  required: (value) => !!value || "Field is required",
+  required: (value) => !!value || t('common.fill_require_field'),
 };
 
 const initialize = async () => {
@@ -198,7 +199,7 @@ async function onSubmit() {
         if (res.id > 0) {
           alert.value = true;
           alertcolor.value = "success";
-          alertContent.value = "Save success, the account id is " + res.id;
+          alertContent.value = t('common.save_success') + ", " + t('proxy.id') + ": " + res.id;
           pe.id = res.id;
           $route.params.id = res.id.toString();
           isEdit.value = true;
@@ -206,7 +207,7 @@ async function onSubmit() {
         } else {
           alert.value = true;
           alertcolor.value = "error";
-          alertContent.value = "Save fail";
+          alertContent.value = t('common.save_fail');
         }
         setTimeout(() => {
           alert.value = false;

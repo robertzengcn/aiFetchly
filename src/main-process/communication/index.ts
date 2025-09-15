@@ -17,6 +17,7 @@ import {registerSystemSettingIpcHandlers} from "@/main-process/communication/sys
 import {registerUserIpcHandlers} from "@/main-process/communication/userIpc";
 import {registerPlatformIpcHandlers} from "@/main-process/communication/platform-ipc";
 import {registerSessionRecordingIpcHandlers} from "@/main-process/communication/sessionRecording-ipc";
+import {registerLanguagePreferenceIpcHandlers} from "@/main-process/ipc/language-ipc";
 export function registerCommunicationIpcHandlers(win: BrowserWindow) {
     try{
     SyncMsg(win)
@@ -34,6 +35,7 @@ export function registerCommunicationIpcHandlers(win: BrowserWindow) {
     registerUserIpcHandlers()
     registerPlatformIpcHandlers()
     registerSessionRecordingIpcHandlers()
+    registerLanguagePreferenceIpcHandlers()
     AsyncMsg()
     }catch(e){
         console.log("registerCommunicationIpcHandlers error:")

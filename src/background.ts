@@ -20,7 +20,7 @@ import { NATIVATECOMMAND } from '@/config/channellist'
 import { NativateDatatype } from '@/entityTypes/commonType'
 import { ScheduleManager } from '@/modules/ScheduleManager';
 import { MCPIntegration } from './main-process/MCPIntegration';
-
+import { runafterbootup } from "@/modules/bootuprun"
 // import { createProtocol } from 'electron';
 const isDevelopment = process.env.NODE_ENV !== 'production'
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string;
@@ -69,13 +69,13 @@ function initialize() {
   if (app.isPackaged) {
     if (!app.isDefaultProtocolClient(protocolScheme)) {
       const registres = app.setAsDefaultProtocolClient(protocolScheme);
-      console.log('registres:', registres)
+      //console.log('registres:', registres)
     }
 
   } else {
-    console.log('protocolScheme:', protocolScheme)
-    console.log('process.execPath:', process.execPath)
-    console.log('path.resolve(process.argv[1]):', path.resolve(process.argv[1]))
+    //console.log('protocolScheme:', protocolScheme)
+   // console.log('process.execPath:', process.execPath)
+   // console.log('path.resolve(process.argv[1]):', path.resolve(process.argv[1]))
     // console.log('path:', path.resolve(process.argv[1]))
     ProtocolRegistry.register(protocolScheme, `"${process.execPath}" "${path.resolve(process.argv[1])}" "$_URL_"`,
       {
@@ -99,7 +99,7 @@ function initialize() {
       path.join(process.resourcesPath, '.vite', 'renderer', 'main_window', 'index.html')
     ];
 
-    console.log('Trying alternative paths for HTML file...');
+    //console.log('Trying alternative paths for HTML file...');
     // log.info('Trying alternative paths for HTML file. Original path was:', originalPath);
 
     let loaded = false;
@@ -114,7 +114,7 @@ function initialize() {
         // Check if window is still valid before attempting to load
         if (win && !win.isDestroyed()) {
           if (fs.existsSync(altPath)) {
-            console.log('Alternative path exists, attempting to load...');
+            //console.log('Alternative path exists, attempting to load...');
             // log.info('Alternative path exists, attempting to load:', altPath);
 
             await win.loadFile(altPath);
@@ -133,7 +133,7 @@ function initialize() {
           break;
         }
       } catch (error) {
-        console.error(`Failed to load from alternative path ${i + 1}:`, altPath);
+        //console.error(`Failed to load from alternative path ${i + 1}:`, altPath);
         console.error('Error details:', error);
         // log.error(`Failed to load from alternative path ${i + 1}:`, altPath);
         // log.error('Error details:', error);
@@ -438,6 +438,7 @@ function initialize() {
 
       // Initialize ScheduleManager with auto-start functionality
       try {
+        await runafterbootup()
         const scheduleManager = ScheduleManager.getInstance();
         await scheduleManager.initializeWithDatabaseStatus();
         log.info('ScheduleManager initialized with auto-start functionality');
@@ -542,7 +543,7 @@ function makeSingleInstance() {
     app.quit()
   } else {
 
-    console.log('gotThelock:', gotThelock)
+    // console.log('gotThelock:', gotThelock)
 
     app.on('second-instance', (event, argv, workingDirectory) => {
       if (win) {
@@ -550,11 +551,16 @@ function makeSingleInstance() {
         win.focus()
       }
 
-      console.log("second-instance call")
+      // console.log("second-instance call")
+      // console.log('protocolScheme:', protocolScheme)
+     // argv = argv.map(arg => typeof arg === 'string' ? arg.toLowerCase() : arg);
       const url = argv.find(arg => arg.startsWith(`${protocolScheme}://`));
       if (url) {
-        console.log(`App opened with URL on window: ${url}`);
+        console.log('app opened with url on window')
+        //console.log(`App opened with URL on window: ${url}`);
         handleDeepLink(url)
+      }else{
+        console.error('no url found')
       }
 
     })
@@ -567,7 +573,7 @@ async function handleDeepLink(url: string) {
     const parsedUrl = new URL(url);
     const token = parsedUrl.searchParams.get('token'); // Example: Extract a token from the URL
     if (token) {
-      console.log(`Token received: ${token}`);
+      //console.log(`Token received: ${token}`);
       const tokenService = new Token();
       tokenService.setValue(TOKENNAME, token);
       // const remoteser = new RemoteSource()
@@ -583,7 +589,7 @@ async function handleDeepLink(url: string) {
             await win.webContents.send(NATIVATECOMMAND, { path: 'Dashboard' } as NativateDatatype);
           } else {
             console.error('Window has been destroyed, cannot send navigation command');
-            log.error('Window has been destroyed, cannot send navigation command');
+            //log.error('Window has been destroyed, cannot send navigation command');
           }
         } else {
           log.error('Failed to get user info from remote source');
