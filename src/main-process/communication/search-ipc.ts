@@ -2,7 +2,7 @@ import { ipcMain, dialog, app } from 'electron';
 import { SEARCHSCRAPERAPI, LISTSESARCHRESUT, SEARCHEVENT, TASKSEARCHRESULTLIST, SAVESEARCHERRORLOG, RETRYSEARCHTASK, SYSTEM_MESSAGE, GET_SEARCH_TASK_DETAILS, UPDATE_SEARCH_TASK, SEARCH_TASK_UPDATE_EVENT, CREATE_SEARCH_TASK_ONLY } from '@/config/channellist'
 import { CommonDialogMsg } from "@/entityTypes/commonType";
 import { Usersearchdata, SearchtaskItem, SearchResultFetchparam } from "@/entityTypes/searchControlType"
-import { SearchController } from "@/controller/searchController"
+import { SearchController } from "@/controller/SearchController"
 import { CommonResponse, CommonMessage } from "@/entityTypes/commonType"
 import { SearchTaskUpdateData } from "@/modules/searchModule"
 import { SearchResEntity } from "@/entityTypes/scrapeType"
