@@ -42,6 +42,9 @@ import { YellowPagesTaskEntity } from "@/entity/YellowPagesTask.entity";
 import { YellowPagesResultEntity } from "@/entity/YellowPagesResult.entity";
 import { YellowPagesPlatformEntity } from "@/entity/YellowPagesPlatform.entity";
 import { SessionRecordingEntity } from "@/entity/SessionRecording.entity";
+import { RAGDocumentEntity } from "@/entity/RAGDocument.entity";
+import { RAGChunkEntity } from "@/entity/RAGChunk.entity";
+import { RAGModelEntity } from "@/entity/RAGModel.entity";
 // import sqlite3 from "sqlite3";
 
 
@@ -104,6 +107,9 @@ export class SqliteDb {
                 YellowPagesResultEntity,
                 YellowPagesPlatformEntity,
                 SessionRecordingEntity,
+                RAGDocumentEntity,
+                RAGChunkEntity,
+                RAGModelEntity,
             ],
             synchronize: true, 
             migrations: [],

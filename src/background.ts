@@ -20,6 +20,7 @@ import { NATIVATECOMMAND } from '@/config/channellist'
 import { NativateDatatype } from '@/entityTypes/commonType'
 import { ScheduleManager } from '@/modules/ScheduleManager';
 import { runafterbootup } from "@/modules/bootuprun"
+import { RAGIpcHandlers } from '@/main-process/ragIpcHandlers';
 // import { createProtocol } from 'electron';
 const isDevelopment = process.env.NODE_ENV !== 'production'
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string;
@@ -424,6 +425,14 @@ function initialize() {
       const appDataSource = SqliteDb.getInstance(userdataPath)
       if (!appDataSource.connection.isInitialized) {
         await appDataSource.connection.initialize()
+      }
+
+      // Initialize RAG IPC handlers
+      try {
+        const ragHandlers = new RAGIpcHandlers(appDataSource);
+        log.info('RAG IPC handlers initialized successfully');
+      } catch (error) {
+        log.error('Failed to initialize RAG IPC handlers:', error);
       }
 
       // Initialize ScheduleManager with auto-start functionality
