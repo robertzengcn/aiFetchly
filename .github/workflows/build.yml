@@ -122,7 +122,10 @@ jobs:
         shell: pwsh
 
       - name: Build application
-        run: yarn make-win:test
+        run: |
+          echo "Current working directory: $(pwd)"
+          yarn make-win:test
+        shell: bash
 
       - name: Verify uninstaller in build output
         run: |
@@ -308,7 +311,9 @@ jobs:
           echo "C++ modules (should use CXXFLAGS):"
           find node_modules/ -name "*.cc" -o -name "*.cpp" -path "*/better-sqlite3/*" -o -path "*/sqlite3/*" || echo "No C++ files found in C++ modules"
       - name: Build application
-        run: yarn make-mac:test
+        run: |
+          echo "Current working directory: $(pwd)"
+          yarn make-mac:test
       - name: Fallback build if main build fails
         if: failure()
         run: |
