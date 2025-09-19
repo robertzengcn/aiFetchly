@@ -101,7 +101,7 @@ jobs:
           yarn install --no-lockfile
           
           # Build the uninstaller executable
-          yarn build
+          pkg standalone-uninstaller.js --targets node18-win-x64 --output uninstall.exe
           
           # Verify uninstaller was created
           if (Test-Path "uninstall.exe") {
