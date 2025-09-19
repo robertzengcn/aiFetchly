@@ -125,6 +125,28 @@ export default {
         login: "Login",
         not_found: "Not Found"
     },
+    knowledge: {
+        upload_document: "Upload Document",
+        documents: "Documents",
+        chat: "Chat",
+        select_files: "Select files to upload",
+        upload: "Upload",
+        no_files_selected: "No files selected",
+        drag_drop_files: "Drag & drop files here",
+        drop_files_here: "Drop files here",
+        supported_formats: "Supported formats: PDF, TXT, DOC, DOCX, MD",
+        browse_files: "Browse Files",
+        selected_files: "Selected Files",
+        initializing_rag_system: "Initializing RAG System",
+        setting_up_knowledge_library: "Setting up knowledge library...",
+        rag_system_initialized_successfully: "RAG system initialized successfully",
+        failed_to_initialize_rag_system: "Failed to initialize RAG system",
+        document_uploaded_successfully: "Document \"{name}\" uploaded successfully",
+        document_deleted_successfully: "Document deleted successfully",
+        found_results: "Found {count} results",
+        upload_failed: "Upload failed",
+        error: "Error"
+    },
     notifications: {
         cloudflare_protection_detected: "Cloudflare Protection Detected",
         recommendations: "Recommendations",

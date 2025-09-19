@@ -44,14 +44,6 @@
             @change="applyFilters"
           />
         </v-col>
-        <v-col cols="12" md="3">
-          <v-text-field
-            v-model="filters.author"
-            label="Author"
-            clearable
-            @input="applyFilters"
-          />
-        </v-col>
       </v-row>
     </div>
 
@@ -160,10 +152,6 @@
             label="Description"
             rows="3"
           />
-          <v-text-field
-            v-model="uploadData.author"
-            label="Author"
-          />
           <v-combobox
             v-model="uploadData.tags"
             label="Tags"
@@ -222,15 +210,13 @@ export default defineComponent({
     const uploadData = ref({
       title: '',
       description: '',
-      author: '',
       tags: []
     });
 
     const filters = ref({
       name: '',
       status: '',
-      fileType: '',
-      author: ''
+      fileType: ''
     });
 
     const headers = [
@@ -240,7 +226,6 @@ export default defineComponent({
       { text: 'Processing', value: 'processingStatus', sortable: true },
       { text: 'File Type', value: 'fileType', sortable: true },
       { text: 'Size', value: 'fileSize', sortable: true },
-      { text: 'Author', value: 'author', sortable: true },
       { text: 'Uploaded', value: 'uploadedAt', sortable: true },
       { text: 'Actions', value: 'actions', sortable: false }
     ];
@@ -272,7 +257,6 @@ export default defineComponent({
             processingStatus: 'completed',
             fileType: 'pdf',
             fileSize: 1024000,
-            author: 'John Doe',
             uploadedAt: new Date('2024-01-15'),
             tags: ['research', 'ai']
           },
@@ -284,7 +268,6 @@ export default defineComponent({
             processingStatus: 'completed',
             fileType: 'txt',
             fileSize: 51200,
-            author: 'Jane Smith',
             uploadedAt: new Date('2024-01-14'),
             tags: ['meeting', 'notes']
           }
@@ -325,7 +308,7 @@ export default defineComponent({
         
         showUploadDialog.value = false;
         uploadFile.value = null;
-        uploadData.value = { title: '', description: '', author: '', tags: [] };
+        uploadData.value = { title: '', description: '', tags: [] };
         
         // Refresh documents
         loadDocuments();

@@ -4,7 +4,7 @@
     <div class="knowledge-header">
       <h1 class="knowledge-title">
         <v-icon class="mr-2">mdi-book-open-variant</v-icon>
-        Knowledge Library
+        {{ $t('route.knowledge_library') }}
       </h1>
       <div class="knowledge-actions">
         <v-btn
@@ -12,14 +12,7 @@
           prepend-icon="mdi-upload"
           @click="showUploadDialog = true"
         >
-          Upload Document
-        </v-btn>
-        <v-btn
-          color="secondary"
-          prepend-icon="mdi-cog"
-          @click="showSettingsDialog = true"
-        >
-          Settings
+          {{ $t('knowledge.upload_document') }}
         </v-btn>
       </div>
     </div>
@@ -45,19 +38,19 @@
         <!-- Documents Tab -->
         <v-tab value="documents">
           <v-icon class="mr-2">mdi-file-document-multiple</v-icon>
-          Documents
+          {{ $t('knowledge.documents') }}
         </v-tab>
 
         <!-- Search Tab -->
         <v-tab value="search">
           <v-icon class="mr-2">mdi-magnify</v-icon>
-          Search
+          {{ $t('route.search') }}
         </v-tab>
 
         <!-- Chat Tab -->
         <v-tab value="chat">
           <v-icon class="mr-2">mdi-chat</v-icon>
-          Chat
+          {{ $t('knowledge.chat') }}
         </v-tab>
 
       </v-tabs>
@@ -96,8 +89,124 @@
       </v-card-text>
     </v-card>
 
-    <!-- Upload Dialog - TODO: Implement -->
-    <!-- Settings Dialog - TODO: Implement -->
+    <!-- Upload Dialog -->
+    <v-dialog v-model="showUploadDialog" max-width="700px" persistent>
+      <v-card>
+        <v-card-title class="text-h5">
+          {{ $t('knowledge.upload_document') }}
+        </v-card-title>
+        
+        <v-card-text>
+          <!-- Drag and Drop Area -->
+          <div
+            class="upload-drop-zone"
+            :class="{ 'drag-over': isDragOver, 'has-files': uploadFiles.length > 0 }"
+            @drop="onFileDrop"
+            @dragover.prevent="onDragOver"
+            @dragenter.prevent="onDragEnter"
+            @dragleave.prevent="onDragLeave"
+            @click="triggerFileInput"
+          >
+            <div class="drop-zone-content">
+              <v-icon 
+                size="48" 
+                :color="isDragOver ? 'primary' : 'grey'"
+                class="mb-3"
+              >
+                mdi-cloud-upload
+              </v-icon>
+              
+              <div class="text-h6 mb-2">
+                {{ isDragOver ? $t('knowledge.drop_files_here') : $t('knowledge.drag_drop_files') }}
+              </div>
+              
+              <div class="text-body-2 text-grey">
+                {{ $t('knowledge.supported_formats') }}
+              </div>
+              
+              <v-btn
+                color="primary"
+                variant="outlined"
+                class="mt-3"
+                @click.stop="triggerFileInput"
+              >
+                {{ $t('knowledge.browse_files') }}
+              </v-btn>
+            </div>
+          </div>
+
+          <!-- Hidden file input -->
+          <input
+            ref="fileInput"
+            type="file"
+            multiple
+            accept=".pdf,.txt,.doc,.docx,.md"
+            style="display: none"
+            @change="onFileSelect"
+          />
+          
+          <!-- Selected Files List -->
+          <div v-if="uploadFiles.length > 0" class="selected-files mt-4">
+            <div class="text-subtitle-1 mb-2">
+              {{ $t('knowledge.selected_files') }} ({{ uploadFiles.length }})
+            </div>
+            <v-list density="compact">
+              <v-list-item
+                v-for="(file, index) in uploadFiles"
+                :key="index"
+                class="file-item"
+              >
+                <template v-slot:prepend>
+                  <v-icon color="primary">mdi-file-document</v-icon>
+                </template>
+                
+                <v-list-item-title>{{ file.name }}</v-list-item-title>
+                <v-list-item-subtitle>{{ formatFileSize(file.size) }}</v-list-item-subtitle>
+                
+                <template v-slot:append>
+                  <v-btn
+                    icon="mdi-close"
+                    size="small"
+                    variant="text"
+                    @click="removeFile(index)"
+                  />
+                </template>
+              </v-list-item>
+            </v-list>
+          </div>
+          
+          <v-alert
+            v-if="uploadError"
+            type="error"
+            class="mt-3"
+            dismissible
+            @input="uploadError = ''"
+          >
+            {{ uploadError }}
+          </v-alert>
+        </v-card-text>
+        
+        <v-card-actions>
+          <v-spacer></v-spacer>
+          <v-btn
+            color="grey"
+            text
+            @click="cancelUpload"
+          >
+            {{ $t('common.cancel') }}
+          </v-btn>
+          <v-btn
+            color="primary"
+            @click="confirmUpload"
+            :loading="uploading"
+            :disabled="!uploadFiles || uploadFiles.length === 0"
+          >
+            {{ $t('knowledge.upload') }}
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
 
     <!-- Loading Overlay -->
     <v-overlay
@@ -119,20 +228,30 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue';
+import { useI18n } from 'vue-i18n';
 import DocumentManagement from '@/views/pages/knowledge/DocumentManagement.vue';
 import SearchInterface from '@/views/pages/knowledge/SearchInterface.vue';
 import ChatInterface from '@/views/pages/knowledge/ChatInterface.vue';
 import { initializeRAG, getRAGStats } from '@/views/api/rag';
 
+// i18n setup
+const { t } = useI18n();
+
 // Reactive data
 const activeTab = ref('documents');
 const showUploadDialog = ref(false);
-const showSettingsDialog = ref(false);
 const isLoading = ref(false);
 const loadingMessage = ref('');
 const loadingSubMessage = ref('');
 const statusMessage = ref('');
 const statusType = ref<'success' | 'error' | 'warning' | 'info'>('info');
+
+// Upload dialog data
+const uploadFiles = ref<File[]>([]);
+const uploading = ref(false);
+const uploadError = ref('');
+const isDragOver = ref(false);
+const fileInput = ref<HTMLInputElement>();
 
 // Component refs
 const documentManagement = ref();
@@ -151,7 +270,7 @@ onUnmounted(() => {
 // Methods
 async function initializeRAGSystem() {
   try {
-    setLoading(true, 'Initializing RAG System', 'Setting up knowledge library...');
+    setLoading(true, t('knowledge.initializing_rag_system'), t('knowledge.setting_up_knowledge_library'));
     
     // Check if RAG is already initialized
     const response = await getRAGStats();
@@ -162,11 +281,11 @@ async function initializeRAGSystem() {
     // }
     
     setLoading(false);
-    //showStatus('RAG system initialized successfully', 'success');
+    //showStatus(t('knowledge.rag_system_initialized_successfully'), 'success');
   } catch (error) {
     console.error('Failed to initialize RAG system:', error);
     setLoading(false);
-    showStatus(`Failed to initialize RAG system: ${error}`, 'error');
+    showStatus(`${t('knowledge.failed_to_initialize_rag_system')}: ${error}`, 'error');
   }
 }
 
@@ -212,7 +331,7 @@ function showStatus(message: string, type: 'success' | 'error' | 'warning' | 'in
 
 // Event handlers
 function handleDocumentUploaded(document: any) {
-  showStatus(`Document "${document.name}" uploaded successfully`, 'success');
+  showStatus(t('knowledge.document_uploaded_successfully', { name: document.name }), 'success');
   // Refresh document management if needed
   if (documentManagement.value) {
     documentManagement.value.refreshDocuments();
@@ -220,7 +339,7 @@ function handleDocumentUploaded(document: any) {
 }
 
 function handleDocumentDeleted(documentId: number) {
-  showStatus('Document deleted successfully', 'success');
+  showStatus(t('knowledge.document_deleted_successfully'), 'success');
   // Refresh document management if needed
   if (documentManagement.value) {
     documentManagement.value.refreshDocuments();
@@ -228,7 +347,7 @@ function handleDocumentDeleted(documentId: number) {
 }
 
 function handleSearchCompleted(results: any) {
-  showStatus(`Found ${results.totalResults} results`, 'success');
+  showStatus(t('knowledge.found_results', { count: results.totalResults }), 'success');
 }
 
 function handleMessageSent(message: any) {
@@ -237,7 +356,7 @@ function handleMessageSent(message: any) {
 
 function handleUploadSuccess(document: any) {
   showUploadDialog.value = false;
-  showStatus(`Document "${document.name}" uploaded successfully`, 'success');
+  showStatus(t('knowledge.document_uploaded_successfully', { name: document.name }), 'success');
   // Refresh document management
   if (documentManagement.value) {
     documentManagement.value.refreshDocuments();
@@ -245,18 +364,101 @@ function handleUploadSuccess(document: any) {
 }
 
 function handleUploadError(error: string) {
-  showStatus(`Upload failed: ${error}`, 'error');
+  showStatus(`${t('knowledge.upload_failed')}: ${error}`, 'error');
 }
 
-function handleSettingsSaved(settings: any) {
-  showSettingsDialog.value = false;
-  showStatus('Settings saved successfully', 'success');
-  // Reinitialize RAG with new settings if needed
-  initializeRAGSystem();
-}
 
 function handleError(error: string) {
-  showStatus(`Error: ${error}`, 'error');
+  showStatus(`${t('knowledge.error')}: ${error}`, 'error');
+}
+
+// Upload dialog methods
+function onFileSelect(event: Event) {
+  const target = event.target as HTMLInputElement;
+  if (target.files) {
+    uploadFiles.value = Array.from(target.files);
+    uploadError.value = '';
+  }
+}
+
+function triggerFileInput() {
+  fileInput.value?.click();
+}
+
+function onDragOver(event: DragEvent) {
+  event.preventDefault();
+  isDragOver.value = true;
+}
+
+function onDragEnter(event: DragEvent) {
+  event.preventDefault();
+  isDragOver.value = true;
+}
+
+function onDragLeave(event: DragEvent) {
+  event.preventDefault();
+  isDragOver.value = false;
+}
+
+function onFileDrop(event: DragEvent) {
+  event.preventDefault();
+  isDragOver.value = false;
+  
+  if (event.dataTransfer?.files) {
+    const files = Array.from(event.dataTransfer.files);
+    uploadFiles.value = files;
+    uploadError.value = '';
+  }
+}
+
+function removeFile(index: number) {
+  uploadFiles.value.splice(index, 1);
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes === 0) return '0 Bytes';
+  const k = 1024;
+  const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+function cancelUpload() {
+  showUploadDialog.value = false;
+  uploadFiles.value = [];
+  uploadError.value = '';
+  uploading.value = false;
+  isDragOver.value = false;
+}
+
+async function confirmUpload() {
+  if (!uploadFiles.value || uploadFiles.value.length === 0) {
+    uploadError.value = t('knowledge.no_files_selected');
+    return;
+  }
+
+  uploading.value = true;
+  uploadError.value = '';
+
+  try {
+    // TODO: Implement actual file upload logic
+    // For now, simulate upload
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    
+    // Simulate successful upload
+    const uploadedDocument = {
+      name: uploadFiles.value[0].name,
+      size: uploadFiles.value[0].size
+    };
+    
+    handleUploadSuccess(uploadedDocument);
+    cancelUpload();
+  } catch (error) {
+    uploadError.value = t('knowledge.upload_failed');
+    console.error('Upload error:', error);
+  } finally {
+    uploading.value = false;
+  }
 }
 
 // Expose methods for parent components
@@ -269,9 +471,6 @@ defineExpose({
   },
   uploadDocument: () => {
     showUploadDialog.value = true;
-  },
-  openSettings: () => {
-    showSettingsDialog.value = true;
   }
 });
 </script>
@@ -378,5 +577,58 @@ defineExpose({
 
 .v-window-item::-webkit-scrollbar-thumb:hover {
   background: #a8a8a8;
+}
+
+/* Upload Dialog Styles */
+.upload-drop-zone {
+  border: 2px dashed #e0e0e0;
+  border-radius: 12px;
+  padding: 40px 20px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  background-color: #fafafa;
+  min-height: 200px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.upload-drop-zone:hover {
+  border-color: #1976d2;
+  background-color: #f5f5f5;
+}
+
+.upload-drop-zone.drag-over {
+  border-color: #1976d2;
+  background-color: #e3f2fd;
+  transform: scale(1.02);
+}
+
+.upload-drop-zone.has-files {
+  border-color: #4caf50;
+  background-color: #f1f8e9;
+}
+
+.drop-zone-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.selected-files {
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 16px;
+  background-color: #f9f9f9;
+}
+
+.file-item {
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.file-item:last-child {
+  border-bottom: none;
 }
 </style>

@@ -117,6 +117,28 @@ export default {
         login: "登录",
         not_found: "未找到"
     },
+    knowledge: {
+        upload_document: "上传文档",
+        documents: "文档",
+        chat: "聊天",
+        select_files: "选择要上传的文件",
+        upload: "上传",
+        no_files_selected: "未选择文件",
+        drag_drop_files: "拖拽文件到此处",
+        drop_files_here: "在此处放置文件",
+        supported_formats: "支持格式：PDF, TXT, DOC, DOCX, MD",
+        browse_files: "浏览文件",
+        selected_files: "已选文件",
+        initializing_rag_system: "正在初始化RAG系统",
+        setting_up_knowledge_library: "正在设置知识库...",
+        rag_system_initialized_successfully: "RAG系统初始化成功",
+        failed_to_initialize_rag_system: "RAG系统初始化失败",
+        document_uploaded_successfully: "文档 \"{name}\" 上传成功",
+        document_deleted_successfully: "文档删除成功",
+        found_results: "找到 {count} 个结果",
+        upload_failed: "上传失败",
+        error: "错误"
+    },
     notifications: {
         cloudflare_protection_detected: "检测到Cloudflare保护",
         recommendations: "建议",
