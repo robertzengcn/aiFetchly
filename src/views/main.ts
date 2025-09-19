@@ -1,14 +1,14 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia';
 import './styles/index.scss';
-import App from '@/views/App.vue'
-import router from '@/views/router';
-import {vuetify} from '@/views/plugins/vuetify'
-import { loadFonts } from '@/views/plugins/webfontloader'
-import store from '@/views/store'
-import '@/views/permission'
+import App from './App.vue'
+import router from './router';
+import {vuetify} from './plugins/vuetify'
+import { loadFonts } from './plugins/webfontloader'
+import store from './store'
+import './permission'
 // import { createI18n } from 'vue-i18n'
-import  i18n from '@/views/lang';
+import  i18n from './lang';
 
 loadFonts()
 // const i18n = createI18n({

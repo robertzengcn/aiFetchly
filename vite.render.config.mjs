@@ -5,7 +5,6 @@ import vue from '@vitejs/plugin-vue'
 import vuetify from 'vite-plugin-vuetify'
 import ClosePlugin from './vite-plugin-close.ts'
 import checker from 'vite-plugin-checker'
-import alias from "@rollup/plugin-alias";
 
 export default defineConfig({
   build: {
@@ -17,7 +16,6 @@ export default defineConfig({
     vuetify({
       autoImport: true,
     }),
-    alias(),
     ClosePlugin(),
     checker({
       // e.g. use TypeScript check
