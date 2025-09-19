@@ -104,7 +104,7 @@ jobs:
           # Verify uninstaller was created
           if (Test-Path "uninstall.exe") {
             echo "✅ Uninstaller created successfully"
-            ls -la uninstall.exe
+            Get-ChildItem uninstall.exe | Format-Table Name, Length, LastWriteTime
           } else {
             echo "❌ Failed to create uninstaller"
             exit 1
