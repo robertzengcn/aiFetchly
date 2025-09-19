@@ -1,0 +1,17 @@
+{
+  "name": "aifetchly-uninstaller",
+  "version": "1.0.0",
+  "description": "aiFetchly Standalone Uninstaller",
+  "main": "standalone-uninstaller.js",
+  "scripts": {
+    "build": "pkg standalone-uninstaller.js --targets node18-win-x64 --output uninstall.exe"
+  },
+  "dependencies": {
+    "electron": "^35.0.3"
+  },
+  "pkg": {
+    "assets": [
+      "uninstall-windows.js"
+    ]
+  }
+}
