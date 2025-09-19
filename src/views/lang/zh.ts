@@ -113,6 +113,7 @@ export default {
         email_service: "邮件服务",
         email_service_create: "创建邮件服务",
         email_service_edit: "编辑邮件服务",
+        knowledge_library: "知识库",
         login: "登录",
         not_found: "未找到"
     },

@@ -6,7 +6,7 @@ import { windowInvoke,windowReceive,windowSend } from '@/views/utils/apirequest'
 import {LISTSESARCHRESUT,TASKSEARCHRESULTLIST,SAVESEARCHERRORLOG,RETRYSEARCHTASK,GET_SEARCH_TASK_DETAILS,UPDATE_SEARCH_TASK,SEARCH_TASK_UPDATE_EVENT,CREATE_SEARCH_TASK_ONLY} from "@/config/channellist";
 import {SearchResEntityDisplay} from "@/entityTypes/scrapeType"
 import {ItemSearchparam} from "@/entityTypes/commonType"
-import {TaskDetailsForEdit, SearchTaskUpdateData} from "@/modules/searchModule"
+import {TaskDetailsForEdit, SearchTaskUpdateData} from "@/modules/SearchModule"
 //import {CommonDialogMsg} from "@/entityTypes/commonType";
 // import { ipcMain} from 'electron'
 

@@ -18,14 +18,14 @@ export class OpenAIEmbeddingService implements EmbeddingImpl {
         this.model = config.model;
         this.provider = 'openai';
         this.dimensions = config.dimensions || 1536; // Default for text-embedding-ada-002
-        this.maxRetries = config.maxRetries || 3;
+        // this.maxRetries = config.maxRetries || 3;
 
-        if (!config.apiKey) {
-            throw new Error('OpenAI API key is required');
-        }
+        // if (!config.apiKey) {
+        //     throw new Error('OpenAI API key is required');
+        // }
 
         this.client = new OpenAI({
-            apiKey: config.apiKey,
+            // apiKey: config.apiKey,
             maxRetries: this.maxRetries
         });
     }

@@ -60,11 +60,6 @@
           Chat
         </v-tab>
 
-        <!-- Analytics Tab -->
-        <v-tab value="analytics">
-          <v-icon class="mr-2">mdi-chart-line</v-icon>
-          Analytics
-        </v-tab>
       </v-tabs>
 
       <v-card-text class="pa-0">
@@ -97,30 +92,12 @@
             />
           </v-window-item>
 
-          <!-- Analytics Window -->
-          <v-window-item value="analytics">
-            <AnalyticsDashboard
-              ref="analyticsDashboard"
-              @error="handleError"
-            />
-          </v-window-item>
         </v-window>
       </v-card-text>
     </v-card>
 
-    <!-- Upload Dialog -->
-    <DocumentUploadDialog
-      v-model="showUploadDialog"
-      @upload-success="handleUploadSuccess"
-      @upload-error="handleUploadError"
-    />
-
-    <!-- Settings Dialog -->
-    <SettingsDialog
-      v-model="showSettingsDialog"
-      @settings-saved="handleSettingsSaved"
-      @error="handleError"
-    />
+    <!-- Upload Dialog - TODO: Implement -->
+    <!-- Settings Dialog - TODO: Implement -->
 
     <!-- Loading Overlay -->
     <v-overlay
@@ -142,12 +119,10 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue';
-import DocumentManagement from '@/components/rag/DocumentManagement.vue';
-import SearchInterface from '@/components/rag/SearchInterface.vue';
-import ChatInterface from '@/components/rag/ChatInterface.vue';
-import AnalyticsDashboard from '@/components/rag/AnalyticsDashboard.vue';
-import DocumentUploadDialog from '@/components/rag/DocumentUploadDialog.vue';
-import SettingsDialog from '@/components/rag/SettingsDialog.vue';
+import DocumentManagement from '@/views/pages/knowledge/DocumentManagement.vue';
+import SearchInterface from '@/views/pages/knowledge/SearchInterface.vue';
+import ChatInterface from '@/views/pages/knowledge/ChatInterface.vue';
+import { initializeRAG, getRAGStats } from '@/views/api/rag';
 
 // Reactive data
 const activeTab = ref('documents');
@@ -163,11 +138,10 @@ const statusType = ref<'success' | 'error' | 'warning' | 'info'>('info');
 const documentManagement = ref();
 const searchInterface = ref();
 const chatInterface = ref();
-const analyticsDashboard = ref();
 
 // Lifecycle hooks
 onMounted(async () => {
-  await initializeRAG();
+  await initializeRAGSystem();
 });
 
 onUnmounted(() => {
@@ -175,47 +149,48 @@ onUnmounted(() => {
 });
 
 // Methods
-async function initializeRAG() {
+async function initializeRAGSystem() {
   try {
     setLoading(true, 'Initializing RAG System', 'Setting up knowledge library...');
     
     // Check if RAG is already initialized
-    const response = await window.electronAPI.invoke('rag:get-stats');
-    
-    if (!response.success) {
-      // Initialize with default configuration
-      await initializeWithDefaultConfig();
-    }
+    const response = await getRAGStats();
+    console.log(response)
+    // if (!response.success) {
+    //   // Initialize with default configuration
+    //   //await initializeWithDefaultConfig();
+    // }
     
     setLoading(false);
-    showStatus('RAG system initialized successfully', 'success');
+    //showStatus('RAG system initialized successfully', 'success');
   } catch (error) {
+    console.error('Failed to initialize RAG system:', error);
     setLoading(false);
     showStatus(`Failed to initialize RAG system: ${error}`, 'error');
   }
 }
 
-async function initializeWithDefaultConfig() {
-  const embeddingConfig = {
-    provider: 'openai',
-    model: 'text-embedding-ada-002',
-    apiKey: process.env.OPENAI_API_KEY || '',
-  };
+// async function initializeWithDefaultConfig() {
+//   const embeddingConfig = {
+//     provider: 'openai',
+//     model: 'text-embedding-ada-002',
+//     apiKey: process.env.OPENAI_API_KEY || '',
+//   };
 
-  const llmConfig = {
-    model: 'gpt-3.5-turbo',
-    apiKey: process.env.OPENAI_API_KEY || '',
-  };
+//   const llmConfig = {
+//     model: 'gpt-3.5-turbo',
+//     apiKey: process.env.OPENAI_API_KEY || '',
+//   };
 
-  const response = await window.electronAPI.invoke('rag:initialize', {
-    embedding: embeddingConfig,
-    llm: llmConfig,
-  });
+//   const response = await initializeRAG({
+//     embedding: embeddingConfig,
+//     llm: llmConfig,
+//   });
 
-  if (!response.success) {
-    throw new Error(response.message);
-  }
-}
+//   if (!response.success) {
+//     throw new Error(response.message);
+//   }
+// }
 
 function setLoading(loading: boolean, message = '', subMessage = '') {
   isLoading.value = loading;
@@ -277,7 +252,7 @@ function handleSettingsSaved(settings: any) {
   showSettingsDialog.value = false;
   showStatus('Settings saved successfully', 'success');
   // Reinitialize RAG with new settings if needed
-  initializeRAG();
+  initializeRAGSystem();
 }
 
 function handleError(error: string) {
@@ -288,7 +263,6 @@ function handleError(error: string) {
 defineExpose({
   refreshData: () => {
     if (documentManagement.value) documentManagement.value.refreshDocuments();
-    if (analyticsDashboard.value) analyticsDashboard.value.refreshAnalytics();
   },
   switchToTab: (tab: string) => {
     activeTab.value = tab;

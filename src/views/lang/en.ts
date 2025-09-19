@@ -121,6 +121,7 @@ export default {
         email_service: "Email Service",
         email_service_create: "Email Service Create",
         email_service_edit: "Email Service Edit",
+        knowledge_library: "Knowledge Library",
         login: "Login",
         not_found: "Not Found"
     },

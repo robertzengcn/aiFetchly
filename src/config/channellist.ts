@@ -190,3 +190,23 @@ export const YELLOW_PAGES_HANDLE_PREVIOUS_SESSION = 'yellow_pages:handle_previou
 // Language Preference Channels
 export const LANGUAGE_PREFERENCE_GET = 'language:preference:get'
 export const LANGUAGE_PREFERENCE_UPDATE = 'language:preference:update'
+
+// RAG (Retrieval-Augmented Generation) Channels
+export const RAG_INITIALIZE = 'rag:initialize'
+export const RAG_QUERY = 'rag:query'
+export const RAG_UPLOAD_DOCUMENT = 'rag:upload-document'
+export const RAG_GET_STATS = 'rag:get-stats'
+export const RAG_TEST_PIPELINE = 'rag:test-pipeline'
+export const RAG_GET_DOCUMENTS = 'rag:get-documents'
+export const RAG_GET_DOCUMENT = 'rag:get-document'
+export const RAG_UPDATE_DOCUMENT = 'rag:update-document'
+export const RAG_DELETE_DOCUMENT = 'rag:delete-document'
+export const RAG_GET_DOCUMENT_STATS = 'rag:get-document-stats'
+export const RAG_SEARCH = 'rag:search'
+export const RAG_GET_SUGGESTIONS = 'rag:get-suggestions'
+export const RAG_GET_SEARCH_ANALYTICS = 'rag:get-search-analytics'
+export const RAG_UPDATE_EMBEDDING_MODEL = 'rag:update-embedding-model'
+export const RAG_GET_AVAILABLE_MODELS = 'rag:get-available-models'
+export const RAG_TEST_EMBEDDING_SERVICE = 'rag:test-embedding-service'
+export const RAG_CLEAR_CACHE = 'rag:clear-cache'
+export const RAG_CLEANUP = 'rag:cleanup'

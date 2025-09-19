@@ -145,3 +145,23 @@ export type LlmDatatype={
 export type NativateDatatype={
     path:string
 }
+
+// RAG Configuration Types
+
+export interface ConfigurationResponse {
+    success: boolean;
+    data: any;
+    metadata?: {
+        version: string;
+        lastUpdated: string;
+        ttl: number;
+        autoSelected: boolean;
+        selectionReason?: string;
+    };
+}
+
+export interface ConfigurationError {
+    code: string;
+    message: string;
+    details?: any;
+}

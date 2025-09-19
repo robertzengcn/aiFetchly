@@ -8,16 +8,25 @@ import { EmbeddingProviderEnum } from '@/config/generate';
 
 /**
  * Configuration for embedding models
+ * Simplified interface - sensitive fields (apiKey, provider, url) are handled by ConfigurationService
  */
 export interface EmbeddingConfig {
     model: string;
+    dimensions?: number;
+    maxTokens?: number;
+    timeout?: number;
+    retries?: number;
+}
+
+/**
+ * Internal configuration with sensitive fields (used by ConfigurationService)
+ * @internal
+ */
+export interface InternalEmbeddingConfig extends EmbeddingConfig {
     provider: string;
     apiKey?: string;
     url?: string;
-    dimensions?: number;
-    maxTokens?: number;
     temperature?: number;
-    maxRetries?: number;
 }
 
 /**
@@ -55,7 +64,7 @@ export class EmbeddingFactory extends AbstractTranslateFactory {
      * @param config - Configuration for the embedding model
      * @returns Embedding implementation instance
      */
-    public createEmbedding(provider: string, config: EmbeddingConfig): EmbeddingImpl | undefined {
+    public createEmbedding(provider: string, config: InternalEmbeddingConfig): EmbeddingImpl | undefined {
         const EmbeddingClass = this.embeddingRegistry.get(provider);
         if (!EmbeddingClass) {
             throw new Error(`Unsupported embedding provider: ${provider}`);
@@ -71,6 +80,7 @@ export class EmbeddingFactory extends AbstractTranslateFactory {
             return undefined;
         }
     }
+
 
     /**
      * Get an existing embedding implementation
@@ -162,13 +172,13 @@ export class EmbeddingFactory extends AbstractTranslateFactory {
      * @returns True if configuration is valid
      */
     public validateConfig(config: EmbeddingConfig): boolean {
-        if (!config.model || !config.provider) {
+        if (!config.model ) {
             return false;
         }
 
-        if (!this.embeddingRegistry.has(config.provider)) {
-            return false;
-        }
+        // if (!this.embeddingRegistry.has(config.provider)) {
+        //     return false;
+        // }
 
         // Provider-specific validation can be added here
         return true;

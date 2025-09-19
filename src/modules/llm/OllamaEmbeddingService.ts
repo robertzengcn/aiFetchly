@@ -15,7 +15,7 @@ export class OllamaEmbeddingService implements EmbeddingImpl {
     constructor(config: EmbeddingConfig) {
         this.model = config.model;
         this.provider = 'ollama';
-        this.url = config.url || 'http://localhost:11434';
+        // this.url = config.url || 'http://localhost:11434';
         this.dimensions = config.dimensions || 4096; // Default for most Ollama embedding models
     }
 

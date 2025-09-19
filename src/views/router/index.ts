@@ -504,7 +504,7 @@ export const constantRoutes: RouteRecordRaw[] = [
     children: [
       {
         path: 'library',
-        component: () => import('@/views/KnowledgeLibrary.vue'),
+        component: () => import('@/views/pages/knowledge/KnowledgeLibrary.vue'),
         name: 'KnowledgeLibrary',
         meta: {
           visible: true,
