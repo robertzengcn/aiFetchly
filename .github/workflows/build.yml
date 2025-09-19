@@ -91,17 +91,15 @@ jobs:
           
           $uninstallerPackage | Out-File -FilePath "installer-scripts/standalone-uninstaller-package.json" -Encoding UTF8
           
-          # Install pkg globally for building executables
-          yarn global add pkg
-          
           # Navigate to installer-scripts directory
           cd installer-scripts
           
-          # Install dependencies for uninstaller
-          yarn install --no-lockfile
+          # Install dependencies for uninstaller including pkg
+          # yarn install --no-lockfile
+          yarn add pkg
           
           # Build the uninstaller executable
-          yarn pkg standalone-uninstaller.js --targets node18-win-x64 --output uninstall.exe
+          npx pkg standalone-uninstaller.js --targets node18-win-x64 --output uninstall.exe
           
           # Verify uninstaller was created
           if (Test-Path "uninstall.exe") {
