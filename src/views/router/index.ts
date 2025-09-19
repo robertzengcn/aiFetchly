@@ -295,11 +295,11 @@ export const constantRoutes: RouteRecordRaw[] = [
       {
         path: 'parse',
         component: () => import('@/views/pages/proxy/proxyparse.vue'),
-        name: 'ParseProxy',
+        name: 'BatchUploadProxy',
         meta: {
           visible: true,
           title: 'route.parse_proxy',
-          icon: 'mdi-code-braces'
+          icon: 'mdi-upload-multiple'
         }
       }
     ]

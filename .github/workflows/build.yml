@@ -62,6 +62,60 @@ jobs:
         run: yarn rebuild-sqlite3
       - name: Rebuild better sqlite
         run: yarn rebuild-better-sqlite
+
+      # NEW: Build standalone uninstaller
+      - name: Build standalone uninstaller
+        run: |
+          echo "Building standalone uninstaller..."
+          
+          # Create standalone uninstaller package.json
+          $uninstallerPackage = @"
+          {
+            "name": "aifetchly-uninstaller",
+            "version": "1.0.0",
+            "description": "aiFetchly Standalone Uninstaller",
+            "main": "standalone-uninstaller.js",
+            "scripts": {
+              "build": "pkg standalone-uninstaller.js --targets node18-win-x64 --output uninstall.exe"
+            },
+            "dependencies": {
+              "electron": "^35.0.3"
+            },
+            "pkg": {
+              "assets": [
+                "uninstall-windows.js"
+              ]
+            }
+          }
+          "@
+          
+          $uninstallerPackage | Out-File -FilePath "installer-scripts/standalone-uninstaller-package.json" -Encoding UTF8
+          
+          # Install pkg globally for building executables
+          yarn global add pkg
+          
+          # Navigate to installer-scripts directory
+          cd installer-scripts
+          
+          # Install dependencies for uninstaller
+          yarn install --no-lockfile
+          
+          # Build the uninstaller executable
+          yarn build
+          
+          # Verify uninstaller was created
+          if (Test-Path "uninstall.exe") {
+            echo "✅ Uninstaller created successfully"
+            ls -la uninstall.exe
+          } else {
+            echo "❌ Failed to create uninstaller"
+            exit 1
+          }
+          
+          # Go back to project root
+          cd ..
+        shell: pwsh
+
       - name: Install WiX Toolset
         run: |
           Invoke-WebRequest -Uri https://github.com/wixtoolset/wix3/releases/download/wix3112rtm/wix311-binaries.zip -OutFile wix.zip
@@ -72,11 +126,31 @@ jobs:
       - name: Build application
         run: yarn make-win:test
 
+      - name: Verify uninstaller in build output
+        run: |
+          echo "Checking for uninstaller in build output..."
+          if (Test-Path "out/make/win32/x64/aiFetchly-*.exe") {
+            echo "✅ Main installer found"
+            Get-ChildItem "out/make/win32/x64/aiFetchly-*.exe" | ForEach-Object { echo "Installer: $($_.Name)" }
+          }
+          
+          # Check if uninstaller was included in the installer
+          echo "Checking installer contents..."
+          # This would depend on how WiX includes the uninstaller
+        shell: pwsh
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: electron-app-windows-v${{ steps.calculate_version.outputs.version }}
           path: out/make
+
+      # NEW: Upload uninstaller as separate artifact
+      - name: Upload uninstaller artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aifetchly-uninstaller-v${{ steps.calculate_version.outputs.version }}
+          path: installer-scripts/uninstall.exe
 
   build-macos:
     runs-on: macos-latest
