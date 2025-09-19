@@ -124,8 +124,8 @@ export function registerSearchIpcHandlers(): void {
             status: true,
             msg: "",
             data: {
-                records: res,
-                num: res.length
+                records: res.record,
+                num: res.total
             }
         }
         return resp
