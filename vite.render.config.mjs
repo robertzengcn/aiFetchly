@@ -5,10 +5,13 @@ import vue from '@vitejs/plugin-vue'
 import vuetify from 'vite-plugin-vuetify'
 import ClosePlugin from './vite-plugin-close.ts'
 import checker from 'vite-plugin-checker'
+import alias from "@rollup/plugin-alias";
+
 export default defineConfig({
   build: {
     sourcemap: true},
   plugins: [
+    alias(),
     vue(),
     // https://github.com/vuetifyjs/vuetify-loader/tree/next/packages/vite-plugin
     vuetify({
