@@ -95,7 +95,6 @@ jobs:
           cd installer-scripts
           
           # Install dependencies for uninstaller including pkg
-          # yarn install --no-lockfile
           yarn add pkg
           
           # Build the uninstaller executable
@@ -110,8 +109,20 @@ jobs:
             exit 1
           }
           
+          # Copy uninstaller to project root for easier access
+          Copy-Item "uninstall.exe" "../uninstall.exe"
+          
           # Go back to project root
           cd ..
+          
+          # Verify uninstaller is in project root
+          if (Test-Path "uninstall.exe") {
+            echo "✅ Uninstaller copied to project root"
+            Get-ChildItem "uninstall.exe" | Format-Table Name, Length, LastWriteTime
+          } else {
+            echo "❌ Failed to copy uninstaller to project root"
+            exit 1
+          }
         shell: pwsh
 
       - name: Install WiX Toolset
@@ -137,7 +148,22 @@ jobs:
           
           # Check if uninstaller was included in the installer
           echo "Checking installer contents..."
-          # This would depend on how WiX includes the uninstaller
+          
+          # Check for uninstaller in the project root
+          if (Test-Path "uninstall.exe") {
+            echo "✅ Uninstaller found in project root"
+            Get-ChildItem "uninstall.exe" | Format-Table Name, Length, LastWriteTime
+          } else {
+            echo "❌ Uninstaller not found in project root"
+          }
+          
+          # Check for uninstaller in installer-scripts directory
+          if (Test-Path "installer-scripts/uninstall.exe") {
+            echo "✅ Uninstaller found in installer-scripts directory"
+            Get-ChildItem "installer-scripts/uninstall.exe" | Format-Table Name, Length, LastWriteTime
+          } else {
+            echo "❌ Uninstaller not found in installer-scripts directory"
+          }
         shell: pwsh
 
       - name: Upload artifact

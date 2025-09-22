@@ -148,7 +148,21 @@ module.exports={
         // Uninstall configuration
         uninstallIcon: './src/assets/images/icon.ico',
         // Custom uninstall script
-        uninstallScript: './installer-scripts/uninstall-windows.js'
+        uninstallScript: './installer-scripts/uninstall-windows.js',
+        // Include uninstaller in the installer
+        extraFiles: [
+          {
+            src: './installer-scripts/uninstall.exe',
+            dest: 'uninstall.exe'
+          }
+        ],
+        // Post-installation script to copy uninstaller
+        postInstallScript: './installer-scripts/copy-uninstaller.js',
+        // Ensure uninstaller is accessible
+        setupExe: 'aiFetchlySetup.exe',
+        // Create uninstaller registry entry
+        uninstallDisplayName: 'aiFetchly',
+        uninstallString: '%LOCALAPPDATA%\\aiFetchly\\uninstall.exe'
       },
     },
     {
@@ -239,77 +253,8 @@ module.exports={
         language: 1033,
         manufacturer: 'Robert Zeng',
         icon: './src/assets/images/icon.ico',
-        
-        // Include uninstall.exe as extra file
-        extraFiles: [
-          {
-            src: './installer-scripts/uninstall.exe',
-            dest: 'uninstall.exe'
-          }
-        ],
-        
-        // Custom WiX installer options
-        ui: {
-          // Enable custom UI for installation location selection
-          chooseDirectory: true,
-          // Show license agreement
-          license: './LICENSE',
-          // Custom banner and dialog images
-          // banner: './src/assets/images/installer-banner.png',
-          // dialog: './src/assets/images/installer-dialog.png',
-          // Installation directory options
-          installDir: 'C:\\Program Files\\aiFetchly',
-          // Create desktop shortcut
-          createDesktopShortcut: true,
-          // Create start menu shortcut
-          createStartMenuShortcut: true,
-          // Install for all users
-          perMachine: false,
-          // Additional features
-          features: {
-            // Main application feature
-            main: {
-              title: 'aiFetchly Application',
-              description: 'Main application files',
-              level: 1
-            },
-            // Desktop shortcut feature
-            desktopShortcut: {
-              title: 'Desktop Shortcut',
-              description: 'Create a shortcut on the desktop',
-              level: 1
-            },
-            // Start menu shortcut feature
-            startMenuShortcut: {
-              title: 'Start Menu Shortcut',
-              description: 'Create a shortcut in the start menu',
-              level: 1
-            }
-          }
-        },
-        // Custom actions for post-installation
-        customActions: [
-          {
-            name: 'CreateShortcuts',
-            description: 'Create desktop and start menu shortcuts',
-            script: './installer-scripts/create-shortcuts.js'
-          },
-          {
-            name: 'CopyUninstaller',
-            description: 'Copy uninstall.exe to installation directory',
-            script: './installer-scripts/copy-uninstaller.js'
-          }
-        ],
-        // Uninstall configuration
-        uninstallIcon: './src/assets/images/uninstall.ico',
-        // Uninstall custom actions
-        uninstallCustomActions: [
-          {
-            name: 'RemoveShortcuts',
-            description: 'Remove desktop and start menu shortcuts',
-            script: './installer-scripts/uninstall-windows.js'
-          }
-        ]
+        // Note: WiX doesn't support extraFiles directly
+        // Uninstaller will be handled by Squirrel installer
       }
     }
   ],
@@ -362,6 +307,23 @@ module.exports={
     }
   ],
   hooks: {
+    postPackage: async (forgeConfig, options) => {
+      // Copy uninstaller to the packaged application
+      const { postInstallHook } = require('./installer-scripts/post-install-hook.js');
+      
+      console.log('Running post-package hook...');
+      console.log('Output directory:', options.outputPaths[0]);
+      
+      // Set the installation directory to the output directory
+      process.env.INSTALLDIR = options.outputPaths[0];
+      
+      const success = postInstallHook();
+      if (success) {
+        console.log('✅ Uninstaller copied to packaged application');
+      } else {
+        console.log('❌ Failed to copy uninstaller to packaged application');
+      }
+    },
     prePackage: async () => {
       const projectRoot = normalize(__dirname);
       const getExternalNestedDependencies = async (
