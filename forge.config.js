@@ -255,6 +255,48 @@ module.exports={
         icon: './src/assets/images/icon.ico',
         // Note: WiX doesn't support extraFiles directly
         // Uninstaller will be handled by Squirrel installer
+      },
+      ui: {
+        // Enable custom UI for installation location selection
+        chooseDirectory: true,
+        // Show license agreement
+        license: './LICENSE',
+        // Custom banner and dialog images
+        // banner: './src/assets/images/installer-banner.png',
+        // dialog: './src/assets/images/installer-dialog.png',
+        // Installation directory options
+        installDir: 'C:\\Program Files\\aiFetchly',
+        // Create desktop shortcut
+        // createDesktopShortcut: true,
+        // Create start menu shortcut
+        // createStartMenuShortcut: true,
+        // Install for all users
+        //perMachine: false,
+        // "images": {
+        //   "background": "[...]/path/to/background-493x312.bmp",
+        //   "banner": "[...]/path/to/banner-493x58.bmp"
+        // },
+        // Additional features
+        // features: {
+        //   // Main application feature
+        //   main: {
+        //     title: 'aiFetchly Application',
+        //     description: 'Main application files',
+        //     level: 1
+        //   },
+        //   // Desktop shortcut feature
+        //   desktopShortcut: {
+        //     title: 'Desktop Shortcut',
+        //     description: 'Create a shortcut on the desktop',
+        //     level: 1
+        //   },
+        //   // Start menu shortcut feature
+        //   startMenuShortcut: {
+        //     title: 'Start Menu Shortcut',
+        //     description: 'Create a shortcut in the start menu',
+        //     level: 1
+        //   }
+        // }
       }
     }
   ],
