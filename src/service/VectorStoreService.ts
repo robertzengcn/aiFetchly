@@ -126,6 +126,20 @@ export class VectorStoreService {
     }
 
     /**
+     * Store a single embedding
+     * @param embeddingData - Embedding data to store
+     */
+    async storeEmbedding(embeddingData: {
+        chunkId: number;
+        documentId: number;
+        content: string;
+        embedding: number[];
+        metadata?: any;
+    }): Promise<void> {
+        await this.addVectors([embeddingData.embedding], [embeddingData.chunkId]);
+    }
+
+    /**
      * Add vectors to the index
      * @param vectors - Array of vectors to add
      * @param chunkIds - Array of chunk IDs corresponding to vectors

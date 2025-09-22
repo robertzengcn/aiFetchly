@@ -53,6 +53,14 @@ export class VectorSearchService {
     }
 
     /**
+     * Get the vector store service
+     * @returns Vector store service instance
+     */
+    get vectorStoreService(): VectorStoreService {
+        return this.vectorStore;
+    }
+
+    /**
      * Search for similar content
      * @param query - Search query
      * @param options - Search options

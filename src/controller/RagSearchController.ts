@@ -1,4 +1,6 @@
-import { RagSearchModule, SearchRequest, SearchResponse } from '@/modules/RagSearchModule';
+import { RagSearchModule, SearchRequest, SearchResponse, DocumentUploadResponse } from '@/modules/RagSearchModule';
+import { DocumentUploadOptions } from '@/service/DocumentService';
+import { RAGDocumentEntity } from '@/entity/RAGDocument.entity';
 
 export class RagSearchController {
     private ragSearchModule: RagSearchModule;
@@ -113,6 +115,77 @@ export class RagSearchController {
         embeddingProvider: string;
     }> {
         return await this.ragSearchModule.getSearchStats();
+    }
+
+    /**
+     * Upload and process a document
+     * @param options - Document upload options
+     * @returns Upload response
+     */
+    async uploadDocument(options: DocumentUploadOptions): Promise<DocumentUploadResponse> {
+        return await this.ragSearchModule.uploadDocument(options);
+    }
+
+    /**
+     * Get all documents
+     * @param filters - Optional filters
+     * @returns Array of documents
+     */
+    async getDocuments(filters?: {
+        status?: string;
+        processingStatus?: string;
+        author?: string;
+        tags?: string[];
+        dateRange?: { start: Date; end: Date };
+    }): Promise<RAGDocumentEntity[]> {
+        return await this.ragSearchModule.getDocuments(filters);
+    }
+
+    /**
+     * Get a specific document by ID
+     * @param id - Document ID
+     * @returns Document entity
+     */
+    async getDocument(id: number): Promise<RAGDocumentEntity | null> {
+        return await this.ragSearchModule.getDocument(id);
+    }
+
+    /**
+     * Update document metadata
+     * @param id - Document ID
+     * @param metadata - Updated metadata
+     */
+    async updateDocument(id: number, metadata: {
+        title?: string;
+        description?: string;
+        tags?: string[];
+        author?: string;
+    }): Promise<void> {
+        return await this.ragSearchModule.updateDocument(id, metadata);
+    }
+
+    /**
+     * Delete a document
+     * @param id - Document ID
+     * @param deleteFile - Whether to delete the physical file
+     */
+    async deleteDocument(id: number, deleteFile: boolean = false): Promise<void> {
+        return await this.ragSearchModule.deleteDocument(id, deleteFile);
+    }
+
+    /**
+     * Get document statistics
+     * @returns Document statistics
+     */
+    async getDocumentStats(): Promise<{
+        totalDocuments: number;
+        totalChunks: number;
+        totalSize: number;
+        averageSize: number;
+        byStatus: Record<string, number>;
+        byType: Record<string, number>;
+    }> {
+        return await this.ragSearchModule.getDocumentStats();
     }
 
     /**

@@ -161,10 +161,10 @@ export class RAGModule {
     }
 
     /**
-     * Upload and process a document
+     * Upload a document to the system
      * @param filePath - Path to the document
      * @param options - Upload options
-     * @returns Processing result
+     * @returns Upload result
      */
     async uploadDocument(filePath: string, options: {
         name: string;
@@ -174,8 +174,9 @@ export class RAGModule {
         author?: string;
     }): Promise<{
         documentId: number;
-        chunksCreated: number;
         processingTime: number;
+        success: boolean;
+        message: string;
     }> {
         const startTime = Date.now();
 
@@ -194,22 +195,86 @@ export class RAGModule {
                 author: options.author
             });
 
-            // Update processing status
+            // Update processing status to pending (ready for chunking)
             await this.documentService.updateDocumentStatus(
                 document.id,
+                'active',
+                'pending'
+            );
+
+            const processingTime = Date.now() - startTime;
+
+            // Update stats
+            await this.updateStats();
+
+            return {
+                documentId: document.id,
+                processingTime,
+                success: true,
+                message: 'Document uploaded successfully'
+            };
+        } catch (error) {
+            console.error('Error uploading document:', error);
+            return {
+                documentId: 0,
+                processingTime: Date.now() - startTime,
+                success: false,
+                message: `Document upload failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+            };
+        }
+    }
+
+    /**
+     * Chunk a document into smaller pieces
+     * @param documentId - Document ID to chunk
+     * @param options - Chunking options
+     * @returns Chunking result
+     */
+    async chunkDocument(documentId: number, options?: {
+        chunkSize?: number;
+        overlapSize?: number;
+        strategy?: 'sentence' | 'paragraph' | 'semantic' | 'fixed';
+        preserveWhitespace?: boolean;
+        minChunkSize?: number;
+    }): Promise<{
+        documentId: number;
+        chunksCreated: number;
+        processingTime: number;
+        success: boolean;
+        message: string;
+    }> {
+        const startTime = Date.now();
+
+        try {
+            if (!this.isInitialized) {
+                throw new Error('RAG module not initialized');
+            }
+
+            // Get document
+            const document = await this.documentService.findDocumentById(documentId);
+            if (!document) {
+                return {
+                    documentId,
+                    chunksCreated: 0,
+                    processingTime: Date.now() - startTime,
+                    success: false,
+                    message: 'Document not found'
+                };
+            }
+
+            // Update processing status
+            await this.documentService.updateDocumentStatus(
+                documentId,
                 'active',
                 'processing'
             );
 
             // Chunk the document
-            const chunks = await this.chunkingService.chunkDocument(document);
+            const chunks = await this.chunkingService.chunkDocument(document, options);
 
-            // Generate embeddings for chunks
-            await this.generateChunkEmbeddings(chunks);
-
-            // Update processing status
+            // Update processing status to completed
             await this.documentService.updateDocumentStatus(
-                document.id,
+                documentId,
                 'active',
                 'completed'
             );
@@ -220,13 +285,143 @@ export class RAGModule {
             await this.updateStats();
 
             return {
-                documentId: document.id,
+                documentId,
                 chunksCreated: chunks.length,
-                processingTime
+                processingTime,
+                success: true,
+                message: `Document chunked successfully into ${chunks.length} chunks`
             };
         } catch (error) {
-            console.error('Error uploading document:', error);
-            throw new Error(`Document upload failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            console.error('Error chunking document:', error);
+            
+            // Update processing status to error
+            try {
+                await this.documentService.updateDocumentStatus(
+                    documentId,
+                    'active',
+                    'error'
+                );
+            } catch (updateError) {
+                console.error('Failed to update document status to error:', updateError);
+            }
+
+            return {
+                documentId,
+                chunksCreated: 0,
+                processingTime: Date.now() - startTime,
+                success: false,
+                message: `Document chunking failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+            };
+        }
+    }
+
+    /**
+     * Complete document processing pipeline (upload + chunk + embed)
+     * @param filePath - Path to the document
+     * @param options - Upload and processing options
+     * @returns Complete processing result
+     */
+    async processDocument(filePath: string, options: {
+        name: string;
+        title?: string;
+        description?: string;
+        tags?: string[];
+        author?: string;
+        chunking?: {
+            chunkSize?: number;
+            overlapSize?: number;
+            strategy?: 'sentence' | 'paragraph' | 'semantic' | 'fixed';
+            preserveWhitespace?: boolean;
+            minChunkSize?: number;
+        };
+    }): Promise<{
+        documentId: number;
+        chunksCreated: number;
+        embeddingsGenerated: number;
+        processingTime: number;
+        success: boolean;
+        message: string;
+        steps: {
+            upload: boolean;
+            chunking: boolean;
+            embedding: boolean;
+        };
+    }> {
+        const startTime = Date.now();
+        const steps = { upload: false, chunking: false, embedding: false };
+
+        try {
+            if (!this.isInitialized) {
+                throw new Error('RAG module not initialized');
+            }
+
+            // Step 1: Upload document
+            const uploadResult = await this.uploadDocument(filePath, options);
+            if (!uploadResult.success) {
+                return {
+                    documentId: 0,
+                    chunksCreated: 0,
+                    embeddingsGenerated: 0,
+                    processingTime: Date.now() - startTime,
+                    success: false,
+                    message: `Upload failed: ${uploadResult.message}`,
+                    steps
+                };
+            }
+            steps.upload = true;
+
+            // Step 2: Chunk document
+            const chunkResult = await this.chunkDocument(uploadResult.documentId, options.chunking);
+            if (!chunkResult.success) {
+                return {
+                    documentId: uploadResult.documentId,
+                    chunksCreated: 0,
+                    embeddingsGenerated: 0,
+                    processingTime: Date.now() - startTime,
+                    success: false,
+                    message: `Chunking failed: ${chunkResult.message}`,
+                    steps
+                };
+            }
+            steps.chunking = true;
+
+            // Step 3: Generate embeddings
+            const embedResult = await this.generateDocumentEmbeddings(uploadResult.documentId);
+            if (!embedResult.success) {
+                return {
+                    documentId: uploadResult.documentId,
+                    chunksCreated: chunkResult.chunksCreated,
+                    embeddingsGenerated: 0,
+                    processingTime: Date.now() - startTime,
+                    success: false,
+                    message: `Embedding generation failed: ${embedResult.message}`,
+                    steps
+                };
+            }
+            steps.embedding = true;
+
+            const processingTime = Date.now() - startTime;
+
+            return {
+                documentId: uploadResult.documentId,
+                chunksCreated: chunkResult.chunksCreated,
+                embeddingsGenerated: embedResult.chunksProcessed,
+                processingTime,
+                success: true,
+                message: 'Document processed successfully (uploaded, chunked, and embedded)',
+                steps
+            };
+        } catch (error) {
+            console.error('Error in complete document processing:', error);
+            return {
+                documentId: 0,
+                chunksCreated: 0,
+                embeddingsGenerated: 0,
+                processingTime: Date.now() - startTime,
+                success: false,
+                message: `Complete processing failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+                steps
+            };
         }
     }
 
@@ -258,6 +453,138 @@ export class RAGModule {
         } catch (error) {
             console.error('Error generating chunk embeddings:', error);
             throw new Error('Failed to generate chunk embeddings');
+        }
+    }
+
+    /**
+     * Generate embeddings for a specific document's chunks
+     * @param documentId - Document ID to generate embeddings for
+     * @returns Processing result
+     */
+    async generateDocumentEmbeddings(documentId: number): Promise<{
+        documentId: number;
+        chunksProcessed: number;
+        processingTime: number;
+        success: boolean;
+        message: string;
+    }> {
+        const startTime = Date.now();
+
+        try {
+            if (!this.isInitialized) {
+                throw new Error('RAG module not initialized');
+            }
+
+            // Get document chunks
+            const chunks = await this.chunkingService.getDocumentChunks(documentId);
+            if (chunks.length === 0) {
+                return {
+                    documentId,
+                    chunksProcessed: 0,
+                    processingTime: Date.now() - startTime,
+                    success: false,
+                    message: 'No chunks found for document'
+                };
+            }
+
+            // Check if chunks already have embeddings
+            const chunksWithoutEmbeddings = chunks.filter(chunk => !chunk.embeddingId);
+            if (chunksWithoutEmbeddings.length === 0) {
+                return {
+                    documentId,
+                    chunksProcessed: 0,
+                    processingTime: Date.now() - startTime,
+                    success: true,
+                    message: 'All chunks already have embeddings'
+                };
+            }
+
+            // Generate embeddings for chunks that don't have them
+            await this.generateChunkEmbeddings(chunksWithoutEmbeddings);
+
+            const processingTime = Date.now() - startTime;
+
+            return {
+                documentId,
+                chunksProcessed: chunksWithoutEmbeddings.length,
+                processingTime,
+                success: true,
+                message: `Generated embeddings for ${chunksWithoutEmbeddings.length} chunks`
+            };
+        } catch (error) {
+            console.error('Error generating document embeddings:', error);
+            return {
+                documentId,
+                chunksProcessed: 0,
+                processingTime: Date.now() - startTime,
+                success: false,
+                message: `Failed to generate embeddings: ${error instanceof Error ? error.message : 'Unknown error'}`
+            };
+        }
+    }
+
+    /**
+     * Generate embeddings for all documents that don't have them
+     * @returns Processing results
+     */
+    async generateAllMissingEmbeddings(): Promise<{
+        totalDocuments: number;
+        documentsProcessed: number;
+        totalChunksProcessed: number;
+        processingTime: number;
+        results: Array<{
+            documentId: number;
+            chunksProcessed: number;
+            success: boolean;
+            message: string;
+        }>;
+    }> {
+        const startTime = Date.now();
+
+        try {
+            if (!this.isInitialized) {
+                throw new Error('RAG module not initialized');
+            }
+
+            // Get all documents
+            const documents = await this.documentService.getDocuments();
+            const results: Array<{
+                documentId: number;
+                chunksProcessed: number;
+                success: boolean;
+                message: string;
+            }> = [];
+
+            let totalChunksProcessed = 0;
+
+            for (const document of documents) {
+                const result = await this.generateDocumentEmbeddings(document.id);
+                results.push(result);
+                
+                if (result.success) {
+                    totalChunksProcessed += result.chunksProcessed;
+                }
+            }
+
+            const processingTime = Date.now() - startTime;
+            const documentsProcessed = results.filter(r => r.success).length;
+
+            return {
+                totalDocuments: documents.length,
+                documentsProcessed,
+                totalChunksProcessed,
+                processingTime,
+                results
+            };
+        } catch (error) {
+            console.error('Error generating all missing embeddings:', error);
+            return {
+                totalDocuments: 0,
+                documentsProcessed: 0,
+                totalChunksProcessed: 0,
+                processingTime: Date.now() - startTime,
+                results: []
+            };
         }
     }
 

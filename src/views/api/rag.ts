@@ -1,6 +1,6 @@
-import { windowInvoke } from '@/views/utils/apirequest';
+import { windowInvoke, windowInvokeBinary } from '@/views/utils/apirequest';
 import { EmbeddingConfig } from '@/modules/llm/EmbeddingFactory';
-import { LlmCongfig } from '@/entityTypes/commonType';
+import { LlmCongfig, SaveTempFileResponse } from '@/entityTypes/commonType';
 import {
   RAG_INITIALIZE,
   RAG_QUERY,
@@ -19,7 +19,10 @@ import {
   RAG_GET_AVAILABLE_MODELS,
   RAG_TEST_EMBEDDING_SERVICE,
   RAG_CLEAR_CACHE,
-  RAG_CLEANUP
+  RAG_CLEANUP,
+  SHOW_OPEN_DIALOG,
+  GET_FILE_STATS,
+  SAVE_TEMP_FILE
 } from '@/config/channellist';
 
 // RAG API response types
@@ -45,8 +48,10 @@ export interface DocumentInfo {
   author?: string;
   filePath: string;
   fileSize: number;
+  fileType?: string;
   uploadDate: string;
   status: 'processing' | 'completed' | 'error';
+  processingStatus?: string;
 }
 
 export interface SearchRequest {
@@ -223,4 +228,158 @@ export async function clearRAGCache(): Promise<RAGResponse> {
  */
 export async function cleanupRAG(): Promise<RAGResponse> {
   return await windowInvoke(RAG_CLEANUP, {});
+}
+
+// File Dialog API Functions
+
+/**
+ * Show native file dialog
+ */
+export async function showOpenDialog(options: {
+  properties: string[];
+  filters: Array<{ name: string; extensions: string[] }>;
+}): Promise<{ canceled: boolean; filePaths: string[] }> {
+  return await windowInvoke(SHOW_OPEN_DIALOG, options);
+}
+
+/**
+ * Get file statistics
+ */
+export async function getFileStats(filePath: string): Promise<{
+  size: number;
+  mtime: Date;
+  isFile: boolean;
+  isDirectory: boolean;
+}> {
+  return await windowInvoke(GET_FILE_STATS, { filePath });
+}
+
+/**
+ * Save temporary file
+ */
+export async function saveTempFile(data: {
+  fileName: string;
+  buffer: Uint8Array;
+  metadata?: {
+    title?: string;
+    description?: string;
+    tags?: string[];
+    author?: string;
+  };
+}): Promise<SaveTempFileResponse> {
+  console.log("saveTempFile is ready");
+  console.log(data);
+  return await windowInvokeBinary(SAVE_TEMP_FILE, data);
+}
+
+/**
+ * Select files using native dialog
+ */
+export async function selectFilesNative(): Promise<(File & { path: string })[]> {
+  try {
+    const result = await showOpenDialog({
+      properties: ['openFile', 'multiSelections'],
+      filters: [
+        { name: 'Documents', extensions: ['pdf', 'txt', 'doc', 'docx', 'md', 'html', 'htm'] },
+        { name: 'All Files', extensions: ['*'] }
+      ]
+    });
+
+    if (!result.canceled && result.filePaths.length > 0) {
+      // Convert file paths to File objects for consistency
+      const files = await Promise.all(result.filePaths.map(async (filePath: string) => {
+        const fileName = filePath.split('/').pop() || 'unknown';
+        const stats = await getFileStats(filePath);
+        
+        // Create a File-like object with the actual file path
+        return {
+          name: fileName,
+          path: filePath, // This is the key difference - we have the actual path
+          size: stats.size,
+          type: getFileType(fileName),
+          lastModified: stats.mtime.getTime()
+        } as File & { path: string };
+      }));
+      
+      return files;
+    }
+    return [];
+  } catch (error) {
+    console.error('Error selecting files:', error);
+    throw new Error('Failed to select files');
+  }
+}
+
+/**
+ * Copy file to temporary location
+ */
+export async function copyFileToTemp(file: File, metadata?: {
+  title?: string;
+  description?: string;
+  tags?: string[];
+  author?: string;
+}): Promise<SaveTempFileResponse> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        // Convert file to buffer
+        const arrayBuffer = reader.result as ArrayBuffer;
+        const buffer = new Uint8Array(arrayBuffer);
+        console.log("buffer is ready");
+        console.log(buffer);
+        // Generate temporary file path
+        const tempFileName = `rag_upload_${Date.now()}_${file.name}`;
+        console.log("tempFileName is ready");
+        console.log(tempFileName);
+        
+        // Prepare metadata with defaults
+        const fileMetadata = {
+          title: metadata?.title || file.name.replace(/\.[^/.]+$/, ''),
+          description: metadata?.description || `Uploaded document: ${file.name}`,
+          tags: metadata?.tags || ['uploaded', 'knowledge'],
+          author: metadata?.author || 'User'
+        };
+        
+        // Use API to save file to temp location
+        const saveResult = await saveTempFile({
+          fileName: tempFileName,
+          buffer: buffer,
+          metadata: fileMetadata
+        });
+        console.log("saveResult is ready");
+        console.log(saveResult);
+        
+        // Check if database save was successful
+        if (saveResult.databaseError) {
+          console.warn('Database save failed:', saveResult.databaseError);
+        } else if (saveResult.databaseSaved) {
+          console.log('Document successfully saved to database');
+        }
+        
+        resolve(saveResult);
+      } catch (error) {
+        reject(error);
+      }
+    };
+    reader.onerror = () => reject(new Error('Failed to read file'));
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+/**
+ * Get file MIME type from extension
+ */
+function getFileType(fileName: string): string {
+  const ext = fileName.split('.').pop()?.toLowerCase();
+  const mimeTypes: Record<string, string> = {
+    'pdf': 'application/pdf',
+    'txt': 'text/plain',
+    'doc': 'application/msword',
+    'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'md': 'text/markdown',
+    'html': 'text/html',
+    'htm': 'text/html'
+  };
+  return mimeTypes[ext || ''] || 'application/octet-stream';
 }

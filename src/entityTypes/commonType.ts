@@ -165,3 +165,33 @@ export interface ConfigurationError {
     message: string;
     details?: any;
 }
+
+// File Upload Response Types
+export interface UploadedDocument {
+    id: number;
+    name: string;
+    title: string;
+    description?: string;
+    tags?: string[];
+    author?: string;
+    filePath: string;
+    fileSize?: number;
+    fileType?: string;
+    uploadDate?: string;
+    status: string;
+    processingStatus?: string;
+}
+
+export interface SaveTempFileResponse {
+    tempFilePath: string;
+    databaseSaved: boolean;
+    databaseError?: string | null;
+    document?: UploadedDocument;
+}
+
+export interface DocumentUploadResponse {
+    documentId: number;
+    chunksCreated: number;
+    processingTime: number;
+    document: UploadedDocument;
+}

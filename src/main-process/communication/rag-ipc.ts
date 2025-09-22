@@ -1,7 +1,9 @@
-import { ipcMain } from 'electron';
+import { ipcMain, dialog, app } from 'electron';
 import { RagSearchController } from '@/controller/RagSearchController';
 import { SearchRequest, SearchResponse } from '@/modules/RagSearchModule';
-import { CommonMessage, LlmCongfig } from '@/entityTypes/commonType';
+import { CommonMessage, LlmCongfig, SaveTempFileResponse, DocumentUploadResponse } from '@/entityTypes/commonType';
+import * as fs from 'fs';
+import * as path from 'path';
 import {
     RAG_INITIALIZE,
     RAG_QUERY,
@@ -20,7 +22,10 @@ import {
     RAG_GET_AVAILABLE_MODELS,
     RAG_TEST_EMBEDDING_SERVICE,
     RAG_CLEAR_CACHE,
-    RAG_CLEANUP
+    RAG_CLEANUP,
+    SHOW_OPEN_DIALOG,
+    GET_FILE_STATS,
+    SAVE_TEMP_FILE
 } from '@/config/channellist';
 
 /**
@@ -38,6 +43,129 @@ async function createRagController(): Promise<RagSearchController> {
  */
 export function registerRagIpcHandlers(): void {
     console.log("RAG IPC handlers registered");
+
+    // Save temporary file handler
+    ipcMain.handle(SAVE_TEMP_FILE, async (event, data): Promise<CommonMessage<SaveTempFileResponse>> => {
+        try {
+            //console.log('Received data in main process:', typeof data, data);
+            const { fileName, buffer, metadata } = data;
+            if (!fileName || !buffer || buffer.length <= 1) {
+                const errorResponse: CommonMessage<SaveTempFileResponse> = {
+                    status: false,
+                    msg: 'Invalid fileName or buffer: fileName must be provided and buffer must have length > 1',
+                    data: {
+                        tempFilePath: '',
+                        databaseSaved: false,
+                        databaseError: 'Invalid input parameters'
+                    }
+                };
+                return errorResponse;
+            }
+            // Create app data directory for uploaded files using Electron's app.getPath
+            const appDataDir = path.join(app.getPath('appData'), 'uploads');
+            if (!fs.existsSync(appDataDir)) {
+                fs.mkdirSync(appDataDir, { recursive: true });
+            }
+            
+            // Generate unique filename to avoid conflicts
+            const timestamp = Date.now();
+            const fileExt = path.extname(fileName);
+            const baseName = path.basename(fileName, fileExt);
+            const uniqueFileName = `${baseName}_${timestamp}${fileExt}`;
+            const appDataFilePath = path.join(appDataDir, uniqueFileName);
+            
+            // Convert Uint8Array to Buffer and write to file
+            // If buffer comes as an object with numeric keys, convert it back to Uint8Array first
+            let uint8Buffer;
+            if (buffer instanceof Uint8Array) {
+                uint8Buffer = buffer;
+            } else if (typeof buffer === 'object' && buffer.constructor === Object) {
+                // Handle case where Uint8Array was serialized as plain object
+                const values = Object.values(buffer) as number[];
+                uint8Buffer = new Uint8Array(values);
+            } else {
+                uint8Buffer = new Uint8Array(buffer);
+            }
+            
+            const nodeBuffer = Buffer.from(uint8Buffer);
+            fs.writeFileSync(appDataFilePath, nodeBuffer);
+            
+            let documentInfo: any = null;
+            let databaseSaved = false;
+            let databaseError: string | null = null;
+            
+            // If metadata is provided, save document to database
+            if (metadata) {
+                try {
+                    const ragController = await createRagController();
+                    
+                    // Extract original filename without timestamp prefix
+                    const originalFileName = fileName.replace(/^rag_upload_\d+_/, '');
+                    
+                    const uploadOptions = {
+                        filePath: appDataFilePath,
+                        name: originalFileName,
+                        title: metadata.title || originalFileName.replace(/\.[^/.]+$/, ''),
+                        description: metadata.description || `Uploaded document: ${originalFileName}`,
+                        tags: metadata.tags || ['uploaded', 'knowledge'],
+                        author: metadata.author || 'User'
+                    };
+                    
+                    const uploadResult = await ragController.uploadDocument(uploadOptions);
+                    console.log(`Document saved to database with ID: ${uploadResult.documentId}`);
+                    
+                    documentInfo = uploadResult.document;
+                    databaseSaved = true;
+                } catch (dbError) {
+                    console.warn('Failed to save document to database:', dbError);
+                    databaseError = dbError instanceof Error ? dbError.message : 'Unknown database error';
+                }
+            }
+            
+            const response: CommonMessage<SaveTempFileResponse> = {
+                status: true,
+                msg: 'File saved successfully',
+                data: {
+                    tempFilePath: appDataFilePath,
+                    databaseSaved,
+                    databaseError,
+                    document: documentInfo
+                }
+            };
+            
+            return response;
+        } catch (error) {
+            console.error('Error saving temporary file:', error);
+            throw new Error(`Failed to save temporary file: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+    });
+
+    // Show native file dialog
+    ipcMain.handle(SHOW_OPEN_DIALOG, async (event, options): Promise<any> => {
+        try {
+            const result = await dialog.showOpenDialog(options);
+            return result;
+        } catch (error) {
+            console.error('Error showing open dialog:', error);
+            throw new Error(`Failed to show open dialog: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+    });
+
+    // Get file stats
+    ipcMain.handle(GET_FILE_STATS, async (event, data: { filePath: string }): Promise<any> => {
+        try {
+            const stats = fs.statSync(data.filePath);
+            return {
+                size: stats.size,
+                mtime: stats.mtime,
+                isFile: stats.isFile(),
+                isDirectory: stats.isDirectory()
+            };
+        } catch (error) {
+            console.error('Error getting file stats:', error);
+            throw new Error(`Failed to get file stats: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+    });
 
     // Initialize RAG module
     ipcMain.handle(RAG_INITIALIZE, async (event, data): Promise<CommonMessage<any | null>> => {
@@ -120,7 +248,7 @@ export function registerRagIpcHandlers(): void {
     });
 
     // Upload document
-    ipcMain.handle(RAG_UPLOAD_DOCUMENT, async (event, data): Promise<CommonMessage<any | null>> => {
+    ipcMain.handle(RAG_UPLOAD_DOCUMENT, async (event, data): Promise<CommonMessage<DocumentUploadResponse | null>> => {
         try {
             const options = JSON.parse(data) as {
                 filePath: string;
@@ -131,24 +259,31 @@ export function registerRagIpcHandlers(): void {
                 author?: string;
             };
 
-            // Mock implementation - replace with actual document upload logic
-            const documentInfo = {
-                id: Math.floor(Math.random() * 1000),
-                name: options.name,
-                title: options.title,
-                description: options.description,
-                tags: options.tags,
-                author: options.author,
-                filePath: options.filePath,
-                fileSize: 0,
-                uploadDate: new Date().toISOString(),
-                status: 'completed' as const
-            };
+            const ragSearchController = await createRagController();
+            const uploadResult = await ragSearchController.uploadDocument(options);
             
-            const response: CommonMessage<any> = {
+            const response: CommonMessage<DocumentUploadResponse> = {
                 status: true,
-                msg: "Document uploaded successfully",
-                data: documentInfo
+                msg: "Document uploaded and processed successfully",
+                data: {
+                    documentId: uploadResult.documentId,
+                    chunksCreated: uploadResult.chunksCreated,
+                    processingTime: uploadResult.processingTime,
+                    document: {
+                        id: uploadResult.document.id,
+                        name: uploadResult.document.name,
+                        title: uploadResult.document.title || uploadResult.document.name,
+                        description: uploadResult.document.description,
+                        tags: uploadResult.document.tags ? JSON.parse(uploadResult.document.tags) : [],
+                        author: uploadResult.document.author,
+                        filePath: uploadResult.document.filePath,
+                        fileSize: uploadResult.document.fileSize,
+                        fileType: uploadResult.document.fileType,
+                        uploadDate: uploadResult.document.uploadedAt?.toISOString() || new Date().toISOString(),
+                        status: uploadResult.document.status,
+                        processingStatus: uploadResult.document.processingStatus
+                    }
+                }
             };
             return response;
         } catch (error) {
@@ -198,38 +333,29 @@ export function registerRagIpcHandlers(): void {
         try {
             const filters = data ? JSON.parse(data) : undefined;
             
-            // Mock documents list - replace with actual document retrieval logic
-            const documents = [
-                {
-                    id: 1,
-                    name: "Sample Document 1",
-                    title: "Introduction to RAG",
-                    description: "A comprehensive guide to RAG systems",
-                    tags: ["rag", "ai", "nlp"],
-                    author: "AI Team",
-                    filePath: "/path/to/doc1.pdf",
-                    fileSize: 1024000,
-                    uploadDate: new Date().toISOString(),
-                    status: "completed"
-                },
-                {
-                    id: 2,
-                    name: "Sample Document 2",
-                    title: "Advanced RAG Techniques",
-                    description: "Advanced techniques for RAG implementation",
-                    tags: ["rag", "advanced", "techniques"],
-                    author: "Research Team",
-                    filePath: "/path/to/doc2.pdf",
-                    fileSize: 2048000,
-                    uploadDate: new Date().toISOString(),
-                    status: "completed"
-                }
-            ];
+            const ragSearchController = await createRagController();
+            const documents = await ragSearchController.getDocuments(filters);
+            
+            // Transform documents for frontend
+            const transformedDocuments = documents.map(doc => ({
+                id: doc.id,
+                name: doc.name,
+                title: doc.title,
+                description: doc.description,
+                tags: doc.tags ? JSON.parse(doc.tags) : [],
+                author: doc.author,
+                filePath: doc.filePath,
+                fileSize: doc.fileSize,
+                fileType: doc.fileType,
+                uploadDate: doc.uploadedAt?.toISOString() || new Date().toISOString(),
+                status: doc.status,
+                processingStatus: doc.processingStatus
+            }));
             
             const response: CommonMessage<any[]> = {
                 status: true,
                 msg: "Documents retrieved successfully",
-                data: documents
+                data: transformedDocuments
             };
             return response;
         } catch (error) {
@@ -248,24 +374,37 @@ export function registerRagIpcHandlers(): void {
         try {
             const { id } = JSON.parse(data) as { id: number };
             
-            // Mock document - replace with actual document retrieval logic
-            const document = {
-                id: id,
-                name: `Document ${id}`,
-                title: `Document Title ${id}`,
-                description: `Description for document ${id}`,
-                tags: ["sample", "document"],
-                author: "System",
-                filePath: `/path/to/doc${id}.pdf`,
-                fileSize: 1024000,
-                uploadDate: new Date().toISOString(),
-                status: "completed"
+            const ragSearchController = await createRagController();
+            const document = await ragSearchController.getDocument(id);
+            
+            if (!document) {
+                const errorResponse: CommonMessage<null> = {
+                    status: false,
+                    msg: "Document not found",
+                    data: null
+                };
+                return errorResponse;
+            }
+            
+            const transformedDocument = {
+                id: document.id,
+                name: document.name,
+                title: document.title,
+                description: document.description,
+                tags: document.tags ? JSON.parse(document.tags) : [],
+                author: document.author,
+                filePath: document.filePath,
+                fileSize: document.fileSize,
+                fileType: document.fileType,
+                uploadDate: document.uploadedAt?.toISOString() || new Date().toISOString(),
+                status: document.status,
+                processingStatus: document.processingStatus
             };
             
             const response: CommonMessage<any> = {
                 status: true,
                 msg: "Document retrieved successfully",
-                data: document
+                data: transformedDocument
             };
             return response;
         } catch (error) {
@@ -284,8 +423,8 @@ export function registerRagIpcHandlers(): void {
         try {
             const { id, metadata } = JSON.parse(data) as { id: number; metadata: any };
             
-            // Mock update - replace with actual document update logic
-            console.log(`Updating document ${id} with metadata:`, metadata);
+            const ragSearchController = await createRagController();
+            await ragSearchController.updateDocument(id, metadata);
             
             const response: CommonMessage<void> = {
                 status: true,
@@ -307,8 +446,8 @@ export function registerRagIpcHandlers(): void {
         try {
             const { id, deleteFile } = JSON.parse(data) as { id: number; deleteFile?: boolean };
             
-            // Mock delete - replace with actual document deletion logic
-            console.log(`Deleting document ${id}, deleteFile: ${deleteFile}`);
+            const ragSearchController = await createRagController();
+            await ragSearchController.deleteDocument(id, deleteFile || false);
             
             const response: CommonMessage<void> = {
                 status: true,
@@ -328,23 +467,8 @@ export function registerRagIpcHandlers(): void {
     // Get document statistics
     ipcMain.handle(RAG_GET_DOCUMENT_STATS, async (event, data): Promise<CommonMessage<any | null>> => {
         try {
-            // Mock document stats - replace with actual stats retrieval logic
-            const stats = {
-                totalDocuments: 10,
-                totalChunks: 150,
-                totalSize: 10240000,
-                averageSize: 1024000,
-                byStatus: {
-                    completed: 8,
-                    processing: 1,
-                    error: 1
-                },
-                byType: {
-                    pdf: 6,
-                    txt: 3,
-                    docx: 1
-                }
-            };
+            const ragSearchController = await createRagController();
+            const stats = await ragSearchController.getDocumentStats();
             
             const response: CommonMessage<any> = {
                 status: true,
