@@ -88,7 +88,7 @@
         {{ formatFileSize(item.fileSize) }}
       </template>
 
-      <template v-slot:item.uploadedAt="{ item }">
+      <template v-slot:item.uploadDate="{ item }">
         {{ formatDate(item.uploadDate) }}
       </template>
 
@@ -101,14 +101,14 @@
         >
           <v-icon size="small">mdi-eye</v-icon>
         </v-btn>
-        <v-btn
+        <!-- <v-btn
           icon
           size="small"
           variant="text"
           @click="editDocument(item)"
         >
           <v-icon size="small">mdi-pencil</v-icon>
-        </v-btn>
+        </v-btn> -->
         <v-btn
           icon
           size="small"
@@ -196,10 +196,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, computed } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { getDocuments, type DocumentInfo } from '@/views/api/rag';
-
+import { Header } from "@/entityTypes/commonType"
+const headers = ref<Array<Header>>([])
 // i18n setup
 const { t } = useI18n();
     const documents = ref<DocumentInfo[]>([]);
@@ -223,15 +224,15 @@ const { t } = useI18n();
       fileType: ''
     });
 
-    const headers = [
-      { text: t('knowledge.name'), value: 'name', sortable: true },
-      { text: t('knowledge.title'), value: 'title', sortable: true },
-      { text: t('knowledge.status'), value: 'status', sortable: true },
-      { text: t('knowledge.processing'), value: 'processingStatus', sortable: true },
-      { text: t('knowledge.file_type'), value: 'fileType', sortable: true },
-      { text: t('knowledge.size'), value: 'fileSize', sortable: true },
-      { text: t('knowledge.uploaded'), value: 'uploadedAt', sortable: true },
-      { text: t('knowledge.actions'), value: 'actions', sortable: false }
+    headers.value = [
+      { title: t('knowledge.name'), sortable: true, key: 'name' },
+      { title: t('knowledge.title'), sortable: true, key: 'title' },
+      { title: t('knowledge.status'), sortable: true, key: 'status' },
+      { title: t('knowledge.processing'), sortable: true, key: 'processingStatus' },
+      { title: t('knowledge.file_type'), sortable: true, key: 'fileType' },
+      { title: t('knowledge.size'), sortable: true, key: 'fileSize' },
+      { title: t('knowledge.uploaded'), sortable: true, key: 'uploadDate' },
+      { title: t('knowledge.actions'), sortable: false, key: 'actions' }
     ];
 
     const statusOptions = [
@@ -252,14 +253,14 @@ const { t } = useI18n();
       loading.value = true;
       try {
         // Get documents using IPC method
-        const response = await getDocuments(filters.value);
-        console.log('📄 Documents response:', response);
+        const documentsList = await getDocuments(filters.value);
+        console.log('📄 Documents response:', documentsList);
         
-        if (response) {
-          documents.value = response;
+        if (documentsList && Array.isArray(documentsList)) {
+          documents.value = documentsList;
           console.log('✅ Documents loaded successfully:', documents.value.length);
         } else {
-          console.error('❌ Failed to load documents:', response.message);
+          console.error('❌ Failed to load documents: Invalid response format');
           documents.value = [];
         }
       } catch (error) {

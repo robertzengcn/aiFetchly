@@ -132,7 +132,11 @@ export async function uploadDocument(options: {
  * Get all documents
  */
 export async function getDocuments(filters?: any): Promise<DocumentInfo[]> {
-  return await windowInvoke(RAG_GET_DOCUMENTS, filters);
+  const response = await windowInvoke(RAG_GET_DOCUMENTS, filters);
+  if (response) {
+    return response;
+  }
+  return [];
 }
 
 /**
