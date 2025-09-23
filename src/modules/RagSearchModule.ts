@@ -509,6 +509,157 @@ export class RagSearchModule extends BaseModule {
     }
 
     /**
+     * Chunk a document into smaller pieces
+     * @param documentId - Document ID to chunk
+     * @param options - Chunking options
+     * @returns Chunking result
+     */
+    async chunkDocument(documentId: number, options?: {
+        chunkSize?: number;
+        overlapSize?: number;
+        strategy?: 'sentence' | 'paragraph' | 'semantic' | 'fixed';
+        preserveWhitespace?: boolean;
+        minChunkSize?: number;
+    }): Promise<{
+        documentId: number;
+        chunksCreated: number;
+        processingTime: number;
+        success: boolean;
+        message: string;
+    }> {
+        const startTime = Date.now();
+
+        try {
+            // Get document
+            const document = await this.documentService.findDocumentById(documentId);
+            if (!document) {
+                return {
+                    documentId,
+                    chunksCreated: 0,
+                    processingTime: Date.now() - startTime,
+                    success: false,
+                    message: 'Document not found'
+                };
+            }
+
+            // Update processing status
+            await this.documentService.updateDocumentStatus(
+                documentId,
+                'active',
+                'processing'
+            );
+
+            // Chunk the document
+            const chunks = await this.chunkingService.chunkDocument(document, options);
+
+            // Update processing status to completed
+            await this.documentService.updateDocumentStatus(
+                documentId,
+                'active',
+                'completed'
+            );
+
+            const processingTime = Date.now() - startTime;
+
+            return {
+                documentId,
+                chunksCreated: chunks.length,
+                processingTime,
+                success: true,
+                message: `Document chunked successfully into ${chunks.length} chunks`
+            };
+        } catch (error) {
+            console.error('Error chunking document:', error);
+            
+            // Update processing status to error
+            try {
+                await this.documentService.updateDocumentStatus(
+                    documentId,
+                    'active',
+                    'error'
+                );
+            } catch (updateError) {
+                console.error('Failed to update document status to error:', updateError);
+            }
+
+            return {
+                documentId,
+                chunksCreated: 0,
+                processingTime: Date.now() - startTime,
+                success: false,
+                message: `Document chunking failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+            };
+        }
+    }
+
+    /**
+     * Generate embeddings for document chunks
+     * @param documentId - Document ID to generate embeddings for
+     * @returns Embedding generation result
+     */
+    async generateDocumentEmbeddings(documentId: number): Promise<{
+        documentId: number;
+        chunksProcessed: number;
+        processingTime: number;
+        success: boolean;
+        message: string;
+    }> {
+        const startTime = Date.now();
+
+        try {
+            // Get document chunks
+            const chunks = await this.chunkingService.getDocumentChunks(documentId);
+            if (chunks.length === 0) {
+                return {
+                    documentId,
+                    chunksProcessed: 0,
+                    processingTime: Date.now() - startTime,
+                    success: false,
+                    message: 'No chunks found for document'
+                };
+            }
+
+            // Check if chunks already have embeddings
+            const chunksWithoutEmbeddings = chunks.filter(chunk => !chunk.embeddingId);
+            if (chunksWithoutEmbeddings.length === 0) {
+                return {
+                    documentId,
+                    chunksProcessed: 0,
+                    processingTime: Date.now() - startTime,
+                    success: true,
+                    message: 'All chunks already have embeddings'
+                };
+            }
+
+            // Generate embeddings for chunks that don't have them
+            if (this.currentEmbeddingService) {
+                await this.generateChunkEmbeddings(chunksWithoutEmbeddings);
+            } else {
+                throw new Error('Embedding service not available');
+            }
+
+            const processingTime = Date.now() - startTime;
+
+            return {
+                documentId,
+                chunksProcessed: chunksWithoutEmbeddings.length,
+                processingTime,
+                success: true,
+                message: `Generated embeddings for ${chunksWithoutEmbeddings.length} chunks`
+            };
+        } catch (error) {
+            console.error('Error generating document embeddings:', error);
+            return {
+                documentId,
+                chunksProcessed: 0,
+                processingTime: Date.now() - startTime,
+                success: false,
+                message: `Failed to generate embeddings: ${error instanceof Error ? error.message : 'Unknown error'}`
+            };
+        }
+    }
+
+    /**
      * Clean up resources
      */
     async cleanup(): Promise<void> {

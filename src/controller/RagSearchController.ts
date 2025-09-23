@@ -1,12 +1,15 @@
 import { RagSearchModule, SearchRequest, SearchResponse, DocumentUploadResponse } from '@/modules/RagSearchModule';
 import { DocumentUploadOptions } from '@/service/DocumentService';
 import { RAGDocumentEntity } from '@/entity/RAGDocument.entity';
+import { RagConfigApi, ChunkingConfig } from '@/api/ragConfigApi';
 
 export class RagSearchController {
     private ragSearchModule: RagSearchModule;
+    private ragConfigApi: RagConfigApi;
 
     constructor() {
         this.ragSearchModule = new RagSearchModule();
+        this.ragConfigApi = new RagConfigApi();
     }
 
     /**
@@ -186,6 +189,157 @@ export class RagSearchController {
         byType: Record<string, number>;
     }> {
         return await this.ragSearchModule.getDocumentStats();
+    }
+
+    /**
+     * Chunk a document into smaller pieces
+     * @param documentId - Document ID to chunk
+     * @param options - Chunking options
+     * @returns Chunking result
+     */
+    async chunkDocument(documentId: number, options?: {
+        chunkSize?: number;
+        overlapSize?: number;
+        strategy?: 'sentence' | 'paragraph' | 'semantic' | 'fixed';
+        preserveWhitespace?: boolean;
+        minChunkSize?: number;
+    }): Promise<{
+        documentId: number;
+        chunksCreated: number;
+        processingTime: number;
+        success: boolean;
+        message: string;
+    }> {
+        return await this.ragSearchModule.chunkDocument(documentId, options);
+    }
+
+    /**
+     * Generate embeddings for document chunks
+     * @param documentId - Document ID to generate embeddings for
+     * @returns Embedding generation result
+     */
+    async generateDocumentEmbeddings(documentId: number): Promise<{
+        documentId: number;
+        chunksProcessed: number;
+        processingTime: number;
+        success: boolean;
+        message: string;
+    }> {
+        return await this.ragSearchModule.generateDocumentEmbeddings(documentId);
+    }
+
+    /**
+     * Chunk and embed a document (combined operation)
+     * @param documentId - Document ID to process
+     * @returns Combined processing result
+     */
+    async chunkAndEmbedDocument(documentId: number): Promise<{
+        documentId: number;
+        chunksCreated: number;
+        embeddingsGenerated: number;
+        processingTime: number;
+        success: boolean;
+        message: string;
+        steps: {
+            chunking: boolean;
+            embedding: boolean;
+        };
+        chunkingResult?: {
+            chunksCreated: number;
+            processingTime: number;
+            message: string;
+        };
+        embeddingResult?: {
+            chunksProcessed: number;
+            processingTime: number;
+            message: string;
+        };
+    }> {
+        const startTime = Date.now();
+        const steps = { chunking: false, embedding: false };
+
+        try {
+            // Step 1: Get chunking configuration from remote server
+            let chunkingOptions: ChunkingConfig | undefined;
+            try {
+                const configResponse = await this.ragConfigApi.getChunkingConfig();
+                if (configResponse.status && configResponse.data) {
+                    chunkingOptions = configResponse.data;
+                    console.log('Using remote chunking configuration:', chunkingOptions);
+                } else {
+                    console.warn('Failed to get remote chunking config, using defaults');
+                }
+            } catch (configError) {
+                console.warn('Error fetching chunking config from remote server:', configError);
+                console.log('Using default chunking configuration');
+            }
+
+            // Step 2: Chunk the document
+            const chunkResult = await this.chunkDocument(documentId, chunkingOptions);
+            if (!chunkResult.success) {
+                return {
+                    documentId,
+                    chunksCreated: 0,
+                    embeddingsGenerated: 0,
+                    processingTime: Date.now() - startTime,
+                    success: false,
+                    message: `Document chunking failed: ${chunkResult.message}`,
+                    steps
+                };
+            }
+            steps.chunking = true;
+
+            // Step 3: Generate embeddings for the chunks
+            const embedResult = await this.generateDocumentEmbeddings(documentId);
+            if (!embedResult.success) {
+                return {
+                    documentId,
+                    chunksCreated: chunkResult.chunksCreated,
+                    embeddingsGenerated: 0,
+                    processingTime: Date.now() - startTime,
+                    success: false,
+                    message: `Embedding generation failed: ${embedResult.message}`,
+                    steps,
+                    chunkingResult: {
+                        chunksCreated: chunkResult.chunksCreated,
+                        processingTime: chunkResult.processingTime,
+                        message: chunkResult.message
+                    }
+                };
+            }
+            steps.embedding = true;
+
+            return {
+                documentId,
+                chunksCreated: chunkResult.chunksCreated,
+                embeddingsGenerated: embedResult.chunksProcessed,
+                processingTime: Date.now() - startTime,
+                success: true,
+                message: 'Document chunked and embedded successfully',
+                steps,
+                chunkingResult: {
+                    chunksCreated: chunkResult.chunksCreated,
+                    processingTime: chunkResult.processingTime,
+                    message: chunkResult.message
+                },
+                embeddingResult: {
+                    chunksProcessed: embedResult.chunksProcessed,
+                    processingTime: embedResult.processingTime,
+                    message: embedResult.message
+                }
+            };
+        } catch (error) {
+            console.error('Error in chunk and embed document:', error);
+            return {
+                documentId,
+                chunksCreated: 0,
+                embeddingsGenerated: 0,
+                processingTime: Date.now() - startTime,
+                success: false,
+                message: `Chunk and embed failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+                steps
+            };
+        }
     }
 
     /**

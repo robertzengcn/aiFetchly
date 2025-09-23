@@ -89,31 +89,34 @@
       </template>
 
       <template v-slot:item.uploadedAt="{ item }">
-        {{ formatDate(item.uploadedAt) }}
+        {{ formatDate(item.uploadDate) }}
       </template>
 
       <template v-slot:item.actions="{ item }">
         <v-btn
           icon
-          small
+          size="small"
+          variant="text"
           @click="handlePreviewDocument(item)"
         >
-          <v-icon>mdi-eye</v-icon>
+          <v-icon size="small">mdi-eye</v-icon>
         </v-btn>
         <v-btn
           icon
-          small
+          size="small"
+          variant="text"
           @click="editDocument(item)"
         >
-          <v-icon>mdi-pencil</v-icon>
+          <v-icon size="small">mdi-pencil</v-icon>
         </v-btn>
         <v-btn
           icon
-          small
+          size="small"
+          variant="text"
           color="error"
           @click="deleteDocument(item)"
         >
-          <v-icon>mdi-delete</v-icon>
+          <v-icon size="small">mdi-delete</v-icon>
         </v-btn>
       </template>
     </v-data-table>
@@ -195,18 +198,19 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { getDocuments, type DocumentInfo } from '@/views/api/rag';
 
 // i18n setup
 const { t } = useI18n();
-    const documents = ref([]);
-    const selectedDocuments = ref([]);
+    const documents = ref<DocumentInfo[]>([]);
+    const selectedDocuments = ref<DocumentInfo[]>([]);
     const loading = ref(false);
     const showUploadDialog = ref(false);
     const showPreviewDialog = ref(false);
-    const previewDocument = ref(null);
+    const previewDocument = ref<DocumentInfo | null>(null);
     const previewContent = ref('');
     const uploading = ref(false);
-    const uploadFile = ref(null);
+    const uploadFile = ref<any>(null);
     const uploadData = ref({
       title: '',
       description: '',
@@ -247,55 +251,43 @@ const { t } = useI18n();
     const loadDocuments = async () => {
       loading.value = true;
       try {
-        // Mock data for now
-        documents.value = [
-          // {
-          //   id: 1,
-          //   name: 'sample.pdf',
-          //   title: 'Sample Document',
-          //   status: 'active',
-          //   processingStatus: 'completed',
-          //   fileType: 'pdf',
-          //   fileSize: 1024000,
-          //   uploadedAt: new Date('2024-01-15'),
-          //   tags: ['research', 'ai']
-          // },
-          // {
-          //   id: 2,
-          //   name: 'notes.txt',
-          //   title: 'Meeting Notes',
-          //   status: 'active',
-          //   processingStatus: 'completed',
-          //   fileType: 'txt',
-          //   fileSize: 51200,
-          //   uploadedAt: new Date('2024-01-14'),
-          //   tags: ['meeting', 'notes']
-          // }
-        ];
+        // Get documents using IPC method
+        const response = await getDocuments(filters.value);
+        console.log('📄 Documents response:', response);
+        
+        if (response.success && response.data) {
+          documents.value = response.data;
+          console.log('✅ Documents loaded successfully:', documents.value.length);
+        } else {
+          console.error('❌ Failed to load documents:', response.message);
+          documents.value = [];
+        }
       } catch (error) {
-        console.error('Error loading documents:', error);
+        console.error('❌ Error loading documents:', error);
+        documents.value = [];
       } finally {
         loading.value = false;
       }
     };
 
     const applyFilters = () => {
-      // Filter logic would go here
+      // Reload documents with new filters
       console.log('Applying filters:', filters.value);
+      loadDocuments();
     };
 
     const refreshDocuments = () => {
       loadDocuments();
     };
 
-    const onFileSelected = (file) => {
-      if (file) {
+    const onFileSelected = (file: File | File[] | null) => {
+      if (file && !Array.isArray(file)) {
         uploadData.value.title = file.name.replace(/\.[^/.]+$/, '');
       }
     };
 
     const uploadDocument = async () => {
-      if (!uploadFile.value) return;
+      if (!uploadFile.value || Array.isArray(uploadFile.value)) return;
       
       uploading.value = true;
       try {

@@ -234,7 +234,7 @@ const { t } = useI18n();
 
 import DocumentManagement from '@/views/pages/knowledge/DocumentManagement.vue';
 import SearchInterface from '@/views/pages/knowledge/SearchInterface.vue';
-import { initializeRAG, getRAGStats, uploadDocument, selectFilesNative as selectFilesNativeAPI, copyFileToTemp as copyFileToTempAPI } from '@/views/api/rag';
+import { initializeRAG, getRAGStats, uploadDocument, selectFilesNative as selectFilesNativeAPI, copyFileToTemp as copyFileToTempAPI, chunkAndEmbedDocument } from '@/views/api/rag';
 import type { SaveTempFileResponse, UploadedDocument } from '@/entityTypes/commonType';
 
 // i18n setup
@@ -352,7 +352,7 @@ function handleSearchCompleted(results: { totalResults: number; [key: string]: a
 }
 
 
-function handleUploadSuccess(document: UploadedDocument) {
+async function handleUploadSuccess(document: UploadedDocument) {
   showUploadDialog.value = false;
   
   // Provide detailed feedback based on document status
@@ -366,10 +366,52 @@ function handleUploadSuccess(document: UploadedDocument) {
   
   console.log('📄 Document processed:', document);
   
-  // Refresh document management if available
-  if (documentManagement.value) {
-    documentManagement.value.refreshDocuments();
+  // Automatically start chunking and embedding process
+  if (document.id) {
+    try {
+      setLoading(true, t('knowledge.processing_document'), t('knowledge.chunking_and_embedding_document'));
+      
+      const chunkEmbedResult = await chunkAndEmbedDocument(document.id);
+      
+      if (chunkEmbedResult.success && chunkEmbedResult.data) {
+        const { chunksCreated, embeddingsGenerated, processingTime } = chunkEmbedResult.data;
+        showStatus(
+          t('knowledge.document_processed_successfully', { 
+            name: document.name, 
+            chunks: chunksCreated, 
+            embeddings: embeddingsGenerated 
+          }), 
+          'success'
+        );
+        console.log(`✅ Document ${document.name} processed: ${chunksCreated} chunks, ${embeddingsGenerated} embeddings in ${processingTime}ms`);
+      } else {
+        showStatus(
+          t('knowledge.document_processing_failed', { 
+            name: document.name, 
+            error: chunkEmbedResult.message 
+          }), 
+          'warning'
+        );
+        console.warn(`⚠️ Document ${document.name} processing failed:`, chunkEmbedResult.message);
+      }
+    } catch (error) {
+      console.error(`❌ Error processing document ${document.name}:`, error);
+      showStatus(
+        t('knowledge.document_processing_error', { 
+          name: document.name, 
+          error: error instanceof Error ? error.message : 'Unknown error' 
+        }), 
+        'error'
+      );
+    } finally {
+      setLoading(false);
+    }
   }
+  
+  // Refresh document management if available
+  // if (documentManagement.value) {
+  //   documentManagement.value.refreshDocuments();
+  // }
 }
 
 function handleUploadError(error: string) {
@@ -462,7 +504,7 @@ async function confirmUpload() {
 
   try {
     // Upload each file
-    const uploadPromises = uploadFiles.value.map(async (file) => {
+    const uploadPromises = uploadFiles.value.map(async (file): Promise<UploadedDocument | null> => {
       // For Electron, we can access the file path directly if available
       // Otherwise, use the webkitRelativePath or create a temporary file
       let filePath = (file as any).path || file.webkitRelativePath;
@@ -482,42 +524,31 @@ async function confirmUpload() {
         needsUpload = !copyResult.uploadResult.databaseSaved; // Only skip if database save was successful
       }
       
-      // Only call uploadDocument if we have a direct file path (not temp file)
-      // if (needsUpload) {
-      //   const response = await uploadDocument({
-      //     filePath: filePath,
-      //     name: file.name,
-      //     title: file.name.replace(/\.[^/.]+$/, ""), // Remove file extension for title
-      //     description: `Uploaded document: ${file.name}`,
-      //     tags: ['uploaded', 'knowledge'],
-      //     author: 'User'
-      //   });
-
-      //   if (!response.success) {
-      //     throw new Error(response.message || 'Upload failed');
-      //   }
-
-      //   return response.data;
-      // } else {
-      //   // Return document info from temp file upload result (already processed)
-      //   return copyResult?.uploadResult.document || {
-      //     id: Date.now(), // Temporary ID
-      //     name: file.name,
-      //     title: file.name.replace(/\.[^/.]+$/, ""),
-      //     filePath: filePath,
-      //     status: copyResult?.uploadResult.databaseSaved ? 'completed' : 'pending',
-      //     description: `Uploaded document: ${file.name}`,
-      //     tags: ['uploaded', 'knowledge'],
-      //     author: 'User'
-      //   } as UploadedDocument;
-      // }
+      // Return document info from temp file upload result (already processed)
+      if (copyResult?.uploadResult.document) {
+        return copyResult.uploadResult.document;
+      } else {
+        // Fallback document info if no database document available
+        return {
+          id: Date.now(), // Temporary ID
+          name: file.name,
+          title: file.name.replace(/\.[^/.]+$/, ""),
+          filePath: filePath,
+          status: 'pending',
+          description: `Uploaded document: ${file.name}`,
+          tags: ['uploaded', 'knowledge'],
+          author: 'User'
+        } as UploadedDocument;
+      }
     });
 
     const uploadedDocuments = await Promise.all(uploadPromises);
     
-    // Handle successful uploads
-    uploadedDocuments.forEach(doc => {
-      handleUploadSuccess(doc);
+    // Handle successful uploads (filter out null values)
+    uploadedDocuments.filter(doc => doc !== null).forEach(doc => {
+      if (doc) {
+        handleUploadSuccess(doc);
+      }
     });
     
     cancelUpload();
@@ -540,13 +571,53 @@ async function copyFileToTemp(file: File, metadata?: {
     const uploadResult: SaveTempFileResponse = await copyFileToTempAPI(file, metadata);
     
     // Check upload results and provide user feedback
-    if (uploadResult.databaseSaved) {
-      console.log('✅ File and database save successful:', uploadResult.document?.name);
-      if (uploadResult.document) {
-        showStatus(
-          t('knowledge.document_uploaded_successfully', { name: uploadResult.document.name }), 
-          'success'
-        );
+    if (uploadResult.databaseSaved && uploadResult.document) {
+      console.log('✅ File and database save successful:', uploadResult.document.name);
+      showStatus(
+        t('knowledge.document_uploaded_successfully', { name: uploadResult.document.name }), 
+        'success'
+      );
+      
+      // Automatically start chunking and embedding process for database-saved documents
+      if (uploadResult.document.id) {
+        try {
+          setLoading(true, t('knowledge.processing_document'), t('knowledge.chunking_and_embedding_document'));
+          
+          const chunkEmbedResult = await chunkAndEmbedDocument(uploadResult.document.id);
+          
+          if (chunkEmbedResult.success && chunkEmbedResult.data) {
+            const { chunksCreated, embeddingsGenerated, processingTime } = chunkEmbedResult.data;
+            showStatus(
+              t('knowledge.document_processed_successfully', { 
+                name: uploadResult.document.name, 
+                chunks: chunksCreated, 
+                embeddings: embeddingsGenerated 
+              }), 
+              'success'
+            );
+            console.log(`✅ Document ${uploadResult.document.name} processed: ${chunksCreated} chunks, ${embeddingsGenerated} embeddings in ${processingTime}ms`);
+          } else {
+            showStatus(
+              t('knowledge.document_processing_failed', { 
+                name: uploadResult.document.name, 
+                error: chunkEmbedResult.message 
+              }), 
+              'warning'
+            );
+            console.warn(`⚠️ Document ${uploadResult.document.name} processing failed:`, chunkEmbedResult.message);
+          }
+        } catch (error) {
+          console.error(`❌ Error processing document ${uploadResult.document.name}:`, error);
+          showStatus(
+            t('knowledge.document_processing_error', { 
+              name: uploadResult.document.name, 
+              error: error instanceof Error ? error.message : 'Unknown error' 
+            }), 
+            'error'
+          );
+        } finally {
+          setLoading(false);
+        }
       }
     } else if (uploadResult.databaseError) {
       console.warn('⚠️ File saved but database error:', uploadResult.databaseError);

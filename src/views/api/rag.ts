@@ -1,6 +1,6 @@
 import { windowInvoke, windowInvokeBinary } from '@/views/utils/apirequest';
 import { EmbeddingConfig } from '@/modules/llm/EmbeddingFactory';
-import { LlmCongfig, SaveTempFileResponse } from '@/entityTypes/commonType';
+import { LlmCongfig, SaveTempFileResponse, ChunkAndEmbedResponse } from '@/entityTypes/commonType';
 import {
   RAG_INITIALIZE,
   RAG_QUERY,
@@ -20,6 +20,7 @@ import {
   RAG_TEST_EMBEDDING_SERVICE,
   RAG_CLEAR_CACHE,
   RAG_CLEANUP,
+  RAG_CHUNK_AND_EMBED_DOCUMENT,
   SHOW_OPEN_DIALOG,
   GET_FILE_STATS,
   SAVE_TEMP_FILE
@@ -382,4 +383,52 @@ function getFileType(fileName: string): string {
     'htm': 'text/html'
   };
   return mimeTypes[ext || ''] || 'application/octet-stream';
+}
+
+/**
+ * Chunk and embed a document
+ * 
+ * This function takes a document ID from the frontend and performs two operations:
+ * 1. Chunks the document into smaller pieces for better search and retrieval
+ * 2. Generates embeddings for each chunk to enable semantic search
+ * 
+ * The chunking configuration is automatically fetched from the remote server.
+ * If the remote server is unavailable, default configuration will be used.
+ * 
+ * @param documentId - Document ID to chunk and embed
+ * @returns Promise with chunking and embedding results
+ * 
+ * @example
+ * ```typescript
+ * // Basic usage - chunking config fetched from remote server
+ * const result = await chunkAndEmbedDocument(123);
+ * 
+ * if (result.success) {
+ *   console.log(`Created ${result.data.chunksCreated} chunks`);
+ *   console.log(`Generated ${result.data.embeddingsGenerated} embeddings`);
+ * }
+ * ```
+ */
+export async function chunkAndEmbedDocument(
+  documentId: number
+): Promise<RAGResponse<ChunkAndEmbedResponse>> {
+  try {
+    const requestData = {
+      documentId
+    };
+
+    const response = await windowInvoke(RAG_CHUNK_AND_EMBED_DOCUMENT, requestData);
+    
+    return {
+      success: response.status,
+      data: response.data,
+      message: response.msg
+    };
+  } catch (error) {
+    console.error('Error chunking and embedding document:', error);
+    return {
+      success: false,
+      message: error instanceof Error ? error.message : 'Unknown error occurred'
+    };
+  }
 }

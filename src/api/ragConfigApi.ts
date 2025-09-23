@@ -18,6 +18,28 @@ export interface ModelInfo {
 }
 
 /**
+ * Chunking configuration interface for remote configuration
+ */
+export interface ChunkingConfig {
+    /** Size of each chunk in characters */
+    chunkSize: number;
+    /** Overlap size between chunks in characters */
+    overlapSize: number;
+    /** Chunking strategy to use */
+    strategy: 'sentence' | 'paragraph' | 'semantic' | 'fixed';
+    /** Whether to preserve whitespace in chunks */
+    preserveWhitespace: boolean;
+    /** Minimum chunk size to avoid very small chunks */
+    minChunkSize: number;
+    /** Maximum chunk size to avoid very large chunks */
+    maxChunkSize?: number;
+    /** Whether to split on sentences when possible */
+    splitOnSentences?: boolean;
+    /** Whether to split on paragraphs when possible */
+    splitOnParagraphs?: boolean;
+}
+
+/**
  * API client for RAG configuration management
  * 
  * Handles communication with remote configuration service to retrieve
@@ -119,5 +141,24 @@ export class RagConfigApi {
         const data = new FormData();
         data.append('content', content);
         return this._httpClient.post('/api/rag/embed', data);
+    }
+
+    /**
+     * Retrieves the chunking configuration from remote server
+     * 
+     * @returns Promise resolving to chunking configuration response
+     * @throws {Error} When network request fails
+     * 
+     * @example
+     * ```typescript
+     * const config = await api.getChunkingConfig();
+     * if (config.success) {
+     *   const chunkSize = config.data.chunkSize;
+     *   const strategy = config.data.strategy;
+     * }
+     * ```
+     */
+    async getChunkingConfig(): Promise<CommonApiresp<ChunkingConfig>> {
+        return this._httpClient.get('/api/rag/chunking-config');
     }
 }

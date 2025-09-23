@@ -128,6 +128,28 @@ export type LlmCongfig={
     model:string,
     url?:string,
     apikey?:string,
+}
+
+export interface ChunkAndEmbedResponse {
+    documentId: number;
+    chunksCreated: number;
+    embeddingsGenerated: number;
+    processingTime: number;
+    success: boolean;
+    steps: {
+        chunking: boolean;
+        embedding: boolean;
+    };
+    chunkingResult?: {
+        chunksCreated: number;
+        processingTime: number;
+        message: string;
+    };
+    embeddingResult?: {
+        chunksProcessed: number;
+        processingTime: number;
+        message: string;
+    };
 }  
 export type TraditionalTranslateCongfig={
     url:string,

@@ -1,7 +1,8 @@
 import { ipcMain, dialog, app } from 'electron';
 import { RagSearchController } from '@/controller/RagSearchController';
 import { SearchRequest, SearchResponse } from '@/modules/RagSearchModule';
-import { CommonMessage, LlmCongfig, SaveTempFileResponse, DocumentUploadResponse } from '@/entityTypes/commonType';
+import { CommonMessage, SaveTempFileResponse, DocumentUploadResponse, ChunkAndEmbedResponse } from '@/entityTypes/commonType';
+import { DocumentInfo } from '@/views/api/rag';
 import * as fs from 'fs';
 import * as path from 'path';
 import {
@@ -23,6 +24,7 @@ import {
     RAG_TEST_EMBEDDING_SERVICE,
     RAG_CLEAR_CACHE,
     RAG_CLEANUP,
+    RAG_CHUNK_AND_EMBED_DOCUMENT,
     SHOW_OPEN_DIALOG,
     GET_FILE_STATS,
     SAVE_TEMP_FILE
@@ -37,6 +39,7 @@ async function createRagController(): Promise<RagSearchController> {
     await controller.initialize();
     return controller;
 }
+
 
 /**
  * Register RAG IPC handlers
@@ -329,7 +332,7 @@ export function registerRagIpcHandlers(): void {
     });
 
     // Get documents
-    ipcMain.handle(RAG_GET_DOCUMENTS, async (event, data): Promise<CommonMessage<any[] | null>> => {
+    ipcMain.handle(RAG_GET_DOCUMENTS, async (event, data): Promise<CommonMessage<DocumentInfo[] | null>> => {
         try {
             const filters = data ? JSON.parse(data) : undefined;
             
@@ -337,7 +340,7 @@ export function registerRagIpcHandlers(): void {
             const documents = await ragSearchController.getDocuments(filters);
             
             // Transform documents for frontend
-            const transformedDocuments = documents.map(doc => ({
+            const transformedDocuments: DocumentInfo[] = documents.map(doc => ({
                 id: doc.id,
                 name: doc.name,
                 title: doc.title,
@@ -348,11 +351,11 @@ export function registerRagIpcHandlers(): void {
                 fileSize: doc.fileSize,
                 fileType: doc.fileType,
                 uploadDate: doc.uploadedAt?.toISOString() || new Date().toISOString(),
-                status: doc.status,
+                status: doc.status as 'processing' | 'completed' | 'error',
                 processingStatus: doc.processingStatus
             }));
             
-            const response: CommonMessage<any[]> = {
+            const response: CommonMessage<DocumentInfo[]> = {
                 status: true,
                 msg: "Documents retrieved successfully",
                 data: transformedDocuments
@@ -657,6 +660,34 @@ export function registerRagIpcHandlers(): void {
             const errorResponse: CommonMessage<void> = {
                 status: false,
                 msg: error instanceof Error ? error.message : "Unknown error occurred"
+            };
+            return errorResponse;
+        }
+    });
+
+    // Chunk and embed document
+    ipcMain.handle(RAG_CHUNK_AND_EMBED_DOCUMENT, async (event, data): Promise<CommonMessage<ChunkAndEmbedResponse | null>> => {
+        try {
+            const requestData = JSON.parse(data) as {
+                documentId: number;
+            };
+
+            const ragSearchController = await createRagController();
+            const result = await ragSearchController.chunkAndEmbedDocument(requestData.documentId);
+
+            const response: CommonMessage<ChunkAndEmbedResponse> = {
+                status: result.success,
+                msg: result.message,
+                data: result
+            };
+
+            return response;
+        } catch (error) {
+            console.error('RAG chunk and embed document error:', error);
+            const errorResponse: CommonMessage<null> = {
+                status: false,
+                msg: error instanceof Error ? error.message : "Unknown error occurred",
+                data: null
             };
             return errorResponse;
         }
