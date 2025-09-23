@@ -255,8 +255,8 @@ const { t } = useI18n();
         const response = await getDocuments(filters.value);
         console.log('📄 Documents response:', response);
         
-        if (response.success && response.data) {
-          documents.value = response.data;
+        if (response) {
+          documents.value = response;
           console.log('✅ Documents loaded successfully:', documents.value.length);
         } else {
           console.error('❌ Failed to load documents:', response.message);
