@@ -159,6 +159,6 @@ export class RagConfigApi {
      * ```
      */
     async getChunkingConfig(): Promise<CommonApiresp<ChunkingConfig>> {
-        return this._httpClient.get('/api/rag/chunking-config');
+        return this._httpClient.get('/api/ai/chunking/info');
     }
 }
