@@ -191,21 +191,21 @@ export async function getSearchAnalytics(): Promise<RAGResponse> {
 /**
  * Update embedding model
  */
-export async function updateEmbeddingModel(config: {
-  provider: string;
-  model: string;
-  apiKey?: string;
-  url?: string;
-}): Promise<RAGResponse> {
-  return await windowInvoke(RAG_UPDATE_EMBEDDING_MODEL, config);
-}
+// export async function updateEmbeddingModel(config: {
+//   provider: string;
+//   model: string;
+//   apiKey?: string;
+//   url?: string;
+// }): Promise<RAGResponse> {
+//   return await windowInvoke(RAG_UPDATE_EMBEDDING_MODEL, config);
+// }
 
 /**
- * Get available models
+ * Get available models - Not needed for desktop app using remote API
  */
-export async function getAvailableModels(): Promise<RAGResponse<string[]>> {
-  return await windowInvoke(RAG_GET_AVAILABLE_MODELS, {});
-}
+// export async function getAvailableModels(): Promise<RAGResponse<string[]>> {
+//   return await windowInvoke(RAG_GET_AVAILABLE_MODELS, {});
+// }
 
 /**
  * Test embedding service

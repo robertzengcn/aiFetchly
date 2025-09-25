@@ -62,14 +62,6 @@ export class RagSearchController {
         this.ragSearchModule.clearCache();
     }
 
-    /**
-     * Update embedding model
-     * @param model - Model name
-     */
-    async updateEmbeddingModel(model: string): Promise<void> {
-        const provider = this.determineProviderFromModel(model);
-        await this.ragSearchModule.updateEmbeddingModel(provider, model);
-    }
 
     private determineProviderFromModel(model: string): string {
         if (model.includes('text-embedding')) {
@@ -82,16 +74,6 @@ export class RagSearchController {
         return 'openai';
     }
 
-    /**
-     * Get available embedding models
-     * @returns Array of available models
-     */
-    getAvailableModels(): {
-        provider: string;
-        models: string[];
-    }[] {
-        return this.ragSearchModule.getAvailableModels();
-    }
 
     /**
      * Test embedding service

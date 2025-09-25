@@ -121,7 +121,7 @@ export class RagConfigApi {
      * ```
      */
     async isOnline(): Promise<CommonApiresp<boolean>> {
-        return this._httpClient.get('/api/rag/health');
+        return this._httpClient.get('/api/healthcheck');
     }
 
     /**
@@ -140,7 +140,7 @@ export class RagConfigApi {
     async getEmbedding(content: string): Promise<CommonApiresp<number[]>> {
         const data = new FormData();
         data.append('content', content);
-        return this._httpClient.post('/api/rag/embed', data);
+        return this._httpClient.post('/api/ai/embedding/generate', data);
     }
 
     /**

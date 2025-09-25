@@ -22,8 +22,6 @@ describe('RagSearchController', () => {
             getAnalytics: vi.fn(),
             getPerformanceMetrics: vi.fn(),
             clearCache: vi.fn(),
-            updateEmbeddingModel: vi.fn(),
-            getAvailableModels: vi.fn(),
             testEmbeddingService: vi.fn(),
             getSearchStats: vi.fn(),
             cleanup: vi.fn()
@@ -181,41 +179,7 @@ describe('RagSearchController', () => {
         });
     });
 
-    describe('updateEmbeddingModel', () => {
-        test('should call module updateEmbeddingModel with model name', async () => {
-            const model = 'text-embedding-3-large';
 
-            mockRagSearchModule.updateEmbeddingModel.mockResolvedValue(undefined);
-
-            await controller.updateEmbeddingModel(model);
-
-            expect(mockRagSearchModule.updateEmbeddingModel).toHaveBeenCalledTimes(1);
-            expect(mockRagSearchModule.updateEmbeddingModel).toHaveBeenCalledWith(model);
-        });
-
-        test('should handle updateEmbeddingModel errors', async () => {
-            const error = new Error('Model update failed');
-            mockRagSearchModule.updateEmbeddingModel.mockRejectedValue(error);
-
-            await expect(controller.updateEmbeddingModel('test-model')).rejects.toThrow('Model update failed');
-        });
-    });
-
-    describe('getAvailableModels', () => {
-        test('should call module getAvailableModels', () => {
-            const models = [
-                { provider: 'openai', models: ['text-embedding-3-small', 'text-embedding-3-large'] },
-                { provider: 'huggingface', models: ['sentence-transformers/all-MiniLM-L6-v2'] }
-            ];
-
-            mockRagSearchModule.getAvailableModels.mockReturnValue(models);
-
-            const result = controller.getAvailableModels();
-
-            expect(mockRagSearchModule.getAvailableModels).toHaveBeenCalledTimes(1);
-            expect(result).toEqual(models);
-        });
-    });
 
     describe('testEmbeddingService', () => {
         test('should call module testEmbeddingService', async () => {

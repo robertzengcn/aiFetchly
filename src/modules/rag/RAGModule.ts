@@ -74,7 +74,7 @@ export class RAGModule {
     constructor(db: SqliteDb) {
         this.db = db;
         this.documentService = new DocumentService(db);
-        this.chunkingService = new ChunkingService(db);
+        this.chunkingService = new ChunkingService(db, '');
         this.searchController = new RagSearchController();
         this.queryProcessor = new QueryProcessor(this.searchController, db);
         this.responseGenerator = new ResponseGenerator();

@@ -7,6 +7,7 @@ import { EmbeddingImpl } from '@/modules/interface/EmbeddingImpl';
 import { DocumentService, DocumentUploadOptions } from '@/service/DocumentService';
 import { ChunkingService } from '@/service/ChunkingService';
 import { RAGDocumentEntity } from '@/entity/RAGDocument.entity';
+import { RagConfigApi } from '@/api/ragConfigApi';
 
 export interface SearchRequest {
     query: string;
@@ -49,9 +50,9 @@ export class RagSearchModule extends BaseModule {
     private searchService: VectorSearchService;
     private embeddingFactory: EmbeddingFactory;
     private configurationService: ConfigurationService;
-    private currentEmbeddingService: EmbeddingImpl | null = null;
     private documentService: DocumentService;
     private chunkingService: ChunkingService;
+    private ragConfigApi: RagConfigApi;
 
     constructor() {
         super();
@@ -62,7 +63,8 @@ export class RagSearchModule extends BaseModule {
         this.embeddingFactory = new EmbeddingFactory();
         this.configurationService = new ConfigurationServiceImpl();
         this.documentService = new DocumentService(this.sqliteDb);
-        this.chunkingService = new ChunkingService(this.sqliteDb);
+        this.chunkingService = new ChunkingService(this.sqliteDb, this.dbpath);
+        this.ragConfigApi = new RagConfigApi();
     }
 
     /**
@@ -102,10 +104,8 @@ export class RagSearchModule extends BaseModule {
             // Chunk the document
             const chunks = await this.chunkingService.chunkDocument(document);
 
-            // Generate embeddings for chunks if embedding service is available
-            if (this.currentEmbeddingService) {
-                await this.generateChunkEmbeddings(chunks);
-            }
+            // Generate embeddings for chunks using remote API
+            await this.generateChunkEmbeddings(chunks);
 
             // Update processing status to completed
             await this.documentService.updateDocumentStatus(
@@ -149,26 +149,25 @@ export class RagSearchModule extends BaseModule {
     }
 
     /**
-     * Generate embeddings for document chunks
+     * Generate embeddings for document chunks using remote API
      * @param chunks - Array of chunk entities
      */
     private async generateChunkEmbeddings(chunks: any[]): Promise<void> {
-        if (!this.currentEmbeddingService) {
-            console.warn('No embedding service available, skipping embedding generation');
-            return;
-        }
-
         try {
             for (const chunk of chunks) {
-                // Generate embedding for chunk content
-                const embedding = await this.currentEmbeddingService.embedText(chunk.content);
+                // Generate embedding for chunk content using remote API
+                const response = await this.ragConfigApi.getEmbedding(chunk.content);
+                
+                if (!response.status || !response.data) {
+                    throw new Error(`Failed to get embedding: ${response.msg || 'Unknown error'}`);
+                }
                 
                 // Store embedding in vector store
                 await this.searchService.vectorStoreService.storeEmbedding({
                     chunkId: chunk.id,
                     documentId: chunk.documentId,
                     content: chunk.content,
-                    embedding: embedding,
+                    embedding: response.data,
                     metadata: {
                         chunkIndex: chunk.chunkIndex,
                         pageNumber: chunk.pageNumber
@@ -176,7 +175,7 @@ export class RagSearchModule extends BaseModule {
                 });
             }
             
-            console.log(`Generated embeddings for ${chunks.length} chunks`);
+            console.log(`Generated embeddings for ${chunks.length} chunks using remote API`);
         } catch (error) {
             console.error('Error generating embeddings:', error);
             throw new Error(`Failed to generate embeddings: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -271,86 +270,10 @@ export class RagSearchModule extends BaseModule {
         this.searchService.clearCache();
     }
 
-    /**
-     * Update embedding model
-     * @param provider - Embedding provider
-     * @param model - Model name
-     * @param config - Additional configuration
-     */
-    async updateEmbeddingModel(
-        provider: string,
-        model: string,
-        config: Partial<EmbeddingConfig> = {}
-    ): Promise<void> {
-        try {
-            const embeddingConfig: any = {
-                provider,
-                model,
-                ...config
-            };
 
-            // Clean up current embedding service
-            if (this.currentEmbeddingService) {
-                await this.currentEmbeddingService.cleanup();
-            }
-
-            // Create new embedding service
-            this.currentEmbeddingService = this.embeddingFactory.createEmbedding(
-                provider,
-                embeddingConfig
-            ) || null;
-
-            if (!this.currentEmbeddingService) {
-                throw new Error('Failed to create new embedding service');
-            }
-
-            // Initialize new embedding service
-            await this.currentEmbeddingService.initialize();
-
-            // Update search service
-            this.searchService.setEmbeddingService(this.currentEmbeddingService);
-
-            console.log(`Embedding model updated to ${provider}:${model}`);
-        } catch (error) {
-            console.error('Failed to update embedding model:', error);
-            throw new Error('Failed to update embedding model');
-        }
-    }
 
     /**
-     * Get available embedding models
-     * @returns Array of available models
-     */
-    getAvailableModels(): {
-        provider: string;
-        models: string[];
-    }[] {
-        const providers = this.embeddingFactory.getSupportedProviders();
-        const availableModels: { provider: string; models: string[] }[] = [];
-
-        for (const provider of providers) {
-            let models: string[] = [];
-
-            switch (provider) {
-                case 'openai':
-                    models = ['text-embedding-ada-002', 'text-embedding-3-small', 'text-embedding-3-large'];
-                    break;
-                case 'huggingface':
-                    models = ['sentence-transformers/all-MiniLM-L6-v2', 'sentence-transformers/all-mpnet-base-v2'];
-                    break;
-                case 'ollama':
-                    models = ['nomic-embed-text', 'mxbai-embed-large', 'all-minilm', 'bge-large-en-v1.5'];
-                    break;
-            }
-
-            availableModels.push({ provider, models });
-        }
-
-        return availableModels;
-    }
-
-    /**
-     * Test embedding service
+     * Test embedding service using remote API
      * @returns Test result
      */
     async testEmbeddingService(): Promise<{
@@ -359,20 +282,20 @@ export class RagSearchModule extends BaseModule {
         dimensions?: number;
     }> {
         try {
-            if (!this.currentEmbeddingService) {
+            const testText = 'This is a test embedding';
+            const response = await this.ragConfigApi.getEmbedding(testText);
+
+            if (!response.status || !response.data) {
                 return {
                     success: false,
-                    message: 'No embedding service initialized'
+                    message: `Remote embedding API failed: ${response.msg || 'Unknown error'}`
                 };
             }
 
-            const testText = 'This is a test embedding';
-            const embedding = await this.currentEmbeddingService.embedText(testText);
-
             return {
                 success: true,
-                message: 'Embedding service working correctly',
-                dimensions: embedding.length
+                message: 'Remote embedding API working correctly',
+                dimensions: response.data.length
             };
         } catch (error) {
             return {
@@ -402,8 +325,8 @@ export class RagSearchModule extends BaseModule {
                 totalChunks: analytics.totalChunks,
                 indexSize: analytics.indexStats.totalVectors,
                 averageChunkSize: analytics.averageChunkSize,
-                embeddingModel: this.currentEmbeddingService?.getModel() || 'Unknown',
-                embeddingProvider: this.currentEmbeddingService?.getProvider() || 'Unknown'
+                embeddingModel: 'Remote API',
+                embeddingProvider: 'Remote API'
             };
         } catch (error) {
             console.error('Failed to get search stats:', error);
@@ -631,12 +554,8 @@ export class RagSearchModule extends BaseModule {
                 };
             }
 
-            // Generate embeddings for chunks that don't have them
-            if (this.currentEmbeddingService) {
-                await this.generateChunkEmbeddings(chunksWithoutEmbeddings);
-            } else {
-                throw new Error('Embedding service not available');
-            }
+            // Generate embeddings for chunks that don't have them using remote API
+            await this.generateChunkEmbeddings(chunksWithoutEmbeddings);
 
             const processingTime = Date.now() - startTime;
 
@@ -664,9 +583,6 @@ export class RagSearchModule extends BaseModule {
      */
     async cleanup(): Promise<void> {
         try {
-            if (this.currentEmbeddingService) {
-                await this.currentEmbeddingService.cleanup();
-            }
             await this.embeddingFactory.cleanupAll();
             console.log('RAG search module cleaned up');
         } catch (error) {

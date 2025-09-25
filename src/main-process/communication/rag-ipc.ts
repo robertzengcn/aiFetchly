@@ -574,52 +574,52 @@ export function registerRagIpcHandlers(): void {
     });
 
     // Update embedding model
-    ipcMain.handle(RAG_UPDATE_EMBEDDING_MODEL, async (event, data): Promise<CommonMessage<void>> => {
-        try {
-            const config = JSON.parse(data) as {
-                model: string;
-            };
+    // ipcMain.handle(RAG_UPDATE_EMBEDDING_MODEL, async (event, data): Promise<CommonMessage<void>> => {
+    //     try {
+    //         const config = JSON.parse(data) as {
+    //             model: string;
+    //         };
 
-            const ragSearchController = await createRagController();
-            await ragSearchController.updateEmbeddingModel(config.model);
+    //         const ragSearchController = await createRagController();
+    //         await ragSearchController.updateEmbeddingModel(config.model);
             
-            const response: CommonMessage<void> = {
-                status: true,
-                msg: "Embedding model updated successfully"
-            };
-            return response;
-        } catch (error) {
-            console.error('RAG update embedding model error:', error);
-            const errorResponse: CommonMessage<void> = {
-                status: false,
-                msg: error instanceof Error ? error.message : "Unknown error occurred"
-            };
-            return errorResponse;
-        }
-    });
+    //         const response: CommonMessage<void> = {
+    //             status: true,
+    //             msg: "Embedding model updated successfully"
+    //         };
+    //         return response;
+    //     } catch (error) {
+    //         console.error('RAG update embedding model error:', error);
+    //         const errorResponse: CommonMessage<void> = {
+    //             status: false,
+    //             msg: error instanceof Error ? error.message : "Unknown error occurred"
+    //         };
+    //         return errorResponse;
+    //     }
+    // });
 
     // Get available models
-    ipcMain.handle(RAG_GET_AVAILABLE_MODELS, async (event, data): Promise<CommonMessage<string[] | null>> => {
-        try {
-            const ragSearchController = await createRagController();
-            const models = ragSearchController.getAvailableModels();
+    // ipcMain.handle(RAG_GET_AVAILABLE_MODELS, async (event, data): Promise<CommonMessage<string[] | null>> => {
+    //     try {
+    //         const ragSearchController = await createRagController();
+    //         const models = ragSearchController.getAvailableModels();
             
-            const response: CommonMessage<string[]> = {
-                status: true,
-                msg: "Available models retrieved successfully",
-                data: models.map(m => `${m.provider}:${m.models.join(',')}`).flat()
-            };
-            return response;
-        } catch (error) {
-            console.error('RAG get available models error:', error);
-            const errorResponse: CommonMessage<null> = {
-                status: false,
-                msg: error instanceof Error ? error.message : "Unknown error occurred",
-                data: null
-            };
-            return errorResponse;
-        }
-    });
+    //         const response: CommonMessage<string[]> = {
+    //             status: true,
+    //             msg: "Available models retrieved successfully",
+    //             data: models.map(m => `${m.provider}:${m.models.join(',')}`).flat()
+    //         };
+    //         return response;
+    //     } catch (error) {
+    //         console.error('RAG get available models error:', error);
+    //         const errorResponse: CommonMessage<null> = {
+    //             status: false,
+    //             msg: error instanceof Error ? error.message : "Unknown error occurred",
+    //             data: null
+    //         };
+    //         return errorResponse;
+    //     }
+    // });
 
     // Test embedding service
     ipcMain.handle(RAG_TEST_EMBEDDING_SERVICE, async (event, data): Promise<CommonMessage<any | null>> => {
