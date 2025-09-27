@@ -256,7 +256,7 @@ module.exports={
         // Custom UI template
         ui:{
           chooseDirectory: true,
-          Template: './wix-ui-template.xml'
+          template: './wix-ui-template.xml'
         },
         // Installation directory options
         installDir: 'C:\\Program Files\\aiFetchly',
