@@ -257,9 +257,9 @@ module.exports={
         ui:{
           chooseDirectory: true,
           //template: './wix-ui-template.xml'
-          images:{
-            infoIcon: './src/assets/images/icon.ico'
-          }
+          // images:{
+          //   infoIcon: './src/assets/images/icon.ico'
+          // }
         },
         // Installation directory options
         installDir: 'C:\\Program Files\\aiFetchly',
