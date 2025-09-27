@@ -1,0 +1,241 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
+     xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
+  
+  <!-- UI Configuration for aiFetchly Installer -->
+  <Fragment>
+    
+    <!-- Custom UI Definition -->
+    <UI Id="CustomUI">
+      
+      <!-- Progress Bar Configuration -->
+      <ProgressText Action="InstallFiles">Installing aiFetchly files... (1/3)</ProgressText>
+      <ProgressText Action="WriteRegistryValues">Writing registry values... (2/3)</ProgressText>
+      <ProgressText Action="CreateShortcuts">Creating shortcuts... (3/3)</ProgressText>
+      
+      <!-- Dialog Definitions -->
+      <DialogRef Id="WelcomeDlg" />
+      <DialogRef Id="LicenseAgreementDlg" />
+      <DialogRef Id="CustomWelcomeDlg" />
+      <DialogRef Id="CustomLicenseDlg" />
+      <DialogRef Id="CustomInstallDirDlg" />
+      <DialogRef Id="CustomFeaturesDlg" />
+      <DialogRef Id="CustomProgressDlg" />
+      <DialogRef Id="CustomExitDlg" />
+      <DialogRef Id="ErrorDlg" />
+      <DialogRef Id="FatalError" />
+      <DialogRef Id="FilesInUse" />
+      <DialogRef Id="MsiRMFilesInUse" />
+      <DialogRef Id="PrepareDlg" />
+      <DialogRef Id="ResumeDlg" />
+      <DialogRef Id="UserExit" />
+      
+      <!-- Publish Events for UI Flow -->
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="CustomWelcomeDlg">1</Publish>
+      
+      <Publish Dialog="CustomWelcomeDlg" Control="Next" Event="NewDialog" Value="CustomLicenseDlg">1</Publish>
+      <Publish Dialog="CustomWelcomeDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg">1</Publish>
+      
+      <Publish Dialog="CustomLicenseDlg" Control="Next" Event="NewDialog" Value="CustomInstallDirDlg">LicenseAccepted = "1"</Publish>
+      <Publish Dialog="CustomLicenseDlg" Control="Back" Event="NewDialog" Value="CustomWelcomeDlg">1</Publish>
+      
+      <Publish Dialog="CustomInstallDirDlg" Control="Next" Event="NewDialog" Value="CustomFeaturesDlg">1</Publish>
+      <Publish Dialog="CustomInstallDirDlg" Control="Back" Event="NewDialog" Value="CustomLicenseDlg">1</Publish>
+      
+      <Publish Dialog="CustomFeaturesDlg" Control="Next" Event="NewDialog" Value="CustomProgressDlg">1</Publish>
+      <Publish Dialog="CustomFeaturesDlg" Control="Back" Event="NewDialog" Value="CustomInstallDirDlg">1</Publish>
+      
+      <Publish Dialog="CustomProgressDlg" Control="Back" Event="NewDialog" Value="CustomFeaturesDlg">NOT Installed</Publish>
+      
+      <Publish Dialog="CustomExitDlg" Control="Finish" Event="EndDialog" Value="Return" Order="999">1</Publish>
+      
+      <!-- Error Handling -->
+      <Publish Dialog="ErrorDlg" Control="Next" Event="NewDialog" Value="CustomProgressDlg">1</Publish>
+      <Publish Dialog="FatalError" Control="Next" Event="NewDialog" Value="CustomExitDlg">1</Publish>
+      <Publish Dialog="FilesInUse" Control="Next" Event="NewDialog" Value="CustomProgressDlg">1</Publish>
+      <Publish Dialog="MsiRMFilesInUse" Control="Next" Event="NewDialog" Value="CustomProgressDlg">1</Publish>
+      
+    </UI>
+    
+    <!-- Custom Welcome Dialog -->
+    <Dialog Id="CustomWelcomeDlg" Width="493" Height="312" Title="!(loc.WelcomeDlg_Title)">
+      <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="!(loc.WixUINext)" />
+      <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="!(loc.WixUIBack)" />
+      <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="!(loc.WixUICancel)">
+        <Publish Event="SpawnDialog" Value="CancelDlg">1</Publish>
+      </Control>
+      <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="493" Height="58" TabSkip="no" Text="!(loc.WelcomeDlgBannerBitmap)" />
+      <Control Id="BannerLine" Type="Line" X="0" Y="58" Width="493" Height="0" />
+      <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="493" Height="0" />
+      <Control Id="Description" Type="Text" X="135" Y="80" Width="220" Height="60" Transparent="yes" NoPrefix="yes" Text="Welcome to the aiFetchly Setup Wizard. This wizard will guide you through the installation of aiFetchly." />
+      <Control Id="Title" Type="Text" X="135" Y="20" Width="220" Height="60" Transparent="yes" NoPrefix="yes" Text="Welcome to the aiFetchly Setup Wizard" />
+      <Control Id="Bitmap" Type="Bitmap" X="0" Y="0" Width="493" Height="312" TabSkip="no" Text="!(loc.WelcomeDlgBitmap)" />
+    </Dialog>
+    
+    <!-- Custom License Agreement Dialog -->
+    <Dialog Id="CustomLicenseDlg" Width="493" Height="312" Title="!(loc.LicenseAgreementDlg_Title)">
+      <Control Id="LicenseAcceptedCheckBox" Type="CheckBox" X="20" Y="207" Width="370" Height="18" CheckBoxValue="1" Property="LicenseAccepted" Text="I &amp;accept the terms in the License Agreement" />
+      <Control Id="Print" Type="PushButton" X="112" Y="243" Width="56" Height="17" Text="!(loc.WixUIPrint)" />
+      <Control Id="LicenseText" Type="ScrollableText" X="20" Y="60" Width="370" Height="140" Sunken="yes" TabSkip="no">
+        <Text SourceFile="!(wix.LicenseFile)" />
+      </Control>
+      <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="!(loc.WixUIBack)" />
+      <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="!(loc.WixUINext)" />
+      <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="!(loc.WixUICancel)">
+        <Publish Event="SpawnDialog" Value="CancelDlg">1</Publish>
+      </Control>
+      <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="493" Height="58" TabSkip="no" Text="!(loc.LicenseAgreementDlgBannerBitmap)" />
+      <Control Id="BannerLine" Type="Line" X="0" Y="58" Width="493" Height="0" />
+      <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="493" Height="0" />
+      <Control Id="Description" Type="Text" X="135" Y="80" Width="220" Height="60" Transparent="yes" NoPrefix="yes" Text="Please review the license terms before installing aiFetchly." />
+      <Control Id="Title" Type="Text" X="135" Y="20" Width="220" Height="60" Transparent="yes" NoPrefix="yes" Text="License Agreement" />
+      <Control Id="Bitmap" Type="Bitmap" X="0" Y="0" Width="493" Height="312" TabSkip="no" Text="!(loc.LicenseAgreementDlgBitmap)" />
+    </Dialog>
+    
+    <!-- Custom Installation Directory Dialog -->
+    <Dialog Id="CustomInstallDirDlg" Width="493" Height="312" Title="!(loc.InstallDirDlg_Title)">
+      <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="!(loc.WixUINext)" />
+      <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="!(loc.WixUIBack)" />
+      <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="!(loc.WixUICancel)">
+        <Publish Event="SpawnDialog" Value="CancelDlg">1</Publish>
+      </Control>
+      <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="493" Height="58" TabSkip="no" Text="!(loc.InstallDirDlgBannerBitmap)" />
+      <Control Id="BannerLine" Type="Line" X="0" Y="58" Width="493" Height="0" />
+      <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="493" Height="0" />
+      <Control Id="Description" Type="Text" X="135" Y="80" Width="220" Height="60" Transparent="yes" NoPrefix="yes" Text="Click Next to install to the default folder, or click Change to choose another." />
+      <Control Id="Title" Type="Text" X="135" Y="20" Width="220" Height="60" Transparent="yes" NoPrefix="yes" Text="Destination Folder" />
+      <Control Id="Bitmap" Type="Bitmap" X="0" Y="0" Width="493" Height="312" TabSkip="no" Text="!(loc.InstallDirDlgBitmap)" />
+      <Control Id="FolderLabel" Type="Text" X="20" Y="60" Width="290" Height="15" Transparent="yes" NoPrefix="yes" Text="Install aiFetchly to:" />
+      <Control Id="Folder" Type="PathEdit" X="20" Y="75" Width="320" Height="18" Property="WIXUI_INSTALLDIR" Indirect="yes" />
+      <Control Id="ChangeFolder" Type="PushButton" X="20" Y="100" Width="56" Height="17" Text="!(loc.WixUIChangeFolder)">
+        <Publish Event="SelectionBrowse" Value="WixUI_BrowseDlg">1</Publish>
+        <Publish Event="DoAction" Value="WixUIValidatePath" Order="3">1</Publish>
+        <Publish Event="SpawnDialog" Value="BrowseDlg" Order="4">NOT WIXUI_DONTVALIDATEPATH</Publish>
+      </Control>
+      <Control Id="DiskCost" Type="PushButton" X="304" Y="243" Width="56" Height="17" Text="!(loc.WixUIDiskCost)">
+        <Publish Event="SpawnDialog" Value="DiskCostDlg">1</Publish>
+      </Control>
+    </Dialog>
+    
+    <!-- Custom Features Selection Dialog -->
+    <Dialog Id="CustomFeaturesDlg" Width="493" Height="312" Title="!(loc.FeaturesDlg_Title)">
+      <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="!(loc.WixUINext)" />
+      <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="!(loc.WixUIBack)" />
+      <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="!(loc.WixUICancel)">
+        <Publish Event="SpawnDialog" Value="CancelDlg">1</Publish>
+      </Control>
+      <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="493" Height="58" TabSkip="no" Text="!(loc.FeaturesDlgBannerBitmap)" />
+      <Control Id="BannerLine" Type="Line" X="0" Y="58" Width="493" Height="0" />
+      <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="493" Height="0" />
+      <Control Id="Description" Type="Text" X="135" Y="80" Width="220" Height="60" Transparent="yes" NoPrefix="yes" Text="Select the way you want features to be installed." />
+      <Control Id="Title" Type="Text" X="135" Y="20" Width="220" Height="60" Transparent="yes" NoPrefix="yes" Text="Custom Setup" />
+      <Control Id="Bitmap" Type="Bitmap" X="0" Y="0" Width="493" Height="312" TabSkip="no" Text="!(loc.FeaturesDlgBitmap)" />
+      <Control Id="FeaturesList" Type="SelectionTree" X="20" Y="60" Width="370" Height="130" Property="_BrowseProperty" Text="!(loc.FeaturesDlgTree)" Sunken="yes" TabSkip="no">
+        <SelectionTree Id="FeaturesList" />
+      </Control>
+      <Control Id="DiskCost" Type="PushButton" X="304" Y="243" Width="56" Height="17" Text="!(loc.WixUIDiskCost)">
+        <Publish Event="SpawnDialog" Value="DiskCostDlg">1</Publish>
+      </Control>
+    </Dialog>
+    
+    <!-- Custom Progress Dialog -->
+    <Dialog Id="CustomProgressDlg" Width="493" Height="312" Title="!(loc.ProgressDlg_Title)">
+      <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="!(loc.WixUICancel)">
+        <Publish Event="SpawnDialog" Value="CancelDlg">1</Publish>
+      </Control>
+      <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="493" Height="58" TabSkip="no" Text="!(loc.ProgressDlgBannerBitmap)" />
+      <Control Id="BannerLine" Type="Line" X="0" Y="58" Width="493" Height="0" />
+      <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="493" Height="0" />
+      <Control Id="Description" Type="Text" X="135" Y="80" Width="220" Height="60" Transparent="yes" NoPrefix="yes" Text="Please wait while the Setup Wizard installs aiFetchly. This may take several minutes." />
+      <Control Id="Title" Type="Text" X="135" Y="20" Width="220" Height="60" Transparent="yes" NoPrefix="yes" Text="Installing aiFetchly" />
+      <Control Id="Bitmap" Type="Bitmap" X="0" Y="0" Width="493" Height="312" TabSkip="no" Text="!(loc.ProgressDlgBitmap)" />
+      <Control Id="ProgressBar" Type="ProgressBar" X="20" Y="80" Width="370" Height="15" Text="!(loc.ProgressDlgProgressBar)" />
+      <Control Id="StatusLabel" Type="Text" X="20" Y="100" Width="370" Height="15" Transparent="yes" NoPrefix="yes" Text="Preparing to install..." />
+      <Control Id="ActionText" Type="Text" X="20" Y="115" Width="370" Height="30" Transparent="yes" NoPrefix="yes" Text="[1]" />
+    </Dialog>
+    
+    <!-- Custom Exit Dialog -->
+    <Dialog Id="CustomExitDlg" Width="493" Height="312" Title="!(loc.ExitDlg_Title)">
+      <Control Id="Finish" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="!(loc.WixUIFinish)" />
+      <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="!(loc.WixUICancel)">
+        <Publish Event="SpawnDialog" Value="CancelDlg">1</Publish>
+      </Control>
+      <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="493" Height="58" TabSkip="no" Text="!(loc.ExitDlgBannerBitmap)" />
+      <Control Id="BannerLine" Type="Line" X="0" Y="58" Width="493" Height="0" />
+      <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="493" Height="0" />
+      <Control Id="Description" Type="Text" X="135" Y="80" Width="220" Height="60" Transparent="yes" NoPrefix="yes" Text="Setup has successfully installed aiFetchly on your computer." />
+      <Control Id="Title" Type="Text" X="135" Y="20" Width="220" Height="60" Transparent="yes" NoPrefix="yes" Text="Completing the aiFetchly Setup Wizard" />
+      <Control Id="Bitmap" Type="Bitmap" X="0" Y="0" Width="493" Height="312" TabSkip="no" Text="!(loc.ExitDlgBitmap)" />
+      <Control Id="LaunchApplication" Type="CheckBox" X="20" Y="207" Width="370" Height="18" CheckBoxValue="1" Property="LAUNCHAPP" Text="Launch aiFetchly" />
+    </Dialog>
+    
+    <!-- UI Properties -->
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+    <Property Id="LicenseAccepted" Value="0" />
+    <Property Id="LAUNCHAPP" Value="1" />
+    
+    <!-- Custom Actions for Launching Application -->
+    <CustomAction Id="LaunchApplication" FileKey="WixShellExecTarget" ExeCommand="[#aiFetchly.exe]" Return="asyncNoWait" />
+    
+    <!-- Publish Launch Application -->
+    <Publish Dialog="CustomExitDlg" Control="Finish" Event="DoAction" Value="LaunchApplication">LAUNCHAPP = 1</Publish>
+    
+  </Fragment>
+  
+  <!-- UI Images and Resources -->
+  <Fragment>
+    
+    <!-- Binary Resources for UI Images -->
+    <Binary Id="BannerBitmap" SourceFile="src/assets/images/installer-banner.bmp" />
+    <Binary Id="DialogBitmap" SourceFile="src/assets/images/installer-dialog.bmp" />
+    <Binary Id="UpBitmap" SourceFile="src/assets/images/installer-up.bmp" />
+    <Binary Id="NewBitmap" SourceFile="src/assets/images/installer-new.bmp" />
+    
+    <!-- Icon Resources -->
+    <Icon Id="icon.ico" SourceFile="src/assets/images/icon.ico" />
+    
+    <!-- Property for License File -->
+    <Property Id="WIXUI_LICENSE" Value="LICENSE" />
+    
+  </Fragment>
+  
+  <!-- Localization Strings -->
+  <Fragment>
+    
+    <String Id="WelcomeDlg_Title">Welcome to the aiFetchly Setup Wizard</String>
+    <String Id="LicenseAgreementDlg_Title">License Agreement</String>
+    <String Id="InstallDirDlg_Title">Destination Folder</String>
+    <String Id="FeaturesDlg_Title">Custom Setup</String>
+    <String Id="ProgressDlg_Title">Installing aiFetchly</String>
+    <String Id="ExitDlg_Title">Completing the aiFetchly Setup Wizard</String>
+    
+    <String Id="WelcomeDlgBannerBitmap">BannerBitmap</String>
+    <String Id="LicenseAgreementDlgBannerBitmap">BannerBitmap</String>
+    <String Id="InstallDirDlgBannerBitmap">BannerBitmap</String>
+    <String Id="FeaturesDlgBannerBitmap">BannerBitmap</String>
+    <String Id="ProgressDlgBannerBitmap">BannerBitmap</String>
+    <String Id="ExitDlgBannerBitmap">BannerBitmap</String>
+    
+    <String Id="WelcomeDlgBitmap">DialogBitmap</String>
+    <String Id="LicenseAgreementDlgBitmap">DialogBitmap</String>
+    <String Id="InstallDirDlgBitmap">DialogBitmap</String>
+    <String Id="FeaturesDlgBitmap">DialogBitmap</String>
+    <String Id="ProgressDlgBitmap">DialogBitmap</String>
+    <String Id="ExitDlgBitmap">DialogBitmap</String>
+    
+    <String Id="WixUINext">&amp;Next &gt;</String>
+    <String Id="WixUIBack">&lt; &amp;Back</String>
+    <String Id="WixUICancel">Cancel</String>
+    <String Id="WixUIFinish">&amp;Finish</String>
+    <String Id="WixUIPrint">&amp;Print</String>
+    <String Id="WixUIChangeFolder">C&amp;hange</String>
+    <String Id="WixUIDiskCost">&amp;Disk Cost</String>
+    <String Id="WixUIValidatePath">Validate Path</String>
+    <String Id="WixUI_DONTVALIDATEPATH">1</String>
+    
+    <String Id="ProgressDlgProgressBar">ProgressBar</String>
+    <String Id="FeaturesDlgTree">FeaturesList</String>
+    
+  </Fragment>
+  
+</Wix>
