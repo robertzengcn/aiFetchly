@@ -27,7 +27,7 @@ describe('RAG Integration Tests', () => {
         
         ragModule = new RAGModule(db);
         documentService = new DocumentService(db);
-        chunkingService = new ChunkingService(db);
+        chunkingService = new ChunkingService(db, testDbPath);
         searchController = new RagSearchController();
     });
 

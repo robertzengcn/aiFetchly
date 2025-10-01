@@ -1,15 +1,15 @@
 <template>
   <div class="document-management">
     <div class="header">
-      <h2>Document Management</h2>
+      <h2>{{ t('knowledge.document_management') }}</h2>
       <div class="actions">
         <v-btn color="primary" @click="showUploadDialog = true">
           <v-icon left>mdi-upload</v-icon>
-          Upload Document
+          {{ t('knowledge.upload_document') }}
         </v-btn>
         <v-btn color="secondary" @click="refreshDocuments">
           <v-icon left>mdi-refresh</v-icon>
-          Refresh
+          {{ t('common.refresh') }}
         </v-btn>
       </div>
     </div>
@@ -20,7 +20,7 @@
         <v-col cols="12" md="3">
           <v-text-field
             v-model="filters.name"
-            label="Search by name"
+            :label="t('knowledge.search_by_name')"
             prepend-inner-icon="mdi-magnify"
             clearable
             @input="applyFilters"
@@ -30,7 +30,7 @@
           <v-select
             v-model="filters.status"
             :items="statusOptions"
-            label="Status"
+            :label="t('knowledge.status')"
             clearable
             @change="applyFilters"
           />
@@ -39,7 +39,7 @@
           <v-select
             v-model="filters.fileType"
             :items="fileTypeOptions"
-            label="File Type"
+            :label="t('knowledge.file_type')"
             clearable
             @change="applyFilters"
           />
@@ -88,32 +88,35 @@
         {{ formatFileSize(item.fileSize) }}
       </template>
 
-      <template v-slot:item.uploadedAt="{ item }">
-        {{ formatDate(item.uploadedAt) }}
+      <template v-slot:item.uploadDate="{ item }">
+        {{ formatDate(item.uploadDate) }}
       </template>
 
       <template v-slot:item.actions="{ item }">
         <v-btn
           icon
-          small
+          size="small"
+          variant="text"
           @click="handlePreviewDocument(item)"
         >
-          <v-icon>mdi-eye</v-icon>
+          <v-icon size="small">mdi-eye</v-icon>
         </v-btn>
-        <v-btn
+        <!-- <v-btn
           icon
-          small
+          size="small"
+          variant="text"
           @click="editDocument(item)"
         >
-          <v-icon>mdi-pencil</v-icon>
-        </v-btn>
+          <v-icon size="small">mdi-pencil</v-icon>
+        </v-btn> -->
         <v-btn
           icon
-          small
+          size="small"
+          variant="text"
           color="error"
           @click="deleteDocument(item)"
         >
-          <v-icon>mdi-delete</v-icon>
+          <v-icon size="small">mdi-delete</v-icon>
         </v-btn>
       </template>
     </v-data-table>
@@ -122,49 +125,49 @@
     <div v-if="selectedDocuments.length > 0" class="bulk-actions">
       <v-btn color="error" @click="bulkDelete">
         <v-icon left>mdi-delete</v-icon>
-        Delete Selected ({{ selectedDocuments.length }})
+        {{ t('knowledge.delete_selected', { count: selectedDocuments.length }) }}
       </v-btn>
       <v-btn color="warning" @click="bulkUpdateStatus('archived')">
         <v-icon left>mdi-archive</v-icon>
-        Archive Selected
+        {{ t('knowledge.archive_selected') }}
       </v-btn>
     </div>
 
     <!-- Upload Dialog -->
     <v-dialog v-model="showUploadDialog" max-width="600">
       <v-card>
-        <v-card-title>Upload Document</v-card-title>
+        <v-card-title>{{ t('knowledge.upload_document') }}</v-card-title>
         <v-card-text>
           <v-file-input
             v-model="uploadFile"
-            label="Select file"
+            :label="t('knowledge.select_file')"
             accept=".pdf,.txt,.doc,.docx,.html,.md"
             show-size
             @change="onFileSelected"
           />
           <v-text-field
             v-model="uploadData.title"
-            label="Title"
+            :label="t('knowledge.title')"
             class="mt-4"
           />
           <v-textarea
             v-model="uploadData.description"
-            label="Description"
+            :label="t('knowledge.description')"
             rows="3"
           />
           <v-combobox
             v-model="uploadData.tags"
-            label="Tags"
+            :label="t('knowledge.tags')"
             multiple
             chips
-            hint="Press Enter to add tags"
+            :hint="t('knowledge.tags_hint')"
           />
         </v-card-text>
         <v-card-actions>
           <v-spacer />
-          <v-btn @click="showUploadDialog = false">Cancel</v-btn>
+          <v-btn @click="showUploadDialog = false">{{ t('common.cancel') }}</v-btn>
           <v-btn color="primary" @click="uploadDocument" :loading="uploading">
-            Upload
+            {{ t('knowledge.upload') }}
           </v-btn>
         </v-card-actions>
       </v-card>
@@ -180,33 +183,35 @@
           </div>
           <div v-else class="text-center">
             <v-progress-circular indeterminate />
-            <p>Loading content...</p>
+            <p>{{ t('knowledge.loading_content') }}</p>
           </div>
         </v-card-text>
         <v-card-actions>
           <v-spacer />
-          <v-btn @click="showPreviewDialog = false">Close</v-btn>
+          <v-btn @click="showPreviewDialog = false">{{ t('common.close') }}</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
   </div>
 </template>
 
-<script>
-import { defineComponent, ref, onMounted, computed } from 'vue';
-
-export default defineComponent({
-  name: 'DocumentManagement',
-  setup() {
-    const documents = ref([]);
-    const selectedDocuments = ref([]);
+<script setup lang="ts">
+import { ref, onMounted, computed } from 'vue';
+import { useI18n } from 'vue-i18n';
+import { getDocuments, type DocumentInfo } from '@/views/api/rag';
+import { Header } from "@/entityTypes/commonType"
+const headers = ref<Array<Header>>([])
+// i18n setup
+const { t } = useI18n();
+    const documents = ref<DocumentInfo[]>([]);
+    const selectedDocuments = ref<DocumentInfo[]>([]);
     const loading = ref(false);
     const showUploadDialog = ref(false);
     const showPreviewDialog = ref(false);
-    const previewDocument = ref(null);
+    const previewDocument = ref<DocumentInfo | null>(null);
     const previewContent = ref('');
     const uploading = ref(false);
-    const uploadFile = ref(null);
+    const uploadFile = ref<any>(null);
     const uploadData = ref({
       title: '',
       description: '',
@@ -219,83 +224,71 @@ export default defineComponent({
       fileType: ''
     });
 
-    const headers = [
-      { text: 'Name', value: 'name', sortable: true },
-      { text: 'Title', value: 'title', sortable: true },
-      { text: 'Status', value: 'status', sortable: true },
-      { text: 'Processing', value: 'processingStatus', sortable: true },
-      { text: 'File Type', value: 'fileType', sortable: true },
-      { text: 'Size', value: 'fileSize', sortable: true },
-      { text: 'Uploaded', value: 'uploadedAt', sortable: true },
-      { text: 'Actions', value: 'actions', sortable: false }
+    headers.value = [
+      { title: t('knowledge.name'), sortable: true, key: 'name' },
+      { title: t('knowledge.title'), sortable: true, key: 'title' },
+      { title: t('knowledge.status'), sortable: true, key: 'status' },
+      { title: t('knowledge.processing'), sortable: true, key: 'processingStatus' },
+      { title: t('knowledge.file_type'), sortable: true, key: 'fileType' },
+      { title: t('knowledge.size'), sortable: true, key: 'fileSize' },
+      { title: t('knowledge.uploaded'), sortable: true, key: 'uploadDate' },
+      { title: t('knowledge.actions'), sortable: false, key: 'actions' }
     ];
 
     const statusOptions = [
-      { text: 'Active', value: 'active' },
-      { text: 'Archived', value: 'archived' },
-      { text: 'Processing', value: 'processing' }
+      { text: t('knowledge.status_active'), value: 'active' },
+      { text: t('knowledge.status_archived'), value: 'archived' },
+      { text: t('knowledge.status_processing'), value: 'processing' }
     ];
 
     const fileTypeOptions = [
       { text: 'PDF', value: 'pdf' },
-      { text: 'Text', value: 'txt' },
-      { text: 'Word', value: 'doc' },
+      { text: t('knowledge.file_type_text'), value: 'txt' },
+      { text: t('knowledge.file_type_word'), value: 'doc' },
       { text: 'HTML', value: 'html' },
-      { text: 'Markdown', value: 'md' }
+      { text: t('knowledge.file_type_markdown'), value: 'md' }
     ];
 
     const loadDocuments = async () => {
       loading.value = true;
       try {
-        // Mock data for now
-        documents.value = [
-          {
-            id: 1,
-            name: 'sample.pdf',
-            title: 'Sample Document',
-            status: 'active',
-            processingStatus: 'completed',
-            fileType: 'pdf',
-            fileSize: 1024000,
-            uploadedAt: new Date('2024-01-15'),
-            tags: ['research', 'ai']
-          },
-          {
-            id: 2,
-            name: 'notes.txt',
-            title: 'Meeting Notes',
-            status: 'active',
-            processingStatus: 'completed',
-            fileType: 'txt',
-            fileSize: 51200,
-            uploadedAt: new Date('2024-01-14'),
-            tags: ['meeting', 'notes']
-          }
-        ];
+        // Get documents using IPC method
+        const documentsList = await getDocuments(filters.value);
+        console.log('📄 Documents response:', documentsList);
+        
+        if (documentsList && Array.isArray(documentsList)) {
+          documents.value = documentsList;
+          console.log('✅ Documents loaded successfully:', documents.value.length);
+        } else {
+          console.error('❌ Failed to load documents: Invalid response format');
+          documents.value = [];
+        }
       } catch (error) {
-        console.error('Error loading documents:', error);
+        console.error('❌ Error loading documents:', error);
+        documents.value = [];
       } finally {
         loading.value = false;
       }
     };
 
     const applyFilters = () => {
-      // Filter logic would go here
+      // Reload documents with new filters
       console.log('Applying filters:', filters.value);
+      loadDocuments();
     };
 
     const refreshDocuments = () => {
       loadDocuments();
     };
 
-    const onFileSelected = (file) => {
-      if (file) {
+    const onFileSelected = (file: File | File[] | null) => {
+      if (file && !Array.isArray(file)) {
         uploadData.value.title = file.name.replace(/\.[^/.]+$/, '');
       }
     };
 
     const uploadDocument = async () => {
-      if (!uploadFile.value) return;
+      if (!uploadFile.value || Array.isArray(uploadFile.value)) return;
       
       uploading.value = true;
       try {
@@ -339,7 +332,7 @@ export default defineComponent({
     };
 
     const deleteDocument = async (doc) => {
-      if (confirm(`Are you sure you want to delete "${doc.name}"?`)) {
+      if (confirm(t('knowledge.confirm_delete_document', { name: doc.name }))) {
         try {
           // Mock delete
           console.log('Deleting document:', doc);
@@ -351,7 +344,7 @@ export default defineComponent({
     };
 
     const bulkDelete = async () => {
-      if (confirm(`Are you sure you want to delete ${selectedDocuments.value.length} documents?`)) {
+      if (confirm(t('knowledge.confirm_bulk_delete', { count: selectedDocuments.value.length }))) {
         try {
           // Mock bulk delete
           console.log('Bulk deleting:', selectedDocuments.value);
@@ -432,41 +425,6 @@ export default defineComponent({
     onMounted(() => {
       loadDocuments();
     });
-
-    return {
-      documents,
-      selectedDocuments,
-      loading,
-      showUploadDialog,
-      showPreviewDialog,
-      previewDocument,
-      previewContent,
-      uploading,
-      uploadFile,
-      uploadData,
-      filters,
-      headers,
-      statusOptions,
-      fileTypeOptions,
-      loadDocuments,
-      applyFilters,
-      refreshDocuments,
-      onFileSelected,
-      uploadDocument,
-      handlePreviewDocument,
-      editDocument,
-      deleteDocument,
-      bulkDelete,
-      bulkUpdateStatus,
-      getFileTypeIcon,
-      getFileTypeColor,
-      getStatusColor,
-      getProcessingStatusColor,
-      formatFileSize,
-      formatDate
-    };
-  }
-});
 </script>
 
 <style scoped>

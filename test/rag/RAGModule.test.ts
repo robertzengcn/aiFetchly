@@ -166,8 +166,9 @@ describe('RAGModule', () => {
             const originalUploadDocument = ragModule.uploadDocument;
             ragModule.uploadDocument = async () => ({
                 documentId: 1,
-                chunksCreated: 3,
-                processingTime: 200
+                processingTime: 200,
+                success: true,
+                message: 'Document uploaded successfully'
             });
 
             try {
@@ -180,8 +181,9 @@ describe('RAGModule', () => {
                 });
 
                 expect(result).to.have.property('documentId', 1);
-                expect(result).to.have.property('chunksCreated', 3);
                 expect(result).to.have.property('processingTime', 200);
+                expect(result).to.have.property('success', true);
+                expect(result).to.have.property('message', 'Document uploaded successfully');
             } finally {
                 ragModule.uploadDocument = originalUploadDocument;
                 if (fs.existsSync(testFilePath)) {

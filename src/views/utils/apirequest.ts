@@ -17,6 +17,18 @@ export const windowInvoke=async(channel:string,data?:object)=>{
     }
     return result.data; 
 }
+
+// Special method for binary data that doesn't use JSON.stringify
+export const windowInvokeBinary=async(channel:string,data?:any)=>{
+    const result =await window.api.invoke(channel, data); 
+    if(!result){
+        throw new Error("unknow error")
+    }
+    if(!result.status){
+        throw new Error(result.msg)
+    }
+    return result.data; 
+}
 //send async message
 export const windowSend=async(channel:string,data?:object)=>{
     window.api.send(channel, JSON.stringify(data)); 
