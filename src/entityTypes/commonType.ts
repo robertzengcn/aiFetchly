@@ -128,6 +128,28 @@ export type LlmCongfig={
     model:string,
     url?:string,
     apikey?:string,
+}
+
+export interface ChunkAndEmbedResponse {
+    documentId: number;
+    chunksCreated: number;
+    embeddingsGenerated: number;
+    processingTime: number;
+    success: boolean;
+    steps: {
+        chunking: boolean;
+        embedding: boolean;
+    };
+    chunkingResult?: {
+        chunksCreated: number;
+        processingTime: number;
+        message: string;
+    };
+    embeddingResult?: {
+        chunksProcessed: number;
+        processingTime: number;
+        message: string;
+    };
 }  
 export type TraditionalTranslateCongfig={
     url:string,
@@ -164,4 +186,34 @@ export interface ConfigurationError {
     code: string;
     message: string;
     details?: any;
+}
+
+// File Upload Response Types
+export interface UploadedDocument {
+    id: number;
+    name: string;
+    title: string;
+    description?: string;
+    tags?: string[];
+    author?: string;
+    filePath: string;
+    fileSize?: number;
+    fileType?: string;
+    uploadDate?: string;
+    status: string;
+    processingStatus?: string;
+}
+
+export interface SaveTempFileResponse {
+    tempFilePath: string;
+    databaseSaved: boolean;
+    databaseError?: string | null;
+    document?: UploadedDocument;
+}
+
+export interface DocumentUploadResponse {
+    documentId: number;
+    chunksCreated: number;
+    processingTime: number;
+    document: UploadedDocument;
 }

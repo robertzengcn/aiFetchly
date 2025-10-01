@@ -4,6 +4,10 @@ import { EmbeddingFactory, EmbeddingConfig } from '@/modules/llm/EmbeddingFactor
 import { VectorStoreService } from '@/service/VectorStoreService';
 import { ConfigurationService, ConfigurationServiceImpl } from '@/modules/ConfigurationService';
 import { EmbeddingImpl } from '@/modules/interface/EmbeddingImpl';
+import { DocumentService, DocumentUploadOptions } from '@/service/DocumentService';
+import { ChunkingService } from '@/service/ChunkingService';
+import { RAGDocumentEntity } from '@/entity/RAGDocument.entity';
+import { RagConfigApi } from '@/api/ragConfigApi';
 
 export interface SearchRequest {
     query: string;
@@ -24,6 +28,13 @@ export interface SearchResponse {
     suggestions?: string[];
 }
 
+export interface DocumentUploadResponse {
+    documentId: number;
+    chunksCreated: number;
+    processingTime: number;
+    document: RAGDocumentEntity;
+}
+
 /**
  * RAG Search Module
  * 
@@ -39,7 +50,9 @@ export class RagSearchModule extends BaseModule {
     private searchService: VectorSearchService;
     private embeddingFactory: EmbeddingFactory;
     private configurationService: ConfigurationService;
-    private currentEmbeddingService: EmbeddingImpl | null = null;
+    private documentService: DocumentService;
+    private chunkingService: ChunkingService;
+    private ragConfigApi: RagConfigApi;
 
     constructor() {
         super();
@@ -49,6 +62,9 @@ export class RagSearchModule extends BaseModule {
         this.searchService = new VectorSearchService(vectorStoreService, this.sqliteDb);
         this.embeddingFactory = new EmbeddingFactory();
         this.configurationService = new ConfigurationServiceImpl();
+        this.documentService = new DocumentService(this.sqliteDb);
+        this.chunkingService = new ChunkingService(this.sqliteDb, this.dbpath);
+        this.ragConfigApi = new RagConfigApi();
     }
 
     /**
@@ -65,6 +81,106 @@ export class RagSearchModule extends BaseModule {
         }
     }
 
+
+    /**
+     * Upload and process a document
+     * @param options - Document upload options
+     * @returns Upload response with processing results
+     */
+    async uploadDocument(options: DocumentUploadOptions): Promise<DocumentUploadResponse> {
+        const startTime = Date.now();
+
+        try {
+            // Upload document to database
+            const document = await this.documentService.uploadDocument(options);
+
+            // Update processing status to processing
+            await this.documentService.updateDocumentStatus(
+                document.id,
+                'active',
+                'processing'
+            );
+
+            // Chunk the document
+            const chunks = await this.chunkingService.chunkDocument(document);
+
+            // Generate embeddings for chunks using remote API
+            await this.generateChunkEmbeddings(chunks);
+
+            // Update processing status to completed
+            await this.documentService.updateDocumentStatus(
+                document.id,
+                'active',
+                'completed'
+            );
+
+            const processingTime = Date.now() - startTime;
+
+            return {
+                documentId: document.id,
+                chunksCreated: chunks.length,
+                processingTime,
+                document
+            };
+        } catch (error) {
+            console.error('Error uploading document:', error);
+            
+            // Update processing status to error if document was created
+            if (error instanceof Error && error.message.includes('Document with this path already exists')) {
+                throw error;
+            }
+            
+            // Try to find the document and update its status
+            try {
+                const existingDoc = await this.documentService.findDocumentByPath(options.filePath);
+                if (existingDoc) {
+                    await this.documentService.updateDocumentStatus(
+                        existingDoc.id,
+                        'active',
+                        'error'
+                    );
+                }
+            } catch (updateError) {
+                console.error('Failed to update document status to error:', updateError);
+            }
+            
+            throw new Error(`Document upload failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+    }
+
+    /**
+     * Generate embeddings for document chunks using remote API
+     * @param chunks - Array of chunk entities
+     */
+    private async generateChunkEmbeddings(chunks: any[]): Promise<void> {
+        try {
+            for (const chunk of chunks) {
+                // Generate embedding for chunk content using remote API
+                const response = await this.ragConfigApi.getEmbedding(chunk.content);
+                
+                if (!response.status || !response.data) {
+                    throw new Error(`Failed to get embedding: ${response.msg || 'Unknown error'}`);
+                }
+                
+                // Store embedding in vector store
+                await this.searchService.vectorStoreService.storeEmbedding({
+                    chunkId: chunk.id,
+                    documentId: chunk.documentId,
+                    content: chunk.content,
+                    embedding: response.data,
+                    metadata: {
+                        chunkIndex: chunk.chunkIndex,
+                        pageNumber: chunk.pageNumber
+                    }
+                });
+            }
+            
+            console.log(`Generated embeddings for ${chunks.length} chunks using remote API`);
+        } catch (error) {
+            console.error('Error generating embeddings:', error);
+            throw new Error(`Failed to generate embeddings: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+    }
 
     /**
      * Perform a search
@@ -154,86 +270,10 @@ export class RagSearchModule extends BaseModule {
         this.searchService.clearCache();
     }
 
-    /**
-     * Update embedding model
-     * @param provider - Embedding provider
-     * @param model - Model name
-     * @param config - Additional configuration
-     */
-    async updateEmbeddingModel(
-        provider: string,
-        model: string,
-        config: Partial<EmbeddingConfig> = {}
-    ): Promise<void> {
-        try {
-            const embeddingConfig: any = {
-                provider,
-                model,
-                ...config
-            };
 
-            // Clean up current embedding service
-            if (this.currentEmbeddingService) {
-                await this.currentEmbeddingService.cleanup();
-            }
-
-            // Create new embedding service
-            this.currentEmbeddingService = this.embeddingFactory.createEmbedding(
-                provider,
-                embeddingConfig
-            ) || null;
-
-            if (!this.currentEmbeddingService) {
-                throw new Error('Failed to create new embedding service');
-            }
-
-            // Initialize new embedding service
-            await this.currentEmbeddingService.initialize();
-
-            // Update search service
-            this.searchService.setEmbeddingService(this.currentEmbeddingService);
-
-            console.log(`Embedding model updated to ${provider}:${model}`);
-        } catch (error) {
-            console.error('Failed to update embedding model:', error);
-            throw new Error('Failed to update embedding model');
-        }
-    }
 
     /**
-     * Get available embedding models
-     * @returns Array of available models
-     */
-    getAvailableModels(): {
-        provider: string;
-        models: string[];
-    }[] {
-        const providers = this.embeddingFactory.getSupportedProviders();
-        const availableModels: { provider: string; models: string[] }[] = [];
-
-        for (const provider of providers) {
-            let models: string[] = [];
-
-            switch (provider) {
-                case 'openai':
-                    models = ['text-embedding-ada-002', 'text-embedding-3-small', 'text-embedding-3-large'];
-                    break;
-                case 'huggingface':
-                    models = ['sentence-transformers/all-MiniLM-L6-v2', 'sentence-transformers/all-mpnet-base-v2'];
-                    break;
-                case 'ollama':
-                    models = ['nomic-embed-text', 'mxbai-embed-large', 'all-minilm', 'bge-large-en-v1.5'];
-                    break;
-            }
-
-            availableModels.push({ provider, models });
-        }
-
-        return availableModels;
-    }
-
-    /**
-     * Test embedding service
+     * Test embedding service using remote API
      * @returns Test result
      */
     async testEmbeddingService(): Promise<{
@@ -242,20 +282,20 @@ export class RagSearchModule extends BaseModule {
         dimensions?: number;
     }> {
         try {
-            if (!this.currentEmbeddingService) {
+            const testText = 'This is a test embedding';
+            const response = await this.ragConfigApi.getEmbedding(testText);
+
+            if (!response.status || !response.data) {
                 return {
                     success: false,
-                    message: 'No embedding service initialized'
+                    message: `Remote embedding API failed: ${response.msg || 'Unknown error'}`
                 };
             }
 
-            const testText = 'This is a test embedding';
-            const embedding = await this.currentEmbeddingService.embedText(testText);
-
             return {
                 success: true,
-                message: 'Embedding service working correctly',
-                dimensions: embedding.length
+                message: 'Remote embedding API working correctly',
+                dimensions: response.data.length
             };
         } catch (error) {
             return {
@@ -285,8 +325,8 @@ export class RagSearchModule extends BaseModule {
                 totalChunks: analytics.totalChunks,
                 indexSize: analytics.indexStats.totalVectors,
                 averageChunkSize: analytics.averageChunkSize,
-                embeddingModel: this.currentEmbeddingService?.getModel() || 'Unknown',
-                embeddingProvider: this.currentEmbeddingService?.getProvider() || 'Unknown'
+                embeddingModel: 'Remote API',
+                embeddingProvider: 'Remote API'
             };
         } catch (error) {
             console.error('Failed to get search stats:', error);
@@ -295,13 +335,254 @@ export class RagSearchModule extends BaseModule {
     }
 
     /**
+     * Get all documents with optional filtering
+     * @param filters - Optional filters
+     * @returns Array of documents
+     */
+    async getDocuments(filters?: {
+        status?: string;
+        processingStatus?: string;
+        author?: string;
+        tags?: string[];
+        dateRange?: { start: Date; end: Date };
+    }): Promise<RAGDocumentEntity[]> {
+        try {
+            return await this.documentService.getDocuments(filters);
+        } catch (error) {
+            console.error('Failed to get documents:', error);
+            throw new Error('Failed to retrieve documents');
+        }
+    }
+
+    /**
+     * Get a specific document by ID
+     * @param id - Document ID
+     * @returns Document entity
+     */
+    async getDocument(id: number): Promise<RAGDocumentEntity | null> {
+        try {
+            return await this.documentService.findDocumentById(id);
+        } catch (error) {
+            console.error('Failed to get document:', error);
+            throw new Error('Failed to retrieve document');
+        }
+    }
+
+    /**
+     * Update document metadata
+     * @param id - Document ID
+     * @param metadata - Updated metadata
+     */
+    async updateDocument(id: number, metadata: {
+        title?: string;
+        description?: string;
+        tags?: string[];
+        author?: string;
+    }): Promise<void> {
+        try {
+            await this.documentService.updateDocumentMetadata(id, metadata);
+        } catch (error) {
+            console.error('Failed to update document:', error);
+            throw new Error('Failed to update document');
+        }
+    }
+
+    /**
+     * Delete a document
+     * @param id - Document ID
+     * @param deleteFile - Whether to delete the physical file
+     */
+    async deleteDocument(id: number, deleteFile: boolean = false): Promise<void> {
+        try {
+            await this.documentService.deleteDocument(id, deleteFile);
+        } catch (error) {
+            console.error('Failed to delete document:', error);
+            throw new Error('Failed to delete document');
+        }
+    }
+
+    /**
+     * Get document statistics
+     * @returns Document statistics
+     */
+    async getDocumentStats(): Promise<{
+        totalDocuments: number;
+        totalChunks: number;
+        totalSize: number;
+        averageSize: number;
+        byStatus: Record<string, number>;
+        byType: Record<string, number>;
+    }> {
+        try {
+            const stats = await this.documentService.getDocumentStats();
+            
+            // Transform the stats to match expected interface
+            return {
+                totalDocuments: stats.total,
+                totalChunks: 0, // TODO: Get actual chunk count
+                totalSize: stats.totalSize,
+                averageSize: stats.total > 0 ? stats.totalSize / stats.total : 0,
+                byStatus: stats.byStatus,
+                byType: stats.byFileType
+            };
+        } catch (error) {
+            console.error('Failed to get document stats:', error);
+            throw new Error('Failed to retrieve document statistics');
+        }
+    }
+
+    /**
+     * Chunk a document into smaller pieces
+     * @param documentId - Document ID to chunk
+     * @param options - Chunking options
+     * @returns Chunking result
+     */
+    async chunkDocument(documentId: number, options?: {
+        chunkSize?: number;
+        overlapSize?: number;
+        strategy?: 'sentence' | 'paragraph' | 'semantic' | 'fixed';
+        preserveWhitespace?: boolean;
+        minChunkSize?: number;
+    }): Promise<{
+        documentId: number;
+        chunksCreated: number;
+        processingTime: number;
+        success: boolean;
+        message: string;
+    }> {
+        const startTime = Date.now();
+
+        try {
+            // Get document
+            const document = await this.documentService.findDocumentById(documentId);
+            if (!document) {
+                return {
+                    documentId,
+                    chunksCreated: 0,
+                    processingTime: Date.now() - startTime,
+                    success: false,
+                    message: 'Document not found'
+                };
+            }
+
+            // Update processing status
+            await this.documentService.updateDocumentStatus(
+                documentId,
+                'active',
+                'processing'
+            );
+
+            // Chunk the document
+            const chunks = await this.chunkingService.chunkDocument(document, options);
+
+            // Update processing status to completed
+            await this.documentService.updateDocumentStatus(
+                documentId,
+                'active',
+                'completed'
+            );
+
+            const processingTime = Date.now() - startTime;
+
+            return {
+                documentId,
+                chunksCreated: chunks.length,
+                processingTime,
+                success: true,
+                message: `Document chunked successfully into ${chunks.length} chunks`
+            };
+        } catch (error) {
+            console.error('Error chunking document:', error);
+            
+            // Update processing status to error
+            try {
+                await this.documentService.updateDocumentStatus(
+                    documentId,
+                    'active',
+                    'error'
+                );
+            } catch (updateError) {
+                console.error('Failed to update document status to error:', updateError);
+            }
+
+            return {
+                documentId,
+                chunksCreated: 0,
+                processingTime: Date.now() - startTime,
+                success: false,
+                message: `Document chunking failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+            };
+        }
+    }
+
+    /**
+     * Generate embeddings for document chunks
+     * @param documentId - Document ID to generate embeddings for
+     * @returns Embedding generation result
+     */
+    async generateDocumentEmbeddings(documentId: number): Promise<{
+        documentId: number;
+        chunksProcessed: number;
+        processingTime: number;
+        success: boolean;
+        message: string;
+    }> {
+        const startTime = Date.now();
+
+        try {
+            // Get document chunks
+            const chunks = await this.chunkingService.getDocumentChunks(documentId);
+            if (chunks.length === 0) {
+                return {
+                    documentId,
+                    chunksProcessed: 0,
+                    processingTime: Date.now() - startTime,
+                    success: false,
+                    message: 'No chunks found for document'
+                };
+            }
+
+            // Check if chunks already have embeddings
+            const chunksWithoutEmbeddings = chunks.filter(chunk => !chunk.embeddingId);
+            if (chunksWithoutEmbeddings.length === 0) {
+                return {
+                    documentId,
+                    chunksProcessed: 0,
+                    processingTime: Date.now() - startTime,
+                    success: true,
+                    message: 'All chunks already have embeddings'
+                };
+            }
+
+            // Generate embeddings for chunks that don't have them using remote API
+            await this.generateChunkEmbeddings(chunksWithoutEmbeddings);
+
+            const processingTime = Date.now() - startTime;
+
+            return {
+                documentId,
+                chunksProcessed: chunksWithoutEmbeddings.length,
+                processingTime,
+                success: true,
+                message: `Generated embeddings for ${chunksWithoutEmbeddings.length} chunks`
+            };
+        } catch (error) {
+            console.error('Error generating document embeddings:', error);
+            return {
+                documentId,
+                chunksProcessed: 0,
+                processingTime: Date.now() - startTime,
+                success: false,
+                message: `Failed to generate embeddings: ${error instanceof Error ? error.message : 'Unknown error'}`
+            };
+        }
+    }
+
+    /**
      * Clean up resources
      */
     async cleanup(): Promise<void> {
         try {
-            if (this.currentEmbeddingService) {
-                await this.currentEmbeddingService.cleanup();
-            }
             await this.embeddingFactory.cleanupAll();
             console.log('RAG search module cleaned up');
         } catch (error) {

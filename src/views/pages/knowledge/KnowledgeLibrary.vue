@@ -4,7 +4,7 @@
     <div class="knowledge-header">
       <h1 class="knowledge-title">
         <v-icon class="mr-2">mdi-book-open-variant</v-icon>
-        {{ $t('route.knowledge_library') }}
+        {{ t('route.knowledge_library') }}
       </h1>
       <div class="knowledge-actions">
         <v-btn
@@ -12,7 +12,7 @@
           prepend-icon="mdi-upload"
           @click="showUploadDialog = true"
         >
-          {{ $t('knowledge.upload_document') }}
+          {{ t('knowledge.upload_document') }}
         </v-btn>
       </div>
     </div>
@@ -38,20 +38,15 @@
         <!-- Documents Tab -->
         <v-tab value="documents">
           <v-icon class="mr-2">mdi-file-document-multiple</v-icon>
-          {{ $t('knowledge.documents') }}
+          {{ t('knowledge.documents') }}
         </v-tab>
 
         <!-- Search Tab -->
         <v-tab value="search">
           <v-icon class="mr-2">mdi-magnify</v-icon>
-          {{ $t('route.search') }}
+          {{ t('route.search') }}
         </v-tab>
 
-        <!-- Chat Tab -->
-        <v-tab value="chat">
-          <v-icon class="mr-2">mdi-chat</v-icon>
-          {{ $t('knowledge.chat') }}
-        </v-tab>
 
       </v-tabs>
 
@@ -76,14 +71,6 @@
             />
           </v-window-item>
 
-          <!-- Chat Window -->
-          <v-window-item value="chat">
-            <ChatInterface
-              ref="chatInterface"
-              @message-sent="handleMessageSent"
-              @error="handleError"
-            />
-          </v-window-item>
 
         </v-window>
       </v-card-text>
@@ -93,7 +80,7 @@
     <v-dialog v-model="showUploadDialog" max-width="700px" persistent>
       <v-card>
         <v-card-title class="text-h5">
-          {{ $t('knowledge.upload_document') }}
+          {{ t('knowledge.upload_document') }}
         </v-card-title>
         
         <v-card-text>
@@ -117,20 +104,29 @@
               </v-icon>
               
               <div class="text-h6 mb-2">
-                {{ isDragOver ? $t('knowledge.drop_files_here') : $t('knowledge.drag_drop_files') }}
+                {{ isDragOver ? t('knowledge.drop_files_here') : t('knowledge.drag_drop_files') }}
               </div>
               
               <div class="text-body-2 text-grey">
-                {{ $t('knowledge.supported_formats') }}
+                PDF, TXT, DOC, DOCX, MD, HTML files supported
               </div>
               
               <v-btn
                 color="primary"
                 variant="outlined"
-                class="mt-3"
+                class="mt-3 mr-2"
                 @click.stop="triggerFileInput"
               >
-                {{ $t('knowledge.browse_files') }}
+                {{ t('knowledge.browse_files') }}
+              </v-btn>
+              
+              <v-btn
+                color="secondary"
+                variant="outlined"
+                class="mt-3"
+                @click.stop="selectFilesNative"
+              >
+                Native Dialog
               </v-btn>
             </div>
           </div>
@@ -140,7 +136,7 @@
             ref="fileInput"
             type="file"
             multiple
-            accept=".pdf,.txt,.doc,.docx,.md"
+            accept=".pdf,.txt,.doc,.docx,.md,.html,.htm"
             style="display: none"
             @change="onFileSelect"
           />
@@ -148,7 +144,7 @@
           <!-- Selected Files List -->
           <div v-if="uploadFiles.length > 0" class="selected-files mt-4">
             <div class="text-subtitle-1 mb-2">
-              {{ $t('knowledge.selected_files') }} ({{ uploadFiles.length }})
+              {{ t('knowledge.selected_files') }} ({{ uploadFiles.length }})
             </div>
             <v-list density="compact">
               <v-list-item
@@ -190,10 +186,10 @@
           <v-spacer></v-spacer>
           <v-btn
             color="grey"
-            text
+            variant="text"
             @click="cancelUpload"
           >
-            {{ $t('common.cancel') }}
+            {{ t('common.cancel') }}
           </v-btn>
           <v-btn
             color="primary"
@@ -201,7 +197,7 @@
             :loading="uploading"
             :disabled="!uploadFiles || uploadFiles.length === 0"
           >
-            {{ $t('knowledge.upload') }}
+            {{ t('knowledge.upload') }}
           </v-btn>
         </v-card-actions>
       </v-card>
@@ -229,13 +225,19 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue';
 import { useI18n } from 'vue-i18n';
+
+// Expose t function to template
+const { t } = useI18n();
+
+// Type declaration for template
+//declare const t: (key: string, ...args: any[]) => string;
+
 import DocumentManagement from '@/views/pages/knowledge/DocumentManagement.vue';
 import SearchInterface from '@/views/pages/knowledge/SearchInterface.vue';
-import ChatInterface from '@/views/pages/knowledge/ChatInterface.vue';
-import { initializeRAG, getRAGStats } from '@/views/api/rag';
+import { initializeRAG, getRAGStats, uploadDocument, selectFilesNative as selectFilesNativeAPI, copyFileToTemp as copyFileToTempAPI, chunkAndEmbedDocument } from '@/views/api/rag';
+import type { SaveTempFileResponse, UploadedDocument } from '@/entityTypes/commonType';
 
 // i18n setup
-const { t } = useI18n();
 
 // Reactive data
 const activeTab = ref('documents');
@@ -256,7 +258,6 @@ const fileInput = ref<HTMLInputElement>();
 // Component refs
 const documentManagement = ref();
 const searchInterface = ref();
-const chatInterface = ref();
 
 // Lifecycle hooks
 onMounted(async () => {
@@ -330,7 +331,7 @@ function showStatus(message: string, type: 'success' | 'error' | 'warning' | 'in
 }
 
 // Event handlers
-function handleDocumentUploaded(document: any) {
+function handleDocumentUploaded(document: UploadedDocument) {
   showStatus(t('knowledge.document_uploaded_successfully', { name: document.name }), 'success');
   // Refresh document management if needed
   if (documentManagement.value) {
@@ -346,21 +347,71 @@ function handleDocumentDeleted(documentId: number) {
   }
 }
 
-function handleSearchCompleted(results: any) {
+function handleSearchCompleted(results: { totalResults: number; [key: string]: any }) {
   showStatus(t('knowledge.found_results', { count: results.totalResults }), 'success');
 }
 
-function handleMessageSent(message: any) {
-  // Handle message sent event if needed
-}
 
-function handleUploadSuccess(document: any) {
+async function handleUploadSuccess(document: UploadedDocument) {
   showUploadDialog.value = false;
-  showStatus(t('knowledge.document_uploaded_successfully', { name: document.name }), 'success');
-  // Refresh document management
-  if (documentManagement.value) {
-    documentManagement.value.refreshDocuments();
+  
+  // Provide detailed feedback based on document status
+  if (document.status === 'completed') {
+    showStatus(t('knowledge.document_uploaded_successfully', { name: document.name }), 'success');
+  } else if (document.status === 'pending') {
+    showStatus(t('knowledge.document_uploaded_pending_processing', { name: document.name }), 'info');
+  } else {
+    showStatus(t('knowledge.document_uploaded_successfully', { name: document.name }), 'success');
   }
+  
+  console.log('📄 Document processed:', document);
+  
+  // Automatically start chunking and embedding process
+  if (document.id) {
+    try {
+      setLoading(true, t('knowledge.processing_document'), t('knowledge.chunking_and_embedding_document'));
+      
+      const chunkEmbedResult = await chunkAndEmbedDocument(document.id);
+      
+      if (chunkEmbedResult.success && chunkEmbedResult.data) {
+        const { chunksCreated, embeddingsGenerated, processingTime } = chunkEmbedResult.data;
+        showStatus(
+          t('knowledge.document_processed_successfully', { 
+            name: document.name, 
+            chunks: chunksCreated, 
+            embeddings: embeddingsGenerated 
+          }), 
+          'success'
+        );
+        console.log(`✅ Document ${document.name} processed: ${chunksCreated} chunks, ${embeddingsGenerated} embeddings in ${processingTime}ms`);
+      } else {
+        showStatus(
+          t('knowledge.document_processing_failed', { 
+            name: document.name, 
+            error: chunkEmbedResult.message 
+          }), 
+          'warning'
+        );
+        console.warn(`⚠️ Document ${document.name} processing failed:`, chunkEmbedResult.message);
+      }
+    } catch (error) {
+      console.error(`❌ Error processing document ${document.name}:`, error);
+      showStatus(
+        t('knowledge.document_processing_error', { 
+          name: document.name, 
+          error: error instanceof Error ? error.message : 'Unknown error' 
+        }), 
+        'error'
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+  
+  // Refresh document management if available
+  // if (documentManagement.value) {
+  //   documentManagement.value.refreshDocuments();
+  // }
 }
 
 function handleUploadError(error: string) {
@@ -383,6 +434,17 @@ function onFileSelect(event: Event) {
 
 function triggerFileInput() {
   fileInput.value?.click();
+}
+
+// Alternative: Use Electron's native file dialog
+async function selectFilesNative() {
+  try {
+    const files = await selectFilesNativeAPI();
+    uploadFiles.value = files;
+  } catch (error) {
+    console.error('Error selecting files:', error);
+    uploadError.value = 'Failed to select files';
+  }
 }
 
 function onDragOver(event: DragEvent) {
@@ -441,23 +503,139 @@ async function confirmUpload() {
   uploadError.value = '';
 
   try {
-    // TODO: Implement actual file upload logic
-    // For now, simulate upload
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    // Upload each file
+    const uploadPromises = uploadFiles.value.map(async (file): Promise<UploadedDocument | null> => {
+      // For Electron, we can access the file path directly if available
+      // Otherwise, use the webkitRelativePath or create a temporary file
+      let filePath = (file as any).path || file.webkitRelativePath;
+      let copyResult: { filePath: string; uploadResult: SaveTempFileResponse } | null = null;
+      let needsUpload = true;
+      
+      if (!filePath) {
+        // Fallback: create temporary file for browser-like behavior
+        // This will automatically save to database via SAVE_TEMP_FILE handler
+        copyResult = await copyFileToTemp(file, {
+          title: file.name.replace(/\.[^/.]+$/, ""),
+          description: `Uploaded document: ${file.name}`,
+          tags: ['uploaded', 'knowledge'],
+          author: 'User'
+        });
+        filePath = copyResult.filePath;
+        needsUpload = !copyResult.uploadResult.databaseSaved; // Only skip if database save was successful
+      }
+      
+      // Return document info from temp file upload result (already processed)
+      if (copyResult?.uploadResult.document) {
+        return copyResult.uploadResult.document;
+      } else {
+        // Fallback document info if no database document available
+        return {
+          id: Date.now(), // Temporary ID
+          name: file.name,
+          title: file.name.replace(/\.[^/.]+$/, ""),
+          filePath: filePath,
+          status: 'pending',
+          description: `Uploaded document: ${file.name}`,
+          tags: ['uploaded', 'knowledge'],
+          author: 'User'
+        } as UploadedDocument;
+      }
+    });
+
+    const uploadedDocuments = await Promise.all(uploadPromises);
     
-    // Simulate successful upload
-    const uploadedDocument = {
-      name: uploadFiles.value[0].name,
-      size: uploadFiles.value[0].size
-    };
+    // Handle successful uploads (filter out null values)
+    uploadedDocuments.filter(doc => doc !== null).forEach(doc => {
+      if (doc) {
+        handleUploadSuccess(doc);
+      }
+    });
     
-    handleUploadSuccess(uploadedDocument);
     cancelUpload();
   } catch (error) {
-    uploadError.value = t('knowledge.upload_failed');
+    uploadError.value = t('knowledge.upload_failed') + ': ' + (error instanceof Error ? error.message : 'Unknown error');
     console.error('Upload error:', error);
   } finally {
     uploading.value = false;
+  }
+}
+
+// Helper function to copy file to temporary location
+async function copyFileToTemp(file: File, metadata?: {
+  title?: string;
+  description?: string;
+  tags?: string[];
+  author?: string;
+}): Promise<{ filePath: string; uploadResult: SaveTempFileResponse }> {
+  try {
+    const uploadResult: SaveTempFileResponse = await copyFileToTempAPI(file, metadata);
+    
+    // Check upload results and provide user feedback
+    if (uploadResult.databaseSaved && uploadResult.document) {
+      console.log('✅ File and database save successful:', uploadResult.document.name);
+      showStatus(
+        t('knowledge.document_uploaded_successfully', { name: uploadResult.document.name }), 
+        'success'
+      );
+      
+      // Automatically start chunking and embedding process for database-saved documents
+      if (uploadResult.document.id) {
+        try {
+          setLoading(true, t('knowledge.processing_document'), t('knowledge.chunking_and_embedding_document'));
+          
+          const chunkEmbedResult = await chunkAndEmbedDocument(uploadResult.document.id);
+          
+          if (chunkEmbedResult.success && chunkEmbedResult.data) {
+            const { chunksCreated, embeddingsGenerated, processingTime } = chunkEmbedResult.data;
+            showStatus(
+              t('knowledge.document_processed_successfully', { 
+                name: uploadResult.document.name, 
+                chunks: chunksCreated, 
+                embeddings: embeddingsGenerated 
+              }), 
+              'success'
+            );
+            console.log(`✅ Document ${uploadResult.document.name} processed: ${chunksCreated} chunks, ${embeddingsGenerated} embeddings in ${processingTime}ms`);
+          } else {
+            showStatus(
+              t('knowledge.document_processing_failed', { 
+                name: uploadResult.document.name, 
+                error: chunkEmbedResult.message 
+              }), 
+              'warning'
+            );
+            console.warn(`⚠️ Document ${uploadResult.document.name} processing failed:`, chunkEmbedResult.message);
+          }
+        } catch (error) {
+          console.error(`❌ Error processing document ${uploadResult.document.name}:`, error);
+          showStatus(
+            t('knowledge.document_processing_error', { 
+              name: uploadResult.document.name, 
+              error: error instanceof Error ? error.message : 'Unknown error' 
+            }), 
+            'error'
+          );
+        } finally {
+          setLoading(false);
+        }
+      }
+    } else if (uploadResult.databaseError) {
+      console.warn('⚠️ File saved but database error:', uploadResult.databaseError);
+      showStatus(
+        `${t('knowledge.file_saved_but_database_error')}: ${uploadResult.databaseError}`, 
+        'warning'
+      );
+    } else {
+      console.log('📁 File saved to temp location only');
+    }
+    
+    return { 
+      filePath: uploadResult.tempFilePath, 
+      uploadResult 
+    };
+  } catch (error) {
+    console.error('❌ Error copying file to temp location:', error);
+    throw error;
   }
 }
 
