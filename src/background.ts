@@ -73,10 +73,10 @@ function initialize() {
     }
 
   } else {
-    //console.log('protocolScheme:', protocolScheme)
-   // console.log('process.execPath:', process.execPath)
-   // console.log('path.resolve(process.argv[1]):', path.resolve(process.argv[1]))
-    // console.log('path:', path.resolve(process.argv[1]))
+  console.log('protocolScheme:', protocolScheme)
+   console.log('process.execPath:', process.execPath)
+   console.log('path.resolve(process.argv[1]):', path.resolve(process.argv[1]))
+    console.log('path:', path.resolve(process.argv[1]))
     ProtocolRegistry.register(protocolScheme, `"${process.execPath}" "${path.resolve(process.argv[1])}" "$_URL_"`,
       {
         override: true,
