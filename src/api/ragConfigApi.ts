@@ -4,6 +4,32 @@ import { EmbeddingConfig } from "@/modules/llm/EmbeddingFactory";
 import { CommonApiresp } from "@/entityTypes/commonType";
 
 /**
+ * Embedding result interface for individual embedding
+ */
+export interface EmbeddingResult {
+    /** Original text that was embedded */
+    text: string;
+    /** Embedding vector as array of numbers */
+    embedding: number[];
+    /** Dimensions of the embedding vector */
+    dimensions: number;
+    /** Model used for embedding */
+    model: string;
+}
+
+/**
+ * Embedding response data interface
+ */
+export interface EmbeddingResponseData {
+    /** Array of embedding results */
+    embeddings: EmbeddingResult[];
+    /** Total number of embeddings processed */
+    total_embeddings: number;
+    /** Processing time in milliseconds */
+    processing_time: number;
+}
+
+/**
  * Model information interface for remote configuration
  */
 export interface ModelInfo {
@@ -127,20 +153,46 @@ export class RagConfigApi {
     /**
      * Send content to remote host and get embedding result
      * 
-     * @param content - Text content to embed
-     * @returns Promise resolving to embedding vector
+     * @param texts - Array of text content to embed
+     * @returns Promise resolving to embedding result objects
      * @throws {Error} When network request fails
      * 
      * @example
      * ```typescript
-     * const embedding = await api.getEmbedding('Hello world');
-     * console.log('Embedding dimensions:', embedding.data.length);
+     * const embedding = await api.generateEmbedding(['Hello world']);
+     * console.log('Embedding dimensions:', embedding.data[0].dimensions);
+     * console.log('Model used:', embedding.data[0].model);
+     * console.log('Vector length:', embedding.data[0].embedding.length);
+     * 
+     * // Multiple texts
+     * const embeddings = await api.generateEmbedding(['Hello world', 'Test code is necessary']);
+     * console.log('Number of embeddings:', embeddings.data.length);
      * ```
      */
-    async getEmbedding(content: string): Promise<CommonApiresp<number[]>> {
-        const data = new FormData();
-        data.append('content', content);
-        return this._httpClient.post('/api/ai/embedding/generate', data);
+    async generateEmbedding(texts: string[]): Promise<CommonApiresp<EmbeddingResult[]>> {
+        const data = {
+            texts: texts
+        };
+        
+        const response = await this._httpClient.postJson('/api/ai/embedding/generate', data);
+        
+        // Extract the embedding results from the nested response structure
+        if (response.status && response.data && response.data.data && response.data.data.embeddings) {
+            return {
+                status: response.status,
+                code: response.code,
+                msg: response.msg,
+                data: response.data.data.embeddings
+            };
+        }
+        
+        // Return error response if structure is unexpected
+        return {
+            status: false,
+            code: response.code || 50000,
+            msg: response.msg || 'Failed to extract embedding from response',
+            data: undefined
+        };
     }
 
     /**

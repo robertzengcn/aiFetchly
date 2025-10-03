@@ -156,7 +156,7 @@ export class RagSearchModule extends BaseModule {
         try {
             for (const chunk of chunks) {
                 // Generate embedding for chunk content using remote API
-                const response = await this.ragConfigApi.getEmbedding(chunk.content);
+                const response = await this.ragConfigApi.generateEmbedding([chunk.content]);
                 
                 if (!response.status || !response.data) {
                     throw new Error(`Failed to get embedding: ${response.msg || 'Unknown error'}`);
@@ -167,7 +167,7 @@ export class RagSearchModule extends BaseModule {
                     chunkId: chunk.id,
                     documentId: chunk.documentId,
                     content: chunk.content,
-                    embedding: response.data,
+                    embedding: response.data[0].embedding,
                     metadata: {
                         chunkIndex: chunk.chunkIndex,
                         pageNumber: chunk.pageNumber
@@ -283,7 +283,7 @@ export class RagSearchModule extends BaseModule {
     }> {
         try {
             const testText = 'This is a test embedding';
-            const response = await this.ragConfigApi.getEmbedding(testText);
+            const response = await this.ragConfigApi.generateEmbedding([testText]);
 
             if (!response.status || !response.data) {
                 return {
