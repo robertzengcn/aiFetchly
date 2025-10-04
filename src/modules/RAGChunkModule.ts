@@ -1,11 +1,13 @@
+import { BaseModule } from "@/modules/baseModule";
 import { RAGChunkModel } from "@/model/RAGChunk.model";
 import { RAGChunkEntity } from "@/entity/RAGChunk.entity";
 
-export class RAGChunkModule {
+export class RAGChunkModule extends BaseModule {
     private ragChunkModel: RAGChunkModel;
 
-    constructor(filepath: string) {
-        this.ragChunkModel = new RAGChunkModel(filepath);
+    constructor() {
+        super();
+        this.ragChunkModel = new RAGChunkModel(this.dbpath);
     }
 
     /**

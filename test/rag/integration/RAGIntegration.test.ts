@@ -25,9 +25,9 @@ describe('RAG Integration Tests', () => {
             await db.connection.initialize();
         }
         
-        ragModule = new RAGModule(db);
+        ragModule = new RAGModule();
         documentService = new DocumentService(db);
-        chunkingService = new ChunkingService(db, testDbPath);
+        chunkingService = new ChunkingService(db);
         searchController = new RagSearchController();
     });
 

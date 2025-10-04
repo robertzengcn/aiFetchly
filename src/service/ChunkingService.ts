@@ -54,10 +54,10 @@ export class ChunkingService {
         minChunkSize: 100
     };
 
-    constructor(db: SqliteDb, filepath?: string) {
+    constructor(db: SqliteDb) {
         this.db = db;
         this.ragConfigApi = new RagConfigApi();
-        this.ragChunkModule = new RAGChunkModule(filepath || '');
+        this.ragChunkModule = new RAGChunkModule();
         this.initializeConfig();
     }
 
