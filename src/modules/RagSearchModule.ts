@@ -7,6 +7,7 @@ import { EmbeddingImpl } from '@/modules/interface/EmbeddingImpl';
 import { DocumentService, DocumentUploadOptions } from '@/service/DocumentService';
 import { ChunkingService } from '@/service/ChunkingService';
 import { RAGDocumentEntity } from '@/entity/RAGDocument.entity';
+import { RAGChunkEntity } from '@/entity/RAGChunk.entity';
 import { RagConfigApi } from '@/api/ragConfigApi';
 
 export interface SearchRequest {
@@ -63,7 +64,7 @@ export class RagSearchModule extends BaseModule {
         this.embeddingFactory = new EmbeddingFactory();
         this.configurationService = new ConfigurationServiceImpl();
         this.documentService = new DocumentService(this.sqliteDb);
-        this.chunkingService = new ChunkingService(this.sqliteDb, this.dbpath);
+        this.chunkingService = new ChunkingService(this.sqliteDb);
         this.ragConfigApi = new RagConfigApi();
     }
 
@@ -152,7 +153,7 @@ export class RagSearchModule extends BaseModule {
      * Generate embeddings for document chunks using remote API
      * @param chunks - Array of chunk entities
      */
-    private async generateChunkEmbeddings(chunks: any[]): Promise<void> {
+    private async generateChunkEmbeddings(chunks: RAGChunkEntity[]): Promise<void> {
         try {
             for (const chunk of chunks) {
                 // Generate embedding for chunk content using remote API
@@ -162,12 +163,16 @@ export class RagSearchModule extends BaseModule {
                     throw new Error(`Failed to get embedding: ${response.msg || 'Unknown error'}`);
                 }
                 
-                // Store embedding in vector store
+                const embeddingResult = response.data[0];
+                
+                // Store embedding in vector store with model information
                 await this.searchService.vectorStoreService.storeEmbedding({
                     chunkId: chunk.id,
                     documentId: chunk.documentId,
                     content: chunk.content,
-                    embedding: response.data[0].embedding,
+                    embedding: embeddingResult.embedding,
+                    model: embeddingResult.model,
+                    dimensions: embeddingResult.dimensions,
                     metadata: {
                         chunkIndex: chunk.chunkIndex,
                         pageNumber: chunk.pageNumber

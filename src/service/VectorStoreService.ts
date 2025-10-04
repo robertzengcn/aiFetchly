@@ -1,7 +1,10 @@
 import { RAGChunkEntity } from '@/entity/RAGChunk.entity';
+import { RAGModelEntity } from '@/entity/RAGModel.entity';
+import { RAGChunkModule } from '@/modules/RAGChunkModule';
 import { SqliteDb } from '@/config/SqliteDb';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as faiss from 'faiss-node';
 
 /**
  * FAISS index interface for type safety
@@ -10,10 +13,19 @@ interface FAISSIndex {
     add(vectors: number[][]): void;
     search(queryVector: number[], k: number): { indices: number[], distances: number[] };
     save(path: string): void;
-    load(path: string): void;
     getDimension(): number;
     getTotalVectors(): number;
     reset(): void;
+}
+
+/**
+ * Embedding model configuration interface
+ */
+export interface EmbeddingModelConfig {
+    modelId: string;
+    dimensions: number;
+    name?: string;
+    description?: string;
 }
 
 /**
@@ -21,15 +33,17 @@ interface FAISSIndex {
  */
 export class VectorStoreService {
     private db: SqliteDb;
-    private faiss: any = null;
     private index: FAISSIndex | null = null;
     private indexPath: string;
     private dimension: number = 0;
     private isInitialized: boolean = false;
+    private currentModel: EmbeddingModelConfig | null = null;
+    private ragChunkModule: RAGChunkModule;
 
     constructor(db: SqliteDb, indexPath?: string) {
         this.db = db;
         this.indexPath = indexPath || path.join(process.cwd(), 'data', 'vector_index');
+        this.ragChunkModule = new RAGChunkModule();
         this.ensureIndexDirectory();
     }
 
@@ -38,8 +52,7 @@ export class VectorStoreService {
      */
     async initialize(): Promise<void> {
         try {
-            // Dynamic import to avoid bundling issues
-            this.faiss = await import('faiss-node') as any;
+            // FAISS is now statically imported at the top of the file
             this.isInitialized = true;
             console.log('FAISS initialized successfully');
         } catch (error) {
@@ -49,35 +62,41 @@ export class VectorStoreService {
     }
 
     /**
-     * Create a new FAISS index
-     * @param dimension - Vector dimension
+     * Create a new FAISS index with specific embedding model configuration
+     * @param modelConfig - Embedding model configuration
      * @param indexType - Type of index (default: 'Flat')
      */
-    async createIndex(dimension: number, indexType: string = 'Flat'): Promise<void> {
+    async createIndex(modelConfig: EmbeddingModelConfig, indexType: string = 'Flat'): Promise<void> {
         if (!this.isInitialized) {
             await this.initialize();
         }
 
         try {
-            this.dimension = dimension;
+            this.dimension = modelConfig.dimensions;
+            this.currentModel = modelConfig;
+            
+            // Update index path to include model information for model-specific indices
+            const modelSpecificPath = this.getModelSpecificIndexPath(modelConfig);
+            this.indexPath = modelSpecificPath;
+            this.ensureIndexDirectory();
             
             switch (indexType.toLowerCase()) {
                 case 'flat':
-                    this.index = new this.faiss.IndexFlatL2(dimension);
+                    this.index = new faiss.IndexFlatL2(modelConfig.dimensions) as any;
                     break;
                 case 'ivf':
                     // IVF index requires training data, using Flat for now
-                    this.index = new this.faiss.IndexFlatL2(dimension);
+                    this.index = new faiss.IndexFlatL2(modelConfig.dimensions) as any;
                     break;
                 case 'hnsw':
-                    // HNSW index for better performance
-                    this.index = new this.faiss.IndexHNSWFlat(dimension, 32);
+                    // HNSW index for better performance - using Flat for now as HNSW may not be available
+                    this.index = new faiss.IndexFlatL2(modelConfig.dimensions) as any;
                     break;
                 default:
-                    this.index = new this.faiss.IndexFlatL2(dimension);
+                    this.index = new faiss.IndexFlatL2(modelConfig.dimensions) as any;
             }
 
-            console.log(`Created ${indexType} index with dimension ${dimension}`);
+            console.log(`Created ${indexType} index for model ${modelConfig.modelId} with dimension ${modelConfig.dimensions}`);
         } catch (error) {
             console.error('Failed to create FAISS index:', error);
             throw new Error('Failed to create FAISS index');
@@ -85,27 +104,64 @@ export class VectorStoreService {
     }
 
     /**
-     * Load existing index from disk
-     * @param dimension - Expected vector dimension
+     * Create a new FAISS index (legacy method for backward compatibility)
+     * @param dimension - Vector dimension
+     * @param indexType - Type of index (default: 'Flat')
+     * @deprecated Use createIndex(modelConfig, indexType) instead
      */
-    async loadIndex(dimension: number): Promise<void> {
+    async createIndexLegacy(dimension: number, indexType: string = 'Flat'): Promise<void> {
+        const defaultModel: EmbeddingModelConfig = {
+            modelId: 'default',
+            dimensions: dimension,
+            name: 'Default Model',
+            description: 'Legacy default model'
+        };
+        
+        await this.createIndex(defaultModel, indexType);
+    }
+
+    /**
+     * Load existing index from disk with model configuration
+     * @param modelConfig - Embedding model configuration
+     */
+    async loadIndex(modelConfig: EmbeddingModelConfig): Promise<void> {
         if (!this.isInitialized) {
             await this.initialize();
         }
 
         try {
+            const modelSpecificPath = this.getModelSpecificIndexPath(modelConfig);
+            this.indexPath = modelSpecificPath;
+            
             if (fs.existsSync(this.indexPath)) {
-                this.index = this.faiss.IndexFlatL2.load(this.indexPath);
-                this.dimension = dimension;
-                console.log(`Loaded existing index with ${this.index?.getTotalVectors() || 0} vectors`);
+                this.index = (faiss as any).IndexFlatL2.load(this.indexPath);
+                this.dimension = modelConfig.dimensions;
+                this.currentModel = modelConfig;
+                console.log(`Loaded existing index for model ${modelConfig.modelId} with ${this.index?.getTotalVectors() || 0} vectors`);
             } else {
-                console.log('No existing index found, creating new one');
-                await this.createIndex(dimension);
+                console.log(`No existing index found for model ${modelConfig.modelId}, creating new one`);
+                await this.createIndex(modelConfig);
             }
         } catch (error) {
             console.error('Failed to load FAISS index:', error);
             throw new Error('Failed to load FAISS index');
         }
+    }
+
+    /**
+     * Load existing index from disk (legacy method for backward compatibility)
+     * @param dimension - Expected vector dimension
+     * @deprecated Use loadIndex(modelConfig) instead
+     */
+    async loadIndexLegacy(dimension: number): Promise<void> {
+        const defaultModel: EmbeddingModelConfig = {
+            modelId: 'default',
+            dimensions: dimension,
+            name: 'Default Model',
+            description: 'Legacy default model'
+        };
+        
+        await this.loadIndex(defaultModel);
     }
 
     /**
@@ -126,7 +182,7 @@ export class VectorStoreService {
     }
 
     /**
-     * Store a single embedding
+     * Store a single embedding with model information
      * @param embeddingData - Embedding data to store
      */
     async storeEmbedding(embeddingData: {
@@ -135,7 +191,28 @@ export class VectorStoreService {
         content: string;
         embedding: number[];
         metadata?: any;
+        model?: string;
+        dimensions?: number;
     }): Promise<void> {
+        // Check if we need to create or load index for this model
+        if (embeddingData.model && embeddingData.dimensions) {
+            const modelConfig: EmbeddingModelConfig = {
+                modelId: embeddingData.model,
+                dimensions: embeddingData.dimensions
+            };
+
+            // Check if index exists for this model, if not create it
+            if (!this.indexExistsForModel(modelConfig)) {
+                console.log(`Creating new index for model ${embeddingData.model} with dimensions ${embeddingData.dimensions}`);
+                await this.createIndex(modelConfig);
+            } else if (!this.currentModel || 
+                       this.currentModel.modelId !== embeddingData.model || 
+                       this.currentModel.dimensions !== embeddingData.dimensions) {
+                console.log(`Loading existing index for model ${embeddingData.model} with dimensions ${embeddingData.dimensions}`);
+                await this.loadIndex(modelConfig);
+            }
+        }
+
         await this.addVectors([embeddingData.embedding], [embeddingData.chunkId]);
     }
 
@@ -156,19 +233,17 @@ export class VectorStoreService {
         try {
             // Add vectors to FAISS index
             this.index.add(vectors);
+            
 
-            // Update chunk entities with embedding IDs
-            const repository = this.db.connection.getRepository(RAGChunkEntity);
+            // Update chunk entities with embedding IDs using RAGChunkModule
             const startIndex = this.index.getTotalVectors() - vectors.length;
 
             for (let i = 0; i < chunkIds.length; i++) {
                 const embeddingId = (startIndex + i).toString();
-                await repository.update(
-                    { id: chunkIds[i] },
-                    { 
-                        embeddingId,
-                        vectorDimensions: this.dimension
-                    }
+                await this.ragChunkModule.updateChunkEmbedding(
+                    chunkIds[i], 
+                    embeddingId, 
+                    this.dimension
                 );
             }
 
@@ -201,16 +276,14 @@ export class VectorStoreService {
         try {
             const results = this.index.search(queryVector, k);
             
-            // Get chunk IDs for the results
-            const repository = this.db.connection.getRepository(RAGChunkEntity);
+            // Get chunk IDs for the results using RAGChunkModule
             const chunkIds: number[] = [];
 
             for (const index of results.indices) {
-                const chunk = await repository.findOne({
-                    where: { embeddingId: index.toString() }
-                });
-                if (chunk) {
-                    chunkIds.push(chunk.id);
+                const chunks = await this.ragChunkModule.getChunksByEmbeddingId(index.toString());
+                if (chunks.length > 0) {
+                    // Take the first chunk if multiple chunks have the same embedding ID
+                    chunkIds.push(chunks[0].id);
                 }
             }
 
@@ -234,12 +307,14 @@ export class VectorStoreService {
         dimension: number;
         indexType: string;
         isInitialized: boolean;
+        currentModel: EmbeddingModelConfig | null;
     } {
         return {
             totalVectors: this.index?.getTotalVectors() || 0,
             dimension: this.dimension,
             indexType: this.index?.constructor.name || 'Unknown',
-            isInitialized: this.isInitialized
+            isInitialized: this.isInitialized,
+            currentModel: this.currentModel
         };
     }
 
@@ -303,13 +378,24 @@ export class VectorStoreService {
                 throw new Error(`Backup file not found: ${backupPath}`);
             }
 
-            this.index = this.faiss.IndexFlatL2.load(backupPath);
+            this.index = (faiss as any).IndexFlatL2.load(backupPath);
             this.dimension = this.index?.getDimension() || 0;
             console.log(`Index restored from ${backupPath}`);
         } catch (error) {
             console.error('Failed to restore index:', error);
             throw new Error('Failed to restore index');
         }
+    }
+
+    /**
+     * Generate model-specific index path
+     * @param modelConfig - Embedding model configuration
+     * @returns Model-specific index path
+     */
+    private getModelSpecificIndexPath(modelConfig: EmbeddingModelConfig): string {
+        const baseDir = path.dirname(this.indexPath);
+        const fileName = `index_${modelConfig.modelId}_${modelConfig.dimensions}.faiss`;
+        return path.join(baseDir, 'models', fileName);
     }
 
     /**
@@ -354,5 +440,69 @@ export class VectorStoreService {
      */
     indexExists(): boolean {
         return fs.existsSync(this.indexPath);
+    }
+
+    /**
+     * Check if index exists for a specific model
+     * @param modelConfig - Embedding model configuration
+     * @returns True if index file exists for the model
+     */
+    indexExistsForModel(modelConfig: EmbeddingModelConfig): boolean {
+        const modelSpecificPath = this.getModelSpecificIndexPath(modelConfig);
+        return fs.existsSync(modelSpecificPath);
+    }
+
+    /**
+     * Get current model configuration
+     * @returns Current model configuration or null if not set
+     */
+    getCurrentModel(): EmbeddingModelConfig | null {
+        return this.currentModel;
+    }
+
+    /**
+     * Switch to a different embedding model
+     * @param modelConfig - New embedding model configuration
+     * @param indexType - Type of index (default: 'Flat')
+     */
+    async switchModel(modelConfig: EmbeddingModelConfig, indexType: string = 'Flat'): Promise<void> {
+        // Save current index if it exists
+        if (this.index) {
+            await this.saveIndex();
+        }
+
+        // Load or create index for the new model
+        await this.loadIndex(modelConfig);
+    }
+
+    /**
+     * Create index from RAGModelEntity
+     * @param ragModel - RAG model entity
+     * @param indexType - Type of index (default: 'Flat')
+     */
+    async createIndexFromRAGModel(ragModel: RAGModelEntity, indexType: string = 'Flat'): Promise<void> {
+        const modelConfig: EmbeddingModelConfig = {
+            modelId: ragModel.modelId,
+            dimensions: ragModel.dimensions,
+            name: ragModel.name,
+            description: ragModel.description
+        };
+
+        await this.createIndex(modelConfig, indexType);
+    }
+
+    /**
+     * Load index from RAGModelEntity
+     * @param ragModel - RAG model entity
+     */
+    async loadIndexFromRAGModel(ragModel: RAGModelEntity): Promise<void> {
+        const modelConfig: EmbeddingModelConfig = {
+            modelId: ragModel.modelId,
+            dimensions: ragModel.dimensions,
+            name: ragModel.name,
+            description: ragModel.description
+        };
+
+        await this.loadIndex(modelConfig);
     }
 }

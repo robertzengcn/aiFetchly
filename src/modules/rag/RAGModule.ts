@@ -1,9 +1,12 @@
+import { BaseModule } from '@/modules/baseModule';
 import { QueryProcessor, ProcessedQuery, QueryProcessingOptions } from '@/service/QueryProcessor';
 import { RagSearchController } from '@/controller/RagSearchController';
 import { ResponseGenerator, GeneratedResponse, ResponseGenerationOptions } from '@/service/ResponseGenerator';
 import { DocumentService } from '@/service/DocumentService';
 import { ChunkingService } from '@/service/ChunkingService';
-import { SqliteDb } from '@/config/SqliteDb';
+import { RAGChunkModule } from '@/modules/RAGChunkModule';
+import { RAGChunkEntity } from '@/entity/RAGChunk.entity';
+import { RagSearchModule } from '@/modules/RagSearchModule';
 import { EmbeddingConfig } from '@/modules/llm/EmbeddingFactory';
 import { LlmCongfig } from '@/entityTypes/commonType';
 
@@ -53,13 +56,14 @@ export interface RAGStats {
     lastActivity: Date;
 }
 
-export class RAGModule {
+export class RAGModule extends BaseModule {
     private queryProcessor: QueryProcessor;
     private searchController: RagSearchController;
     private responseGenerator: ResponseGenerator;
     private documentService: DocumentService;
     private chunkingService: ChunkingService;
-    private db: SqliteDb;
+    private ragChunkModule: RAGChunkModule;
+    private ragSearchModule: RagSearchModule;
     private isInitialized: boolean = false;
     private stats: RAGStats = {
         totalQueries: 0,
@@ -71,12 +75,16 @@ export class RAGModule {
         lastActivity: new Date()
     };
 
-    constructor(db: SqliteDb) {
-        this.db = db;
-        this.documentService = new DocumentService(db);
-        this.chunkingService = new ChunkingService(db, '');
+    constructor() {
+        super();
+        
+        // Initialize services with database from BaseModule
+        this.documentService = new DocumentService(this.sqliteDb);
+        this.chunkingService = new ChunkingService(this.sqliteDb);
+        this.ragChunkModule = new RAGChunkModule();
+        this.ragSearchModule = new RagSearchModule();
         this.searchController = new RagSearchController();
-        this.queryProcessor = new QueryProcessor(this.searchController, db);
+        this.queryProcessor = new QueryProcessor(this.searchController, this.sqliteDb);
         this.responseGenerator = new ResponseGenerator();
     }
 
@@ -89,6 +97,9 @@ export class RAGModule {
         try {
             // Initialize response generator
             await this.responseGenerator.initialize(llmConfig);
+
+            // Initialize RAG search module
+            await this.ragSearchModule.initialize();
 
             // Update stats
             await this.updateStats();
@@ -425,36 +436,6 @@ export class RAGModule {
         }
     }
 
-    /**
-     * Generate embeddings for document chunks
-     * @param chunks - Array of chunk entities
-     */
-    private async generateChunkEmbeddings(chunks: any[]): Promise<void> {
-        try {
-            // Get embedding service from search controller
-            const embeddingService = (this.searchController as any).currentEmbeddingService;
-            if (!embeddingService) {
-                throw new Error('Embedding service not available');
-            }
-
-            // Generate embeddings for each chunk
-            for (const chunk of chunks) {
-                const embedding = await embeddingService.embedText(chunk.content);
-                
-                // Update chunk with embedding
-                const repository = this.db.connection.getRepository(require('@/entity/RAGChunk.entity').RAGChunkEntity);
-                await repository.update(chunk.id, {
-                    embeddingId: chunk.id.toString(),
-                    vectorDimensions: embedding.length
-                });
-            }
-
-            console.log(`Generated embeddings for ${chunks.length} chunks`);
-        } catch (error) {
-            console.error('Error generating chunk embeddings:', error);
-            throw new Error('Failed to generate chunk embeddings');
-        }
-    }
 
     /**
      * Generate embeddings for a specific document's chunks
@@ -499,17 +480,20 @@ export class RAGModule {
                 };
             }
 
-            // Generate embeddings for chunks that don't have them
-            await this.generateChunkEmbeddings(chunksWithoutEmbeddings);
+            // Generate embeddings for chunks that don't have them using RagSearchModule
+            const embedResult = await this.ragSearchModule.generateDocumentEmbeddings(documentId);
+            if (!embedResult.success) {
+                throw new Error(embedResult.message);
+            }
 
             const processingTime = Date.now() - startTime;
 
             return {
                 documentId,
-                chunksProcessed: chunksWithoutEmbeddings.length,
+                chunksProcessed: embedResult.chunksProcessed,
                 processingTime,
                 success: true,
-                message: `Generated embeddings for ${chunksWithoutEmbeddings.length} chunks`
+                message: embedResult.message
             };
         } catch (error) {
             console.error('Error generating document embeddings:', error);
@@ -558,7 +542,7 @@ export class RAGModule {
             let totalChunksProcessed = 0;
 
             for (const document of documents) {
-                const result = await this.generateDocumentEmbeddings(document.id);
+                const result = await this.ragSearchModule.generateDocumentEmbeddings(document.id);
                 results.push(result);
                 
                 if (result.success) {

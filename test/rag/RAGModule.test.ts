@@ -19,7 +19,7 @@ describe('RAGModule', () => {
             await db.connection.initialize();
         }
         
-        ragModule = new RAGModule(db);
+        ragModule = new RAGModule();
     });
 
     after(async () => {
