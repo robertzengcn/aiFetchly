@@ -8,7 +8,13 @@ import checker from 'vite-plugin-checker'
 
 export default defineConfig({
   build: {
-    sourcemap: true},
+    sourcemap: true,
+    rollupOptions: {
+      external: [
+        'canvas'  // Mark canvas as external to prevent bundling native .node files
+      ]
+    }
+  },
   plugins: [
     alias(),
     vue(),

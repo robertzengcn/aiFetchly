@@ -28,7 +28,8 @@ function emptyModulesPlugin() {
         'mysql', 'mysql2',
         'pg', 'pg-query-stream', 'pg-native',
         'mongodb', 'mssql', 'oracledb',
-        'hdb-pool', 'redis', 'ioredis', 'sql.js'
+        'hdb-pool', 'redis', 'ioredis', 'sql.js',
+        'canvas'  // Add canvas to empty modules for fallback
     ];
 
     return {
@@ -41,7 +42,7 @@ function emptyModulesPlugin() {
         },
         load(id) {
             if (id === 'virtual:empty-module') {
-                return 'export default {}; export const Stream = {}; export const Readable = {}; export const Writable = {}; export const PassThrough = {};';
+                return 'export default {}; export const Stream = {}; export const Readable = {}; export const Writable = {}; export const PassThrough = {}; export const createCanvas = () => ({}); export const loadImage = () => ({});';
             }
             return null;
         }
@@ -280,7 +281,8 @@ export default ({ mode }) => {
                     'sqlite3',  // Mark sqlite3 as external
                     'better-sqlite3',
                     'bindings',
-                    'typeorm'
+                    'typeorm',
+                    'canvas'  // Mark canvas as external to prevent bundling native .node files
                 ]
             },
             sourcemap: true,
