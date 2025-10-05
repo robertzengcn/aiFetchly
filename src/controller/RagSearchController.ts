@@ -2,14 +2,22 @@ import { RagSearchModule, SearchRequest, SearchResponse, DocumentUploadResponse 
 import { DocumentUploadOptions } from '@/service/DocumentService';
 import { RAGDocumentEntity } from '@/entity/RAGDocument.entity';
 import { RagConfigApi, ChunkingConfig } from '@/api/ragConfigApi';
+import { SystemSettingModel } from '@/model/SystemSetting.model';
+import { SystemSettingGroupEntity } from '@/entity/SystemSettingGroup.entity';
+import { SystemSettingGroupModel } from '@/model/SystemSettingGroup.model';
 
 export class RagSearchController {
     private ragSearchModule: RagSearchModule;
     private ragConfigApi: RagConfigApi;
+    private systemSettingModel: SystemSettingModel;
+    private systemSettingGroupModel: SystemSettingGroupModel;
 
     constructor() {
         this.ragSearchModule = new RagSearchModule();
         this.ragConfigApi = new RagConfigApi();
+        // Initialize system setting models with default database path
+        this.systemSettingModel = new SystemSettingModel('./data/settings.db');
+        this.systemSettingGroupModel = new SystemSettingGroupModel('./data/settings.db');
     }
 
     /**
@@ -321,6 +329,44 @@ export class RagSearchController {
                 message: `Chunk and embed failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
                 steps
             };
+        }
+    }
+
+    /**
+     * Update the embedding model
+     * @param modelName - Name of the model to switch to
+     */
+    async updateEmbeddingModel(modelName: string): Promise<void> {
+        try {
+            // Update the embedding model in the search module
+            await this.ragSearchModule.updateEmbeddingModel(modelName);
+            
+            // Save the default embedding model to system settings
+            await this.saveDefaultEmbeddingModelToSettings(modelName);
+            
+            console.log(`Embedding model updated to: ${modelName}`);
+        } catch (error) {
+            console.error('Error updating embedding model:', error);
+            throw new Error(`Failed to update embedding model: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+    }
+
+    /**
+     * Save default embedding model to system settings
+     * @param modelName - Name of the embedding model
+     */
+    private async saveDefaultEmbeddingModelToSettings(modelName: string): Promise<void> {
+        try {
+            // Get or create the embedding settings group
+            const embeddingGroup = await this.systemSettingGroupModel.getOrCreateEmbeddingGroup();
+            
+            // Update the default embedding model setting
+            await this.systemSettingModel.updateDefaultEmbeddingModel(modelName, embeddingGroup);
+            
+            console.log(`Default embedding model saved to settings: ${modelName}`);
+        } catch (error) {
+            console.error('Error saving default embedding model to settings:', error);
+            // Don't throw error here to avoid breaking the main update process
         }
     }
 

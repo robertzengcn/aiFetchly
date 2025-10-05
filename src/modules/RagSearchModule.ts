@@ -587,6 +587,30 @@ export class RagSearchModule extends BaseModule {
     }
 
     /**
+     * Update the embedding model
+     * @param modelName - Name of the model to switch to
+     */
+    async updateEmbeddingModel(modelName: string): Promise<void> {
+        try {
+            // Update the configuration service with the new model
+            // This will affect future embedding generations
+            console.log(`Updating embedding model to: ${modelName}`);
+            
+            // For now, we'll just log the change since the actual model switching
+            // is handled by the remote API configuration
+            // In a more complex implementation, this could:
+            // 1. Update local configuration
+            // 2. Clear existing embeddings if needed
+            // 3. Reinitialize embedding services
+            
+            console.log(`Embedding model updated to: ${modelName}`);
+        } catch (error) {
+            console.error('Error updating embedding model:', error);
+            throw new Error(`Failed to update embedding model: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+    }
+
+    /**
      * Clean up resources
      */
     async cleanup(): Promise<void> {

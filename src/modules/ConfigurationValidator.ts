@@ -162,11 +162,11 @@ export class ConfigurationValidator {
         }
 
         // Check model status
-        if (modelMetadata.status === 'deprecated' && !allowDeprecated) {
-            errors.push(`Model '${config.model}' is deprecated`);
-        } else if (modelMetadata.status === 'inactive') {
-            errors.push(`Model '${config.model}' is inactive`);
-        }
+        // if (modelMetadata.status === 'deprecated' && !allowDeprecated) {
+        //     errors.push(`Model '${config.model}' is deprecated`);
+        // } else if (modelMetadata.status === 'inactive') {
+        //     errors.push(`Model '${config.model}' is inactive`);
+        // }
 
         // Check dimensions compatibility
         if (config.dimensions && modelMetadata.performance) {

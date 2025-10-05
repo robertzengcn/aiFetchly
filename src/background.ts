@@ -84,7 +84,7 @@ function initialize() {
         terminal: true,
       }
     ).then(() => console.log('Successfully registered'))
-      .catch(console.error);
+      .catch(e => console.error(e));
     // app.setAsDefaultProtocolClient(protocolScheme);
   }
   makeSingleInstance()
@@ -536,6 +536,7 @@ function makeSingleInstance() {
 async function handleDeepLink(url: string) {
   try {
     const parsedUrl = new URL(url);
+    console.log(parsedUrl)
     const token = parsedUrl.searchParams.get('token'); // Example: Extract a token from the URL
     if (token) {
       //console.log(`Token received: ${token}`);

@@ -172,7 +172,21 @@ export default {
         tags_hint: "Press Enter to add tags",
         loading_content: "Loading content...",
         confirm_delete_document: "Are you sure you want to delete \"{name}\"?",
-        confirm_bulk_delete: "Are you sure you want to delete {count} documents?"
+        confirm_bulk_delete: "Are you sure you want to delete {count} documents?",
+        // Settings translations
+        settings: "Settings",
+        embedding_model: "Embedding Model",
+        embedding_model_hint: "Choose the embedding model for document processing",
+        current_model: "Current Model",
+        update_model: "Update Model",
+        model_category_fast: "Fast",
+        model_category_accurate: "Accurate", 
+        model_category_balanced: "Balanced",
+        model_category_default: "Default",
+        priority: "Priority",
+        embedding_model_updated_successfully: "Embedding model updated successfully",
+        failed_to_update_embedding_model: "Failed to update embedding model",
+        max_dimensions: "Max Dimensions"
     },
     notifications: {
         cloudflare_protection_detected: "Cloudflare Protection Detected",

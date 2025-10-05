@@ -31,7 +31,9 @@ export const chrome_path='chrome_path'
 export const firefox_path='firefox_path'
 export const user_preferences='user_preferences'
 export const language_preference='language_preference'
-
+export const embedding_group='embedding_group'
+export const embedding_group_description='embedding_group_description'
+export const default_embedding_model='default_embedding_model'
 export const settinggroupInit: Array<SystemSettingGroupdf> = [
     {
         name: deepseeklocalgroup,
@@ -163,6 +165,18 @@ export const settinggroupInit: Array<SystemSettingGroupdf> = [
                 description:'volcengine-api-key-description',
                 type:'input',
              }
+        ]
+    },
+    {
+        name: embedding_group,
+        description: embedding_group_description,
+        items: [
+            {
+                key: default_embedding_model,
+                value: '',
+                description: '',
+                type: 'select',
+            }
         ]
     },
     {

@@ -164,7 +164,21 @@ export default {
         tags_hint: "按回车键添加标签",
         loading_content: "正在加载内容...",
         confirm_delete_document: "您确定要删除 \"{name}\" 吗？",
-        confirm_bulk_delete: "您确定要删除 {count} 个文档吗？"
+        confirm_bulk_delete: "您确定要删除 {count} 个文档吗？",
+        // Settings translations
+        settings: "设置",
+        embedding_model: "嵌入模型",
+        embedding_model_hint: "选择用于文档处理的嵌入模型",
+        current_model: "当前模型",
+        update_model: "更新模型",
+        model_category_fast: "快速",
+        model_category_accurate: "准确", 
+        model_category_balanced: "平衡",
+        model_category_default: "默认",
+        priority: "优先级",
+        embedding_model_updated_successfully: "嵌入模型更新成功",
+        failed_to_update_embedding_model: "更新嵌入模型失败",
+        max_dimensions: "最大维度"
     },
     notifications: {
         cloudflare_protection_detected: "检测到Cloudflare保护",

@@ -3,7 +3,9 @@ import { RagSearchController } from '@/controller/RagSearchController';
 import { SearchRequest, SearchResponse } from '@/modules/RagSearchModule';
 import { CommonMessage, SaveTempFileResponse, DocumentUploadResponse, ChunkAndEmbedResponse } from '@/entityTypes/commonType';
 import { DocumentInfo } from '@/views/api/rag';
-import { RagConfigApi, ModelInfo } from '@/api/ragConfigApi';
+import { RagConfigApi, ModelInfo, AvailableModelsResponse } from '@/api/ragConfigApi';
+import { SystemSettingModule } from '@/modules/SystemSettingModule';
+import { SystemSettingGroupModule } from '@/modules/SystemSettingGroupModule';
 import * as fs from 'fs';
 import * as path from 'path';
 import {
@@ -39,6 +41,84 @@ async function createRagController(): Promise<RagSearchController> {
     const controller = new RagSearchController();
     await controller.initialize();
     return controller;
+}
+
+/**
+ * Check if default embedding model exists in system settings, 
+ * if not, fetch it from API and update the setting.
+ * If it exists, validate that it's still in the available models list.
+ */
+async function checkAndSetDefaultEmbeddingModel(): Promise<void> {
+    try {
+        // Initialize system setting modules
+        const systemSettingModule = new SystemSettingModule();
+        const systemSettingGroupModule = new SystemSettingGroupModule();
+        
+        // Get or create embedding settings group
+        const embeddingGroup = await systemSettingGroupModule.getOrCreateEmbeddingGroup();
+        
+        // Check if default embedding model setting exists
+        const defaultEmbeddingModel = await systemSettingModule.getDefaultEmbeddingModel(embeddingGroup);
+        
+        if (!defaultEmbeddingModel) {
+            console.log('Default embedding model not found in system settings, fetching from API...');
+            
+            // Fetch available models from API
+            const ragConfigApi = new RagConfigApi();
+            const modelsResponse = await ragConfigApi.getAvailableEmbeddingModels();
+            
+            if (modelsResponse.status && modelsResponse.data) {
+                const defaultModel = modelsResponse.data.default_model;
+                console.log(`Setting default embedding model to: ${defaultModel}`);
+                
+                // Update the default embedding model setting
+                await systemSettingModule.updateDefaultEmbeddingModel(defaultModel, embeddingGroup);
+                console.log('Default embedding model updated successfully');
+            } else {
+                console.warn('Failed to fetch available models from API, using fallback model');
+                // Use fallback model if API call fails
+                const fallbackModel = 'Qwen/Qwen3-Embedding-4B';
+                await systemSettingModule.updateDefaultEmbeddingModel(fallbackModel, embeddingGroup);
+                console.log(`Using fallback model: ${fallbackModel}`);
+            }
+        } else {
+            console.log(`Default embedding model already exists: ${defaultEmbeddingModel}`);
+            
+            // Validate that the existing default model is still available
+            try {
+                const ragConfigApi = new RagConfigApi();
+                const modelsResponse = await ragConfigApi.getAvailableEmbeddingModels();
+                
+                if (modelsResponse.status && modelsResponse.data) {
+                    const availableModels = modelsResponse.data.models;
+                    const defaultModel = modelsResponse.data.default_model;
+                    
+                    // Check if the current default embedding model is in the available models
+                    const isCurrentModelAvailable = Object.keys(availableModels).includes(defaultEmbeddingModel);
+                    
+                    if (!isCurrentModelAvailable) {
+                        console.log(`Current default embedding model '${defaultEmbeddingModel}' is not available in the models list`);
+                        console.log(`Updating to new default model: ${defaultModel}`);
+                        
+                        // Update to the new default model from the API
+                        await systemSettingModule.updateDefaultEmbeddingModel(defaultModel, embeddingGroup);
+                        console.log('Default embedding model updated to available model');
+                    } else {
+                        console.log(`Current default embedding model '${defaultEmbeddingModel}' is still available`);
+                    }
+                } else {
+                    console.warn('Failed to fetch available models for validation, keeping current model');
+                }
+            } catch (validationError) {
+                console.warn('Error validating default embedding model availability:', validationError);
+                console.log('Keeping current default embedding model due to validation error');
+            }
+        }
+    } catch (error) {
+        console.error('Error checking/setting default embedding model:', error);
+        // Don't throw error to avoid breaking the initialization process
+        // The system can still work with the fallback model
+    }
 }
 
 
@@ -175,8 +255,11 @@ export function registerRagIpcHandlers(): void {
     // Initialize RAG module
     ipcMain.handle(RAG_INITIALIZE, async (event, data): Promise<CommonMessage<any | null>> => {
         try {
-            // No configuration needed - controller handles everything automatically
-            await createRagController();
+            // Create controller first
+            //const ragController = await createRagController();
+            
+            // Check if default embedding model exists in system settings
+            await checkAndSetDefaultEmbeddingModel();
             
             const response: CommonMessage<any> = {
                 status: true,
@@ -577,37 +660,56 @@ export function registerRagIpcHandlers(): void {
     });
 
     // Update embedding model
-    // ipcMain.handle(RAG_UPDATE_EMBEDDING_MODEL, async (event, data): Promise<CommonMessage<void>> => {
-    //     try {
-    //         const config = JSON.parse(data) as {
-    //             model: string;
-    //         };
+    ipcMain.handle(RAG_UPDATE_EMBEDDING_MODEL, async (event, data): Promise<CommonMessage<boolean>> => {
+        try {
+            const config = JSON.parse(data) as {
+                model: string;
+            };
 
-    //         const ragSearchController = await createRagController();
-    //         await ragSearchController.updateEmbeddingModel(config.model);
+            const ragSearchController = await createRagController();
+            await ragSearchController.updateEmbeddingModel(config.model);
             
-    //         const response: CommonMessage<void> = {
-    //             status: true,
-    //             msg: "Embedding model updated successfully"
-    //         };
-    //         return response;
-    //     } catch (error) {
-    //         console.error('RAG update embedding model error:', error);
-    //         const errorResponse: CommonMessage<void> = {
-    //             status: false,
-    //             msg: error instanceof Error ? error.message : "Unknown error occurred"
-    //         };
-    //         return errorResponse;
-    //     }
-    // });
+            const response: CommonMessage<boolean> = {
+                status: true,
+                msg: "Embedding model updated successfully",
+                data: true
+            };
+            return response;
+        } catch (error) {
+            console.error('RAG update embedding model error:', error);
+            const errorResponse: CommonMessage<boolean> = {
+                status: false,
+                msg: error instanceof Error ? error.message : "Unknown error occurred",
+                data: false
+            };
+            return errorResponse;
+        }
+    });
 
     // Get available models
-    ipcMain.handle(RAG_GET_AVAILABLE_MODELS, async (event, data): Promise<CommonMessage<ModelInfo[] | null>> => {
+    ipcMain.handle(RAG_GET_AVAILABLE_MODELS, async (event, data): Promise<CommonMessage<AvailableModelsResponse | null>> => {
         try {
             const ragConfigApi = new RagConfigApi();
             const response = await ragConfigApi.getAvailableEmbeddingModels();
             
-            if (response.status) {
+            if (response.status && response.data) {
+                // Get the default embedding model from system settings
+                const systemSettingModule = new SystemSettingModule();
+                const systemSettingGroupModule = new SystemSettingGroupModule();
+                
+                try {
+                    const embeddingGroup = await systemSettingGroupModule.getOrCreateEmbeddingGroup();
+                    const defaultModelFromSettings = await systemSettingModule.getDefaultEmbeddingModel(embeddingGroup);
+                    
+                    // Override the default_model with the one from system settings if available
+                    if (defaultModelFromSettings) {
+                        response.data.default_model = defaultModelFromSettings;
+                    }
+                } catch (settingsError) {
+                    console.warn('Could not retrieve default embedding model from settings:', settingsError);
+                    // Continue with the original response if settings retrieval fails
+                }
+                
                 return {
                     status: true,
                     msg: "Available models retrieved successfully",
