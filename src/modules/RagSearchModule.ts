@@ -90,7 +90,9 @@ export class RagSearchModule extends BaseModule {
      */
     async uploadDocument(options: DocumentUploadOptions): Promise<DocumentUploadResponse> {
         const startTime = Date.now();
-
+        if (!options.modelName) {
+            throw new Error('Model name is required');
+        }
         try {
             // Upload document to database
             const document = await this.documentService.uploadDocument(options);
@@ -106,7 +108,7 @@ export class RagSearchModule extends BaseModule {
             const chunks = await this.chunkingService.chunkDocument(document);
 
             // Generate embeddings for chunks using remote API
-            await this.generateChunkEmbeddings(chunks);
+            await this.generateChunkEmbeddings(chunks, options.modelName);
 
             // Update processing status to completed
             await this.documentService.updateDocumentStatus(
@@ -153,11 +155,11 @@ export class RagSearchModule extends BaseModule {
      * Generate embeddings for document chunks using remote API
      * @param chunks - Array of chunk entities
      */
-    private async generateChunkEmbeddings(chunks: RAGChunkEntity[]): Promise<void> {
+    private async generateChunkEmbeddings(chunks: RAGChunkEntity[], modelName: string): Promise<void> {
         try {
             for (const chunk of chunks) {
                 // Generate embedding for chunk content using remote API
-                const response = await this.ragConfigApi.generateEmbedding([chunk.content]);
+                const response = await this.ragConfigApi.generateEmbedding([chunk.content], modelName);
                 
                 if (!response.status || !response.data) {
                     throw new Error(`Failed to get embedding: ${response.msg || 'Unknown error'}`);
@@ -288,7 +290,8 @@ export class RagSearchModule extends BaseModule {
     }> {
         try {
             const testText = 'This is a test embedding';
-            const response = await this.ragConfigApi.generateEmbedding([testText]);
+            const modelName = 'text-embedding-3-small';
+            const response = await this.ragConfigApi.generateEmbedding([testText], modelName);
 
             if (!response.status || !response.data) {
                 return {
@@ -525,7 +528,7 @@ export class RagSearchModule extends BaseModule {
      * @param documentId - Document ID to generate embeddings for
      * @returns Embedding generation result
      */
-    async generateDocumentEmbeddings(documentId: number): Promise<{
+    async generateDocumentEmbeddings(documentId: number, modelName: string): Promise<{
         documentId: number;
         chunksProcessed: number;
         processingTime: number;
@@ -560,7 +563,7 @@ export class RagSearchModule extends BaseModule {
             }
 
             // Generate embeddings for chunks that don't have them using remote API
-            await this.generateChunkEmbeddings(chunksWithoutEmbeddings);
+            await this.generateChunkEmbeddings(chunksWithoutEmbeddings, modelName);
 
             const processingTime = Date.now() - startTime;
 

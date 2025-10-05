@@ -1,6 +1,7 @@
 import { windowInvoke, windowInvokeBinary } from '@/views/utils/apirequest';
 import { EmbeddingConfig } from '@/modules/llm/EmbeddingFactory';
 import { LlmCongfig, SaveTempFileResponse, ChunkAndEmbedResponse } from '@/entityTypes/commonType';
+import { ModelInfo } from '@/api/ragConfigApi';
 import {
   RAG_INITIALIZE,
   RAG_QUERY,
@@ -201,11 +202,11 @@ export async function getSearchAnalytics(): Promise<RAGResponse> {
 // }
 
 /**
- * Get available models - Not needed for desktop app using remote API
+ * Get available embedding models
  */
-// export async function getAvailableModels(): Promise<RAGResponse<string[]>> {
-//   return await windowInvoke(RAG_GET_AVAILABLE_MODELS, {});
-// }
+export async function getAvailableEmbeddingModels(): Promise<RAGResponse<ModelInfo[]>> {
+  return await windowInvoke(RAG_GET_AVAILABLE_MODELS, {});
+}
 
 /**
  * Test embedding service

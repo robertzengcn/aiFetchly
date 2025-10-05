@@ -154,6 +154,7 @@ export class RagConfigApi {
      * Send content to remote host and get embedding result
      * 
      * @param texts - Array of text content to embed
+     * @param modelName - Optional model name to use for embedding generation
      * @returns Promise resolving to embedding result objects
      * @throws {Error} When network request fails
      * 
@@ -164,14 +165,15 @@ export class RagConfigApi {
      * console.log('Model used:', embedding.data[0].model);
      * console.log('Vector length:', embedding.data[0].embedding.length);
      * 
-     * // Multiple texts
-     * const embeddings = await api.generateEmbedding(['Hello world', 'Test code is necessary']);
+     * // Multiple texts with specific model
+     * const embeddings = await api.generateEmbedding(['Hello world', 'Test code is necessary'], 'text-embedding-3-small');
      * console.log('Number of embeddings:', embeddings.data.length);
      * ```
      */
-    async generateEmbedding(texts: string[]): Promise<CommonApiresp<EmbeddingResult[]>> {
+    async generateEmbedding(texts: string[], modelName: string): Promise<CommonApiresp<EmbeddingResult[]>> {
         const data = {
-            texts: texts
+            texts: texts,
+            model_name: modelName
         };
         
         const response = await this._httpClient.postJson('/api/ai/embedding/generate', data);
@@ -212,5 +214,23 @@ export class RagConfigApi {
      */
     async getChunkingConfig(): Promise<CommonApiresp<ChunkingConfig>> {
         return this._httpClient.get('/api/ai/chunking/info');
+    }
+
+    /**
+     * Retrieves available embedding models from remote server
+     * 
+     * @returns Promise resolving to available models response
+     * @throws {Error} When network request fails
+     * 
+     * @example
+     * ```typescript
+     * const models = await api.getAvailableEmbeddingModels();
+     * if (models.success) {
+     *   console.log('Available models:', models.data);
+     * }
+     * ```
+     */
+    async getAvailableEmbeddingModels(): Promise<CommonApiresp<ModelInfo[]>> {
+        return this._httpClient.get('/api/ai/embedding/models');
     }
 }

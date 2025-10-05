@@ -345,6 +345,7 @@ export class RAGModule extends BaseModule {
             preserveWhitespace?: boolean;
             minChunkSize?: number;
         };
+        modelName: string;
     }): Promise<{
         documentId: number;
         chunksCreated: number;
@@ -397,7 +398,7 @@ export class RAGModule extends BaseModule {
             steps.chunking = true;
 
             // Step 3: Generate embeddings
-            const embedResult = await this.generateDocumentEmbeddings(uploadResult.documentId);
+            const embedResult = await this.generateDocumentEmbeddings(uploadResult.documentId, options.modelName);
             if (!embedResult.success) {
                 return {
                     documentId: uploadResult.documentId,
@@ -442,7 +443,7 @@ export class RAGModule extends BaseModule {
      * @param documentId - Document ID to generate embeddings for
      * @returns Processing result
      */
-    async generateDocumentEmbeddings(documentId: number): Promise<{
+    async generateDocumentEmbeddings(documentId: number, modelName: string): Promise<{
         documentId: number;
         chunksProcessed: number;
         processingTime: number;
@@ -481,7 +482,7 @@ export class RAGModule extends BaseModule {
             }
 
             // Generate embeddings for chunks that don't have them using RagSearchModule
-            const embedResult = await this.ragSearchModule.generateDocumentEmbeddings(documentId);
+            const embedResult = await this.ragSearchModule.generateDocumentEmbeddings(documentId, modelName);
             if (!embedResult.success) {
                 throw new Error(embedResult.message);
             }
@@ -511,7 +512,7 @@ export class RAGModule extends BaseModule {
      * Generate embeddings for all documents that don't have them
      * @returns Processing results
      */
-    async generateAllMissingEmbeddings(): Promise<{
+    async generateAllMissingEmbeddings(modelName: string): Promise<{
         totalDocuments: number;
         documentsProcessed: number;
         totalChunksProcessed: number;
@@ -542,7 +543,7 @@ export class RAGModule extends BaseModule {
             let totalChunksProcessed = 0;
 
             for (const document of documents) {
-                const result = await this.ragSearchModule.generateDocumentEmbeddings(document.id);
+                const result = await this.ragSearchModule.generateDocumentEmbeddings(document.id, modelName);
                 results.push(result);
                 
                 if (result.success) {

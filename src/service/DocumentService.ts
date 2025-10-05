@@ -11,6 +11,7 @@ export interface DocumentUploadOptions {
     description?: string;
     tags?: string[];
     author?: string;
+    modelName?: string;
 }
 
 export interface DocumentValidationResult {

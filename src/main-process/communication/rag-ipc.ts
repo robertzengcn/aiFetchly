@@ -3,6 +3,7 @@ import { RagSearchController } from '@/controller/RagSearchController';
 import { SearchRequest, SearchResponse } from '@/modules/RagSearchModule';
 import { CommonMessage, SaveTempFileResponse, DocumentUploadResponse, ChunkAndEmbedResponse } from '@/entityTypes/commonType';
 import { DocumentInfo } from '@/views/api/rag';
+import { RagConfigApi, ModelInfo } from '@/api/ragConfigApi';
 import * as fs from 'fs';
 import * as path from 'path';
 import {
@@ -111,7 +112,8 @@ export function registerRagIpcHandlers(): void {
                         title: metadata.title || originalFileName.replace(/\.[^/.]+$/, ''),
                         description: metadata.description || `Uploaded document: ${originalFileName}`,
                         tags: metadata.tags || ['uploaded', 'knowledge'],
-                        author: metadata.author || 'User'
+                        author: metadata.author || 'User',
+                        
                     };
                     
                     const uploadResult = await ragController.uploadDocument(uploadOptions);
@@ -260,6 +262,7 @@ export function registerRagIpcHandlers(): void {
                 description?: string;
                 tags?: string[];
                 author?: string;
+                modelName: string;
             };
 
             const ragSearchController = await createRagController();
@@ -599,27 +602,34 @@ export function registerRagIpcHandlers(): void {
     // });
 
     // Get available models
-    // ipcMain.handle(RAG_GET_AVAILABLE_MODELS, async (event, data): Promise<CommonMessage<string[] | null>> => {
-    //     try {
-    //         const ragSearchController = await createRagController();
-    //         const models = ragSearchController.getAvailableModels();
+    ipcMain.handle(RAG_GET_AVAILABLE_MODELS, async (event, data): Promise<CommonMessage<ModelInfo[] | null>> => {
+        try {
+            const ragConfigApi = new RagConfigApi();
+            const response = await ragConfigApi.getAvailableEmbeddingModels();
             
-    //         const response: CommonMessage<string[]> = {
-    //             status: true,
-    //             msg: "Available models retrieved successfully",
-    //             data: models.map(m => `${m.provider}:${m.models.join(',')}`).flat()
-    //         };
-    //         return response;
-    //     } catch (error) {
-    //         console.error('RAG get available models error:', error);
-    //         const errorResponse: CommonMessage<null> = {
-    //             status: false,
-    //             msg: error instanceof Error ? error.message : "Unknown error occurred",
-    //             data: null
-    //         };
-    //         return errorResponse;
-    //     }
-    // });
+            if (response.status) {
+                return {
+                    status: true,
+                    msg: "Available models retrieved successfully",
+                    data: response.data
+                };
+            } else {
+                return {
+                    status: false,
+                    msg: response.msg || "Failed to retrieve available models",
+                    data: null
+                };
+            }
+        } catch (error) {
+            console.error('RAG get available models error:', error);
+            const errorResponse: CommonMessage<null> = {
+                status: false,
+                msg: error instanceof Error ? error.message : "Unknown error occurred",
+                data: null
+            };
+            return errorResponse;
+        }
+    });
 
     // Test embedding service
     ipcMain.handle(RAG_TEST_EMBEDDING_SERVICE, async (event, data): Promise<CommonMessage<any | null>> => {
@@ -670,10 +680,11 @@ export function registerRagIpcHandlers(): void {
         try {
             const requestData = JSON.parse(data) as {
                 documentId: number;
+                modelName: string;
             };
 
             const ragSearchController = await createRagController();
-            const result = await ragSearchController.chunkAndEmbedDocument(requestData.documentId);
+            const result = await ragSearchController.chunkAndEmbedDocument(requestData.documentId, requestData.modelName);
 
             const response: CommonMessage<ChunkAndEmbedResponse> = {
                 status: result.success,
