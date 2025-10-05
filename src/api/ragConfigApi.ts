@@ -33,14 +33,28 @@ export interface EmbeddingResponseData {
  * Model information interface for remote configuration
  */
 export interface ModelInfo {
-    /** Model identifier (e.g., 'text-embedding-3-small') */
-    model: string;
-    /** Model category for performance classification */
-    category: 'fast' | 'accurate' | 'balanced' | 'default';
-    /** Priority score for model selection (higher = better) */
-    priority: number;
-    /** Current status of the model */
-    status: 'active' | 'inactive' | 'deprecated';
+    /** Model identifier (e.g., 'Qwen/Qwen3-Embedding-4B') */
+    name: string;
+    /** Model description */
+    description: string;
+    /** Maximum dimensions supported by the model */
+    max_dimensions: number;
+    /** Recommended dimensions for the model */
+    recommended_dimensions: number;
+}
+
+/**
+ * Available models response interface
+ */
+export interface AvailableModelsResponse {
+    /** Array of available models */
+    models: Record<string, ModelInfo>;
+    /** Default model name */
+    default_model: string;
+    /** Total number of models */
+    total_models: number;
+    /** Number of configured models */
+    configured_models: number;
 }
 
 /**
@@ -227,10 +241,11 @@ export class RagConfigApi {
      * const models = await api.getAvailableEmbeddingModels();
      * if (models.success) {
      *   console.log('Available models:', models.data);
+     *   console.log('Default model:', models.data.default_model);
      * }
      * ```
      */
-    async getAvailableEmbeddingModels(): Promise<CommonApiresp<ModelInfo[]>> {
+    async getAvailableEmbeddingModels(): Promise<CommonApiresp<AvailableModelsResponse>> {
         return this._httpClient.get('/api/ai/embedding/models');
     }
 }

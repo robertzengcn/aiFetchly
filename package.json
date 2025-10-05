@@ -66,6 +66,8 @@
     "vitest-video": "vitest --config vite.main.config.mjs -t video-download",
     "tsc": "tsc --noEmit --watch",
     "rebuild-better-sqlite": "electron-rebuild -f -w better-sqlite3",
+    "rebuild-canvas": "electron-rebuild canvas",
+    "rebuild-faiss-node": "electron-rebuild faiss-node",
     "prepackage": "npm run rebuild-sqlite3",
     "rebuild-sqlite3": "electron-rebuild -f -w sqlite3",
     "vue-check": "vue-tsc --noEmit --watch",

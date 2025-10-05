@@ -192,6 +192,7 @@
         </v-card-actions>
       </v-card>
     </v-dialog>
+
   </div>
 </template>
 
@@ -447,7 +448,7 @@ const { t } = useI18n();
 .filters {
   margin-bottom: 20px;
   padding: 20px;
-  background-color: #f5f5f5;
+  
   border-radius: 8px;
 }
 

@@ -10,13 +10,15 @@ export interface ModelPerformance {
 
 export interface ModelMetadata extends ModelInfo {
     performance: ModelPerformance;
-    description: string;
     capabilities: string[];
     requirements: {
         minMemory?: number;
         minCpu?: number;
         gpuRequired?: boolean;
     };
+    category: 'fast' | 'accurate' | 'balanced' | 'default';
+    priority: number;
+    status: 'active' | 'inactive' | 'deprecated';
 }
 
 export class ModelRegistry {
@@ -64,7 +66,7 @@ export class ModelRegistry {
      * @param category Model category
      * @returns Array of models in the category
      */
-    getModelsByCategory(category: ModelInfo['category']): ModelMetadata[] {
+    getModelsByCategory(category: ModelMetadata['category']): ModelMetadata[] {
         return Array.from(this.models.values())
             .filter(model => model.category === category && model.status === 'active');
     }
@@ -74,7 +76,7 @@ export class ModelRegistry {
      * @param category Optional category filter
      * @returns Best model or null if none available
      */
-    getBestModel(category?: ModelInfo['category']): ModelMetadata | null {
+    getBestModel(category?: ModelMetadata['category']): ModelMetadata | null {
         let candidates = Array.from(this.models.values())
             .filter(model => model.status === 'active');
 
@@ -139,7 +141,7 @@ export class ModelRegistry {
      * @param modelId Model identifier
      * @param status New status
      */
-    updateStatus(modelId: string, status: ModelInfo['status']): void {
+    updateStatus(modelId: string, status: ModelMetadata['status']): void {
         const model = this.models.get(modelId);
         if (model) {
             model.status = status;
@@ -207,7 +209,10 @@ export class ModelRegistry {
     private initializeDefaultModels(): void {
         // Add some default models for fallback
         this.registerModel('text-embedding-3-small', {
-            model: 'text-embedding-3-small',
+            name: 'text-embedding-3-small',
+            description: 'Fast and efficient embedding model',
+            max_dimensions: 1536,
+            recommended_dimensions: 512,
             category: 'fast',
             priority: 8,
             status: 'active',
@@ -217,7 +222,6 @@ export class ModelRegistry {
                 cost: 0.3,
                 lastUpdated: Date.now()
             },
-            description: 'Fast and efficient embedding model',
             capabilities: ['text-embedding', 'semantic-search'],
             requirements: {
                 minMemory: 512,
@@ -226,7 +230,10 @@ export class ModelRegistry {
         });
 
         this.registerModel('text-embedding-3-large', {
-            model: 'text-embedding-3-large',
+            name: 'text-embedding-3-large',
+            description: 'High accuracy embedding model',
+            max_dimensions: 3072,
+            recommended_dimensions: 1536,
             category: 'accurate',
             priority: 9,
             status: 'active',
@@ -236,7 +243,6 @@ export class ModelRegistry {
                 cost: 0.7,
                 lastUpdated: Date.now()
             },
-            description: 'High accuracy embedding model',
             capabilities: ['text-embedding', 'semantic-search', 'fine-grained-analysis'],
             requirements: {
                 minMemory: 1024,
@@ -245,7 +251,10 @@ export class ModelRegistry {
         });
 
         this.registerModel('text-embedding-ada-002', {
-            model: 'text-embedding-ada-002',
+            name: 'text-embedding-ada-002',
+            description: 'Balanced performance and accuracy',
+            max_dimensions: 1536,
+            recommended_dimensions: 1536,
             category: 'balanced',
             priority: 7,
             status: 'active',
@@ -255,7 +264,6 @@ export class ModelRegistry {
                 cost: 0.5,
                 lastUpdated: Date.now()
             },
-            description: 'Balanced performance and accuracy',
             capabilities: ['text-embedding', 'semantic-search'],
             requirements: {
                 minMemory: 768,

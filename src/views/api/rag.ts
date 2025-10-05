@@ -192,20 +192,56 @@ export async function getSearchAnalytics(): Promise<RAGResponse> {
 /**
  * Update embedding model
  */
-// export async function updateEmbeddingModel(config: {
-//   provider: string;
-//   model: string;
-//   apiKey?: string;
-//   url?: string;
-// }): Promise<RAGResponse> {
-//   return await windowInvoke(RAG_UPDATE_EMBEDDING_MODEL, config);
-// }
+export async function updateEmbeddingModel(modelName: string): Promise<boolean> {
+  return await windowInvoke(RAG_UPDATE_EMBEDDING_MODEL, { model: modelName });
+}
 
 /**
  * Get available embedding models
  */
 export async function getAvailableEmbeddingModels(): Promise<RAGResponse<ModelInfo[]>> {
-  return await windowInvoke(RAG_GET_AVAILABLE_MODELS, {});
+  const response = await windowInvoke(RAG_GET_AVAILABLE_MODELS, {});
+  if (response) {
+    // Transform the response data to match our expected format
+    const modelsData = response;
+    const modelsArray: ModelInfo[] = Object.values(modelsData.models || {});
+    
+    return {
+      success: response.status,
+      data: modelsArray,
+      message: response.msg
+    };
+  }
+  return {
+    success: false,
+    data: [],
+    message: 'Failed to get available models'
+  };
+}
+
+/**
+ * Get available embedding models with default model info
+ */
+export async function getAvailableEmbeddingModelsWithDefault(): Promise<RAGResponse<{ models: ModelInfo[], defaultModel: string }>> {
+  const response = await windowInvoke(RAG_GET_AVAILABLE_MODELS, {});
+  if (response) {
+    const modelsData = response;
+    const modelsArray: ModelInfo[] = Object.values(modelsData.models || {});
+    
+    return {
+      success: response.status,
+      data: {
+        models: modelsArray,
+        defaultModel: modelsData.default_model || ''
+      },
+      message: response.msg
+    };
+  }
+  return {
+    success: false,
+    data: { models: [], defaultModel: '' },
+    message: 'Failed to get available models'
+  };
 }
 
 /**

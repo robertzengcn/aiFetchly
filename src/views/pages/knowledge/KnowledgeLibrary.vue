@@ -14,6 +14,13 @@
         >
           {{ t('knowledge.upload_document') }}
         </v-btn>
+        <v-btn
+          color="info"
+          prepend-icon="mdi-cog"
+          @click="openSettingsDialog"
+        >
+          {{ t('knowledge.settings') }}
+        </v-btn>
       </div>
     </div>
 
@@ -204,6 +211,61 @@
     </v-dialog>
 
 
+    <!-- Settings Dialog -->
+    <v-dialog v-model="showSettingsDialog" max-width="600">
+      <v-card>
+        <v-card-title>{{ t('knowledge.settings') }}</v-card-title>
+        <v-card-text>
+          <v-form>
+            <v-select
+              v-model="selectedEmbeddingModel"
+              :items="availableModels"
+              :label="t('knowledge.embedding_model')"
+              :loading="loadingModels"
+              item-title="name"
+              item-value="name"
+              :hint="t('knowledge.embedding_model_hint')"
+              persistent-hint
+            >
+              <template v-slot:item="{ props, item }">
+                <v-list-item v-bind="props">
+                  <template v-slot:title>
+                    {{ item.raw.name }}
+                  </template>
+                  <template v-slot:subtitle>
+                    {{ item.raw.description }} - 
+                    {{ t('knowledge.max_dimensions') }}: {{ item.raw.max_dimensions }}
+                  </template>
+                </v-list-item>
+              </template>
+            </v-select>
+            
+            <v-alert
+              v-if="currentModel"
+              type="info"
+              variant="tonal"
+              class="mt-4"
+            >
+              {{ t('knowledge.current_model') }}: {{ currentModel }}
+            </v-alert>
+          </v-form>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn @click="showSettingsDialog = false">{{ t('common.cancel') }}</v-btn>
+          <v-btn 
+            color="primary" 
+            @click="handleUpdateEmbeddingModel" 
+            :loading="updatingModel"
+            :disabled="!selectedEmbeddingModel || selectedEmbeddingModel === currentModel"
+          >
+            {{ t('knowledge.update_model') }}
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+
     <!-- Loading Overlay -->
     <v-overlay
       v-model="isLoading"
@@ -234,19 +296,28 @@ const { t } = useI18n();
 
 import DocumentManagement from '@/views/pages/knowledge/DocumentManagement.vue';
 import SearchInterface from '@/views/pages/knowledge/SearchInterface.vue';
-import { initializeRAG, getRAGStats, uploadDocument, selectFilesNative as selectFilesNativeAPI, copyFileToTemp as copyFileToTempAPI, chunkAndEmbedDocument } from '@/views/api/rag';
+import { initializeRAG, getRAGStats, uploadDocument, selectFilesNative as selectFilesNativeAPI, copyFileToTemp as copyFileToTempAPI, chunkAndEmbedDocument, getAvailableEmbeddingModelsWithDefault, updateEmbeddingModel } from '@/views/api/rag';
 import type { SaveTempFileResponse, UploadedDocument } from '@/entityTypes/commonType';
+import { ModelInfo } from '@/api/ragConfigApi';
 
 // i18n setup
 
 // Reactive data
 const activeTab = ref('documents');
 const showUploadDialog = ref(false);
+const showSettingsDialog = ref(false);
 const isLoading = ref(false);
 const loadingMessage = ref('');
 const loadingSubMessage = ref('');
 const statusMessage = ref('');
 const statusType = ref<'success' | 'error' | 'warning' | 'info'>('info');
+
+// Settings related variables
+const availableModels = ref<ModelInfo[]>([]);
+const selectedEmbeddingModel = ref<string>('');
+const currentModel = ref<string>('');
+const loadingModels = ref(false);
+const updatingModel = ref(false);
 
 // Upload dialog data
 const uploadFiles = ref<File[]>([]);
@@ -421,6 +492,62 @@ function handleUploadError(error: string) {
 
 function handleError(error: string) {
   showStatus(`${t('knowledge.error')}: ${error}`, 'error');
+}
+
+// Settings functions
+async function loadAvailableModels() {
+  loadingModels.value = true;
+  try {
+    const response = await getAvailableEmbeddingModelsWithDefault();
+    console.log('🔍 Available models response:', response);
+    if (response && response.data) {
+      availableModels.value = response.data.models;
+      // Set the default model from system settings
+      if (response.data.defaultModel) {
+        currentModel.value = response.data.defaultModel;
+        selectedEmbeddingModel.value = response.data.defaultModel;
+      }
+      console.log('✅ Available models loaded:', availableModels.value.length);
+      console.log('✅ Default model set:', response.data.defaultModel);
+    } else {
+      console.error('❌ Failed to load available models');
+      availableModels.value = [];
+    }
+  } catch (error) {
+    console.error('❌ Error loading available models:', error);
+    availableModels.value = [];
+  } finally {
+    loadingModels.value = false;
+  }
+}
+
+async function handleUpdateEmbeddingModel() {
+  if (!selectedEmbeddingModel.value) return;
+  
+  updatingModel.value = true;
+  try {
+    const response = await updateEmbeddingModel(selectedEmbeddingModel.value);
+    console.log(response)
+    if (response) {
+      currentModel.value = selectedEmbeddingModel.value;
+      console.log('✅ Embedding model updated successfully');
+      showSettingsDialog.value = false;
+      showStatus(t('knowledge.embedding_model_updated_successfully'), 'success');
+    } else {
+      console.error('❌ Failed to update embedding model:');
+      showStatus(`${t('knowledge.failed_to_update_embedding_model')}`, 'error');
+    }
+  } catch (error) {
+    console.error('❌ Error updating embedding model:', error);
+    showStatus(`${t('knowledge.failed_to_update_embedding_model')}: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
+  } finally {
+    updatingModel.value = false;
+  }
+}
+
+async function openSettingsDialog() {
+  showSettingsDialog.value = true;
+  await loadAvailableModels();
 }
 
 // Upload dialog methods
@@ -658,7 +785,7 @@ defineExpose({
   height: 100vh;
   display: flex;
   flex-direction: column;
-  background-color: #f5f5f5;
+  
 }
 
 .knowledge-header {
@@ -666,7 +793,7 @@ defineExpose({
   justify-content: space-between;
   align-items: center;
   padding: 16px 24px;
-  background: white;
+  
   border-bottom: 1px solid #e0e0e0;
   box-shadow: 0 2px 4px rgba(0,0,0,0.1);
 }

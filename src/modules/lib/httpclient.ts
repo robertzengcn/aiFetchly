@@ -75,7 +75,7 @@ export class HttpClient {
   
     public async get(endpoint:string, options = {}): Promise<any> {
       // const body = new URLSearchParams(params).toString();  
-      console.log(this._headers)
+      //console.log(this._headers)
       return this._fetchJSON(endpoint, {
         ...options,
         method: "GET",
