@@ -200,14 +200,14 @@ export class RagSearchController {
      * @param documentId - Document ID to generate embeddings for
      * @returns Embedding generation result
      */
-    async generateDocumentEmbeddings(documentId: number): Promise<{
+    async generateDocumentEmbeddings(documentId: number, modelName: string): Promise<{
         documentId: number;
         chunksProcessed: number;
         processingTime: number;
         success: boolean;
         message: string;
     }> {
-        return await this.ragSearchModule.generateDocumentEmbeddings(documentId);
+        return await this.ragSearchModule.generateDocumentEmbeddings(documentId, modelName);
     }
 
     /**
@@ -215,7 +215,7 @@ export class RagSearchController {
      * @param documentId - Document ID to process
      * @returns Combined processing result
      */
-    async chunkAndEmbedDocument(documentId: number): Promise<{
+    async chunkAndEmbedDocument(documentId: number, modelName: string): Promise<{
         documentId: number;
         chunksCreated: number;
         embeddingsGenerated: number;
@@ -272,7 +272,7 @@ export class RagSearchController {
             steps.chunking = true;
 
             // Step 3: Generate embeddings for the chunks
-            const embedResult = await this.generateDocumentEmbeddings(documentId);
+            const embedResult = await this.generateDocumentEmbeddings(documentId, modelName);
             if (!embedResult.success) {
                 return {
                     documentId,
