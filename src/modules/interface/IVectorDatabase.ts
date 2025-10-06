@@ -6,6 +6,7 @@ export interface VectorDatabaseConfig {
     modelId: string;
     dimensions: number;
     indexType?: string;
+    documentId?: number; // Document-specific index support
     [key: string]: unknown; // Allow for database-specific configuration
 }
 
@@ -15,6 +16,7 @@ export interface VectorDatabaseConfig {
 export interface VectorSearchResult {
     indices: number[];
     distances: number[];
+    chunkIds: number[];
 }
 
 /**
@@ -55,8 +57,10 @@ export interface IVectorDatabase {
 
     /**
      * Add vectors to the index
+     * @param vectors - Array of vectors to add
+     * @param chunkIds - Array of chunk IDs corresponding to vectors
      */
-    addVectors(vectors: number[][]): Promise<void>;
+    addVectors(vectors: number[][], chunkIds: number[]): Promise<void>;
 
     /**
      * Search for similar vectors
@@ -107,4 +111,16 @@ export interface IVectorDatabase {
      * Check if the database is initialized
      */
     isInitialized(): boolean;
+
+    /**
+     * Delete a document-specific index
+     * @param documentId - Document ID to delete index for
+     */
+    deleteDocumentIndex(documentId: number): Promise<void>;
+
+    /**
+     * Check if a document-specific index exists
+     * @param documentId - Document ID to check
+     */
+    documentIndexExists(documentId: number): boolean;
 }

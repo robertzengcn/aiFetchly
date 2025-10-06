@@ -186,7 +186,15 @@ export default {
         priority: "Priority",
         embedding_model_updated_successfully: "Embedding model updated successfully",
         failed_to_update_embedding_model: "Failed to update embedding model",
-        max_dimensions: "Max Dimensions"
+        max_dimensions: "Max Dimensions",
+        // Document processing translations
+        processing_document: "Processing Document",
+        chunking_and_embedding_document: "Chunking and embedding document...",
+        document_processed_successfully: "Document \"{name}\" processed successfully: {chunks} chunks, {embeddings} embeddings",
+        document_processing_failed: "Document \"{name}\" processing failed: {error}",
+        document_processing_error: "Error processing document \"{name}\": {error}",
+        document_uploaded_pending_processing: "Document \"{name}\" uploaded and pending processing",
+        file_saved_but_database_error: "File saved but database error"
     },
     notifications: {
         cloudflare_protection_detected: "Cloudflare Protection Detected",

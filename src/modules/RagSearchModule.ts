@@ -9,7 +9,10 @@ import { ChunkingService } from '@/service/ChunkingService';
 import { RAGDocumentEntity } from '@/entity/RAGDocument.entity';
 import { RAGChunkEntity } from '@/entity/RAGChunk.entity';
 import { RagConfigApi } from '@/api/ragConfigApi';
-
+import { app } from 'electron';
+import {getUserdbpath} from "@/modules/lib/electronfunction"
+// import { Token } from "./token";
+// import { USERSDBPATH } from "@/config/usersetting";
 export interface SearchRequest {
     query: string;
     options?: SearchOptions;
@@ -57,9 +60,11 @@ export class RagSearchModule extends BaseModule {
 
     constructor() {
         super();
-        
+        //get user data path
+        // const tokenService = new Token()
+        // const userdataPath = tokenService.getValue(USERSDBPATH)
         // Initialize services with database
-        const vectorStoreService = new VectorStoreService(this.sqliteDb);
+        const vectorStoreService = new VectorStoreService(getUserdbpath());
         this.searchService = new VectorSearchService(vectorStoreService, this.sqliteDb);
         this.embeddingFactory = new EmbeddingFactory();
         this.configurationService = new ConfigurationServiceImpl();
@@ -112,7 +117,7 @@ export class RagSearchModule extends BaseModule {
 
             // Update processing status to completed
             await this.documentService.updateDocumentStatus(
-                document.id,
+                 document.id,
                 'active',
                 'completed'
             );
@@ -157,6 +162,12 @@ export class RagSearchModule extends BaseModule {
      */
     private async generateChunkEmbeddings(chunks: RAGChunkEntity[], modelName: string): Promise<void> {
         try {
+            if (chunks.length === 0) {
+                return;
+            }
+
+            const documentId = chunks[0].documentId;
+            
             for (const chunk of chunks) {
                 // Generate embedding for chunk content using remote API
                 const response = await this.ragConfigApi.generateEmbedding([chunk.content], modelName);
@@ -167,7 +178,7 @@ export class RagSearchModule extends BaseModule {
                 
                 const embeddingResult = response.data[0];
                 
-                // Store embedding in vector store with model information
+                // Store embedding in document-specific vector store with model information
                 await this.searchService.vectorStoreService.storeEmbedding({
                     chunkId: chunk.id,
                     documentId: chunk.documentId,
@@ -182,7 +193,7 @@ export class RagSearchModule extends BaseModule {
                 });
             }
             
-            console.log(`Generated embeddings for ${chunks.length} chunks using remote API`);
+            console.log(`Generated embeddings for ${chunks.length} chunks using remote API for document ${documentId}`);
         } catch (error) {
             console.error('Error generating embeddings:', error);
             throw new Error(`Failed to generate embeddings: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -396,13 +407,19 @@ export class RagSearchModule extends BaseModule {
     }
 
     /**
-     * Delete a document
+     * Delete a document and its associated vector index
      * @param id - Document ID
      * @param deleteFile - Whether to delete the physical file
      */
     async deleteDocument(id: number, deleteFile: boolean = false): Promise<void> {
         try {
+            // Delete the document-specific vector index first
+            await this.searchService.vectorStoreService.deleteDocumentIndex(id);
+            console.log(`Deleted vector index for document ${id}`);
+            
+            // Then delete the document from the database
             await this.documentService.deleteDocument(id, deleteFile);
+            console.log(`Deleted document ${id} from database`);
         } catch (error) {
             console.error('Failed to delete document:', error);
             throw new Error('Failed to delete document');

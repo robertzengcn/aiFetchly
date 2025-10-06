@@ -178,7 +178,15 @@ export default {
         priority: "优先级",
         embedding_model_updated_successfully: "嵌入模型更新成功",
         failed_to_update_embedding_model: "更新嵌入模型失败",
-        max_dimensions: "最大维度"
+        max_dimensions: "最大维度",
+        // Document processing translations
+        processing_document: "处理文档",
+        chunking_and_embedding_document: "正在分块和嵌入文档...",
+        document_processed_successfully: "文档 \"{name}\" 处理成功：{chunks} 个块，{embeddings} 个嵌入",
+        document_processing_failed: "文档 \"{name}\" 处理失败：{error}",
+        document_processing_error: "处理文档 \"{name}\" 时出错：{error}",
+        document_uploaded_pending_processing: "文档 \"{name}\" 已上传，等待处理",
+        file_saved_but_database_error: "文件已保存但数据库错误"
     },
     notifications: {
         cloudflare_protection_detected: "检测到Cloudflare保护",

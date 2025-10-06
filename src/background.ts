@@ -20,6 +20,7 @@ import { NATIVATECOMMAND } from '@/config/channellist'
 import { NativateDatatype } from '@/entityTypes/commonType'
 import { ScheduleManager } from '@/modules/ScheduleManager';
 import { runafterbootup } from "@/modules/bootuprun"
+import { YellowPagesController } from './controller/YellowPagesController';
 // import { RAGIpcHandlers } from '@/main-process/ragIpcHandlers';
 // import { createProtocol } from 'electron';
 const isDevelopment = process.env.NODE_ENV !== 'production'
@@ -447,7 +448,6 @@ function initialize() {
 
       // Check for orphaned Yellow Pages processes on startup
       try {
-        const { YellowPagesController } = await import('./controller/YellowPagesController');
         const yellowPagesCtrl = YellowPagesController.getInstance();
 
         // Handle tasks from previous session first

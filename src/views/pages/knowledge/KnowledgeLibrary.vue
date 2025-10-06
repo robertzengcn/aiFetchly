@@ -299,6 +299,7 @@ import SearchInterface from '@/views/pages/knowledge/SearchInterface.vue';
 import { initializeRAG, getRAGStats, uploadDocument, selectFilesNative as selectFilesNativeAPI, copyFileToTemp as copyFileToTempAPI, chunkAndEmbedDocument, getAvailableEmbeddingModelsWithDefault, updateEmbeddingModel } from '@/views/api/rag';
 import type { SaveTempFileResponse, UploadedDocument } from '@/entityTypes/commonType';
 import { ModelInfo } from '@/api/ragConfigApi';
+import { DocumentMetadata } from '@/entityTypes/metadataType';
 
 // i18n setup
 
@@ -344,9 +345,17 @@ async function initializeRAGSystem() {
   try {
     setLoading(true, t('knowledge.initializing_rag_system'), t('knowledge.setting_up_knowledge_library'));
     
-    // Check if RAG is already initialized
+    // Check if RAG is already initialized and get stats including default embedding model
     const response = await getRAGStats();
-    console.log(response)
+    console.log('RAG Stats Response:', response);
+    
+    // Set the default embedding model from the stats response
+    if (response.data?.defaultEmbeddingModel) {
+      currentModel.value = response.data.defaultEmbeddingModel;
+      selectedEmbeddingModel.value = response.data.defaultEmbeddingModel;
+      console.log('✅ Default embedding model set from stats:', response.data.defaultEmbeddingModel);
+    }
+    
     // if (!response.success) {
     //   // Initialize with default configuration
     //   //await initializeWithDefaultConfig();
@@ -503,12 +512,13 @@ async function loadAvailableModels() {
     if (response && response.data) {
       availableModels.value = response.data.models;
       // Set the default model from system settings
+      // Note: This should match the defaultEmbeddingModel from getRAGStats() since both read from system settings
       if (response.data.defaultModel) {
         currentModel.value = response.data.defaultModel;
         selectedEmbeddingModel.value = response.data.defaultModel;
+        console.log('✅ Default model set from available models:', response.data.defaultModel);
       }
       console.log('✅ Available models loaded:', availableModels.value.length);
-      console.log('✅ Default model set:', response.data.defaultModel);
     } else {
       console.error('❌ Failed to load available models');
       availableModels.value = [];
@@ -645,8 +655,10 @@ async function confirmUpload() {
           title: file.name.replace(/\.[^/.]+$/, ""),
           description: `Uploaded document: ${file.name}`,
           tags: ['uploaded', 'knowledge'],
-          author: 'User'
+          // model_name: currentModel.value
         });
+        console.log("copyResult is ready")
+        console.log(copyResult)
         filePath = copyResult.filePath;
         needsUpload = !copyResult.uploadResult.databaseSaved; // Only skip if database save was successful
       }
@@ -688,12 +700,8 @@ async function confirmUpload() {
 }
 
 // Helper function to copy file to temporary location
-async function copyFileToTemp(file: File, metadata?: {
-  title?: string;
-  description?: string;
-  tags?: string[];
-  author?: string;
-}): Promise<{ filePath: string; uploadResult: SaveTempFileResponse }> {
+async function copyFileToTemp(file: File, metadata?: DocumentMetadata) 
+  : Promise<{ filePath: string; uploadResult: SaveTempFileResponse }> {
   try {
     const uploadResult: SaveTempFileResponse = await copyFileToTempAPI(file, metadata);
     

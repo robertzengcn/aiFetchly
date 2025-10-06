@@ -1,6 +1,6 @@
 import { windowInvoke, windowInvokeBinary } from '@/views/utils/apirequest';
 import { EmbeddingConfig } from '@/modules/llm/EmbeddingFactory';
-import { LlmCongfig, SaveTempFileResponse, ChunkAndEmbedResponse } from '@/entityTypes/commonType';
+import { LlmCongfig, SaveTempFileResponse, ChunkAndEmbedResponse, CommonMessage } from '@/entityTypes/commonType';
 import { ModelInfo } from '@/api/ragConfigApi';
 import {
   RAG_INITIALIZE,
@@ -26,7 +26,8 @@ import {
   GET_FILE_STATS,
   SAVE_TEMP_FILE
 } from '@/config/channellist';
-
+import { DocumentMetadata } from '@/entityTypes/metadataType';
+import { RagStatsResponse } from '@/entityTypes/commonType';
 // RAG API response types
 export interface RAGResponse<T = any> {
   success: boolean;
@@ -101,7 +102,7 @@ export async function initializeRAG(config: {
 /**
  * Get RAG statistics
  */
-export async function getRAGStats(): Promise<RAGResponse<RAGStats>> {
+export async function getRAGStats(): Promise<CommonMessage<RagStatsResponse>> {
   return await windowInvoke(RAG_GET_STATS, {});
 }
 
@@ -355,12 +356,7 @@ export async function selectFilesNative(): Promise<(File & { path: string })[]> 
 /**
  * Copy file to temporary location
  */
-export async function copyFileToTemp(file: File, metadata?: {
-  title?: string;
-  description?: string;
-  tags?: string[];
-  author?: string;
-}): Promise<SaveTempFileResponse> {
+export async function copyFileToTemp(file: File, metadata?: DocumentMetadata) : Promise<SaveTempFileResponse> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = async () => {
@@ -380,7 +376,8 @@ export async function copyFileToTemp(file: File, metadata?: {
           title: metadata?.title || file.name.replace(/\.[^/.]+$/, ''),
           description: metadata?.description || `Uploaded document: ${file.name}`,
           tags: metadata?.tags || ['uploaded', 'knowledge'],
-          author: metadata?.author || 'User'
+          author: metadata?.author || 'User',
+          // model_name: metadata?.model_name
         };
         
         // Use API to save file to temp location

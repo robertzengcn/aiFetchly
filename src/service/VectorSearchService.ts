@@ -61,7 +61,7 @@ export class VectorSearchService {
     }
 
     /**
-     * Search for similar content
+     * Search for similar content across all documents
      * @param query - Search query
      * @param options - Search options
      * @returns Array of search results
@@ -75,12 +75,49 @@ export class VectorSearchService {
             // Generate query embedding
             const queryVector = await this.embeddingService.embedText(query);
             
-            // Search in vector store
-            const limit = options.limit || 10;
-            const searchResults = await this.vectorStore.search(queryVector, limit);
+            // Get all documents with embeddings
+            const documents = await this.getAllDocumentsWithEmbeddings();
+            
+            if (documents.length === 0) {
+                return [];
+            }
+
+            // Search across all document-specific indexes
+            const allResults: Array<{
+                chunkIds: number[];
+                distances: number[];
+                documentId: number;
+            }> = [];
+
+            for (const document of documents) {
+                try {
+                    // Get model configuration for this document
+                    const modelConfig = await this.getDocumentModelConfig(document.id);
+                    if (!modelConfig) {
+                        console.warn(`No model configuration found for document ${document.id}`);
+                        continue;
+                    }
+
+                    // Load document-specific index and search
+                    await this.vectorStore.loadDocumentIndex(document.id, modelConfig);
+                    const documentResults = await this.vectorStore.search(queryVector, options.limit || 10);
+                    
+                    allResults.push({
+                        chunkIds: documentResults.chunkIds,
+                        distances: documentResults.distances,
+                        documentId: document.id
+                    });
+                } catch (error) {
+                    console.warn(`Failed to search in document ${document.id}:`, error);
+                    continue;
+                }
+            }
+
+            // Combine and sort results from all documents
+            const combinedResults = this.combineSearchResults(allResults, options.limit || 10);
             
             // Get detailed results from database
-            const results = await this.getDetailedResults(searchResults.chunkIds, searchResults.distances, options);
+            const results = await this.getDetailedResults(combinedResults.chunkIds, combinedResults.distances, options);
             
             return results;
         } catch (error) {
@@ -326,6 +363,108 @@ export class VectorSearchService {
             averageSearchTime: 0,
             cacheHitRate: 0,
             totalSearches: 0
+        };
+    }
+
+    /**
+     * Get all documents that have embeddings
+     * @returns Array of document IDs with embeddings
+     */
+    private async getAllDocumentsWithEmbeddings(): Promise<Array<{ id: number }>> {
+        try {
+            const documentRepository = this.db.connection.getRepository(RAGDocumentEntity);
+            
+            const documents = await documentRepository
+                .createQueryBuilder('d')
+                .select('DISTINCT d.id')
+                .innerJoin('d.chunks', 'c')
+                .where('c.embeddingId IS NOT NULL')
+                .andWhere("c.embeddingId != ''")
+                .andWhere('d.status = :status', { status: 'active' })
+                .getRawMany();
+                
+            return documents.map((row: any) => ({ id: row.d_id }));
+        } catch (error) {
+            console.error('Error getting documents with embeddings:', error);
+            return [];
+        }
+    }
+
+    /**
+     * Get model configuration for a document
+     * @param documentId - Document ID
+     * @returns Model configuration or null if not found
+     */
+    private async getDocumentModelConfig(documentId: number): Promise<{
+        modelId: string;
+        dimensions: number;
+    } | null> {
+        try {
+            const chunkRepository = this.db.connection.getRepository(RAGChunkEntity);
+            
+            const result = await chunkRepository
+                .createQueryBuilder('c')
+                .select(['c.embeddingModel', 'c.embeddingDimensions'])
+                .where('c.documentId = :documentId', { documentId })
+                .andWhere('c.embeddingId IS NOT NULL')
+                .andWhere("c.embeddingId != ''")
+                .limit(1)
+                .getRawOne();
+            
+            if (result) {
+                return {
+                    modelId: result.c_embeddingModel || 'default',
+                    dimensions: result.c_embeddingDimensions || 1536
+                };
+            }
+            
+            return null;
+        } catch (error) {
+            console.error(`Error getting model config for document ${documentId}:`, error);
+            return null;
+        }
+    }
+
+    /**
+     * Combine search results from multiple documents
+     * @param allResults - Results from all documents
+     * @param limit - Maximum number of results to return
+     * @returns Combined and sorted results
+     */
+    private combineSearchResults(
+        allResults: Array<{
+            chunkIds: number[];
+            distances: number[];
+            documentId: number;
+        }>,
+        limit: number
+    ): {
+        chunkIds: number[];
+        distances: number[];
+    } {
+        // Combine all results with their distances
+        const combinedResults: Array<{
+            chunkId: number;
+            distance: number;
+        }> = [];
+
+        for (const result of allResults) {
+            for (let i = 0; i < result.chunkIds.length; i++) {
+                combinedResults.push({
+                    chunkId: result.chunkIds[i],
+                    distance: result.distances[i]
+                });
+            }
+        }
+
+        // Sort by distance (lower is better) and take top results
+        combinedResults.sort((a, b) => a.distance - b.distance);
+        
+        const topResults = combinedResults.slice(0, limit);
+        
+        return {
+            chunkIds: topResults.map(r => r.chunkId),
+            distances: topResults.map(r => r.distance)
         };
     }
 }
