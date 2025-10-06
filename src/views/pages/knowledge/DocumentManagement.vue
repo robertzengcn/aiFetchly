@@ -30,6 +30,8 @@
           <v-select
             v-model="filters.status"
             :items="statusOptions"
+            item-title="name"
+            item-value="key"
             :label="t('knowledge.status')"
             clearable
             @change="applyFilters"
@@ -39,6 +41,8 @@
           <v-select
             v-model="filters.fileType"
             :items="fileTypeOptions"
+            item-title="name"
+            item-value="key"
             :label="t('knowledge.file_type')"
             clearable
             @change="applyFilters"
@@ -236,19 +240,19 @@ const { t } = useI18n();
       { title: t('knowledge.actions'), sortable: false, key: 'actions' }
     ];
 
-    const statusOptions = [
-      { text: t('knowledge.status_active'), value: 'active' },
-      { text: t('knowledge.status_archived'), value: 'archived' },
-      { text: t('knowledge.status_processing'), value: 'processing' }
-    ];
+    const statusOptions = ref([
+      { key: 'active', name: t('knowledge.status_active') },
+      { key: 'archived', name: t('knowledge.status_archived') },
+      { key: 'processing', name: t('knowledge.status_processing') }
+    ]);
 
-    const fileTypeOptions = [
-      { text: 'PDF', value: 'pdf' },
-      { text: t('knowledge.file_type_text'), value: 'txt' },
-      { text: t('knowledge.file_type_word'), value: 'doc' },
-      { text: 'HTML', value: 'html' },
-      { text: t('knowledge.file_type_markdown'), value: 'md' }
-    ];
+    const fileTypeOptions = ref([
+      { key: 'pdf', name: 'PDF' },
+      { key: 'txt', name: t('knowledge.file_type_text') },
+      { key: 'doc', name: t('knowledge.file_type_word') },
+      { key: 'html', name: 'HTML' },
+      { key: 'md', name: t('knowledge.file_type_markdown') }
+    ]);
 
     const loadDocuments = async () => {
       loading.value = true;
@@ -298,7 +302,7 @@ const { t } = useI18n();
         console.log('Upload data:', uploadData.value);
         
         // Simulate upload delay
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        //await new Promise(resolve => setTimeout(resolve, 2000));
         
         showUploadDialog.value = false;
         uploadFile.value = null;
@@ -327,10 +331,10 @@ const { t } = useI18n();
       }
     };
 
-    const editDocument = (doc) => {
-      console.log('Edit document:', doc);
-      // Edit logic would go here
-    };
+    // const editDocument = (doc) => {
+    //   console.log('Edit document:', doc);
+    //   // Edit logic would go here
+    // };
 
     const deleteDocument = async (doc) => {
       if (confirm(t('knowledge.confirm_delete_document', { name: doc.name }))) {

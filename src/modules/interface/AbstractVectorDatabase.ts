@@ -38,13 +38,15 @@ export abstract class AbstractVectorDatabase implements IVectorDatabase {
 
     /**
      * Add vectors to the index (to be implemented by subclasses)
+     * @param vectors - Array of vectors to add
+     * @param chunkIds - Array of chunk IDs corresponding to vectors
      */
-    abstract addVectors(vectors: number[][]): Promise<void>;
+    abstract addVectors(vectors: number[][], chunkIds: number[]): Promise<void>;
 
     /**
      * Search for similar vectors (to be implemented by subclasses)
      */
-    abstract search(queryVector: number[], k: number): Promise<{ indices: number[]; distances: number[]; }>;
+    abstract search(queryVector: number[], k: number): Promise<{ indices: number[]; distances: number[]; chunkIds: number[]; }>;
 
     /**
      * Get index statistics (to be implemented by subclasses)
@@ -105,12 +107,33 @@ export abstract class AbstractVectorDatabase implements IVectorDatabase {
     abstract cleanup(): Promise<void>;
 
     /**
+     * Delete a document-specific index (to be implemented by subclasses)
+     * @param documentId - Document ID to delete index for
+     */
+    abstract deleteDocumentIndex(documentId: number): Promise<void>;
+
+    /**
+     * Check if a document-specific index exists (to be implemented by subclasses)
+     * @param documentId - Document ID to check
+     */
+    abstract documentIndexExists(documentId: number): boolean;
+
+    /**
      * Generate model-specific index path
      */
     protected getModelSpecificIndexPath(config: VectorDatabaseConfig): string {
         const baseDir = path.dirname(this.indexPath);
         const fileName = `index_${config.modelId}_${config.dimensions}.${this.getFileExtension()}`;
         return path.join(baseDir, 'models', fileName);
+    }
+
+    /**
+     * Generate document-specific index path
+     */
+    protected getDocumentSpecificIndexPath(config: VectorDatabaseConfig, documentId: number): string {
+        const baseDir = path.dirname(this.indexPath);
+        const fileName = `index_doc_${documentId}_${config.modelId}_${config.dimensions}.${this.getFileExtension()}`;
+        return path.join(baseDir, 'documents', fileName);
     }
 
     /**

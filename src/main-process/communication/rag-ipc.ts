@@ -1,7 +1,7 @@
 import { ipcMain, dialog, app } from 'electron';
 import { RagSearchController } from '@/controller/RagSearchController';
 import { SearchRequest, SearchResponse } from '@/modules/RagSearchModule';
-import { CommonMessage, SaveTempFileResponse, DocumentUploadResponse, ChunkAndEmbedResponse } from '@/entityTypes/commonType';
+import { CommonMessage, SaveTempFileResponse, DocumentUploadResponse, ChunkAndEmbedResponse, UploadedDocument, RagStatsResponse } from '@/entityTypes/commonType';
 import { DocumentInfo } from '@/views/api/rag';
 import { RagConfigApi, ModelInfo, AvailableModelsResponse } from '@/api/ragConfigApi';
 import { SystemSettingModule } from '@/modules/SystemSettingModule';
@@ -146,7 +146,7 @@ export function registerRagIpcHandlers(): void {
                 return errorResponse;
             }
             // Create app data directory for uploaded files using Electron's app.getPath
-            const appDataDir = path.join(app.getPath('appData'), 'uploads');
+            const appDataDir = path.join(app.getPath('userData'), 'uploads');
             if (!fs.existsSync(appDataDir)) {
                 fs.mkdirSync(appDataDir, { recursive: true });
             }
@@ -174,7 +174,7 @@ export function registerRagIpcHandlers(): void {
             const nodeBuffer = Buffer.from(uint8Buffer);
             fs.writeFileSync(appDataFilePath, nodeBuffer);
             
-            let documentInfo: any = null;
+            let documentInfo: UploadedDocument | null = null;
             let databaseSaved = false;
             let databaseError: string | null = null;
             
@@ -182,6 +182,17 @@ export function registerRagIpcHandlers(): void {
             if (metadata) {
                 try {
                     const ragController = await createRagController();
+                    
+                    // Get default embedding model from system settings
+                    let defaultEmbeddingModel: string | null = null;
+                    try {
+                        const systemSettingModule = new SystemSettingModule();
+                        const systemSettingGroupModule = new SystemSettingGroupModule();
+                        const embeddingGroup = await systemSettingGroupModule.getOrCreateEmbeddingGroup();
+                        defaultEmbeddingModel = await systemSettingModule.getDefaultEmbeddingModel(embeddingGroup);
+                    } catch (settingsError) {
+                        console.warn('Could not retrieve default embedding model from settings:', settingsError);
+                    }
                     
                     // Extract original filename without timestamp prefix
                     const originalFileName = fileName.replace(/^rag_upload_\d+_/, '');
@@ -193,13 +204,26 @@ export function registerRagIpcHandlers(): void {
                         description: metadata.description || `Uploaded document: ${originalFileName}`,
                         tags: metadata.tags || ['uploaded', 'knowledge'],
                         author: metadata.author || 'User',
-                        
+                        modelName: defaultEmbeddingModel || metadata.model_name
                     };
                     
                     const uploadResult = await ragController.uploadDocument(uploadOptions);
                     console.log(`Document saved to database with ID: ${uploadResult.documentId}`);
                     
-                    documentInfo = uploadResult.document;
+                    documentInfo = {
+                        id: uploadResult.document.id,
+                        name: uploadResult.document.name,
+                        title: uploadResult.document.title || uploadResult.document.name,
+                        description: uploadResult.document.description,
+                        tags: uploadResult.document.tags ? JSON.parse(uploadResult.document.tags) : [],
+                        author: uploadResult.document.author,
+                        filePath: uploadResult.document.filePath,
+                        fileSize: uploadResult.document.fileSize,
+                        fileType: uploadResult.document.fileType,
+                        uploadDate: uploadResult.document.uploadedAt?.toISOString() || new Date().toISOString(),
+                        status: uploadResult.document.status,
+                        processingStatus: uploadResult.document.processingStatus
+                    };
                     databaseSaved = true;
                 } catch (dbError) {
                     console.warn('Failed to save document to database:', dbError);
@@ -214,7 +238,7 @@ export function registerRagIpcHandlers(): void {
                     tempFilePath: appDataFilePath,
                     databaseSaved,
                     databaseError,
-                    document: documentInfo
+                    document: documentInfo || undefined
                 }
             };
             
@@ -279,15 +303,32 @@ export function registerRagIpcHandlers(): void {
     });
 
     // Get RAG statistics
-    ipcMain.handle(RAG_GET_STATS, async (event, data): Promise<CommonMessage<any | null>> => {
+    ipcMain.handle(RAG_GET_STATS, async (event, data): Promise<CommonMessage<RagStatsResponse | null>> => {
         try {
             const ragSearchController = await createRagController();
             const stats = await ragSearchController.getSearchStats();
             
-            const response: CommonMessage<any> = {
+            // Get default embedding model from system settings
+            let defaultEmbeddingModel: string | null = null;
+            try {
+                const systemSettingModule = new SystemSettingModule();
+                const systemSettingGroupModule = new SystemSettingGroupModule();
+                const embeddingGroup = await systemSettingGroupModule.getOrCreateEmbeddingGroup();
+                defaultEmbeddingModel = await systemSettingModule.getDefaultEmbeddingModel(embeddingGroup);
+            } catch (settingsError) {
+                console.warn('Could not retrieve default embedding model from settings:', settingsError);
+            }
+            
+            // Include default embedding model in the stats response
+            const enhancedStats: RagStatsResponse = {
+                ...stats,
+                defaultEmbeddingModel
+            };
+            
+            const response: CommonMessage<RagStatsResponse> = {
                 status: true,
                 msg: "RAG statistics retrieved successfully",
-                data: stats
+                data: enhancedStats
             };
             return response;
         } catch (error) {

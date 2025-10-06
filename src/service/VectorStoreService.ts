@@ -1,10 +1,11 @@
-import { RAGChunkEntity } from '@/entity/RAGChunk.entity';
+// import { RAGChunkEntity } from '@/entity/RAGChunk.entity';
 import { RAGModelEntity } from '@/entity/RAGModel.entity';
 import { RAGChunkModule } from '@/modules/RAGChunkModule';
 import { SqliteDb } from '@/config/SqliteDb';
 import * as path from 'path';
 import { IVectorDatabase } from '@/modules/interface/IVectorDatabase';
 import { VectorDatabaseFactory, VectorDatabaseType, VectorDatabaseFactoryConfig } from '@/modules/factories/VectorDatabaseFactory';
+import { VectorDatabasePool, VectorDatabaseKeyGenerator } from '@/modules/factories/VectorDatabasePool';
 import { VectorDatabaseConfig } from '@/modules/interface/IVectorDatabase';
 
 /**
@@ -22,7 +23,7 @@ export interface EmbeddingModelConfig {
  * Supports multiple vector database backends (FAISS, Chroma, Pinecone, etc.)
  */
 export class VectorStoreService {
-    private db: SqliteDb;
+    // private db: SqliteDb;
     private vectorDatabase: IVectorDatabase;
     private indexPath: string;
     private currentModel: EmbeddingModelConfig | null = null;
@@ -30,16 +31,16 @@ export class VectorStoreService {
     private databaseType: VectorDatabaseType;
 
     constructor(
-        db: SqliteDb, 
+        // db: SqliteDb, 
         indexPath?: string, 
         databaseType: VectorDatabaseType = VectorDatabaseType.FAISS
     ) {
-        this.db = db;
+        // this.db = db;
         this.indexPath = indexPath || path.join(process.cwd(), 'data', 'vector_index');
         this.databaseType = databaseType;
         this.ragChunkModule = new RAGChunkModule();
         
-        // Create vector database instance using factory
+        // Create vector database instance using factory (will be replaced by pool later)
         this.vectorDatabase = VectorDatabaseFactory.createDatabase({
             type: databaseType,
             baseIndexPath: this.indexPath
@@ -123,6 +124,13 @@ export class VectorStoreService {
             };
 
             await this.vectorDatabase.loadIndex(vectorDbConfig);
+            
+            // Rebuild chunk ID mapping for FAISS (if it supports it)
+            if (this.databaseType === VectorDatabaseType.FAISS && 
+                'rebuildChunkIdMapping' in this.vectorDatabase) {
+                await (this.vectorDatabase as any).rebuildChunkIdMapping(this.ragChunkModule);
+            }
+            
             const stats = this.vectorDatabase.getIndexStats();
             console.log(`Loaded existing index for model ${modelConfig.modelId} with ${stats.totalVectors} vectors`);
         } catch (error) {
@@ -160,7 +168,7 @@ export class VectorStoreService {
     }
 
     /**
-     * Store a single embedding with model information
+     * Store a single embedding with model information (document-specific) using pooled instance
      * @param embeddingData - Embedding data to store
      */
     async storeEmbedding(embeddingData: {
@@ -172,26 +180,32 @@ export class VectorStoreService {
         model?: string;
         dimensions?: number;
     }): Promise<void> {
-        // Check if we need to create or load index for this model
-        if (embeddingData.model && embeddingData.dimensions) {
+        // Check if we need to create or load document-specific index for this model
+        if (embeddingData.model && embeddingData.dimensions && embeddingData.documentId) {
             const modelConfig: EmbeddingModelConfig = {
                 modelId: embeddingData.model,
                 dimensions: embeddingData.dimensions
             };
 
-            // Check if index exists for this model, if not create it
-            if (!this.indexExistsForModel(modelConfig)) {
-                console.log(`Creating new index for model ${embeddingData.model} with dimensions ${embeddingData.dimensions}`);
-                await this.createIndex(modelConfig);
+            // Get pooled instance for this document and model
+            const pooledInstance = this.getPooledDocumentInstance(embeddingData.documentId, modelConfig);
+
+            // Check if document-specific index exists, if not create it
+            if (!this.documentIndexExists(embeddingData.documentId, modelConfig)) {
+                console.log(`Creating new document-specific index for document ${embeddingData.documentId} with model ${embeddingData.model} (using pool)`);
+                await this.createDocumentIndex(embeddingData.documentId, modelConfig);
             } else if (!this.currentModel || 
                        this.currentModel.modelId !== embeddingData.model || 
                        this.currentModel.dimensions !== embeddingData.dimensions) {
-                console.log(`Loading existing index for model ${embeddingData.model} with dimensions ${embeddingData.dimensions}`);
-                await this.loadIndex(modelConfig);
+                console.log(`Loading existing document-specific index for document ${embeddingData.documentId} with model ${embeddingData.model} (using pool)`);
+                await this.loadDocumentIndex(embeddingData.documentId, modelConfig);
             }
-        }
 
-        await this.addVectors([embeddingData.embedding], [embeddingData.chunkId]);
+            // Use pooled instance to add vectors
+            await this.addVectorsWithInstance(pooledInstance, [embeddingData.embedding], [embeddingData.chunkId]);
+        } else {
+            throw new Error('Document ID, model, and dimensions are required for document-specific indexing');
+        }
     }
 
     /**
@@ -200,7 +214,17 @@ export class VectorStoreService {
      * @param chunkIds - Array of chunk IDs corresponding to vectors
      */
     async addVectors(vectors: number[][], chunkIds: number[]): Promise<void> {
-        if (!this.vectorDatabase.isInitialized()) {
+        return this.addVectorsWithInstance(this.vectorDatabase, vectors, chunkIds);
+    }
+
+    /**
+     * Add vectors to a specific instance
+     * @param instance - Vector database instance
+     * @param vectors - Array of vectors to add
+     * @param chunkIds - Array of chunk IDs corresponding to vectors
+     */
+    private async addVectorsWithInstance(instance: IVectorDatabase, vectors: number[][], chunkIds: number[]): Promise<void> {
+        if (!instance.isInitialized()) {
             throw new Error('Vector database not initialized');
         }
 
@@ -209,11 +233,11 @@ export class VectorStoreService {
         }
 
         try {
-            // Add vectors to the vector database
-            await this.vectorDatabase.addVectors(vectors);
+            // Add vectors to the vector database (now handles chunk IDs internally)
+            await instance.addVectors(vectors, chunkIds);
 
             // Update chunk entities with embedding IDs using RAGChunkModule
-            const stats = this.vectorDatabase.getIndexStats();
+            const stats = instance.getIndexStats();
             const startIndex = stats.totalVectors - vectors.length;
 
             for (let i = 0; i < chunkIds.length; i++) {
@@ -225,7 +249,7 @@ export class VectorStoreService {
                 );
             }
 
-            console.log(`Added ${vectors.length} vectors to ${this.databaseType} index`);
+            console.log(`Added ${vectors.length} vectors to ${this.databaseType} index (using pool)`);
         } catch (error) {
             console.error(`Failed to add vectors to ${this.databaseType} index:`, error);
             throw new Error(`Failed to add vectors to ${this.databaseType} index`);
@@ -236,7 +260,7 @@ export class VectorStoreService {
      * Search for similar vectors
      * @param queryVector - Query vector
      * @param k - Number of results to return
-     * @returns Search results with indices and distances
+     * @returns Search results with indices, distances, and chunkIds
      */
     async search(queryVector: number[], k: number = 10): Promise<{
         indices: number[];
@@ -255,21 +279,11 @@ export class VectorStoreService {
         try {
             const results = await this.vectorDatabase.search(queryVector, k);
             
-            // Get chunk IDs for the results using RAGChunkModule
-            const chunkIds: number[] = [];
-
-            for (const index of results.indices) {
-                const chunks = await this.ragChunkModule.getChunksByEmbeddingId(index.toString());
-                if (chunks.length > 0) {
-                    // Take the first chunk if multiple chunks have the same embedding ID
-                    chunkIds.push(chunks[0].id);
-                }
-            }
-
+            // Vector database now returns chunkIds directly
             return {
                 indices: results.indices,
                 distances: results.distances,
-                chunkIds
+                chunkIds: results.chunkIds
             };
         } catch (error) {
             console.error(`Failed to search vectors in ${this.databaseType}:`, error);
@@ -430,6 +444,47 @@ export class VectorStoreService {
     }
 
     /**
+     * Generate instance key for pool
+     * @param modelConfig - Model configuration
+     * @param documentId - Optional document ID
+     * @returns Instance key
+     */
+    private getInstanceKey(modelConfig: EmbeddingModelConfig, documentId?: number): string {
+        if (documentId) {
+            return VectorDatabaseKeyGenerator.generateDocumentKey(documentId, modelConfig, this.indexPath);
+        } else {
+            return VectorDatabaseKeyGenerator.generateModelKey(modelConfig, this.indexPath);
+        }
+    }
+
+    /**
+     * Get pooled instance for document-specific operations
+     * @param documentId - Document ID
+     * @param modelConfig - Model configuration
+     * @returns Pooled vector database instance
+     */
+    private getPooledDocumentInstance(documentId: number, modelConfig: EmbeddingModelConfig): IVectorDatabase {
+        const key = this.getInstanceKey(modelConfig, documentId);
+        return VectorDatabasePool.getInstance(key, {
+            type: this.databaseType,
+            baseIndexPath: this.indexPath
+        });
+    }
+
+    /**
+     * Get pooled instance for model-specific operations
+     * @param modelConfig - Model configuration
+     * @returns Pooled vector database instance
+     */
+    private getPooledModelInstance(modelConfig: EmbeddingModelConfig): IVectorDatabase {
+        const key = this.getInstanceKey(modelConfig);
+        return VectorDatabasePool.getInstance(key, {
+            type: this.databaseType,
+            baseIndexPath: this.indexPath
+        });
+    }
+
+    /**
      * Switch to a different embedding model
      * @param modelConfig - New embedding model configuration
      * @param indexType - Type of index (default: 'Flat')
@@ -508,5 +563,146 @@ export class VectorStoreService {
      */
     getDatabaseType(): VectorDatabaseType {
         return this.databaseType;
+    }
+
+    /**
+     * Create a document-specific index using pooled instance
+     * @param documentId - Document ID
+     * @param modelConfig - Embedding model configuration
+     * @param indexType - Type of index (default: 'Flat')
+     */
+    async createDocumentIndex(documentId: number, modelConfig: EmbeddingModelConfig, indexType: string = 'Flat'): Promise<void> {
+        try {
+            this.currentModel = modelConfig;
+            
+            // Get pooled instance for this document and model
+            const pooledInstance = this.getPooledDocumentInstance(documentId, modelConfig);
+            
+            const vectorDbConfig: VectorDatabaseConfig = {
+                indexPath: this.indexPath,
+                modelId: modelConfig.modelId,
+                dimensions: modelConfig.dimensions,
+                indexType,
+                documentId: documentId
+            };
+
+            await pooledInstance.createIndex(vectorDbConfig);
+            console.log(`Created document-specific ${indexType} index for document ${documentId} with model ${modelConfig.modelId} (using pool)`);
+        } catch (error) {
+            console.error(`Failed to create document-specific index for document ${documentId}:`, error);
+            throw new Error(`Failed to create document-specific index for document ${documentId}`);
+        }
+    }
+
+    /**
+     * Load a document-specific index
+     * @param documentId - Document ID
+     * @param modelConfig - Embedding model configuration
+     */
+    async loadDocumentIndex(documentId: number, modelConfig: EmbeddingModelConfig): Promise<void> {
+        if (!this.vectorDatabase.isInitialized()) {
+            await this.initialize();
+        }
+
+        try {
+            this.currentModel = modelConfig;
+            
+            const vectorDbConfig: VectorDatabaseConfig = {
+                indexPath: this.indexPath,
+                modelId: modelConfig.modelId,
+                dimensions: modelConfig.dimensions,
+                documentId: documentId
+            };
+
+            await this.vectorDatabase.loadIndex(vectorDbConfig);
+            console.log(`Loaded document-specific index for document ${documentId} with model ${modelConfig.modelId}`);
+        } catch (error) {
+            console.error(`Failed to load document-specific index for document ${documentId}:`, error);
+            throw new Error(`Failed to load document-specific index for document ${documentId}`);
+        }
+    }
+
+    /**
+     * Delete a document-specific index using pooled instance
+     * @param documentId - Document ID
+     */
+    async deleteDocumentIndex(documentId: number): Promise<void> {
+        try {
+            if (this.currentModel) {
+                // Get pooled instance to delete the index
+                const pooledInstance = this.getPooledDocumentInstance(documentId, this.currentModel);
+                await pooledInstance.deleteDocumentIndex(documentId);
+                
+                // Clear the pooled instance after deletion
+                const key = this.getInstanceKey(this.currentModel, documentId);
+                await VectorDatabasePool.clearInstance(key);
+                
+                console.log(`Deleted document-specific index for document ${documentId} (cleared from pool)`);
+            } else {
+                // Fallback to current instance if no model is set
+                await this.vectorDatabase.deleteDocumentIndex(documentId);
+                console.log(`Deleted document-specific index for document ${documentId} (fallback)`);
+            }
+        } catch (error) {
+            console.error(`Failed to delete document-specific index for document ${documentId}:`, error);
+            throw new Error(`Failed to delete document-specific index for document ${documentId}`);
+        }
+    }
+
+    /**
+     * Check if a document-specific index exists
+     * @param documentId - Document ID
+     * @param modelConfig - Embedding model configuration
+     * @returns True if document-specific index exists
+     */
+    documentIndexExists(documentId: number, modelConfig: EmbeddingModelConfig): boolean {
+        return this.vectorDatabase.documentIndexExists(documentId);
+    }
+
+    /**
+     * Search within a specific document's index
+     * @param queryVector - Query vector
+     * @param documentId - Document ID to search within
+     * @param k - Number of results to return
+     * @returns Search results with indices, distances, and chunkIds
+     */
+    async searchDocument(queryVector: number[], documentId: number, k: number = 10): Promise<{
+        indices: number[];
+        distances: number[];
+        chunkIds: number[];
+    }> {
+        if (!this.vectorDatabase.isInitialized()) {
+            throw new Error('Vector database not initialized');
+        }
+
+        // Load the document-specific index for searching
+        if (this.currentModel) {
+            await this.loadDocumentIndex(documentId, this.currentModel);
+        } else {
+            throw new Error('No current model configured for document search');
+        }
+
+        return await this.search(queryVector, k);
+    }
+
+    /**
+     * Get pool statistics
+     * @returns Pool statistics
+     */
+    getPoolStats(): any {
+        return {
+            poolSize: VectorDatabasePool.getPoolSize(),
+            instanceKeys: VectorDatabasePool.getInstanceKeys(),
+            currentModel: this.currentModel,
+            databaseType: this.databaseType
+        };
+    }
+
+    /**
+     * Clear all pooled instances
+     */
+    async clearPool(): Promise<void> {
+        await VectorDatabasePool.clearAllInstances();
+        console.log('Cleared all vector database pool instances');
     }
 }

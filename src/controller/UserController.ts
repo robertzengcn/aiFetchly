@@ -48,7 +48,7 @@ export class UserController {
                 //check db exist, create one if not exist
 
                 const userdataPath = getUserpath(res.email)
-                console.log(userdataPath)
+                //console.log(userdataPath)
                 
                 //     // type: 'object',                 
                 const logPath = getApplogspath(res.email)

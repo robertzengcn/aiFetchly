@@ -217,3 +217,20 @@ export interface DocumentUploadResponse {
     processingTime: number;
     document: UploadedDocument;
 }
+
+// RAG Statistics Types
+export interface RagSearchStats {
+    totalDocuments: number;
+    totalChunks: number;
+    indexSize: number;
+    averageChunkSize: number;
+    embeddingModel: string;
+    embeddingProvider: string;
+}
+
+export interface RagStatsResponse extends RagSearchStats {
+    defaultEmbeddingModel: string | null;
+}
+
+// Re-export metadata types for convenience
+export * from './metadataType';
