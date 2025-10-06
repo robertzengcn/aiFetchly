@@ -10,7 +10,7 @@ import {
   PLATFORM_TOGGLE 
 } from '@/config/channellist'
 import { PlatformRegistry } from '@/modules/PlatformRegistry'
-import { PlatformConfig } from '@/interfaces/IPlatformConfig'
+import { PlatformConfig } from '@/modules/interface/IPlatformConfig'
 import { CommonResponse } from '@/entityTypes/commonType'
 
 export function registerPlatformIpcHandlers() {

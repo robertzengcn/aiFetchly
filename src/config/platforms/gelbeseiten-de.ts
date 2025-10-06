@@ -1,4 +1,4 @@
-import { PlatformConfig, PlatformFeature } from '@/interfaces/IPlatformConfig';
+import { PlatformConfig, PlatformFeature } from '@/modules/interface/IPlatformConfig';
 import { AdapterGelbeseiten } from '@/modules/platforms/GelbeseitenAdapter';
 export const Platform_gelbeseiten_de: PlatformConfig = {
   id: 'gelbeseiten-de',

@@ -2,21 +2,10 @@ import { RAGChunkEntity } from '@/entity/RAGChunk.entity';
 import { RAGModelEntity } from '@/entity/RAGModel.entity';
 import { RAGChunkModule } from '@/modules/RAGChunkModule';
 import { SqliteDb } from '@/config/SqliteDb';
-import * as fs from 'fs';
 import * as path from 'path';
-import * as faiss from 'faiss-node';
-
-/**
- * FAISS index interface for type safety
- */
-interface FAISSIndex {
-    add(vectors: number[][]): void;
-    search(queryVector: number[], k: number): { indices: number[], distances: number[] };
-    save(path: string): void;
-    getDimension(): number;
-    getTotalVectors(): number;
-    reset(): void;
-}
+import { IVectorDatabase } from '@/modules/interface/IVectorDatabase';
+import { VectorDatabaseFactory, VectorDatabaseType, VectorDatabaseFactoryConfig } from '@/modules/factories/VectorDatabaseFactory';
+import { VectorDatabaseConfig } from '@/modules/interface/IVectorDatabase';
 
 /**
  * Embedding model configuration interface
@@ -29,22 +18,32 @@ export interface EmbeddingModelConfig {
 }
 
 /**
- * Vector store service for managing FAISS indices
+ * Vector store service for managing vector databases using the Strategy pattern
+ * Supports multiple vector database backends (FAISS, Chroma, Pinecone, etc.)
  */
 export class VectorStoreService {
     private db: SqliteDb;
-    private index: FAISSIndex | null = null;
+    private vectorDatabase: IVectorDatabase;
     private indexPath: string;
-    private dimension: number = 0;
-    private isInitialized: boolean = false;
     private currentModel: EmbeddingModelConfig | null = null;
     private ragChunkModule: RAGChunkModule;
+    private databaseType: VectorDatabaseType;
 
-    constructor(db: SqliteDb, indexPath?: string) {
+    constructor(
+        db: SqliteDb, 
+        indexPath?: string, 
+        databaseType: VectorDatabaseType = VectorDatabaseType.FAISS
+    ) {
         this.db = db;
         this.indexPath = indexPath || path.join(process.cwd(), 'data', 'vector_index');
+        this.databaseType = databaseType;
         this.ragChunkModule = new RAGChunkModule();
-        this.ensureIndexDirectory();
+        
+        // Create vector database instance using factory
+        this.vectorDatabase = VectorDatabaseFactory.createDatabase({
+            type: databaseType,
+            baseIndexPath: this.indexPath
+        });
     }
 
     /**
@@ -52,59 +51,44 @@ export class VectorStoreService {
      */
     async initialize(): Promise<void> {
         try {
-            // FAISS is now statically imported at the top of the file
-            this.isInitialized = true;
-            console.log('FAISS initialized successfully');
+            await this.vectorDatabase.initialize();
+            console.log(`${this.databaseType} vector database initialized successfully`);
         } catch (error) {
-            console.error('Failed to initialize FAISS:', error);
-            throw new Error('Failed to initialize FAISS. Please ensure faiss-node is installed.');
+            console.error(`Failed to initialize ${this.databaseType} vector database:`, error);
+            throw new Error(`Failed to initialize ${this.databaseType} vector database`);
         }
     }
 
     /**
-     * Create a new FAISS index with specific embedding model configuration
+     * Create a new vector database index with specific embedding model configuration
      * @param modelConfig - Embedding model configuration
      * @param indexType - Type of index (default: 'Flat')
      */
     async createIndex(modelConfig: EmbeddingModelConfig, indexType: string = 'Flat'): Promise<void> {
-        if (!this.isInitialized) {
+        if (!this.vectorDatabase.isInitialized()) {
             await this.initialize();
         }
 
         try {
-            this.dimension = modelConfig.dimensions;
             this.currentModel = modelConfig;
             
-            // Update index path to include model information for model-specific indices
-            const modelSpecificPath = this.getModelSpecificIndexPath(modelConfig);
-            this.indexPath = modelSpecificPath;
-            this.ensureIndexDirectory();
-            
-            switch (indexType.toLowerCase()) {
-                case 'flat':
-                    this.index = new faiss.IndexFlatL2(modelConfig.dimensions) as any;
-                    break;
-                case 'ivf':
-                    // IVF index requires training data, using Flat for now
-                    this.index = new faiss.IndexFlatL2(modelConfig.dimensions) as any;
-                    break;
-                case 'hnsw':
-                    // HNSW index for better performance - using Flat for now as HNSW may not be available
-                    this.index = new faiss.IndexFlatL2(modelConfig.dimensions) as any;
-                    break;
-                default:
-                    this.index = new faiss.IndexFlatL2(modelConfig.dimensions) as any;
-            }
+            const vectorDbConfig: VectorDatabaseConfig = {
+                indexPath: this.indexPath,
+                modelId: modelConfig.modelId,
+                dimensions: modelConfig.dimensions,
+                indexType
+            };
 
+            await this.vectorDatabase.createIndex(vectorDbConfig);
             console.log(`Created ${indexType} index for model ${modelConfig.modelId} with dimension ${modelConfig.dimensions}`);
         } catch (error) {
-            console.error('Failed to create FAISS index:', error);
-            throw new Error('Failed to create FAISS index');
+            console.error(`Failed to create ${this.databaseType} index:`, error);
+            throw new Error(`Failed to create ${this.databaseType} index`);
         }
     }
 
     /**
-     * Create a new FAISS index (legacy method for backward compatibility)
+     * Create a new vector database index (legacy method for backward compatibility)
      * @param dimension - Vector dimension
      * @param indexType - Type of index (default: 'Flat')
      * @deprecated Use createIndex(modelConfig, indexType) instead
@@ -125,26 +109,25 @@ export class VectorStoreService {
      * @param modelConfig - Embedding model configuration
      */
     async loadIndex(modelConfig: EmbeddingModelConfig): Promise<void> {
-        if (!this.isInitialized) {
+        if (!this.vectorDatabase.isInitialized()) {
             await this.initialize();
         }
 
         try {
-            const modelSpecificPath = this.getModelSpecificIndexPath(modelConfig);
-            this.indexPath = modelSpecificPath;
+            this.currentModel = modelConfig;
             
-            if (fs.existsSync(this.indexPath)) {
-                this.index = (faiss as any).IndexFlatL2.load(this.indexPath);
-                this.dimension = modelConfig.dimensions;
-                this.currentModel = modelConfig;
-                console.log(`Loaded existing index for model ${modelConfig.modelId} with ${this.index?.getTotalVectors() || 0} vectors`);
-            } else {
-                console.log(`No existing index found for model ${modelConfig.modelId}, creating new one`);
-                await this.createIndex(modelConfig);
-            }
+            const vectorDbConfig: VectorDatabaseConfig = {
+                indexPath: this.indexPath,
+                modelId: modelConfig.modelId,
+                dimensions: modelConfig.dimensions
+            };
+
+            await this.vectorDatabase.loadIndex(vectorDbConfig);
+            const stats = this.vectorDatabase.getIndexStats();
+            console.log(`Loaded existing index for model ${modelConfig.modelId} with ${stats.totalVectors} vectors`);
         } catch (error) {
-            console.error('Failed to load FAISS index:', error);
-            throw new Error('Failed to load FAISS index');
+            console.error(`Failed to load ${this.databaseType} index:`, error);
+            throw new Error(`Failed to load ${this.databaseType} index`);
         }
     }
 
@@ -168,16 +151,11 @@ export class VectorStoreService {
      * Save index to disk
      */
     async saveIndex(): Promise<void> {
-        if (!this.index) {
-            throw new Error('No index to save');
-        }
-
         try {
-            this.index.save(this.indexPath);
-            console.log(`Index saved to ${this.indexPath}`);
+            await this.vectorDatabase.saveIndex();
         } catch (error) {
-            console.error('Failed to save FAISS index:', error);
-            throw new Error('Failed to save FAISS index');
+            console.error(`Failed to save ${this.databaseType} index:`, error);
+            throw new Error(`Failed to save ${this.databaseType} index`);
         }
     }
 
@@ -222,8 +200,8 @@ export class VectorStoreService {
      * @param chunkIds - Array of chunk IDs corresponding to vectors
      */
     async addVectors(vectors: number[][], chunkIds: number[]): Promise<void> {
-        if (!this.index) {
-            throw new Error('Index not initialized');
+        if (!this.vectorDatabase.isInitialized()) {
+            throw new Error('Vector database not initialized');
         }
 
         if (vectors.length !== chunkIds.length) {
@@ -231,26 +209,26 @@ export class VectorStoreService {
         }
 
         try {
-            // Add vectors to FAISS index
-            this.index.add(vectors);
-            
+            // Add vectors to the vector database
+            await this.vectorDatabase.addVectors(vectors);
 
             // Update chunk entities with embedding IDs using RAGChunkModule
-            const startIndex = this.index.getTotalVectors() - vectors.length;
+            const stats = this.vectorDatabase.getIndexStats();
+            const startIndex = stats.totalVectors - vectors.length;
 
             for (let i = 0; i < chunkIds.length; i++) {
                 const embeddingId = (startIndex + i).toString();
                 await this.ragChunkModule.updateChunkEmbedding(
                     chunkIds[i], 
                     embeddingId, 
-                    this.dimension
+                    stats.dimension
                 );
             }
 
-            console.log(`Added ${vectors.length} vectors to index`);
+            console.log(`Added ${vectors.length} vectors to ${this.databaseType} index`);
         } catch (error) {
-            console.error('Failed to add vectors to index:', error);
-            throw new Error('Failed to add vectors to index');
+            console.error(`Failed to add vectors to ${this.databaseType} index:`, error);
+            throw new Error(`Failed to add vectors to ${this.databaseType} index`);
         }
     }
 
@@ -265,16 +243,17 @@ export class VectorStoreService {
         distances: number[];
         chunkIds: number[];
     }> {
-        if (!this.index) {
-            throw new Error('Index not initialized');
+        if (!this.vectorDatabase.isInitialized()) {
+            throw new Error('Vector database not initialized');
         }
 
-        if (queryVector.length !== this.dimension) {
-            throw new Error(`Query vector dimension ${queryVector.length} does not match index dimension ${this.dimension}`);
+        const stats = this.vectorDatabase.getIndexStats();
+        if (queryVector.length !== stats.dimension) {
+            throw new Error(`Query vector dimension ${queryVector.length} does not match index dimension ${stats.dimension}`);
         }
 
         try {
-            const results = this.index.search(queryVector, k);
+            const results = await this.vectorDatabase.search(queryVector, k);
             
             // Get chunk IDs for the results using RAGChunkModule
             const chunkIds: number[] = [];
@@ -293,8 +272,8 @@ export class VectorStoreService {
                 chunkIds
             };
         } catch (error) {
-            console.error('Failed to search vectors:', error);
-            throw new Error('Failed to search vectors');
+            console.error(`Failed to search vectors in ${this.databaseType}:`, error);
+            throw new Error(`Failed to search vectors in ${this.databaseType}`);
         }
     }
 
@@ -308,13 +287,16 @@ export class VectorStoreService {
         indexType: string;
         isInitialized: boolean;
         currentModel: EmbeddingModelConfig | null;
+        databaseType: string;
     } {
+        const dbStats = this.vectorDatabase.getIndexStats();
         return {
-            totalVectors: this.index?.getTotalVectors() || 0,
-            dimension: this.dimension,
-            indexType: this.index?.constructor.name || 'Unknown',
-            isInitialized: this.isInitialized,
-            currentModel: this.currentModel
+            totalVectors: dbStats.totalVectors,
+            dimension: dbStats.dimension,
+            indexType: dbStats.indexType,
+            isInitialized: dbStats.isInitialized,
+            currentModel: this.currentModel,
+            databaseType: this.databaseType
         };
     }
 
@@ -322,9 +304,11 @@ export class VectorStoreService {
      * Reset the index
      */
     async resetIndex(): Promise<void> {
-        if (this.index) {
-            this.index.reset();
-            console.log('Index reset successfully');
+        try {
+            await this.vectorDatabase.resetIndex();
+        } catch (error) {
+            console.error(`Failed to reset ${this.databaseType} index:`, error);
+            throw new Error(`Failed to reset ${this.databaseType} index`);
         }
     }
 
@@ -332,17 +316,11 @@ export class VectorStoreService {
      * Optimize the index
      */
     async optimizeIndex(): Promise<void> {
-        if (!this.index) {
-            throw new Error('Index not initialized');
-        }
-
         try {
-            // For Flat index, no optimization needed
-            // For other index types, optimization would be done here
-            console.log('Index optimization completed');
+            await this.vectorDatabase.optimizeIndex();
         } catch (error) {
-            console.error('Failed to optimize index:', error);
-            throw new Error('Failed to optimize index');
+            console.error(`Failed to optimize ${this.databaseType} index:`, error);
+            throw new Error(`Failed to optimize ${this.databaseType} index`);
         }
     }
 
@@ -351,16 +329,11 @@ export class VectorStoreService {
      * @param backupPath - Path to save backup
      */
     async backupIndex(backupPath: string): Promise<void> {
-        if (!this.index) {
-            throw new Error('No index to backup');
-        }
-
         try {
-            this.index.save(backupPath);
-            console.log(`Index backed up to ${backupPath}`);
+            await this.vectorDatabase.backupIndex(backupPath);
         } catch (error) {
-            console.error('Failed to backup index:', error);
-            throw new Error('Failed to backup index');
+            console.error(`Failed to backup ${this.databaseType} index:`, error);
+            throw new Error(`Failed to backup ${this.databaseType} index`);
         }
     }
 
@@ -369,42 +342,15 @@ export class VectorStoreService {
      * @param backupPath - Path to backup file
      */
     async restoreIndex(backupPath: string): Promise<void> {
-        if (!this.isInitialized) {
+        if (!this.vectorDatabase.isInitialized()) {
             await this.initialize();
         }
 
         try {
-            if (!fs.existsSync(backupPath)) {
-                throw new Error(`Backup file not found: ${backupPath}`);
-            }
-
-            this.index = (faiss as any).IndexFlatL2.load(backupPath);
-            this.dimension = this.index?.getDimension() || 0;
-            console.log(`Index restored from ${backupPath}`);
+            await this.vectorDatabase.restoreIndex(backupPath);
         } catch (error) {
-            console.error('Failed to restore index:', error);
-            throw new Error('Failed to restore index');
-        }
-    }
-
-    /**
-     * Generate model-specific index path
-     * @param modelConfig - Embedding model configuration
-     * @returns Model-specific index path
-     */
-    private getModelSpecificIndexPath(modelConfig: EmbeddingModelConfig): string {
-        const baseDir = path.dirname(this.indexPath);
-        const fileName = `index_${modelConfig.modelId}_${modelConfig.dimensions}.faiss`;
-        return path.join(baseDir, 'models', fileName);
-    }
-
-    /**
-     * Ensure index directory exists
-     */
-    private ensureIndexDirectory(): void {
-        const dir = path.dirname(this.indexPath);
-        if (!fs.existsSync(dir)) {
-            fs.mkdirSync(dir, { recursive: true });
+            console.error(`Failed to restore ${this.databaseType} index:`, error);
+            throw new Error(`Failed to restore ${this.databaseType} index`);
         }
     }
 
@@ -412,11 +358,11 @@ export class VectorStoreService {
      * Clean up resources
      */
     async cleanup(): Promise<void> {
-        if (this.index) {
-            await this.saveIndex();
+        try {
+            await this.vectorDatabase.cleanup();
+        } catch (error) {
+            console.error(`Failed to cleanup ${this.databaseType} vector database:`, error);
         }
-        this.index = null;
-        this.isInitialized = false;
     }
 
     /**
@@ -424,14 +370,7 @@ export class VectorStoreService {
      * @returns Index file size in bytes
      */
     getIndexFileSize(): number {
-        try {
-            if (fs.existsSync(this.indexPath)) {
-                return fs.statSync(this.indexPath).size;
-            }
-            return 0;
-        } catch {
-            return 0;
-        }
+        return this.vectorDatabase.getIndexFileSize();
     }
 
     /**
@@ -439,7 +378,7 @@ export class VectorStoreService {
      * @returns True if index file exists
      */
     indexExists(): boolean {
-        return fs.existsSync(this.indexPath);
+        return this.vectorDatabase.indexExists();
     }
 
     /**
@@ -448,8 +387,38 @@ export class VectorStoreService {
      * @returns True if index file exists for the model
      */
     indexExistsForModel(modelConfig: EmbeddingModelConfig): boolean {
-        const modelSpecificPath = this.getModelSpecificIndexPath(modelConfig);
-        return fs.existsSync(modelSpecificPath);
+        // Create a temporary vector database config to check existence
+        const vectorDbConfig: VectorDatabaseConfig = {
+            indexPath: this.indexPath,
+            modelId: modelConfig.modelId,
+            dimensions: modelConfig.dimensions
+        };
+        
+        // Create a temporary database instance to check if index exists
+        const tempDb = VectorDatabaseFactory.createDatabase({
+            type: this.databaseType,
+            baseIndexPath: this.indexPath
+        });
+        
+        // Generate the expected path for this model
+        const baseDir = path.dirname(this.indexPath);
+        const fileName = `index_${modelConfig.modelId}_${modelConfig.dimensions}.${this.getFileExtension()}`;
+        const modelSpecificPath = path.join(baseDir, 'models', fileName);
+        
+        return require('fs').existsSync(modelSpecificPath);
+    }
+
+    /**
+     * Get file extension for the current database type
+     */
+    private getFileExtension(): string {
+        switch (this.databaseType) {
+            case VectorDatabaseType.FAISS:
+                return 'faiss';
+            // Add other database types as needed
+            default:
+                return 'index';
+        }
     }
 
     /**
@@ -467,7 +436,7 @@ export class VectorStoreService {
      */
     async switchModel(modelConfig: EmbeddingModelConfig, indexType: string = 'Flat'): Promise<void> {
         // Save current index if it exists
-        if (this.index) {
+        if (this.vectorDatabase.isInitialized()) {
             await this.saveIndex();
         }
 
@@ -504,5 +473,40 @@ export class VectorStoreService {
         };
 
         await this.loadIndex(modelConfig);
+    }
+
+    /**
+     * Switch to a different vector database type
+     * @param databaseType - New vector database type
+     * @param indexPath - Optional new index path
+     */
+    async switchDatabase(databaseType: VectorDatabaseType, indexPath?: string): Promise<void> {
+        // Save current index if it exists
+        if (this.vectorDatabase.isInitialized()) {
+            await this.saveIndex();
+        }
+
+        // Clean up current database
+        await this.vectorDatabase.cleanup();
+
+        // Create new database instance
+        this.databaseType = databaseType;
+        if (indexPath) {
+            this.indexPath = indexPath;
+        }
+
+        this.vectorDatabase = VectorDatabaseFactory.createDatabase({
+            type: databaseType,
+            baseIndexPath: this.indexPath
+        });
+
+        console.log(`Switched to ${databaseType} vector database`);
+    }
+
+    /**
+     * Get the current vector database type
+     */
+    getDatabaseType(): VectorDatabaseType {
+        return this.databaseType;
     }
 }

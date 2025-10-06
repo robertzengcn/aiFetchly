@@ -1,6 +1,6 @@
 import * as fs from 'fs'
 import * as path from 'path'
-import { PlatformConfig, PlatformSelectors, PlatformSettings, PlatformMetadata, PlatformFeature } from '@/interfaces/IPlatformConfig'
+import { PlatformConfig, PlatformSelectors, PlatformSettings, PlatformMetadata, PlatformFeature } from '@/modules/interface/IPlatformConfig'
 import { BaseModule } from '@/modules/baseModule'
 
 /**

@@ -1,5 +1,5 @@
-import { PlatformConfig, PlatformType, PlatformSummary } from '@/interfaces/IPlatformConfig';
-import { IBasePlatformAdapter, IPlatformAdapterFactory } from '@/interfaces/IBasePlatformAdapter';
+import { PlatformConfig, PlatformType, PlatformSummary } from '@/modules/interface/IPlatformConfig';
+import { IBasePlatformAdapter, IPlatformAdapterFactory } from '@/modules/interface/IBasePlatformAdapter';
 import { PlatformRegistry } from '@/modules/PlatformRegistry';
 import { BaseModule } from '@/modules/baseModule';
 

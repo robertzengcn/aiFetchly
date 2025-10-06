@@ -1,8 +1,8 @@
 import { Page } from 'puppeteer';
 import { BasePlatformAdapter } from '@/modules/BasePlatformAdapter';
-import { SearchResult } from '@/interfaces/IBasePlatformAdapter';
-import { BusinessData } from '@/interfaces/IDataExtractor';
-import { PlatformConfig } from '@/interfaces/IPlatformConfig';
+import { SearchResult } from '@/modules/interface/IBasePlatformAdapter';
+import { BusinessData } from '@/modules/interface/IDataExtractor';
+import { PlatformConfig } from '@/modules/interface/IPlatformConfig';
 
 /**
  * Configuration Platform Adapter

@@ -21,7 +21,7 @@ import { BrowserManager } from '@/modules/browserManager';
 import { ChildProcessAdapterFactory } from '@/modules/ChildProcessAdapterFactory';
 import { BasePlatformAdapter } from '@/modules/BasePlatformAdapter';
 import { ProcessMessage } from '@/entityTypes/processMessage-type';
-import { StartTaskMessage, ProgressMessage, CompletedMessage, ErrorMessage } from '@/interfaces/BackgroundProcessMessages';
+import { StartTaskMessage, ProgressMessage, CompletedMessage, ErrorMessage } from '@/modules/interface/BackgroundProcessMessages';
 import { SessionRecordingManager } from '@/modules/SessionRecordingManager';
 //import { MessageType } from '@/interfaces/IPCMessageProtocol';
 

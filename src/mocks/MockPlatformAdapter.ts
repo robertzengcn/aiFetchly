@@ -1,4 +1,4 @@
-import { IPlatformAdapter, SearchResult, BusinessData, PlatformSelectors, RateLimitingConfig, AuthenticationConfig, CookiesType, PlatformFeature } from '../interfaces/IPlatformAdapter';
+import { IPlatformAdapter, SearchResult, BusinessData, PlatformSelectors, RateLimitingConfig, AuthenticationConfig, CookiesType, PlatformFeature } from '../modules/interface/IPlatformAdapter';
 
 /**
  * Mock implementation of IPlatformAdapter for testing purposes.
