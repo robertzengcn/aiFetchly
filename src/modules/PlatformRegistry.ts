@@ -1,6 +1,6 @@
 import { BaseModule } from '@/modules/baseModule';
-import { PlatformConfig } from '@/interfaces/IPlatformConfig';
-import { ValidationResult } from '@/interfaces/IBasePlatformAdapter';
+import { PlatformConfig } from '@/modules/interface/IPlatformConfig';
+import { ValidationResult } from '@/modules/interface/IBasePlatformAdapter';
 import * as fs from 'fs';
 import * as path from 'path';
 import { platforms as staticPlatforms } from '@/config/platforms';

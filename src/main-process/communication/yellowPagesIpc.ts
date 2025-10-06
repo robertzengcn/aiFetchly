@@ -29,8 +29,8 @@ import {
     TaskProgress, 
     YellowPagesResult,
     PaginatedResponse
-} from '@/interfaces/ITaskManager';
-import { PlatformSummary } from '@/interfaces/IPlatformConfig';
+} from '@/modules/interface/ITaskManager';
+import { PlatformSummary } from '@/modules/interface/IPlatformConfig';
 
 export function registerYellowPagesIpcHandlers(): void {
     console.log("Yellow Pages IPC handlers registered");

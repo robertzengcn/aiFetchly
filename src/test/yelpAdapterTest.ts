@@ -5,7 +5,7 @@
 
 import { PlatformAdapterFactory } from '@/modules/PlatformAdapterFactory';
 // import { YelpComAdapter } from '@/modules/platforms/YelpComAdapter';
-import { PlatformConfig } from '@/interfaces/IPlatformConfig';
+import { PlatformConfig } from '@/modules/interface/IPlatformConfig';
 
 export class YelpAdapterTest {
     private factory: PlatformAdapterFactory;

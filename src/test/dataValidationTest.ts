@@ -14,7 +14,7 @@
 import { YellowPagesComAdapter } from '../modules/platforms/YellowPagesComAdapter';
 // import { YelpComAdapter } from '../modules/platforms/YelpComAdapter';
 import { YellowPagesCaAdapter } from '../modules/platforms/YellowPagesCaAdapter';
-import { PlatformConfig } from '../interfaces/IPlatformConfig';
+import { PlatformConfig } from '../modules/interface/IPlatformConfig';
 
 interface ValidationResult {
     platform: string;

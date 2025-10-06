@@ -1,4 +1,4 @@
-import { Rating } from '@/interfaces/IDataExtractor';
+import { Rating } from '@/modules/interface/IDataExtractor';
 
 /**
  * Rating parsing utilities for different platforms

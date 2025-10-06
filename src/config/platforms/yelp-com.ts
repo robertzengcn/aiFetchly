@@ -1,4 +1,4 @@
-import { PlatformConfig, PlatformFeature } from '@/interfaces/IPlatformConfig';
+import { PlatformConfig, PlatformFeature } from '@/modules/interface/IPlatformConfig';
 import { YelpComAdapter } from '@/modules/platforms/YelpComAdapter';
 
 export const Platform_yelp_com: PlatformConfig = {

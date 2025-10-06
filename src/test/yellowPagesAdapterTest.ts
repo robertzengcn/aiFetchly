@@ -5,7 +5,7 @@
 
 import { PlatformAdapterFactory } from '@/modules/PlatformAdapterFactory';
 import { YellowPagesComAdapter } from '@/modules/platforms/YellowPagesComAdapter';
-import { PlatformConfig } from '@/interfaces/IPlatformConfig';
+import { PlatformConfig } from '@/modules/interface/IPlatformConfig';
 
 export class YellowPagesAdapterTest {
     private factory: PlatformAdapterFactory;

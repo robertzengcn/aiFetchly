@@ -2,7 +2,7 @@ import { BaseModule } from "@/modules/baseModule";
 import { YellowPagesTaskModel } from "@/model/YellowPagesTask.model";
 import { SortBy } from "@/entityTypes/commonType";
 import { YellowPagesTaskEntity } from "@/entity/YellowPagesTask.entity";
-import { YellowPagesTaskData, TaskStatus, TaskFilters, TaskSummary } from "@/interfaces/ITaskManager";
+import { YellowPagesTaskData, TaskStatus, TaskFilters, TaskSummary } from "@/modules/interface/ITaskManager";
 import { YellowPagesTaskStatus } from "@/model/YellowPagesTask.model";
 import { YellowPagesTaskUpdateFields } from "@/model/YellowPagesTask.model";
 import { YellowPagesResultModule } from "@/modules/YellowPagesResultModule";

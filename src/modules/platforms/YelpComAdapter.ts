@@ -1,6 +1,6 @@
 import { Page, ElementHandle } from 'puppeteer';
 import { BasePlatformAdapter } from '@/modules/BasePlatformAdapter';
-import { PlatformConfig } from '@/interfaces/IPlatformConfig';
+import { PlatformConfig } from '@/modules/interface/IPlatformConfig';
 
 /**
  * Yelp.com Platform Adapter
