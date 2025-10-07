@@ -371,6 +371,91 @@ export class RagSearchController {
     }
 
     /**
+     * Get default embedding model from system settings
+     * @returns Default embedding model name or null if not found
+     */
+    async getDefaultEmbeddingModel(): Promise<string | null> {
+        try {
+            return await this.systemSettingModel.getDefaultEmbeddingModel();
+        } catch (error) {
+            console.warn('Could not retrieve default embedding model from settings:', error);
+            return null;
+        }
+    }
+
+    /**
+     * Check if default embedding model exists in system settings, 
+     * if not, fetch it from API and update the setting.
+     * If it exists, validate that it's still in the available models list.
+     */
+    async checkAndSetDefaultEmbeddingModel(): Promise<void> {
+        try {
+            // Get or create embedding settings group
+            const embeddingGroup = await this.systemSettingGroupModel.getOrCreateEmbeddingGroup();
+            
+            // Check if default embedding model setting exists
+            const defaultEmbeddingModel = await this.systemSettingModel.getDefaultEmbeddingModel();
+            
+            if (!defaultEmbeddingModel) {
+                console.log('Default embedding model not found in system settings, fetching from API...');
+                
+                // Fetch available models from API
+                const modelsResponse = await this.ragConfigApi.getAvailableEmbeddingModels();
+                
+                if (modelsResponse.status && modelsResponse.data) {
+                    const defaultModel = modelsResponse.data.default_model;
+                    console.log(`Setting default embedding model to: ${defaultModel}`);
+                    
+                    // Update the default embedding model setting
+                    await this.systemSettingModel.updateDefaultEmbeddingModel(defaultModel, embeddingGroup);
+                    console.log('Default embedding model updated successfully');
+                } else {
+                    console.warn('Failed to fetch available models from API, using fallback model');
+                    // Use fallback model if API call fails
+                    const fallbackModel = 'Qwen/Qwen3-Embedding-4B';
+                    await this.systemSettingModel.updateDefaultEmbeddingModel(fallbackModel, embeddingGroup);
+                    console.log(`Using fallback model: ${fallbackModel}`);
+                }
+            } else {
+                console.log(`Default embedding model already exists: ${defaultEmbeddingModel}`);
+                
+                // Validate that the existing default model is still available
+                try {
+                    const modelsResponse = await this.ragConfigApi.getAvailableEmbeddingModels();
+                    
+                    if (modelsResponse.status && modelsResponse.data) {
+                        const availableModels = modelsResponse.data.models;
+                        const defaultModel = modelsResponse.data.default_model;
+                        
+                        // Check if the current default embedding model is in the available models
+                        const isCurrentModelAvailable = Object.keys(availableModels).includes(defaultEmbeddingModel);
+                        
+                        if (!isCurrentModelAvailable) {
+                            console.log(`Current default embedding model '${defaultEmbeddingModel}' is not available in the models list`);
+                            console.log(`Updating to new default model: ${defaultModel}`);
+                            
+                            // Update to the new default model from the API
+                            await this.systemSettingModel.updateDefaultEmbeddingModel(defaultModel, embeddingGroup);
+                            console.log('Default embedding model updated to available model');
+                        } else {
+                            console.log(`Current default embedding model '${defaultEmbeddingModel}' is still available`);
+                        }
+                    } else {
+                        console.warn('Failed to fetch available models for validation, keeping current model');
+                    }
+                } catch (validationError) {
+                    console.warn('Error validating default embedding model availability:', validationError);
+                    console.log('Keeping current default embedding model due to validation error');
+                }
+            }
+        } catch (error) {
+            console.error('Error checking/setting default embedding model:', error);
+            // Don't throw error to avoid breaking the initialization process
+            // The system can still work with the fallback model
+        }
+    }
+
+    /**
      * Clean up resources
      */
     async cleanup(): Promise<void> {

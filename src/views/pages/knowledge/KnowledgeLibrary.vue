@@ -28,7 +28,8 @@
     <v-alert
       v-if="statusMessage"
       :type="statusType"
-      class="mb-4"
+      class="mb-2 status-alert-compact"
+      density="compact"
       dismissible
       @input="statusMessage = ''"
     >
@@ -447,46 +448,46 @@ async function handleUploadSuccess(document: UploadedDocument) {
   console.log('📄 Document processed:', document);
   
   // Automatically start chunking and embedding process
-  if (document.id) {
-    try {
-      setLoading(true, t('knowledge.processing_document'), t('knowledge.chunking_and_embedding_document'));
+  // if (document.id) {
+  //   try {
+  //     setLoading(true, t('knowledge.processing_document'), t('knowledge.chunking_and_embedding_document'));
       
-      const chunkEmbedResult = await chunkAndEmbedDocument(document.id);
+  //     const chunkEmbedResult = await chunkAndEmbedDocument(document.id);
       
-      if (chunkEmbedResult.success && chunkEmbedResult.data) {
-        const { chunksCreated, embeddingsGenerated, processingTime } = chunkEmbedResult.data;
-        showStatus(
-          t('knowledge.document_processed_successfully', { 
-            name: document.name, 
-            chunks: chunksCreated, 
-            embeddings: embeddingsGenerated 
-          }), 
-          'success'
-        );
-        console.log(`✅ Document ${document.name} processed: ${chunksCreated} chunks, ${embeddingsGenerated} embeddings in ${processingTime}ms`);
-      } else {
-        showStatus(
-          t('knowledge.document_processing_failed', { 
-            name: document.name, 
-            error: chunkEmbedResult.message 
-          }), 
-          'warning'
-        );
-        console.warn(`⚠️ Document ${document.name} processing failed:`, chunkEmbedResult.message);
-      }
-    } catch (error) {
-      console.error(`❌ Error processing document ${document.name}:`, error);
-      showStatus(
-        t('knowledge.document_processing_error', { 
-          name: document.name, 
-          error: error instanceof Error ? error.message : 'Unknown error' 
-        }), 
-        'error'
-      );
-    } finally {
-      setLoading(false);
-    }
-  }
+  //     if (chunkEmbedResult.success && chunkEmbedResult.data) {
+  //       const { chunksCreated, embeddingsGenerated, processingTime } = chunkEmbedResult.data;
+  //       showStatus(
+  //         t('knowledge.document_processed_successfully', { 
+  //           name: document.name, 
+  //           chunks: chunksCreated, 
+  //           embeddings: embeddingsGenerated 
+  //         }), 
+  //         'success'
+  //       );
+  //       console.log(`✅ Document ${document.name} processed: ${chunksCreated} chunks, ${embeddingsGenerated} embeddings in ${processingTime}ms`);
+  //     } else {
+  //       showStatus(
+  //         t('knowledge.document_processing_failed', { 
+  //           name: document.name, 
+  //           error: chunkEmbedResult.message 
+  //         }), 
+  //         'warning'
+  //       );
+  //       console.warn(`⚠️ Document ${document.name} processing failed:`, chunkEmbedResult.message);
+  //     }
+  //   } catch (error) {
+  //     console.error(`❌ Error processing document ${document.name}:`, error);
+  //     showStatus(
+  //       t('knowledge.document_processing_error', { 
+  //         name: document.name, 
+  //         error: error instanceof Error ? error.message : 'Unknown error' 
+  //       }), 
+  //       'error'
+  //     );
+  //   } finally {
+  //     setLoading(false);
+  //   }
+  // }
   
   // Refresh document management if available
   // if (documentManagement.value) {
@@ -865,6 +866,28 @@ defineExpose({
 .v-alert {
   margin: 16px;
   border-radius: 8px;
+}
+
+.status-alert-compact {
+  max-width: 600px;
+  margin-left: auto !important;
+  margin-right: auto !important;
+  font-size: 13px;
+  padding: 8px 16px !important;
+  min-height: auto !important;
+  line-height: 1.3;
+}
+
+.status-alert-compact :deep(.v-alert__content) {
+  padding: 0 !important;
+}
+
+.status-alert-compact :deep(.v-alert__prepend) {
+  margin-right: 8px !important;
+}
+
+.status-alert-compact :deep(.v-alert__close) {
+  margin-left: 8px !important;
 }
 
 /* Tab content styles */
