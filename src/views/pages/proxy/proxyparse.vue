@@ -51,21 +51,21 @@
     <v-card v-if="showtable" class="mb-4" variant="outlined">
       <v-card-title class="d-flex align-center">
         <v-icon class="mr-2">mdi-cog</v-icon>
-        {{ $t('proxy.check_settings') }}
+        {{ t('proxy.check_settings') }}
       </v-card-title>
       <v-card-text>
         <v-row>
           <v-col cols="12" md="4">
             <v-text-field
               v-model.number="checkTimeout"
-              :label="$t('proxy.check_timeout')"
+              :label="t('proxy.check_timeout')"
               type="number"
               min="1"
               max="60"
               suffix="seconds"
               variant="outlined"
               density="compact"
-              :hint="$t('proxy.check_timeout_hint')"
+              :hint="t('proxy.check_timeout_hint')"
               persistent-hint
             ></v-text-field>
           </v-col>
@@ -83,7 +83,7 @@
               class="elevation-0"
               density="compact"
               variant="solo"
-              :label="$t('proxy.search')"
+              :label="t('proxy.search')"
               append-inner-icon="mdi-magnify"
               single-line
               hide-details
@@ -94,7 +94,7 @@
             class="btn"
             variant="flat"
             prepend-icon="mdi-filter-variant"
-            ><span> {{ $t('proxy.clear_table') }}</span></v-btn
+            ><span> {{ t('proxy.clear_table') }}</span></v-btn
           >
           <v-btn
           
@@ -103,7 +103,7 @@
             class="btn ml-1"
             variant="flat"
             prepend-icon="mdi-filter-variant"
-            ><span> {{ $t('proxy.check_proxy') }}</span></v-btn
+            ><span> {{ t('proxy.check_proxy') }}</span></v-btn
           >
           <v-btn
           color="blue"
@@ -111,7 +111,7 @@
             class="btn ml-1"
             variant="flat"
             prepend-icon="mdi-filter-variant"
-            ><span> {{ $t('proxy.save_to_my_proxy') }}</span></v-btn
+            ><span> {{ t('proxy.save_to_my_proxy') }}</span></v-btn
           >
           <v-btn
           color="red"
@@ -119,7 +119,7 @@
             class="btn ml-1"
             variant="flat"
             prepend-icon="mdi-filter-variant"
-            ><span> {{ $t('proxy.remove_fail_proxy') }}</span></v-btn
+            ><span> {{ t('proxy.remove_fail_proxy') }}</span></v-btn
           >
         </div>
       </div>
@@ -137,13 +137,13 @@
       <v-data-table :items="items" :headers="headers" class="mt-2"  :search="search">
         <template v-slot:[`item.status`]="{ item }">
           <v-chip v-if="item.status === 0" class="mx-2" color="grey">
-            {{ $t('proxy.not_check') }}
+            {{ t('proxy.not_check') }}
           </v-chip>
           <v-chip v-if="item.status === 1" class="mx-2" color="secondary">
-            {{ $t('proxy.pass') }}
+            {{ t('proxy.pass') }}
           </v-chip>
           <v-chip v-if="item.status === 2" class="mx-2" color="pink">
-            {{ $t('proxy.failure') }}
+            {{ t('proxy.failure') }}
           </v-chip>
         </template>
         

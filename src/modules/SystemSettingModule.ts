@@ -38,7 +38,7 @@ export class SystemSettingModule extends BaseModule {
      * @param group SystemSettingGroupEntity for embedding settings
      * @returns Default embedding model name or null if not found
      */
-    public async getDefaultEmbeddingModel(group: SystemSettingGroupEntity): Promise<string | null> {
-        return this.systemSettingModel.getDefaultEmbeddingModel(group);
+    public async getDefaultEmbeddingModel(): Promise<string | null> {
+        return this.systemSettingModel.getDefaultEmbeddingModel();
     }
 }

@@ -139,11 +139,11 @@ export class SystemSettingModel extends BaseDb {
      * @param group SystemSettingGroupEntity for embedding settings
      * @returns Default embedding model name or null if not found
      */
-    public async getDefaultEmbeddingModel(group: SystemSettingGroupEntity): Promise<string | null> {
-        const defaultEmbeddingModelKey = default_embedding_model;
+    public async getDefaultEmbeddingModel(): Promise<string | null> {
+        // const defaultEmbeddingModelKey = default_embedding_model;
         
         const setting = await this.repository.findOne({
-            where: { group: group, key: defaultEmbeddingModelKey }
+            where: {key: default_embedding_model }
         });
 
         return setting ? setting.value : null;
