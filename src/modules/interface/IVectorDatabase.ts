@@ -60,7 +60,7 @@ export interface IVectorDatabase {
      * @param vectors - Array of vectors to add
      * @param chunkIds - Array of chunk IDs corresponding to vectors
      */
-    addVectors(vectors: number[][], chunkIds: number[]): Promise<void>;
+    addVectors(vectors: number[], chunkIds: number[]): Promise<void>;
 
     /**
      * Search for similar vectors

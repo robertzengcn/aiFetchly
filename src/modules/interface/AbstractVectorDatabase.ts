@@ -41,7 +41,7 @@ export abstract class AbstractVectorDatabase implements IVectorDatabase {
      * @param vectors - Array of vectors to add
      * @param chunkIds - Array of chunk IDs corresponding to vectors
      */
-    abstract addVectors(vectors: number[][], chunkIds: number[]): Promise<void>;
+    abstract addVectors(vectors: number[], chunkIds: number[]): Promise<void>;
 
     /**
      * Search for similar vectors (to be implemented by subclasses)

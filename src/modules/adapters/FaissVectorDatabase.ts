@@ -133,7 +133,7 @@ export class FaissVectorDatabase extends AbstractVectorDatabase {
      * @param vectors - Array of vectors to add
      * @param chunkIds - Array of chunk IDs corresponding to vectors
      */
-    async addVectors(vectors: number[][], chunkIds: number[]): Promise<void> {
+    async addVectors(vectors: number[], chunkIds: number[]): Promise<void> {
         if (!this.index) {
             throw new Error('Index not initialized');
         }
@@ -142,30 +142,24 @@ export class FaissVectorDatabase extends AbstractVectorDatabase {
             return;
         }
 
-        if (vectors.length !== chunkIds.length) {
-            throw new Error('Vectors and chunk IDs length mismatch');
-        }
-
-        // Validate all vectors have the correct dimension
-        vectors.forEach(vector => {
-            this.validateDimensions(vector, this.dimension);
-        });
+        // Validate vector has the correct dimension
+        this.validateDimensions(vectors, this.dimension);
 
         try {
             const currentVectorCount = this.index.ntotal();
             
             // Debug logging
-            console.log(`Adding ${vectors.length} vectors to FAISS index. Each vector has ${vectors[0]?.length || 0} dimensions. Index dimension: ${this.dimension}`);
+            console.log(`Adding vector to FAISS index. Vector has ${vectors.length} dimensions. Index dimension: ${this.dimension}`);
             console.log(`Current vector count before adding: ${currentVectorCount}`);
             console.log(vectors)
-            this.index.add(vectors);
+            this.index.add([vectors]);
             
             // Store chunk ID mapping for each added vector
             for (let i = 0; i < chunkIds.length; i++) {
                 this.chunkIdMapping.set(currentVectorCount + i, chunkIds[i]);
             }
             
-            console.log(`Added ${vectors.length} vectors to FAISS index`);
+            console.log(`Added vector to FAISS index`);
         } catch (error) {
             console.error('Failed to add vectors to FAISS index:', error);
             throw new Error('Failed to add vectors to FAISS index');
