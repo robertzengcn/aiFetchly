@@ -791,11 +791,11 @@ export function registerRagIpcHandlers(): void {
         try {
             const requestData = JSON.parse(data) as {
                 documentId: number;
-                modelName: string;
+                // modelName: string;
             };
 
             const ragSearchController = await createRagController();
-            const result = await ragSearchController.chunkAndEmbedDocument(requestData.documentId, requestData.modelName);
+            const result = await ragSearchController.chunkAndEmbedDocument(requestData.documentId);
 
             const response: CommonMessage<ChunkAndEmbedResponse> = {
                 status: result.success,
