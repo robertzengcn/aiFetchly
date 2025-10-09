@@ -1,17 +1,53 @@
 <template>
   <div class="document-management">
     <div class="header">
-      <h2>{{ t('knowledge.document_management') }}</h2>
-      <div class="actions">
-        <v-btn color="primary" @click="showUploadDialog = true">
+      <div class="header-left">
+        <h2>{{ t('knowledge.document_management') }}</h2>
+        <div v-if="lastRefreshTime" class="last-refresh">
+          <v-icon size="small" color="grey">mdi-clock-outline</v-icon>
+          <span class="text-caption text-grey ml-1">
+            {{ t('knowledge.last_refresh') }}: {{ formatLastRefresh(lastRefreshTime) }}
+          </span>
+        </div>
+      </div>
+      <!-- <div class="actions"> -->
+        <!-- Auto-refresh controls -->
+        <!-- <div class="auto-refresh-controls">
+          <v-switch
+            v-model="autoRefreshEnabled"
+            :label="t('knowledge.auto_refresh')"
+            color="primary"
+            density="compact"
+            hide-details
+            @change="toggleAutoRefresh"
+          />
+          <v-select
+            v-model="refreshInterval"
+            :items="refreshIntervalOptions"
+            item-title="text"
+            item-value="value"
+            density="compact"
+            variant="outlined"
+            hide-details
+            :disabled="!autoRefreshEnabled"
+            @change="updateRefreshInterval"
+            style="min-width: 120px; margin-left: 8px;"
+          />
+        </div> -->
+        
+        <!-- <v-btn color="primary" @click="showUploadDialog = true">
           <v-icon left>mdi-upload</v-icon>
           {{ t('knowledge.upload_document') }}
-        </v-btn>
-        <v-btn color="secondary" @click="refreshDocuments">
+        </v-btn> -->
+        <!-- <v-btn 
+          color="secondary" 
+          @click="refreshDocuments"
+          :loading="loading"
+        >
           <v-icon left>mdi-refresh</v-icon>
           {{ t('common.refresh') }}
-        </v-btn>
-      </div>
+        </v-btn> -->
+      <!-- </div> -->
     </div>
 
     <!-- Filters -->
@@ -201,7 +237,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue';
+import { ref, onMounted, onUnmounted, computed } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { getDocuments, type DocumentInfo } from '@/views/api/rag';
 import { Header } from "@/entityTypes/commonType"
@@ -229,6 +265,22 @@ const { t } = useI18n();
       fileType: ''
     });
 
+    // Auto-refresh functionality
+    const autoRefreshEnabled = ref(false);
+    const refreshInterval = ref(5000); // 5 seconds default
+    const lastRefreshTime = ref<Date | null>(null);
+    const refreshTimer = ref<NodeJS.Timeout | null>(null);
+    const isTabVisible = ref(true);
+
+    // Refresh interval options (in milliseconds)
+    const refreshIntervalOptions = ref([
+      { text: t('knowledge.refresh_10_seconds'), value: 10000 },
+      { text: t('knowledge.refresh_30_seconds'), value: 30000 },
+      { text: t('knowledge.refresh_1_minute'), value: 60000 },
+      { text: t('knowledge.refresh_2_minutes'), value: 120000 },
+      { text: t('knowledge.refresh_5_minutes'), value: 300000 }
+    ]);
+
     headers.value = [
       { title: t('knowledge.name'), sortable: true, key: 'name' },
       { title: t('knowledge.title'), sortable: true, key: 'title' },
@@ -254,7 +306,13 @@ const { t } = useI18n();
       { key: 'md', name: t('knowledge.file_type_markdown') }
     ]);
 
-    const loadDocuments = async () => {
+    const loadDocuments = async (isAutoRefresh = false) => {
+      // Skip auto-refresh if tab is not visible
+      if (isAutoRefresh && !isTabVisible.value) {
+        console.log('⏭️ Skipping auto-refresh - tab not visible');
+        return;
+      }
+
       loading.value = true;
       try {
         // Get documents using IPC method
@@ -263,6 +321,7 @@ const { t } = useI18n();
         
         if (documentsList && Array.isArray(documentsList)) {
           documents.value = documentsList;
+          lastRefreshTime.value = new Date();
           console.log('✅ Documents loaded successfully:', documents.value.length);
         } else {
           console.error('❌ Failed to load documents: Invalid response format');
@@ -284,6 +343,64 @@ const { t } = useI18n();
 
     const refreshDocuments = () => {
       loadDocuments();
+    };
+
+    // Auto-refresh methods
+    const startAutoRefresh = () => {
+      if (refreshTimer.value) {
+        clearInterval(refreshTimer.value);
+      }
+      
+      refreshTimer.value = setInterval(() => {
+        console.log('🔄 Auto-refreshing documents...');
+        loadDocuments(true);
+      }, refreshInterval.value);
+      
+      console.log(`✅ Auto-refresh started (${refreshInterval.value}ms interval)`);
+    };
+
+    const stopAutoRefresh = () => {
+      if (refreshTimer.value) {
+        clearInterval(refreshTimer.value);
+        refreshTimer.value = null;
+        console.log('⏹️ Auto-refresh stopped');
+      }
+    };
+
+    const toggleAutoRefresh = () => {
+      if (autoRefreshEnabled.value) {
+        startAutoRefresh();
+      } else {
+        stopAutoRefresh();
+      }
+    };
+
+    const updateRefreshInterval = () => {
+      if (autoRefreshEnabled.value) {
+        startAutoRefresh(); // Restart with new interval
+      }
+    };
+
+    // Tab visibility handling
+    const handleVisibilityChange = () => {
+      isTabVisible.value = !document.hidden;
+      console.log('👁️ Tab visibility changed:', isTabVisible.value ? 'visible' : 'hidden');
+    };
+
+    // Format last refresh time
+    const formatLastRefresh = (date: Date) => {
+      const now = new Date();
+      const diff = now.getTime() - date.getTime();
+      const seconds = Math.floor(diff / 1000);
+      const minutes = Math.floor(seconds / 60);
+      
+      if (seconds < 60) {
+        return t('knowledge.just_now');
+      } else if (minutes < 60) {
+        return t('knowledge.minutes_ago', { count: minutes });
+      } else {
+        return date.toLocaleTimeString();
+      }
     };
 
     const onFileSelected = (file: File | File[] | null) => {
@@ -429,6 +546,33 @@ const { t } = useI18n();
 
     onMounted(() => {
       loadDocuments();
+      
+      // Set up tab visibility listener
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+      
+      // Load auto-refresh settings from localStorage
+      const savedAutoRefresh = localStorage.getItem('documentManagement.autoRefresh');
+      const savedInterval = localStorage.getItem('documentManagement.refreshInterval');
+      
+      if (savedAutoRefresh === 'true') {
+        autoRefreshEnabled.value = true;
+        if (savedInterval) {
+          refreshInterval.value = parseInt(savedInterval);
+        }
+        startAutoRefresh();
+      }
+    });
+
+    onUnmounted(() => {
+      // Clean up auto-refresh timer
+      stopAutoRefresh();
+      
+      // Remove event listeners
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      
+      // Save settings to localStorage
+      localStorage.setItem('documentManagement.autoRefresh', autoRefreshEnabled.value.toString());
+      localStorage.setItem('documentManagement.refreshInterval', refreshInterval.value.toString());
     });
 </script>
 
@@ -440,13 +584,40 @@ const { t } = useI18n();
 .header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
   margin-bottom: 20px;
+}
+
+.header-left {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.header-left h2 {
+  margin: 0;
+}
+
+.last-refresh {
+  display: flex;
+  align-items: center;
+  font-size: 0.75rem;
 }
 
 .actions {
   display: flex;
-  gap: 10px;
+  align-items: center;
+  gap: 16px;
+}
+
+.auto-refresh-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background-color: #f5f5f5;
+  border-radius: 8px;
+  border: 1px solid #e0e0e0;
 }
 
 .filters {
@@ -481,5 +652,30 @@ const { t } = useI18n();
   background-color: #f5f5f5;
   padding: 15px;
   border-radius: 4px;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+  .header {
+    flex-direction: column;
+    gap: 16px;
+    align-items: stretch;
+  }
+  
+  .actions {
+    flex-direction: column;
+    gap: 12px;
+  }
+  
+  .auto-refresh-controls {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  
+  .auto-refresh-controls .v-select {
+    margin-left: 0 !important;
+    min-width: auto !important;
+  }
 }
 </style>

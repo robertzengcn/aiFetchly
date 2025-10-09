@@ -19,7 +19,7 @@ describe('DocumentService', () => {
             await db.connection.initialize();
         }
         
-        documentService = new DocumentService(db);
+        documentService = new DocumentService();
     });
 
     after(async () => {

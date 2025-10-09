@@ -4,7 +4,8 @@ import { EmbeddingFactory, EmbeddingConfig } from '@/modules/llm/EmbeddingFactor
 import { VectorStoreService } from '@/service/VectorStoreService';
 import { ConfigurationService, ConfigurationServiceImpl } from '@/modules/ConfigurationService';
 import { EmbeddingImpl } from '@/modules/interface/EmbeddingImpl';
-import { DocumentService, DocumentUploadOptions } from '@/service/DocumentService';
+import { DocumentService } from '@/service/DocumentService';
+import { DocumentUploadOptions } from '@/modules/RAGDocumentModule';
 import { ChunkingService } from '@/service/ChunkingService';
 import { RAGDocumentEntity } from '@/entity/RAGDocument.entity';
 import { RAGChunkEntity } from '@/entity/RAGChunk.entity';
@@ -68,7 +69,7 @@ export class RagSearchModule extends BaseModule {
         this.searchService = new VectorSearchService(vectorStoreService, this.sqliteDb);
         this.embeddingFactory = new EmbeddingFactory();
         this.configurationService = new ConfigurationServiceImpl();
-        this.documentService = new DocumentService(this.sqliteDb);
+        this.documentService = new DocumentService();
         this.chunkingService = new ChunkingService(this.sqliteDb);
         this.ragConfigApi = new RagConfigApi();
     }
@@ -105,7 +106,7 @@ export class RagSearchModule extends BaseModule {
             // Update processing status to processing
             await this.documentService.updateDocumentStatus(
                 document.id,
-                'active',
+                 'active',
                 'processing'
             );
 
