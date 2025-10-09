@@ -279,5 +279,8 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/robertzengcn/aiFetchly.git"
+  },
+  "resolutions": {
+    "canvas": "^3.0.2"
   }
 }
