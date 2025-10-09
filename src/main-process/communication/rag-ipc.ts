@@ -143,7 +143,16 @@ export function registerRagIpcHandlers(): void {
                     const ragController = await createRagController();
                     
                     // Get default embedding model from controller
-                    const defaultEmbeddingModel = await ragController.getDefaultEmbeddingModel();
+                    let defaultEmbeddingModel = await ragController.getDefaultEmbeddingModel();
+                    
+                    // If default embedding model doesn't exist, initialize it
+                    if (!defaultEmbeddingModel) {
+                        await ragController.checkAndSetDefaultEmbeddingModel();
+                        defaultEmbeddingModel = await ragController.getDefaultEmbeddingModel();
+                    }
+                    if (!defaultEmbeddingModel) {
+                        throw new Error('Default embedding model not found');
+                    }
                     
                     // Extract original filename without timestamp prefix
                     const originalFileName = fileName.replace(/^rag_upload_\d+_/, '');
@@ -397,7 +406,7 @@ export function registerRagIpcHandlers(): void {
     // Test RAG pipeline
     ipcMain.handle(RAG_TEST_PIPELINE, async (event, data): Promise<CommonMessage<any | null>> => {
         try {
-            const ragSearchController = await createRagController();
+            // const ragSearchController = await createRagController();
 
             // Mock test result
             const testResult = {

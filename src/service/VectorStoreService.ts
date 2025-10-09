@@ -233,14 +233,14 @@ export class VectorStoreService {
         }
 
         try {
-            // Add vectors to the vector database (now handles chunk IDs internally)
-            await instance.addVectors(vectors, chunkIds);
-
-            // Update chunk entities with embedding IDs using RAGChunkModule
             const stats = instance.getIndexStats();
-            const startIndex = stats.totalVectors - vectors.length;
+            const startIndex = stats.totalVectors;
 
-            for (let i = 0; i < chunkIds.length; i++) {
+            // Add each vector individually (API expects single vector)
+            for (let i = 0; i < vectors.length; i++) {
+                await instance.addVectors(vectors[i], [chunkIds[i]]);
+                
+                // Update chunk entity with embedding ID
                 const embeddingId = (startIndex + i).toString();
                 await this.ragChunkModule.updateChunkEmbedding(
                     chunkIds[i], 
