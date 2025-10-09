@@ -7,7 +7,7 @@ import { VectorDatabaseConfig, VectorSearchResult, IndexStats } from '@/modules/
  * FAISS index interface for type safety
  */
 interface FAISSIndex {
-    add(vectors: number[][]): void;
+    add(vectors: number[]): void;
     search(queryVector: number[], k: number): { indices: number[], distances: number[] };
     save(path: string): void;
     d(): number;  // dimension method in FAISS
@@ -152,7 +152,7 @@ export class FaissVectorDatabase extends AbstractVectorDatabase {
             console.log(`Adding vector to FAISS index. Vector has ${vectors.length} dimensions. Index dimension: ${this.dimension}`);
             console.log(`Current vector count before adding: ${currentVectorCount}`);
             console.log(vectors)
-            this.index.add([vectors]);
+            this.index.add(vectors);
             
             // Store chunk ID mapping for each added vector
             for (let i = 0; i < chunkIds.length; i++) {

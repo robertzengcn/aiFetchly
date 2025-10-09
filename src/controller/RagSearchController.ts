@@ -223,7 +223,7 @@ export class RagSearchController {
      * @param documentId - Document ID to process
      * @returns Combined processing result
      */
-    async chunkAndEmbedDocument(documentId: number, modelName: string): Promise<{
+    async chunkAndEmbedDocument(documentId: number): Promise<{
         documentId: number;
         chunksCreated: number;
         embeddingsGenerated: number;
@@ -278,6 +278,10 @@ export class RagSearchController {
                 };
             }
             steps.chunking = true;
+            const modelName = await this.getDefaultEmbeddingModel();
+            if (!modelName) {
+                throw new Error('Default embedding model not found');
+            }
 
             // Step 3: Generate embeddings for the chunks
             const embedResult = await this.generateDocumentEmbeddings(documentId, modelName);

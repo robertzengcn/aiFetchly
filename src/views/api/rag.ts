@@ -498,12 +498,13 @@ function getFileType(fileName: string): string {
  * If the remote server is unavailable, default configuration will be used.
  * 
  * @param documentId - Document ID to chunk and embed
+ * @param modelName - Embedding model name to use
  * @returns Promise with chunking and embedding results
  * 
  * @example
  * ```typescript
  * // Basic usage - chunking config fetched from remote server
- * const result = await chunkAndEmbedDocument(123);
+ * const result = await chunkAndEmbedDocument(123, 'Qwen/Qwen3-Embedding-4B');
  * 
  * if (result.success) {
  *   console.log(`Created ${result.data.chunksCreated} chunks`);
@@ -512,19 +513,21 @@ function getFileType(fileName: string): string {
  * ```
  */
 export async function chunkAndEmbedDocument(
-  documentId: number
+  documentId: number,
+  // modelName: string
 ): Promise<RAGResponse<ChunkAndEmbedResponse>> {
   try {
     const requestData = {
-      documentId
+      documentId,
+      // modelName
     };
 
     const response = await windowInvoke(RAG_CHUNK_AND_EMBED_DOCUMENT, requestData);
     
     return {
-      success: response.status,
+      success: true,
       data: response.data,
-      message: response.msg
+      message: ""
     };
   } catch (error) {
     console.error('Error chunking and embedding document:', error);

@@ -165,6 +165,9 @@ export default {
         loading_content: "正在加载内容...",
         confirm_delete_document: "您确定要删除 \"{name}\" 吗？",
         confirm_bulk_delete: "您确定要删除 {count} 个文档吗？",
+        confirm_reembed_document: "您确定要重新嵌入文档 \"{name}\" 吗？这将重新生成所有分块和嵌入。",
+        reembed_success: "文档 \"{name}\" 重新嵌入成功：创建了 {chunks} 个分块，生成了 {embeddings} 个嵌入",
+        reembed_error: "重新嵌入文档 \"{name}\" 失败：{error}",
         // Settings translations
         settings: "设置",
         embedding_model: "嵌入模型",

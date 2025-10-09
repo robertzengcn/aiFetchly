@@ -173,6 +173,9 @@ export default {
         loading_content: "Loading content...",
         confirm_delete_document: "Are you sure you want to delete \"{name}\"?",
         confirm_bulk_delete: "Are you sure you want to delete {count} documents?",
+        confirm_reembed_document: "Are you sure you want to re-embed document \"{name}\"? This will regenerate all chunks and embeddings.",
+        reembed_success: "Document \"{name}\" re-embedded successfully: {chunks} chunks created, {embeddings} embeddings generated",
+        reembed_error: "Failed to re-embed document \"{name}\": {error}",
         // Settings translations
         settings: "Settings",
         embedding_model: "Embedding Model",

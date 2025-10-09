@@ -153,6 +153,16 @@
           icon
           size="small"
           variant="text"
+          color="primary"
+          @click="reembedDocument(item)"
+          :loading="reembeddingDocIds.includes(item.id)"
+        >
+          <v-icon size="small">mdi-reload</v-icon>
+        </v-btn>
+        <v-btn
+          icon
+          size="small"
+          variant="text"
           color="error"
           @click="deleteDocument(item)"
         >
@@ -239,7 +249,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { getDocuments, type DocumentInfo } from '@/views/api/rag';
+import { getDocuments, type DocumentInfo, chunkAndEmbedDocument, getRAGStats } from '@/views/api/rag';
 import { Header } from "@/entityTypes/commonType"
 const headers = ref<Array<Header>>([])
 // i18n setup
@@ -258,6 +268,7 @@ const { t } = useI18n();
       description: '',
       tags: []
     });
+    const reembeddingDocIds = ref<number[]>([]);
 
     const filters = ref({
       name: '',
@@ -461,6 +472,56 @@ const { t } = useI18n();
           loadDocuments();
         } catch (error) {
           console.error('Delete error:', error);
+        }
+      }
+    };
+
+    const reembedDocument = async (doc: DocumentInfo) => {
+      if (confirm(t('knowledge.confirm_reembed_document', { name: doc.name }))) {
+        try {
+          // Add document ID to reembedding list to show loading state
+          reembeddingDocIds.value.push(doc.id);
+          
+          console.log('Re-embedding document:', doc);
+          
+          // Get default embedding model from stats
+          const stats = await getRAGStats();
+          // const modelName = stats.data?.defaultEmbeddingModel || 'Qwen/Qwen3-Embedding-4B';
+          
+          // console.log('Using embedding model:', modelName);
+          
+          // Call the chunk and embed API with model name
+          const result = await chunkAndEmbedDocument(doc.id);
+          
+          if (result.success) {
+            console.log('✅ Re-embedding successful:', result.data);
+            alert(t('knowledge.reembed_success', { 
+              name: doc.name,
+              chunks: result.data?.chunksCreated || 0,
+              embeddings: result.data?.embeddingsGenerated || 0
+            }));
+            
+            // Refresh documents to get updated status
+            await loadDocuments();
+          } else {
+            console.error('❌ Re-embedding failed:', result.message);
+            alert(t('knowledge.reembed_error', { 
+              name: doc.name,
+              error: result.message || 'Unknown error'
+            }));
+          }
+        } catch (error) {
+          console.error('Re-embedding error:', error);
+          alert(t('knowledge.reembed_error', { 
+            name: doc.name,
+            error: error instanceof Error ? error.message : 'Unknown error'
+          }));
+        } finally {
+          // Remove document ID from reembedding list
+          const index = reembeddingDocIds.value.indexOf(doc.id);
+          if (index > -1) {
+            reembeddingDocIds.value.splice(index, 1);
+          }
         }
       }
     };
