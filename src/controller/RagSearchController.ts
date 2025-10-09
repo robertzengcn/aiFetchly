@@ -1,5 +1,5 @@
 import { RagSearchModule, SearchRequest, SearchResponse, DocumentUploadResponse } from '@/modules/RagSearchModule';
-import { DocumentUploadOptions } from '@/service/DocumentService';
+import { DocumentUploadOptions } from '@/modules/RAGDocumentModule';
 import { RAGDocumentEntity } from '@/entity/RAGDocument.entity';
 import { RagConfigApi, ChunkingConfig } from '@/api/ragConfigApi';
 import { SystemSettingModel } from '@/model/SystemSetting.model';
@@ -254,7 +254,7 @@ export class RagSearchController {
             try {
                 const configResponse = await this.ragConfigApi.getChunkingConfig();
                 if (configResponse.status && configResponse.data) {
-                    chunkingOptions = configResponse.data;
+                    chunkingOptions = configResponse.data.default_config;
                     console.log('Using remote chunking configuration:', chunkingOptions);
                 } else {
                     console.warn('Failed to get remote chunking config, using defaults');

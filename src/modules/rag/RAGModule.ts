@@ -79,7 +79,7 @@ export class RAGModule extends BaseModule {
         super();
         
         // Initialize services with database from BaseModule
-        this.documentService = new DocumentService(this.sqliteDb);
+        this.documentService = new DocumentService();
         this.chunkingService = new ChunkingService(this.sqliteDb);
         this.ragChunkModule = new RAGChunkModule();
         this.ragSearchModule = new RagSearchModule();

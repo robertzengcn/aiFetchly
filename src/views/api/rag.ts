@@ -1,4 +1,4 @@
-import { windowInvoke, windowInvokeBinary } from '@/views/utils/apirequest';
+import { windowInvoke, windowInvokeBinary, windowSend, windowSendBinary, windowReceive } from '@/views/utils/apirequest';
 import { EmbeddingConfig } from '@/modules/llm/EmbeddingFactory';
 import { LlmCongfig, SaveTempFileResponse, ChunkAndEmbedResponse, CommonMessage } from '@/entityTypes/commonType';
 import { ModelInfo } from '@/api/ragConfigApi';
@@ -24,7 +24,9 @@ import {
   RAG_CHUNK_AND_EMBED_DOCUMENT,
   SHOW_OPEN_DIALOG,
   GET_FILE_STATS,
-  SAVE_TEMP_FILE
+  SAVE_TEMP_FILE,
+  SAVE_TEMP_FILE_PROGRESS,
+  SAVE_TEMP_FILE_COMPLETE
 } from '@/config/channellist';
 import { DocumentMetadata } from '@/entityTypes/metadataType';
 import { RagStatsResponse } from '@/entityTypes/commonType';
@@ -87,6 +89,19 @@ export interface SearchResponse {
   total: number;
   query: string;
   processingTime: number;
+}
+
+// Progress event types for file upload
+export interface FileUploadProgress {
+  progress: number;
+  message: string;
+  fileName: string;
+}
+
+export interface FileUploadComplete {
+  status: boolean;
+  msg: string;
+  data: SaveTempFileResponse;
 }
 
 /**
@@ -298,21 +313,65 @@ export async function getFileStats(filePath: string): Promise<{
 }
 
 /**
- * Save temporary file
+ * Save temporary file with progress updates
  */
-export async function saveTempFile(data: {
-  fileName: string;
-  buffer: Uint8Array;
-  metadata?: {
-    title?: string;
-    description?: string;
-    tags?: string[];
-    author?: string;
-  };
-}): Promise<SaveTempFileResponse> {
+export async function saveTempFile(
+  data: {
+    fileName: string;
+    buffer: Uint8Array;
+    metadata?: {
+      title?: string;
+      description?: string;
+      tags?: string[];
+      author?: string;
+    };
+  },
+  onProgress?: (progress: FileUploadProgress) => void,
+  onComplete?: (result: FileUploadComplete) => void
+): Promise<SaveTempFileResponse> {
   console.log("saveTempFile is ready");
   console.log(data);
-  return await windowInvokeBinary(SAVE_TEMP_FILE, data);
+
+  return new Promise((resolve, reject) => {
+    // Set up progress listener
+    const progressHandler = (progressData: any) => {
+      try {
+        const progress: FileUploadProgress = JSON.parse(progressData);
+        if (onProgress) {
+          onProgress(progress);
+        }
+      } catch (error) {
+        console.error('Error parsing progress data:', error);
+      }
+    };
+
+    // Set up completion listener
+    const completeHandler = (completeData: any) => {
+      try {
+        const result: FileUploadComplete = JSON.parse(completeData);
+        
+        if (onComplete) {
+          onComplete(result);
+        }
+        
+        if (result.status) {
+          resolve(result.data);
+        } else {
+          reject(new Error(result.msg));
+        }
+      } catch (error) {
+        console.error('Error parsing completion data:', error);
+        reject(error);
+      }
+    };
+
+    // Register event listeners using the project's API
+    windowReceive(SAVE_TEMP_FILE_PROGRESS, progressHandler);
+    windowReceive(SAVE_TEMP_FILE_COMPLETE, completeHandler);
+
+    // Send the file data to main process using binary send method
+    windowSendBinary(SAVE_TEMP_FILE, data);
+  });
 }
 
 /**
@@ -354,9 +413,14 @@ export async function selectFilesNative(): Promise<(File & { path: string })[]> 
 }
 
 /**
- * Copy file to temporary location
+ * Copy file to temporary location with progress updates
  */
-export async function copyFileToTemp(file: File, metadata?: DocumentMetadata) : Promise<SaveTempFileResponse> {
+export async function copyFileToTemp(
+  file: File, 
+  metadata?: DocumentMetadata,
+  onProgress?: (progress: FileUploadProgress) => void,
+  onComplete?: (result: FileUploadComplete) => void
+): Promise<SaveTempFileResponse> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = async () => {
@@ -380,12 +444,12 @@ export async function copyFileToTemp(file: File, metadata?: DocumentMetadata) : 
           // model_name: metadata?.model_name
         };
         
-        // Use API to save file to temp location
+        // Use API to save file to temp location with progress callbacks
         const saveResult = await saveTempFile({
           fileName: tempFileName,
           buffer: buffer,
           metadata: fileMetadata
-        });
+        }, onProgress, onComplete);
         console.log("saveResult is ready");
         console.log(saveResult);
         

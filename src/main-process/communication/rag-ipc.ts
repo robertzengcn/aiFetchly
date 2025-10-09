@@ -28,7 +28,9 @@ import {
     RAG_CHUNK_AND_EMBED_DOCUMENT,
     SHOW_OPEN_DIALOG,
     GET_FILE_STATS,
-    SAVE_TEMP_FILE
+    SAVE_TEMP_FILE,
+    SAVE_TEMP_FILE_PROGRESS,
+    SAVE_TEMP_FILE_COMPLETE
 } from '@/config/channellist';
 
 /**
@@ -48,8 +50,8 @@ async function createRagController(): Promise<RagSearchController> {
 export function registerRagIpcHandlers(): void {
     console.log("RAG IPC handlers registered");
 
-    // Save temporary file handler
-    ipcMain.handle(SAVE_TEMP_FILE, async (event, data): Promise<CommonMessage<SaveTempFileResponse>> => {
+    // Save temporary file handler with progress updates
+    ipcMain.on(SAVE_TEMP_FILE, async (event, data): Promise<void> => {
         try {
             //console.log('Received data in main process:', typeof data, data);
             const { fileName, buffer, metadata } = data;
@@ -63,13 +65,29 @@ export function registerRagIpcHandlers(): void {
                         databaseError: 'Invalid input parameters'
                     }
                 };
-                return errorResponse;
+                event.sender.send(SAVE_TEMP_FILE_COMPLETE, JSON.stringify(errorResponse));
+                return;
             }
+
+            // Send progress update: Starting file save
+            event.sender.send(SAVE_TEMP_FILE_PROGRESS, JSON.stringify({
+                progress: 10,
+                message: 'Starting file save...',
+                fileName: fileName
+            }));
+
             // Create app data directory for uploaded files using Electron's app.getPath
             const appDataDir = path.join(app.getPath('userData'), 'uploads');
             if (!fs.existsSync(appDataDir)) {
                 fs.mkdirSync(appDataDir, { recursive: true });
             }
+            
+            // Send progress update: Directory created
+            event.sender.send(SAVE_TEMP_FILE_PROGRESS, JSON.stringify({
+                progress: 20,
+                message: 'Directory prepared...',
+                fileName: fileName
+            }));
             
             // Generate unique filename to avoid conflicts
             const timestamp = Date.now();
@@ -77,6 +95,13 @@ export function registerRagIpcHandlers(): void {
             const baseName = path.basename(fileName, fileExt);
             const uniqueFileName = `${baseName}_${timestamp}${fileExt}`;
             const appDataFilePath = path.join(appDataDir, uniqueFileName);
+            
+            // Send progress update: Processing file buffer
+            event.sender.send(SAVE_TEMP_FILE_PROGRESS, JSON.stringify({
+                progress: 30,
+                message: 'Processing file buffer...',
+                fileName: fileName
+            }));
             
             // Convert Uint8Array to Buffer and write to file
             // If buffer comes as an object with numeric keys, convert it back to Uint8Array first
@@ -94,6 +119,13 @@ export function registerRagIpcHandlers(): void {
             const nodeBuffer = Buffer.from(uint8Buffer);
             fs.writeFileSync(appDataFilePath, nodeBuffer);
             
+            // Send progress update: File saved
+            event.sender.send(SAVE_TEMP_FILE_PROGRESS, JSON.stringify({
+                progress: 50,
+                message: 'File saved to disk...',
+                fileName: fileName
+            }));
+            
             let documentInfo: UploadedDocument | null = null;
             let databaseSaved = false;
             let databaseError: string | null = null;
@@ -101,6 +133,13 @@ export function registerRagIpcHandlers(): void {
             // If metadata is provided, save document to database
             if (metadata) {
                 try {
+                    // Send progress update: Starting database save
+                    event.sender.send(SAVE_TEMP_FILE_PROGRESS, JSON.stringify({
+                        progress: 60,
+                        message: 'Saving to database...',
+                        fileName: fileName
+                    }));
+
                     const ragController = await createRagController();
                     
                     // Get default embedding model from controller
@@ -118,6 +157,13 @@ export function registerRagIpcHandlers(): void {
                         author: metadata.author || 'User',
                         modelName: defaultEmbeddingModel || metadata.model_name
                     };
+                    
+                    // Send progress update: Processing document
+                    event.sender.send(SAVE_TEMP_FILE_PROGRESS, JSON.stringify({
+                        progress: 80,
+                        message: 'Processing document...',
+                        fileName: fileName
+                    }));
                     
                     const uploadResult = await ragController.uploadDocument(uploadOptions);
                     console.log(`Document saved to database with ID: ${uploadResult.documentId}`);
@@ -143,6 +189,13 @@ export function registerRagIpcHandlers(): void {
                 }
             }
             
+            // Send progress update: Almost complete
+            event.sender.send(SAVE_TEMP_FILE_PROGRESS, JSON.stringify({
+                progress: 90,
+                message: 'Finalizing...',
+                fileName: fileName
+            }));
+            
             const response: CommonMessage<SaveTempFileResponse> = {
                 status: true,
                 msg: 'File saved successfully',
@@ -154,10 +207,20 @@ export function registerRagIpcHandlers(): void {
                 }
             };
             
-            return response;
+            // Send final completion message
+            event.sender.send(SAVE_TEMP_FILE_COMPLETE, JSON.stringify(response));
         } catch (error) {
             console.error('Error saving temporary file:', error);
-            throw new Error(`Failed to save temporary file: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            const errorResponse: CommonMessage<SaveTempFileResponse> = {
+                status: false,
+                msg: `Failed to save temporary file: ${error instanceof Error ? error.message : 'Unknown error'}`,
+                data: {
+                    tempFilePath: '',
+                    databaseSaved: false,
+                    databaseError: error instanceof Error ? error.message : 'Unknown error'
+                }
+            };
+            event.sender.send(SAVE_TEMP_FILE_COMPLETE, JSON.stringify(errorResponse));
         }
     });
 

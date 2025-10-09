@@ -28,9 +28,10 @@
     <v-alert
       v-if="statusMessage"
       :type="statusType"
-      class="mb-2 status-alert-compact"
+      class="mb-2"
       density="compact"
       dismissible
+      closable
       @input="statusMessage = ''"
     >
       {{ statusMessage }}
@@ -167,6 +168,19 @@
                 <v-list-item-title>{{ file.name }}</v-list-item-title>
                 <v-list-item-subtitle>{{ formatFileSize(file.size) }}</v-list-item-subtitle>
                 
+                <!-- Progress indicator for current uploading file -->
+                <div v-if="currentUploadingFile === file.name && uploadProgress.has(file.name)" class="mt-2">
+                  <v-progress-linear
+                    :model-value="uploadProgress.get(file.name)?.progress || 0"
+                    color="primary"
+                    height="4"
+                    rounded
+                  />
+                  <div class="text-caption mt-1">
+                    {{ uploadProgress.get(file.name)?.message || 'Processing...' }}
+                  </div>
+                </div>
+                
                 <template v-slot:append>
                   <v-btn
                     icon="mdi-close"
@@ -297,7 +311,7 @@ const { t } = useI18n();
 
 import DocumentManagement from '@/views/pages/knowledge/DocumentManagement.vue';
 import SearchInterface from '@/views/pages/knowledge/SearchInterface.vue';
-import { initializeRAG, getRAGStats, uploadDocument, selectFilesNative as selectFilesNativeAPI, copyFileToTemp as copyFileToTempAPI, chunkAndEmbedDocument, getAvailableEmbeddingModelsWithDefault, updateEmbeddingModel } from '@/views/api/rag';
+import { initializeRAG, getRAGStats, uploadDocument, selectFilesNative as selectFilesNativeAPI, copyFileToTemp as copyFileToTempAPI, chunkAndEmbedDocument, getAvailableEmbeddingModelsWithDefault, updateEmbeddingModel, FileUploadProgress, FileUploadComplete } from '@/views/api/rag';
 import type { SaveTempFileResponse, UploadedDocument } from '@/entityTypes/commonType';
 import { ModelInfo } from '@/api/ragConfigApi';
 import { DocumentMetadata } from '@/entityTypes/metadataType';
@@ -327,6 +341,10 @@ const uploading = ref(false);
 const uploadError = ref('');
 const isDragOver = ref(false);
 const fileInput = ref<HTMLInputElement>();
+
+// Progress tracking
+const uploadProgress = ref<Map<string, FileUploadProgress>>(new Map());
+const currentUploadingFile = ref<string>('');
 
 // Component refs
 const documentManagement = ref();
@@ -404,11 +422,11 @@ function showStatus(message: string, type: 'success' | 'error' | 'warning' | 'in
   statusType.value = type;
   
   // Auto-hide success messages after 3 seconds
-  if (type === 'success') {
+  //if (type === 'success') {
     setTimeout(() => {
       statusMessage.value = '';
     }, 3000);
-  }
+  //}
 }
 
 // Event handlers
@@ -629,6 +647,8 @@ function cancelUpload() {
   uploadError.value = '';
   uploading.value = false;
   isDragOver.value = false;
+  currentUploadingFile.value = '';
+  uploadProgress.value.clear();
 }
 
 async function confirmUpload() {
@@ -639,34 +659,57 @@ async function confirmUpload() {
 
   uploading.value = true;
   uploadError.value = '';
+  uploadProgress.value.clear();
 
   try {
-    // Upload each file
+    // Upload each file with progress tracking
     const uploadPromises = uploadFiles.value.map(async (file): Promise<UploadedDocument | null> => {
       // For Electron, we can access the file path directly if available
       // Otherwise, use the webkitRelativePath or create a temporary file
       let filePath = (file as any).path || file.webkitRelativePath;
-      let copyResult: { filePath: string; uploadResult: SaveTempFileResponse } | null = null;
-      let needsUpload = true;
       
       if (!filePath) {
-        // Fallback: create temporary file for browser-like behavior
-        // This will automatically save to database via SAVE_TEMP_FILE handler
-        copyResult = await copyFileToTemp(file, {
+        // Set current uploading file for progress display
+        currentUploadingFile.value = file.name;
+        
+        // Fallback: create temporary file for browser-like behavior with progress callbacks
+        const uploadResult = await copyFileToTempAPI(file, {
           title: file.name.replace(/\.[^/.]+$/, ""),
           description: `Uploaded document: ${file.name}`,
           tags: ['uploaded', 'knowledge'],
           // model_name: currentModel.value
+        }, 
+        // Progress callback
+        (progress: FileUploadProgress) => {
+          uploadProgress.value.set(file.name, progress);
+          console.log(`Progress for ${file.name}:`, progress);
+        },
+        // Complete callback
+        (result: FileUploadComplete) => {
+          console.log(`Complete for ${file.name}:`, result);
+          uploadProgress.value.delete(file.name);
         });
-        console.log("copyResult is ready")
-        console.log(copyResult)
-        filePath = copyResult.filePath;
-        needsUpload = !copyResult.uploadResult.databaseSaved; // Only skip if database save was successful
-      }
-      
-      // Return document info from temp file upload result (already processed)
-      if (copyResult?.uploadResult.document) {
-        return copyResult.uploadResult.document;
+        
+        console.log("uploadResult is ready")
+        console.log(uploadResult)
+        filePath = uploadResult.tempFilePath;
+        
+        // Return document info from temp file upload result (already processed)
+        if (uploadResult.document) {
+          return uploadResult.document;
+        } else {
+          // Fallback document info if no database document available
+          return {
+            id: Date.now(), // Temporary ID
+            name: file.name,
+            title: file.name.replace(/\.[^/.]+$/, ""),
+            filePath: filePath,
+            status: 'pending',
+            description: `Uploaded document: ${file.name}`,
+            tags: ['uploaded', 'knowledge'],
+            author: 'User'
+          } as UploadedDocument;
+        }
       } else {
         // Fallback document info if no database document available
         return {
@@ -697,6 +740,8 @@ async function confirmUpload() {
     console.error('Upload error:', error);
   } finally {
     uploading.value = false;
+    currentUploadingFile.value = '';
+    uploadProgress.value.clear();
   }
 }
 

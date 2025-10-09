@@ -78,6 +78,9 @@ export interface ChunkingConfig {
     /** Whether to split on paragraphs when possible */
     splitOnParagraphs?: boolean;
 }
+export interface ChunkingConfigResponse{
+    default_config: ChunkingConfig;
+}
 
 /**
  * API client for RAG configuration management
@@ -226,7 +229,7 @@ export class RagConfigApi {
      * }
      * ```
      */
-    async getChunkingConfig(): Promise<CommonApiresp<ChunkingConfig>> {
+    async getChunkingConfig(): Promise<CommonApiresp<ChunkingConfigResponse>> {
         return this._httpClient.get('/api/ai/chunking/info');
     }
 

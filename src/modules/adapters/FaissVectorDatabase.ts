@@ -10,8 +10,8 @@ interface FAISSIndex {
     add(vectors: number[][]): void;
     search(queryVector: number[], k: number): { indices: number[], distances: number[] };
     save(path: string): void;
-    getDimension(): number;
-    getTotalVectors(): number;
+    d(): number;  // dimension method in FAISS
+    ntotal(): number;  // total vectors method in FAISS
     reset(): void;
 }
 
@@ -99,7 +99,7 @@ export class FaissVectorDatabase extends AbstractVectorDatabase {
                 
                 // Note: Chunk ID mapping will need to be rebuilt from database
                 // This is a limitation of FAISS - it doesn't store metadata
-                console.log(`Loaded existing FAISS index for model ${config.modelId} with ${this.index?.getTotalVectors() || 0} vectors`);
+                console.log(`Loaded existing FAISS index for model ${config.modelId} with ${this.index?.ntotal() || 0} vectors`);
                 console.warn('Chunk ID mapping will need to be rebuilt from database');
             } else {
                 console.log(`No existing FAISS index found for model ${config.modelId}, creating new one`);
@@ -152,7 +152,12 @@ export class FaissVectorDatabase extends AbstractVectorDatabase {
         });
 
         try {
-            const currentVectorCount = this.index.getTotalVectors();
+            const currentVectorCount = this.index.ntotal();
+            
+            // Debug logging
+            console.log(`Adding ${vectors.length} vectors to FAISS index. Each vector has ${vectors[0]?.length || 0} dimensions. Index dimension: ${this.dimension}`);
+            console.log(`Current vector count before adding: ${currentVectorCount}`);
+            console.log(vectors)
             this.index.add(vectors);
             
             // Store chunk ID mapping for each added vector
@@ -206,7 +211,7 @@ export class FaissVectorDatabase extends AbstractVectorDatabase {
      */
     getIndexStats(): IndexStats {
         return {
-            totalVectors: this.index?.getTotalVectors() || 0,
+            totalVectors: this.index?.ntotal() || 0,
             dimension: this.dimension,
             indexType: this.index?.constructor.name || 'Unknown',
             isInitialized: this.initialized,
@@ -275,7 +280,7 @@ export class FaissVectorDatabase extends AbstractVectorDatabase {
             }
 
             this.index = (faiss as any).IndexFlatL2.load(backupPath);
-            this.dimension = this.index?.getDimension() || 0;
+            this.dimension = this.index?.d() || 0;
             console.log(`FAISS index restored from ${backupPath}`);
         } catch (error) {
             console.error('Failed to restore FAISS index:', error);

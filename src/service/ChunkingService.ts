@@ -94,7 +94,7 @@ export class ChunkingService {
             // Fetch configuration from remote API
             const configResponse = await this.ragConfigApi.getChunkingConfig();
             if (configResponse.status && configResponse.data) {
-                this.cachedConfig = configResponse.data;
+                this.cachedConfig = configResponse.data.default_config;
                 this.configCacheExpiry = Date.now() + this.CACHE_DURATION_MS;
                 console.log('Chunking configuration loaded from remote API:', {
                     chunkSize: this.cachedConfig.chunkSize,
@@ -225,6 +225,9 @@ export class ChunkingService {
      */
     private convertHtmlToMarkdown(htmlContent: string): string {
         try {
+            // First, clean the HTML content to remove unwanted elements
+            const cleanedHtml = this.cleanHtmlContent(htmlContent);
+
             const turndownService = new TurndownService({
                 headingStyle: 'atx',
                 bulletListMarker: '-',
@@ -246,17 +249,69 @@ export class ChunkingService {
                 replacement: (content) => `==${content}==`
             });
 
+            // Add rule to remove script and style content completely
+            turndownService.addRule('removeScripts', {
+                filter: ['script', 'style', 'noscript'],
+                replacement: () => ''
+            });
+
+            // Add rule to clean up navigation and header elements
+            turndownService.addRule('removeNavigation', {
+                filter: ['nav', 'header', 'footer', 'aside'],
+                replacement: (content) => content.trim() ? `\n\n${content}\n\n` : ''
+            });
+
             // Convert HTML to markdown
-            const markdown = turndownService.turndown(htmlContent);
+            const markdown = turndownService.turndown(cleanedHtml);
             
             // Clean up extra whitespace and normalize line breaks
             return markdown
                 .replace(/\n{3,}/g, '\n\n') // Replace multiple newlines with double newlines
                 .replace(/[ \t]+$/gm, '') // Remove trailing whitespace from lines
+                .replace(/^\s*\n/gm, '') // Remove empty lines at start
                 .trim();
         } catch (error) {
             console.error('Error converting HTML to markdown:', error);
             // Fallback: return the original HTML content if conversion fails
+            return htmlContent;
+        }
+    }
+
+    /**
+     * Clean HTML content by removing unwanted elements and scripts
+     */
+    private cleanHtmlContent(htmlContent: string): string {
+        try {
+            // Remove script tags and their content completely
+            let cleaned = htmlContent.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
+            
+            // Remove style tags and their content completely
+            cleaned = cleaned.replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '');
+            
+            // Remove noscript tags and their content
+            cleaned = cleaned.replace(/<noscript\b[^<]*(?:(?!<\/noscript>)<[^<]*)*<\/noscript>/gi, '');
+            
+            // Remove comments
+            cleaned = cleaned.replace(/<!--[\s\S]*?-->/g, '');
+            
+            // Remove meta tags (except viewport)
+            cleaned = cleaned.replace(/<meta(?![^>]*viewport)[^>]*>/gi, '');
+            
+            // Remove link tags that are not stylesheets or canonical
+            cleaned = cleaned.replace(/<link(?![^>]*(?:stylesheet|canonical))[^>]*>/gi, '');
+            
+            // Remove script-related attributes from other elements
+            cleaned = cleaned.replace(/\s*on\w+\s*=\s*["'][^"']*["']/gi, '');
+            
+            // Remove data attributes that might contain scripts
+            cleaned = cleaned.replace(/\s*data-[^=]*\s*=\s*["'][^"']*["']/gi, '');
+            
+            // Clean up extra whitespace
+            cleaned = cleaned.replace(/\s+/g, ' ').trim();
+            
+            return cleaned;
+        } catch (error) {
+            console.error('Error cleaning HTML content:', error);
             return htmlContent;
         }
     }
@@ -793,34 +848,38 @@ export class ChunkingService {
         isHeading: boolean, isListStart: boolean, isCodeBlock: boolean, isHorizontalRule: boolean, isTableRow: boolean,
         isListContinuation: boolean, isTableContinuation: boolean, isCodeContinuation: boolean
     ): boolean {
-        // Always break on major structural elements if chunk is getting large
-        if (isHeading && this.estimateTokenCount(currentChunk) > options.chunkSize * 0.7) {
-            return true;
-        }
+        const currentTokenCount = this.estimateTokenCount(currentChunk);
+        const potentialTokenCount = this.estimateTokenCount(potentialChunk);
         
-        // Break on horizontal rules (page separators)
+        // Break on horizontal rules (page separators) - highest priority
         if (isHorizontalRule) {
             return true;
         }
         
-        // Don't break in the middle of code blocks
-        if (isCodeContinuation) {
-            return false;
-        }
-        
-        // Don't break in the middle of lists
-        if (isListContinuation) {
-            return false;
-        }
-        
-        // Don't break in the middle of tables
-        if (isTableContinuation) {
-            return false;
-        }
-        
-        // Break if chunk size exceeds limit
-        if (this.estimateTokenCount(potentialChunk) > options.chunkSize) {
+        // CRITICAL: Always break if chunk size exceeds limit, regardless of structural considerations
+        // This ensures we never create chunks that exceed the specified size
+        if (potentialTokenCount > options.chunkSize) {
             return true;
+        }
+        
+        // Don't break in the middle of code blocks (unless size limit is exceeded)
+        if (isCodeContinuation && potentialTokenCount <= options.chunkSize) {
+            return false;
+        }
+        
+        // Don't break in the middle of tables (unless size limit is exceeded)
+        if (isTableContinuation && potentialTokenCount <= options.chunkSize) {
+            return false;
+        }
+        
+        // Break on major structural elements if chunk is getting large (but not if it would exceed size limit)
+        if (isHeading && currentTokenCount > options.chunkSize * 0.7 && potentialTokenCount <= options.chunkSize) {
+            return true;
+        }
+        
+        // Don't break in the middle of lists (unless size limit is exceeded)
+        if (isListContinuation && potentialTokenCount <= options.chunkSize) {
+            return false;
         }
         
         return false;
