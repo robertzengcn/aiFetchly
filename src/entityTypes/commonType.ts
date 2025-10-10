@@ -170,6 +170,17 @@ export type NativateDatatype={
 
 // RAG Configuration Types
 
+/**
+ * Configuration for embedding models
+ */
+export interface EmbeddingConfig {
+    model: string;
+    dimensions?: number;
+    maxTokens?: number;
+    timeout?: number;
+    retries?: number;
+}
+
 export interface ConfigurationResponse {
     success: boolean;
     data: any;

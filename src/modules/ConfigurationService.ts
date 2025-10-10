@@ -1,6 +1,6 @@
 "use strict";
 import { RagConfigApi } from "@/api/ragConfigApi";
-import { EmbeddingConfig } from "@/modules/llm/EmbeddingFactory";
+import { EmbeddingConfig } from "@/entityTypes/commonType";
 
 /**
  * Configuration service interface for embedding model management

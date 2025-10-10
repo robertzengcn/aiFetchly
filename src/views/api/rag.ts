@@ -1,6 +1,5 @@
 import { windowInvoke, windowInvokeBinary, windowSend, windowSendBinary, windowReceive } from '@/views/utils/apirequest';
-import { EmbeddingConfig } from '@/modules/llm/EmbeddingFactory';
-import { LlmCongfig, SaveTempFileResponse, ChunkAndEmbedResponse, CommonMessage } from '@/entityTypes/commonType';
+import { EmbeddingConfig, LlmCongfig, SaveTempFileResponse, ChunkAndEmbedResponse, CommonMessage } from '@/entityTypes/commonType';
 import { ModelInfo } from '@/api/ragConfigApi';
 import {
   RAG_INITIALIZE,

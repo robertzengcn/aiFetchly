@@ -1,7 +1,6 @@
 "use strict";
 import { HttpClient } from "@/modules/lib/httpclient";
-import { EmbeddingConfig } from "@/modules/llm/EmbeddingFactory";
-import { CommonApiresp } from "@/entityTypes/commonType";
+import { EmbeddingConfig, CommonApiresp } from "@/entityTypes/commonType";
 
 /**
  * Embedding result interface for individual embedding

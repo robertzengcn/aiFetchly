@@ -1,5 +1,5 @@
 "use strict";
-import { EmbeddingConfig } from "@/modules/llm/EmbeddingFactory";
+import { EmbeddingConfig } from "@/entityTypes/commonType";
 import { ModelRegistry, ModelMetadata } from "./ModelRegistry";
 
 export interface ValidationResult {

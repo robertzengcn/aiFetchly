@@ -1,9 +1,6 @@
 import { SearchResult } from '@/service/VectorSearchService';
 import { ProcessedQuery } from '@/service/QueryProcessor';
-import { LlmFactory } from '@/modules/llm/LlmFactory';
-import { LlmImpl } from '@/modules/interface/LlmImpl';
 import { LlmCongfig } from '@/entityTypes/commonType';
-import { TranslateToolEnum } from '@/config/generate';
 
 export interface GeneratedResponse {
     content: string;
@@ -34,38 +31,34 @@ export interface ResponseGenerationOptions {
     contextWindow?: number;
 }
 
+/**
+ * ResponseGenerator - Currently deprecated/unused
+ * This class was previously used for LLM-based response generation
+ * The RAG system now uses remote APIs instead
+ * 
+ * @deprecated Use remote API-based response generation instead
+ */
 export class ResponseGenerator {
-    private llmFactory: LlmFactory;
-    private currentLlm: LlmImpl | null = null;
     private responseHistory: Map<string, GeneratedResponse> = new Map();
 
     constructor() {
-        this.llmFactory = new LlmFactory();
+        // No longer using LlmFactory - now relies on remote APIs
+        console.warn('ResponseGenerator is deprecated. Use remote API-based response generation instead.');
     }
 
     /**
      * Initialize the response generator with LLM configuration
+     * @deprecated This method is no longer used. Response generation now handled by remote APIs.
      * @param llmConfig - LLM configuration
      */
     async initialize(llmConfig: LlmCongfig): Promise<void> {
-        try {
-            // Use the first available LLM tool for now
-            // In production, this could be configurable
-            this.currentLlm = this.llmFactory.getLlmTool(TranslateToolEnum.OPENAI, llmConfig) || null;
-            
-            if (!this.currentLlm) {
-                throw new Error('Failed to initialize LLM');
-            }
-
-            console.log('Response generator initialized successfully');
-        } catch (error) {
-            console.error('Failed to initialize response generator:', error);
-            throw new Error('Failed to initialize response generator');
-        }
+        console.warn('ResponseGenerator.initialize() is deprecated and no longer functional');
+        // No-op - this class is deprecated
     }
 
     /**
      * Generate a response based on search results
+     * @deprecated This method is no longer functional. Use remote API-based response generation instead.
      * @param query - Processed query
      * @param searchResults - Search results
      * @param options - Generation options
@@ -76,60 +69,7 @@ export class ResponseGenerator {
         searchResults: SearchResult[],
         options: ResponseGenerationOptions = {}
     ): Promise<GeneratedResponse> {
-        const startTime = Date.now();
-
-        try {
-            if (!this.currentLlm) {
-                throw new Error('LLM not initialized');
-            }
-
-            // Check cache first
-            const cacheKey = this.generateCacheKey(query, searchResults, options);
-            const cached = this.responseHistory.get(cacheKey);
-            if (cached) {
-                return cached;
-            }
-
-            // Prepare context from search results
-            const context = this.prepareContext(searchResults, options.contextWindow || 4000);
-            
-            // Generate sources
-            const sources = this.prepareSources(searchResults);
-
-            // Create system prompt
-            const systemPrompt = this.createSystemPrompt(query, options);
-
-            // Generate response
-            const response = await this.generateLLMResponse(
-                query,
-                context,
-                systemPrompt,
-                options
-            );
-
-            // Calculate confidence
-            const confidence = this.calculateConfidence(query, searchResults, response);
-
-            const generatedResponse: GeneratedResponse = {
-                content: response,
-                sources: options.includeSources !== false ? sources : [],
-                confidence,
-                processingTime: Date.now() - startTime,
-                metadata: {
-                    model: 'openai', // Default model name
-                    tokensUsed: this.estimateTokens(context + response),
-                    chunksUsed: searchResults.length
-                }
-            };
-
-            // Cache the response
-            this.responseHistory.set(cacheKey, generatedResponse);
-
-            return generatedResponse;
-        } catch (error) {
-            console.error('Error generating response:', error);
-            throw new Error(`Response generation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-        }
+        throw new Error('ResponseGenerator is deprecated. LlmFactory has been removed. Use remote API-based response generation instead.');
     }
 
     /**
@@ -217,11 +157,7 @@ export class ResponseGenerator {
 
     /**
      * Generate response using LLM
-     * @param query - Processed query
-     * @param context - Context from search results
-     * @param systemPrompt - System prompt
-     * @param options - Generation options
-     * @returns Generated response text
+     * @deprecated This method is no longer functional. LlmFactory has been removed.
      */
     private async generateLLMResponse(
         query: ProcessedQuery,
@@ -229,21 +165,7 @@ export class ResponseGenerator {
         systemPrompt: string,
         options: ResponseGenerationOptions
     ): Promise<string> {
-        if (!this.currentLlm) {
-            throw new Error('LLM not initialized');
-        }
-
-        const userPrompt = `Context:\n${context}\n\nQuestion: ${query.originalQuery}`;
-        
-        // Use the LLM's translate method as a general text generation method
-        const response = await this.currentLlm.translate(
-            'user', // input language
-            'assistant', // output language
-            userPrompt,
-            systemPrompt
-        );
-
-        return response?.toString() || 'Unable to generate response';
+        throw new Error('LlmFactory has been removed. Use remote API-based response generation instead.');
     }
 
     /**
@@ -313,24 +235,18 @@ export class ResponseGenerator {
 
     /**
      * Update LLM configuration
-     * @param llmConfig - New LLM configuration
+     * @deprecated This method is no longer functional. LlmFactory has been removed.
      */
-    async updateLlmConfig(llmConfig: LlmCongfig): Promise<void> {
-        try {
-            this.currentLlm = this.llmFactory.getLlmTool(TranslateToolEnum.OPENAI, llmConfig) || null;
-            
-            if (!this.currentLlm) {
-                throw new Error('Failed to update LLM configuration');
-            }
+    async updateLlmConfig(config: Partial<LlmCongfig>): Promise<void> {
+        throw new Error('LlmFactory has been removed. Use remote API-based LLM instead.');
+    }
 
-            // Clear cache when LLM changes
-            this.responseHistory.clear();
-            
-            console.log('LLM configuration updated successfully');
-        } catch (error) {
-            console.error('Failed to update LLM configuration:', error);
-            throw new Error('Failed to update LLM configuration');
-        }
+    /**
+     * Switch to a different LLM
+     * @deprecated This method is no longer functional. LlmFactory has been removed.
+     */
+    async switchLlm(llmConfig: LlmCongfig): Promise<void> {
+        throw new Error('LlmFactory has been removed. Use remote API-based LLM instead.');
     }
 
     /**
@@ -371,48 +287,26 @@ export class ResponseGenerator {
 
     /**
      * Get available LLM models
-     * @returns Array of available models
+     * @deprecated This method is no longer functional. LlmFactory has been removed.
+     * @returns Empty array
      */
     getAvailableModels(): string[] {
-        return Object.values(TranslateToolEnum);
+        console.warn('getAvailableModels() is deprecated. LlmFactory has been removed.');
+        return [];
     }
 
     /**
      * Test LLM connection
-     * @returns Test result
+     * @deprecated This method is no longer functional. LlmFactory has been removed.
      */
     async testLlmConnection(): Promise<{
         success: boolean;
         message: string;
         responseTime?: number;
     }> {
-        try {
-            if (!this.currentLlm) {
-                return {
-                    success: false,
-                    message: 'LLM not initialized'
-                };
-            }
-
-            const startTime = Date.now();
-            const testResponse = await this.currentLlm.translate(
-                'user',
-                'assistant',
-                'Hello, this is a test.',
-                'Respond with "Test successful"'
-            );
-            const responseTime = Date.now() - startTime;
-
-            return {
-                success: true,
-                message: 'LLM connection test successful',
-                responseTime
-            };
-        } catch (error) {
-            return {
-                success: false,
-                message: `LLM connection test failed: ${error instanceof Error ? error.message : 'Unknown error'}`
-            };
-        }
+        return {
+            success: false,
+            message: 'LlmFactory has been removed. Use remote API-based LLM instead.'
+        };
     }
 }

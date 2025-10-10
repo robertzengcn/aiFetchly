@@ -2,7 +2,7 @@
 import { expect, test, describe, beforeEach, vi } from 'vitest';
 import { RagConfigApi } from '../ragConfigApi';
 import { HttpClient } from '@/modules/lib/httpclient';
-import { EmbeddingConfig } from '@/modules/llm/EmbeddingFactory';
+import { EmbeddingConfig } from '@/entityTypes/commonType';
 
 // Mock HttpClient
 vi.mock('@/modules/lib/httpclient');
