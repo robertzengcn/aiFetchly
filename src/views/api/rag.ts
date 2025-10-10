@@ -22,6 +22,7 @@ import {
   RAG_CLEAR_CACHE,
   RAG_CLEANUP,
   RAG_CHUNK_AND_EMBED_DOCUMENT,
+  RAG_DOWNLOAD_DOCUMENT,
   SHOW_OPEN_DIALOG,
   GET_FILE_STATS,
   SAVE_TEMP_FILE,
@@ -172,9 +173,23 @@ export async function updateDocument(id: number, metadata: any): Promise<RAGResp
 
 /**
  * Delete a document
+ * @param id - Document ID to delete
+ * @param deleteFile - Whether to also delete the physical file and vector index (default: true)
  */
-export async function deleteDocument(id: number, deleteFile?: boolean): Promise<RAGResponse> {
-  return await windowInvoke(RAG_DELETE_DOCUMENT, { id, deleteFile });
+export async function deleteDocument(id: number, deleteFile: boolean = true): Promise<RAGResponse> {
+  try {      
+    await windowInvoke(RAG_DELETE_DOCUMENT, { id, deleteFile });
+    return {
+      success: true,
+      message: ''
+    };
+  } catch (error) {
+    console.error('Error deleting document:', error);
+    return {
+      success: false,
+      message: error instanceof Error ? error.message : 'Unknown error occurred'
+    };
+  }
 }
 
 /**
@@ -531,6 +546,35 @@ export async function chunkAndEmbedDocument(
     };
   } catch (error) {
     console.error('Error chunking and embedding document:', error);
+    return {
+      success: false,
+      message: error instanceof Error ? error.message : 'Unknown error occurred'
+    };
+  }
+}
+
+/**
+ * Download a document
+ * @param documentId - Document ID to download
+ * @param fileName - File name for the download
+ * @returns Download result
+ */
+export async function downloadDocument(documentId: number, fileName: string): Promise<RAGResponse<{ downloaded: boolean }>> {
+  try {
+    const requestData = {
+      documentId,
+      fileName
+    };
+
+    const response = await windowInvoke(RAG_DOWNLOAD_DOCUMENT, requestData);
+    
+    return {
+      success: true,
+      data: response,
+      message: ""
+    };
+  } catch (error) {
+    console.error('Error downloading document:', error);
     return {
       success: false,
       message: error instanceof Error ? error.message : 'Unknown error occurred'

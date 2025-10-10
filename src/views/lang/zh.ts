@@ -168,6 +168,12 @@ export default {
         confirm_reembed_document: "您确定要重新嵌入文档 \"{name}\" 吗？这将重新生成所有分块和嵌入。",
         reembed_success: "文档 \"{name}\" 重新嵌入成功：创建了 {chunks} 个分块，生成了 {embeddings} 个嵌入",
         reembed_error: "重新嵌入文档 \"{name}\" 失败：{error}",
+        download_error: "下载文档 \"{name}\" 失败：{error}",
+        delete_success: "文档 \"{name}\" 删除成功",
+        delete_error: "删除文档 \"{name}\" 失败：{error}",
+        bulk_delete_success: "成功删除 {count} 个文档",
+        bulk_delete_partial: "成功删除 {success} 个文档，删除 {failed} 个文档失败",
+        bulk_delete_error: "删除文档失败：{error}",
         // Settings translations
         settings: "设置",
         embedding_model: "嵌入模型",

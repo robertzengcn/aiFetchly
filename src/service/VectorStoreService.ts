@@ -570,8 +570,9 @@ export class VectorStoreService {
      * @param documentId - Document ID
      * @param modelConfig - Embedding model configuration
      * @param indexType - Type of index (default: 'Flat')
+     * @returns The file path of the created vector index
      */
-    async createDocumentIndex(documentId: number, modelConfig: EmbeddingModelConfig, indexType: string = 'Flat'): Promise<void> {
+    async createDocumentIndex(documentId: number, modelConfig: EmbeddingModelConfig, indexType: string = 'Flat'): Promise<string> {
         try {
             this.currentModel = modelConfig;
             
@@ -588,6 +589,10 @@ export class VectorStoreService {
 
             await pooledInstance.createIndex(vectorDbConfig);
             console.log(`Created document-specific ${indexType} index for document ${documentId} with model ${modelConfig.modelId} (using pool)`);
+            
+            // Get and return the actual index file path
+            const indexFilePath = this.getDocumentIndexPath(documentId, modelConfig);
+            return indexFilePath;
         } catch (error) {
             console.error(`Failed to create document-specific index for document ${documentId}:`, error);
             throw new Error(`Failed to create document-specific index for document ${documentId}`);
@@ -704,5 +709,17 @@ export class VectorStoreService {
     async clearPool(): Promise<void> {
         await VectorDatabasePool.clearAllInstances();
         console.log('Cleared all vector database pool instances');
+    }
+
+    /**
+     * Get the file path for a document-specific vector index
+     * @param documentId - Document ID
+     * @param modelConfig - Embedding model configuration
+     * @returns The file path of the vector index
+     */
+    getDocumentIndexPath(documentId: number, modelConfig: EmbeddingModelConfig): string {
+        const baseDir = path.dirname(this.indexPath);
+        const fileName = `index_doc_${documentId}_${modelConfig.modelId}_${modelConfig.dimensions}.${this.getFileExtension()}`;
+        return path.join(baseDir, 'documents', fileName);
     }
 }

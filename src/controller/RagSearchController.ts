@@ -167,6 +167,19 @@ export class RagSearchController {
     }
 
     /**
+     * Download a document
+     * @param id - Document ID to download
+     * @returns Document file path
+     */
+    async downloadDocument(id: number): Promise<string> {
+        const document = await this.getDocument(id);
+        if (!document) {
+            throw new Error('Document not found');
+        }
+        return document.filePath;
+    }
+
+    /**
      * Get document statistics
      * @returns Document statistics
      */
@@ -416,9 +429,9 @@ export class RagSearchController {
                 } else {
                     console.warn('Failed to fetch available models from API, using fallback model');
                     // Use fallback model if API call fails
-                    const fallbackModel = 'Qwen/Qwen3-Embedding-4B';
-                    await this.systemSettingModel.updateDefaultEmbeddingModel(fallbackModel, embeddingGroup);
-                    console.log(`Using fallback model: ${fallbackModel}`);
+                    // const fallbackModel = 'Qwen/Qwen3-Embedding-4B';
+                    // await this.systemSettingModel.updateDefaultEmbeddingModel(fallbackModel, embeddingGroup);
+                    // console.log(`Using fallback model: ${fallbackModel}`);
                 }
             } else {
                 console.log(`Default embedding model already exists: ${defaultEmbeddingModel}`);

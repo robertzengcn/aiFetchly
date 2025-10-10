@@ -64,6 +64,11 @@ export class RAGDocumentEntity extends AuditableEntity {
     @Column('datetime', { nullable: true })
     lastAccessedAt?: Date;
 
+    // Vector database index path
+    @Order(14)
+    @Column('varchar', { length: 500, nullable: true })
+    vectorIndexPath?: string;
+
     // Relationships
     @OneToMany('RAGChunkEntity', 'document')
     chunks?: any[];

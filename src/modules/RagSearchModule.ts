@@ -161,13 +161,14 @@ export class RagSearchModule extends BaseModule {
      * Generate embeddings for document chunks using remote API
      * @param chunks - Array of chunk entities
      */
-    private async generateChunkEmbeddings(chunks: RAGChunkEntity[], modelName: string): Promise<void> {
+    private async generateChunkEmbeddings(chunks: RAGChunkEntity[], modelName: string): Promise<string | null> {
         try {
             if (chunks.length === 0) {
-                return;
+                return null;
             }
 
             const documentId = chunks[0].documentId;
+            let vectorIndexPath: string | null = null;
             
             for (const chunk of chunks) {
                 // Generate embedding for chunk content using remote API
@@ -192,9 +193,21 @@ export class RagSearchModule extends BaseModule {
                         pageNumber: chunk.pageNumber
                     }
                 });
+                
+                // Get the vector index path (only need to do this once)
+                if (!vectorIndexPath) {
+                    vectorIndexPath = this.searchService.vectorStoreService.getDocumentIndexPath(
+                        documentId,
+                        {
+                            modelId: embeddingResult.model,
+                            dimensions: embeddingResult.dimensions
+                        }
+                    );
+                }
             }
             
             console.log(`Generated embeddings for ${chunks.length} chunks using remote API for document ${documentId}`);
+            return vectorIndexPath;
         } catch (error) {
             console.error('Error generating embeddings:', error);
             throw new Error(`Failed to generate embeddings: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -414,11 +427,8 @@ export class RagSearchModule extends BaseModule {
      */
     async deleteDocument(id: number, deleteFile: boolean = false): Promise<void> {
         try {
-            // Delete the document-specific vector index first
-            await this.searchService.vectorStoreService.deleteDocumentIndex(id);
-            console.log(`Deleted vector index for document ${id}`);
-            
-            // Then delete the document from the database
+            // Delete the document from the database
+            // Note: RAGDocumentModule handles deleting the vector index file using the stored vectorIndexPath
             await this.documentService.deleteDocument(id, deleteFile);
             console.log(`Deleted document ${id} from database`);
         } catch (error) {
@@ -581,7 +591,15 @@ export class RagSearchModule extends BaseModule {
             }
 
             // Generate embeddings for chunks that don't have them using remote API
-            await this.generateChunkEmbeddings(chunksWithoutEmbeddings, modelName);
+            const vectorIndexPath = await this.generateChunkEmbeddings(chunksWithoutEmbeddings, modelName);
+
+            // Save vector index path to document entity
+            if (vectorIndexPath) {
+                await this.documentService.updateDocumentMetadata(documentId, {
+                    vectorIndexPath
+                });
+                console.log(`Saved vector index path to document ${documentId}: ${vectorIndexPath}`);
+            }
 
             const processingTime = Date.now() - startTime;
 

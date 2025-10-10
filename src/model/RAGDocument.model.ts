@@ -75,6 +75,7 @@ export class RAGDocumentModel extends BaseDb {
         description?: string;
         tags?: string[];
         author?: string;
+        vectorIndexPath?: string;
     }): Promise<boolean> {
         const entity = await this.repository.findOne({ where: { id } });
         if (!entity) return false;
@@ -83,6 +84,7 @@ export class RAGDocumentModel extends BaseDb {
         if (metadata.description !== undefined) entity.description = metadata.description;
         if (metadata.tags !== undefined) entity.tags = JSON.stringify(metadata.tags);
         if (metadata.author !== undefined) entity.author = metadata.author;
+        if (metadata.vectorIndexPath !== undefined) entity.vectorIndexPath = metadata.vectorIndexPath;
 
         const result = await this.repository.save(entity);
         return !!result;

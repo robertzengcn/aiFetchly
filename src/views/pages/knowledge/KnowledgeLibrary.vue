@@ -50,8 +50,8 @@
           {{ t('knowledge.documents') }}
         </v-tab>
 
-        <!-- Search Tab -->
-        <v-tab value="search">
+        <!-- Search Tab (Hidden - set v-if="true" to show) -->
+        <v-tab v-if="false" value="search">
           <v-icon class="mr-2">mdi-magnify</v-icon>
           {{ t('route.search') }}
         </v-tab>
@@ -71,8 +71,8 @@
             />
           </v-window-item>
 
-          <!-- Search Window -->
-          <v-window-item value="search">
+          <!-- Search Window (Hidden - matches tab visibility) -->
+          <v-window-item v-if="false" value="search">
             <SearchInterface
               ref="searchInterface"
               @search-completed="handleSearchCompleted"
