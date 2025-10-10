@@ -176,6 +176,12 @@ export default {
         confirm_reembed_document: "Are you sure you want to re-embed document \"{name}\"? This will regenerate all chunks and embeddings.",
         reembed_success: "Document \"{name}\" re-embedded successfully: {chunks} chunks created, {embeddings} embeddings generated",
         reembed_error: "Failed to re-embed document \"{name}\": {error}",
+        download_error: "Failed to download document \"{name}\": {error}",
+        delete_success: "Document \"{name}\" deleted successfully",
+        delete_error: "Failed to delete document \"{name}\": {error}",
+        bulk_delete_success: "Successfully deleted {count} documents",
+        bulk_delete_partial: "Deleted {success} documents, failed to delete {failed} documents",
+        bulk_delete_error: "Failed to delete documents: {error}",
         // Settings translations
         settings: "Settings",
         embedding_model: "Embedding Model",

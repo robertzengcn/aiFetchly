@@ -26,6 +26,7 @@ import {
     RAG_CLEAR_CACHE,
     RAG_CLEANUP,
     RAG_CHUNK_AND_EMBED_DOCUMENT,
+    RAG_DOWNLOAD_DOCUMENT,
     SHOW_OPEN_DIALOG,
     GET_FILE_STATS,
     SAVE_TEMP_FILE,
@@ -551,7 +552,13 @@ export function registerRagIpcHandlers(): void {
     ipcMain.handle(RAG_DELETE_DOCUMENT, async (event, data): Promise<CommonMessage<void>> => {
         try {
             const { id, deleteFile } = JSON.parse(data) as { id: number; deleteFile?: boolean };
-            
+            if (id == null) {
+                const errorResponse: CommonMessage<void> = {
+                    status: false,
+                    msg: "Document id is required"
+                };
+                return errorResponse;
+            }
             const ragSearchController = await createRagController();
             await ragSearchController.deleteDocument(id, deleteFile || false);
             
@@ -806,6 +813,74 @@ export function registerRagIpcHandlers(): void {
             return response;
         } catch (error) {
             console.error('RAG chunk and embed document error:', error);
+            const errorResponse: CommonMessage<null> = {
+                status: false,
+                msg: error instanceof Error ? error.message : "Unknown error occurred",
+                data: null
+            };
+            return errorResponse;
+        }
+    });
+
+    // Download document
+    ipcMain.handle(RAG_DOWNLOAD_DOCUMENT, async (event, data): Promise<CommonMessage<{ downloaded: boolean } | null>> => {
+        try {
+            const requestData = JSON.parse(data) as {
+                documentId: number;
+                fileName: string;
+            };
+
+            const ragSearchController = await createRagController();
+            const document = await ragSearchController.getDocument(requestData.documentId);
+
+            if (!document) {
+                const errorResponse: CommonMessage<null> = {
+                    status: false,
+                    msg: "Document not found",
+                    data: null
+                };
+                return errorResponse;
+            }
+
+            // Check if file exists
+            if (!fs.existsSync(document.filePath)) {
+                const errorResponse: CommonMessage<null> = {
+                    status: false,
+                    msg: "Document file not found on disk",
+                    data: null
+                };
+                return errorResponse;
+            }
+
+            // Show save dialog to let user choose download location
+            const result = await dialog.showSaveDialog({
+                title: 'Save Document',
+                defaultPath: path.join(app.getPath('downloads'), requestData.fileName),
+                filters: [
+                    { name: 'All Files', extensions: ['*'] }
+                ]
+            });
+
+            if (result.canceled || !result.filePath) {
+                const response: CommonMessage<{ downloaded: boolean }> = {
+                    status: true,
+                    msg: "Download canceled by user",
+                    data: { downloaded: false }
+                };
+                return response;
+            }
+
+            // Copy file to chosen location
+            fs.copyFileSync(document.filePath, result.filePath);
+
+            const response: CommonMessage<{ downloaded: boolean }> = {
+                status: true,
+                msg: "Document downloaded successfully",
+                data: { downloaded: true }
+            };
+            return response;
+        } catch (error) {
+            console.error('RAG download document error:', error);
             const errorResponse: CommonMessage<null> = {
                 status: false,
                 msg: error instanceof Error ? error.message : "Unknown error occurred",

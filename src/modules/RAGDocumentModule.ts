@@ -182,17 +182,28 @@ export class RAGDocumentModule extends BaseModule {
     /**
      * Delete document and cleanup
      */
-    async deleteDocument(id: number, deleteFile: boolean = false): Promise<void> {
+    async deleteDocument(id: number, deleteFile: boolean = false, deleteVectorIndex: boolean = true): Promise<void> {
         const document = await this.ragDocumentModel.getDocumentById(id);
 
         if (!document) {
             throw new Error('Document not found');
         }
 
+        // Delete vector index if path exists and deletion is requested
+        if (deleteVectorIndex && document.vectorIndexPath && fs.existsSync(document.vectorIndexPath)) {
+            try {
+                fs.unlinkSync(document.vectorIndexPath);
+                console.log(`Deleted vector index: ${document.vectorIndexPath}`);
+            } catch (error) {
+                console.warn(`Failed to delete vector index: ${document.vectorIndexPath}`, error);
+            }
+        }
+
         // Delete file if requested
         if (deleteFile && fs.existsSync(document.filePath)) {
             try {
                 fs.unlinkSync(document.filePath);
+                console.log(`Deleted document file: ${document.filePath}`);
             } catch (error) {
                 console.warn(`Failed to delete file: ${document.filePath}`, error);
             }
@@ -213,6 +224,7 @@ export class RAGDocumentModule extends BaseModule {
         description?: string;
         tags?: string[];
         author?: string;
+        vectorIndexPath?: string;
     }): Promise<void> {
         const success = await this.ragDocumentModel.updateDocumentMetadata(id, metadata);
         if (!success) {

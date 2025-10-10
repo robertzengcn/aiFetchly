@@ -211,6 +211,7 @@ export const RAG_TEST_EMBEDDING_SERVICE = 'rag:test-embedding-service'
 export const RAG_CLEAR_CACHE = 'rag:clear-cache'
 export const RAG_CLEANUP = 'rag:cleanup'
 export const RAG_CHUNK_AND_EMBED_DOCUMENT = 'rag:chunk-and-embed-document'
+export const RAG_DOWNLOAD_DOCUMENT = 'rag:download-document'
 
 // File Dialog Channels
 export const SHOW_OPEN_DIALOG = 'show-open-dialog'

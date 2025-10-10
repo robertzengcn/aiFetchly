@@ -137,9 +137,9 @@
           icon
           size="small"
           variant="text"
-          @click="handlePreviewDocument(item)"
+          @click="handleDownloadDocument(item)"
         >
-          <v-icon size="small">mdi-eye</v-icon>
+          <v-icon size="small">mdi-download</v-icon>
         </v-btn>
         <!-- <v-btn
           icon
@@ -223,33 +223,13 @@
       </v-card>
     </v-dialog>
 
-    <!-- Preview Dialog -->
-    <v-dialog v-model="showPreviewDialog" max-width="800">
-      <v-card>
-        <v-card-title>{{ previewDocument?.name }}</v-card-title>
-        <v-card-text>
-          <div v-if="previewContent" class="preview-content">
-            {{ previewContent }}
-          </div>
-          <div v-else class="text-center">
-            <v-progress-circular indeterminate />
-            <p>{{ t('knowledge.loading_content') }}</p>
-          </div>
-        </v-card-text>
-        <v-card-actions>
-          <v-spacer />
-          <v-btn @click="showPreviewDialog = false">{{ t('common.close') }}</v-btn>
-        </v-card-actions>
-      </v-card>
-    </v-dialog>
-
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { getDocuments, type DocumentInfo, chunkAndEmbedDocument, getRAGStats } from '@/views/api/rag';
+import { getDocuments, type DocumentInfo, chunkAndEmbedDocument, getRAGStats, downloadDocument, deleteDocument as deleteDocumentAPI } from '@/views/api/rag';
 import { Header } from "@/entityTypes/commonType"
 const headers = ref<Array<Header>>([])
 // i18n setup
@@ -258,11 +238,8 @@ const { t } = useI18n();
     const selectedDocuments = ref<DocumentInfo[]>([]);
     const loading = ref(false);
     const showUploadDialog = ref(false);
-    const showPreviewDialog = ref(false);
-    const previewDocument = ref<DocumentInfo | null>(null);
-    const previewContent = ref('');
     const uploading = ref(false);
-    const uploadFile = ref<any>(null);
+    const uploadFile = ref<File | File[] | undefined>(undefined);
     const uploadData = ref({
       title: '',
       description: '',
@@ -433,7 +410,7 @@ const { t } = useI18n();
         //await new Promise(resolve => setTimeout(resolve, 2000));
         
         showUploadDialog.value = false;
-        uploadFile.value = null;
+        uploadFile.value = undefined;
         uploadData.value = { title: '', description: '', tags: [] };
         
         // Refresh documents
@@ -445,17 +422,32 @@ const { t } = useI18n();
       }
     };
 
-    const handlePreviewDocument = async (doc) => {
-      previewDocument.value = doc;
-      showPreviewDialog.value = true;
-      previewContent.value = '';
-      
+    const handleDownloadDocument = async (doc: DocumentInfo) => {
       try {
-        // Mock content loading
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        previewContent.value = `This is a preview of ${doc.name}. The actual content would be loaded here.`;
+        console.log('Downloading document:', doc);
+        
+        // Use API method to download document
+        const result = await downloadDocument(doc.id, doc.name);
+        
+        if (result.success) {
+          if (result.data?.downloaded) {
+            console.log('✅ Document downloaded successfully:', doc.name);
+          } else {
+            console.log('ℹ️ Download canceled by user');
+          }
+        } else {
+          console.error('❌ Document download failed:', result.message);
+          alert(t('knowledge.download_error', { 
+            name: doc.name,
+            error: result.message || 'Unknown error'
+          }));
+        }
       } catch (error) {
-        console.error('Error loading preview:', error);
+        console.error('Download error:', error);
+        alert(t('knowledge.download_error', { 
+          name: doc.name,
+          error: error instanceof Error ? error.message : 'Unknown error'
+        }));
       }
     };
 
@@ -464,14 +456,33 @@ const { t } = useI18n();
     //   // Edit logic would go here
     // };
 
-    const deleteDocument = async (doc) => {
+    const deleteDocument = async (doc: DocumentInfo) => {
       if (confirm(t('knowledge.confirm_delete_document', { name: doc.name }))) {
         try {
-          // Mock delete
           console.log('Deleting document:', doc);
-          loadDocuments();
+          
+          // Call the delete API with deleteFile=true to also remove the physical file and vector index
+          const result = await deleteDocumentAPI(doc.id, true);
+          
+          if (result.success) {
+            console.log('✅ Document deleted successfully:', doc.name);
+            alert(t('knowledge.delete_success', { name: doc.name }));
+            
+            // Refresh documents list
+            await loadDocuments();
+          } else {
+            console.error('❌ Document deletion failed:', result.message);
+            alert(t('knowledge.delete_error', { 
+              name: doc.name,
+              error: result.message || 'Unknown error'
+            }));
+          }
         } catch (error) {
           console.error('Delete error:', error);
+          alert(t('knowledge.delete_error', { 
+            name: doc.name,
+            error: error instanceof Error ? error.message : 'Unknown error'
+          }));
         }
       }
     };
@@ -529,12 +540,35 @@ const { t } = useI18n();
     const bulkDelete = async () => {
       if (confirm(t('knowledge.confirm_bulk_delete', { count: selectedDocuments.value.length }))) {
         try {
-          // Mock bulk delete
           console.log('Bulk deleting:', selectedDocuments.value);
+          
+          // Delete all selected documents
+          const deletePromises = selectedDocuments.value.map(doc => 
+            deleteDocumentAPI(doc.id, true)
+          );
+          
+          const results = await Promise.allSettled(deletePromises);
+          
+          // Count successes and failures
+          const successCount = results.filter(r => r.status === 'fulfilled' && r.value.success).length;
+          const failureCount = results.length - successCount;
+          
+          if (failureCount > 0) {
+            alert(t('knowledge.bulk_delete_partial', { 
+              success: successCount, 
+              failed: failureCount 
+            }));
+          } else {
+            alert(t('knowledge.bulk_delete_success', { count: successCount }));
+          }
+          
           selectedDocuments.value = [];
-          loadDocuments();
+          await loadDocuments();
         } catch (error) {
           console.error('Bulk delete error:', error);
+          alert(t('knowledge.bulk_delete_error', { 
+            error: error instanceof Error ? error.message : 'Unknown error'
+          }));
         }
       }
     };
@@ -703,16 +737,6 @@ const { t } = useI18n();
   border-radius: 4px;
   display: flex;
   gap: 10px;
-}
-
-.preview-content {
-  max-height: 400px;
-  overflow-y: auto;
-  white-space: pre-wrap;
-  font-family: monospace;
-  background-color: #f5f5f5;
-  padding: 15px;
-  border-radius: 4px;
 }
 
 /* Responsive design */
