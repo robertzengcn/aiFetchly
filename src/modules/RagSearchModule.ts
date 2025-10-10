@@ -1,9 +1,7 @@
 import { BaseModule } from "@/modules/baseModule";
 import { VectorSearchService, SearchResult, SearchOptions } from '@/service/VectorSearchService';
-import { EmbeddingFactory, EmbeddingConfig } from '@/modules/llm/EmbeddingFactory';
 import { VectorStoreService } from '@/service/VectorStoreService';
 import { ConfigurationService, ConfigurationServiceImpl } from '@/modules/ConfigurationService';
-import { EmbeddingImpl } from '@/modules/interface/EmbeddingImpl';
 import { DocumentService } from '@/service/DocumentService';
 import { DocumentUploadOptions } from '@/modules/RAGDocumentModule';
 import { ChunkingService } from '@/service/ChunkingService';
@@ -53,7 +51,6 @@ export interface DocumentUploadResponse {
  */
 export class RagSearchModule extends BaseModule {
     private searchService: VectorSearchService;
-    private embeddingFactory: EmbeddingFactory;
     private configurationService: ConfigurationService;
     private documentService: DocumentService;
     private chunkingService: ChunkingService;
@@ -67,7 +64,6 @@ export class RagSearchModule extends BaseModule {
         // Initialize services with database
         const vectorStoreService = new VectorStoreService(getUserdbpath());
         this.searchService = new VectorSearchService(vectorStoreService, this.sqliteDb);
-        this.embeddingFactory = new EmbeddingFactory();
         this.configurationService = new ConfigurationServiceImpl();
         this.documentService = new DocumentService();
         this.chunkingService = new ChunkingService(this.sqliteDb);
@@ -651,7 +647,7 @@ export class RagSearchModule extends BaseModule {
      */
     async cleanup(): Promise<void> {
         try {
-            await this.embeddingFactory.cleanupAll();
+            // Cleanup logic here if needed
             console.log('RAG search module cleaned up');
         } catch (error) {
             console.error('Error during cleanup:', error);

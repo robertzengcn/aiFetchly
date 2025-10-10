@@ -7,7 +7,7 @@ import { ChunkingService } from '@/service/ChunkingService';
 import { RAGChunkModule } from '@/modules/RAGChunkModule';
 import { RAGChunkEntity } from '@/entity/RAGChunk.entity';
 import { RagSearchModule } from '@/modules/RagSearchModule';
-import { EmbeddingConfig } from '@/modules/llm/EmbeddingFactory';
+import { EmbeddingConfig } from '@/entityTypes/commonType';
 import { LlmCongfig } from '@/entityTypes/commonType';
 
 export interface RAGQuery {
