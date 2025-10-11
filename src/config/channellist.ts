@@ -219,3 +219,11 @@ export const GET_FILE_STATS = 'get-file-stats'
 export const SAVE_TEMP_FILE = 'save-temp-file'
 export const SAVE_TEMP_FILE_PROGRESS = 'save-temp-file:progress'
 export const SAVE_TEMP_FILE_COMPLETE = 'save-temp-file:complete'
+
+// AI Chat Channels
+export const AI_CHAT_MESSAGE = 'ai-chat:message'
+export const AI_CHAT_STREAM = 'ai-chat:stream'
+export const AI_CHAT_STREAM_CHUNK = 'ai-chat:stream-chunk'
+export const AI_CHAT_STREAM_COMPLETE = 'ai-chat:stream-complete'
+export const AI_CHAT_HISTORY = 'ai-chat:history'
+export const AI_CHAT_CLEAR = 'ai-chat:clear'

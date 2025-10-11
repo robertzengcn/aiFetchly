@@ -181,6 +181,48 @@ export interface EmbeddingConfig {
     retries?: number;
 }
 
+// AI Chat Types
+
+/**
+ * Chat message interface
+ */
+export interface ChatMessage {
+    id: string;
+    role: 'user' | 'assistant' | 'system';
+    content: string;
+    timestamp: Date;
+    conversationId?: string;
+}
+
+/**
+ * Chat history response
+ */
+export interface ChatHistoryResponse {
+    messages: ChatMessage[];
+    totalMessages: number;
+    conversationId: string;
+}
+
+/**
+ * Chat stream chunk
+ */
+export interface ChatStreamChunk {
+    content: string;
+    isComplete: boolean;
+    messageId?: string;
+}
+
+/**
+ * Chat response from remote API
+ */
+export interface ChatApiResponse {
+    message: string;
+    conversationId: string;
+    messageId: string;
+    model: string;
+    tokensUsed?: number;
+}
+
 export interface ConfigurationResponse {
     success: boolean;
     data: any;

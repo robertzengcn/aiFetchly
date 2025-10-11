@@ -45,6 +45,7 @@ import { SessionRecordingEntity } from "@/entity/SessionRecording.entity";
 import { RAGDocumentEntity } from "@/entity/RAGDocument.entity";
 import { RAGChunkEntity } from "@/entity/RAGChunk.entity";
 import { RAGModelEntity } from "@/entity/RAGModel.entity";
+import { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
 // import sqlite3 from "sqlite3";
 
 
@@ -110,6 +111,7 @@ export class SqliteDb {
                 RAGDocumentEntity,
                 RAGChunkEntity,
                 RAGModelEntity,
+                AIChatMessageEntity,
             ],
             synchronize: true, 
             migrations: [],

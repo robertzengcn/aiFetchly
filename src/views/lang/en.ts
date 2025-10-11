@@ -203,7 +203,17 @@ export default {
         document_processing_failed: "Document \"{name}\" processing failed: {error}",
         document_processing_error: "Error processing document \"{name}\": {error}",
         document_uploaded_pending_processing: "Document \"{name}\" uploaded and pending processing",
-        file_saved_but_database_error: "File saved but database error"
+        file_saved_but_database_error: "File saved but database error",
+        // AI Chat translations
+        ai_assistant: "AI Assistant",
+        type_message_placeholder: "Type a message... (Shift+Enter for new line)",
+        start_conversation: "Start a conversation with AI Assistant",
+        clear_chat_confirm: "Are you sure you want to clear the chat history?",
+        rag_context_enabled: "RAG context enabled",
+        rag_context_disabled: "RAG context disabled",
+        just_now: "Just now",
+        minutes_ago: "{count}m ago",
+        hours_ago: "{count}h ago"
     },
     notifications: {
         cloudflare_protection_detected: "Cloudflare Protection Detected",

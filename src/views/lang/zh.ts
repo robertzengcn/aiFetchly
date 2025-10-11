@@ -195,7 +195,17 @@ export default {
         document_processing_failed: "文档 \"{name}\" 处理失败：{error}",
         document_processing_error: "处理文档 \"{name}\" 时出错：{error}",
         document_uploaded_pending_processing: "文档 \"{name}\" 已上传，等待处理",
-        file_saved_but_database_error: "文件已保存但数据库错误"
+        file_saved_but_database_error: "文件已保存但数据库错误",
+        // AI Chat translations
+        ai_assistant: "AI 助手",
+        type_message_placeholder: "输入消息... (Shift+Enter 换行)",
+        start_conversation: "开始与 AI 助手对话",
+        clear_chat_confirm: "您确定要清除聊天记录吗？",
+        rag_context_enabled: "知识库上下文已启用",
+        rag_context_disabled: "知识库上下文已禁用",
+        just_now: "刚刚",
+        minutes_ago: "{count}分钟前",
+        hours_ago: "{count}小时前"
     },
     notifications: {
         cloudflare_protection_detected: "检测到Cloudflare保护",

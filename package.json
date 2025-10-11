@@ -79,12 +79,14 @@
     "test-platform": "ts-node src/scripts/test-platform.ts"
   },
   "dependencies": {
+    "@ai-sdk/vue": "^2.0.68",
     "@lem0-packages/puppeteer-page-proxy": "^1.4.1",
     "@mdi/font": "7.4.47",
     "@rollup/plugin-alias": "^5.1.0",
     "@types/better-sqlite3": "^7.6.9",
     "@types/turndown": "^5.0.5",
     "@xenova/transformers": "^2.17.2",
+    "ai": "^5.0.68",
     "apexcharts": "^3.44.0",
     "app-root-path": "^3.1.0",
     "argparse": "^2.0.1",
@@ -158,7 +160,8 @@
     "vuex-module-decorators": "^2.0.0",
     "webfontloader": "^1.0.0",
     "whatwg-fetch": "^3.6.20",
-    "winston": "^3.2.1"
+    "winston": "^3.2.1",
+    "zod": "^4.1.12"
   },
   "devDependencies": {
     "@babel/core": "^7.23.2",
