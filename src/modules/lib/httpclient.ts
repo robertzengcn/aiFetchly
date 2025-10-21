@@ -148,6 +148,23 @@ export class HttpClient {
         // headers: this._headers,
       });
     }
+
+    // post json data and return stream response
+    public async postStream(endpoint:string, data, options = {}): Promise<Response> {
+      const res = await fetch(this.baseUrl + endpoint, {
+        ...options,
+        body: JSON.stringify(data),
+        method: "POST",
+        headers: {
+          ...this._headers,
+          'Accept': 'text/event-stream',
+          'Content-Type': 'application/json'
+        },
+      });
+      
+      if (!res.ok) throw new Error(res.statusText);
+      return res;
+    }
   }
   
   export default HttpClient;

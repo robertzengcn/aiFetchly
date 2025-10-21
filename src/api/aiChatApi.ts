@@ -33,6 +33,17 @@ export interface ChatStreamResponse {
 }
 
 /**
+ * Stream event format from /api/ai/ask/stream
+ */
+export interface StreamEvent {
+    event: string;
+    data: {
+        content: Record<string, unknown>;
+        timestamp: string;
+    };
+}
+
+/**
  * Available chat models response
  */
 export interface AvailableChatModelsResponse {
@@ -109,21 +120,31 @@ export class AiChatApi {
     /**
      * Stream a chat message to the remote AI service
      * 
-     * This endpoint returns streaming chunks of the response for better UX.
+     * This endpoint returns streaming events in the format:
+     * { event: string, data: { content: {}, timestamp: string } }
      * 
      * @param request - Chat request containing message and optional parameters
-     * @returns Promise resolving to stream response
+     * @param onEvent - Callback function to handle each stream event
+     * @returns Promise resolving when stream completes
      * @throws {Error} When network request fails
      * 
      * @example
      * ```typescript
-     * const stream = await api.streamMessage({
-     *   message: 'Explain quantum computing',
-     *   conversationId: 'conv-123'
-     * });
+     * await api.streamMessage(
+     *   {
+     *     message: 'Explain quantum computing',
+     *     conversationId: 'conv-123'
+     *   },
+     *   (event) => {
+     *     console.log('Event:', event.event, 'Data:', event.data);
+     *   }
+     * );
      * ```
      */
-    async streamMessage(request: ChatRequest): Promise<CommonApiresp<ReadableStream>> {
+    async streamMessage(
+        request: ChatRequest,
+        onEvent: (event: StreamEvent) => void
+    ): Promise<void> {
         const data: ChatApiRequestData = {
             message: request.message,
             conversation_id: request.conversationId,
@@ -135,7 +156,55 @@ export class AiChatApi {
             data.model = request.model;
         }
         
-        return this._httpClient.postJson('/api/ai/ask/stream', data);
+        const response = await this._httpClient.postStream('/api/ai/ask/stream', data);
+        
+        if (!response.body) {
+            throw new Error('Response body is null');
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        try {
+            while (true) {
+                const { done, value } = await reader.read();
+                
+                if (done) {
+                    break;
+                }
+
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                
+                // Keep the last incomplete line in the buffer
+                buffer = lines.pop() || '';
+
+                for (const line of lines) {
+                    const trimmedLine = line.trim();
+                    if (trimmedLine) {
+                        try {
+                            const event: StreamEvent = JSON.parse(trimmedLine);
+                            onEvent(event);
+                        } catch (error) {
+                            console.error('Error parsing stream event:', error, 'Line:', trimmedLine);
+                        }
+                    }
+                }
+            }
+
+            // Process any remaining data in the buffer
+            if (buffer.trim()) {
+                try {
+                    const event: StreamEvent = JSON.parse(buffer.trim());
+                    onEvent(event);
+                } catch (error) {
+                    console.error('Error parsing final stream event:', error);
+                }
+            }
+        } finally {
+            reader.releaseLock();
+        }
     }
 
     /**
