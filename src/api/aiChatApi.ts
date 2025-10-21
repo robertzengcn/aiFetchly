@@ -33,6 +33,26 @@ export interface ChatStreamResponse {
 }
 
 /**
+ * Convert Python-style dict string to valid JSON string
+ * Handles: single quotes -> double quotes, None -> null, True -> true, False -> false
+ */
+function pythonDictToJson(pythonStr: string): string {
+    return pythonStr
+        // Replace None with null
+        .replace(/:\s*None\b/g, ': null')
+        .replace(/\bNone\s*,/g, 'null,')
+        // Replace True with true
+        .replace(/:\s*True\b/g, ': true')
+        .replace(/\bTrue\s*,/g, 'true,')
+        // Replace False with false
+        .replace(/:\s*False\b/g, ': false')
+        .replace(/\bFalse\s*,/g, 'false,')
+        // Replace single quotes with double quotes (simple approach)
+        // This handles the common case but may not work for all edge cases with nested quotes
+        .replace(/'/g, '"');
+}
+
+/**
  * Stream event types from AI server
  */
 export enum StreamEventType {
@@ -214,7 +234,11 @@ export class AiChatApi {
                     // Try to parse as complete JSON object first (for backwards compatibility)
                     if (trimmedLine.startsWith('{')) {
                         try {
-                            const event: StreamEvent = JSON.parse(trimmedLine);
+                            // Convert Python-style dict to JSON if needed
+                            const jsonStr = trimmedLine.includes("'") 
+                                ? pythonDictToJson(trimmedLine) 
+                                : trimmedLine;
+                            const event: StreamEvent = JSON.parse(jsonStr);
                             onEvent(event);
                             continue;
                         } catch (error) {
@@ -229,7 +253,11 @@ export class AiChatApi {
                     } else if (trimmedLine.startsWith('data:')) {
                         const dataStr = trimmedLine.substring(5).trim();
                         try {
-                            currentEvent.data = JSON.parse(dataStr);
+                            // Convert Python-style dict to JSON if needed
+                            const jsonStr = dataStr.startsWith('{') && dataStr.includes("'") 
+                                ? pythonDictToJson(dataStr) 
+                                : dataStr;
+                            currentEvent.data = JSON.parse(jsonStr);
                         } catch (error) {
                             console.error('Error parsing event data:', error, 'Data:', dataStr);
                         }
@@ -245,7 +273,12 @@ export class AiChatApi {
             // Process any remaining complete JSON in the buffer
             if (buffer.trim() && buffer.trim().startsWith('{')) {
                 try {
-                    const event: StreamEvent = JSON.parse(buffer.trim());
+                    // Convert Python-style dict to JSON if needed
+                    const bufferStr = buffer.trim();
+                    const jsonStr = bufferStr.includes("'") 
+                        ? pythonDictToJson(bufferStr) 
+                        : bufferStr;
+                    const event: StreamEvent = JSON.parse(jsonStr);
                     onEvent(event);
                 } catch (error) {
                     console.error('Error parsing final stream event:', error);
