@@ -1,5 +1,5 @@
 import { ipcMain } from 'electron';
-import { AiChatApi, ChatRequest } from '@/api/aiChatApi';
+import { AiChatApi, ChatRequest, StreamEvent } from '@/api/aiChatApi';
 import { CommonMessage, ChatMessage, ChatHistoryResponse, ChatStreamChunk } from '@/entityTypes/commonType';
 import { AIChatModule } from '@/modules/AIChatModule';
 import {
@@ -126,45 +126,49 @@ export function registerAiChatIpcHandlers(): void {
                 model: requestData.model
             };
 
-            const apiResponse = await aiChatApi.streamMessage(chatRequest);
+            const assistantMessageId = `assistant-${Date.now()}`;
+            let fullContent = '';
+            let isStreamComplete = false;
 
-            if (apiResponse.status && apiResponse.data) {
-                // For now, send the complete response as a single chunk
-                // TODO: Implement actual streaming when remote API supports it
-                const chunk: ChatStreamChunk = {
-                    content: JSON.stringify(apiResponse.data),
-                    isComplete: false,
-                    messageId: `assistant-${Date.now()}`
-                };
+            // Stream message with event handler
+            await aiChatApi.streamMessage(chatRequest, (streamEvent: StreamEvent) => {
+                // Handle stream event based on event type
+                if (streamEvent.event === 'message' || streamEvent.event === 'chunk') {
+                    // Extract content from the event data
+                    const content = typeof streamEvent.data.content === 'string' 
+                        ? streamEvent.data.content 
+                        : JSON.stringify(streamEvent.data.content);
+                    
+                    fullContent += content;
 
-                event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(chunk));
+                    // Send chunk to renderer
+                    const chunk: ChatStreamChunk = {
+                        content: content,
+                        isComplete: false,
+                        messageId: assistantMessageId
+                    };
+                    event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(chunk));
+                } else if (streamEvent.event === 'done' || streamEvent.event === 'complete') {
+                    isStreamComplete = true;
+                }
+            });
 
-                // Send completion
-                const completeChunk: ChatStreamChunk = {
-                    content: '',
-                    isComplete: true,
-                    messageId: chunk.messageId
-                };
+            // Send completion
+            const completeChunk: ChatStreamChunk = {
+                content: '',
+                isComplete: true,
+                messageId: assistantMessageId
+            };
+            event.sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(completeChunk));
 
-                event.sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(completeChunk));
-
-                // Save assistant message to database
-                const assistantMessageId = chunk.messageId || `assistant-${Date.now()}`;
-                await chatModule.saveMessage({
-                    messageId: assistantMessageId,
-                    conversationId,
-                    role: 'assistant',
-                    content: JSON.stringify(apiResponse.data),
-                    timestamp: new Date()
-                });
-            } else {
-                // Send error
-                const errorChunk: ChatStreamChunk = {
-                    content: apiResponse.msg || 'Failed to get response',
-                    isComplete: true
-                };
-                event.sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(errorChunk));
-            }
+            // Save assistant message to database
+            await chatModule.saveMessage({
+                messageId: assistantMessageId,
+                conversationId,
+                role: 'assistant',
+                content: fullContent,
+                timestamp: new Date()
+            });
         } catch (error) {
             console.error('AI Chat stream error:', error);
             const errorChunk: ChatStreamChunk = {
