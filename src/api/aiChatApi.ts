@@ -33,13 +33,31 @@ export interface ChatStreamResponse {
 }
 
 /**
+ * Stream event types from AI server
+ */
+export enum StreamEventType {
+    TOKEN = "token",                          // Individual response tokens
+    TOOL_CALL = "tool_call",                  // Tool execution requests
+    TOOL_RESULT = "tool_result",              // Tool execution results
+    ERROR = "error",                          // Error conditions
+    DONE = "done",                            // Response completion
+    CONVERSATION_START = "conversation_start", // Session initialization
+    CONVERSATION_END = "conversation_end",    // Conversation termination
+    PONG = "pong"                             // Keep alive
+}
+
+/**
  * Stream event format from /api/ai/ask/stream
  */
 export interface StreamEvent {
-    event: string;
+    event: StreamEventType | string;
     data: {
-        content: Record<string, unknown>;
+        content: Record<string, unknown> | string;
         timestamp: string;
+        toolName?: string;
+        toolParams?: Record<string, unknown>;
+        errorMessage?: string;
+        conversationId?: string;
     };
 }
 
@@ -165,6 +183,7 @@ export class AiChatApi {
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
+        let currentEvent: Partial<StreamEvent> = {};
 
         try {
             while (true) {
@@ -182,19 +201,49 @@ export class AiChatApi {
 
                 for (const line of lines) {
                     const trimmedLine = line.trim();
-                    if (trimmedLine) {
+                    
+                    if (!trimmedLine) {
+                        // Empty line signals end of event in SSE format
+                        if (currentEvent.event && currentEvent.data) {
+                            onEvent(currentEvent as StreamEvent);
+                            currentEvent = {};
+                        }
+                        continue;
+                    }
+
+                    // Try to parse as complete JSON object first (for backwards compatibility)
+                    if (trimmedLine.startsWith('{')) {
                         try {
                             const event: StreamEvent = JSON.parse(trimmedLine);
                             onEvent(event);
+                            continue;
                         } catch (error) {
-                            console.error('Error parsing stream event:', error, 'Line:', trimmedLine);
+                            // Not a complete JSON object, continue to SSE parsing
+                        }
+                    }
+
+                    // Parse SSE format: "event: type" or "data: json"
+                    if (trimmedLine.startsWith('event:')) {
+                        const eventType = trimmedLine.substring(6).trim();
+                        currentEvent.event = eventType as StreamEventType;
+                    } else if (trimmedLine.startsWith('data:')) {
+                        const dataStr = trimmedLine.substring(5).trim();
+                        try {
+                            currentEvent.data = JSON.parse(dataStr);
+                        } catch (error) {
+                            console.error('Error parsing event data:', error, 'Data:', dataStr);
                         }
                     }
                 }
             }
 
-            // Process any remaining data in the buffer
-            if (buffer.trim()) {
+            // Process any remaining event in progress
+            if (currentEvent.event && currentEvent.data) {
+                onEvent(currentEvent as StreamEvent);
+            }
+
+            // Process any remaining complete JSON in the buffer
+            if (buffer.trim() && buffer.trim().startsWith('{')) {
                 try {
                     const event: StreamEvent = JSON.parse(buffer.trim());
                     onEvent(event);

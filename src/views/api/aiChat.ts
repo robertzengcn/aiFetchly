@@ -114,6 +114,12 @@ export async function streamChatMessage(
       try {
         const chunk: ChatStreamChunk = JSON.parse(completeData);
         
+        // Check if this is an error completion
+        if (chunk.eventType === 'error' && chunk.errorMessage) {
+          reject(new Error(chunk.errorMessage));
+          return;
+        }
+        
         if (onComplete) {
           onComplete(fullContent);
         }
@@ -204,7 +210,7 @@ export async function clearChatHistory(
       AI_CHAT_CLEAR,
       requestData
     );
-
+console.log('response', response);
     return {
       success: response.status,
       message: response.msg

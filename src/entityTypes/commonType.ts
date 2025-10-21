@@ -210,6 +210,12 @@ export interface ChatStreamChunk {
     content: string;
     isComplete: boolean;
     messageId?: string;
+    eventType?: string;
+    toolName?: string;
+    toolParams?: Record<string, unknown>;
+    toolResult?: Record<string, unknown>;
+    errorMessage?: string;
+    conversationId?: string;
 }
 
 /**

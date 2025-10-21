@@ -1,5 +1,5 @@
 import { ipcMain } from 'electron';
-import { AiChatApi, ChatRequest, StreamEvent } from '@/api/aiChatApi';
+import { AiChatApi, ChatRequest, StreamEvent, StreamEventType } from '@/api/aiChatApi';
 import { CommonMessage, ChatMessage, ChatHistoryResponse, ChatStreamChunk } from '@/entityTypes/commonType';
 import { AIChatModule } from '@/modules/AIChatModule';
 import {
@@ -128,52 +128,160 @@ export function registerAiChatIpcHandlers(): void {
 
             const assistantMessageId = `assistant-${Date.now()}`;
             let fullContent = '';
-            let isStreamComplete = false;
+            let streamConversationId = conversationId;
 
             // Stream message with event handler
             await aiChatApi.streamMessage(chatRequest, (streamEvent: StreamEvent) => {
-                // Handle stream event based on event type
-                if (streamEvent.event === 'message' || streamEvent.event === 'chunk') {
-                    // Extract content from the event data
-                    const content = typeof streamEvent.data.content === 'string' 
-                        ? streamEvent.data.content 
-                        : JSON.stringify(streamEvent.data.content);
-                    
-                    fullContent += content;
+                const eventType = streamEvent.event;
+                
+                // Extract content from the event data
+                const extractContent = (): string => {
+                    if (typeof streamEvent.data.content === 'string') {
+                        return streamEvent.data.content;
+                    }
+                    return JSON.stringify(streamEvent.data.content);
+                };
 
-                    // Send chunk to renderer
-                    const chunk: ChatStreamChunk = {
-                        content: content,
-                        isComplete: false,
-                        messageId: assistantMessageId
-                    };
-                    event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(chunk));
-                } else if (streamEvent.event === 'done' || streamEvent.event === 'complete') {
-                    isStreamComplete = true;
+                switch (eventType) {
+                    case StreamEventType.TOKEN:
+                        // Individual response tokens - append to message and stream to UI
+                        {
+                            const content = extractContent();
+                            fullContent += content;
+
+                            const chunk: ChatStreamChunk = {
+                                content: content,
+                                isComplete: false,
+                                messageId: assistantMessageId,
+                                eventType: StreamEventType.TOKEN
+                            };
+                            event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(chunk));
+                        }
+                        break;
+
+                    case StreamEventType.TOOL_CALL:
+                        // Tool execution request - notify UI to show tool execution indicator
+                        {
+                            const toolName = streamEvent.data.toolName || 'Unknown Tool';
+                            const toolParams = streamEvent.data.toolParams;
+
+                            const chunk: ChatStreamChunk = {
+                                content: `Executing tool: ${toolName}`,
+                                isComplete: false,
+                                messageId: assistantMessageId,
+                                eventType: StreamEventType.TOOL_CALL,
+                                toolName: toolName,
+                                toolParams: toolParams
+                            };
+                            event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(chunk));
+                        }
+                        break;
+
+                    case StreamEventType.TOOL_RESULT:
+                        // Tool execution result - notify UI and continue streaming
+                        {
+                            const toolResult = streamEvent.data.content;
+
+                            const chunk: ChatStreamChunk = {
+                                content: '',
+                                isComplete: false,
+                                messageId: assistantMessageId,
+                                eventType: StreamEventType.TOOL_RESULT,
+                                toolResult: typeof toolResult === 'object' ? toolResult as Record<string, unknown> : { result: toolResult }
+                            };
+                            event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(chunk));
+                        }
+                        break;
+
+                    case StreamEventType.ERROR:
+                        // Error occurred - notify UI and stop streaming
+                        {
+                            const errorMessage = streamEvent.data.errorMessage || extractContent() || 'An error occurred during streaming';
+
+                            const errorChunk: ChatStreamChunk = {
+                                content: '',
+                                isComplete: true,
+                                messageId: assistantMessageId,
+                                eventType: StreamEventType.ERROR,
+                                errorMessage: errorMessage
+                            };
+                            event.sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(errorChunk));
+                        }
+                        break;
+
+                    case StreamEventType.DONE:
+                        // Streaming complete - finalize message
+                        {
+                            const completeChunk: ChatStreamChunk = {
+                                content: '',
+                                isComplete: true,
+                                messageId: assistantMessageId,
+                                eventType: StreamEventType.DONE
+                            };
+                            event.sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(completeChunk));
+                        }
+                        break;
+
+                    case StreamEventType.CONVERSATION_START:
+                        // Conversation initialization
+                        {
+                            if (streamEvent.data.conversationId) {
+                                streamConversationId = streamEvent.data.conversationId;
+                            }
+
+                            const chunk: ChatStreamChunk = {
+                                content: '',
+                                isComplete: false,
+                                messageId: assistantMessageId,
+                                eventType: StreamEventType.CONVERSATION_START,
+                                conversationId: streamConversationId
+                            };
+                            event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(chunk));
+                        }
+                        break;
+
+                    case StreamEventType.CONVERSATION_END:
+                        // Conversation termination
+                        {
+                            const chunk: ChatStreamChunk = {
+                                content: '',
+                                isComplete: true,
+                                messageId: assistantMessageId,
+                                eventType: StreamEventType.CONVERSATION_END
+                            };
+                            event.sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(chunk));
+                        }
+                        break;
+
+                    case StreamEventType.PONG:
+                        // Keep-alive - no action needed, just log
+                        console.log('Received keep-alive pong');
+                        break;
+
+                    default:
+                        // Unknown event type - log and potentially handle as token
+                        console.warn('Unknown stream event type:', eventType);
+                        break;
                 }
             });
 
-            // Send completion
-            const completeChunk: ChatStreamChunk = {
-                content: '',
-                isComplete: true,
-                messageId: assistantMessageId
-            };
-            event.sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(completeChunk));
-
-            // Save assistant message to database
-            await chatModule.saveMessage({
-                messageId: assistantMessageId,
-                conversationId,
-                role: 'assistant',
-                content: fullContent,
-                timestamp: new Date()
-            });
+            // Save assistant message to database if we have content
+            if (fullContent.trim()) {
+                await chatModule.saveMessage({
+                    messageId: assistantMessageId,
+                    conversationId: streamConversationId,
+                    role: 'assistant',
+                    content: fullContent,
+                    timestamp: new Date()
+                });
+            }
         } catch (error) {
             console.error('AI Chat stream error:', error);
             const errorChunk: ChatStreamChunk = {
-                content: error instanceof Error ? error.message : 'Unknown error occurred',
-                isComplete: true
+                content: '',
+                isComplete: true,
+                eventType: StreamEventType.ERROR,
+                errorMessage: error instanceof Error ? error.message : 'Unknown error occurred'
             };
             event.sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(errorChunk));
         }
@@ -225,7 +333,7 @@ export function registerAiChatIpcHandlers(): void {
             const conversationId = requestData.conversationId || currentConversationId;
 
             const chatModule = new AIChatModule();
-
+            console.log('conversationId', conversationId);
             if (conversationId === 'all') {
                 // Clear all conversations from database
                 await chatModule.clearAllHistory();

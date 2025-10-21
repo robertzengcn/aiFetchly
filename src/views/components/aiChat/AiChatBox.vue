@@ -65,8 +65,56 @@
         </div>
       </div>
 
+      <!-- Tool Execution Indicator -->
+      <div v-if="isExecutingTool" class="message-wrapper assistant">
+        <div class="message-content">
+          <div class="message-avatar">
+            <v-icon color="purple">mdi-robot</v-icon>
+          </div>
+          <div class="message-bubble tool-execution">
+            <div class="tool-indicator">
+              <v-progress-circular
+                indeterminate
+                size="20"
+                width="2"
+                color="purple"
+                class="mr-2"
+              ></v-progress-circular>
+              <span class="tool-text">
+                <strong>Executing tool:</strong> {{ currentToolName }}
+              </span>
+            </div>
+            <div v-if="Object.keys(currentToolParams).length > 0" class="tool-params">
+              <details>
+                <summary>Tool Parameters</summary>
+                <pre>{{ JSON.stringify(currentToolParams, null, 2) }}</pre>
+              </details>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tool Result Display -->
+      <div v-if="showToolResult && toolResult" class="message-wrapper assistant">
+        <div class="message-content">
+          <div class="message-avatar">
+            <v-icon color="purple">mdi-robot</v-icon>
+          </div>
+          <div class="message-bubble tool-result">
+            <div class="tool-result-header">
+              <v-icon size="small" color="success" class="mr-1">mdi-check-circle</v-icon>
+              <span><strong>Tool Result</strong></span>
+            </div>
+            <details>
+              <summary>View Result</summary>
+              <pre>{{ JSON.stringify(toolResult, null, 2) }}</pre>
+            </details>
+          </div>
+        </div>
+      </div>
+
       <!-- Typing Indicator -->
-      <div v-if="isTyping" class="message-wrapper assistant">
+      <div v-if="isTyping && !isExecutingTool" class="message-wrapper assistant">
         <div class="message-content">
           <div class="message-avatar">
             <v-icon color="purple">mdi-robot</v-icon>
@@ -77,6 +125,31 @@
               <span></span>
               <span></span>
             </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Error Display -->
+      <div v-if="streamError" class="message-wrapper assistant error-message">
+        <div class="message-content">
+          <div class="message-avatar">
+            <v-icon color="error">mdi-alert-circle</v-icon>
+          </div>
+          <div class="message-bubble error-bubble">
+            <div class="error-header">
+              <v-icon size="small" color="error" class="mr-1">mdi-alert</v-icon>
+              <strong>Error</strong>
+            </div>
+            <div class="error-text">{{ streamError }}</div>
+            <v-btn
+              size="small"
+              variant="text"
+              color="primary"
+              class="mt-2"
+              @click="streamError = null"
+            >
+              Dismiss
+            </v-btn>
           </div>
         </div>
       </div>
@@ -161,6 +234,12 @@ const showScrollButton = ref(false);
 const conversationId = ref('default');
 const inputField = ref<any>(null);
 const useRAGContext = ref(false);
+const isExecutingTool = ref(false);
+const currentToolName = ref('');
+const currentToolParams = ref<Record<string, unknown>>({});
+const toolResult = ref<Record<string, unknown> | null>(null);
+const showToolResult = ref(false);
+const streamError = ref<string | null>(null);
 
 /**
  * Load chat history when component mounts
@@ -210,6 +289,14 @@ async function handleSendMessage() {
   inputMessage.value = '';
   isLoading.value = true;
   isTyping.value = true;
+  streamError.value = null;
+
+  // Reset tool-related states
+  isExecutingTool.value = false;
+  currentToolName.value = '';
+  currentToolParams.value = {};
+  toolResult.value = null;
+  showToolResult.value = false;
 
   // Add user message to UI immediately
   const userMessage: ChatMessage = {
@@ -244,36 +331,94 @@ async function handleSendMessage() {
     await streamFunction(
       userMessageContent,
       (chunk: ChatStreamChunk) => {
-        // Update message content with each chunk
-        assistantContent += chunk.content;
-        const lastMessage = messages.value[messages.value.length - 1];
-        if (lastMessage && lastMessage.role === 'assistant') {
-          lastMessage.content = assistantContent;
+        // Handle different event types
+        const eventType = chunk.eventType;
+
+        switch (eventType) {
+          case 'token':
+            // Append token content to message
+            assistantContent += chunk.content;
+            const lastMessage = messages.value[messages.value.length - 1];
+            if (lastMessage && lastMessage.role === 'assistant') {
+              lastMessage.content = assistantContent;
+            }
+            scrollToBottom();
+            break;
+
+          case 'tool_call':
+            // Show tool execution indicator
+            isExecutingTool.value = true;
+            currentToolName.value = chunk.toolName || 'Unknown Tool';
+            currentToolParams.value = chunk.toolParams || {};
+            isTyping.value = false; // Pause typing indicator during tool execution
+            break;
+
+          case 'tool_result':
+            // Hide tool execution indicator and show result
+            isExecutingTool.value = false;
+            if (chunk.toolResult) {
+              toolResult.value = chunk.toolResult;
+              showToolResult.value = true;
+            }
+            isTyping.value = true; // Resume typing indicator
+            break;
+
+          case 'conversation_start':
+            // Update conversation ID if provided
+            if (chunk.conversationId) {
+              conversationId.value = chunk.conversationId;
+            }
+            break;
+
+          case 'pong':
+            // Keep-alive, no action needed
+            break;
+
+          default:
+            // Handle unknown or unspecified event types as tokens
+            if (chunk.content) {
+              assistantContent += chunk.content;
+              const msg = messages.value[messages.value.length - 1];
+              if (msg && msg.role === 'assistant') {
+                msg.content = assistantContent;
+              }
+              scrollToBottom();
+            }
+            break;
         }
-        scrollToBottom();
       },
       (fullContent: string) => {
-        // Update with final content
+        // Stream complete
         const lastMessage = messages.value[messages.value.length - 1];
         if (lastMessage && lastMessage.role === 'assistant') {
-          lastMessage.content = fullContent;
+          if (assistantContent) {
+            lastMessage.content = assistantContent;
+          } else if (fullContent) {
+            lastMessage.content = fullContent;
+          }
         }
+        
+        // Reset all states
         isTyping.value = false;
         isLoading.value = false;
+        isExecutingTool.value = false;
+        showToolResult.value = false;
         scrollToBottom();
       },
       conversationId.value
     );
   } catch (error) {
     console.error('Error sending message:', error);
+    streamError.value = error instanceof Error ? error.message : 'Failed to send message';
     isTyping.value = false;
     isLoading.value = false;
+    isExecutingTool.value = false;
     
     // Show error message
     const errorMessage: ChatMessage = {
       id: `error-${Date.now()}`,
       role: 'assistant',
-      content: `Error: ${error instanceof Error ? error.message : 'Failed to send message'}`,
+      content: `Error: ${streamError.value}`,
       timestamp: new Date(),
       conversationId: conversationId.value
     };
@@ -289,10 +434,11 @@ async function handleClearChat() {
   if (!confirm(t('knowledge.clear_chat_confirm'))) return;
 
   try {
-    const response = await clearChatHistory(conversationId.value);
-    if (response.success) {
+    await clearChatHistory(conversationId.value);
+    // console.log('response', response);
+    // if (response.success) {
       messages.value = [];
-    }
+    // }
   } catch (error) {
     console.error('Error clearing chat:', error);
   }
@@ -571,6 +717,127 @@ onMounted(() => {
 
 .chat-messages::-webkit-scrollbar-thumb:hover {
   background: rgba(var(--v-theme-on-surface), 0.5);
+}
+
+/* Tool Execution Styles */
+.tool-execution {
+  background-color: rgba(156, 39, 176, 0.08) !important;
+  border: 1px solid rgba(156, 39, 176, 0.3);
+}
+
+.tool-indicator {
+  display: flex;
+  align-items: center;
+  padding: 4px 0;
+}
+
+.tool-text {
+  font-size: 14px;
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.tool-params {
+  margin-top: 8px;
+  
+  details {
+    cursor: pointer;
+    
+    summary {
+      font-size: 12px;
+      color: rgba(156, 39, 176, 0.9);
+      font-weight: 500;
+      user-select: none;
+      
+      &:hover {
+        color: rgb(156, 39, 176);
+      }
+    }
+    
+    pre {
+      margin-top: 8px;
+      padding: 8px;
+      background-color: rgba(var(--v-theme-on-surface), 0.05);
+      border-radius: 4px;
+      font-size: 11px;
+      overflow-x: auto;
+      max-height: 200px;
+    }
+  }
+}
+
+/* Tool Result Styles */
+.tool-result {
+  background-color: rgba(76, 175, 80, 0.08) !important;
+  border: 1px solid rgba(76, 175, 80, 0.3);
+}
+
+.tool-result-header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 4px;
+  color: rgb(76, 175, 80);
+}
+
+.tool-result details {
+  cursor: pointer;
+  margin-top: 4px;
+  
+  summary {
+    font-size: 12px;
+    color: rgba(76, 175, 80, 0.9);
+    font-weight: 500;
+    user-select: none;
+    
+    &:hover {
+      color: rgb(76, 175, 80);
+    }
+  }
+  
+  pre {
+    margin-top: 8px;
+    padding: 8px;
+    background-color: rgba(var(--v-theme-on-surface), 0.05);
+    border-radius: 4px;
+    font-size: 11px;
+    overflow-x: auto;
+    max-height: 200px;
+  }
+}
+
+/* Error Message Styles */
+.error-message {
+  animation: slideInError 0.3s ease-out;
+}
+
+@keyframes slideInError {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.error-bubble {
+  background-color: rgba(244, 67, 54, 0.08) !important;
+  border: 1px solid rgba(244, 67, 54, 0.3);
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.error-header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 8px;
+  color: rgb(244, 67, 54);
+  font-weight: 600;
+}
+
+.error-text {
+  font-size: 14px;
+  line-height: 1.5;
+  color: rgb(var(--v-theme-on-surface));
 }
 </style>
 
