@@ -252,14 +252,28 @@ export class AiChatApi {
                         currentEvent.event = eventType as StreamEventType;
                     } else if (trimmedLine.startsWith('data:')) {
                         const dataStr = trimmedLine.substring(5).trim();
+                        
+                        // Ignore simple string data like 'pong' (keep-alive messages)
+                        if (dataStr === 'pong' || (!dataStr.startsWith('{') && !dataStr.startsWith('['))) {
+                            continue;
+                        }
+                        
                         try {
                             // Convert Python-style dict to JSON if needed
+                            // const jsonStr = dataStr.startsWith('{') && dataStr.includes("'") 
+                            //     ? pythonDictToJson(dataStr) 
+                            //     : dataStr;
+                            currentEvent.data = JSON.parse(dataStr);
+                        } catch (error) {
+                            console.error('Error parsing event data:', error, 'Data:', dataStr);
+                            try{
                             const jsonStr = dataStr.startsWith('{') && dataStr.includes("'") 
-                                ? pythonDictToJson(dataStr) 
-                                : dataStr;
+                            ? pythonDictToJson(dataStr) 
+                            : dataStr;
                             currentEvent.data = JSON.parse(jsonStr);
                         } catch (error) {
                             console.error('Error parsing event data:', error, 'Data:', dataStr);
+                        }
                         }
                     }
                 }

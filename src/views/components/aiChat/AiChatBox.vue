@@ -592,7 +592,7 @@ onMounted(() => {
     justify-content: flex-start;
 
     .message-bubble {
-      background-color: rgb(var(--v-theme-surface-variant));
+      background-color: #f5f5f5;
       color: rgb(var(--v-theme-on-surface));
       margin-right: 0;
       margin-left: 8px;
