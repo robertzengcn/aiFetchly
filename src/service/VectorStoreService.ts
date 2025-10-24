@@ -1,7 +1,7 @@
 // import { RAGChunkEntity } from '@/entity/RAGChunk.entity';
-import { RAGModelEntity } from '@/entity/RAGModel.entity';
+// import { RAGModelEntity } from '@/entity/RAGModel.entity';
 import { RAGChunkModule } from '@/modules/RAGChunkModule';
-import { SqliteDb } from '@/config/SqliteDb';
+// import { SqliteDb } from '@/config/SqliteDb';
 import * as path from 'path';
 import { IVectorDatabase } from '@/modules/interface/IVectorDatabase';
 import { VectorDatabaseFactory, VectorDatabaseType, VectorDatabaseFactoryConfig } from '@/modules/factories/VectorDatabaseFactory';
@@ -505,31 +505,31 @@ export class VectorStoreService {
      * @param ragModel - RAG model entity
      * @param indexType - Type of index (default: 'Flat')
      */
-    async createIndexFromRAGModel(ragModel: RAGModelEntity, indexType: string = 'Flat'): Promise<void> {
-        const modelConfig: EmbeddingModelConfig = {
-            modelId: ragModel.modelId,
-            dimensions: ragModel.dimensions,
-            name: ragModel.name,
-            description: ragModel.description
-        };
+    // async createIndexFromRAGModel(ragModel: RAGModelEntity, indexType: string = 'Flat'): Promise<void> {
+    //     const modelConfig: EmbeddingModelConfig = {
+    //         modelId: ragModel.modelId,
+    //         dimensions: ragModel.dimensions,
+    //         name: ragModel.name,
+    //         description: ragModel.description
+    //     };
 
-        await this.createIndex(modelConfig, indexType);
-    }
+    //     await this.createIndex(modelConfig, indexType);
+    // }
 
     /**
      * Load index from RAGModelEntity
      * @param ragModel - RAG model entity
      */
-    async loadIndexFromRAGModel(ragModel: RAGModelEntity): Promise<void> {
-        const modelConfig: EmbeddingModelConfig = {
-            modelId: ragModel.modelId,
-            dimensions: ragModel.dimensions,
-            name: ragModel.name,
-            description: ragModel.description
-        };
+    // async loadIndexFromRAGModel(ragModel: RAGModelEntity): Promise<void> {
+    //     const modelConfig: EmbeddingModelConfig = {
+    //         modelId: ragModel.modelId,
+    //         dimensions: ragModel.dimensions,
+    //         name: ragModel.name,
+    //         description: ragModel.description
+    //     };
 
-        await this.loadIndex(modelConfig);
-    }
+    //     await this.loadIndex(modelConfig);
+    // }
 
     /**
      * Switch to a different vector database type

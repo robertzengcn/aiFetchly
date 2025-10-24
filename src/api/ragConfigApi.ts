@@ -37,9 +37,9 @@ export interface ModelInfo {
     /** Model description */
     description: string;
     /** Maximum dimensions supported by the model */
-    max_dimensions: number;
+    dimensions: number;
     /** Recommended dimensions for the model */
-    recommended_dimensions: number;
+    // recommended_dimensions: number;
 }
 
 /**
