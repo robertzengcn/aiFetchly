@@ -50,6 +50,7 @@ export interface AvailableModelsResponse {
     models: Record<string, ModelInfo>;
     /** Default model name */
     default_model: string;
+    default_dimensions: number;
     /** Total number of models */
     total_models: number;
     /** Number of configured models */

@@ -3,21 +3,24 @@ import { DocumentUploadOptions } from '@/modules/RAGDocumentModule';
 import { RAGDocumentEntity } from '@/entity/RAGDocument.entity';
 import { RagConfigApi, ChunkingConfig } from '@/api/ragConfigApi';
 import { SystemSettingModel } from '@/model/SystemSetting.model';
-import { SystemSettingGroupEntity } from '@/entity/SystemSettingGroup.entity';
+// import { SystemSettingGroupEntity } from '@/entity/SystemSettingGroup.entity';
 import { SystemSettingGroupModel } from '@/model/SystemSettingGroup.model';
+import { SystemSettingModule } from '@/modules/SystemSettingModule';
+import { SystemSettingGroupModule } from '@/modules/SystemSettingGroupModule';
 
 export class RagSearchController {
     private ragSearchModule: RagSearchModule;
     private ragConfigApi: RagConfigApi;
     private systemSettingModel: SystemSettingModel;
     private systemSettingGroupModel: SystemSettingGroupModel;
-
+    private systemSettingModule: SystemSettingModule;
+    private systemSettingGroupModule: SystemSettingGroupModule; 
     constructor() {
         this.ragSearchModule = new RagSearchModule();
         this.ragConfigApi = new RagConfigApi();
         // Initialize system setting models with default database path
-        this.systemSettingModel = new SystemSettingModel('./data/settings.db');
-        this.systemSettingGroupModel = new SystemSettingGroupModel('./data/settings.db');
+        this.systemSettingModule = new SystemSettingModule();
+        this.systemSettingGroupModule = new SystemSettingGroupModule();
     }
 
     /**
@@ -291,13 +294,13 @@ export class RagSearchController {
                 };
             }
             steps.chunking = true;
-            const modelName = await this.getDefaultEmbeddingModel();
-            if (!modelName) {
+            const model = await this.getDefaultEmbeddingModel();
+            if (!model) {
                 throw new Error('Default embedding model not found');
             }
 
             // Step 3: Generate embeddings for the chunks
-            const embedResult = await this.generateDocumentEmbeddings(documentId, modelName);
+            const embedResult = await this.generateDocumentEmbeddings(documentId, model.modelName);
             if (!embedResult.success) {
                 return {
                     documentId,
@@ -352,16 +355,17 @@ export class RagSearchController {
     /**
      * Update the embedding model
      * @param modelName - Name of the model to switch to
+     * @param dimension - Vector dimension for the model
      */
-    async updateEmbeddingModel(modelName: string): Promise<void> {
+    async updateEmbeddingModel(modelName: string, dimension: number): Promise<void> {
         try {
             // Update the embedding model in the search module
             await this.ragSearchModule.updateEmbeddingModel(modelName);
             
             // Save the default embedding model to system settings
-            await this.saveDefaultEmbeddingModelToSettings(modelName);
+            await this.saveDefaultEmbeddingModelToSettings(modelName, dimension);
             
-            console.log(`Embedding model updated to: ${modelName}`);
+            console.log(`Embedding model updated to: ${modelName}:${dimension}`);
         } catch (error) {
             console.error('Error updating embedding model:', error);
             throw new Error(`Failed to update embedding model: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -371,16 +375,17 @@ export class RagSearchController {
     /**
      * Save default embedding model to system settings
      * @param modelName - Name of the embedding model
+     * @param dimension - Vector dimension for the model
      */
-    private async saveDefaultEmbeddingModelToSettings(modelName: string): Promise<void> {
+    private async saveDefaultEmbeddingModelToSettings(modelName: string, dimension: number): Promise<void> {
         try {
             // Get or create the embedding settings group
             const embeddingGroup = await this.systemSettingGroupModel.getOrCreateEmbeddingGroup();
             
             // Update the default embedding model setting
-            await this.systemSettingModel.updateDefaultEmbeddingModel(modelName, embeddingGroup);
+            await this.systemSettingModel.updateDefaultEmbeddingModel(`${modelName}:${dimension}`, embeddingGroup);
             
-            console.log(`Default embedding model saved to settings: ${modelName}`);
+            console.log(`Default embedding model saved to settings: ${modelName}:${dimension}`);
         } catch (error) {
             console.error('Error saving default embedding model to settings:', error);
             // Don't throw error here to avoid breaking the main update process
@@ -391,9 +396,9 @@ export class RagSearchController {
      * Get default embedding model from system settings
      * @returns Default embedding model name or null if not found
      */
-    async getDefaultEmbeddingModel(): Promise<string | null> {
+    async getDefaultEmbeddingModel(): Promise<{ modelName: string; dimension: number } | null> {
         try {
-            return await this.systemSettingModel.getDefaultEmbeddingModel();
+            return await this.systemSettingModule.getDefaultEmbeddingModel();
         } catch (error) {
             console.warn('Could not retrieve default embedding model from settings:', error);
             return null;
@@ -421,10 +426,11 @@ export class RagSearchController {
                 
                 if (modelsResponse.status && modelsResponse.data) {
                     const defaultModel = modelsResponse.data.default_model;
-                    console.log(`Setting default embedding model to: ${defaultModel}`);
+                    const defaultDimensions = modelsResponse.data.default_dimensions;
+                    console.log(`Setting default embedding model to: ${defaultModel}:${defaultDimensions}`);
                     
                     // Update the default embedding model setting
-                    await this.systemSettingModel.updateDefaultEmbeddingModel(defaultModel, embeddingGroup);
+                    await this.systemSettingModel.updateDefaultEmbeddingModel(`${defaultModel}:${defaultDimensions}`, embeddingGroup);
                     console.log('Default embedding model updated successfully');
                 } else {
                     console.warn('Failed to fetch available models from API, using fallback model');
@@ -442,17 +448,17 @@ export class RagSearchController {
                     
                     if (modelsResponse.status && modelsResponse.data) {
                         const availableModels = modelsResponse.data.models;
-                        const defaultModel = modelsResponse.data.default_model;
-                        
+                        const defaultModelName = modelsResponse.data.default_model;
+                        const defaultDimensions = modelsResponse.data.default_dimensions;
                         // Check if the current default embedding model is in the available models
                         const isCurrentModelAvailable = Object.keys(availableModels).includes(defaultEmbeddingModel);
                         
                         if (!isCurrentModelAvailable) {
                             console.log(`Current default embedding model '${defaultEmbeddingModel}' is not available in the models list`);
-                            console.log(`Updating to new default model: ${defaultModel}`);
+                            console.log(`Updating to new default model: ${defaultModelName}:${defaultDimensions}`);
                             
                             // Update to the new default model from the API
-                            await this.systemSettingModel.updateDefaultEmbeddingModel(defaultModel, embeddingGroup);
+                            await this.systemSettingModel.updateDefaultEmbeddingModel(`${defaultModelName}:${defaultDimensions}`, embeddingGroup);
                             console.log('Default embedding model updated to available model');
                         } else {
                             console.log(`Current default embedding model '${defaultEmbeddingModel}' is still available`);

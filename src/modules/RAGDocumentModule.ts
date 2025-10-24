@@ -12,7 +12,8 @@ export interface DocumentUploadOptions {
     description?: string;
     tags?: string[];
     author?: string;
-    modelName?: string;
+    // modelName?: string;
+    // vectorDimensions?: number;
 }
 
 export interface DocumentValidationResult {

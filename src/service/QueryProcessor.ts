@@ -35,7 +35,7 @@ export interface QueryProcessingOptions {
 
 export class QueryProcessor {
     private searchController: RagSearchController;
-    private db: SqliteDb;
+    // private db: SqliteDb;
     private processingHistory: Map<string, ProcessedQuery> = new Map();
     private analytics: {
         totalQueries: number;
@@ -51,7 +51,7 @@ export class QueryProcessor {
 
     constructor(searchController: RagSearchController, db: SqliteDb) {
         this.searchController = searchController;
-        this.db = db;
+        // this.db = db;
     }
 
     /**

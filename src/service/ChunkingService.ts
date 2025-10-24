@@ -40,7 +40,7 @@ export interface DocumentContent {
 }
 
 export class ChunkingService {
-    private db: SqliteDb;
+    // private db: SqliteDb;
     private ragConfigApi: RagConfigApi;
     private ragChunkModule: RAGChunkModule;
     private cachedConfig: ChunkingConfig | null = null;
@@ -54,8 +54,8 @@ export class ChunkingService {
         minChunkSize: 100
     };
 
-    constructor(db: SqliteDb) {
-        this.db = db;
+    constructor() {
+        // this.db = db;
         this.ragConfigApi = new RagConfigApi();
         this.ragChunkModule = new RAGChunkModule();
         this.initializeConfig();
@@ -184,7 +184,7 @@ export class ChunkingService {
         console.log(`Processing document: ${path.basename(document.filePath)}`);
         console.log(`Content type: ${documentContent.contentType}, Original format: ${documentContent.originalFormat}`);
         console.log(`Content length: ${documentContent.content.length} characters, ${documentContent.metadata?.wordCount || 0} words`);
-        
+
         // Generate chunks based on strategy and content type
         const chunks = await this.generateChunks(documentContent.content, documentContent.contentType, chunkingOptions);
         

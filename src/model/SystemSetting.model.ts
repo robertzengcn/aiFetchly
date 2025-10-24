@@ -105,11 +105,12 @@ export class SystemSettingModel extends BaseDb {
 
     /**
      * Update default embedding model setting
-     * @param modelName New embedding model name
+     * @param modelNameWithDimension Model name in format "modelName:dimension" (e.g., "text-embedding-ada-002:1536")
      * @param group SystemSettingGroupEntity for embedding settings
      * @returns Updated SystemSettingEntity
      */
-    public async updateDefaultEmbeddingModel(modelName: string, group: SystemSettingGroupEntity): Promise<SystemSettingEntity> {
+    public async updateDefaultEmbeddingModel(modelNameWithDimension: string, group: SystemSettingGroupEntity): Promise<SystemSettingEntity> {
+        
         const defaultEmbeddingModelKey = default_embedding_model;
         
         let setting = await this.repository.findOne({
@@ -121,13 +122,13 @@ export class SystemSettingModel extends BaseDb {
             const systemSettingEntity = new SystemSettingEntity();
             systemSettingEntity.group = group;
             systemSettingEntity.key = defaultEmbeddingModelKey;
-            systemSettingEntity.value = modelName;
+            systemSettingEntity.value = modelNameWithDimension;
             systemSettingEntity.description = embedding_group_description;
             systemSettingEntity.type = 'select';
             setting = await this.repository.save(systemSettingEntity);
         } else {
             // Update existing setting
-            setting.value = modelName;
+            setting.value = modelNameWithDimension;
             setting = await this.repository.save(setting);
         }
 
