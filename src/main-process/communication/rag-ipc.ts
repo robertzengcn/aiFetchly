@@ -299,7 +299,7 @@ export function registerRagIpcHandlers(): void {
             // Include default embedding model in the stats response
             const enhancedStats: RagStatsResponse = {
                 ...stats,
-                defaultEmbeddingModel
+                defaultEmbeddingModel: defaultEmbeddingModel?.modelName || '',
             };
             
             const response: CommonMessage<RagStatsResponse> = {
@@ -690,12 +690,42 @@ export function registerRagIpcHandlers(): void {
                 model: string;
             };
 
+            // First, validate the model name against available models
+            const ragConfigApi = new RagConfigApi();
+            const modelsResponse = await ragConfigApi.getAvailableEmbeddingModels();
+            
+            if (!modelsResponse.status || !modelsResponse.data) {
+                const errorResponse: CommonMessage<boolean> = {
+                    status: false,
+                    msg: "Failed to fetch available models for validation",
+                    data: false
+                };
+                return errorResponse;
+            }
+
+            const availableModels = modelsResponse.data.models;
+            const modelInfo = availableModels[config.model];
+            
+            if (!modelInfo) {
+                const availableModelNames = Object.keys(availableModels).join(', ');
+                const errorResponse: CommonMessage<boolean> = {
+                    status: false,
+                    msg: `Invalid model name "${config.model}". Available models: ${availableModelNames}`,
+                    data: false
+                };
+                return errorResponse;
+            }
+
+            // Get the dimension from the model info
+            const dimension = modelInfo.dimensions;
+            
+            // Update the embedding model with validated name and dimension
             const ragSearchController = await createRagController();
-            await ragSearchController.updateEmbeddingModel(config.model);
+            await ragSearchController.updateEmbeddingModel(config.model, dimension);
             
             const response: CommonMessage<boolean> = {
                 status: true,
-                msg: "Embedding model updated successfully",
+                msg: `Embedding model updated successfully to ${config.model}:${dimension}`,
                 data: true
             };
             return response;
@@ -723,7 +753,7 @@ export function registerRagIpcHandlers(): void {
                 
                 // Override the default_model with the one from system settings if available
                 if (defaultModelFromSettings) {
-                    response.data.default_model = defaultModelFromSettings;
+                    response.data.default_model = defaultModelFromSettings.modelName;
                 }
                 
                 return {

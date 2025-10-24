@@ -1,5 +1,5 @@
 import { VectorStoreService } from './VectorStoreService';
-import { SqliteDb } from '@/config/SqliteDb';
+// import { SqliteDb } from '@/config/SqliteDb';
 import { EmbeddingImpl } from '@/modules/interface/EmbeddingImpl';
 import { RAGDocumentModule } from '@/modules/RAGDocumentModule';
 import { RAGChunkModule } from '@/modules/RAGChunkModule';

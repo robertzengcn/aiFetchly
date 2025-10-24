@@ -249,7 +249,7 @@
                   </template>
                   <template v-slot:subtitle>
                     {{ item.raw.description }} - 
-                    {{ t('knowledge.max_dimensions') }}: {{ item.raw.max_dimensions }}
+                    {{ t('knowledge.max_dimensions') }}: {{ item.raw.dimensions }}
                   </template>
                 </v-list-item>
               </template>

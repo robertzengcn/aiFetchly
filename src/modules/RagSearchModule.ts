@@ -8,6 +8,7 @@ import { ChunkingService } from '@/service/ChunkingService';
 import { RAGDocumentEntity } from '@/entity/RAGDocument.entity';
 import { RAGChunkEntity } from '@/entity/RAGChunk.entity';
 import { RagConfigApi } from '@/api/ragConfigApi';
+import { SystemSettingModule } from '@/modules/SystemSettingModule';
 import { app } from 'electron';
 import {getUserdbpath} from "@/modules/lib/electronfunction"
 // import { Token } from "./token";
@@ -55,6 +56,7 @@ export class RagSearchModule extends BaseModule {
     private documentService: DocumentService;
     private chunkingService: ChunkingService;
     private ragConfigApi: RagConfigApi;
+    private systemSettingModule: SystemSettingModule;
 
     constructor() {
         super();
@@ -67,8 +69,9 @@ export class RagSearchModule extends BaseModule {
         this.searchService = new VectorSearchService(vectorStoreService);
         this.configurationService = new ConfigurationServiceImpl();
         this.documentService = new DocumentService();
-        this.chunkingService = new ChunkingService(this.sqliteDb);
+        this.chunkingService = new ChunkingService();
         this.ragConfigApi = new RagConfigApi();
+        this.systemSettingModule = new SystemSettingModule();
     }
 
     /**
@@ -93,8 +96,18 @@ export class RagSearchModule extends BaseModule {
      */
     async uploadDocument(options: DocumentUploadOptions): Promise<DocumentUploadResponse> {
         const startTime = Date.now();
-        if (!options.modelName) {
-            throw new Error('Model name is required');
+        
+        // Check if default embedding model exists in system settings
+        const defaultEmbeddingModel = await this.systemSettingModule.getDefaultEmbeddingModel();
+        if (!defaultEmbeddingModel) {
+            throw new Error('No default embedding model configured. Please set a default embedding model before uploading documents.');
+        }
+        
+        // Use default embedding model if no modelName is provided
+        const modelName =  defaultEmbeddingModel.modelName;
+        const vectorDimensions = defaultEmbeddingModel.dimension;
+        if (!modelName) {
+            throw new Error('No embedding model name provided. Cannot process document without an embedding model.');
         }
         try {
             // Upload document to database
@@ -111,12 +124,13 @@ export class RagSearchModule extends BaseModule {
             const chunks = await this.chunkingService.chunkDocument(document);
 
             // Generate embeddings for chunks using remote API
-            const vectorIndexPath =await this.generateChunkEmbeddings(chunks, options.modelName);
+            const vectorIndexPath =await this.generateChunkEmbeddings(chunks, modelName);
 
             if (vectorIndexPath) {
                 await this.documentService.updateDocumentMetadata(document.id, {
                     vectorIndexPath:vectorIndexPath,
-                    modelName: options.modelName
+                    modelName: modelName,
+                    vectorDimensions: vectorDimensions
                 });
             }
 
