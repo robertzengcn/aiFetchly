@@ -204,7 +204,6 @@
 import { ref, onMounted, nextTick, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { sendChatMessage, streamChatMessage, getChatHistory, clearChatHistory } from '@/views/api/aiChat';
-import { streamChatMessageWithRAG } from '@/views/api/aiChatWithRAG';
 import { ChatMessage, ChatStreamChunk } from '@/entityTypes/commonType';
 
 // i18n setup
@@ -231,8 +230,8 @@ const isLoading = ref(false);
 const isTyping = ref(false);
 const messagesContainer = ref<HTMLElement | null>(null);
 const showScrollButton = ref(false);
-const conversationId = ref('default');
-const inputField = ref<any>(null);
+const conversationId = ref<string | undefined>(undefined);
+const inputField = ref<HTMLTextAreaElement | null>(null);
 const useRAGContext = ref(false);
 const isExecutingTool = ref(false);
 const currentToolName = ref('');
@@ -299,12 +298,13 @@ async function handleSendMessage() {
   showToolResult.value = false;
 
   // Add user message to UI immediately
+  // Note: conversationId will be set by backend on first message
   const userMessage: ChatMessage = {
     id: `user-${Date.now()}`,
     role: 'user',
     content: userMessageContent,
     timestamp: new Date(),
-    conversationId: conversationId.value
+    conversationId: conversationId.value || 'pending'
   };
   messages.value.push(userMessage);
   
@@ -314,21 +314,20 @@ async function handleSendMessage() {
   try {
     // Use streaming for better UX
     let assistantContent = '';
+    const assistantMessageId = `assistant-${Date.now()}`;
     const assistantMessage: ChatMessage = {
-      id: `assistant-${Date.now()}`,
+      id: assistantMessageId,
       role: 'assistant',
       content: '',
       timestamp: new Date(),
-      conversationId: conversationId.value
+      conversationId: conversationId.value || 'pending'
     };
     
     // Add placeholder message
     messages.value.push(assistantMessage);
 
-    // Use RAG context if enabled, otherwise use regular chat
-    const streamFunction = useRAGContext.value ? streamChatMessageWithRAG : streamChatMessage;
-
-    await streamFunction(
+    // Use unified streaming function with RAG flag
+    await streamChatMessage(
       userMessageContent,
       (chunk: ChatStreamChunk) => {
         // Handle different event types
@@ -336,10 +335,10 @@ async function handleSendMessage() {
 
         switch (eventType) {
           case 'token':
-            // Append token content to message
+            // Append token content and display immediately
             assistantContent += chunk.content;
             const lastMessage = messages.value[messages.value.length - 1];
-            if (lastMessage && lastMessage.role === 'assistant') {
+            if (lastMessage && lastMessage.role === 'assistant' && lastMessage.id === assistantMessageId) {
               lastMessage.content = assistantContent;
             }
             scrollToBottom();
@@ -364,9 +363,16 @@ async function handleSendMessage() {
             break;
 
           case 'conversation_start':
-            // Update conversation ID if provided
+            // Update conversation ID if provided and update all pending messages
             if (chunk.conversationId) {
               conversationId.value = chunk.conversationId;
+              
+              // Update conversationId for all messages with 'pending' conversationId
+              messages.value.forEach(msg => {
+                if (msg.conversationId === 'pending') {
+                  msg.conversationId = chunk.conversationId!;
+                }
+              });
             }
             break;
 
@@ -379,7 +385,7 @@ async function handleSendMessage() {
             if (chunk.content) {
               assistantContent += chunk.content;
               const msg = messages.value[messages.value.length - 1];
-              if (msg && msg.role === 'assistant') {
+              if (msg && msg.role === 'assistant' && msg.id === assistantMessageId) {
                 msg.content = assistantContent;
               }
               scrollToBottom();
@@ -387,16 +393,9 @@ async function handleSendMessage() {
             break;
         }
       },
-      (fullContent: string) => {
-        // Stream complete
-        const lastMessage = messages.value[messages.value.length - 1];
-        if (lastMessage && lastMessage.role === 'assistant') {
-          if (assistantContent) {
-            lastMessage.content = assistantContent;
-          } else if (fullContent) {
-            lastMessage.content = fullContent;
-          }
-        }
+      () => {
+        // Stream complete - only handle cleanup, content is already updated
+        // No need to update content again since we've been updating it as tokens arrived
         
         // Reset all states
         isTyping.value = false;
@@ -405,7 +404,10 @@ async function handleSendMessage() {
         showToolResult.value = false;
         scrollToBottom();
       },
-      conversationId.value
+      conversationId.value,
+      undefined, // model
+      useRAGContext.value, // useRAG flag
+      3 // ragLimit
     );
   } catch (error) {
     console.error('Error sending message:', error);
@@ -420,7 +422,7 @@ async function handleSendMessage() {
       role: 'assistant',
       content: `Error: ${streamError.value}`,
       timestamp: new Date(),
-      conversationId: conversationId.value
+      conversationId: conversationId.value || 'error'
     };
     messages.value.push(errorMessage);
     scrollToBottom();

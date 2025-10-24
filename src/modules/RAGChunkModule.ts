@@ -73,8 +73,8 @@ export class RAGChunkModule extends BaseModule {
     /**
      * Update chunk embedding information
      */
-    async updateChunkEmbedding(chunkId: number, embeddingId: string, vectorDimensions: number): Promise<boolean> {
-        return await this.ragChunkModel.updateChunkEmbedding(chunkId, embeddingId, vectorDimensions);
+    async updateChunkEmbedding(chunkId: number, embeddingId: string): Promise<boolean> {
+        return await this.ragChunkModel.updateChunkEmbedding(chunkId, embeddingId);
     }
 
     /**
@@ -89,5 +89,33 @@ export class RAGChunkModule extends BaseModule {
      */
     async getChunksWithoutEmbeddings(documentId?: number): Promise<RAGChunkEntity[]> {
         return await this.ragChunkModel.getChunksWithoutEmbeddings(documentId);
+    }
+
+    /**
+     * Get chunks by IDs with their associated documents
+     */
+    async getChunksByIds(chunkIds: number[]): Promise<RAGChunkEntity[]> {
+        return await this.ragChunkModel.getChunksByIds(chunkIds);
+    }
+
+    /**
+     * Search chunks by content
+     */
+    async searchChunksByContent(query: string, limit: number = 10): Promise<RAGChunkEntity[]> {
+        return await this.ragChunkModel.searchChunksByContent(query, limit);
+    }
+
+    /**
+     * Get total chunk count
+     */
+    async getTotalChunkCount(): Promise<number> {
+        return await this.ragChunkModel.getTotalChunkCount();
+    }
+
+    /**
+     * Get average token count
+     */
+    async getAverageTokenCount(): Promise<number> {
+        return await this.ragChunkModel.getAverageTokenCount();
     }
 }

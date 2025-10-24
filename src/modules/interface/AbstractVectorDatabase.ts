@@ -170,8 +170,8 @@ export abstract class AbstractVectorDatabase implements IVectorDatabase {
         if (!config.modelId || !config.dimensions) {
             throw new Error('Model ID and dimensions are required');
         }
-        if (config.dimensions <= 0) {
-            throw new Error('Dimensions must be greater than 0');
-        }
+        // if (config.dimensions <= 0) {
+        //     throw new Error('Dimensions must be greater than 0');
+        // }
     }
 }

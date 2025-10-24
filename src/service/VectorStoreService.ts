@@ -81,7 +81,7 @@ export class VectorStoreService {
             };
 
             await this.vectorDatabase.createIndex(vectorDbConfig);
-            console.log(`Created ${indexType} index for model ${modelConfig.modelId} with dimension ${modelConfig.dimensions}`);
+            console.log(`Created ${indexType} index for model ${modelConfig.modelId} with dimension ${modelConfig.name}`);
         } catch (error) {
             console.error(`Failed to create ${this.databaseType} index:`, error);
             throw new Error(`Failed to create ${this.databaseType} index`);
@@ -195,8 +195,9 @@ export class VectorStoreService {
                 console.log(`Creating new document-specific index for document ${embeddingData.documentId} with model ${embeddingData.model} (using pool)`);
                 await this.createDocumentIndex(embeddingData.documentId, modelConfig);
             } else if (!this.currentModel || 
-                       this.currentModel.modelId !== embeddingData.model || 
-                       this.currentModel.dimensions !== embeddingData.dimensions) {
+                       this.currentModel.modelId !== embeddingData.model 
+                    //    this.currentModel.dimensions !== embeddingData.dimensions
+                    ) {
                 console.log(`Loading existing document-specific index for document ${embeddingData.documentId} with model ${embeddingData.model} (using pool)`);
                 await this.loadDocumentIndex(embeddingData.documentId, modelConfig);
             }
@@ -244,8 +245,8 @@ export class VectorStoreService {
                 const embeddingId = (startIndex + i).toString();
                 await this.ragChunkModule.updateChunkEmbedding(
                     chunkIds[i], 
-                    embeddingId, 
-                    stats.dimension
+                    embeddingId
+                    // stats.dimension
                 );
             }
 
@@ -416,7 +417,7 @@ export class VectorStoreService {
         
         // Generate the expected path for this model
         const baseDir = path.dirname(this.indexPath);
-        const fileName = `index_${modelConfig.modelId}_${modelConfig.dimensions}.${this.getFileExtension()}`;
+        const fileName = `index_${modelConfig.modelId}_${modelConfig.name}.${this.getFileExtension()}`;
         const modelSpecificPath = path.join(baseDir, 'models', fileName);
         
         return require('fs').existsSync(modelSpecificPath);
@@ -719,7 +720,7 @@ export class VectorStoreService {
      */
     getDocumentIndexPath(documentId: number, modelConfig: EmbeddingModelConfig): string {
         const baseDir = path.dirname(this.indexPath);
-        const fileName = `index_doc_${documentId}_${modelConfig.modelId}_${modelConfig.dimensions}.${this.getFileExtension()}`;
+        const fileName = `index_doc_${documentId}_${modelConfig.name}_.${this.getFileExtension()}`;
         return path.join(baseDir, 'documents', fileName);
     }
 }

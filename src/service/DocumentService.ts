@@ -82,6 +82,7 @@ export class DocumentService {
         tags?: string[];
         author?: string;
         vectorIndexPath?: string;
+        modelName?: string;
     }): Promise<void> {
         return await this.ragDocumentModule.updateDocumentMetadata(id, metadata);
     }

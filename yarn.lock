@@ -36,15 +36,6 @@
   dependencies:
     json-schema "^0.4.0"
 
-"@ai-sdk/vue@^2.0.68":
-  version "2.0.68"
-  resolved "https://registry.npmmirror.com/@ai-sdk/vue/-/vue-2.0.68.tgz#90a859f4548494866cad67b423945f2c88c148b2"
-  integrity sha512-5UZs9+tKVIuh2GEIbE0LOuVE0bwlobUuQBy+3jbP9CmxHqZx9Uau1612XaKCFWhEPKNn7eGLqlfigoaKbcnoLQ==
-  dependencies:
-    "@ai-sdk/provider-utils" "3.0.12"
-    ai "5.0.68"
-    swrv "^1.0.4"
-
 "@ampproject/remapping@^2.2.0":
   version "2.3.0"
   resolved "https://registry.npmjs.org/@ampproject/remapping/-/remapping-2.3.0.tgz"
@@ -2036,6 +2027,13 @@
   resolved "https://registry.npmmirror.com/@types/turndown/-/turndown-5.0.5.tgz"
   integrity sha512-TL2IgGgc7B5j78rIccBtlYAnkuv8nUQqhQc+DSYV5j9Be9XOcm/SKOVRuA47xAVI3680Tk9B1d8flK2GWT2+4w==
 
+"@types/uuid@^11.0.0":
+  version "11.0.0"
+  resolved "https://registry.npmmirror.com/@types/uuid/-/uuid-11.0.0.tgz#f4fa34bbf2af941148ef1973c4361fc43617971c"
+  integrity sha512-HVyk8nj2m+jcFRNazzqyVKiZezyhDKrGUA3jlEcg/nZ6Ms+qHwocba1Y/AaVaznJTAM9xpdFSh+ptbNrhOGvZA==
+  dependencies:
+    uuid "*"
+
 "@types/validator@^13.12.2":
   version "13.12.2"
   resolved "https://registry.npmjs.org/@types/validator/-/validator-13.12.2.tgz"
@@ -2652,7 +2650,7 @@ aggregate-error@^3.0.0:
     clean-stack "^2.0.0"
     indent-string "^4.0.0"
 
-ai@5.0.68, ai@^5.0.68:
+ai@^5.0.68:
   version "5.0.68"
   resolved "https://registry.npmmirror.com/ai/-/ai-5.0.68.tgz#e2e39934bd1af50e3059141a4bb758e4bc8b06b1"
   integrity sha512-SB6r+4TkKVlSg2ozGBSfuf6Is5hrcX/bpGBzOoyHIN3b4ILGhaly0IHEvP8+3GGIHXqtkPVEUmR6V05jKdjNlg==
@@ -10144,11 +10142,6 @@ svg.select.js@^3.0.1:
   dependencies:
     svg.js "^2.6.5"
 
-swrv@^1.0.4:
-  version "1.1.0"
-  resolved "https://registry.npmmirror.com/swrv/-/swrv-1.1.0.tgz#e3825e1e825893391e34fd5b924ba8e6122c14ce"
-  integrity sha512-pjllRDr2s0iTwiE5Isvip51dZGR7GjLH1gCSVyE8bQnbAx6xackXsFdojau+1O5u98yHF5V73HQGOFxKUXO9gQ==
-
 synckit@^0.9.1:
   version "0.9.2"
   resolved "https://registry.npmjs.org/synckit/-/synckit-0.9.2.tgz"
@@ -10819,6 +10812,11 @@ utils-merge@1.0.1:
   version "1.0.1"
   resolved "https://registry.npmjs.org/utils-merge/-/utils-merge-1.0.1.tgz"
   integrity sha512-pMZTvIkT1d+TFGvDOqodOclx0QWkkgi6Tdoa8gC8ffGAAqz9pzPTZWAybbsHHoED/ztMtkv/VoYTYyShUn81hA==
+
+uuid@*:
+  version "13.0.0"
+  resolved "https://registry.npmmirror.com/uuid/-/uuid-13.0.0.tgz#263dc341b19b4d755eb8fe36b78d95a6b65707e8"
+  integrity sha512-XQegIaBTVUjSHliKqcnFqYypAd4S+WCYt5NIeRs6w/UAry7z8Y9j5ZwRRL4kzq9U3sD6v+85er9FvkEaBpji2w==
 
 uuid@8.0.0:
   version "8.0.0"

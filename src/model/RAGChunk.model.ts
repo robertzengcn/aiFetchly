@@ -96,10 +96,10 @@ export class RAGChunkModel extends BaseDb {
     /**
      * Update chunk embedding information
      */
-    async updateChunkEmbedding(chunkId: number, embeddingId: string, vectorDimensions: number): Promise<boolean> {
+    async updateChunkEmbedding(chunkId: number, embeddingId: string): Promise<boolean> {
         const result = await this.repository.update(
             { id: chunkId },
-            { embeddingId, vectorDimensions }
+            { embeddingId}
         );
         return (result.affected || 0) > 0;
     }
@@ -125,5 +125,47 @@ export class RAGChunkModel extends BaseDb {
         }
 
         return await queryBuilder.getMany();
+    }
+
+    /**
+     * Get chunks by IDs with their associated documents
+     */
+    async getChunksByIds(chunkIds: number[]): Promise<RAGChunkEntity[]> {
+        return await this.repository
+            .createQueryBuilder('chunk')
+            .leftJoinAndSelect('chunk.document', 'document')
+            .where('chunk.id IN (:...chunkIds)', { chunkIds })
+            .getMany();
+    }
+
+    /**
+     * Search chunks by content
+     */
+    async searchChunksByContent(query: string, limit: number = 10): Promise<RAGChunkEntity[]> {
+        return await this.repository
+            .createQueryBuilder('chunk')
+            .select(['chunk.content'])
+            .where('chunk.content LIKE :query', { query: `%${query}%` })
+            .limit(limit)
+            .getMany();
+    }
+
+    /**
+     * Get total chunk count
+     */
+    async getTotalChunkCount(): Promise<number> {
+        return await this.repository.count();
+    }
+
+    /**
+     * Get average token count
+     */
+    async getAverageTokenCount(): Promise<number> {
+        const result = await this.repository
+            .createQueryBuilder('chunk')
+            .select('AVG(chunk.tokenCount)', 'avgTokens')
+            .getRawOne();
+        
+        return parseFloat(result?.avgTokens) || 0;
     }
 }

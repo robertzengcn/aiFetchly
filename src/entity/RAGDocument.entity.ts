@@ -68,6 +68,14 @@ export class RAGDocumentEntity extends AuditableEntity {
     @Order(14)
     @Column('varchar', { length: 500, nullable: true })
     vectorIndexPath?: string;
+    
+    @Order(15)
+    @Column('varchar', { length: 500, nullable: true })
+    modelName?: string;
+    
+    @Order(16)
+    @Column('int', { nullable: true })
+    vectorDimensions?: number;
 
     // Relationships
     @OneToMany('RAGChunkEntity', 'document')

@@ -184,7 +184,7 @@ export class ChunkingService {
         console.log(`Processing document: ${path.basename(document.filePath)}`);
         console.log(`Content type: ${documentContent.contentType}, Original format: ${documentContent.originalFormat}`);
         console.log(`Content length: ${documentContent.content.length} characters, ${documentContent.metadata?.wordCount || 0} words`);
-
+        
         // Generate chunks based on strategy and content type
         const chunks = await this.generateChunks(documentContent.content, documentContent.contentType, chunkingOptions);
         

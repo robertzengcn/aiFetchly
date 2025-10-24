@@ -62,8 +62,9 @@ export class RagSearchModule extends BaseModule {
         // const tokenService = new Token()
         // const userdataPath = tokenService.getValue(USERSDBPATH)
         // Initialize services with database
-        const vectorStoreService = new VectorStoreService(getUserdbpath());
-        this.searchService = new VectorSearchService(vectorStoreService, this.sqliteDb);
+        const dbPath = getUserdbpath();
+        const vectorStoreService = new VectorStoreService(dbPath);
+        this.searchService = new VectorSearchService(vectorStoreService);
         this.configurationService = new ConfigurationServiceImpl();
         this.documentService = new DocumentService();
         this.chunkingService = new ChunkingService(this.sqliteDb);
@@ -110,7 +111,14 @@ export class RagSearchModule extends BaseModule {
             const chunks = await this.chunkingService.chunkDocument(document);
 
             // Generate embeddings for chunks using remote API
-            await this.generateChunkEmbeddings(chunks, options.modelName);
+            const vectorIndexPath =await this.generateChunkEmbeddings(chunks, options.modelName);
+
+            if (vectorIndexPath) {
+                await this.documentService.updateDocumentMetadata(document.id, {
+                    vectorIndexPath:vectorIndexPath,
+                    modelName: options.modelName
+                });
+            }
 
             // Update processing status to completed
             await this.documentService.updateDocumentStatus(
@@ -203,6 +211,7 @@ export class RagSearchModule extends BaseModule {
             }
             
             console.log(`Generated embeddings for ${chunks.length} chunks using remote API for document ${documentId}`);
+            console.log('vectorIndexPath', vectorIndexPath);
             return vectorIndexPath;
         } catch (error) {
             console.error('Error generating embeddings:', error);
@@ -592,7 +601,8 @@ export class RagSearchModule extends BaseModule {
             // Save vector index path to document entity
             if (vectorIndexPath) {
                 await this.documentService.updateDocumentMetadata(documentId, {
-                    vectorIndexPath
+                    vectorIndexPath,
+                    modelName: modelName
                 });
                 console.log(`Saved vector index path to document ${documentId}: ${vectorIndexPath}`);
             }

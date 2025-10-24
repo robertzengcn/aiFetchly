@@ -508,9 +508,9 @@ async function handleUploadSuccess(document: UploadedDocument) {
   // }
   
   // Refresh document management if available
-  // if (documentManagement.value) {
-  //   documentManagement.value.refreshDocuments();
-  // }
+  if (documentManagement.value) {
+    documentManagement.value.refreshDocuments();
+  }
 }
 
 function handleUploadError(error: string) {
@@ -688,6 +688,7 @@ async function confirmUpload() {
         (result: FileUploadComplete) => {
           console.log(`Complete for ${file.name}:`, result);
           uploadProgress.value.delete(file.name);
+         
         });
         
         console.log("uploadResult is ready")

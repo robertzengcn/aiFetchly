@@ -111,7 +111,7 @@
           :color="getStatusColor(item.status)"
           small
         >
-          {{ item.status }}
+          {{ translateStatus(item.status) }}
         </v-chip>
       </template>
 
@@ -120,7 +120,7 @@
           :color="getProcessingStatusColor(item.processingStatus)"
           small
         >
-          {{ item.processingStatus }}
+          {{ translateProcessingStatus(item.processingStatus) }}
         </v-chip>
       </template>
 
@@ -229,7 +229,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { getDocuments, type DocumentInfo, chunkAndEmbedDocument, getRAGStats, downloadDocument, deleteDocument as deleteDocumentAPI } from '@/views/api/rag';
+import { getDocuments, type DocumentInfo, chunkAndEmbedDocument, getRAGStats, downloadDocument, deleteDocument as deleteDocumentAPI, uploadDocument as uploadDocumentAPI } from '@/views/api/rag';
 import { Header } from "@/entityTypes/commonType"
 const headers = ref<Array<Header>>([])
 // i18n setup
@@ -402,21 +402,40 @@ const { t } = useI18n();
       
       uploading.value = true;
       try {
-        // Mock upload
-        console.log('Uploading file:', uploadFile.value);
+        const file = uploadFile.value;
+        console.log('Uploading file:', file);
         console.log('Upload data:', uploadData.value);
         
-        // Simulate upload delay
-        //await new Promise(resolve => setTimeout(resolve, 2000));
+        // In Electron, the file object should have a path property
+        const filePath = (file as any).path || file.name;
         
-        showUploadDialog.value = false;
-        uploadFile.value = undefined;
-        uploadData.value = { title: '', description: '', tags: [] };
+        // Call the upload API
+        const result = await uploadDocumentAPI({
+          filePath: filePath,
+          name: file.name,
+          title: uploadData.value.title,
+          description: uploadData.value.description,
+          tags: uploadData.value.tags
+        });
         
-        // Refresh documents
-        loadDocuments();
+        if (result.success) {
+          console.log('✅ Document uploaded successfully:', file.name);
+          alert(t('knowledge.document_uploaded_successfully', { name: file.name }));
+          
+          // Close dialog and reset form
+          showUploadDialog.value = false;
+          uploadFile.value = undefined;
+          uploadData.value = { title: '', description: '', tags: [] };
+          
+          // Refresh documents list immediately
+          await loadDocuments();
+        } else {
+          console.error('❌ Document upload failed:', result.message);
+          alert(t('knowledge.upload_failed') + ': ' + (result.message || 'Unknown error'));
+        }
       } catch (error) {
         console.error('Upload error:', error);
+        alert(t('knowledge.upload_failed') + ': ' + (error instanceof Error ? error.message : 'Unknown error'));
       } finally {
         uploading.value = false;
       }
@@ -639,6 +658,30 @@ const { t } = useI18n();
       return new Date(date).toLocaleDateString();
     };
 
+    const translateStatus = (status: string | undefined) => {
+      if (!status) return '';
+      const statusMap: Record<string, string> = {
+        'active': t('knowledge.status_active'),
+        'archived': t('knowledge.status_archived'),
+        'processing': t('knowledge.status_processing'),
+        'completed': t('knowledge.status_completed'),
+        'pending': t('knowledge.status_pending'),
+        'failed': t('knowledge.status_failed')
+      };
+      return statusMap[status] || status;
+    };
+
+    const translateProcessingStatus = (status: string | undefined) => {
+      if (!status) return '';
+      const processingStatusMap: Record<string, string> = {
+        'completed': t('knowledge.processing_completed'),
+        'processing': t('knowledge.processing_processing'),
+        'failed': t('knowledge.processing_failed'),
+        'pending': t('knowledge.processing_pending')
+      };
+      return processingStatusMap[status] || status;
+    };
+
     onMounted(() => {
       loadDocuments();
       
@@ -668,6 +711,11 @@ const { t } = useI18n();
       // Save settings to localStorage
       localStorage.setItem('documentManagement.autoRefresh', autoRefreshEnabled.value.toString());
       localStorage.setItem('documentManagement.refreshInterval', refreshInterval.value.toString());
+    });
+
+    // Expose methods to parent component
+    defineExpose({
+      refreshDocuments: loadDocuments
     });
 </script>
 

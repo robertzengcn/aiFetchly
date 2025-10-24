@@ -225,6 +225,8 @@ export class RAGDocumentModule extends BaseModule {
         tags?: string[];
         author?: string;
         vectorIndexPath?: string;
+        modelName?: string;
+        vectorDimensions?: number;
     }): Promise<void> {
         const success = await this.ragDocumentModel.updateDocumentMetadata(id, metadata);
         if (!success) {
@@ -259,5 +261,19 @@ export class RAGDocumentModule extends BaseModule {
      */
     private generateContentHash(content: string): string {
         return crypto.createHash('sha256').update(content).digest('hex');
+    }
+
+    /**
+     * Count total documents
+     */
+    async countDocuments(): Promise<number> {
+        return await this.ragDocumentModel.countDocuments();
+    }
+
+    /**
+     * Get all documents that have embeddings
+     */
+    async getDocumentsWithEmbeddings(): Promise<Array<{ id: number }>> {
+        return await this.ragDocumentModel.getDocumentsWithEmbeddings();
     }
 }
