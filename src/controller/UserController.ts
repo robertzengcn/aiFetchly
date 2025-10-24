@@ -5,7 +5,7 @@ import { getUserpath, checkAndCreatePath, getApplogspath } from "@/modules/lib/f
 // import {SequelizeConfig} from "@/config/SequelizeConfig"
 // import * as fs from 'fs';
 // import * as path from 'path';
-import { USERSDBPATH, USERLOGPATH, USEREMAIL,USERNAME, USERROLES } from '@/config/usersetting';
+import { USERSDBPATH, USERLOGPATH, USEREMAIL,USERNAME, USERROLES, USERID } from '@/config/usersetting';
 import { Token } from "@/modules/token"
 //import {runAfterTableCreate} from "@/modules/lib/databaseinit"
 import { SqliteDb } from "@/config/SqliteDb"
@@ -36,86 +36,86 @@ export class UserController {
     // private pass: string;
     //defined login function which will call remote source with request
     //and return the result
-    public async login(data: userlogin): Promise<jwtUser> {
+    // public async login(data: userlogin): Promise<jwtUser> {
 
-        const remoteSourmodel = new RemoteSource;
-       // console.log(data)
-        const jwtuser = await remoteSourmodel.Login(data.user, data.pass).then(async function (res) {
-            //console.log(res);
-            res as jwtUser
-            if (res.email.length > 0) {
+    //     const remoteSourmodel = new RemoteSource;
+    //    // console.log(data)
+    //     const jwtuser = await remoteSourmodel.Login(data.user, data.pass).then(async function (res) {
+    //         //console.log(res);
+    //         res as jwtUser
+    //         if (res.email.length > 0) {
 
-                //check db exist, create one if not exist
+    //             //check db exist, create one if not exist
 
-                const userdataPath = getUserpath(res.email)
-                //console.log(userdataPath)
+    //             const userdataPath = getUserpath(res.email)
+    //             //console.log(userdataPath)
                 
-                //     // type: 'object',                 
-                const logPath = getApplogspath(res.email)
+    //             //     // type: 'object',                 
+    //             const logPath = getApplogspath(res.email)
 
-                await checkAndCreatePath(userdataPath)
-                await checkAndCreatePath(logPath)
-                const tokenService = new Token()
-                console.log(res)
-                //tokenService.setValue('useremail',res.email)
-                tokenService.setValue(USEREMAIL, res.email)
-                tokenService.setValue(USERNAME, res.name)
-                tokenService.setValue(USERSDBPATH, userdataPath)
-                tokenService.setValue(USERLOGPATH, logPath)
-                //tokenService.setValue(USERROLES, JSON.stringify(res.roles))
-                //const scraperModel = Scraperdb.getInstance(userdataPath);
-                //const dbdatapath=scraperModel.getdbpath(userdataPath)
-                // console.log(dbdatapath)
-                try {
-                //scraperModel.init()
-                const appDataSource = SqliteDb.getInstance(userdataPath)
-                if(!appDataSource.connection.isInitialized){
-                await appDataSource.connection.initialize()
-                }
-                } catch (error) {
-                    console.error('Failed to initialize database connection:', error)
+    //             await checkAndCreatePath(userdataPath)
+    //             await checkAndCreatePath(logPath)
+    //             const tokenService = new Token()
+    //             console.log(res)
+    //             //tokenService.setValue('useremail',res.email)
+    //             tokenService.setValue(USEREMAIL, res.email)
+    //             tokenService.setValue(USERNAME, res.name)
+    //             tokenService.setValue(USERSDBPATH, userdataPath)
+    //             tokenService.setValue(USERLOGPATH, logPath)
+    //             //tokenService.setValue(USERROLES, JSON.stringify(res.roles))
+    //             //const scraperModel = Scraperdb.getInstance(userdataPath);
+    //             //const dbdatapath=scraperModel.getdbpath(userdataPath)
+    //             // console.log(dbdatapath)
+    //             try {
+    //             //scraperModel.init()
+    //             const appDataSource = SqliteDb.getInstance(userdataPath)
+    //             if(!appDataSource.connection.isInitialized){
+    //             await appDataSource.connection.initialize()
+    //             }
+    //             } catch (error) {
+    //                 console.error('Failed to initialize database connection:', error)
 
-                    // Log detailed error information
-                    if (error instanceof Error) {
-                        console.error(`Error name: ${error.name}`)
-                        console.error(`Error message: ${error.message}`)
-                        console.error(`Error stack: ${error.stack}`)
-
-
-                        // Handle specific error types
-                        if (error.message === 'SQLITE_CANTOPEN') {
-                            console.error('Could not open SQLite database file. Check path and permissions.')
-                        } else if (error.name === 'SQLITE_CORRUPT') {
-                            console.error('SQLite database file is corrupted.')
-                        } else if (error.name === 'CannotConnectAlreadyConnectedError') {
-                            console.log('SQLite database file is already connected.')
-                        }else if(error.name==='CannotConnectAlreadyConnectedError2'){
-                            console.log('SQLite database file is already connected.')
-
-                        } else {
-                            // Throw a more descriptive error or return a specific error response
-                           throw new Error(`Database initialization failed: ${error.message}`)
-                        }
+    //                 // Log detailed error information
+    //                 if (error instanceof Error) {
+    //                     console.error(`Error name: ${error.name}`)
+    //                     console.error(`Error message: ${error.message}`)
+    //                     console.error(`Error stack: ${error.stack}`)
 
 
-                    }
-                }
-                console.log('initialize')
-                // const sequelize=SequelizeConfig.getInstance(userdataPath);
-                // await sequelize.sync({ force: true,alter: true });
-                // Insert some sample data after the sync completes
-                //  runAfterTableCreate()
+    //                     // Handle specific error types
+    //                     if (error.message === 'SQLITE_CANTOPEN') {
+    //                         console.error('Could not open SQLite database file. Check path and permissions.')
+    //                     } else if (error.name === 'SQLITE_CORRUPT') {
+    //                         console.error('SQLite database file is corrupted.')
+    //                     } else if (error.name === 'CannotConnectAlreadyConnectedError') {
+    //                         console.log('SQLite database file is already connected.')
+    //                     }else if(error.name==='CannotConnectAlreadyConnectedError2'){
+    //                         console.log('SQLite database file is already connected.')
 
-               // await runafterbootup()
-            }
-            return res;
-        }).catch(function (error) {
-            console.log(error.stack)
-            //debug(error);
-            throw new Error(error.message);
-        });
-        return jwtuser;
-    }
+    //                     } else {
+    //                         // Throw a more descriptive error or return a specific error response
+    //                        throw new Error(`Database initialization failed: ${error.message}`)
+    //                     }
+
+
+    //                 }
+    //             }
+    //             console.log('initialize')
+    //             // const sequelize=SequelizeConfig.getInstance(userdataPath);
+    //             // await sequelize.sync({ force: true,alter: true });
+    //             // Insert some sample data after the sync completes
+    //             //  runAfterTableCreate()
+
+    //            // await runafterbootup()
+    //         }
+    //         return res;
+    //     }).catch(function (error) {
+    //         console.log(error.stack)
+    //         //debug(error);
+    //         throw new Error(error.message);
+    //     });
+    //     return jwtuser;
+    // }
     public getLoginPageUrl(): string {
         const loginUrl = import.meta.env.VITE_LOGIN_URL as string;
         const appName = app.getName() || "";
@@ -248,6 +248,7 @@ export class UserController {
                             //tokenService.setValue('useremail',res.email)
                             tokenService.setValue(USEREMAIL, res.email)
                             tokenService.setValue(USERNAME, res.name)
+                            tokenService.setValue(USERID, res.id.toString())
                             tokenService.setValue(USERSDBPATH, userdataPath)
                             tokenService.setValue(USERLOGPATH, logPath)
                             //const scraperModel = Scraperdb.getInstance(userdataPath);

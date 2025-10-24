@@ -76,6 +76,8 @@ export class RAGDocumentModel extends BaseDb {
         tags?: string[];
         author?: string;
         vectorIndexPath?: string;
+        modelName?: string;
+        vectorDimensions?: number;
     }): Promise<boolean> {
         const entity = await this.repository.findOne({ where: { id } });
         if (!entity) return false;
@@ -85,7 +87,8 @@ export class RAGDocumentModel extends BaseDb {
         if (metadata.tags !== undefined) entity.tags = JSON.stringify(metadata.tags);
         if (metadata.author !== undefined) entity.author = metadata.author;
         if (metadata.vectorIndexPath !== undefined) entity.vectorIndexPath = metadata.vectorIndexPath;
-
+        if (metadata.modelName !== undefined) entity.modelName = metadata.modelName;
+        if (metadata.vectorDimensions !== undefined) entity.vectorDimensions = metadata.vectorDimensions;
         const result = await this.repository.save(entity);
         return !!result;
     }
@@ -187,5 +190,21 @@ export class RAGDocumentModel extends BaseDb {
 
     async countDocuments(): Promise<number> {
         return this.repository.count();
+    }
+
+    /**
+     * Get all documents that have embeddings
+     */
+    async getDocumentsWithEmbeddings(): Promise<Array<{ id: number }>> {
+        const documents = await this.repository
+            .createQueryBuilder('d')
+            .select('DISTINCT d.id')
+            .innerJoin('d.chunks', 'c')
+            .where('c.embeddingId IS NOT NULL')
+            .andWhere("c.embeddingId != ''")
+            .andWhere('d.status = :status', { status: 'active' })
+            .getRawMany();
+            
+        return documents.map((row: any) => ({ id: row.d_id }));
     }
 }

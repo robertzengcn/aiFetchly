@@ -24,11 +24,13 @@ export interface AIChatResponse<T = any> {
  * @param message - User message to send
  * @param conversationId - Optional conversation ID for context
  * @param model - Optional specific model to use
+ * @param useRAG - Optional flag to enable RAG context from knowledge base
+ * @param ragLimit - Optional number of RAG chunks to include (default: 3)
  * @returns Promise resolving to AI response
  * 
  * @example
  * ```typescript
- * const response = await sendChatMessage('Hello, how are you?');
+ * const response = await sendChatMessage('Hello, how are you?', undefined, undefined, true);
  * if (response.success && response.data) {
  *   console.log('AI:', response.data.content);
  * }
@@ -37,13 +39,17 @@ export interface AIChatResponse<T = any> {
 export async function sendChatMessage(
   message: string,
   conversationId?: string,
-  model?: string
+  model?: string,
+  useRAG?: boolean,
+  ragLimit?: number
 ): Promise<AIChatResponse<ChatMessage>> {
   try {
     const requestData = {
       message,
       conversationId,
-      model
+      model,
+      useRAG,
+      ragLimit
     };
 
     const response: CommonMessage<ChatMessage> = await windowInvoke(
@@ -73,6 +79,8 @@ export async function sendChatMessage(
  * @param onComplete - Callback when streaming is complete
  * @param conversationId - Optional conversation ID for context
  * @param model - Optional specific model to use
+ * @param useRAG - Optional flag to enable RAG context from knowledge base
+ * @param ragLimit - Optional number of RAG chunks to include (default: 3)
  * @returns Promise that resolves when stream starts
  * 
  * @example
@@ -80,22 +88,27 @@ export async function sendChatMessage(
  * await streamChatMessage(
  *   'Explain quantum computing',
  *   (chunk) => console.log('Chunk:', chunk.content),
- *   (finalContent) => console.log('Complete:', finalContent)
+ *   () => console.log('Stream complete'),
+ *   undefined,
+ *   undefined,
+ *   true
  * );
  * ```
  */
 export async function streamChatMessage(
   message: string,
   onChunk?: (chunk: ChatStreamChunk) => void,
-  onComplete?: (fullContent: string) => void,
+  onComplete?: () => void,
   conversationId?: string,
-  model?: string
+  model?: string,
+  useRAG?: boolean,
+  ragLimit?: number
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     let fullContent = '';
 
     // Set up chunk listener
-    const chunkHandler = (chunkData: any) => {
+    const chunkHandler = (chunkData: string) => {
       try {
         const chunk: ChatStreamChunk = JSON.parse(chunkData);
         if (onChunk) {
@@ -110,7 +123,7 @@ export async function streamChatMessage(
     };
 
     // Set up completion listener
-    const completeHandler = (completeData: any) => {
+    const completeHandler = (completeData: string) => {
       try {
         const chunk: ChatStreamChunk = JSON.parse(completeData);
         
@@ -121,7 +134,7 @@ export async function streamChatMessage(
         }
         
         if (onComplete) {
-          onComplete(fullContent);
+          onComplete();
         }
         
         resolve();
@@ -139,7 +152,9 @@ export async function streamChatMessage(
     const requestData = {
       message,
       conversationId,
-      model
+      model,
+      useRAG,
+      ragLimit
     };
     windowSend(AI_CHAT_STREAM, requestData);
   });
@@ -212,8 +227,8 @@ export async function clearChatHistory(
     );
 console.log('response', response);
     return {
-      success: response.status,
-      message: response.msg
+      success: true,
+      message: ""
     };
   } catch (error) {
     console.error('Error clearing chat history:', error);

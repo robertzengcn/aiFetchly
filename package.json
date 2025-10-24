@@ -79,7 +79,6 @@
     "test-platform": "ts-node src/scripts/test-platform.ts"
   },
   "dependencies": {
-    "@ai-sdk/vue": "^2.0.68",
     "@lem0-packages/puppeteer-page-proxy": "^1.4.1",
     "@mdi/font": "7.4.47",
     "@rollup/plugin-alias": "^5.1.0",
@@ -188,6 +187,7 @@
     "@types/nodemailer": "^6.4.16",
     "@types/sinon": "^10.0.15",
     "@types/sqlite3": "^3.1.8",
+    "@types/uuid": "^11.0.0",
     "@types/validator": "^13.12.2",
     "@types/webfontloader": "^1.0.0",
     "@typescript-eslint/eslint-plugin": "^5.4.0",

@@ -95,7 +95,7 @@ export class FaissVectorDatabase extends AbstractVectorDatabase {
             
             if (fs.existsSync(this.indexPath)) {
                 this.index = (faiss as any).IndexFlatL2.load(this.indexPath);
-                this.dimension = config.dimensions;
+                // this.dimension = config.dimensions;
                 
                 // Note: Chunk ID mapping will need to be rebuilt from database
                 // This is a limitation of FAISS - it doesn't store metadata

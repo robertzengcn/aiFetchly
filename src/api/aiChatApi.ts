@@ -10,6 +10,8 @@ export interface ChatRequest {
     conversationId?: string;
     model?: string;
     systemPrompt?: string;
+    useRAG?: boolean;
+    ragLimit?: number;
 }
 
 /**
@@ -20,6 +22,8 @@ interface ChatApiRequestData {
     conversation_id?: string;
     model?: string;
     system_prompt?: string;
+    use_rag?: boolean;
+    rag_limit?: number;
 }
 
 /**
@@ -144,7 +148,9 @@ export class AiChatApi {
         const data: ChatApiRequestData = {
             message: request.message,
             conversation_id: request.conversationId,
-            system_prompt: request.systemPrompt
+            system_prompt: request.systemPrompt,
+            use_rag: request.useRAG,
+            rag_limit: request.ragLimit
         };
         
         // Only include model if specified
@@ -186,7 +192,9 @@ export class AiChatApi {
         const data: ChatApiRequestData = {
             message: request.message,
             conversation_id: request.conversationId,
-            system_prompt: request.systemPrompt
+            system_prompt: request.systemPrompt,
+            use_rag: request.useRAG,
+            rag_limit: request.ragLimit
         };
         
         // Only include model if specified
@@ -195,6 +203,12 @@ export class AiChatApi {
         }
         
         const response = await this._httpClient.postStream('/api/ai/ask/stream', data);
+        
+        // Check if response status is 200 (OK)
+        if (!response.ok || response.status !== 200) {
+            const errorText = await response.text().catch(() => 'Unknown error');
+            throw new Error(`Server returned ${response.status}: ${errorText}`);
+        }
         
         if (!response.body) {
             throw new Error('Response body is null');

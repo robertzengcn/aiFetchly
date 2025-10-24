@@ -10,8 +10,18 @@ import {
     AI_CHAT_HISTORY,
     AI_CHAT_CLEAR
 } from '@/config/channellist';
+import { Token } from '@/modules/token';
+import { USERID } from '@/config/usersetting';
+import { v4 as uuidv4 } from 'uuid';
 
-const currentConversationId = 'default';
+/**
+ * Generate a unique conversation ID in format: user_id:uuid
+ */
+function generateConversationId(): string {
+    const tokenService = new Token();
+    const userId = tokenService.getValue(USERID) || 'anonymous';
+    return `${userId}:${uuidv4()}`;
+}
 
 /**
  * Register AI Chat IPC handlers
@@ -26,11 +36,14 @@ export function registerAiChatIpcHandlers(): void {
                 message: string;
                 conversationId?: string;
                 model?: string;
+                useRAG?: boolean;
+                ragLimit?: number;
             };
 
             const aiChatApi = new AiChatApi();
             const chatModule = new AIChatModule();
-            const conversationId = requestData.conversationId || currentConversationId;
+            // Generate new conversationId if not provided
+            const conversationId = requestData.conversationId || generateConversationId();
 
             // Save user message to database
             const userMessageId = `user-${Date.now()}`;
@@ -46,7 +59,9 @@ export function registerAiChatIpcHandlers(): void {
             const chatRequest: ChatRequest = {
                 message: requestData.message,
                 conversationId,
-                model: requestData.model
+                model: requestData.model,
+                useRAG: requestData.useRAG,
+                ragLimit: requestData.ragLimit
             };
 
             const apiResponse = await aiChatApi.sendMessage(chatRequest);
@@ -103,11 +118,14 @@ export function registerAiChatIpcHandlers(): void {
                 message: string;
                 conversationId?: string;
                 model?: string;
+                useRAG?: boolean;
+                ragLimit?: number;
             };
 
             const aiChatApi = new AiChatApi();
             const chatModule = new AIChatModule();
-            const conversationId = requestData.conversationId || currentConversationId;
+            // Generate new conversationId if not provided
+            const conversationId = requestData.conversationId || generateConversationId();
 
             // Save user message to database
             const userMessageId = `user-${Date.now()}`;
@@ -122,13 +140,16 @@ export function registerAiChatIpcHandlers(): void {
             // Send to remote API for streaming
             const chatRequest: ChatRequest = {
                 message: requestData.message,
-                conversationId,
-                model: requestData.model
+                conversationId:conversationId,
+                model: requestData.model,
+                useRAG: requestData.useRAG,
+                ragLimit: requestData.ragLimit
             };
 
             const assistantMessageId = `assistant-${Date.now()}`;
             let fullContent = '';
             let streamConversationId = conversationId;
+            let hasStartedConversation = false;
 
             // Stream message with event handler
             await aiChatApi.streamMessage(chatRequest, (streamEvent: StreamEvent) => {
@@ -146,6 +167,19 @@ export function registerAiChatIpcHandlers(): void {
                     case StreamEventType.TOKEN:
                         // Individual response tokens - append to message and stream to UI
                         {
+                            // Send conversation_start event on first token if not already sent
+                            if (!hasStartedConversation) {
+                                const startChunk: ChatStreamChunk = {
+                                    content: '',
+                                    isComplete: false,
+                                    messageId: assistantMessageId,
+                                    eventType: StreamEventType.CONVERSATION_START,
+                                    conversationId: streamConversationId
+                                };
+                                event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(startChunk));
+                                hasStartedConversation = true;
+                            }
+
                             const content = extractContent();
                             fullContent += content;
 
@@ -291,7 +325,7 @@ export function registerAiChatIpcHandlers(): void {
     ipcMain.handle(AI_CHAT_HISTORY, async (event, data): Promise<CommonMessage<ChatHistoryResponse | null>> => {
         try {
             const requestData = data ? JSON.parse(data) : {};
-            const conversationId = requestData.conversationId || currentConversationId;
+            const conversationId = requestData.conversationId;
 
             const chatModule = new AIChatModule();
             const messageEntities = await chatModule.getConversationMessages(conversationId);
@@ -330,7 +364,7 @@ export function registerAiChatIpcHandlers(): void {
     ipcMain.handle(AI_CHAT_CLEAR, async (event, data): Promise<CommonMessage<void>> => {
         try {
             const requestData = data ? JSON.parse(data) : {};
-            const conversationId = requestData.conversationId || currentConversationId;
+            const conversationId = requestData.conversationId;
 
             const chatModule = new AIChatModule();
             console.log('conversationId', conversationId);

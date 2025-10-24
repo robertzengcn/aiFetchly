@@ -1,8 +1,8 @@
 import { VectorStoreService } from './VectorStoreService';
-import { RAGChunkEntity } from '@/entity/RAGChunk.entity';
-import { RAGDocumentEntity } from '@/entity/RAGDocument.entity';
 import { SqliteDb } from '@/config/SqliteDb';
 import { EmbeddingImpl } from '@/modules/interface/EmbeddingImpl';
+import { RAGDocumentModule } from '@/modules/RAGDocumentModule';
+import { RAGChunkModule } from '@/modules/RAGChunkModule';
 
 export interface SearchResult {
     chunkId: number;
@@ -36,12 +36,14 @@ export interface SearchOptions {
 
 export class VectorSearchService {
     private vectorStore: VectorStoreService;
-    private db: SqliteDb;
     private embeddingService: EmbeddingImpl | null = null;
+    private documentModule: RAGDocumentModule;
+    private chunkModule: RAGChunkModule;
 
-    constructor(vectorStore: VectorStoreService, db: SqliteDb) {
+    constructor(vectorStore: VectorStoreService) {
         this.vectorStore = vectorStore;
-        this.db = db;
+        this.documentModule = new RAGDocumentModule();
+        this.chunkModule = new RAGChunkModule();
     }
 
     /**
@@ -190,15 +192,8 @@ export class VectorSearchService {
         }
 
         try {
-            const chunkRepository = this.db.connection.getRepository(RAGChunkEntity);
-            const documentRepository = this.db.connection.getRepository(RAGDocumentEntity);
-
-            // Get chunks with their documents
-            const chunks = await chunkRepository
-                .createQueryBuilder('chunk')
-                .leftJoinAndSelect('chunk.document', 'document')
-                .where('chunk.id IN (:...chunkIds)', { chunkIds })
-                .getMany();
+            // Get chunks with their documents using module
+            const chunks = await this.chunkModule.getChunksByIds(chunkIds);
 
             // Create results array
             const results: SearchResult[] = [];
@@ -272,15 +267,8 @@ export class VectorSearchService {
      */
     async getSearchSuggestions(query: string, limit: number = 5): Promise<string[]> {
         try {
-            const chunkRepository = this.db.connection.getRepository(RAGChunkEntity);
-            
-            // Get chunks that contain the query text
-            const chunks = await chunkRepository
-                .createQueryBuilder('chunk')
-                .select(['chunk.content'])
-                .where('chunk.content LIKE :query', { query: `%${query}%` })
-                .limit(limit * 2) // Get more to filter
-                .getMany();
+            // Get chunks that contain the query text using module
+            const chunks = await this.chunkModule.searchChunksByContent(query, limit * 2);
 
             // Extract unique phrases containing the query
             const suggestions = new Set<string>();
@@ -315,18 +303,10 @@ export class VectorSearchService {
         indexStats: any;
     }> {
         try {
-            const chunkRepository = this.db.connection.getRepository(RAGChunkEntity);
-            const documentRepository = this.db.connection.getRepository(RAGDocumentEntity);
-
-            const totalChunks = await chunkRepository.count();
-            const totalDocuments = await documentRepository.count();
-            
-            const avgResult = await chunkRepository
-                .createQueryBuilder('chunk')
-                .select('AVG(chunk.tokenCount)', 'avgTokens')
-                .getRawOne();
-
-            const averageChunkSize = parseFloat(avgResult.avgTokens) || 0;
+            // Use module methods for analytics
+            const totalChunks = await this.chunkModule.getTotalChunkCount();
+            const totalDocuments = await this.documentModule.countDocuments();
+            const averageChunkSize = await this.chunkModule.getAverageTokenCount();
             const indexStats = this.vectorStore.getIndexStats();
 
             return {
@@ -372,18 +352,8 @@ export class VectorSearchService {
      */
     private async getAllDocumentsWithEmbeddings(): Promise<Array<{ id: number }>> {
         try {
-            const documentRepository = this.db.connection.getRepository(RAGDocumentEntity);
-            
-            const documents = await documentRepository
-                .createQueryBuilder('d')
-                .select('DISTINCT d.id')
-                .innerJoin('d.chunks', 'c')
-                .where('c.embeddingId IS NOT NULL')
-                .andWhere("c.embeddingId != ''")
-                .andWhere('d.status = :status', { status: 'active' })
-                .getRawMany();
-                
-            return documents.map((row: any) => ({ id: row.d_id }));
+            // Use document module to get documents with embeddings
+            return await this.documentModule.getDocumentsWithEmbeddings();
         } catch (error) {
             console.error('Error getting documents with embeddings:', error);
             return [];
@@ -400,21 +370,14 @@ export class VectorSearchService {
         dimensions: number;
     } | null> {
         try {
-            const chunkRepository = this.db.connection.getRepository(RAGChunkEntity);
+            // Use RAGDocumentModule to get document by ID
+            const document = await this.documentModule.findDocumentById(documentId);
             
-            const result = await chunkRepository
-                .createQueryBuilder('c')
-                .select(['c.embeddingModel', 'c.embeddingDimensions'])
-                .where('c.documentId = :documentId', { documentId })
-                .andWhere('c.embeddingId IS NOT NULL')
-                .andWhere("c.embeddingId != ''")
-                .limit(1)
-                .getRawOne();
-            
-            if (result) {
+            if (document && document.modelName) {
+                // Get dimensions directly from document (default to 1536 if not set)
                 return {
-                    modelId: result.c_embeddingModel || 'default',
-                    dimensions: result.c_embeddingDimensions || 1536
+                    modelId: document.modelName,
+                    dimensions: document.vectorDimensions || 1536
                 };
             }
             

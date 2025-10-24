@@ -1,12 +1,14 @@
 import { sendChatMessage, streamChatMessage } from '@/views/api/aiChat';
 import { searchDocuments, SearchRequest } from '@/views/api/rag';
-import { ChatMessage } from '@/entityTypes/commonType';
+import { ChatMessage, ChatStreamChunk } from '@/entityTypes/commonType';
 
 /**
+ * @deprecated Use sendChatMessage() with useRAG=true parameter instead
+ * 
  * Send a chat message with RAG context from knowledge base
  * 
- * This function searches the knowledge base for relevant documents
- * and includes them as context in the AI chat message.
+ * This function is now deprecated. Use the unified sendChatMessage() function
+ * with the useRAG parameter set to true instead.
  * 
  * @param message - User message
  * @param conversationId - Optional conversation ID
@@ -15,11 +17,11 @@ import { ChatMessage } from '@/entityTypes/commonType';
  * 
  * @example
  * ```typescript
- * const response = await sendChatMessageWithRAG(
- *   'What is TypeScript?',
- *   'default',
- *   3
- * );
+ * // Old way (deprecated):
+ * const response = await sendChatMessageWithRAG('What is TypeScript?', 'default', 3);
+ * 
+ * // New way:
+ * const response = await sendChatMessage('What is TypeScript?', 'default', undefined, true, 3);
  * ```
  */
 export async function sendChatMessageWithRAG(
@@ -61,7 +63,12 @@ export async function sendChatMessageWithRAG(
 }
 
 /**
+ * @deprecated Use streamChatMessage() with useRAG=true parameter instead
+ * 
  * Stream a chat message with RAG context from knowledge base
+ * 
+ * This function is now deprecated. Use the unified streamChatMessage() function
+ * with the useRAG parameter set to true instead.
  * 
  * @param message - User message
  * @param onChunk - Callback for each chunk
@@ -71,19 +78,17 @@ export async function sendChatMessageWithRAG(
  * 
  * @example
  * ```typescript
- * await streamChatMessageWithRAG(
- *   'Explain quantum computing',
- *   (chunk) => console.log(chunk.content),
- *   (full) => console.log('Done:', full),
- *   'default',
- *   3
- * );
+ * // Old way (deprecated):
+ * await streamChatMessageWithRAG('Explain quantum computing', onChunk, onComplete, 'default', 3);
+ * 
+ * // New way:
+ * await streamChatMessage('Explain quantum computing', onChunk, onComplete, 'default', undefined, true, 3);
  * ```
  */
 export async function streamChatMessageWithRAG(
     message: string,
-    onChunk?: (chunk: any) => void,
-    onComplete?: (fullContent: string) => void,
+    onChunk?: (chunk: ChatStreamChunk) => void,
+    onComplete?: () => void,
     conversationId?: string,
     searchLimit: number = 3
 ): Promise<void> {

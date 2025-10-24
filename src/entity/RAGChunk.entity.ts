@@ -36,9 +36,9 @@ export class RAGChunkEntity extends AuditableEntity {
     @Column('varchar', { length: 100, nullable: true })
     embeddingId?: string; // Reference to embedding in vector store
 
-    @Order(7)
-    @Column('int', { nullable: true })
-    vectorDimensions?: number;
+    // @Order(7)
+    // @Column('int', { nullable: true })
+    // vectorDimensions?: number;
 
     // Metadata
     @Order(8)
