@@ -51,29 +51,33 @@ export class RAGDocumentEntity extends AuditableEntity {
     @Column('varchar', { length: 255, nullable: true })
     author?: string;
 
-    // Timestamps
     @Order(11)
+    @Column('varchar', { length: 500, nullable: true })
+    log?: string; // Error log file path
+
+    // Timestamps
+    @Order(12)
     @Column('datetime', { nullable: true })
     uploadedAt?: Date;
 
-    @Order(12)
+    @Order(13)
     @Column('datetime', { nullable: true })
     processedAt?: Date;
 
-    @Order(13)
+    @Order(14)
     @Column('datetime', { nullable: true })
     lastAccessedAt?: Date;
 
     // Vector database index path
-    @Order(14)
+    @Order(15)
     @Column('varchar', { length: 500, nullable: true })
     vectorIndexPath?: string;
     
-    @Order(15)
+    @Order(16)
     @Column('varchar', { length: 500, nullable: true })
     modelName?: string;
     
-    @Order(16)
+    @Order(17)
     @Column('int', { nullable: true })
     vectorDimensions?: number;
 

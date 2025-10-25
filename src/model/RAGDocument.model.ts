@@ -46,6 +46,7 @@ export class RAGDocumentModel extends BaseDb {
         entity.description = document.description;
         entity.tags = document.tags;
         entity.author = document.author;
+        entity.log = document.log;
         entity.uploadedAt = document.uploadedAt;
         entity.processedAt = document.processedAt;
         entity.lastAccessedAt = document.lastAccessedAt;
@@ -78,6 +79,7 @@ export class RAGDocumentModel extends BaseDb {
         vectorIndexPath?: string;
         modelName?: string;
         vectorDimensions?: number;
+        log?: string;
     }): Promise<boolean> {
         const entity = await this.repository.findOne({ where: { id } });
         if (!entity) return false;
@@ -89,6 +91,22 @@ export class RAGDocumentModel extends BaseDb {
         if (metadata.vectorIndexPath !== undefined) entity.vectorIndexPath = metadata.vectorIndexPath;
         if (metadata.modelName !== undefined) entity.modelName = metadata.modelName;
         if (metadata.vectorDimensions !== undefined) entity.vectorDimensions = metadata.vectorDimensions;
+        if (metadata.log !== undefined) entity.log = metadata.log;
+        const result = await this.repository.save(entity);
+        return !!result;
+    }
+
+    /**
+     * Update document log path
+     * @param id - Document ID
+     * @param logPath - Path to the error log file
+     * @returns Success status
+     */
+    async updateDocumentLogPath(id: number, logPath: string): Promise<boolean> {
+        const entity = await this.repository.findOne({ where: { id } });
+        if (!entity) return false;
+
+        entity.log = logPath;
         const result = await this.repository.save(entity);
         return !!result;
     }

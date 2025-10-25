@@ -22,6 +22,7 @@ import {
   RAG_CLEANUP,
   RAG_CHUNK_AND_EMBED_DOCUMENT,
   RAG_DOWNLOAD_DOCUMENT,
+  RAG_GET_DOCUMENT_ERROR_LOG,
   SHOW_OPEN_DIALOG,
   GET_FILE_STATS,
   SAVE_TEMP_FILE,
@@ -57,6 +58,7 @@ export interface DocumentInfo {
   uploadDate: string;
   status: 'processing' | 'completed' | 'error';
   processingStatus?: string;
+  log?: string; // Error log file path
 }
 
 export interface SearchRequest {
@@ -574,6 +576,30 @@ export async function downloadDocument(documentId: number, fileName: string): Pr
     };
   } catch (error) {
     console.error('Error downloading document:', error);
+    return {
+      success: false,
+      message: error instanceof Error ? error.message : 'Unknown error occurred'
+    };
+  }
+}
+
+/**
+ * Get document error log
+ * @param documentId - Document ID to get error log for
+ * @returns Error log content or null if no log exists
+ */
+export async function getDocumentErrorLog(documentId: number): Promise<RAGResponse<string | null>> {
+  try {
+    const requestData = { documentId };
+    const response = await windowInvoke(RAG_GET_DOCUMENT_ERROR_LOG, requestData);
+    
+    return {
+      success: true,
+      data: response,
+      message: ""
+    };
+  } catch (error) {
+    console.error('Error getting document error log:', error);
     return {
       success: false,
       message: error instanceof Error ? error.message : 'Unknown error occurred'

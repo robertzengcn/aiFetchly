@@ -119,6 +119,8 @@
         <v-chip
           :color="getProcessingStatusColor(item.processingStatus)"
           small
+          :clickable="item.processingStatus === 'error'"
+          @click="item.processingStatus === 'error' ? showErrorLog(item) : null"
         >
           {{ translateProcessingStatus(item.processingStatus) }}
         </v-chip>
@@ -223,13 +225,46 @@
       </v-card>
     </v-dialog>
 
+    <!-- Error Log Dialog -->
+    <v-dialog v-model="showErrorLogDialog" max-width="800">
+      <v-card>
+        <v-card-title>
+          <v-icon left color="error">mdi-alert-circle</v-icon>
+          {{ t('knowledge.error_log_title', { name: selectedErrorDocument?.name }) }}
+        </v-card-title>
+        <v-card-text>
+          <div v-if="loadingErrorLog" class="text-center py-4">
+            <v-progress-circular indeterminate color="primary"></v-progress-circular>
+            <p class="mt-2">{{ t('knowledge.loading_error_log') }}</p>
+          </div>
+          <div v-else-if="errorLogContent" class="error-log-content">
+            <v-textarea
+              :model-value="errorLogContent"
+              readonly
+              variant="outlined"
+              rows="15"
+              class="error-log-textarea"
+            />
+          </div>
+          <div v-else class="text-center py-4">
+            <v-icon size="48" color="grey">mdi-file-document-outline</v-icon>
+            <p class="mt-2 text-grey">{{ t('knowledge.no_error_log') }}</p>
+          </div>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn @click="showErrorLogDialog = false">{{ t('common.close') }}</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { getDocuments, type DocumentInfo, chunkAndEmbedDocument, getRAGStats, downloadDocument, deleteDocument as deleteDocumentAPI, uploadDocument as uploadDocumentAPI } from '@/views/api/rag';
+import { getDocuments, type DocumentInfo, chunkAndEmbedDocument, getRAGStats, downloadDocument, deleteDocument as deleteDocumentAPI, uploadDocument as uploadDocumentAPI, getDocumentErrorLog } from '@/views/api/rag';
 import { Header } from "@/entityTypes/commonType"
 const headers = ref<Array<Header>>([])
 // i18n setup
@@ -246,6 +281,12 @@ const { t } = useI18n();
       tags: []
     });
     const reembeddingDocIds = ref<number[]>([]);
+
+    // Error log dialog variables
+    const showErrorLogDialog = ref(false);
+    const selectedErrorDocument = ref<DocumentInfo | null>(null);
+    const errorLogContent = ref<string | null>(null);
+    const loadingErrorLog = ref(false);
 
     const filters = ref({
       name: '',
@@ -603,6 +644,32 @@ const { t } = useI18n();
       }
     };
 
+    const showErrorLog = async (doc: DocumentInfo) => {
+      try {
+        selectedErrorDocument.value = doc;
+        showErrorLogDialog.value = true;
+        loadingErrorLog.value = true;
+        errorLogContent.value = null;
+
+        console.log('Loading error log for document:', doc.id);
+        
+        const result = await getDocumentErrorLog(doc.id);
+        
+        if (result.success) {
+          errorLogContent.value = result.data || null;
+          console.log('Error log loaded successfully');
+        } else {
+          console.error('Failed to load error log:', result.message);
+          errorLogContent.value = null;
+        }
+      } catch (error) {
+        console.error('Error loading error log:', error);
+        errorLogContent.value = null;
+      } finally {
+        loadingErrorLog.value = false;
+      }
+    };
+
     const getFileTypeIcon = (fileType) => {
       const icons = {
         pdf: 'mdi-file-pdf',
@@ -641,6 +708,7 @@ const { t } = useI18n();
         completed: 'green',
         processing: 'orange',
         failed: 'red',
+        error: 'red',
         pending: 'blue'
       };
       return colors[status] || 'grey';
@@ -677,6 +745,7 @@ const { t } = useI18n();
         'completed': t('knowledge.processing_completed'),
         'processing': t('knowledge.processing_processing'),
         'failed': t('knowledge.processing_failed'),
+        'error': t('knowledge.processing_error'),
         'pending': t('knowledge.processing_pending')
       };
       return processingStatusMap[status] || status;
@@ -785,6 +854,21 @@ const { t } = useI18n();
   border-radius: 4px;
   display: flex;
   gap: 10px;
+}
+
+.error-log-content {
+  margin-top: 16px;
+}
+
+.error-log-textarea {
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.error-log-textarea .v-field__input {
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 
 /* Responsive design */
