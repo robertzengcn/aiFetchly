@@ -200,6 +200,8 @@ export default {
         embedding_model_updated_successfully: "嵌入模型更新成功",
         failed_to_update_embedding_model: "更新嵌入模型失败",
         max_dimensions: "最大维度",
+        model: "模型",
+        dimensions: "维度",
         // Document processing translations
         processing_document: "处理文档",
         chunking_and_embedding_document: "正在分块和嵌入文档...",

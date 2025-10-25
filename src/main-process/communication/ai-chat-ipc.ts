@@ -2,6 +2,8 @@ import { ipcMain } from 'electron';
 import { AiChatApi, ChatRequest, StreamEvent, StreamEventType } from '@/api/aiChatApi';
 import { CommonMessage, ChatMessage, ChatHistoryResponse, ChatStreamChunk } from '@/entityTypes/commonType';
 import { AIChatModule } from '@/modules/AIChatModule';
+import { RagSearchModule, SearchRequest, SearchResponse } from '@/modules/RagSearchModule';
+import { SearchResult } from '@/service/VectorSearchService';
 import {
     AI_CHAT_MESSAGE,
     AI_CHAT_STREAM,
@@ -42,6 +44,9 @@ export function registerAiChatIpcHandlers(): void {
 
             const aiChatApi = new AiChatApi();
             const chatModule = new AIChatModule();
+            const ragSearchModule = new RagSearchModule();
+            await ragSearchModule.initialize();
+            
             // Generate new conversationId if not provided
             const conversationId = requestData.conversationId || generateConversationId();
 
@@ -55,9 +60,43 @@ export function registerAiChatIpcHandlers(): void {
                 timestamp: new Date()
             });
 
+            // If useRAG is true, perform local RAG search and append results to the message
+            let enhancedMessage = requestData.message;
+            if (requestData.useRAG) {
+                try {
+                    const searchRequest: SearchRequest = {
+                        query: requestData.message,
+                        options: {
+                            limit: requestData.ragLimit || 3
+                        }
+                    };
+                    
+                    const searchResponse: SearchResponse = await ragSearchModule.search(searchRequest);
+                    
+                    if (searchResponse.results.length > 0) {
+                        // Format RAG results as context
+                        const ragContext = searchResponse.results
+                            .map((result, index) => {
+                                return `[Document ${index + 1}: ${result.document.name}]\n${result.content}`;
+                            })
+                            .join('\n\n');
+                        
+                        // Prepend RAG context to the message
+                        enhancedMessage = `Based on the following context from knowledge base:\n\n${ragContext}\n\n---\n\nUser question: ${requestData.message}`;
+                        
+                        console.log(`RAG search found ${searchResponse.results.length} relevant documents`);
+                    } else {
+                        console.log('RAG search returned no results, proceeding with original message');
+                    }
+                } catch (ragError) {
+                    console.error('RAG search failed, proceeding without RAG context:', ragError);
+                    // Continue with original message if RAG fails
+                }
+            }
+
             // Send to remote API
             const chatRequest: ChatRequest = {
-                message: requestData.message,
+                message: enhancedMessage,
                 conversationId,
                 model: requestData.model,
                 useRAG: requestData.useRAG,
@@ -124,6 +163,9 @@ export function registerAiChatIpcHandlers(): void {
 
             const aiChatApi = new AiChatApi();
             const chatModule = new AIChatModule();
+            const ragSearchModule = new RagSearchModule();
+            await ragSearchModule.initialize();
+            
             // Generate new conversationId if not provided
             const conversationId = requestData.conversationId || generateConversationId();
 
@@ -137,9 +179,43 @@ export function registerAiChatIpcHandlers(): void {
                 timestamp: new Date()
             });
 
+            // If useRAG is true, perform local RAG search and append results to the message
+            let enhancedMessage = requestData.message;
+            if (requestData.useRAG) {
+                try {
+                    const searchRequest: SearchRequest = {
+                        query: requestData.message,
+                        options: {
+                            limit: requestData.ragLimit || 3
+                        }
+                    };
+                    
+                    const searchResponse: SearchResponse = await ragSearchModule.search(searchRequest);
+                    
+                    if (searchResponse.results.length > 0) {
+                        // Format RAG results as context
+                        const ragContext = searchResponse.results
+                            .map((result, index) => {
+                                return `[Document ${index + 1}: ${result.document.name}]\n${result.content}`;
+                            })
+                            .join('\n\n');
+                        
+                        // Prepend RAG context to the message
+                        enhancedMessage = `Based on the following context from knowledge base:\n\n${ragContext}\n\n---\n\nUser question: ${requestData.message}`;
+                        
+                        console.log(`RAG search found ${searchResponse.results.length} relevant documents`);
+                    } else {
+                        console.log('RAG search returned no results, proceeding with original message');
+                    }
+                } catch (ragError) {
+                    console.error('RAG search failed, proceeding without RAG context:', ragError);
+                    // Continue with original message if RAG fails
+                }
+            }
+
             // Send to remote API for streaming
             const chatRequest: ChatRequest = {
-                message: requestData.message,
+                message: enhancedMessage,
                 conversationId:conversationId,
                 model: requestData.model,
                 useRAG: requestData.useRAG,

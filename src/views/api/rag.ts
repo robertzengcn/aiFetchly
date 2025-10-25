@@ -223,9 +223,12 @@ export async function getSearchAnalytics(): Promise<RAGResponse> {
 
 /**
  * Update embedding model
+ * @returns Object with modelName and dimension if successful, null otherwise
  */
-export async function updateEmbeddingModel(modelName: string): Promise<boolean> {
-  return await windowInvoke(RAG_UPDATE_EMBEDDING_MODEL, { model: modelName });
+export async function updateEmbeddingModel(modelName: string): Promise<{ modelName: string; dimension: number } | null> {
+  const response = await windowInvoke(RAG_UPDATE_EMBEDDING_MODEL, { model: modelName });
+  
+  return response || null;
 }
 
 /**

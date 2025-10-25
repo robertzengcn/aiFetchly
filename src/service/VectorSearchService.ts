@@ -3,6 +3,7 @@ import { VectorStoreService } from './VectorStoreService';
 import { EmbeddingImpl } from '@/modules/interface/EmbeddingImpl';
 import { RAGDocumentModule } from '@/modules/RAGDocumentModule';
 import { RAGChunkModule } from '@/modules/RAGChunkModule';
+import { RagConfigApi } from '@/api/ragConfigApi';
 
 export interface SearchResult {
     chunkId: number;
@@ -39,11 +40,13 @@ export class VectorSearchService {
     private embeddingService: EmbeddingImpl | null = null;
     private documentModule: RAGDocumentModule;
     private chunkModule: RAGChunkModule;
+    private ragConfigApi: RagConfigApi;
 
     constructor(vectorStore: VectorStoreService) {
         this.vectorStore = vectorStore;
         this.documentModule = new RAGDocumentModule();
         this.chunkModule = new RAGChunkModule();
+        this.ragConfigApi = new RagConfigApi();
     }
 
     /**
@@ -69,14 +72,7 @@ export class VectorSearchService {
      * @returns Array of search results
      */
     async search(query: string, options: SearchOptions = {}): Promise<SearchResult[]> {
-        if (!this.embeddingService) {
-            throw new Error('Embedding service not set');
-        }
-
         try {
-            // Generate query embedding
-            const queryVector = await this.embeddingService.embedText(query);
-            
             // Get all documents with embeddings
             const documents = await this.getAllDocumentsWithEmbeddings();
             
@@ -84,34 +80,65 @@ export class VectorSearchService {
                 return [];
             }
 
-            // Search across all document-specific indexes
+            // Group documents by their embedding model
+            const documentsByModel = await this.groupDocumentsByModel(documents);
+            
+            if (documentsByModel.size === 0) {
+                return [];
+            }
+
+            // Search across all document-specific indexes, using the appropriate model for each
             const allResults: Array<{
                 chunkIds: number[];
                 distances: number[];
                 documentId: number;
             }> = [];
 
-            for (const document of documents) {
+            // Process each unique model group
+            for (const [modelKey, documentIds] of documentsByModel.entries()) {
+                const [modelName, dimensions] = modelKey.split(':');
+                
+                // Generate query embedding for this specific model using remote API
+                let queryVector: number[];
                 try {
-                    // Get model configuration for this document
-                    const modelConfig = await this.getDocumentModelConfig(document.id);
-                    if (!modelConfig) {
-                        console.warn(`No model configuration found for document ${document.id}`);
+                    // Use remote API to generate embedding for the correct model
+                    const response = await this.ragConfigApi.generateEmbedding([query], modelName);
+                    
+                    if (!response.status || !response.data || !response.data[0]) {
+                        throw new Error(`Failed to generate embedding: ${response.msg || 'Unknown error'}`);
+                    }
+                    
+                    queryVector = response.data[0].embedding;
+                    
+                    // Validate vector dimensions match
+                    if (queryVector.length !== parseInt(dimensions)) {
+                        console.warn(`Query vector dimensions (${queryVector.length}) don't match document dimensions (${dimensions}) for model ${modelName}`);
                         continue;
                     }
-
-                    // Load document-specific index and search
-                    await this.vectorStore.loadDocumentIndex(document.id, modelConfig);
-                    const documentResults = await this.vectorStore.search(queryVector, options.limit || 10);
-                    
-                    allResults.push({
-                        chunkIds: documentResults.chunkIds,
-                        distances: documentResults.distances,
-                        documentId: document.id
-                    });
                 } catch (error) {
-                    console.warn(`Failed to search in document ${document.id}:`, error);
+                    console.error(`Failed to generate query embedding for model ${modelName}:`, error);
                     continue;
+                }
+
+                // Search in all documents using this model
+                for (const documentId of documentIds) {
+                    try {
+                        // Load document-specific index and search
+                        await this.vectorStore.loadDocumentIndex(documentId, {
+                            modelId: modelName,
+                            dimensions: parseInt(dimensions)
+                        });
+                        const documentResults = await this.vectorStore.search(queryVector, options.limit || 10);
+                        
+                        allResults.push({
+                            chunkIds: documentResults.chunkIds,
+                            distances: documentResults.distances,
+                            documentId: documentId
+                        });
+                    } catch (error) {
+                        console.warn(`Failed to search in document ${documentId}:`, error);
+                        continue;
+                    }
                 }
             }
 
@@ -126,6 +153,33 @@ export class VectorSearchService {
             console.error('Error in vector search:', error);
             throw new Error(`Vector search failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
+    }
+
+    /**
+     * Group documents by their embedding model
+     * @param documents - Array of document IDs
+     * @returns Map of model key to document IDs
+     */
+    private async groupDocumentsByModel(documents: Array<{ id: number }>): Promise<Map<string, number[]>> {
+        const documentsByModel = new Map<string, number[]>();
+        
+        for (const doc of documents) {
+            const modelConfig = await this.getDocumentModelConfig(doc.id);
+            if (!modelConfig) {
+                console.warn(`No model configuration found for document ${doc.id}`);
+                continue;
+            }
+            
+            // Create a unique key for the model and dimensions
+            const modelKey = `${modelConfig.modelId}:${modelConfig.dimensions}`;
+            
+            if (!documentsByModel.has(modelKey)) {
+                documentsByModel.set(modelKey, []);
+            }
+            documentsByModel.get(modelKey)!.push(doc.id);
+        }
+        
+        return documentsByModel;
     }
 
     /**

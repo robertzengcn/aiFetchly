@@ -281,6 +281,27 @@
     </v-dialog>
 
 
+    <!-- Update Model Result Dialog -->
+    <v-dialog v-model="showUpdateResultDialog" max-width="500">
+      <v-card>
+        <v-card-title>
+          <v-icon :color="updateResultType" left>{{ updateResultIcon }}</v-icon>
+          {{ updateResultTitle }}
+        </v-card-title>
+        <v-card-text>
+          <div v-if="updateResultType === 'success' && updateResult">
+            <p><strong>{{ t('knowledge.model') }}:</strong> {{ updateResult.modelName }}</p>
+            <p><strong>{{ t('knowledge.dimensions') }}:</strong> {{ updateResult.dimension }}</p>
+          </div>
+          <p v-else>{{ updateResultMessage }}</p>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn color="primary" @click="showUpdateResultDialog = false">{{ t('common.close') }}</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
     <!-- Loading Overlay -->
     <v-overlay
       v-model="isLoading"
@@ -334,6 +355,14 @@ const selectedEmbeddingModel = ref<string>('');
 const currentModel = ref<string>('');
 const loadingModels = ref(false);
 const updatingModel = ref(false);
+
+// Update result dialog variables
+const showUpdateResultDialog = ref(false);
+const updateResultType = ref<'success' | 'error'>('success');
+const updateResult = ref<{ modelName: string; dimension: number } | null>(null);
+const updateResultMessage = ref('');
+const updateResultTitle = ref('');
+const updateResultIcon = ref('mdi-check-circle');
 
 // Upload dialog data
 const uploadFiles = ref<File[]>([]);
@@ -555,20 +584,44 @@ async function handleUpdateEmbeddingModel() {
   
   updatingModel.value = true;
   try {
-    const response = await updateEmbeddingModel(selectedEmbeddingModel.value);
-    console.log(response)
-    if (response) {
-      currentModel.value = selectedEmbeddingModel.value;
-      console.log('✅ Embedding model updated successfully');
+    const result = await updateEmbeddingModel(selectedEmbeddingModel.value);
+    console.log('Update embedding model result:', result);
+    
+    if (result) {
+      currentModel.value = result.modelName;
+      console.log(`✅ Embedding model updated successfully to ${result.modelName} with dimension ${result.dimension}`);
+      
+      // Show success dialog
+      updateResultType.value = 'success';
+      updateResultTitle.value = t('knowledge.embedding_model_updated_successfully');
+      updateResultIcon.value = 'mdi-check-circle';
+      updateResult.value = result;
+      updateResultMessage.value = '';
+      showUpdateResultDialog.value = true;
+      
+      // Close settings dialog
       showSettingsDialog.value = false;
-      showStatus(t('knowledge.embedding_model_updated_successfully'), 'success');
     } else {
-      console.error('❌ Failed to update embedding model:');
-      showStatus(`${t('knowledge.failed_to_update_embedding_model')}`, 'error');
+      console.error('❌ Failed to update embedding model: No data returned');
+      
+      // Show error dialog
+      updateResultType.value = 'error';
+      updateResultTitle.value = t('knowledge.failed_to_update_embedding_model');
+      updateResultIcon.value = 'mdi-alert-circle';
+      updateResult.value = null;
+      updateResultMessage.value = t('knowledge.failed_to_update_embedding_model');
+      showUpdateResultDialog.value = true;
     }
   } catch (error) {
     console.error('❌ Error updating embedding model:', error);
-    showStatus(`${t('knowledge.failed_to_update_embedding_model')}: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
+    
+    // Show error dialog
+    updateResultType.value = 'error';
+    updateResultTitle.value = t('knowledge.failed_to_update_embedding_model');
+    updateResultIcon.value = 'mdi-alert-circle';
+    updateResult.value = null;
+    updateResultMessage.value = error instanceof Error ? error.message : 'Unknown error';
+    showUpdateResultDialog.value = true;
   } finally {
     updatingModel.value = false;
   }

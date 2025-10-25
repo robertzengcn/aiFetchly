@@ -59,7 +59,7 @@
             :label="t('knowledge.search_by_name')"
             prepend-inner-icon="mdi-magnify"
             clearable
-            @input="applyFilters"
+            @update:modelValue="applyFilters"
           />
         </v-col>
         <v-col cols="12" md="3">
