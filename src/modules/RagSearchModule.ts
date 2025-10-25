@@ -64,8 +64,8 @@ export class RagSearchModule extends BaseModule {
         // const tokenService = new Token()
         // const userdataPath = tokenService.getValue(USERSDBPATH)
         // Initialize services with database
-        const dbPath = getUserdbpath();
-        const vectorStoreService = new VectorStoreService(dbPath);
+        // const dbPath = getUserdbpath();
+        const vectorStoreService = new VectorStoreService();
         this.searchService = new VectorSearchService(vectorStoreService);
         this.configurationService = new ConfigurationServiceImpl();
         this.documentService = new DocumentService();
@@ -161,6 +161,17 @@ export class RagSearchModule extends BaseModule {
             try {
                 const existingDoc = await this.documentService.findDocumentByPath(options.filePath);
                 if (existingDoc) {
+                    // Save error log for the document
+                    try {
+                        await this.documentService.saveErrorLog(
+                            existingDoc.id,
+                            error instanceof Error ? error : new Error(String(error)),
+                            'Document upload failed'
+                        );
+                    } catch (logError) {
+                        console.error('Failed to save error log for document:', logError);
+                    }
+                    
                     await this.documentService.updateDocumentStatus(
                         existingDoc.id,
                         'active',
@@ -229,6 +240,21 @@ export class RagSearchModule extends BaseModule {
             return vectorIndexPath;
         } catch (error) {
             console.error('Error generating embeddings:', error);
+            
+            // Try to save error log for the document
+            try {
+                const documentId = chunks[0]?.documentId;
+                if (documentId) {
+                    await this.documentService.saveErrorLog(
+                        documentId,
+                        error instanceof Error ? error : new Error(String(error)),
+                        'Failed to generate embeddings for document chunks'
+                    );
+                }
+            } catch (logError) {
+                console.error('Failed to save error log during embedding generation:', logError);
+            }
+            
             throw new Error(`Failed to generate embeddings: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
     }

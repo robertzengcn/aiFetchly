@@ -707,7 +707,7 @@ export function registerRagIpcHandlers(): void {
     });
 
     // Update embedding model
-    ipcMain.handle(RAG_UPDATE_EMBEDDING_MODEL, async (event, data): Promise<CommonMessage<boolean>> => {
+    ipcMain.handle(RAG_UPDATE_EMBEDDING_MODEL, async (event, data): Promise<CommonMessage<{ modelName: string; dimension: number } | null>> => {
         try {
             const config = JSON.parse(data) as {
                 model: string;
@@ -718,10 +718,10 @@ export function registerRagIpcHandlers(): void {
             const modelsResponse = await ragConfigApi.getAvailableEmbeddingModels();
             
             if (!modelsResponse.status || !modelsResponse.data) {
-                const errorResponse: CommonMessage<boolean> = {
+                const errorResponse: CommonMessage<null> = {
                     status: false,
                     msg: "Failed to fetch available models for validation",
-                    data: false
+                    data: null
                 };
                 return errorResponse;
             }
@@ -731,10 +731,10 @@ export function registerRagIpcHandlers(): void {
             
             if (!modelInfo) {
                 const availableModelNames = Object.keys(availableModels).join(', ');
-                const errorResponse: CommonMessage<boolean> = {
+                const errorResponse: CommonMessage<null> = {
                     status: false,
                     msg: `Invalid model name "${config.model}". Available models: ${availableModelNames}`,
-                    data: false
+                    data: null
                 };
                 return errorResponse;
             }
@@ -746,18 +746,21 @@ export function registerRagIpcHandlers(): void {
             const ragSearchController = await createRagController();
             await ragSearchController.updateEmbeddingModel(config.model, dimension);
             
-            const response: CommonMessage<boolean> = {
+            const response: CommonMessage<{ modelName: string; dimension: number }> = {
                 status: true,
                 msg: `Embedding model updated successfully to ${config.model}:${dimension}`,
-                data: true
+                data: {
+                    modelName: config.model,
+                    dimension: dimension
+                }
             };
             return response;
         } catch (error) {
             console.error('RAG update embedding model error:', error);
-            const errorResponse: CommonMessage<boolean> = {
+            const errorResponse: CommonMessage<null> = {
                 status: false,
                 msg: error instanceof Error ? error.message : "Unknown error occurred",
-                data: false
+                data: null
             };
             return errorResponse;
         }

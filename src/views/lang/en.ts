@@ -208,6 +208,8 @@ export default {
         embedding_model_updated_successfully: "Embedding model updated successfully",
         failed_to_update_embedding_model: "Failed to update embedding model",
         max_dimensions: "Max Dimensions",
+        model: "Model",
+        dimensions: "Dimensions",
         // Document processing translations
         processing_document: "Processing Document",
         chunking_and_embedding_document: "Chunking and embedding document...",
