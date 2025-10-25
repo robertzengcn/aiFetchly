@@ -167,6 +167,7 @@ export default {
         processing_completed: "Completed",
         processing_processing: "Processing",
         processing_failed: "Failed",
+        processing_error: "Error",
         processing_pending: "Pending",
         file_type_text: "Text",
         file_type_word: "Word",
@@ -189,6 +190,10 @@ export default {
         bulk_delete_success: "Successfully deleted {count} documents",
         bulk_delete_partial: "Deleted {success} documents, failed to delete {failed} documents",
         bulk_delete_error: "Failed to delete documents: {error}",
+        // Error log dialog translations
+        error_log_title: "Error Log - {name}",
+        loading_error_log: "Loading error log...",
+        no_error_log: "No error log available for this document",
         // Settings translations
         settings: "Settings",
         embedding_model: "Embedding Model",

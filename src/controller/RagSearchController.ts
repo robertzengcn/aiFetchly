@@ -74,16 +74,16 @@ export class RagSearchController {
     }
 
 
-    private determineProviderFromModel(model: string): string {
-        if (model.includes('text-embedding')) {
-            return 'openai';
-        } else if (model.includes('sentence-transformers')) {
-            return 'huggingface';
-        } else if (model.includes('nomic') || model.includes('llama')) {
-            return 'ollama';
-        }
-        return 'openai';
-    }
+    // private determineProviderFromModel(model: string): string {
+    //     if (model.includes('text-embedding')) {
+    //         return 'openai';
+    //     } else if (model.includes('sentence-transformers')) {
+    //         return 'huggingface';
+    //     } else if (model.includes('nomic') || model.includes('llama')) {
+    //         return 'ollama';
+    //     }
+    //     return 'openai';
+    // }
 
 
     /**
@@ -156,6 +156,7 @@ export class RagSearchController {
         description?: string;
         tags?: string[];
         author?: string;
+        log?: string;
     }): Promise<void> {
         return await this.ragSearchModule.updateDocument(id, metadata);
     }
@@ -224,14 +225,14 @@ export class RagSearchController {
      * @param documentId - Document ID to generate embeddings for
      * @returns Embedding generation result
      */
-    async generateDocumentEmbeddings(documentId: number, modelName: string): Promise<{
+    async generateDocumentEmbeddings(documentId: number, modelName: string,dimension: number): Promise<{
         documentId: number;
         chunksProcessed: number;
         processingTime: number;
         success: boolean;
         message: string;
     }> {
-        return await this.ragSearchModule.generateDocumentEmbeddings(documentId, modelName);
+        return await this.ragSearchModule.generateDocumentEmbeddings(documentId, modelName,dimension);
     }
 
     /**
@@ -300,7 +301,7 @@ export class RagSearchController {
             }
 
             // Step 3: Generate embeddings for the chunks
-            const embedResult = await this.generateDocumentEmbeddings(documentId, model.modelName);
+            const embedResult = await this.generateDocumentEmbeddings(documentId, model.modelName,model.dimension);
             if (!embedResult.success) {
                 return {
                     documentId,
@@ -476,6 +477,26 @@ export class RagSearchController {
             // Don't throw error to avoid breaking the initialization process
             // The system can still work with the fallback model
         }
+    }
+
+    /**
+     * Save error log for a document
+     * @param documentId - Document ID
+     * @param error - Error object or error message
+     * @param context - Additional context about the error
+     * @returns Path to the created error log file
+     */
+    async saveDocumentErrorLog(documentId: number, error: Error | string, context?: string): Promise<string> {
+        return await this.ragSearchModule.saveDocumentErrorLog(documentId, error, context);
+    }
+
+    /**
+     * Get document error log content
+     * @param documentId - Document ID
+     * @returns Error log content or null if no log exists
+     */
+    async getDocumentErrorLog(documentId: number): Promise<string | null> {
+        return await this.ragSearchModule.getDocumentErrorLog(documentId);
     }
 
     /**

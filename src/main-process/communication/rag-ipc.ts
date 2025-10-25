@@ -31,7 +31,8 @@ import {
     GET_FILE_STATS,
     SAVE_TEMP_FILE,
     SAVE_TEMP_FILE_PROGRESS,
-    SAVE_TEMP_FILE_COMPLETE
+    SAVE_TEMP_FILE_COMPLETE,
+    RAG_GET_DOCUMENT_ERROR_LOG
 } from '@/config/channellist';
 
 /**
@@ -53,6 +54,11 @@ export function registerRagIpcHandlers(): void {
 
     // Save temporary file handler with progress updates
     ipcMain.on(SAVE_TEMP_FILE, async (event, data): Promise<void> => {
+        let documentInfo: UploadedDocument | null = null;
+        let databaseSaved = false;
+        let databaseError: string | null = null;
+        let ragController: RagSearchController | null = null;
+        
         try {
             //console.log('Received data in main process:', typeof data, data);
             const { fileName, buffer, metadata } = data;
@@ -127,10 +133,6 @@ export function registerRagIpcHandlers(): void {
                 fileName: fileName
             }));
             
-            let documentInfo: UploadedDocument | null = null;
-            let databaseSaved = false;
-            let databaseError: string | null = null;
-            
             // If metadata is provided, save document to database
             if (metadata) {
                 try {
@@ -141,19 +143,7 @@ export function registerRagIpcHandlers(): void {
                         fileName: fileName
                     }));
 
-                    const ragController = await createRagController();
-                    
-                    // Get default embedding model from controller
-                    let defaultEmbeddingModel = await ragController.getDefaultEmbeddingModel();
-                    
-                    // If default embedding model doesn't exist, initialize it
-                    if (!defaultEmbeddingModel) {
-                        await ragController.checkAndSetDefaultEmbeddingModel();
-                        defaultEmbeddingModel = await ragController.getDefaultEmbeddingModel();
-                    }
-                    if (!defaultEmbeddingModel) {
-                        throw new Error('Default embedding model not found');
-                    }
+                    ragController = await createRagController();
                     
                     // Extract original filename without timestamp prefix
                     const originalFileName = fileName.replace(/^rag_upload_\d+_/, '');
@@ -165,7 +155,6 @@ export function registerRagIpcHandlers(): void {
                         description: metadata.description || `Uploaded document: ${originalFileName}`,
                         tags: metadata.tags || ['uploaded', 'knowledge'],
                         author: metadata.author || 'User',
-                        modelName: defaultEmbeddingModel || metadata.model_name
                     };
                     
                     // Send progress update: Processing document
@@ -190,12 +179,26 @@ export function registerRagIpcHandlers(): void {
                         fileType: uploadResult.document.fileType,
                         uploadDate: uploadResult.document.uploadedAt?.toISOString() || new Date().toISOString(),
                         status: uploadResult.document.status,
-                        processingStatus: uploadResult.document.processingStatus
+                        processingStatus: uploadResult.document.processingStatus,
+                        log: uploadResult.document.log
                     };
                     databaseSaved = true;
                 } catch (dbError) {
                     console.warn('Failed to save document to database:', dbError);
                     databaseError = dbError instanceof Error ? dbError.message : 'Unknown database error';
+                    
+                    // Save error log if document was created but database save failed
+                    if (documentInfo?.id && ragController) {
+                        try {
+                            await ragController.saveDocumentErrorLog(
+                                documentInfo.id, 
+                                dbError instanceof Error ? dbError : new Error(String(dbError)),
+                                'SAVE_TEMP_FILE database save error'
+                            );
+                        } catch (logError) {
+                            console.error('Failed to save error log:', logError);
+                        }
+                    }
                 }
             }
             
@@ -221,6 +224,23 @@ export function registerRagIpcHandlers(): void {
             event.sender.send(SAVE_TEMP_FILE_COMPLETE, JSON.stringify(response));
         } catch (error) {
             console.error('Error saving temporary file:', error);
+            
+            // Try to save error log if we have document info
+            if (documentInfo?.id) {
+                try {
+                    if (!ragController) {
+                        ragController = await createRagController();
+                    }
+                    await ragController.saveDocumentErrorLog(
+                        documentInfo.id,
+                        error instanceof Error ? error : new Error(String(error)),
+                        'SAVE_TEMP_FILE general error'
+                    );
+                } catch (logError) {
+                    console.error('Failed to save error log:', logError);
+                }
+            }
+            
             const errorResponse: CommonMessage<SaveTempFileResponse> = {
                 status: false,
                 msg: `Failed to save temporary file: ${error instanceof Error ? error.message : 'Unknown error'}`,
@@ -388,7 +408,8 @@ export function registerRagIpcHandlers(): void {
                         fileType: uploadResult.document.fileType,
                         uploadDate: uploadResult.document.uploadedAt?.toISOString() || new Date().toISOString(),
                         status: uploadResult.document.status,
-                        processingStatus: uploadResult.document.processingStatus
+                        processingStatus: uploadResult.document.processingStatus,
+                        log: uploadResult.document.log
                     }
                 }
             };
@@ -456,7 +477,8 @@ export function registerRagIpcHandlers(): void {
                 fileType: doc.fileType,
                 uploadDate: doc.uploadedAt?.toISOString() || new Date().toISOString(),
                 status: doc.status as 'processing' | 'completed' | 'error',
-                processingStatus: doc.processingStatus
+                processingStatus: doc.processingStatus,
+                log: doc.log
             }));
             
             const response: CommonMessage<DocumentInfo[]> = {
@@ -505,7 +527,8 @@ export function registerRagIpcHandlers(): void {
                 fileType: document.fileType,
                 uploadDate: document.uploadedAt?.toISOString() || new Date().toISOString(),
                 status: document.status,
-                processingStatus: document.processingStatus
+                processingStatus: document.processingStatus,
+                log: document.log
             };
             
             const response: CommonMessage<any> = {
@@ -911,6 +934,31 @@ export function registerRagIpcHandlers(): void {
             return response;
         } catch (error) {
             console.error('RAG download document error:', error);
+            const errorResponse: CommonMessage<null> = {
+                status: false,
+                msg: error instanceof Error ? error.message : "Unknown error occurred",
+                data: null
+            };
+            return errorResponse;
+        }
+    });
+
+    // Get document error log
+    ipcMain.handle(RAG_GET_DOCUMENT_ERROR_LOG, async (event, data): Promise<CommonMessage<string | null>> => {
+        try {
+            const { documentId } = JSON.parse(data) as { documentId: number };
+            
+            const ragSearchController = await createRagController();
+            const errorLog = await ragSearchController.getDocumentErrorLog(documentId);
+            
+            const response: CommonMessage<string | null> = {
+                status: true,
+                msg: errorLog ? "Error log retrieved successfully" : "No error log found for this document",
+                data: errorLog
+            };
+            return response;
+        } catch (error) {
+            console.error('RAG get document error log error:', error);
             const errorResponse: CommonMessage<null> = {
                 status: false,
                 msg: error instanceof Error ? error.message : "Unknown error occurred",

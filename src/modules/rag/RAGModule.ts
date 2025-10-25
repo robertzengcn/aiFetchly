@@ -5,10 +5,11 @@ import { ResponseGenerator, GeneratedResponse, ResponseGenerationOptions } from 
 import { DocumentService } from '@/service/DocumentService';
 import { ChunkingService } from '@/service/ChunkingService';
 import { RAGChunkModule } from '@/modules/RAGChunkModule';
-import { RAGChunkEntity } from '@/entity/RAGChunk.entity';
+// import { RAGChunkEntity } from '@/entity/RAGChunk.entity';
 import { RagSearchModule } from '@/modules/RagSearchModule';
 import { EmbeddingConfig } from '@/entityTypes/commonType';
 import { LlmCongfig } from '@/entityTypes/commonType';
+import { SystemSettingModule } from '@/modules/SystemSettingModule';
 
 export interface RAGQuery {
     query: string;
@@ -65,6 +66,7 @@ export class RAGModule extends BaseModule {
     private ragChunkModule: RAGChunkModule;
     private ragSearchModule: RagSearchModule;
     private isInitialized: boolean = false;
+    private systemSettingModule: SystemSettingModule;
     private stats: RAGStats = {
         totalQueries: 0,
         averageResponseTime: 0,
@@ -86,6 +88,7 @@ export class RAGModule extends BaseModule {
         this.searchController = new RagSearchController();
         this.queryProcessor = new QueryProcessor(this.searchController, this.sqliteDb);
         this.responseGenerator = new ResponseGenerator();
+        this.systemSettingModule = new SystemSettingModule();
     }
 
     /**
@@ -332,110 +335,110 @@ export class RAGModule extends BaseModule {
      * @param options - Upload and processing options
      * @returns Complete processing result
      */
-    async processDocument(filePath: string, options: {
-        name: string;
-        title?: string;
-        description?: string;
-        tags?: string[];
-        author?: string;
-        chunking?: {
-            chunkSize?: number;
-            overlapSize?: number;
-            strategy?: 'sentence' | 'paragraph' | 'semantic' | 'fixed';
-            preserveWhitespace?: boolean;
-            minChunkSize?: number;
-        };
-        modelName: string;
-    }): Promise<{
-        documentId: number;
-        chunksCreated: number;
-        embeddingsGenerated: number;
-        processingTime: number;
-        success: boolean;
-        message: string;
-        steps: {
-            upload: boolean;
-            chunking: boolean;
-            embedding: boolean;
-        };
-    }> {
-        const startTime = Date.now();
-        const steps = { upload: false, chunking: false, embedding: false };
+    // async processDocument(filePath: string, options: {
+    //     name: string;
+    //     title?: string;
+    //     description?: string;
+    //     tags?: string[];
+    //     author?: string;
+    //     chunking?: {
+    //         chunkSize?: number;
+    //         overlapSize?: number;
+    //         strategy?: 'sentence' | 'paragraph' | 'semantic' | 'fixed';
+    //         preserveWhitespace?: boolean;
+    //         minChunkSize?: number;
+    //     };
+    //     modelName: string;
+    // }): Promise<{
+    //     documentId: number;
+    //     chunksCreated: number;
+    //     embeddingsGenerated: number;
+    //     processingTime: number;
+    //     success: boolean;
+    //     message: string;
+    //     steps: {
+    //         upload: boolean;
+    //         chunking: boolean;
+    //         embedding: boolean;
+    //     };
+    // }> {
+    //     const startTime = Date.now();
+    //     const steps = { upload: false, chunking: false, embedding: false };
 
-        try {
-            if (!this.isInitialized) {
-                throw new Error('RAG module not initialized');
-            }
+    //     try {
+    //         if (!this.isInitialized) {
+    //             throw new Error('RAG module not initialized');
+    //         }
 
-            // Step 1: Upload document
-            const uploadResult = await this.uploadDocument(filePath, options);
-            if (!uploadResult.success) {
-                return {
-                    documentId: 0,
-                    chunksCreated: 0,
-                    embeddingsGenerated: 0,
-                    processingTime: Date.now() - startTime,
-                    success: false,
-                    message: `Upload failed: ${uploadResult.message}`,
-                    steps
-                };
-            }
-            steps.upload = true;
+    //         // Step 1: Upload document
+    //         const uploadResult = await this.uploadDocument(filePath, options);
+    //         if (!uploadResult.success) {
+    //             return {
+    //                 documentId: 0,
+    //                 chunksCreated: 0,
+    //                 embeddingsGenerated: 0,
+    //                 processingTime: Date.now() - startTime,
+    //                 success: false,
+    //                 message: `Upload failed: ${uploadResult.message}`,
+    //                 steps
+    //             };
+    //         }
+    //         steps.upload = true;
 
-            // Step 2: Chunk document
-            const chunkResult = await this.chunkDocument(uploadResult.documentId, options.chunking);
-            if (!chunkResult.success) {
-                return {
-                    documentId: uploadResult.documentId,
-                    chunksCreated: 0,
-                    embeddingsGenerated: 0,
-                    processingTime: Date.now() - startTime,
-                    success: false,
-                    message: `Chunking failed: ${chunkResult.message}`,
-                    steps
-                };
-            }
-            steps.chunking = true;
+    //         // Step 2: Chunk document
+    //         const chunkResult = await this.chunkDocument(uploadResult.documentId, options.chunking);
+    //         if (!chunkResult.success) {
+    //             return {
+    //                 documentId: uploadResult.documentId,
+    //                 chunksCreated: 0,
+    //                 embeddingsGenerated: 0,
+    //                 processingTime: Date.now() - startTime,
+    //                 success: false,
+    //                 message: `Chunking failed: ${chunkResult.message}`,
+    //                 steps
+    //             };
+    //         }
+    //         steps.chunking = true;
 
-            // Step 3: Generate embeddings
-            const embedResult = await this.generateDocumentEmbeddings(uploadResult.documentId, options.modelName);
-            if (!embedResult.success) {
-                return {
-                    documentId: uploadResult.documentId,
-                    chunksCreated: chunkResult.chunksCreated,
-                    embeddingsGenerated: 0,
-                    processingTime: Date.now() - startTime,
-                    success: false,
-                    message: `Embedding generation failed: ${embedResult.message}`,
-                    steps
-                };
-            }
-            steps.embedding = true;
+    //         // Step 3: Generate embeddings
+    //         const embedResult = await this.generateDocumentEmbeddings(uploadResult.documentId, options.modelName);
+    //         if (!embedResult.success) {
+    //             return {
+    //                 documentId: uploadResult.documentId,
+    //                 chunksCreated: chunkResult.chunksCreated,
+    //                 embeddingsGenerated: 0,
+    //                 processingTime: Date.now() - startTime,
+    //                 success: false,
+    //                 message: `Embedding generation failed: ${embedResult.message}`,
+    //                 steps
+    //             };
+    //         }
+    //         steps.embedding = true;
 
-            const processingTime = Date.now() - startTime;
+    //         const processingTime = Date.now() - startTime;
 
-            return {
-                documentId: uploadResult.documentId,
-                chunksCreated: chunkResult.chunksCreated,
-                embeddingsGenerated: embedResult.chunksProcessed,
-                processingTime,
-                success: true,
-                message: 'Document processed successfully (uploaded, chunked, and embedded)',
-                steps
-            };
-        } catch (error) {
-            console.error('Error in complete document processing:', error);
-            return {
-                documentId: 0,
-                chunksCreated: 0,
-                embeddingsGenerated: 0,
-                processingTime: Date.now() - startTime,
-                success: false,
-                message: `Complete processing failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
-                steps
-            };
-        }
-    }
+    //         return {
+    //             documentId: uploadResult.documentId,
+    //             chunksCreated: chunkResult.chunksCreated,
+    //             embeddingsGenerated: embedResult.chunksProcessed,
+    //             processingTime,
+    //             success: true,
+    //             message: 'Document processed successfully (uploaded, chunked, and embedded)',
+    //             steps
+    //         };
+    //     } catch (error) {
+    //         console.error('Error in complete document processing:', error);
+    //         return {
+    //             documentId: 0,
+    //             chunksCreated: 0,
+    //             embeddingsGenerated: 0,
+    //             processingTime: Date.now() - startTime,
+    //             success: false,
+    //             message: `Complete processing failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+    //             steps
+    //         };
+    //     }
+    // }
 
 
     /**
@@ -443,7 +446,7 @@ export class RAGModule extends BaseModule {
      * @param documentId - Document ID to generate embeddings for
      * @returns Processing result
      */
-    async generateDocumentEmbeddings(documentId: number, modelName: string): Promise<{
+    async generateDocumentEmbeddings(documentId: number, modelName: string,dimension:number): Promise<{
         documentId: number;
         chunksProcessed: number;
         processingTime: number;
@@ -482,7 +485,7 @@ export class RAGModule extends BaseModule {
             }
 
             // Generate embeddings for chunks that don't have them using RagSearchModule
-            const embedResult = await this.ragSearchModule.generateDocumentEmbeddings(documentId, modelName);
+            const embedResult = await this.ragSearchModule.generateDocumentEmbeddings(documentId, modelName,dimension);
             if (!embedResult.success) {
                 throw new Error(embedResult.message);
             }
@@ -512,7 +515,7 @@ export class RAGModule extends BaseModule {
      * Generate embeddings for all documents that don't have them
      * @returns Processing results
      */
-    async generateAllMissingEmbeddings(modelName: string): Promise<{
+    async generateAllMissingEmbeddings(): Promise<{
         totalDocuments: number;
         documentsProcessed: number;
         totalChunksProcessed: number;
@@ -524,6 +527,12 @@ export class RAGModule extends BaseModule {
             message: string;
         }>;
     }> {
+        const defaultEmbeddingModel = await this.systemSettingModule.getDefaultEmbeddingModel();
+        if (!defaultEmbeddingModel) {
+            throw new Error('No default embedding model configured. Please set a default embedding model before uploading documents.');
+        }
+        const modelName = defaultEmbeddingModel.modelName;
+        const dimension = defaultEmbeddingModel.dimension;
         const startTime = Date.now();
 
         try {
@@ -543,7 +552,7 @@ export class RAGModule extends BaseModule {
             let totalChunksProcessed = 0;
 
             for (const document of documents) {
-                const result = await this.ragSearchModule.generateDocumentEmbeddings(document.id, modelName);
+                const result = await this.ragSearchModule.generateDocumentEmbeddings(document.id, modelName,dimension);
                 results.push(result);
                 
                 if (result.success) {

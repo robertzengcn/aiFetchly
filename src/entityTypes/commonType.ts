@@ -261,6 +261,7 @@ export interface UploadedDocument {
     uploadDate?: string;
     status: string;
     processingStatus?: string;
+    log?: string; // Error log file path
 }
 
 export interface SaveTempFileResponse {

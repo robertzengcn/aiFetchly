@@ -159,6 +159,7 @@ export default {
         processing_completed: "已完成",
         processing_processing: "处理中",
         processing_failed: "失败",
+        processing_error: "错误",
         processing_pending: "待处理",
         file_type_text: "文本",
         file_type_word: "Word",
@@ -181,6 +182,10 @@ export default {
         bulk_delete_success: "成功删除 {count} 个文档",
         bulk_delete_partial: "成功删除 {success} 个文档，删除 {failed} 个文档失败",
         bulk_delete_error: "删除文档失败：{error}",
+        // Error log dialog translations
+        error_log_title: "错误日志 - {name}",
+        loading_error_log: "正在加载错误日志...",
+        no_error_log: "此文档没有可用的错误日志",
         // Settings translations
         settings: "设置",
         embedding_model: "嵌入模型",

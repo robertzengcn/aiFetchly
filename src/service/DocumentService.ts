@@ -84,8 +84,29 @@ export class DocumentService {
         vectorIndexPath?: string;
         modelName?: string;
         vectorDimensions?: number;
+        log?: string;
     }): Promise<void> {
         return await this.ragDocumentModule.updateDocumentMetadata(id, metadata);
+    }
+
+    /**
+     * Save error log for a document
+     * @param documentId - Document ID
+     * @param error - Error object or error message
+     * @param context - Additional context about the error
+     * @returns Path to the created error log file
+     */
+    async saveErrorLog(documentId: number, error: Error | string, context?: string): Promise<string> {
+        return await this.ragDocumentModule.saveErrorLog(documentId, error, context);
+    }
+
+    /**
+     * Get document error log content
+     * @param documentId - Document ID
+     * @returns Error log content or null if no log exists
+     */
+    async getDocumentErrorLog(documentId: number): Promise<string | null> {
+        return await this.ragDocumentModule.getDocumentErrorLog(documentId);
     }
 
     /**

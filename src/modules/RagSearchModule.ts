@@ -430,12 +430,43 @@ export class RagSearchModule extends BaseModule {
         description?: string;
         tags?: string[];
         author?: string;
+        log?: string;
     }): Promise<void> {
         try {
             await this.documentService.updateDocumentMetadata(id, metadata);
         } catch (error) {
             console.error('Failed to update document:', error);
             throw new Error('Failed to update document');
+        }
+    }
+
+    /**
+     * Save error log for a document
+     * @param documentId - Document ID
+     * @param error - Error object or error message
+     * @param context - Additional context about the error
+     * @returns Path to the created error log file
+     */
+    async saveDocumentErrorLog(documentId: number, error: Error | string, context?: string): Promise<string> {
+        try {
+            return await this.documentService.saveErrorLog(documentId, error, context);
+        } catch (logError) {
+            console.error('Failed to save document error log:', logError);
+            throw new Error('Failed to save document error log');
+        }
+    }
+
+    /**
+     * Get document error log content
+     * @param documentId - Document ID
+     * @returns Error log content or null if no log exists
+     */
+    async getDocumentErrorLog(documentId: number): Promise<string | null> {
+        try {
+            return await this.documentService.getDocumentErrorLog(documentId);
+        } catch (error) {
+            console.error('Failed to get document error log:', error);
+            throw new Error('Failed to get document error log');
         }
     }
 
@@ -575,7 +606,7 @@ export class RagSearchModule extends BaseModule {
      * @param documentId - Document ID to generate embeddings for
      * @returns Embedding generation result
      */
-    async generateDocumentEmbeddings(documentId: number, modelName: string): Promise<{
+    async generateDocumentEmbeddings(documentId: number, modelName: string,dimension: number): Promise<{
         documentId: number;
         chunksProcessed: number;
         processingTime: number;
@@ -616,7 +647,8 @@ export class RagSearchModule extends BaseModule {
             if (vectorIndexPath) {
                 await this.documentService.updateDocumentMetadata(documentId, {
                     vectorIndexPath,
-                    modelName: modelName
+                    modelName: modelName,
+                    vectorDimensions: dimension
                 });
                 console.log(`Saved vector index path to document ${documentId}: ${vectorIndexPath}`);
             }
