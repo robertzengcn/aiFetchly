@@ -228,7 +228,7 @@ export class RagSearchModule extends BaseModule {
                     vectorIndexPath = this.searchService.vectorStoreService.getDocumentIndexPath(
                         documentId,
                         {
-                            modelId: embeddingResult.model,
+                            name: embeddingResult.model,
                             dimensions: embeddingResult.dimensions
                         }
                     );

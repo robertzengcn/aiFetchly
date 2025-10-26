@@ -3,10 +3,11 @@
  */
 export interface VectorDatabaseConfig {
     indexPath: string;
-    modelId: string;
+    modelName: string;
     dimensions: number;
     indexType?: string;
     documentId?: number; // Document-specific index support
+    documentIndexPath?: string;
     [key: string]: unknown; // Allow for database-specific configuration
 }
 
@@ -27,7 +28,7 @@ export interface IndexStats {
     dimension: number;
     indexType: string;
     isInitialized: boolean;
-    modelId: string;
+    modelName: string;
     dimensions: number;
 }
 

@@ -132,7 +132,7 @@ export abstract class AbstractVectorDatabase implements IVectorDatabase {
      */
     protected getDocumentSpecificIndexPath(config: VectorDatabaseConfig, documentId: number): string {
         const baseDir = path.dirname(this.indexPath);
-        const fileName = `index_doc_${documentId}_${config.modelId}_${config.dimensions}.${this.getFileExtension()}`;
+        const fileName = `index_doc_${documentId}_${config.modelName}_${config.dimensions}.${this.getFileExtension()}`;
         return path.join(baseDir, 'documents', fileName);
     }
 
@@ -167,8 +167,8 @@ export abstract class AbstractVectorDatabase implements IVectorDatabase {
      * Validate configuration
      */
     protected validateConfig(config: VectorDatabaseConfig): void {
-        if (!config.modelId || !config.dimensions) {
-            throw new Error('Model ID and dimensions are required');
+        if (!config.modelName || !config.dimensions) {
+            throw new Error('Model Name and dimensions are required');
         }
         // if (config.dimensions <= 0) {
         //     throw new Error('Dimensions must be greater than 0');

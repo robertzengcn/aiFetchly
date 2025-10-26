@@ -277,7 +277,7 @@ export class RAGDocumentModule extends BaseModule {
     /**
      * Get all documents that have embeddings
      */
-    async getDocumentsWithEmbeddings(): Promise<Array<{ id: number }>> {
+    async getDocumentsWithEmbeddings(): Promise<Array<{ id: number; vectorIndexPath: string | null }>> {
         return await this.ragDocumentModel.getDocumentsWithEmbeddings();
     }
 
