@@ -213,16 +213,24 @@ export class RAGDocumentModel extends BaseDb {
     /**
      * Get all documents that have embeddings
      */
-    async getDocumentsWithEmbeddings(): Promise<Array<{ id: number }>> {
+    async getDocumentsWithEmbeddings(): Promise<Array<{ id: number; vectorIndexPath: string | null }>> {
         const documents = await this.repository
             .createQueryBuilder('d')
-            .select('DISTINCT d.id')
+            .select('DISTINCT d.id, d.vectorIndexPath')
             .innerJoin('d.chunks', 'c')
-            .where('c.embeddingId IS NOT NULL')
-            .andWhere("c.embeddingId != ''")
+            // .where('c.embeddingId IS NOT NULL')
+            // .andWhere("c.embeddingId != ''")
             .andWhere('d.status = :status', { status: 'active' })
             .getRawMany();
             
-        return documents.map((row: any) => ({ id: row.d_id }));
+        interface RawDocumentRow {
+            d_id: number;
+            d_vectorIndexPath: string | null;
+        }
+        
+        return documents.map((row: RawDocumentRow) => ({ 
+            id: row.d_id,
+            vectorIndexPath: row.d_vectorIndexPath
+        }));
     }
 }

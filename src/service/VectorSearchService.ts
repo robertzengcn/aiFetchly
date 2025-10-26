@@ -95,7 +95,7 @@ export class VectorSearchService {
             }> = [];
 
             // Process each unique model group
-            for (const [modelKey, documentIds] of documentsByModel.entries()) {
+            for (const [modelKey, docs] of documentsByModel.entries()) {
                 const [modelName, dimensions] = modelKey.split(':');
                 
                 // Generate query embedding for this specific model using remote API
@@ -121,22 +121,23 @@ export class VectorSearchService {
                 }
 
                 // Search in all documents using this model
-                for (const documentId of documentIds) {
+                for (const doc of docs) {
                     try {
                         // Load document-specific index and search
-                        await this.vectorStore.loadDocumentIndex(documentId, {
-                            modelId: modelName,
-                            dimensions: parseInt(dimensions)
+                        await this.vectorStore.loadDocumentIndex(doc.id, {
+                            name: modelName,
+                            dimensions: parseInt(dimensions),
+                            documentIndexPath: doc.vectorIndexPath || undefined
                         });
                         const documentResults = await this.vectorStore.search(queryVector, options.limit || 10);
                         
                         allResults.push({
                             chunkIds: documentResults.chunkIds,
                             distances: documentResults.distances,
-                            documentId: documentId
+                            documentId: doc.id
                         });
                     } catch (error) {
-                        console.warn(`Failed to search in document ${documentId}:`, error);
+                        console.warn(`Failed to search in document ${doc.id}:`, error);
                         continue;
                     }
                 }
@@ -157,11 +158,11 @@ export class VectorSearchService {
 
     /**
      * Group documents by their embedding model
-     * @param documents - Array of document IDs
-     * @returns Map of model key to document IDs
+     * @param documents - Array of documents with IDs and vector index paths
+     * @returns Map of model key to document data
      */
-    private async groupDocumentsByModel(documents: Array<{ id: number }>): Promise<Map<string, number[]>> {
-        const documentsByModel = new Map<string, number[]>();
+    private async groupDocumentsByModel(documents: Array<{ id: number; vectorIndexPath: string | null }>): Promise<Map<string, Array<{ id: number; vectorIndexPath: string | null }>>> {
+        const documentsByModel = new Map<string, Array<{ id: number; vectorIndexPath: string | null }>>();
         
         for (const doc of documents) {
             const modelConfig = await this.getDocumentModelConfig(doc.id);
@@ -171,12 +172,12 @@ export class VectorSearchService {
             }
             
             // Create a unique key for the model and dimensions
-            const modelKey = `${modelConfig.modelId}:${modelConfig.dimensions}`;
+            const modelKey = `${modelConfig.modelName}:${modelConfig.dimensions}`;
             
             if (!documentsByModel.has(modelKey)) {
                 documentsByModel.set(modelKey, []);
             }
-            documentsByModel.get(modelKey)!.push(doc.id);
+            documentsByModel.get(modelKey)!.push(doc);
         }
         
         return documentsByModel;
@@ -402,9 +403,9 @@ export class VectorSearchService {
 
     /**
      * Get all documents that have embeddings
-     * @returns Array of document IDs with embeddings
+     * @returns Array of document IDs with embeddings and vector index paths
      */
-    private async getAllDocumentsWithEmbeddings(): Promise<Array<{ id: number }>> {
+    private async getAllDocumentsWithEmbeddings(): Promise<Array<{ id: number; vectorIndexPath: string | null }>> {
         try {
             // Use document module to get documents with embeddings
             return await this.documentModule.getDocumentsWithEmbeddings();
@@ -420,7 +421,7 @@ export class VectorSearchService {
      * @returns Model configuration or null if not found
      */
     private async getDocumentModelConfig(documentId: number): Promise<{
-        modelId: string;
+        modelName: string;
         dimensions: number;
     } | null> {
         try {
@@ -429,9 +430,12 @@ export class VectorSearchService {
             
             if (document && document.modelName) {
                 // Get dimensions directly from document (default to 1536 if not set)
+                if (!document.vectorDimensions) {
+                    throw new Error(`No vector dimensions found for document ${documentId}`);
+                }
                 return {
-                    modelId: document.modelName,
-                    dimensions: document.vectorDimensions || 1536
+                    modelName: document.modelName,
+                    dimensions: document.vectorDimensions
                 };
             }
             

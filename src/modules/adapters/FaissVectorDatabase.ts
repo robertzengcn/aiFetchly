@@ -83,7 +83,9 @@ export class FaissVectorDatabase extends AbstractVectorDatabase {
 
         try {
             this.config = config;
-            
+            if(config.documentIndexPath){
+                this.indexPath = config.documentIndexPath;
+            }else{
             // Update index path based on whether it's document-specific or model-specific
             if (config.documentId) {
                 this.indexPath = this.getDocumentSpecificIndexPath(config, config.documentId);
@@ -92,6 +94,7 @@ export class FaissVectorDatabase extends AbstractVectorDatabase {
                 this.indexPath = this.getModelSpecificIndexPath(config);
                 console.log(`Loading model-specific index for model ${config.modelId}`);
             }
+        }
             
             if (fs.existsSync(this.indexPath)) {
                 this.index = (faiss as any).IndexFlatL2.load(this.indexPath);
@@ -209,7 +212,7 @@ export class FaissVectorDatabase extends AbstractVectorDatabase {
             dimension: this.dimension,
             indexType: this.index?.constructor.name || 'Unknown',
             isInitialized: this.initialized,
-            modelId: this.config?.modelId || '',
+            modelName: this.config?.modelName || '',
             dimensions: this.dimension
         };
     }

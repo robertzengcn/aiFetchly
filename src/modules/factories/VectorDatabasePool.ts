@@ -150,7 +150,7 @@ export class VectorDatabaseKeyGenerator {
         basePath?: string
     ): string {
         const pathHash = basePath ? this.hashPath(basePath) : 'default';
-        return `doc_${documentId}_${modelConfig.modelId}_${modelConfig.name}_${pathHash}`;
+        return `doc_${documentId}_${modelConfig.name}_${pathHash}`;
     }
 
     /**
@@ -164,7 +164,7 @@ export class VectorDatabaseKeyGenerator {
         basePath?: string
     ): string {
         const pathHash = basePath ? this.hashPath(basePath) : 'default';
-        return `model_${modelConfig.modelId}_${modelConfig.name}_${pathHash}`;
+        return `model_${modelConfig.name}_${pathHash}`;
     }
 
     /**
