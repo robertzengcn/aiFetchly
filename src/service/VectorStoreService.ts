@@ -81,8 +81,8 @@ export class VectorStoreService {
                 indexType
             };
 
-            await this.vectorDatabase.createIndex(vectorDbConfig);
-            console.log(`Created ${indexType} index for model ${modelConfig.name} with dimension ${modelConfig.name}`);
+            const indexPath = await this.vectorDatabase.createIndex(vectorDbConfig);
+            console.log(`Created ${indexType} index for model ${modelConfig.name} with dimension ${modelConfig.name} at ${indexPath}`);
         } catch (error) {
             console.error(`Failed to create ${this.databaseType} index:`, error);
             throw new Error(`Failed to create ${this.databaseType} index`);
@@ -180,6 +180,7 @@ export class VectorStoreService {
         metadata?: any;
         model?: string;
         dimensions?: number;
+        vectorIndexPath?: string;
     }): Promise<void> {
         // Check if we need to create or load document-specific index for this model
         if (embeddingData.model && embeddingData.dimensions && embeddingData.documentId) {
@@ -317,6 +318,14 @@ export class VectorStoreService {
     }
 
     /**
+     * Get total number of vectors in the index
+     * @returns Total number of vectors
+     */
+    getTotalVectors(): number {
+        return this.vectorDatabase.getTotalVectors();
+    }
+
+    /**
      * Reset the index
      */
     async resetIndex(): Promise<void> {
@@ -430,7 +439,7 @@ export class VectorStoreService {
     private getFileExtension(): string {
         switch (this.databaseType) {
             case VectorDatabaseType.FAISS:
-                return 'faiss';
+                return 'index';
             // Add other database types as needed
             default:
                 return 'index';
@@ -589,11 +598,9 @@ export class VectorStoreService {
                 documentId: documentId
             };
 
-            await pooledInstance.createIndex(vectorDbConfig);
-            console.log(`Created document-specific ${indexType} index for document ${documentId} with model ${modelConfig.name} (using pool)`);
+            const indexFilePath = await pooledInstance.createIndex(vectorDbConfig);
+            console.log(`Created document-specific ${indexType} index for document ${documentId} with model ${modelConfig.name} (using pool) at ${indexFilePath}`);
             
-            // Get and return the actual index file path
-            const indexFilePath = this.getDocumentIndexPath(documentId, modelConfig);
             return indexFilePath;
         } catch (error) {
             console.error(`Failed to create document-specific index for document ${documentId}:`, error);
@@ -618,7 +625,8 @@ export class VectorStoreService {
                 indexPath: this.indexPath,
                 modelName: modelConfig.name,
                 dimensions: modelConfig.dimensions,
-                documentId: documentId
+                documentId: documentId,
+                documentIndexPath: modelConfig.documentIndexPath
             };
 
             await this.vectorDatabase.loadIndex(vectorDbConfig);
@@ -721,7 +729,7 @@ export class VectorStoreService {
      */
     getDocumentIndexPath(documentId: number, modelConfig: EmbeddingModelConfig): string {
         const baseDir = path.dirname(this.indexPath);
-        const fileName = `index_doc_${documentId}_${modelConfig.name}_.${this.getFileExtension()}`;
+        const fileName = `index_doc_${documentId}_${modelConfig.name}_${modelConfig.dimensions}.${this.getFileExtension()}`;
         return path.join(baseDir, 'documents', fileName);
     }
 }
