@@ -44,7 +44,7 @@ export interface IVectorDatabase {
     /**
      * Create a new index with the given configuration
      */
-    createIndex(config: VectorDatabaseConfig): Promise<void>;
+    createIndex(config: VectorDatabaseConfig): Promise<string>;
 
     /**
      * Load an existing index from disk
@@ -72,6 +72,11 @@ export interface IVectorDatabase {
      * Get index statistics
      */
     getIndexStats(): IndexStats;
+
+    /**
+     * Get total number of vectors in the index
+     */
+    getTotalVectors(): number;
 
     /**
      * Reset the index

@@ -224,13 +224,13 @@ export class RAGDocumentModel extends BaseDb {
             .getRawMany();
             
         interface RawDocumentRow {
-            d_id: number;
-            d_vectorIndexPath: string | null;
+            id: number;
+            vectorIndexPath: string | null;
         }
         
         return documents.map((row: RawDocumentRow) => ({ 
-            id: row.d_id,
-            vectorIndexPath: row.d_vectorIndexPath
+            id: row.id,
+            vectorIndexPath: row.vectorIndexPath
         }));
     }
 }

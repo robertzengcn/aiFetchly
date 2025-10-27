@@ -24,7 +24,7 @@ export abstract class AbstractVectorDatabase implements IVectorDatabase {
     /**
      * Create a new index (to be implemented by subclasses)
      */
-    abstract createIndex(config: VectorDatabaseConfig): Promise<void>;
+    abstract createIndex(config: VectorDatabaseConfig): Promise<string>;
 
     /**
      * Load an existing index (to be implemented by subclasses)
@@ -52,6 +52,11 @@ export abstract class AbstractVectorDatabase implements IVectorDatabase {
      * Get index statistics (to be implemented by subclasses)
      */
     abstract getIndexStats(): IndexStats;
+
+    /**
+     * Get total number of vectors in the index (to be implemented by subclasses)
+     */
+    abstract getTotalVectors(): number;
 
     /**
      * Reset the index (to be implemented by subclasses)

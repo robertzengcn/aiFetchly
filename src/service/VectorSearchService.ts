@@ -138,6 +138,13 @@ export class VectorSearchService {
                         });
                     } catch (error) {
                         console.warn(`Failed to search in document ${doc.id}:`, error);
+                        // Log total number of chunks in the search index for this document
+                        try {
+                            const totalChunks = await this.vectorStore.getTotalVectors();
+                            console.info(`Document ${doc.id} index contains ${totalChunks} chunks`);
+                        } catch (countError) {
+                            console.warn(`Failed to retrieve index size for document ${doc.id}:`, countError);
+                        }
                         continue;
                     }
                 }

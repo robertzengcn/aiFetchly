@@ -9,10 +9,11 @@ import { VectorDatabaseConfig, VectorSearchResult, IndexStats } from '@/modules/
 interface FAISSIndex {
     add(vectors: number[]): void;
     search(queryVector: number[], k: number): { indices: number[], distances: number[] };
-    save(path: string): void;
+    write(path: string): void;
     d(): number;  // dimension method in FAISS
     ntotal(): number;  // total vectors method in FAISS
     reset(): void;
+    read(path: string): FAISSIndex;
 }
 
 /**
@@ -39,7 +40,7 @@ export class FaissVectorDatabase extends AbstractVectorDatabase {
     /**
      * Create a new FAISS index
      */
-    async createIndex(config: VectorDatabaseConfig): Promise<void> {
+    async createIndex(config: VectorDatabaseConfig): Promise<string> {
         if (!this.initialized) {
             await this.initialize();
         }
@@ -63,8 +64,10 @@ export class FaissVectorDatabase extends AbstractVectorDatabase {
             
             const indexType = config.indexType || 'Flat';
             this.index = this.createFaissIndex(indexType, config.dimensions);
-
+            this.index.write(this.indexPath);
             console.log(`Created ${indexType} FAISS index for model ${config.modelId} with dimension ${config.dimensions}`);
+            console.log(`Index path: ${this.indexPath}`);
+            return this.indexPath;
         } catch (error) {
             console.error('Failed to create FAISS index:', error);
             throw new Error('Failed to create FAISS index');
@@ -85,6 +88,7 @@ export class FaissVectorDatabase extends AbstractVectorDatabase {
             this.config = config;
             if(config.documentIndexPath){
                 this.indexPath = config.documentIndexPath;
+            console.log(`Loading document-specific with exist index for document ${config.documentId} at path ${this.indexPath}`);
             }else{
             // Update index path based on whether it's document-specific or model-specific
             if (config.documentId) {
@@ -97,7 +101,7 @@ export class FaissVectorDatabase extends AbstractVectorDatabase {
         }
             
             if (fs.existsSync(this.indexPath)) {
-                this.index = (faiss as any).IndexFlatL2.load(this.indexPath);
+                this.index = (faiss as any).IndexFlatL2.read(this.indexPath);
                 // this.dimension = config.dimensions;
                 
                 // Note: Chunk ID mapping will need to be rebuilt from database
@@ -123,7 +127,7 @@ export class FaissVectorDatabase extends AbstractVectorDatabase {
         }
 
         try {
-            this.index.save(this.indexPath);
+            this.index.write(this.indexPath);
             console.log(`FAISS index saved to ${this.indexPath}`);
         } catch (error) {
             console.error('Failed to save FAISS index:', error);
@@ -152,17 +156,19 @@ export class FaissVectorDatabase extends AbstractVectorDatabase {
             const currentVectorCount = this.index.ntotal();
             
             // Debug logging
-            console.log(`Adding vector to FAISS index. Vector has ${vectors.length} dimensions. Index dimension: ${this.dimension}`);
-            console.log(`Current vector count before adding: ${currentVectorCount}`);
-            console.log(vectors)
+            // console.log(`Adding vector to FAISS index. Vector has ${vectors.length} dimensions. Index dimension: ${this.dimension}`);
+            // console.log(`Current vector count before adding: ${currentVectorCount}`);
+            // console.log(vectors)
             this.index.add(vectors);
-            
+            // this.index.write(this.indexPath);
+            console.log(`Added vector to FAISS index and saved to ${this.indexPath}`);
             // Store chunk ID mapping for each added vector
             for (let i = 0; i < chunkIds.length; i++) {
                 this.chunkIdMapping.set(currentVectorCount + i, chunkIds[i]);
             }
             
             console.log(`Added vector to FAISS index`);
+            await this.saveIndex();
         } catch (error) {
             console.error('Failed to add vectors to FAISS index:', error);
             throw new Error('Failed to add vectors to FAISS index');
@@ -218,6 +224,16 @@ export class FaissVectorDatabase extends AbstractVectorDatabase {
     }
 
     /**
+     * Get total number of vectors in the FAISS index
+     */
+    getTotalVectors(): number {
+        if (!this.index) {
+            throw new Error('Index not initialized');
+        }
+        return this.index.ntotal();
+    }
+
+    /**
      * Reset the FAISS index
      */
     async resetIndex(): Promise<void> {
@@ -255,7 +271,7 @@ export class FaissVectorDatabase extends AbstractVectorDatabase {
         }
 
         try {
-            this.index.save(backupPath);
+            this.index.write(backupPath);
             console.log(`FAISS index backed up to ${backupPath}`);
         } catch (error) {
             console.error('Failed to backup FAISS index:', error);
@@ -322,7 +338,7 @@ export class FaissVectorDatabase extends AbstractVectorDatabase {
      * Get FAISS-specific file extension
      */
     protected getFileExtension(): string {
-        return 'faiss';
+        return 'index';
     }
 
     /**

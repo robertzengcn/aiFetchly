@@ -124,7 +124,7 @@ export class RagSearchModule extends BaseModule {
             const chunks = await this.chunkingService.chunkDocument(document);
 
             // Generate embeddings for chunks using remote API
-            const vectorIndexPath =await this.generateChunkEmbeddings(chunks, modelName);
+            const vectorIndexPath =await this.generateChunkEmbeddings(chunks, modelName, vectorDimensions);
 
             if (vectorIndexPath) {
                 await this.documentService.updateDocumentMetadata(document.id, {
@@ -190,14 +190,22 @@ export class RagSearchModule extends BaseModule {
      * Generate embeddings for document chunks using remote API
      * @param chunks - Array of chunk entities
      */
-    private async generateChunkEmbeddings(chunks: RAGChunkEntity[], modelName: string): Promise<string | null> {
+    private async generateChunkEmbeddings(chunks: RAGChunkEntity[], modelName: string, dimension: number): Promise<string | null> {
         try {
             if (chunks.length === 0) {
                 return null;
             }
 
             const documentId = chunks[0].documentId;
-            let vectorIndexPath: string | null = null;
+            // let vectorIndexPath: string | null = null;
+
+            const vectorIndexPath = this.searchService.vectorStoreService.getDocumentIndexPath(
+                documentId,
+                {
+                    name: modelName,
+                    dimensions: dimension
+                }
+            );
             
             for (const chunk of chunks) {
                 // Generate embedding for chunk content using remote API
@@ -223,16 +231,12 @@ export class RagSearchModule extends BaseModule {
                     }
                 });
                 
-                // Get the vector index path (only need to do this once)
-                if (!vectorIndexPath) {
-                    vectorIndexPath = this.searchService.vectorStoreService.getDocumentIndexPath(
-                        documentId,
-                        {
-                            name: embeddingResult.model,
-                            dimensions: embeddingResult.dimensions
-                        }
-                    );
-                }
+                
+            }
+
+            // Get the vector index path (only need to do this once)
+            if (!vectorIndexPath) {
+                
             }
             
             console.log(`Generated embeddings for ${chunks.length} chunks using remote API for document ${documentId}`);
@@ -667,7 +671,7 @@ export class RagSearchModule extends BaseModule {
             }
 
             // Generate embeddings for chunks that don't have them using remote API
-            const vectorIndexPath = await this.generateChunkEmbeddings(chunksWithoutEmbeddings, modelName);
+            const vectorIndexPath = await this.generateChunkEmbeddings(chunksWithoutEmbeddings, modelName, dimension);
 
             // Save vector index path to document entity
             if (vectorIndexPath) {
