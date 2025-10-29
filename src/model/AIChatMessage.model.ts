@@ -127,5 +127,64 @@ export class AIChatMessageModel extends BaseDb {
             .take(limit)
             .getMany();
     }
+
+    /**
+     * Get all conversations with metadata (last message, timestamp, message count)
+     */
+    async getConversationsWithMetadata(): Promise<Array<{
+        conversationId: string;
+        lastMessage: string;
+        lastMessageTimestamp: Date;
+        messageCount: number;
+        createdAt: Date;
+    }>> {
+        // Get all unique conversation IDs
+        const conversations = await this.repository
+            .createQueryBuilder('message')
+            .select('DISTINCT message.conversationId', 'conversationId')
+            .getRawMany();
+
+        // For each conversation, get the last message and message count
+        const conversationsWithMetadata = await Promise.all(
+            conversations.map(async (conv) => {
+                const conversationId = conv.conversationId;
+                
+                // Get the last message
+                const lastMessage = await this.repository
+                    .createQueryBuilder('message')
+                    .where('message.conversationId = :conversationId', { conversationId })
+                    .orderBy('message.timestamp', 'DESC')
+                    .take(1)
+                    .getOne();
+
+                // Get message count
+                const messageCount = await this.repository
+                    .createQueryBuilder('message')
+                    .where('message.conversationId = :conversationId', { conversationId })
+                    .getCount();
+
+                // Get first message timestamp (conversation created time)
+                const firstMessage = await this.repository
+                    .createQueryBuilder('message')
+                    .where('message.conversationId = :conversationId', { conversationId })
+                    .orderBy('message.timestamp', 'ASC')
+                    .take(1)
+                    .getOne();
+
+                return {
+                    conversationId,
+                    lastMessage: lastMessage?.content || '',
+                    lastMessageTimestamp: lastMessage?.timestamp || new Date(),
+                    messageCount,
+                    createdAt: firstMessage?.timestamp || new Date()
+                };
+            })
+        );
+
+        // Sort by last message timestamp (most recent first)
+        return conversationsWithMetadata.sort((a, b) => 
+            b.lastMessageTimestamp.getTime() - a.lastMessageTimestamp.getTime()
+        );
+    }
 }
 

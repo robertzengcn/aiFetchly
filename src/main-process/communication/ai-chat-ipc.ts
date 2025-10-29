@@ -10,7 +10,8 @@ import {
     AI_CHAT_STREAM_CHUNK,
     AI_CHAT_STREAM_COMPLETE,
     AI_CHAT_HISTORY,
-    AI_CHAT_CLEAR
+    AI_CHAT_CLEAR,
+    AI_CHAT_CONVERSATIONS
 } from '@/config/channellist';
 import { Token } from '@/modules/token';
 import { USERID } from '@/config/usersetting';
@@ -401,10 +402,10 @@ export function registerAiChatIpcHandlers(): void {
     ipcMain.handle(AI_CHAT_HISTORY, async (event, data): Promise<CommonMessage<ChatHistoryResponse | null>> => {
         try {
             const requestData = data ? JSON.parse(data) : {};
-            const conversationId = requestData.conversationId;
+            const requestConversationId = requestData.conversationId;
 
             const chatModule = new AIChatModule();
-            const messageEntities = await chatModule.getConversationMessages(conversationId);
+            const messageEntities = await chatModule.getConversationMessages(requestConversationId);
 
             // Convert entities to ChatMessage format
             const messages: ChatMessage[] = messageEntities.map(entity => ({
@@ -415,13 +416,19 @@ export function registerAiChatIpcHandlers(): void {
                 conversationId: entity.conversationId
             }));
 
+            // Extract conversationId from messages if not provided in request
+            // Use the conversationId from the first message if available, otherwise use the request ID
+            const resolvedConversationId = messages.length > 0 
+                ? messages[0].conversationId 
+                : requestConversationId;
+
             const response: CommonMessage<ChatHistoryResponse> = {
                 status: true,
                 msg: "Chat history retrieved successfully",
                 data: {
                     messages,
                     totalMessages: messages.length,
-                    conversationId
+                    conversationId: resolvedConversationId
                 }
             };
             return response;
@@ -462,6 +469,41 @@ export function registerAiChatIpcHandlers(): void {
             const errorResponse: CommonMessage<void> = {
                 status: false,
                 msg: error instanceof Error ? error.message : "Unknown error occurred"
+            };
+            return errorResponse;
+        }
+    });
+
+    // Get all conversations with metadata
+    ipcMain.handle(AI_CHAT_CONVERSATIONS, async (event, data): Promise<CommonMessage<Array<{
+        conversationId: string;
+        lastMessage: string;
+        lastMessageTimestamp: Date;
+        messageCount: number;
+        createdAt: Date;
+    }> | null>> => {
+        try {
+            const chatModule = new AIChatModule();
+            const conversations = await chatModule.getConversationsWithMetadata();
+
+            const response: CommonMessage<Array<{
+                conversationId: string;
+                lastMessage: string;
+                lastMessageTimestamp: Date;
+                messageCount: number;
+                createdAt: Date;
+            }>> = {
+                status: true,
+                msg: "Conversations retrieved successfully",
+                data: conversations
+            };
+            return response;
+        } catch (error) {
+            console.error('AI Chat conversations error:', error);
+            const errorResponse: CommonMessage<null> = {
+                status: false,
+                msg: error instanceof Error ? error.message : "Unknown error occurred",
+                data: null
             };
             return errorResponse;
         }

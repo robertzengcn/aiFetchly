@@ -101,6 +101,19 @@ export class AIChatModule extends BaseModule {
     async getLatestMessages(limit: number = 10): Promise<AIChatMessageEntity[]> {
         return await this.chatMessageModel.getLatestMessages(limit);
     }
+
+    /**
+     * Get all conversations with metadata (last message, timestamp, message count)
+     */
+    async getConversationsWithMetadata(): Promise<Array<{
+        conversationId: string;
+        lastMessage: string;
+        lastMessageTimestamp: Date;
+        messageCount: number;
+        createdAt: Date;
+    }>> {
+        return await this.chatMessageModel.getConversationsWithMetadata();
+    }
 }
 
 

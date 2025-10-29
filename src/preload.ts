@@ -24,7 +24,7 @@ import {EXTRAMODULECHANNE_LIST,EXTRAMODULECHANNE_INSTALL,EXTRAMODULECHANNE_UNINS
   // File Dialog Channels
   SHOW_OPEN_DIALOG,GET_FILE_STATS,SAVE_TEMP_FILE,SAVE_TEMP_FILE_PROGRESS,SAVE_TEMP_FILE_COMPLETE,
   // AI Chat Channels
-  AI_CHAT_MESSAGE,AI_CHAT_STREAM,AI_CHAT_STREAM_CHUNK,AI_CHAT_STREAM_COMPLETE,AI_CHAT_HISTORY,AI_CHAT_CLEAR} from "@/config/channellist";
+  AI_CHAT_MESSAGE,AI_CHAT_STREAM,AI_CHAT_STREAM_CHUNK,AI_CHAT_STREAM_COMPLETE,AI_CHAT_HISTORY,AI_CHAT_CLEAR,AI_CHAT_CONVERSATIONS} from "@/config/channellist";
 
 // window.ipcRenderer = ipcRenderer
 // console.log('preload.js')
@@ -86,7 +86,7 @@ contextBridge.exposeInMainWorld('api', {
         // File Dialog Channels
         SHOW_OPEN_DIALOG,GET_FILE_STATS,SAVE_TEMP_FILE,
         // AI Chat Channels
-        AI_CHAT_MESSAGE,AI_CHAT_HISTORY,AI_CHAT_CLEAR]
+        AI_CHAT_MESSAGE,AI_CHAT_HISTORY,AI_CHAT_CLEAR,AI_CHAT_CONVERSATIONS]
       if (validChannels.includes(channel)) {
         return ipcRenderer.invoke(channel, data)
       }
