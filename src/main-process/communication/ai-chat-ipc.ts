@@ -3,7 +3,7 @@ import { AiChatApi, ChatRequest, StreamEvent, StreamEventType } from '@/api/aiCh
 import { CommonMessage, ChatMessage, ChatHistoryResponse, ChatStreamChunk } from '@/entityTypes/commonType';
 import { AIChatModule } from '@/modules/AIChatModule';
 import { RagSearchModule, SearchRequest, SearchResponse } from '@/modules/RagSearchModule';
-import { SearchResult } from '@/service/VectorSearchService';
+// import { SearchResult } from '@/service/VectorSearchService';
 import {
     AI_CHAT_MESSAGE,
     AI_CHAT_STREAM,
@@ -67,7 +67,7 @@ export function registerAiChatIpcHandlers(): void {
                     const searchRequest: SearchRequest = {
                         query: requestData.message,
                         options: {
-                            limit: requestData.ragLimit || 3
+                            limit: requestData.ragLimit || 5
                         }
                     };
                     
@@ -186,7 +186,7 @@ export function registerAiChatIpcHandlers(): void {
                     const searchRequest: SearchRequest = {
                         query: requestData.message,
                         options: {
-                            limit: requestData.ragLimit || 3
+                            limit: requestData.ragLimit || 5
                         }
                     };
                     

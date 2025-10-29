@@ -407,7 +407,7 @@ async function handleSendMessage() {
       conversationId.value,
       undefined, // model
       useRAGContext.value, // useRAG flag
-      3 // ragLimit
+      5 // ragLimit
     );
   } catch (error) {
     console.error('Error sending message:', error);

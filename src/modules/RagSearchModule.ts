@@ -65,7 +65,9 @@ export class RagSearchModule extends BaseModule {
         // const userdataPath = tokenService.getValue(USERSDBPATH)
         // Initialize services with database
         // const dbPath = getUserdbpath();
-        const vectorStoreService = new VectorStoreService();
+        //get app data path
+        const appDataPath = app.getPath('appData');
+        const vectorStoreService = new VectorStoreService(appDataPath);
         this.searchService = new VectorSearchService(vectorStoreService);
         this.configurationService = new ConfigurationServiceImpl();
         this.documentService = new DocumentService();
@@ -228,17 +230,14 @@ export class RagSearchModule extends BaseModule {
                     metadata: {
                         chunkIndex: chunk.chunkIndex,
                         pageNumber: chunk.pageNumber
-                    }
+                    },
+                    vectorIndexPath: vectorIndexPath
                 });
-                
-                
+   
             }
 
             // Get the vector index path (only need to do this once)
-            if (!vectorIndexPath) {
-                
-            }
-            
+           
             console.log(`Generated embeddings for ${chunks.length} chunks using remote API for document ${documentId}`);
             console.log('vectorIndexPath', vectorIndexPath);
             return vectorIndexPath;

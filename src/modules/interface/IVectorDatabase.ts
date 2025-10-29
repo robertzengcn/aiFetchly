@@ -29,7 +29,7 @@ export interface IndexStats {
     indexType: string;
     isInitialized: boolean;
     modelName: string;
-    dimensions: number;
+    // dimensions: number;
 }
 
 /**
