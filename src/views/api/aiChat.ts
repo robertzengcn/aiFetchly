@@ -6,7 +6,8 @@ import {
   AI_CHAT_STREAM_CHUNK,
   AI_CHAT_STREAM_COMPLETE,
   AI_CHAT_HISTORY,
-  AI_CHAT_CLEAR
+  AI_CHAT_CLEAR,
+  AI_CHAT_CONVERSATIONS
 } from '@/config/channellist';
 
 /**
@@ -178,15 +179,15 @@ export async function getChatHistory(
   try {
     const requestData = conversationId ? { conversationId } : {};
 
-    const response: CommonMessage<ChatHistoryResponse> = await windowInvoke(
+    const response: ChatHistoryResponse = await windowInvoke(
       AI_CHAT_HISTORY,
       requestData
     );
-
+    console.log('response', response); 
     return {
-      success: response.status,
-      data: response.data || undefined,
-      message: response.msg
+      success: true,
+      data: response || undefined,
+      message: ""
     };
   } catch (error) {
     console.error('Error getting chat history:', error);
@@ -232,6 +233,56 @@ console.log('response', response);
     };
   } catch (error) {
     console.error('Error clearing chat history:', error);
+    return {
+      success: false,
+      message: error instanceof Error ? error.message : 'Unknown error occurred'
+    };
+  }
+}
+
+/**
+ * Conversation metadata interface
+ */
+export interface ConversationMetadata {
+  conversationId: string;
+  lastMessage: string;
+  lastMessageTimestamp: Date;
+  messageCount: number;
+  createdAt: Date;
+}
+
+/**
+ * Get all conversations with metadata
+ * 
+ * @returns Promise resolving to list of conversations with metadata
+ * 
+ * @example
+ * ```typescript
+ * const conversations = await getConversations();
+ * console.log('Total conversations:', conversations.length);
+ * ```
+ */
+export async function getConversations(): Promise<AIChatResponse<ConversationMetadata[]>> {
+  try {
+    const response: ConversationMetadata[] = await windowInvoke(
+      AI_CHAT_CONVERSATIONS,
+      {}
+    );
+    console.log('conversationsmeata response', response);
+    // Convert date strings to Date objects if needed (IPC serializes Date to string)
+    const conversations = response?.map(conv => ({
+      ...conv,
+      lastMessageTimestamp: new Date(conv.lastMessageTimestamp),
+      createdAt: new Date(conv.createdAt)
+    })) || undefined;
+
+    return {
+      success: true,
+      data: conversations,
+      message: ""
+    };
+  } catch (error) {
+    console.error('Error getting conversations:', error);
     return {
       success: false,
       message: error instanceof Error ? error.message : 'Unknown error occurred'

@@ -21,6 +21,26 @@
           icon
           size="small"
           variant="text"
+          @click="showConversationsDialog = true"
+          title="Show conversation history"
+        >
+          <v-icon size="small">mdi-history</v-icon>
+        </v-btn>
+        <v-btn
+          icon
+          size="small"
+          variant="text"
+          @click="handleRefreshHistory"
+          :disabled="isLoadingHistory"
+          :loading="isLoadingHistory"
+          title="Refresh chat history"
+        >
+          <v-icon size="small">mdi-refresh</v-icon>
+        </v-btn>
+        <v-btn
+          icon
+          size="small"
+          variant="text"
           @click="handleClearChat"
           :disabled="messages.length === 0"
         >
@@ -197,13 +217,78 @@
         </template>
       </v-textarea>
     </div>
+
+    <!-- Conversations Dialog -->
+    <v-dialog v-model="showConversationsDialog" max-width="600" scrollable>
+      <v-card>
+        <v-card-title class="d-flex align-center justify-space-between">
+          <span>Conversation History</span>
+          <v-btn
+            icon
+            size="small"
+            variant="text"
+            @click="showConversationsDialog = false"
+          >
+            <v-icon>mdi-close</v-icon>
+          </v-btn>
+        </v-card-title>
+        <v-divider></v-divider>
+        <v-card-text style="padding: 0;">
+          <div v-if="isLoadingConversations" class="pa-4 text-center">
+            <v-progress-circular indeterminate color="primary"></v-progress-circular>
+            <p class="mt-2">Loading conversations...</p>
+          </div>
+          <div v-else-if="conversations.length === 0" class="pa-4 text-center">
+            <v-icon size="48" color="grey-lighten-2">mdi-chat-outline</v-icon>
+            <p class="mt-4 text-grey">No conversations found</p>
+          </div>
+          <v-list v-else density="comfortable">
+            <v-list-item
+              v-for="conv in conversations"
+              :key="conv.conversationId"
+              :class="{ 'bg-primary-lighten-5': conv.conversationId === conversationId }"
+              @click="handleSelectConversation(conv.conversationId)"
+              class="conversation-item"
+            >
+              <template v-slot:prepend>
+                <v-icon color="primary">mdi-chat</v-icon>
+              </template>
+              <v-list-item-title class="conversation-title">
+                {{ truncateMessage(conv.lastMessage, 60) || 'New conversation' }}
+              </v-list-item-title>
+              <v-list-item-subtitle>
+                <div class="d-flex align-center mt-1">
+                  <v-icon size="x-small" class="mr-1">mdi-clock-outline</v-icon>
+                  <span>{{ formatTimestamp(conv.lastMessageTimestamp) }}</span>
+                  <v-spacer></v-spacer>
+                  <v-chip size="x-small" variant="outlined" color="primary">
+                    {{ conv.messageCount }} {{ conv.messageCount === 1 ? 'message' : 'messages' }}
+                  </v-chip>
+                </div>
+              </v-list-item-subtitle>
+            </v-list-item>
+          </v-list>
+        </v-card-text>
+        <v-divider></v-divider>
+        <v-card-actions>
+          <v-spacer></v-spacer>
+          <v-btn
+            variant="text"
+            color="primary"
+            @click="showConversationsDialog = false"
+          >
+            Close
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, nextTick, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { sendChatMessage, streamChatMessage, getChatHistory, clearChatHistory } from '@/views/api/aiChat';
+import { sendChatMessage, streamChatMessage, getChatHistory, clearChatHistory, getConversations, ConversationMetadata } from '@/views/api/aiChat';
 import { ChatMessage, ChatStreamChunk } from '@/entityTypes/commonType';
 
 // i18n setup
@@ -227,6 +312,7 @@ const emit = defineEmits<{
 const messages = ref<ChatMessage[]>([]);
 const inputMessage = ref('');
 const isLoading = ref(false);
+const isLoadingHistory = ref(false);
 const isTyping = ref(false);
 const messagesContainer = ref<HTMLElement | null>(null);
 const showScrollButton = ref(false);
@@ -239,6 +325,9 @@ const currentToolParams = ref<Record<string, unknown>>({});
 const toolResult = ref<Record<string, unknown> | null>(null);
 const showToolResult = ref(false);
 const streamError = ref<string | null>(null);
+const showConversationsDialog = ref(false);
+const conversations = ref<ConversationMetadata[]>([]);
+const isLoadingConversations = ref(false);
 
 /**
  * Load chat history when component mounts
@@ -265,17 +354,92 @@ watch(() => props.visible, (newVal) => {
 });
 
 /**
+ * Watch for conversationId changes to reload history
+ */
+watch(conversationId, (newId, oldId) => {
+  if (newId && newId !== oldId && newId !== 'pending') {
+    loadChatHistory();
+  }
+});
+
+/**
+ * Watch for dialog open to load conversations
+ */
+watch(showConversationsDialog, (isOpen) => {
+  if (isOpen) {
+    loadConversations();
+  }
+});
+
+/**
  * Load chat history from backend
  */
 async function loadChatHistory() {
+  if (isLoadingHistory.value) return; // Prevent concurrent loads
+  
+  isLoadingHistory.value = true;
   try {
     const response = await getChatHistory(conversationId.value);
-    if (response.success && response.data) {
+    if (response && response.data) {
       messages.value = response.data.messages;
+      
+      // Update conversationId if it was returned and we didn't have one
+      if (response.data.conversationId && !conversationId.value) {
+        conversationId.value = response.data.conversationId;
+      }
+      
+      await nextTick();
+      scrollToBottom();
     }
   } catch (error) {
     console.error('Error loading chat history:', error);
+    streamError.value = error instanceof Error ? error.message : 'Failed to load chat history';
+  } finally {
+    isLoadingHistory.value = false;
   }
+}
+
+/**
+ * Manually refresh chat history
+ */
+async function handleRefreshHistory() {
+  await loadChatHistory();
+}
+
+/**
+ * Load conversations list
+ */
+async function loadConversations() {
+  isLoadingConversations.value = true;
+  try {
+    const response = await getConversations();
+    if (response.success && response.data) {
+      conversations.value = response.data;
+    }
+  } catch (error) {
+    console.error('Error loading conversations:', error);
+  } finally {
+    isLoadingConversations.value = false;
+  }
+}
+
+/**
+ * Handle conversation selection
+ */
+async function handleSelectConversation(selectedConversationId: string) {
+  conversationId.value = selectedConversationId;
+  showConversationsDialog.value = false;
+  await loadChatHistory();
+}
+
+/**
+ * Truncate message text for display
+ */
+function truncateMessage(text: string, maxLength: number): string {
+  if (!text || text.length <= maxLength) {
+    return text;
+  }
+  return text.substring(0, maxLength) + '...';
 }
 
 /**
@@ -840,6 +1004,26 @@ onMounted(() => {
   font-size: 14px;
   line-height: 1.5;
   color: rgb(var(--v-theme-on-surface));
+}
+
+/* Conversation Dialog Styles */
+.conversation-item {
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+  
+  &:hover {
+    background-color: rgba(var(--v-theme-primary), 0.08) !important;
+  }
+  
+  &.bg-primary-lighten-5 {
+    background-color: rgba(var(--v-theme-primary), 0.12) !important;
+  }
+}
+
+.conversation-title {
+  font-weight: 500;
+  line-height: 1.4;
+  word-break: break-word;
 }
 </style>
 
