@@ -2,13 +2,15 @@ import * as faiss from 'faiss-node';
 import * as fs from 'fs';
 import { AbstractVectorDatabase } from '@/modules/interface/AbstractVectorDatabase';
 import { VectorDatabaseConfig, VectorSearchResult, IndexStats } from '@/modules/interface/IVectorDatabase';
+import { RAGChunkModule } from '@/modules/RAGChunkModule';
 
 /**
  * FAISS index interface for type safety
  */
 interface FAISSIndex {
+    getDimension(): number;
     add(vectors: number[]): void;
-    search(queryVector: number[], k: number): { indices: number[], distances: number[] };
+    search(queryVector: number[], k: number): { labels: number[], distances: number[] };
     write(path: string): void;
     d(): number;  // dimension method in FAISS
     ntotal(): number;  // total vectors method in FAISS
@@ -52,7 +54,11 @@ export class FaissVectorDatabase extends AbstractVectorDatabase {
             this.dimension = config.dimensions;
             
             // Update index path based on whether it's document-specific or model-specific
-            if (config.documentId) {
+            if (config.documentIndexPath) {
+                // Use the provided document index path directly
+                this.indexPath = config.documentIndexPath;
+                console.log(`Creating document-specific index at specified path: ${config.documentIndexPath}`);
+            } else if (config.documentId) {
                 this.indexPath = this.getDocumentSpecificIndexPath(config, config.documentId);
                 console.log(`Creating document-specific index for document ${config.documentId}`);
             } else {
@@ -65,7 +71,7 @@ export class FaissVectorDatabase extends AbstractVectorDatabase {
             const indexType = config.indexType || 'Flat';
             this.index = this.createFaissIndex(indexType, config.dimensions);
             this.index.write(this.indexPath);
-            console.log(`Created ${indexType} FAISS index for model ${config.modelId} with dimension ${config.dimensions}`);
+            console.log(`Created ${indexType} FAISS index with dimension ${config.dimensions}`);
             console.log(`Index path: ${this.indexPath}`);
             return this.indexPath;
         } catch (error) {
@@ -103,10 +109,13 @@ export class FaissVectorDatabase extends AbstractVectorDatabase {
             if (fs.existsSync(this.indexPath)) {
                 this.index = (faiss as any).IndexFlatL2.read(this.indexPath);
                 // this.dimension = config.dimensions;
-                
+                if(this.index){
+                this.dimension=this.index.getDimension()
+                console.log(this.index.getDimension()); 
+                }
                 // Note: Chunk ID mapping will need to be rebuilt from database
                 // This is a limitation of FAISS - it doesn't store metadata
-                console.log(`Loaded existing FAISS index for model ${config.modelId} with ${this.index?.ntotal() || 0} vectors`);
+                console.log(`Loaded existing FAISS index for model ${config.modelName} with ${this.index?.ntotal() || 0} vectors`);
                 console.warn('Chunk ID mapping will need to be rebuilt from database');
             } else {
                 console.log(`No existing FAISS index found for model ${config.modelId}, creating new one`);
@@ -182,14 +191,32 @@ export class FaissVectorDatabase extends AbstractVectorDatabase {
         if (!this.index) {
             throw new Error('Index not initialized');
         }
-
+        //update index dimension
+        this.dimension = this.index.getDimension();
         this.validateDimensions(queryVector, this.dimension);
 
         try {
-            const results = this.index.search(queryVector, k);
+            // Get total number of vectors in index and adjust k if necessary
+            const totalVectors = this.index.ntotal();
+            if (totalVectors === 0) {
+                // Return empty results if index is empty
+                return {
+                    indices: [],
+                    distances: [],
+                    chunkIds: []
+                };
+            }
             
-            // Map indices to chunk IDs
-            const chunkIds = results.indices.map(index => {
+            // If k is greater than total vectors, set k to total vectors
+            const adjustedK = Math.min(k, totalVectors);
+            if (adjustedK !== k) {
+                console.log(`Adjusted k from ${k} to ${adjustedK} (total vectors: ${totalVectors})`);
+            }
+            
+            const results = this.index.search(queryVector, adjustedK);
+            
+            // Map labels (indices) to chunk IDs
+            const chunkIds = results.labels.map(index => {
                 const chunkId = this.chunkIdMapping.get(index);
                 if (chunkId === undefined) {
                     console.warn(`No chunk ID found for vector index ${index}`);
@@ -199,7 +226,7 @@ export class FaissVectorDatabase extends AbstractVectorDatabase {
             });
             
             return {
-                indices: results.indices,
+                indices: results.labels,
                 distances: results.distances,
                 chunkIds: chunkIds
             };
@@ -219,7 +246,7 @@ export class FaissVectorDatabase extends AbstractVectorDatabase {
             indexType: this.index?.constructor.name || 'Unknown',
             isInitialized: this.initialized,
             modelName: this.config?.modelName || '',
-            dimensions: this.dimension
+            // dimension: this.dimension
         };
     }
 
@@ -382,28 +409,33 @@ export class FaissVectorDatabase extends AbstractVectorDatabase {
      * Rebuild chunk ID mapping from database
      * This method should be called after loading an existing index
      * @param ragChunkModule - RAGChunkModule instance to query chunk data
+     * @param documentId - Document ID to rebuild chunk ID mapping for
      */
-    async rebuildChunkIdMapping(ragChunkModule: any): Promise<void> {
+    async rebuildChunkIdMapping(ragChunkModule: RAGChunkModule, documentId: number): Promise<void> {
         if (!this.index) {
             throw new Error('Index not initialized');
+        }
+
+        if (!documentId) {
+            throw new Error('Document ID is required to rebuild chunk ID mapping');
         }
 
         try {
             this.chunkIdMapping.clear();
             
-            // Get all chunks with embedding IDs for the current model
-            const chunks = await ragChunkModule.getAllChunksWithEmbeddings(this.config?.modelId);
+            // Get all chunks with embedding IDs for the specified document
+            const chunks = await ragChunkModule.getDocumentChunks(documentId);
             
             for (const chunk of chunks) {
-                if (chunk.embedding_id && chunk.embedding_id !== '') {
-                    const vectorIndex = parseInt(chunk.embedding_id);
+                if (chunk.embeddingId && chunk.embeddingId !== '') {
+                    const vectorIndex = parseInt(chunk.embeddingId);
                     if (!isNaN(vectorIndex)) {
                         this.chunkIdMapping.set(vectorIndex, chunk.id);
                     }
                 }
             }
             
-            console.log(`Rebuilt chunk ID mapping with ${this.chunkIdMapping.size} entries`);
+            console.log(`Rebuilt chunk ID mapping with ${this.chunkIdMapping.size} entries for document ${documentId}`);
         } catch (error) {
             console.error('Failed to rebuild chunk ID mapping:', error);
             throw new Error('Failed to rebuild chunk ID mapping');

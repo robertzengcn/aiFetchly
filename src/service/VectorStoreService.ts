@@ -3,6 +3,7 @@
 import { RAGChunkModule } from '@/modules/RAGChunkModule';
 // import { SqliteDb } from '@/config/SqliteDb';
 import * as path from 'path';
+import * as fs from 'fs';
 import { IVectorDatabase } from '@/modules/interface/IVectorDatabase';
 import { VectorDatabaseFactory, VectorDatabaseType, VectorDatabaseFactoryConfig } from '@/modules/factories/VectorDatabaseFactory';
 import { VectorDatabasePool, VectorDatabaseKeyGenerator } from '@/modules/factories/VectorDatabasePool';
@@ -126,10 +127,11 @@ export class VectorStoreService {
 
             await this.vectorDatabase.loadIndex(vectorDbConfig);
             
-            // Rebuild chunk ID mapping for FAISS (if it supports it)
+            // Rebuild chunk ID mapping for FAISS (if it supports it) - only for document-specific indices
             if (this.databaseType === VectorDatabaseType.FAISS && 
-                'rebuildChunkIdMapping' in this.vectorDatabase) {
-                await (this.vectorDatabase as any).rebuildChunkIdMapping(this.ragChunkModule);
+                'rebuildChunkIdMapping' in this.vectorDatabase &&
+                vectorDbConfig.documentId) {
+                await (this.vectorDatabase as any).rebuildChunkIdMapping(this.ragChunkModule, vectorDbConfig.documentId);
             }
             
             const stats = this.vectorDatabase.getIndexStats();
@@ -186,16 +188,29 @@ export class VectorStoreService {
         if (embeddingData.model && embeddingData.dimensions && embeddingData.documentId) {
             const modelConfig: EmbeddingModelConfig = {
                 name: embeddingData.model,
-                dimensions: embeddingData.dimensions
+                dimensions: embeddingData.dimensions,
+                documentIndexPath: embeddingData.vectorIndexPath
             };
+
+            // Check if document-specific index exists by vectorIndexPath if provided
+            let indexExists = false;
+            if (embeddingData.vectorIndexPath) {
+                indexExists = this.checkIndexExistsByPath(embeddingData.vectorIndexPath);
+            } else {
+                indexExists = this.documentIndexExists(embeddingData.documentId, modelConfig);
+            }
 
             // Get pooled instance for this document and model
             const pooledInstance = this.getPooledDocumentInstance(embeddingData.documentId, modelConfig);
 
-            // Check if document-specific index exists, if not create it
-            if (!this.documentIndexExists(embeddingData.documentId, modelConfig)) {
+            // If index doesn't exist, create it
+            if (!indexExists) {
                 console.log(`Creating new document-specific index for document ${embeddingData.documentId} with model ${embeddingData.model} (using pool)`);
-                await this.createDocumentIndex(embeddingData.documentId, modelConfig);
+                if (embeddingData.vectorIndexPath) {
+                    await this.createDocumentIndexByPath(embeddingData.vectorIndexPath, embeddingData.documentId, modelConfig);
+                } else {
+                    await this.createDocumentIndex(embeddingData.documentId, modelConfig);
+                }
             } else if (!this.currentModel || 
                        this.currentModel.name !== embeddingData.model 
                     //    this.currentModel.dimensions !== embeddingData.dimensions
@@ -274,10 +289,10 @@ export class VectorStoreService {
             throw new Error('Vector database not initialized');
         }
 
-        const stats = this.vectorDatabase.getIndexStats();
-        if (queryVector.length !== stats.dimension) {
-            throw new Error(`Query vector dimension ${queryVector.length} does not match index dimension ${stats.dimension}`);
-        }
+        // const stats = this.vectorDatabase.getIndexStats();
+        // if (queryVector.length !== stats.dimension) {
+        //     throw new Error(`Query vector dimension ${queryVector.length} does not match index dimension ${stats.dimension}`);
+        // }
 
         try {
             const results = await this.vectorDatabase.search(queryVector, k);
@@ -609,6 +624,46 @@ export class VectorStoreService {
     }
 
     /**
+     * Create a document-specific index at a specific path using pooled instance
+     * @param indexPath - Full path where the index should be created
+     * @param documentId - Document ID
+     * @param modelConfig - Embedding model configuration
+     * @param indexType - Type of index (default: 'Flat')
+     * @returns The file path of the created vector index
+     */
+    async createDocumentIndexByPath(indexPath: string, documentId: number, modelConfig: EmbeddingModelConfig, indexType: string = 'Flat'): Promise<string> {
+        try {
+            this.currentModel = modelConfig;
+            
+            // Ensure the directory exists
+            const dir = path.dirname(indexPath);
+            if (!fs.existsSync(dir)) {
+                fs.mkdirSync(dir, { recursive: true });
+            }
+            
+            // Get pooled instance for this document and model
+            const pooledInstance = this.getPooledDocumentInstance(documentId, modelConfig);
+            
+            const vectorDbConfig: VectorDatabaseConfig = {
+                indexPath: path.dirname(indexPath),
+                modelName: modelConfig.name,
+                dimensions: modelConfig.dimensions,
+                indexType,
+                documentId: documentId,
+                documentIndexPath: indexPath
+            };
+
+            const indexFilePath = await pooledInstance.createIndex(vectorDbConfig);
+            console.log(`Created document-specific ${indexType} index for document ${documentId} with model ${modelConfig.name} at specified path ${indexFilePath}`);
+            
+            return indexFilePath;
+        } catch (error) {
+            console.error(`Failed to create document-specific index at path ${indexPath} for document ${documentId}:`, error);
+            throw new Error(`Failed to create document-specific index at path ${indexPath} for document ${documentId}`);
+        }
+    }
+
+    /**
      * Load a document-specific index
      * @param documentId - Document ID
      * @param modelConfig - Embedding model configuration
@@ -630,6 +685,13 @@ export class VectorStoreService {
             };
 
             await this.vectorDatabase.loadIndex(vectorDbConfig);
+            
+            // Rebuild chunk ID mapping for FAISS (if it supports it)
+            if (this.databaseType === VectorDatabaseType.FAISS && 
+                'rebuildChunkIdMapping' in this.vectorDatabase) {
+                await (this.vectorDatabase as any).rebuildChunkIdMapping(this.ragChunkModule, documentId);
+            }
+            
             console.log(`Loaded document-specific index for document ${documentId} with model ${modelConfig.name}`);
         } catch (error) {
             console.error(`Failed to load document-specific index for document ${documentId}:`, error);
@@ -731,5 +793,14 @@ export class VectorStoreService {
         const baseDir = path.dirname(this.indexPath);
         const fileName = `index_doc_${documentId}_${modelConfig.name}_${modelConfig.dimensions}.${this.getFileExtension()}`;
         return path.join(baseDir, 'documents', fileName);
+    }
+
+    /**
+     * Check if an index exists at a specific path
+     * @param indexPath - Full path to the index file
+     * @returns True if the index file exists
+     */
+    private checkIndexExistsByPath(indexPath: string): boolean {
+        return fs.existsSync(indexPath);
     }
 }

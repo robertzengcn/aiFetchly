@@ -778,8 +778,8 @@ export class ChunkingService {
         const chunks: ChunkResult[] = [];
         const lines = content.split('\n');
         let currentChunk = '';
-        let startPosition = 0;
-        let chunkIndex = 0;
+        let chunkStartPosition = 0; // Track where current chunk started in original content
+        let processedLength = 0; // Track total length processed in original content
 
         for (let i = 0; i < lines.length; i++) {
             const line = lines[i];
@@ -789,7 +789,8 @@ export class ChunkingService {
             const isHeading = /^#{1,6}\s/.test(line);
             const isListStart = /^[-*+]\s/.test(line) || /^\d+\.\s/.test(line);
             const isCodeBlock = /^```/.test(line);
-            const isHorizontalRule = /^---+$/.test(line);
+            // Match both simple horizontal rules (---) and page separators (--- Page X ---)
+            const isHorizontalRule = /^---+$/.test(line) || /^---\s+Page\s+\d+\s+---/.test(line);
             const isTableRow = /^\|.*\|$/.test(line);
             
             // Check if next line continues the current structure
@@ -808,22 +809,47 @@ export class ChunkingService {
                 isListContinuation, isTableContinuation, isCodeContinuation
             );
             
-            if (shouldBreak && currentChunk.trim()) {
-                // Save current chunk
-                chunks.push({
-                    content: currentChunk.trim(),
-                    startPosition,
-                    endPosition: startPosition + currentChunk.length,
-                    tokenCount: this.estimateTokenCount(currentChunk)
-                });
+            if (shouldBreak) {
+                // If currentChunk has content, save it before breaking
+                if (currentChunk.trim()) {
+                    chunks.push({
+                        content: currentChunk.trim(),
+                        startPosition: chunkStartPosition,
+                        endPosition: chunkStartPosition + currentChunk.length,
+                        tokenCount: this.estimateTokenCount(currentChunk)
+                    });
+                }
                 
-                // Start new chunk with overlap
-                const overlapText = this.getOverlapText(currentChunk, options.overlapSize);
-                currentChunk = overlapText + (overlapText ? '\n' : '') + lineWithNewline;
-                startPosition = startPosition + currentChunk.length - overlapText.length - lineWithNewline.length;
-                chunkIndex++;
+                // Handle the breaking line
+                processedLength += lineWithNewline.length;
+                
+                // For horizontal rules (page separators), skip the separator line itself
+                // Start fresh chunk after the separator
+                if (isHorizontalRule) {
+                    currentChunk = '';
+                    chunkStartPosition = processedLength;
+                } else {
+                    // For other breaks, start the new chunk with overlap (if any) and the current line
+                    const previousChunk = currentChunk;
+                    const overlapText = previousChunk ? this.getOverlapText(previousChunk, options.overlapSize) : '';
+                    
+                    if (overlapText) {
+                        // Find where overlap starts in original content
+                        const overlapStartInChunk = previousChunk.length - overlapText.length;
+                        chunkStartPosition = chunkStartPosition + overlapStartInChunk;
+                        currentChunk = overlapText + lineWithNewline;
+                    } else {
+                        chunkStartPosition = processedLength - lineWithNewline.length;
+                        currentChunk = lineWithNewline;
+                    }
+                }
             } else {
+                // Add line to current chunk
+                if (!currentChunk) {
+                    chunkStartPosition = processedLength;
+                }
                 currentChunk = potentialChunk;
+                processedLength += lineWithNewline.length;
             }
         }
 
@@ -831,8 +857,8 @@ export class ChunkingService {
         if (currentChunk.trim()) {
             chunks.push({
                 content: currentChunk.trim(),
-                startPosition,
-                endPosition: startPosition + currentChunk.length,
+                startPosition: chunkStartPosition,
+                endPosition: chunkStartPosition + currentChunk.length,
                 tokenCount: this.estimateTokenCount(currentChunk)
             });
         }
