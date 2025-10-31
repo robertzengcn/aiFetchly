@@ -1,5 +1,6 @@
 import { ipcMain } from 'electron';
 import { AiChatApi, ChatRequest, StreamEvent, StreamEventType } from '@/api/aiChatApi';
+import { AVAILABLE_TOOL_FUNCTIONS } from '@/config/aiTools.config';
 import { CommonMessage, ChatMessage, ChatHistoryResponse, ChatStreamChunk } from '@/entityTypes/commonType';
 import { AIChatModule } from '@/modules/AIChatModule';
 import { RagSearchModule, SearchRequest, SearchResponse } from '@/modules/RagSearchModule';
@@ -220,7 +221,8 @@ export function registerAiChatIpcHandlers(): void {
                 conversationId:conversationId,
                 model: requestData.model,
                 useRAG: requestData.useRAG,
-                ragLimit: requestData.ragLimit
+                ragLimit: requestData.ragLimit,
+                functions: AVAILABLE_TOOL_FUNCTIONS
             };
 
             const assistantMessageId = `assistant-${Date.now()}`;

@@ -499,13 +499,48 @@ async function handleSendMessage() {
 
         switch (eventType) {
           case 'token':
+            console.log('token', chunk);
+            console.log('messages.value', messages.value);
+            // Hide typing indicator once content starts arriving
+            isTyping.value = false;
+            
             // Append token content and display immediately
             assistantContent += chunk.content;
-            const lastMessage = messages.value[messages.value.length - 1];
-            if (lastMessage && lastMessage.role === 'assistant' && lastMessage.id === assistantMessageId) {
-              lastMessage.content = assistantContent;
+            
+            // Find and update the assistant message
+            let lastIndex = messages.value.length - 1;
+            // console.log('lastIndex', lastIndex);
+            // console.log('messages.value[lastIndex].role', messages.value[lastIndex].role);
+            // console.log('messages.value[lastIndex].id', messages.value[lastIndex].id);
+            // If the last message is 'user', push a new empty assistant message and reset lastIndex
+            if (messages.value[lastIndex].role === 'user') {
+              const newAssistantMessageId = `assistant-${Date.now()}`;
+              const newAssistantMessage: ChatMessage = {
+                id: newAssistantMessageId,
+                role: 'assistant',
+                content: '',
+                timestamp: new Date(),
+                conversationId: conversationId.value || 'pending'
+              };
+              messages.value.push(newAssistantMessage);
+              lastIndex = messages.value.length - 1;
             }
-            scrollToBottom();
+            // console.log('messages.value[lastIndex].role', messages.value[lastIndex].role);
+            // console.log('messages.value[lastIndex].id', messages.value[lastIndex].id);
+            // console.log('assistantMessageId', assistantMessageId);
+            if ( 
+                messages.value[lastIndex].role === 'assistant') {
+              // Replace the entire message object to trigger Vue reactivity
+              // console.log('replay message')
+              messages.value[lastIndex] = {
+                ...messages.value[lastIndex],
+                content: assistantContent
+              };
+            }
+            
+            nextTick(() => {
+              scrollToBottom();
+            });
             break;
 
           case 'tool_call':
@@ -537,6 +572,14 @@ async function handleSendMessage() {
                   msg.conversationId = chunk.conversationId!;
                 }
               });
+            // Push an empty assistant message as the last message at conversation start
+            // messages.value.push({
+            //   id: 'assistant_' + Date.now(),
+            //   role: 'assistant',
+            //   content: '',
+            //   timestamp: new Date(),
+            //   conversationId: chunk.conversationId || 'pending'
+            // });
             }
             break;
 
@@ -547,12 +590,25 @@ async function handleSendMessage() {
           default:
             // Handle unknown or unspecified event types as tokens
             if (chunk.content) {
+              isTyping.value = false;
+              
               assistantContent += chunk.content;
-              const msg = messages.value[messages.value.length - 1];
-              if (msg && msg.role === 'assistant' && msg.id === assistantMessageId) {
-                msg.content = assistantContent;
+              
+              // Find and update the assistant message
+              const lastIndex = messages.value.length - 1;
+              if (lastIndex >= 0 && 
+                  messages.value[lastIndex].role === 'assistant' && 
+                  messages.value[lastIndex].id === assistantMessageId) {
+                // Replace the entire message object to trigger Vue reactivity
+                messages.value[lastIndex] = {
+                  ...messages.value[lastIndex],
+                  content: assistantContent
+                };
               }
-              scrollToBottom();
+              
+              nextTick(() => {
+                scrollToBottom();
+              });
             }
             break;
         }

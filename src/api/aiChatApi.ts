@@ -12,6 +12,7 @@ export interface ChatRequest {
     systemPrompt?: string;
     useRAG?: boolean;
     ragLimit?: number;
+    functions?: ToolFunction[];
 }
 
 /**
@@ -24,6 +25,16 @@ interface ChatApiRequestData {
     system_prompt?: string;
     use_rag?: boolean;
     rag_limit?: number;
+    client_tools?: ToolFunction[];
+}
+
+/**
+ * Tool/function definition for AI server
+ */
+export interface ToolFunction {
+    name: string;
+    description?: string;
+    parameters?: Record<string, unknown>;
 }
 
 /**
@@ -194,7 +205,8 @@ export class AiChatApi {
             conversation_id: request.conversationId,
             system_prompt: request.systemPrompt,
             use_rag: request.useRAG,
-            rag_limit: request.ragLimit
+            rag_limit: request.ragLimit,
+            client_tools: request.functions
         };
         
         // Only include model if specified
