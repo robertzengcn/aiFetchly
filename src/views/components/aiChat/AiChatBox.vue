@@ -30,6 +30,15 @@
           icon
           size="small"
           variant="text"
+          @click="handleNewConversation"
+          title="Start new conversation"
+        >
+          <v-icon size="small">mdi-plus-circle</v-icon>
+        </v-btn>
+        <v-btn
+          icon
+          size="small"
+          variant="text"
           @click="handleRefreshHistory"
           :disabled="isLoadingHistory"
           :loading="isLoadingHistory"
@@ -502,7 +511,7 @@ async function handleSendMessage() {
             console.log('token', chunk);
             console.log('messages.value', messages.value);
             // Hide typing indicator once content starts arriving
-            isTyping.value = false;
+            // isTyping.value = false;
             
             // Append token content and display immediately
             assistantContent += chunk.content;
@@ -646,6 +655,36 @@ async function handleSendMessage() {
     };
     messages.value.push(errorMessage);
     scrollToBottom();
+  }
+}
+
+/**
+ * Start a new conversation
+ */
+async function handleNewConversation() {
+  // Reset conversation ID to start fresh
+  conversationId.value = undefined;
+  
+  // Clear all messages
+  messages.value = [];
+  
+  // Reset tool-related states
+  isExecutingTool.value = false;
+  currentToolName.value = '';
+  currentToolParams.value = {};
+  toolResult.value = null;
+  showToolResult.value = false;
+  
+  // Reset error states
+  streamError.value = null;
+  isTyping.value = false;
+  isLoading.value = false;
+  
+  // Scroll to top and focus input
+  await nextTick();
+  scrollToBottom();
+  if (inputField.value && inputField.value.focus) {
+    inputField.value.focus();
   }
 }
 
