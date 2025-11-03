@@ -84,7 +84,23 @@
             <v-icon v-if="message.role === 'user'" color="primary">mdi-account</v-icon>
             <v-icon v-else color="purple">mdi-robot</v-icon>
           </div>
-          <div class="message-bubble">
+          <div class="message-bubble" :class="{ 'assistant-message': message.role === 'assistant' }">
+            <div 
+              class="message-header" 
+              v-if="message.role === 'assistant' && message.content && message.content.trim()"
+              :class="{ 'copied': copiedMessageId === message.id }"
+            >
+              <v-btn
+                icon
+                size="x-small"
+                variant="text"
+                class="copy-button"
+                @click="handleCopyMessage(message.content, message.id)"
+                :title="copiedMessageId === message.id ? 'Copied!' : 'Copy message'"
+              >
+                <v-icon size="small">{{ copiedMessageId === message.id ? 'mdi-check' : 'mdi-content-copy' }}</v-icon>
+              </v-btn>
+            </div>
             <div class="message-text" v-html="formatMessage(message.content)"></div>
             <div class="message-timestamp" :title="formatFullTimestamp(message.timestamp)">
               <v-icon size="x-small" class="mr-1">mdi-clock-outline</v-icon>
@@ -327,7 +343,7 @@ const messagesContainer = ref<HTMLElement | null>(null);
 const showScrollButton = ref(false);
 const conversationId = ref<string | undefined>(undefined);
 const inputField = ref<HTMLTextAreaElement | null>(null);
-const useRAGContext = ref(true);
+const useRAGContext = ref(false);
 const isExecutingTool = ref(false);
 const currentToolName = ref('');
 const currentToolParams = ref<Record<string, unknown>>({});
@@ -337,6 +353,7 @@ const streamError = ref<string | null>(null);
 const showConversationsDialog = ref(false);
 const conversations = ref<ConversationMetadata[]>([]);
 const isLoadingConversations = ref(false);
+const copiedMessageId = ref<string | null>(null);
 
 /**
  * Load chat history when component mounts
@@ -449,6 +466,46 @@ function truncateMessage(text: string, maxLength: number): string {
     return text;
   }
   return text.substring(0, maxLength) + '...';
+}
+
+/**
+ * Copy message content to clipboard
+ */
+async function handleCopyMessage(content: string, messageId: string) {
+  try {
+    // Copy plain text content (strip HTML tags if any)
+    const textToCopy = content.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim();
+    
+    await navigator.clipboard.writeText(textToCopy);
+    
+    // Show visual feedback
+    copiedMessageId.value = messageId;
+    
+    // Reset after 2 seconds
+    setTimeout(() => {
+      copiedMessageId.value = null;
+    }, 2000);
+  } catch (error) {
+    console.error('Failed to copy message:', error);
+    // Fallback for older browsers
+    const textarea = document.createElement('textarea');
+    textarea.value = content.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim();
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    try {
+      document.execCommand('copy');
+      copiedMessageId.value = messageId;
+      setTimeout(() => {
+        copiedMessageId.value = null;
+      }, 2000);
+    } catch (err) {
+      console.error('Fallback copy also failed:', err);
+    } finally {
+      document.body.removeChild(textarea);
+    }
+  }
 }
 
 /**
@@ -881,6 +938,40 @@ onMounted(() => {
   padding: 12px 16px;
   word-wrap: break-word;
   word-break: break-word;
+  position: relative;
+}
+
+.message-header {
+  position: absolute;
+  bottom: 4px;
+  right: 4px;
+  display: flex;
+  align-items: center;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  z-index: 1;
+}
+
+.message-wrapper.assistant:hover .message-header,
+.message-header.copied {
+  opacity: 1;
+}
+
+.copy-button {
+  min-width: 24px !important;
+  width: 24px !important;
+  height: 24px !important;
+  opacity: 0.6;
+  transition: opacity 0.2s ease, transform 0.1s ease;
+
+  &:hover {
+    opacity: 1;
+    transform: scale(1.1);
+  }
+
+  .v-icon {
+    font-size: 14px !important;
+  }
 }
 
 .message-text {
