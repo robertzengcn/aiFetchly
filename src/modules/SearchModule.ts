@@ -29,6 +29,7 @@ import { twocaptchagroup,twocaptchatoken,twocaptcha_enabled,chrome_path,firefox_
 import {WriteLog,getChromeExcutepath,getFirefoxExcutepath,getRecorddatetime} from "@/modules/lib/function"
 import { USERLOGPATH, USEREMAIL } from '@/config/usersetting';
 import { v4 as uuidv4 } from 'uuid';
+import { SocialAccountModule } from './socialAccountModule';
 
 export type TaskDetailsForEdit = {
     id: number;
@@ -65,6 +66,7 @@ export class SearchModule extends BaseModule {
     private searchAccountModel: SearchAccountModel
     private accountCookiesModule: AccountCookiesModule
     private systemSettingGroupModule: SystemSettingGroupModule
+    private socialAccountModule: SocialAccountModule
     constructor() {
         // const tokenService = new Token()
         // const dbpath = tokenService.getValue(USERSDBPATH)
@@ -80,6 +82,7 @@ export class SearchModule extends BaseModule {
         this.searchAccountModel = new SearchAccountModel(this.dbpath)
         this.accountCookiesModule = new AccountCookiesModule()
         this.systemSettingGroupModule = new SystemSettingGroupModule()
+        this.socialAccountModule = new SocialAccountModule()
     }
 
     /**
@@ -116,6 +119,28 @@ export class SearchModule extends BaseModule {
             throw new Error(`Invalid search engine name: ${engineName}`);
         }
 
+        // If accounts are not provided, randomly select one account by platform
+        let selectedAccounts = options?.accounts;
+        if (!selectedAccounts || selectedAccounts.length === 0) {
+            const platformId = this.convertSEtoPlatformId(engineName);
+            if (platformId) {
+                try {
+                    const accounts = await this.socialAccountModule.getSocialAccountsByPlatform(platformId);
+                    if (accounts && accounts.length > 0) {
+                        // Randomly select one account
+                        const randomIndex = Math.floor(Math.random() * accounts.length);
+                        selectedAccounts = [accounts[randomIndex].id];
+                        console.log(`Randomly selected account ${selectedAccounts[0]} for platform ${platformId} (${engineName})`);
+                    } else {
+                        console.log(`No accounts found for platform ${platformId} (${engineName}), proceeding without account`);
+                    }
+                } catch (error) {
+                    console.error(`Error selecting account for platform ${platformId}:`, error);
+                    // Continue without account if selection fails
+                }
+            }
+        }
+
         // Prepare search data
         const searchData: SearchDataParam = {
             keywords: keywords,
@@ -130,7 +155,7 @@ export class SearchModule extends BaseModule {
                 user: proxy.user,
                 pass: proxy.pass
             })) : undefined,
-            accounts: options?.accounts
+            accounts: selectedAccounts
         };
 
         // Create the search task
@@ -420,6 +445,19 @@ export class SearchModule extends BaseModule {
         // })
         const enginerName = getEnumValueByNumber(SearhEnginer, enginerNum)
         return enginerName
+    }
+    //convert search engine name to platform ID (for social accounts)
+    // Google -> 4, Bing -> 5
+    private convertSEtoPlatformId(engineName: string): number | undefined {
+        const lowerCaseName = engineName.toLowerCase();
+        switch (lowerCaseName) {
+            case "google":
+                return 4;
+            case "bing":
+                return 5;
+            default:
+                return undefined;
+        }
     }
     //save search result
     public async saveSearchResult(data: Array<ResultParseItemType>, taskId: number) {
