@@ -610,6 +610,7 @@ async function handleSendMessage() {
             break;
 
           case 'tool_call':
+            console.log('tool_call', chunk);
             // Show tool execution indicator
             isExecutingTool.value = true;
             currentToolName.value = chunk.toolName || 'Unknown Tool';
@@ -618,6 +619,7 @@ async function handleSendMessage() {
             break;
 
           case 'tool_result':
+            console.log('tool_result', chunk);
             // Hide tool execution indicator and show result
             isExecutingTool.value = false;
             if (chunk.toolResult) {
@@ -649,12 +651,27 @@ async function handleSendMessage() {
             }
             break;
 
+          case 'conversation_end':
+            console.log('conversation_end', chunk);
+            // Conversation ended - check if last assistant message is empty and remove it if so
+            {
+              const lastIndex = messages.value.length - 1;
+              if (lastIndex >= 0 && 
+                  messages.value[lastIndex].role === 'assistant' && 
+                  (!messages.value[lastIndex].content || messages.value[lastIndex].content.trim() === '') &&
+                  (!chunk.messageId || messages.value[lastIndex].id === chunk.messageId)) {
+                messages.value.splice(lastIndex, 1);
+              }
+            }
+            break;
+
           case 'pong':
             // Keep-alive, no action needed
             break;
 
           default:
             // Handle unknown or unspecified event types as tokens
+            console.log('default', chunk);
             if (chunk.content) {
               isTyping.value = false;
               

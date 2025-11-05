@@ -32,6 +32,7 @@ interface ChatApiRequestData {
  * Tool/function definition for AI server
  */
 export interface ToolFunction {
+    type: string;
     name: string;
     description?: string;
     parameters?: Record<string, unknown>;
@@ -82,6 +83,15 @@ export enum StreamEventType {
 }
 
 /**
+ * Tool call data structure (nested within data.data for tool_call events)
+ */
+export interface ToolCallData {
+    name: string;
+    id: string;
+    arguments: Record<string, unknown>;
+}
+
+/**
  * Stream event format from /api/ai/ask/stream
  */
 export interface StreamEvent {
@@ -89,10 +99,13 @@ export interface StreamEvent {
     data: {
         content: Record<string, unknown> | string;
         timestamp: string;
-        toolName?: string;
-        toolParams?: Record<string, unknown>;
-        errorMessage?: string;
-        conversationId?: string;
+        // Nested data structure for tool_call events
+        data?: ToolCallData;
+        // Legacy fields for backwards compatibility
+        // toolName?: string;
+        // toolParams?: Record<string, unknown>;
+        // errorMessage?: string;
+        // conversationId?: string;
     };
 }
 

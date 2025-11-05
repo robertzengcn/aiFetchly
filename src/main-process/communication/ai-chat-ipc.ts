@@ -274,19 +274,27 @@ export function registerAiChatIpcHandlers(): void {
 
                     case StreamEventType.TOOL_CALL:
                         // Tool execution request - notify UI to show tool execution indicator
+                        // Handle nested data structure: data.data contains {name, id, arguments}
                         {
-                            const toolName = streamEvent.data.toolName || 'Unknown Tool';
-                            const toolParams = streamEvent.data.toolParams;
+                            const toolCallData = streamEvent.data.data;
+                            const toolName = toolCallData?.name  || 'Unknown Tool';
+                            const toolParams = toolCallData?.arguments ||{};
+                            const toolId = toolCallData?.id;
+                            const content = typeof streamEvent.data.content === 'string' 
+                                ? streamEvent.data.content 
+                                : `Executing tool: ${toolName}`;
 
                             const chunk: ChatStreamChunk = {
-                                content: `Executing tool: ${toolName}`,
+                                content: content,
                                 isComplete: false,
                                 messageId: assistantMessageId,
                                 eventType: StreamEventType.TOOL_CALL,
                                 toolName: toolName,
-                                toolParams: toolParams
+                                toolParams: toolParams,
+                                toolId: toolId
                             };
                             event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(chunk));
+                            
                         }
                         break;
 
@@ -309,7 +317,7 @@ export function registerAiChatIpcHandlers(): void {
                     case StreamEventType.ERROR:
                         // Error occurred - notify UI and stop streaming
                         {
-                            const errorMessage = streamEvent.data.errorMessage || extractContent() || 'An error occurred during streaming';
+                            const errorMessage =  extractContent() || 'An error occurred during streaming';
 
                             const errorChunk: ChatStreamChunk = {
                                 content: '',
@@ -338,9 +346,9 @@ export function registerAiChatIpcHandlers(): void {
                     case StreamEventType.CONVERSATION_START:
                         // Conversation initialization
                         {
-                            if (streamEvent.data.conversationId) {
-                                streamConversationId = streamEvent.data.conversationId;
-                            }
+                            // if (streamEvent.data?.data?.conversationId) {
+                            //     streamConversationId = streamEvent.data.conversationId;
+                            // }
 
                             const chunk: ChatStreamChunk = {
                                 content: '',
