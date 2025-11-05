@@ -4,6 +4,8 @@ import { AVAILABLE_TOOL_FUNCTIONS } from '@/config/aiTools.config';
 import { CommonMessage, ChatMessage, ChatHistoryResponse, ChatStreamChunk } from '@/entityTypes/commonType';
 import { AIChatModule } from '@/modules/AIChatModule';
 import { RagSearchModule, SearchRequest, SearchResponse } from '@/modules/RagSearchModule';
+import { SearchModule } from '@/modules/SearchModule';
+import { SearchTaskStatus } from '@/model/SearchTask.model';
 // import { SearchResult } from '@/service/VectorSearchService';
 import {
     AI_CHAT_MESSAGE,
@@ -229,6 +231,24 @@ export function registerAiChatIpcHandlers(): void {
             let fullContent = '';
             let streamConversationId = conversationId;
             let hasStartedConversation = false;
+            // Track pending tool calls by tool ID
+            const pendingToolCalls = new Set<string>();
+            // Store deferred completion chunks to send when all tools are done
+            let deferredCompletionChunk: ChatStreamChunk | null = null;
+
+            // Helper function to check if we can send completion
+            const canSendCompletion = (): boolean => {
+                return pendingToolCalls.size === 0;
+            };
+
+            // Helper function to send deferred completion if ready
+            const sendDeferredCompletionIfReady = (): void => {
+                if (canSendCompletion() && deferredCompletionChunk) {
+                    event.sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(deferredCompletionChunk));
+                    deferredCompletionChunk = null;
+                    console.log('Sent deferred completion message');
+                }
+            };
 
             // Stream message with event handler
             await aiChatApi.streamMessage(chatRequest, (streamEvent: StreamEvent) => {
@@ -273,17 +293,24 @@ export function registerAiChatIpcHandlers(): void {
                         break;
 
                     case StreamEventType.TOOL_CALL:
-                        // Tool execution request - notify UI to show tool execution indicator
+                        // Tool execution request - execute locally and send result to UI
                         // Handle nested data structure: data.data contains {name, id, arguments}
                         {
                             const toolCallData = streamEvent.data.data;
-                            const toolName = toolCallData?.name  || 'Unknown Tool';
-                            const toolParams = toolCallData?.arguments ||{};
-                            const toolId = toolCallData?.id;
+                            const toolName = toolCallData?.name || 'Unknown Tool';
+                            const toolParams = toolCallData?.arguments || {};
+                            const toolId = toolCallData?.id || `tool-${Date.now()}`;
                             const content = typeof streamEvent.data.content === 'string' 
                                 ? streamEvent.data.content 
                                 : `Executing tool: ${toolName}`;
 
+                            // Add tool to pending set
+                            if (toolId) {
+                                pendingToolCalls.add(toolId);
+                                console.log(`Tool call started: ${toolName} (ID: ${toolId}), pending: ${pendingToolCalls.size}`);
+                            }
+
+                            // Notify UI that tool is being executed
                             const chunk: ChatStreamChunk = {
                                 content: content,
                                 isComplete: false,
@@ -295,13 +322,183 @@ export function registerAiChatIpcHandlers(): void {
                             };
                             event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(chunk));
                             
+                            // Execute the tool locally (async, don't block)
+                            (async () => {
+                                try {
+                                    let toolResult: Record<string, unknown> = {};
+                                    
+                                    // Check which function is being called and execute it
+                                    switch (toolName) {
+                                        case 'search_google':
+                                        case 'search_bing': {
+                                            const searchModule = new SearchModule();
+                                            const query = typeof toolParams.query === 'string' ? toolParams.query : '';
+                                            const numResults = typeof toolParams.num_results === 'number' ? toolParams.num_results : 10;
+                                            
+                                            // Map tool name to engine name
+                                            const engineName = toolName === 'search_google' ? 'Google' : 'Bing';
+                                            
+                                            // Calculate num_pages based on num_results (assuming ~10 results per page)
+                                            const numPages = Math.ceil(numResults / 10);
+                                            
+                                            // Execute search
+                                            const taskId = await searchModule.searchByKeywordAndEngine(
+                                                [query],
+                                                engineName,
+                                                {
+                                                    num_pages: numPages,
+                                                    concurrency: 1,
+                                                    notShowBrowser: false
+                                                }
+                                            );
+                                            
+                                            // Poll task status until complete or error (max 60 seconds)
+                                            let taskStatus: SearchTaskStatus | null = null;
+                                            const maxWaitTime = 60000; // 60 seconds
+                                            const pollInterval = 1000; // 1 second
+                                            const startTime = Date.now();
+                                            
+                                            while (Date.now() - startTime < maxWaitTime) {
+                                                taskStatus = await searchModule.getTaskStatus(taskId);
+                                                if (taskStatus === null) {
+                                                    throw new Error(`Task ${taskId} not found`);
+                                                }
+                                                if (taskStatus === SearchTaskStatus.Complete || taskStatus === SearchTaskStatus.Error) {
+                                                    break;
+                                                }
+                                                await new Promise(resolve => setTimeout(resolve, pollInterval));
+                                            }
+                                            
+                                            // Check if task completed successfully
+                                            if (taskStatus !== SearchTaskStatus.Complete) {
+                                                throw new Error(`Search task ${taskId} did not complete successfully. Status: ${taskStatus}`);
+                                            }
+                                            
+                                            // Get search results
+                                            const results = await searchModule.listSearchResult(taskId, 1, numResults);
+                                            
+                                            toolResult = {
+                                                success: true,
+                                                taskId: taskId,
+                                                query: query,
+                                                engine: engineName,
+                                                results: results.map(r => ({
+                                                    title: r.title,
+                                                    link: r.link,
+                                                    snippet: r.snippet,
+                                                    visible_link: r.visible_link
+                                                })),
+                                                totalResults: results.length
+                                            };
+                                            break;
+                                        }
+                                        
+                                        case 'search_yellow_pages': {
+                                            // TODO: Implement Yellow Pages search when module is available
+                                            toolResult = {
+                                                success: false,
+                                                error: 'Yellow Pages search not yet implemented'
+                                            };
+                                            break;
+                                        }
+                                        
+                                        case 'extract_emails_from_results': {
+                                            // TODO: Implement email extraction when module is available
+                                            toolResult = {
+                                                success: false,
+                                                error: 'Email extraction not yet implemented'
+                                            };
+                                            break;
+                                        }
+                                        
+                                        default:
+                                            toolResult = {
+                                                success: false,
+                                                error: `Unknown tool: ${toolName}`
+                                            };
+                                    }
+                                    
+                                    // Send tool result to UI
+                                    const resultChunk: ChatStreamChunk = {
+                                        content: '',
+                                        isComplete: false,
+                                        messageId: assistantMessageId,
+                                        eventType: StreamEventType.TOOL_RESULT,
+                                        toolResult: toolResult
+                                    };
+                                    event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(resultChunk));
+                                    
+                                    // Remove tool from pending set
+                                    if (toolId) {
+                                        pendingToolCalls.delete(toolId);
+                                        console.log(`Tool call completed: ${toolName} (ID: ${toolId}), pending: ${pendingToolCalls.size}`);
+                                        // Check if we can send deferred completion
+                                        sendDeferredCompletionIfReady();
+                                    }
+                                    
+                                } catch (error) {
+                                    console.error(`Error executing tool ${toolName}:`, error);
+                                    const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+                                    
+                                    const errorResult: ChatStreamChunk = {
+                                        content: '',
+                                        isComplete: false,
+                                        messageId: assistantMessageId,
+                                        eventType: StreamEventType.TOOL_RESULT,
+                                        toolResult: {
+                                            success: false,
+                                            error: errorMessage
+                                        }
+                                    };
+                                    event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(errorResult));
+                                    
+                                    // Remove tool from pending set even on error
+                                    if (toolId) {
+                                        pendingToolCalls.delete(toolId);
+                                        console.log(`Tool call failed: ${toolName} (ID: ${toolId}), pending: ${pendingToolCalls.size}`);
+                                        
+                                        // Send completion message to AI_CHAT_STREAM_COMPLETE on error
+                                        const errorCompletionChunk: ChatStreamChunk = {
+                                            content: '',
+                                            isComplete: true,
+                                            messageId: assistantMessageId,
+                                            eventType: StreamEventType.ERROR,
+                                            errorMessage: `Tool execution failed: ${errorMessage}`,
+                                            toolName: toolName,
+                                            toolId: toolId
+                                        };
+                                        
+                                        // Check if we can send completion (no other pending tools)
+                                        if (canSendCompletion()) {
+                                            event.sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(errorCompletionChunk));
+                                            console.log(`Sent error completion for tool ${toolName} (ID: ${toolId})`);
+                                        } else {
+                                            // Store as deferred completion if other tools are pending
+                                            console.log(`Deferring error completion due to ${pendingToolCalls.size} pending tool calls`);
+                                            deferredCompletionChunk = errorCompletionChunk;
+                                            // Still check if we can send deferred completion
+                                            sendDeferredCompletionIfReady();
+                                        }
+                                    }
+                                }
+                            })();
                         }
                         break;
 
                     case StreamEventType.TOOL_RESULT:
-                        // Tool execution result - notify UI and continue streaming
+                        // Tool execution result from server - notify UI and continue streaming
                         {
                             const toolResult = streamEvent.data.content;
+                            const toolCallData = streamEvent.data.data;
+                            const toolId = toolCallData?.id;
+
+                            // Remove tool from pending set if this is a server result
+                            if (toolId && pendingToolCalls.has(toolId)) {
+                                pendingToolCalls.delete(toolId);
+                                console.log(`Tool result received from server (ID: ${toolId}), pending: ${pendingToolCalls.size}`);
+                                // Check if we can send deferred completion
+                                sendDeferredCompletionIfReady();
+                            }
 
                             const chunk: ChatStreamChunk = {
                                 content: '',
@@ -326,7 +523,15 @@ export function registerAiChatIpcHandlers(): void {
                                 eventType: StreamEventType.ERROR,
                                 errorMessage: errorMessage
                             };
-                            event.sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(errorChunk));
+                            
+                            // Only send completion if no pending tool calls
+                            if (canSendCompletion()) {
+                                event.sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(errorChunk));
+                            } else {
+                                console.log(`Deferring ERROR completion due to ${pendingToolCalls.size} pending tool calls`);
+                                // Store error and wait for tool calls to complete
+                                deferredCompletionChunk = errorChunk;
+                            }
                         }
                         break;
 
@@ -339,7 +544,15 @@ export function registerAiChatIpcHandlers(): void {
                                 messageId: assistantMessageId,
                                 eventType: StreamEventType.DONE
                             };
-                            event.sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(completeChunk));
+                            
+                            // Only send completion if no pending tool calls
+                            if (canSendCompletion()) {
+                                event.sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(completeChunk));
+                            } else {
+                                console.log(`Deferring DONE completion due to ${pendingToolCalls.size} pending tool calls`);
+                                // Store completion and wait for tool calls to complete
+                                deferredCompletionChunk = completeChunk;
+                            }
                         }
                         break;
 
@@ -370,7 +583,15 @@ export function registerAiChatIpcHandlers(): void {
                                 messageId: assistantMessageId,
                                 eventType: StreamEventType.CONVERSATION_END
                             };
-                            event.sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(chunk));
+                            
+                            // Only send completion if no pending tool calls
+                            if (canSendCompletion()) {
+                                event.sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(chunk));
+                            } else {
+                                console.log(`Deferring CONVERSATION_END completion due to ${pendingToolCalls.size} pending tool calls`);
+                                // Store completion and wait for tool calls to complete
+                                deferredCompletionChunk = chunk;
+                            }
                         }
                         break;
 

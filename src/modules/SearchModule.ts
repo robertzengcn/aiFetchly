@@ -1,6 +1,6 @@
 import { SearchDataParam } from "@/entityTypes/scrapeType"
 import { SearchTaskModel, SearchTaskStatus, SearchTaskUpdateFields } from "@/model/SearchTask.model"
-//import { Token } from "@/modules/token"
+import { Token } from "@/modules/token"
 //import { USERSDBPATH } from '@/config/usersetting';
 import { SearhEnginer } from "@/config/searchSetting"
 // import { ToArray } from "@/modules/lib/function"
@@ -9,7 +9,7 @@ import { SearchResultModel } from "@/model/SearchResult.model"
 import { SearchResEntity, ResultParseItemType } from "@/entityTypes/scrapeType"
 //import {SearchTaskdb} from "@/model/searchTaskdb"
 import { SearchtaskEntityNum, SearchtaskItem } from "@/entityTypes/searchControlType"
-import { getEnumKeyByValue, getEnumValueByNumber } from "@/modules/lib/function"
+import { getEnumKeyByValue, getEnumValueByNumber, getApplogspath, getRandomValues } from "@/modules/lib/function"
 import * as path from 'path';
 import * as fs from 'fs';
 import { SortBy } from "@/entityTypes/commonType";
@@ -27,6 +27,8 @@ import { utilityProcess, MessageChannelMain} from "electron";
 import { SystemSettingGroupModule } from '@/modules/SystemSettingGroupModule';
 import { twocaptchagroup,twocaptchatoken,twocaptcha_enabled,chrome_path,firefox_path,external_system} from '@/config/settinggroupInit'
 import {WriteLog,getChromeExcutepath,getFirefoxExcutepath,getRecorddatetime} from "@/modules/lib/function"
+import { USERLOGPATH, USEREMAIL } from '@/config/usersetting';
+import { v4 as uuidv4 } from 'uuid';
 
 export type TaskDetailsForEdit = {
     id: number;
@@ -133,6 +135,29 @@ export class SearchModule extends BaseModule {
 
         // Create the search task
         const taskId = await this.saveSearchtask(searchData);
+
+        // Generate log paths
+        const tokenService = new Token();
+        let logpath = tokenService.getValue(USERLOGPATH);
+        if (!logpath) {
+            const useremail = tokenService.getValue(USEREMAIL);
+            // Create log path
+            logpath = getApplogspath(useremail);
+        }
+        const uuid = uuidv4({ random: getRandomValues(new Uint8Array(16)) });
+        const errorLogfile = path.join(logpath, 'search_' + taskId.toString() + '_' + uuid + '.error.log');
+        const runLogfile = path.join(logpath, 'search_' + taskId.toString() + '_' + uuid + '.runtime.log');
+        
+        // Create log files
+        fs.writeFileSync(errorLogfile, '');
+        fs.writeFileSync(runLogfile, '');
+        
+        // Update task with log paths
+        await this.updateTaskLog(taskId, runLogfile, errorLogfile);
+        
+        // Add log paths to searchData
+        searchData.error_log = errorLogfile;
+        searchData.run_log = runLogfile;
 
         // Run the search task
         await this.runSearchTask(taskId);
@@ -706,6 +731,16 @@ export class SearchModule extends BaseModule {
      */
     public async isTaskEditable(taskId: number): Promise<boolean> {
         return await this.taskdbModel.isTaskEditable(taskId);
+    }
+
+    /**
+     * Get task status by task ID
+     * @param taskId The task ID
+     * @returns The task status or null if task doesn't exist
+     */
+    public async getTaskStatus(taskId: number): Promise<SearchTaskStatus | null> {
+        const taskEntity = await this.taskdbModel.getTaskEntity(taskId);
+        return taskEntity ? taskEntity.status : null;
     }
 
     /**
