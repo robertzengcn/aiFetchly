@@ -80,6 +80,66 @@ export class SearchModule extends BaseModule {
         this.systemSettingGroupModule = new SystemSettingGroupModule()
     }
 
+    /**
+     * Search by keyword and search engine name
+     * Creates a task and runs it immediately
+     * @param keywords Array of keywords to search
+     * @param engineName Search engine name (e.g., "google", "bing")
+     * @param options Optional search parameters (num_pages, concurrency, etc.)
+     * @returns The created task ID
+     */
+    public async searchByKeywordAndEngine(
+        keywords: string[],
+        engineName: string,
+        options?: {
+            num_pages?: number;
+            concurrency?: number;
+            notShowBrowser?: boolean;
+            localBrowser?: string;
+            proxys?: Array<{host: string, port: number, user?: string, pass?: string}>;
+            accounts?: number[];
+        }
+    ): Promise<number> {
+        // Validate inputs
+        if (!keywords || keywords.length === 0) {
+            throw new Error("Keywords cannot be empty");
+        }
+        if (!engineName || engineName.trim().length === 0) {
+            throw new Error("Search engine name cannot be empty");
+        }
+
+        // Convert search engine name to number
+        const enginId = this.convertSEtoNum(engineName);
+        if (!enginId) {
+            throw new Error(`Invalid search engine name: ${engineName}`);
+        }
+
+        // Prepare search data
+        const searchData: SearchDataParam = {
+            keywords: keywords,
+            engine: engineName,
+            num_pages: options?.num_pages ?? 1,
+            concurrency: options?.concurrency ?? 1,
+            notShowBrowser: options?.notShowBrowser ?? false,
+            localBrowser: options?.localBrowser ?? "",
+            proxys: options?.proxys ? options.proxys.map(proxy => ({
+                host: proxy.host,
+                port: proxy.port.toString(),
+                user: proxy.user,
+                pass: proxy.pass
+            })) : undefined,
+            accounts: options?.accounts
+        };
+
+        // Create the search task
+        const taskId = await this.saveSearchtask(searchData);
+
+        // Run the search task
+        await this.runSearchTask(taskId);
+
+        return taskId;
+    }
+
     //run search function
     public async runSearchTask(taskId:number):Promise<void>{
 

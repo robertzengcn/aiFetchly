@@ -3,6 +3,7 @@ import { ToolFunction } from '@/api/aiChatApi';
 // Centralized list of available tool functions advertised to the AI server
 export const AVAILABLE_TOOL_FUNCTIONS: ToolFunction[] = [
     {
+        type: "function",
         name: 'search_google',
         description: 'Search Google for information using a query string. Returns search results including titles, snippets, and URLs.',
         parameters: {
@@ -22,6 +23,7 @@ export const AVAILABLE_TOOL_FUNCTIONS: ToolFunction[] = [
         }
     },
     {
+        type: "function",
         name: 'search_bing',
         description: 'Search Bing for information using a query string. Returns search results including titles, descriptions, and URLs.',
         parameters: {
@@ -46,6 +48,7 @@ export const AVAILABLE_TOOL_FUNCTIONS: ToolFunction[] = [
         }
     },
     {
+        type: "function",
         name: 'extract_emails_from_results',
         description: 'Extract email addresses from search results or web pages. Can parse HTML content or plain text to find email addresses.',
         parameters: {
@@ -72,6 +75,7 @@ export const AVAILABLE_TOOL_FUNCTIONS: ToolFunction[] = [
         }
     },
     {
+        type: "function",
         name: 'search_yellow_pages',
         description: 'Search Yellow Pages business directory for companies, contact information, and business details by category, name, or location.',
         parameters: {

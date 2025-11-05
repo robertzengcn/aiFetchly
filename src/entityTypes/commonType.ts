@@ -213,6 +213,7 @@ export interface ChatStreamChunk {
     eventType?: string;
     toolName?: string;
     toolParams?: Record<string, unknown>;
+    toolId?: string;
     toolResult?: Record<string, unknown>;
     errorMessage?: string;
     conversationId?: string;
