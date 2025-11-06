@@ -329,14 +329,14 @@ export function registerAiChatIpcHandlers(): void {
                                     
                                     // Check which function is being called and execute it
                                     switch (toolName) {
-                                        case 'search_google':
-                                        case 'search_bing': {
+                                        case 'scrape_urls_from_google':
+                                        case 'scrape_urls_from_bing': {
                                             const searchModule = new SearchModule();
                                             const query = typeof toolParams.query === 'string' ? toolParams.query : '';
                                             const numResults = typeof toolParams.num_results === 'number' ? toolParams.num_results : 10;
                                             
                                             // Map tool name to engine name
-                                            const engineName = toolName === 'search_google' ? 'Google' : 'Bing';
+                                            const engineName = toolName === 'scrape_urls_from_google' ? 'Google' : 'Bing';
                                             
                                             // Calculate num_pages based on num_results (assuming ~10 results per page)
                                             const numPages = Math.ceil(numResults / 10);

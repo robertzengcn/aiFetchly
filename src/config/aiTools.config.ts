@@ -4,8 +4,8 @@ import { ToolFunction } from '@/api/aiChatApi';
 export const AVAILABLE_TOOL_FUNCTIONS: ToolFunction[] = [
     {
         type: "function",
-        name: 'search_google',
-        description: 'Search Google for web pages urls using a query string. Returns search results including titles, snippets, and URLs.',
+        name: 'scrape_urls_from_google',
+        description: 'scrape web pages urls in google using a query string. Returns search results including titles, snippets, and URLs.this tool is not use for search information',
         parameters: {
             type: 'object',
             properties: {
@@ -24,8 +24,8 @@ export const AVAILABLE_TOOL_FUNCTIONS: ToolFunction[] = [
     },
     {
         type: "function",
-        name: 'search_bing',
-        description: 'Search Bing for web pages urls using a query string. Returns search results including titles, descriptions, and URLs.',
+        name: 'scrape_urls_from_bing',
+        description: 'scrape web pages urls in bing using a query string. Returns search results including titles, descriptions, and URLs.this tool is not use for search information',
         parameters: {
             type: 'object',
             properties: {
