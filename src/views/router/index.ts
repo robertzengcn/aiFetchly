@@ -493,6 +493,28 @@ export const constantRoutes: RouteRecordRaw[] = [
     ]
   },
   {
+    path: '/knowledge',
+    name: 'Knowledge_Library',
+    meta: {
+      visible: true,
+      title: 'route.knowledge_library',
+      icon: 'mdi-book-open-variant'
+    },
+    component: Layout,
+    children: [
+      {
+        path: 'library',
+        component: () => import('@/views/pages/knowledge/KnowledgeLibrary.vue'),
+        name: 'KnowledgeLibrary',
+        meta: {
+          visible: true,
+          title: 'route.knowledge_library',
+          icon: 'mdi-book-open-variant'
+        }
+      }
+    ]
+  },
+  {
     path: '/emailmarketing',
     name: 'Email_Marketing',
     meta: {

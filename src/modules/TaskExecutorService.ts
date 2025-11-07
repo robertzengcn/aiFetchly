@@ -6,7 +6,7 @@ import { ScheduleTaskEntity, TaskType } from "@/entity/ScheduleTask.entity";
 //import { VideoDownloadTaskModel } from "@/model/VideoDownloadTask.model";
 //import { SocialTaskModel } from "@/model/SocialTask.model";
 import { TaskStatus } from "@/entityTypes/commonType";
-import { SearchModule } from "@/modules/searchModule";
+import { SearchModule } from "@/modules/SearchModule";
 import {SearchTaskModule} from "@/modules/SearchTaskModule"
 import {EmailMarketingTaskModule} from "@/modules/EmailMarketingTaskModule"
 import {BuckEmailTaskModule} from "@/modules/buckEmailTaskModule"

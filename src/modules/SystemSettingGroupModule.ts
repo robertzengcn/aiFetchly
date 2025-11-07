@@ -20,4 +20,12 @@ export class SystemSettingGroupModule extends BaseModule {
     public async getGroupItembyName(name:string): Promise<SystemSettingGroupEntity | null>{
         return this.systemSettingGroupModel.getGroupItembyName(name)
     }
+
+    /**
+     * Get or create embedding settings group
+     * @returns SystemSettingGroupEntity for embedding settings
+     */
+    public async getOrCreateEmbeddingGroup(): Promise<SystemSettingGroupEntity> {
+        return this.systemSettingGroupModel.getOrCreateEmbeddingGroup();
+    }
 }

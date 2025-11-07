@@ -1,5 +1,5 @@
 import { Page } from 'puppeteer';
-import { BusinessData, Address, BusinessHours, Rating } from '@/interfaces/IDataExtractor';
+import { BusinessData, Address, BusinessHours, Rating } from '@/modules/interface/IDataExtractor';
 import { AddressParser } from './addressParser';
 import { RatingParser } from './ratingParser';
 

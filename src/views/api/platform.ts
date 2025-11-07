@@ -1,5 +1,5 @@
 import { windowInvoke } from '@/views/utils/apirequest'
-import { PlatformConfig } from '@/interfaces/IPlatformConfig'
+import { PlatformConfig } from '@/modules/interface/IPlatformConfig'
 import { 
   PLATFORM_LIST, 
   PLATFORM_DETAIL, 

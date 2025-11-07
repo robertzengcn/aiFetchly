@@ -1,6 +1,6 @@
 import { BasePlatformAdapter } from '@/modules/BasePlatformAdapter';
-import { IBasePlatformAdapter } from '@/interfaces/IBasePlatformAdapter';
-import { PlatformConfig } from '@/interfaces/IPlatformConfig';
+import { IBasePlatformAdapter } from '@/modules/interface/IBasePlatformAdapter';
+import { PlatformConfig } from '@/modules/interface/IPlatformConfig';
 import { PlatformAdapterFactory } from './platforms';
 
 /**

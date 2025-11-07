@@ -1,5 +1,5 @@
-import { MessageType } from '@/interfaces/IPCMessageProtocol';
-import { TaskStatus } from '@/interfaces/ITaskManager';
+import { MessageType } from '@/modules/interface/IPCMessageProtocol';
+import { TaskStatus } from '@/modules/interface/ITaskManager';
 import { YellowPagesScraperProcess as YellowPagesScraper } from './yellowPagesScraper';
 
 // Define missing interfaces and enums

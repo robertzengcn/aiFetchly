@@ -216,7 +216,7 @@ import {
   getPlatformStatistics, 
   togglePlatform 
 } from '@/views/api/platform'
-import { PlatformConfig } from '@/interfaces/IPlatformConfig'
+import { PlatformConfig } from '@/modules/interface/IPlatformConfig'
 
 // Reactive data
 const platforms = ref<PlatformConfig[]>([])
