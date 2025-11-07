@@ -1,8 +1,8 @@
 import { Page } from 'puppeteer';
 import { BasePlatformAdapter } from '@/modules/BasePlatformAdapter';
-import { PlatformConfig } from '@/interfaces/IPlatformConfig';
-import { SearchResult } from '@/interfaces/IBasePlatformAdapter';
-import { BusinessData, Address, BusinessHours, Rating } from '@/interfaces/IDataExtractor';
+import { PlatformConfig } from '@/modules/interface/IPlatformConfig';
+import { SearchResult } from '@/modules/interface/IBasePlatformAdapter';
+import { BusinessData, Address, BusinessHours, Rating } from '@/modules/interface/IDataExtractor';
 
 /**
  * 192.com Platform Adapter

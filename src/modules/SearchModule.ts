@@ -1,6 +1,6 @@
 import { SearchDataParam } from "@/entityTypes/scrapeType"
 import { SearchTaskModel, SearchTaskStatus, SearchTaskUpdateFields } from "@/model/SearchTask.model"
-//import { Token } from "@/modules/token"
+import { Token } from "@/modules/token"
 //import { USERSDBPATH } from '@/config/usersetting';
 import { SearhEnginer } from "@/config/searchSetting"
 // import { ToArray } from "@/modules/lib/function"
@@ -9,7 +9,7 @@ import { SearchResultModel } from "@/model/SearchResult.model"
 import { SearchResEntity, ResultParseItemType } from "@/entityTypes/scrapeType"
 //import {SearchTaskdb} from "@/model/searchTaskdb"
 import { SearchtaskEntityNum, SearchtaskItem } from "@/entityTypes/searchControlType"
-import { getEnumKeyByValue, getEnumValueByNumber } from "@/modules/lib/function"
+import { getEnumKeyByValue, getEnumValueByNumber, getApplogspath, getRandomValues } from "@/modules/lib/function"
 import * as path from 'path';
 import * as fs from 'fs';
 import { SortBy } from "@/entityTypes/commonType";
@@ -27,6 +27,9 @@ import { utilityProcess, MessageChannelMain} from "electron";
 import { SystemSettingGroupModule } from '@/modules/SystemSettingGroupModule';
 import { twocaptchagroup,twocaptchatoken,twocaptcha_enabled,chrome_path,firefox_path,external_system} from '@/config/settinggroupInit'
 import {WriteLog,getChromeExcutepath,getFirefoxExcutepath,getRecorddatetime} from "@/modules/lib/function"
+import { USERLOGPATH, USEREMAIL } from '@/config/usersetting';
+import { v4 as uuidv4 } from 'uuid';
+import { SocialAccountModule } from './socialAccountModule';
 
 export type TaskDetailsForEdit = {
     id: number;
@@ -63,6 +66,7 @@ export class SearchModule extends BaseModule {
     private searchAccountModel: SearchAccountModel
     private accountCookiesModule: AccountCookiesModule
     private systemSettingGroupModule: SystemSettingGroupModule
+    private socialAccountModule: SocialAccountModule
     constructor() {
         // const tokenService = new Token()
         // const dbpath = tokenService.getValue(USERSDBPATH)
@@ -78,6 +82,112 @@ export class SearchModule extends BaseModule {
         this.searchAccountModel = new SearchAccountModel(this.dbpath)
         this.accountCookiesModule = new AccountCookiesModule()
         this.systemSettingGroupModule = new SystemSettingGroupModule()
+        this.socialAccountModule = new SocialAccountModule()
+    }
+
+    /**
+     * Search by keyword and search engine name
+     * Creates a task and runs it immediately
+     * @param keywords Array of keywords to search
+     * @param engineName Search engine name (e.g., "google", "bing")
+     * @param options Optional search parameters (num_pages, concurrency, etc.)
+     * @returns The created task ID
+     */
+    public async searchByKeywordAndEngine(
+        keywords: string[],
+        engineName: string,
+        options?: {
+            num_pages?: number;
+            concurrency?: number;
+            notShowBrowser?: boolean;
+            localBrowser?: string;
+            proxys?: Array<{host: string, port: number, user?: string, pass?: string}>;
+            accounts?: number[];
+        }
+    ): Promise<number> {
+        // Validate inputs
+        if (!keywords || keywords.length === 0) {
+            throw new Error("Keywords cannot be empty");
+        }
+        if (!engineName || engineName.trim().length === 0) {
+            throw new Error("Search engine name cannot be empty");
+        }
+
+        // Convert search engine name to number
+        const enginId = this.convertSEtoNum(engineName);
+        if (!enginId) {
+            throw new Error(`Invalid search engine name: ${engineName}`);
+        }
+
+        // If accounts are not provided, randomly select one account by platform
+        let selectedAccounts = options?.accounts;
+        if (!selectedAccounts || selectedAccounts.length === 0) {
+            const platformId = this.convertSEtoPlatformId(engineName);
+            if (platformId) {
+                try {
+                    const accounts = await this.socialAccountModule.getSocialAccountsByPlatform(platformId);
+                    if (accounts && accounts.length > 0) {
+                        // Randomly select one account
+                        const randomIndex = Math.floor(Math.random() * accounts.length);
+                        selectedAccounts = [accounts[randomIndex].id];
+                        console.log(`Randomly selected account ${selectedAccounts[0]} for platform ${platformId} (${engineName})`);
+                    } else {
+                        console.log(`No accounts found for platform ${platformId} (${engineName}), proceeding without account`);
+                    }
+                } catch (error) {
+                    console.error(`Error selecting account for platform ${platformId}:`, error);
+                    // Continue without account if selection fails
+                }
+            }
+        }
+
+        // Prepare search data
+        const searchData: SearchDataParam = {
+            keywords: keywords,
+            engine: engineName,
+            num_pages: options?.num_pages ?? 1,
+            concurrency: options?.concurrency ?? 1,
+            notShowBrowser: options?.notShowBrowser ?? false,
+            localBrowser: options?.localBrowser ?? "",
+            proxys: options?.proxys ? options.proxys.map(proxy => ({
+                host: proxy.host,
+                port: proxy.port.toString(),
+                user: proxy.user,
+                pass: proxy.pass
+            })) : undefined,
+            accounts: selectedAccounts
+        };
+
+        // Create the search task
+        const taskId = await this.saveSearchtask(searchData);
+
+        // Generate log paths
+        const tokenService = new Token();
+        let logpath = tokenService.getValue(USERLOGPATH);
+        if (!logpath) {
+            const useremail = tokenService.getValue(USEREMAIL);
+            // Create log path
+            logpath = getApplogspath(useremail);
+        }
+        const uuid = uuidv4({ random: getRandomValues(new Uint8Array(16)) });
+        const errorLogfile = path.join(logpath, 'search_' + taskId.toString() + '_' + uuid + '.error.log');
+        const runLogfile = path.join(logpath, 'search_' + taskId.toString() + '_' + uuid + '.runtime.log');
+        
+        // Create log files
+        fs.writeFileSync(errorLogfile, '');
+        fs.writeFileSync(runLogfile, '');
+        
+        // Update task with log paths
+        await this.updateTaskLog(taskId, runLogfile, errorLogfile);
+        
+        // Add log paths to searchData
+        searchData.error_log = errorLogfile;
+        searchData.run_log = runLogfile;
+
+        // Run the search task
+        await this.runSearchTask(taskId);
+
+        return taskId;
     }
 
     //run search function
@@ -335,6 +445,19 @@ export class SearchModule extends BaseModule {
         // })
         const enginerName = getEnumValueByNumber(SearhEnginer, enginerNum)
         return enginerName
+    }
+    //convert search engine name to platform ID (for social accounts)
+    // Google -> 4, Bing -> 5
+    private convertSEtoPlatformId(engineName: string): number | undefined {
+        const lowerCaseName = engineName.toLowerCase();
+        switch (lowerCaseName) {
+            case "google":
+                return 4;
+            case "bing":
+                return 5;
+            default:
+                return undefined;
+        }
     }
     //save search result
     public async saveSearchResult(data: Array<ResultParseItemType>, taskId: number) {
@@ -646,6 +769,16 @@ export class SearchModule extends BaseModule {
      */
     public async isTaskEditable(taskId: number): Promise<boolean> {
         return await this.taskdbModel.isTaskEditable(taskId);
+    }
+
+    /**
+     * Get task status by task ID
+     * @param taskId The task ID
+     * @returns The task status or null if task doesn't exist
+     */
+    public async getTaskStatus(taskId: number): Promise<SearchTaskStatus | null> {
+        const taskEntity = await this.taskdbModel.getTaskEntity(taskId);
+        return taskEntity ? taskEntity.status : null;
     }
 
     /**

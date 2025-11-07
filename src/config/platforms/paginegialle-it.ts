@@ -1,4 +1,4 @@
-import { PlatformConfig, PlatformFeature } from '@/interfaces/IPlatformConfig';
+import { PlatformConfig, PlatformFeature } from '@/modules/interface/IPlatformConfig';
 import { PagineGialleItAdapter } from '@/modules/platforms/PagineGialleItAdapter';
 
 export const Platform_paginegialle_it: PlatformConfig = {

@@ -16,8 +16,8 @@ import {
     YellowPagesResult,
     PaginationParams,
     PaginatedResponse
-} from "@/interfaces/ITaskManager";
-import { PlatformSummary } from "@/interfaces/IPlatformConfig";
+} from "@/modules/interface/ITaskManager";
+import { PlatformSummary } from "@/modules/interface/IPlatformConfig";
 
 /**
  * Yellow Pages Controller

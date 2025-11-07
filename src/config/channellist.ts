@@ -190,3 +190,42 @@ export const YELLOW_PAGES_HANDLE_PREVIOUS_SESSION = 'yellow_pages:handle_previou
 // Language Preference Channels
 export const LANGUAGE_PREFERENCE_GET = 'language:preference:get'
 export const LANGUAGE_PREFERENCE_UPDATE = 'language:preference:update'
+
+// RAG (Retrieval-Augmented Generation) Channels
+export const RAG_INITIALIZE = 'rag:initialize'
+export const RAG_QUERY = 'rag:query'
+export const RAG_UPLOAD_DOCUMENT = 'rag:upload-document'
+export const RAG_GET_STATS = 'rag:get-stats'
+export const RAG_TEST_PIPELINE = 'rag:test-pipeline'
+export const RAG_GET_DOCUMENTS = 'rag:get-documents'
+export const RAG_GET_DOCUMENT = 'rag:get-document'
+export const RAG_UPDATE_DOCUMENT = 'rag:update-document'
+export const RAG_DELETE_DOCUMENT = 'rag:delete-document'
+export const RAG_GET_DOCUMENT_STATS = 'rag:get-document-stats'
+export const RAG_SEARCH = 'rag:search'
+export const RAG_GET_SUGGESTIONS = 'rag:get-suggestions'
+export const RAG_GET_SEARCH_ANALYTICS = 'rag:get-search-analytics'
+export const RAG_UPDATE_EMBEDDING_MODEL = 'rag:update-embedding-model'
+export const RAG_GET_AVAILABLE_MODELS = 'rag:get-available-models'
+export const RAG_TEST_EMBEDDING_SERVICE = 'rag:test-embedding-service'
+export const RAG_CLEAR_CACHE = 'rag:clear-cache'
+export const RAG_CLEANUP = 'rag:cleanup'
+export const RAG_CHUNK_AND_EMBED_DOCUMENT = 'rag:chunk-and-embed-document'
+export const RAG_DOWNLOAD_DOCUMENT = 'rag:download-document'
+export const RAG_GET_DOCUMENT_ERROR_LOG = 'rag:get-document-error-log'
+
+// File Dialog Channels
+export const SHOW_OPEN_DIALOG = 'show-open-dialog'
+export const GET_FILE_STATS = 'get-file-stats'
+export const SAVE_TEMP_FILE = 'save-temp-file'
+export const SAVE_TEMP_FILE_PROGRESS = 'save-temp-file:progress'
+export const SAVE_TEMP_FILE_COMPLETE = 'save-temp-file:complete'
+
+// AI Chat Channels
+export const AI_CHAT_MESSAGE = 'ai-chat:message'
+export const AI_CHAT_STREAM = 'ai-chat:stream'
+export const AI_CHAT_STREAM_CHUNK = 'ai-chat:stream-chunk'
+export const AI_CHAT_STREAM_COMPLETE = 'ai-chat:stream-complete'
+export const AI_CHAT_HISTORY = 'ai-chat:history'
+export const AI_CHAT_CLEAR = 'ai-chat:clear'
+export const AI_CHAT_CONVERSATIONS = 'ai-chat:conversations'

@@ -91,22 +91,20 @@ jobs:
           
           $uninstallerPackage | Out-File -FilePath "installer-scripts/standalone-uninstaller-package.json" -Encoding UTF8
           
-          # Install pkg globally for building executables
-          yarn global add pkg
-          
           # Navigate to installer-scripts directory
           cd installer-scripts
           
-          # Install dependencies for uninstaller
-          yarn install --no-lockfile
+          # Install dependencies for uninstaller including pkg
+          # yarn install --no-lockfile
+          yarn add pkg
           
           # Build the uninstaller executable
-          yarn build
+          npx pkg standalone-uninstaller.js --targets node18-win-x64 --output uninstall.exe
           
           # Verify uninstaller was created
           if (Test-Path "uninstall.exe") {
             echo "✅ Uninstaller created successfully"
-            ls -la uninstall.exe
+            Get-ChildItem uninstall.exe | Format-Table Name, Length, LastWriteTime
           } else {
             echo "❌ Failed to create uninstaller"
             exit 1
@@ -124,7 +122,10 @@ jobs:
         shell: pwsh
 
       - name: Build application
-        run: yarn make-win:test
+        run: |
+          echo "Current working directory: $(pwd)"
+          yarn make-win:test
+        shell: bash
 
       - name: Verify uninstaller in build output
         run: |
@@ -310,7 +311,9 @@ jobs:
           echo "C++ modules (should use CXXFLAGS):"
           find node_modules/ -name "*.cc" -o -name "*.cpp" -path "*/better-sqlite3/*" -o -path "*/sqlite3/*" || echo "No C++ files found in C++ modules"
       - name: Build application
-        run: yarn make-mac:test
+        run: |
+          echo "Current working directory: $(pwd)"
+          yarn make-mac:test
       - name: Fallback build if main build fails
         if: failure()
         run: |

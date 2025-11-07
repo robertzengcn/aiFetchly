@@ -2,6 +2,7 @@ import { BaseDb } from "@/model/Basedb";
 import { Repository } from "typeorm"
 import { SystemSettingEntity } from "@/entity/SystemSetting.entity"
 import { SystemSettingGroupEntity } from "@/entity/SystemSettingGroup.entity"
+import { default_embedding_model, embedding_group_description } from "@/config/settinggroupInit";
 
 
 export class SystemSettingModel extends BaseDb {
@@ -74,5 +75,78 @@ export class SystemSettingModel extends BaseDb {
         itemToUpdate.value=settingValue
         return this.repository.save(itemToUpdate)
 
+    }
+
+    /**
+     * Get or create default embedding model setting
+     * @param group SystemSettingGroupEntity for embedding settings
+     * @returns SystemSettingEntity for default embedding model
+     */
+    public async getOrCreateDefaultEmbeddingModel(group: SystemSettingGroupEntity): Promise<SystemSettingEntity> {
+        const defaultEmbeddingModelKey = default_embedding_model;
+        const defaultEmbeddingModelValue = 'Qwen/Qwen3-Embedding-4B'; // Default model
+
+        let defaultEmbeddingModelSetting = await this.repository.findOne({
+            where: { group: group, key: defaultEmbeddingModelKey }
+        });
+
+        if (!defaultEmbeddingModelSetting) {
+            const systemSettingEntity = new SystemSettingEntity();
+            systemSettingEntity.group = group;
+            systemSettingEntity.key = defaultEmbeddingModelKey;
+            systemSettingEntity.value = defaultEmbeddingModelValue;
+            systemSettingEntity.description = 'Default embedding model for document processing';
+            systemSettingEntity.type = 'select';
+            defaultEmbeddingModelSetting = await this.repository.save(systemSettingEntity);
+        }
+
+        return defaultEmbeddingModelSetting;
+    }
+
+    /**
+     * Update default embedding model setting
+     * @param modelNameWithDimension Model name in format "modelName:dimension" (e.g., "text-embedding-ada-002:1536")
+     * @param group SystemSettingGroupEntity for embedding settings
+     * @returns Updated SystemSettingEntity
+     */
+    public async updateDefaultEmbeddingModel(modelNameWithDimension: string, group: SystemSettingGroupEntity): Promise<SystemSettingEntity> {
+        
+        const defaultEmbeddingModelKey = default_embedding_model;
+        
+        let setting = await this.repository.findOne({
+            where: { key: defaultEmbeddingModelKey }
+        });
+
+        if (!setting) {
+            // Create new setting if it doesn't exist
+            const systemSettingEntity = new SystemSettingEntity();
+            systemSettingEntity.group = group;
+            systemSettingEntity.key = defaultEmbeddingModelKey;
+            systemSettingEntity.value = modelNameWithDimension;
+            systemSettingEntity.description = embedding_group_description;
+            systemSettingEntity.type = 'select';
+            setting = await this.repository.save(systemSettingEntity);
+        } else {
+            // Update existing setting
+            setting.value = modelNameWithDimension;
+            setting = await this.repository.save(setting);
+        }
+
+        return setting;
+    }
+
+    /**
+     * Get default embedding model value
+     * @param group SystemSettingGroupEntity for embedding settings
+     * @returns Default embedding model name or null if not found
+     */
+    public async getDefaultEmbeddingModel(): Promise<string | null> {
+        // const defaultEmbeddingModelKey = default_embedding_model;
+        
+        const setting = await this.repository.findOne({
+            where: {key: default_embedding_model }
+        });
+
+        return setting ? setting.value : null;
     }
 }

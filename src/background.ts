@@ -20,6 +20,8 @@ import { NATIVATECOMMAND } from '@/config/channellist'
 import { NativateDatatype } from '@/entityTypes/commonType'
 import { ScheduleManager } from '@/modules/ScheduleManager';
 import { runafterbootup } from "@/modules/bootuprun"
+import { YellowPagesController } from './controller/YellowPagesController';
+// import { RAGIpcHandlers } from '@/main-process/ragIpcHandlers';
 // import { createProtocol } from 'electron';
 const isDevelopment = process.env.NODE_ENV !== 'production'
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string;
@@ -72,10 +74,10 @@ function initialize() {
     }
 
   } else {
-    //console.log('protocolScheme:', protocolScheme)
-   // console.log('process.execPath:', process.execPath)
-   // console.log('path.resolve(process.argv[1]):', path.resolve(process.argv[1]))
-    // console.log('path:', path.resolve(process.argv[1]))
+  console.log('protocolScheme:', protocolScheme)
+   console.log('process.execPath:', process.execPath)
+   console.log('path.resolve(process.argv[1]):', path.resolve(process.argv[1]))
+    console.log('path:', path.resolve(process.argv[1]))
     ProtocolRegistry.register(protocolScheme, `"${process.execPath}" "${path.resolve(process.argv[1])}" "$_URL_"`,
       {
         override: true,
@@ -83,7 +85,7 @@ function initialize() {
         terminal: true,
       }
     ).then(() => console.log('Successfully registered'))
-      .catch(console.error);
+      .catch(e => console.error(e));
     // app.setAsDefaultProtocolClient(protocolScheme);
   }
   makeSingleInstance()
@@ -426,6 +428,14 @@ function initialize() {
         await appDataSource.connection.initialize()
       }
 
+      // Initialize RAG IPC handlers
+      // try {
+      //   const ragHandlers = new RAGIpcHandlers(appDataSource);
+      //   log.info('RAG IPC handlers initialized successfully');
+      // } catch (error) {
+      //   log.error('Failed to initialize RAG IPC handlers:', error);
+      // }
+
       // Initialize ScheduleManager with auto-start functionality
       try {
         await runafterbootup()
@@ -438,7 +448,6 @@ function initialize() {
 
       // Check for orphaned Yellow Pages processes on startup
       try {
-        const { YellowPagesController } = await import('./controller/YellowPagesController');
         const yellowPagesCtrl = YellowPagesController.getInstance();
 
         // Handle tasks from previous session first
@@ -527,6 +536,7 @@ function makeSingleInstance() {
 async function handleDeepLink(url: string) {
   try {
     const parsedUrl = new URL(url);
+    console.log(parsedUrl)
     const token = parsedUrl.searchParams.get('token'); // Example: Extract a token from the URL
     if (token) {
       //console.log(`Token received: ${token}`);

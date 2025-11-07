@@ -2,7 +2,7 @@ import { BaseModule } from "@/modules/baseModule";
 import { YellowPagesResultModel } from "@/model/YellowPagesResult.model";
 import { SortBy } from "@/entityTypes/commonType";
 import { YellowPagesResultEntity } from "@/entity/YellowPagesResult.entity";
-import { YellowPagesResult } from "@/interfaces/ITaskManager";
+import { YellowPagesResult } from "@/modules/interface/ITaskManager";
 
 export class YellowPagesResultModule extends BaseModule {
     private yellowPagesResultModel: YellowPagesResultModel;

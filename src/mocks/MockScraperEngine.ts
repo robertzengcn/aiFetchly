@@ -1,4 +1,4 @@
-import { IScraperEngine, YellowPagesTask, YellowPagesResult, PlatformSelectors, BusinessData, ScrapingProgress, ScrapingError } from '../interfaces/IScraperEngine';
+import { IScraperEngine, YellowPagesTask, YellowPagesResult, PlatformSelectors, BusinessData, ScrapingProgress, ScrapingError } from '../modules/interface/IScraperEngine';
 
 /**
  * Mock implementation of IScraperEngine for testing purposes.
