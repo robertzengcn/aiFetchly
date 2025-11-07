@@ -5,7 +5,9 @@ import fetch from 'node-fetch';
 // import { fetch as undicifetch,Agent } from "undici";
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import { ProxyParseItem, ProxyCheckres, ProxylistResp } from "@/entityTypes/proxyType"
-// import * as url from 'url';
+import * as http from 'http';
+import * as https from 'https';
+import * as url from 'url';
 // import { socksDispatcher } from "fetch-socks";
 import { ProxyCheckModel, proxyCheckStatus } from "@/model/ProxyCheck.model";
 import { Token } from "@/modules/token"
@@ -58,77 +60,142 @@ export class ProxyController {
     }
     //convert proxy entity to url
 
-    //check proxy valid
-    public async checkProxy(proxyEntity: ProxyParseItem,timeout=5000): Promise<ProxyCheckres> {
-        try {
+    // Helper method to check HTTP proxy using CONNECT method
+    private async checkHttpProxy(proxyHost: string, proxyPort: string, username?: string, password?: string, testUrl: string = 'https://httpbin.org/ip', timeout: number = 5000): Promise<boolean> {
+        return new Promise((resolve) => {
+            const options: any = {
+                host: proxyHost,
+                port: parseInt(proxyPort),
+                method: 'CONNECT',
+                path: new URL(testUrl).host + ':443',
+                timeout,
+            };
 
-            let proxyUrl = "";
+            // Add authentication if provided
+            if (username && password) {
+                const auth = Buffer.from(`${username}:${password}`).toString('base64');
+                options.headers = {
+                    'Proxy-Authorization': `Basic ${auth}`
+                };
+            }
+
+            const req = http.request(options);
+            req.on('connect', (res, socket) => {
+                socket.end();
+                resolve(res.statusCode === 200);
+            });
+
+            req.on('error', (error) => {
+                console.log(`HTTP proxy error: ${error.message}`);
+                resolve(false);
+            });
+            
+            req.on('timeout', () => {
+                console.log(`HTTP proxy timeout after ${timeout}ms`);
+                req.destroy();
+                resolve(false);
+            });
+
+            req.end();
+        });
+    }
+
+    // Helper method to check SOCKS proxy
+    private async checkSocksProxy(proxyHost: string, proxyPort: string, username?: string, password?: string, testUrl: string = 'https://httpbin.org/ip', timeout: number = 5000): Promise<boolean> {
+        return new Promise((resolve) => {
+            const options: any = {
+                host: proxyHost,
+                port: parseInt(proxyPort),
+                method: 'CONNECT',
+                path: new URL(testUrl).host + ':443',
+                timeout,
+            };
+
+            // Add authentication if provided
+            if (username && password) {
+                const auth = Buffer.from(`${username}:${password}`).toString('base64');
+                options.headers = {
+                    'Proxy-Authorization': `Basic ${auth}`
+                };
+            }
+
+            const req = http.request(options);
+            req.on('connect', (res, socket) => {
+                socket.end();
+                resolve(res.statusCode === 200);
+            });
+
+            req.on('error', (error) => {
+                console.log(`SOCKS proxy error: ${error.message}`);
+                resolve(false);
+            });
+            
+            req.on('timeout', () => {
+                console.log(`SOCKS proxy timeout after ${timeout}ms`);
+                req.destroy();
+                resolve(false);
+            });
+
+            req.end();
+        });
+    }
+
+    //check proxy valid
+    public async checkProxy(proxyEntity: ProxyParseItem, timeout = 5000): Promise<ProxyCheckres> {
+        try {
             if (!proxyEntity.protocol) {
                 throw new Error("protocol is required");
             }
 
-            if (proxyEntity.protocol.includes('http')) {
-                if ((proxyEntity.user && (proxyEntity.user?.length > 0)) && (proxyEntity.pass && (proxyEntity.pass?.length > 0))) {
-                    proxyUrl = `${proxyEntity.protocol}://${proxyEntity.user}:${proxyEntity.pass}@${proxyEntity.host}:${proxyEntity.port}`;
-                } else {
-                    proxyUrl = `${proxyEntity.protocol}://${proxyEntity.host}:${proxyEntity.port}`;
-                }
-                console.log(proxyUrl)
-                const agent = new HttpsProxyAgent(proxyUrl);
-                const res = await fetch('https://ident.me/ip', { agent: agent, signal: AbortSignal.timeout(timeout), });
+            let isValid = false;
 
-                if (res.status == 200) {
-                    console.log(res.status);
-                    return { status: true, msg: "", data: true };
-                }
-                console.log("status is" + res.status.toString());
-                return { status: false, msg: "proxy check failure, status code" + res.status.toString(), data: false };
-                // console.log('Proxy is valid');
+            if (proxyEntity.protocol.includes('http')) {
+                // For HTTP/HTTPS proxies, use CONNECT method
+                console.log(`Checking HTTP proxy: ${proxyEntity.host}:${proxyEntity.port}`);
+                isValid = await this.checkHttpProxy(
+                    proxyEntity.host, 
+                    proxyEntity.port, 
+                    proxyEntity.user, 
+                    proxyEntity.pass, 
+                    'https://httpbin.org/ip', 
+                    timeout
+                );
             } else if (proxyEntity.protocol.includes('socks')) {
-                let socketType: 4 | 5 = 5
-                if (proxyEntity.protocol.includes('4')) {
-                    socketType = 4
-                }
-                if ((proxyEntity.user && (proxyEntity.user?.length > 0)) && (proxyEntity.pass && (proxyEntity.pass?.length > 0))) {
-                    proxyUrl = `${proxyEntity.protocol}+${socketType}://${proxyEntity.user}:${proxyEntity.pass}@${proxyEntity.host}:${proxyEntity.port}`;
-                } else {
-                    proxyUrl = `${proxyEntity.protocol}+${socketType}://${proxyEntity.host}:${proxyEntity.port}`;
-                }
-                // console.log(proxyEntity.host)
-                // console.log(proxyEntity.port)
-                // const dispatcher = socksDispatcher({
-                //     type: socketType,
-                //     host: proxyEntity.host,
-                //     port: parseInt(proxyEntity.port),
-                //     userId: proxyEntity.user,
-                //     password: proxyEntity.pass,
-                // });
-                const agent = new SocksProxyAgent(proxyUrl);
-                // const res = await undicifetch("https://ident.me/ip", { dispatcher });
-                const res =await fetch("https://ident.me/ip", { agent })
-                if (res.status == 200) {
-                    console.log(res.status);
-                    return { status: true, msg: "", data: true };
-                }
-                console.log("status is" + res.status.toString());
-                return { status: false, msg: "proxy check failure, status code" + res.status.toString(), data: false };
+                // For SOCKS proxies, use CONNECT method
+                console.log(`Checking SOCKS proxy: ${proxyEntity.host}:${proxyEntity.port}`);
+                isValid = await this.checkSocksProxy(
+                    proxyEntity.host, 
+                    proxyEntity.port, 
+                    proxyEntity.user, 
+                    proxyEntity.pass, 
+                    'https://httpbin.org/ip', 
+                    timeout
+                );
             } else {
                 throw new Error("protocol is not valid");
             }
-        } catch (error) {
-            // console.log('Proxy is not valid');
-            let message = ""
-            if (error instanceof Error) {
-                message = error.message
+
+            if (isValid) {
+                console.log(`Proxy ${proxyEntity.host}:${proxyEntity.port} is valid`);
+                return { status: true, msg: "", data: true };
+            } else {
+                console.log(`Proxy ${proxyEntity.host}:${proxyEntity.port} is invalid`);
+                return { status: false, msg: "proxy check failure", data: false };
             }
-            throw new Error('Proxy is not valid,' + message);
+        } catch (error) {
+            let message = "";
+            if (error instanceof Error) {
+                message = error.message;
+            }
+            console.log(`Proxy check error: ${message}`);
+            throw new Error('Proxy is not valid, ' + message);
         }
     }
     //check user's proxy and update db
-    public async updateProxyStatus(proxyEntity: ProxyParseItem, proxyID: number): Promise<void> {
+    public async updateProxyStatus(proxyEntity: ProxyParseItem, proxyID: number, timeout?: number): Promise<void> {
         console.log("updateProxyStatus")
         console.log(proxyEntity)
-        await this.checkProxy(proxyEntity).then((res) => {
+        await this.checkProxy(proxyEntity, timeout).then((res) => {
             if (res.status) {
                 //update success status to db
                 this.proxyCheckdb.updateProxyCheck(proxyID, proxyCheckStatus.Success)
@@ -144,7 +211,7 @@ export class ProxyController {
 
 
     }
-    public async checkAllproxy(callback?: (arg: number, totalNum: number) => void, finishcall?: () => void): Promise<void> {
+    public async checkAllproxy(callback?: (arg: number, totalNum: number) => void, finishcall?: () => void, timeout?: number): Promise<void> {
         const proxyCount = await this.proxyapi.getProxycount()
         if (proxyCount > 0) {
             const size = 10
@@ -165,7 +232,7 @@ export class ProxyController {
                                     pass: item.password
                                 }
                                 console.log(element)
-                                await this.updateProxyStatus(element, item.id!).catch((error) => {
+                                await this.updateProxyStatus(element, item.id!, timeout).catch((error) => {
                                     console.log(error)
 
                                 })

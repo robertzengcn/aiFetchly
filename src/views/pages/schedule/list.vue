@@ -5,10 +5,10 @@
       <v-col cols="12" md="8">
         <h2 class="text-h4 font-weight-bold">
           <v-icon class="mr-2">mdi-clock-outline</v-icon>
-          Schedule Management
+          {{ t('schedule.schedule_management') }}
         </h2>
         <p class="text-subtitle-1 text-medium-emphasis">
-          Manage automated task scheduling and job dependencies
+          {{ t('schedule.manage_automated_scheduling') }}
         </p>
       </v-col>
       <v-col cols="12" md="4" class="d-flex justify-end align-center">
@@ -18,7 +18,7 @@
           @click="createNewSchedule"
           class="mr-2"
         >
-          New Schedule
+          {{ t('schedule.new_schedule') }}
         </v-btn>
         <v-btn
           color="secondary"
@@ -26,14 +26,14 @@
           @click="importSchedules"
           class="mr-2"
         >
-          Import
+          {{ t('common.import') }}
         </v-btn>
         <v-btn
           color="secondary"
           prepend-icon="mdi-export"
           @click="exportSchedules"
         >
-          Export
+          {{ t('common.export') }}
         </v-btn>
       </v-col>
     </v-row>
@@ -44,7 +44,7 @@
         <v-card>
           <v-card-title class="d-flex align-center">
             <v-icon class="mr-2">mdi-server</v-icon>
-            Scheduler Status
+            {{ t('schedule.scheduler_status') }}
           </v-card-title>
           <v-card-text>
             <v-row>
@@ -55,21 +55,21 @@
                     size="large"
                     class="mb-2"
                   >
-                    {{ schedulerStatus.isRunning ? 'Running' : 'Stopped' }}
+                    {{ schedulerStatus.isRunning ? t('schedule.running') : t('schedule.stopped') }}
                   </v-chip>
-                  <div class="text-caption">Status</div>
+                  <div class="text-caption">{{ t('common.status') }}</div>
                 </div>
               </v-col>
               <v-col cols="12" md="3">
                 <div class="text-center">
                   <div class="text-h6 font-weight-bold">{{ schedulerStatus.activeSchedules }}</div>
-                  <div class="text-caption">Active Schedules</div>
+                  <div class="text-caption">{{ t('schedule.active_schedules') }}</div>
                 </div>
               </v-col>
               <v-col cols="12" md="3">
                 <div class="text-center">
                   <div class="text-h6 font-weight-bold">{{ schedulerStatus.totalSchedules }}</div>
-                  <div class="text-caption">Total Schedules</div>
+                  <div class="text-caption">{{ t('schedule.total_schedules') }}</div>
                 </div>
               </v-col>
               <v-col cols="12" md="3">
@@ -80,7 +80,7 @@
                     @click="toggleScheduler"
                     :loading="schedulerLoading"
                   >
-                    {{ schedulerStatus.isRunning ? 'Stop' : 'Start' }} Scheduler
+                    {{ schedulerStatus.isRunning ? t('schedule.stop') : t('schedule.start') }} {{ t('schedule.scheduler') }}
                   </v-btn>
                 </div>
               </v-col>
@@ -99,7 +99,7 @@
               <v-col cols="12" md="3">
                 <v-text-field
                   v-model="searchQuery"
-                  label="Search schedules"
+                  :label="t('schedule.search_schedules')"
                   prepend-inner-icon="mdi-magnify"
                   clearable
                   @update:model-value="handleSearch"
@@ -109,7 +109,7 @@
                 <v-select
                   v-model="statusFilter"
                   :items="statusOptions"
-                  label="Status"
+                  :label="t('common.status')"
                   clearable
                   @update:model-value="handleFilter"
                 />
@@ -118,7 +118,7 @@
                 <v-select
                   v-model="taskTypeFilter"
                   :items="taskTypeOptions"
-                  label="Task Type"
+                  :label="t('schedule.task_type')"
                   clearable
                   @update:model-value="handleFilter"
                 />
@@ -127,7 +127,7 @@
                 <v-select
                   v-model="triggerTypeFilter"
                   :items="triggerTypeOptions"
-                  label="Trigger Type"
+                  :label="t('schedule.trigger_type')"
                   clearable
                   @update:model-value="handleFilter"
                 />
@@ -147,7 +147,7 @@
                   variant="outlined"
                   @click="clearFilters"
                 >
-                  Clear Filters
+                  {{ t('common.clear_filters') }}
                 </v-btn>
               </v-col>
             </v-row>
@@ -161,9 +161,9 @@
       <v-col cols="12">
         <v-card>
           <v-card-title class="d-flex justify-space-between align-center">
-            <span>Schedules ({{ total }})</span>
+            <span>{{ t('schedule.schedules') }} ({{ total }})</span>
             <v-chip color="info" size="small">
-              Page {{ currentPage + 1 }} of {{ Math.ceil(total / pageSize) }}
+              {{ t('common.page') }} {{ currentPage + 1 }} {{ t('common.of') }} {{ Math.ceil(total / pageSize) }}
             </v-chip>
           </v-card-title>
           <v-card-text>
@@ -203,8 +203,8 @@
         <v-card-text>{{ confirmDialog.message }}</v-card-text>
         <v-card-actions>
           <v-spacer />
-          <v-btn color="secondary" @click="confirmDialog.show = false">Cancel</v-btn>
-          <v-btn color="error" @click="confirmAction">Confirm</v-btn>
+          <v-btn color="secondary" @click="confirmDialog.show = false">{{ t('common.cancel') }}</v-btn>
+          <v-btn color="error" @click="confirmAction">{{ t('common.confirm') }}</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -221,7 +221,7 @@
         <v-card-text>{{ alertDialog.message }}</v-card-text>
         <v-card-actions>
           <v-spacer />
-          <v-btn color="primary" @click="alertDialog.show = false">OK</v-btn>
+          <v-btn color="primary" @click="alertDialog.show = false">{{ t('common.ok') }}</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -293,26 +293,26 @@ const alertDialog = ref({
 })
 
 // Options for filters
-const statusOptions = [
-  { title: 'Active', value: ScheduleStatus.ACTIVE },
-  { title: 'Inactive', value: ScheduleStatus.INACTIVE },
-  { title: 'Paused', value: ScheduleStatus.PAUSED },
-  // { title: 'Error', value: ScheduleStatus.ERROR }
-]
+const statusOptions = computed(() => [
+  { title: t('schedule.active'), value: ScheduleStatus.ACTIVE },
+  { title: t('schedule.inactive'), value: ScheduleStatus.INACTIVE },
+  { title: t('schedule.paused'), value: ScheduleStatus.PAUSED },
+  // { title: t('schedule.error'), value: ScheduleStatus.ERROR }
+])
 
-const taskTypeOptions = [
-  { title: 'Search Task', value: TaskType.SEARCH },
-  { title: 'Email Extract', value: TaskType.EMAIL_EXTRACT },
-  { title: 'Bulk Email', value: TaskType.BUCK_EMAIL },
-  { title: 'Video Download', value: TaskType.VIDEO_DOWNLOAD },
-  // { title: 'Social Task', value: TaskType.SOCIAL_TASK }
-]
+const taskTypeOptions = computed(() => [
+  { title: t('schedule.search_task'), value: TaskType.SEARCH },
+  { title: t('schedule.email_extract'), value: TaskType.EMAIL_EXTRACT },
+  { title: t('schedule.bulk_email'), value: TaskType.BUCK_EMAIL },
+  { title: t('schedule.video_download'), value: TaskType.VIDEO_DOWNLOAD },
+  // { title: t('schedule.social_task'), value: TaskType.SOCIAL_TASK }
+])
 
-const triggerTypeOptions = [
-  { title: 'Cron', value: TriggerType.CRON },
-  { title: 'Dependency', value: TriggerType.DEPENDENCY },
-  { title: 'Manual', value: TriggerType.MANUAL }
-]
+const triggerTypeOptions = computed(() => [
+  { title: t('schedule.cron_schedule'), value: TriggerType.CRON },
+  { title: t('schedule.dependency'), value: TriggerType.DEPENDENCY },
+  { title: t('schedule.manual_only'), value: TriggerType.MANUAL }
+])
 
 // Methods
 const loadSchedules = async () => {
@@ -335,7 +335,7 @@ const loadSchedules = async () => {
     schedules.value = response.schedules
     total.value = response.total
   } catch (error) {
-    showAlert('Error', `Failed to load schedules: ${error}`, 'error')
+    showAlert(t('common.error'), `${t('schedule.failed_to_load_schedules')}: ${error}`, 'error')
   } finally {
     loading.value = false
   }
@@ -384,12 +384,12 @@ const toggleScheduler = async () => {
     }
     await loadSchedulerStatus()
     showAlert(
-      'Success',
-      `Scheduler ${schedulerStatus.value.isRunning ? 'started' : 'stopped'} successfully`,
+      t('common.success'),
+      `${t('schedule.scheduler')} ${schedulerStatus.value.isRunning ? t('schedule.started') : t('schedule.stopped')} ${t('common.success')}`,
       'success'
     )
   } catch (error) {
-    showAlert('Error', `Failed to ${schedulerStatus.value.isRunning ? 'stop' : 'start'} scheduler: ${error}`, 'error')
+    showAlert(t('common.error'), `${t('schedule.failed_to')} ${schedulerStatus.value.isRunning ? t('schedule.stop') : t('schedule.start')} ${t('schedule.scheduler')}: ${error}`, 'error')
   } finally {
     schedulerLoading.value = false
   }
@@ -424,18 +424,18 @@ const confirmAction = async () => {
       confirmDialog.value.show = false
       loadSchedules()
     } catch (error) {
-      showAlert('Error', `Action failed: ${error}`, 'error')
+      showAlert(t('common.error'), `${t('schedule.action_failed')}: ${error}`, 'error')
     }
   }
 }
 
 const deleteSchedule = (id: number) => {
   showConfirmDialog(
-    'Delete Schedule',
-    'Are you sure you want to delete this schedule? This action cannot be undone.',
+    t('schedule.delete_schedule'),
+    t('schedule.delete_schedule_confirm'),
     async () => {
       await deleteScheduleApi(id)
-      showAlert('Success', 'Schedule deleted successfully', 'success')
+      showAlert(t('common.success'), t('schedule.schedule_deleted_successfully'), 'success')
     },
     id
   )
@@ -444,50 +444,50 @@ const deleteSchedule = (id: number) => {
 const enableSchedule = async (id: number) => {
   try {
     await enableScheduleApi(id)
-    showAlert('Success', 'Schedule enabled successfully', 'success')
+    showAlert(t('common.success'), t('schedule.schedule_enabled_successfully'), 'success')
     loadSchedules()
   } catch (error) {
-    showAlert('Error', `Failed to enable schedule: ${error}`, 'error')
+    showAlert(t('common.error'), `${t('schedule.failed_to_enable_schedule')}: ${error}`, 'error')
   }
 }
 
 const disableSchedule = async (id: number) => {
   try {
     await disableScheduleApi(id)
-    showAlert('Success', 'Schedule disabled successfully', 'success')
+    showAlert(t('common.success'), t('schedule.schedule_disabled_successfully'), 'success')
     loadSchedules()
   } catch (error) {
-    showAlert('Error', `Failed to disable schedule: ${error}`, 'error')
+    showAlert(t('common.error'), `${t('schedule.failed_to_disable_schedule')}: ${error}`, 'error')
   }
 }
 
 const pauseSchedule = async (id: number) => {
   try {
     await pauseScheduleApi(id)
-    showAlert('Success', 'Schedule paused successfully', 'success')
+    showAlert(t('common.success'), t('schedule.schedule_paused_successfully'), 'success')
     loadSchedules()
   } catch (error) {
-    showAlert('Error', `Failed to pause schedule: ${error}`, 'error')
+    showAlert(t('common.error'), `${t('schedule.failed_to_pause_schedule')}: ${error}`, 'error')
   }
 }
 
 const resumeSchedule = async (id: number) => {
   try {
     await resumeScheduleApi(id)
-    showAlert('Success', 'Schedule resumed successfully', 'success')
+    showAlert(t('common.success'), t('schedule.schedule_resumed_successfully'), 'success')
     loadSchedules()
   } catch (error) {
-    showAlert('Error', `Failed to resume schedule: ${error}`, 'error')
+    showAlert(t('common.error'), `${t('schedule.failed_to_resume_schedule')}: ${error}`, 'error')
   }
 }
 
 const runScheduleNow = async (id: number) => {
   try {
     await runScheduleNowApi(id)
-    showAlert('Success', 'Schedule execution started', 'success')
+    showAlert(t('common.success'), t('schedule.schedule_execution_started'), 'success')
     loadSchedules()
   } catch (error) {
-    showAlert('Error', `Failed to run schedule: ${error}`, 'error')
+    showAlert(t('common.error'), `${t('schedule.failed_to_run_schedule')}: ${error}`, 'error')
   }
 }
 
@@ -501,15 +501,15 @@ const exportSchedules = async () => {
     }
     const data = await exportSchedulesApi(filters)
     // Handle file download
-    showAlert('Success', 'Schedules exported successfully', 'success')
+    showAlert(t('common.success'), t('schedule.schedules_exported_successfully'), 'success')
   } catch (error) {
-    showAlert('Error', `Failed to export schedules: ${error}`, 'error')
+    showAlert(t('common.error'), `${t('schedule.failed_to_export_schedules')}: ${error}`, 'error')
   }
 }
 
 const importSchedules = () => {
   // TODO: Implement file upload dialog
-  showAlert('Info', 'Import functionality will be implemented soon', 'info')
+  showAlert(t('common.info'), t('schedule.import_functionality_coming_soon'), 'info')
 }
 
 const showAlert = (title: string, message: string, type: 'success' | 'error' | 'warning' | 'info') => {

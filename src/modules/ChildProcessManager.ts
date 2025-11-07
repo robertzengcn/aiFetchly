@@ -1,6 +1,6 @@
 import { spawn, ChildProcess } from 'child_process';
-import { MessageType } from '@/interfaces/IPCMessageProtocol';
-import { TaskStatus } from '@/interfaces/ITaskManager';
+import { MessageType } from '@/modules/interface/IPCMessageProtocol';
+import { TaskStatus } from '@/modules/interface/ITaskManager';
 
 // Define missing interfaces based on usage
 interface IPCMessage {

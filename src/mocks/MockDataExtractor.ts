@@ -1,4 +1,4 @@
-import { IDataExtractor, BusinessData, Address, BusinessHours, Rating, ValidationResult, ValidationError, ValidationWarning } from '../interfaces/IDataExtractor';
+import { IDataExtractor, BusinessData, Address, BusinessHours, Rating, ValidationResult, ValidationError, ValidationWarning } from '../modules/interface/IDataExtractor';
 
 /**
  * Mock implementation of IDataExtractor for testing purposes.

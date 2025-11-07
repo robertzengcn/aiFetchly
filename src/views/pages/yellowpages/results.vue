@@ -239,7 +239,7 @@ import { useI18n } from 'vue-i18n'
 import YellowPagesResultsTable from './components/YellowPagesResultsTable.vue'
 import ResultDetailsView from './components/ResultDetailsView.vue'
 import { getYellowPagesTaskResults, getYellowPagesTaskDetail } from '@/views/api/yellowpages'
-import { YellowPagesResult, TaskStatus } from '@/interfaces/ITaskManager'
+import { YellowPagesResult, TaskStatus } from '@/modules/interface/ITaskManager'
 
 // Route and router
 const route = useRoute()

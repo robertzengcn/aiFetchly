@@ -14,10 +14,10 @@
             <div>
               <h2 class="text-h4 font-weight-bold">
                 <v-icon class="mr-2">mdi-eye</v-icon>
-                Schedule Details
+                {{ t('schedule.detail_title') }}
               </h2>
               <p class="text-subtitle-1 text-medium-emphasis">
-                {{ schedule?.name || 'Loading...' }}
+                {{ schedule?.name || t('schedule.detail_loading') }}
               </p>
             </div>
           </div>
@@ -28,7 +28,7 @@
               @click="editSchedule"
               class="mr-2"
             >
-              Edit
+              {{ t('schedule.detail_edit') }}
             </v-btn>
             <v-btn
               color="success"
@@ -37,7 +37,7 @@
               :loading="running"
               :disabled="!schedule?.is_active"
             >
-              Run Now
+              {{ t('schedule.detail_run_now') }}
             </v-btn>
           </div>
         </div>
@@ -54,7 +54,7 @@
               color="primary"
               size="64"
             />
-            <div class="text-h6 mt-4">Loading schedule...</div>
+            <div class="text-h6 mt-4">{{ t('schedule.detail_loading') }}</div>
           </v-card-text>
         </v-card>
       </v-col>
@@ -66,13 +66,13 @@
         <v-card>
           <v-card-text class="text-center py-8">
             <v-icon size="64" color="error" class="mb-4">mdi-alert-circle</v-icon>
-            <div class="text-h6 text-error mb-2">Failed to load schedule</div>
+            <div class="text-h6 text-error mb-2">{{ t('schedule.detail_failed_to_load') }}</div>
             <div class="text-body-2 text-medium-emphasis mb-4">{{ error }}</div>
             <v-btn
               color="primary"
               @click="loadSchedule"
             >
-              Retry
+              {{ t('schedule.detail_retry') }}
             </v-btn>
           </v-card-text>
         </v-card>
@@ -86,21 +86,21 @@
         <v-card class="mb-4">
           <v-card-title class="d-flex align-center">
             <v-icon class="mr-2">mdi-information</v-icon>
-            Basic Information
+            {{ t('schedule.detail_basic_information') }}
           </v-card-title>
           <v-card-text>
             <v-row>
               <v-col cols="12" md="6">
                 <div class="mb-3">
-                  <div class="text-caption text-medium-emphasis">Name</div>
+                  <div class="text-caption text-medium-emphasis">{{ t('schedule.detail_name') }}</div>
                   <div class="text-body-1 font-weight-medium">{{ schedule.name }}</div>
                 </div>
                 <div class="mb-3">
-                  <div class="text-caption text-medium-emphasis">Description</div>
-                  <div class="text-body-1">{{ schedule.description || 'No description' }}</div>
+                  <div class="text-caption text-medium-emphasis">{{ t('schedule.detail_description') }}</div>
+                  <div class="text-body-1">{{ schedule.description || t('schedule.detail_no_description') }}</div>
                 </div>
                 <div class="mb-3">
-                  <div class="text-caption text-medium-emphasis">Task Type</div>
+                  <div class="text-caption text-medium-emphasis">{{ t('schedule.detail_task_type') }}</div>
                   <v-chip
                     :color="getTaskTypeColor(schedule.task_type)"
                     size="small"
@@ -110,17 +110,17 @@
                   </v-chip>
                 </div>
                 <div class="mb-3">
-                  <div class="text-caption text-medium-emphasis">Task ID</div>
+                  <div class="text-caption text-medium-emphasis">{{ t('schedule.detail_task_id') }}</div>
                   <div class="text-body-1 font-weight-medium">{{ schedule.task_id }}</div>
                 </div>
               </v-col>
               <v-col cols="12" md="6">
                 <div class="mb-3">
-                  <div class="text-caption text-medium-emphasis">Status</div>
+                  <div class="text-caption text-medium-emphasis">{{ t('schedule.detail_status') }}</div>
                   <ScheduleStatusBadge :status="schedule.status" />
                 </div>
                 <div class="mb-3">
-                  <div class="text-caption text-medium-emphasis">Active</div>
+                  <div class="text-caption text-medium-emphasis">{{ t('schedule.detail_active') }}</div>
                   <v-switch
                     :model-value="schedule.is_active"
                     :disabled="true"
@@ -129,7 +129,7 @@
                   />
                 </div>
                 <div class="mb-3">
-                  <div class="text-caption text-medium-emphasis">Trigger Type</div>
+                  <div class="text-caption text-medium-emphasis">{{ t('schedule.detail_trigger_type') }}</div>
                   <v-chip
                     :color="getTriggerTypeColor(schedule.trigger_type)"
                     size="small"
@@ -139,7 +139,7 @@
                   </v-chip>
                 </div>
                 <div class="mb-3">
-                  <div class="text-caption text-medium-emphasis">Created</div>
+                  <div class="text-caption text-medium-emphasis">{{ t('schedule.detail_created') }}</div>
                   <div class="text-body-1">{{ formatDateTime(schedule.created_at) }}</div>
                 </div>
               </v-col>
@@ -151,36 +151,36 @@
         <v-card class="mb-4">
           <v-card-title class="d-flex align-center">
             <v-icon class="mr-2">mdi-cog</v-icon>
-            Schedule Configuration
+            {{ t('schedule.detail_schedule_configuration') }}
           </v-card-title>
           <v-card-text>
             <v-row>
               <v-col cols="12" md="6">
                 <div class="mb-3">
-                  <div class="text-caption text-medium-emphasis">Cron Expression</div>
+                  <div class="text-caption text-medium-emphasis">{{ t('schedule.detail_cron_expression') }}</div>
                   <div v-if="schedule.trigger_type === 'cron'" class="font-family-mono text-body-1">
                     {{ schedule.cron_expression }}
                   </div>
                   <div v-else class="text-body-1 text-medium-emphasis">
-                    Not applicable
+                    {{ t('schedule.detail_not_applicable') }}
                   </div>
                 </div>
                 <div class="mb-3">
-                  <div class="text-caption text-medium-emphasis">Next Run Time</div>
+                  <div class="text-caption text-medium-emphasis">{{ t('schedule.detail_next_run_time') }}</div>
                   <div class="text-body-1 font-weight-medium">
-                    {{ schedule.next_run_time ? formatDateTime(schedule.next_run_time) : 'Not scheduled' }}
+                    {{ schedule.next_run_time ? formatDateTime(schedule.next_run_time) : t('schedule.detail_not_scheduled') }}
                   </div>
                 </div>
               </v-col>
               <v-col cols="12" md="6">
                 <div class="mb-3">
-                  <div class="text-caption text-medium-emphasis">Last Run Time</div>
+                  <div class="text-caption text-medium-emphasis">{{ t('schedule.detail_last_run_time') }}</div>
                   <div class="text-body-1">
-                    {{ schedule.last_run_time ? formatDateTime(schedule.last_run_time) : 'Never run' }}
+                    {{ schedule.last_run_time ? formatDateTime(schedule.last_run_time) : t('schedule.detail_never_run') }}
                   </div>
                 </div>
                 <div class="mb-3">
-                  <div class="text-caption text-medium-emphasis">Execution Count</div>
+                  <div class="text-caption text-medium-emphasis">{{ t('schedule.detail_execution_count') }}</div>
                   <div class="d-flex align-center">
                     <v-icon class="mr-1" color="success" size="small">mdi-check-circle</v-icon>
                     <span class="font-weight-medium">{{ schedule.execution_count }}</span>
@@ -199,7 +199,7 @@
           <v-card-title class="d-flex align-center justify-space-between">
             <div class="d-flex align-center">
               <v-icon class="mr-2">mdi-history</v-icon>
-              Execution History
+              {{ t('schedule.detail_execution_history') }}
             </div>
             <v-btn
               size="small"
@@ -207,7 +207,7 @@
               @click="loadExecutionHistory"
               :loading="loadingHistory"
             >
-              Refresh
+              {{ t('schedule.detail_refresh') }}
             </v-btn>
           </v-card-title>
           <v-card-text>
@@ -225,19 +225,19 @@
         <v-card class="mb-4">
           <v-card-title class="d-flex align-center">
             <v-icon class="mr-2">mdi-link-variant</v-icon>
-            Dependencies
+            {{ t('schedule.detail_dependencies') }}
           </v-card-title>
           <v-card-text>
             <div v-if="dependencies.children.length === 0 && dependencies.parents.length === 0">
               <div class="text-center py-4">
                 <v-icon size="48" color="grey-lighten-1">mdi-link-off</v-icon>
-                <div class="text-body-2 text-grey-lighten-1 mt-2">No dependencies</div>
+                <div class="text-body-2 text-grey-lighten-1 mt-2">{{ t('schedule.detail_no_dependencies') }}</div>
               </div>
             </div>
             <div v-else>
               <!-- Child Dependencies -->
               <div v-if="dependencies.children.length > 0" class="mb-4">
-                <div class="text-caption text-medium-emphasis mb-2">Triggers these schedules:</div>
+                <div class="text-caption text-medium-emphasis mb-2">{{ t('schedule.detail_triggers_these_schedules') }}</div>
                 <v-list density="compact">
                   <v-list-item
                     v-for="dep in dependencies.children"
@@ -251,7 +251,7 @@
 
               <!-- Parent Dependencies -->
               <div v-if="dependencies.parents.length > 0">
-                <div class="text-caption text-medium-emphasis mb-2">Triggered by:</div>
+                <div class="text-caption text-medium-emphasis mb-2">{{ t('schedule.detail_triggered_by') }}</div>
                 <v-list density="compact">
                   <v-list-item
                     v-for="dep in dependencies.parents"
@@ -270,25 +270,25 @@
         <v-card class="mb-4">
           <v-card-title class="d-flex align-center">
             <v-icon class="mr-2">mdi-chart-line</v-icon>
-            Statistics
+            {{ t('schedule.detail_statistics') }}
           </v-card-title>
           <v-card-text>
             <div class="mb-3">
-              <div class="text-caption text-medium-emphasis">Success Rate</div>
+              <div class="text-caption text-medium-emphasis">{{ t('schedule.detail_success_rate') }}</div>
               <div class="text-h6 font-weight-bold">
                 {{ successRate }}%
               </div>
             </div>
             <div class="mb-3">
-              <div class="text-caption text-medium-emphasis">Average Duration</div>
+              <div class="text-caption text-medium-emphasis">{{ t('schedule.detail_average_duration') }}</div>
               <div class="text-h6 font-weight-bold">
                 {{ averageDuration }}
               </div>
             </div>
             <div class="mb-3">
-              <div class="text-caption text-medium-emphasis">Last Error</div>
+              <div class="text-caption text-medium-emphasis">{{ t('schedule.detail_last_error') }}</div>
               <div class="text-body-2">
-                {{ schedule.last_error_message || 'No errors' }}
+                {{ schedule.last_error_message || t('schedule.detail_no_errors') }}
               </div>
             </div>
           </v-card-text>
@@ -298,7 +298,7 @@
         <v-card>
           <v-card-title class="d-flex align-center">
             <v-icon class="mr-2">mdi-lightning-bolt</v-icon>
-            Quick Actions
+            {{ t('schedule.detail_quick_actions') }}
           </v-card-title>
           <v-card-text>
             <v-btn
@@ -309,7 +309,7 @@
               @click="editSchedule"
               class="mb-2"
             >
-              Edit Schedule
+              {{ t('schedule.detail_edit_schedule') }}
             </v-btn>
             <v-btn
               block
@@ -321,7 +321,7 @@
               :disabled="!schedule.is_active"
               class="mb-2"
             >
-              Run Now
+              {{ t('schedule.detail_run_now') }}
             </v-btn>
             <v-btn
               block
@@ -332,7 +332,7 @@
               v-if="schedule.status === 'active'"
               class="mb-2"
             >
-              Pause
+              {{ t('schedule.detail_pause') }}
             </v-btn>
             <v-btn
               block
@@ -343,7 +343,7 @@
               v-if="schedule.status === 'paused'"
               class="mb-2"
             >
-              Resume
+              {{ t('schedule.detail_resume') }}
             </v-btn>
             <v-btn
               block
@@ -352,7 +352,7 @@
               prepend-icon="mdi-delete"
               @click="deleteSchedule"
             >
-              Delete
+              {{ t('schedule.detail_delete') }}
             </v-btn>
           </v-card-text>
         </v-card>
@@ -388,8 +388,8 @@
         <v-card-text>{{ confirmDialog.message }}</v-card-text>
         <v-card-actions>
           <v-spacer />
-          <v-btn color="secondary" @click="confirmDialog.show = false">Cancel</v-btn>
-          <v-btn color="error" @click="confirmAction">Confirm</v-btn>
+          <v-btn color="secondary" @click="confirmDialog.show = false">{{ t('schedule.detail_cancel') }}</v-btn>
+          <v-btn color="error" @click="confirmAction">{{ t('schedule.detail_confirm') }}</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -399,6 +399,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import ScheduleStatusBadge from './widgets/ScheduleStatusBadge.vue'
 import ExecutionHistoryTable from './widgets/ExecutionHistoryTable.vue'
 import {
@@ -413,6 +414,7 @@ import { TaskType, TriggerType, DependencyCondition } from '@/entity/ScheduleTas
 
 const route = useRoute()
 const router = useRouter()
+const { t } = useI18n()
 
 // Reactive data
 const schedule = ref<any>(null)
@@ -464,7 +466,7 @@ const loadSchedule = async () => {
   const scheduleId = Number(route.params.id)
   
   if (!scheduleId || isNaN(scheduleId)) {
-    error.value = 'Invalid schedule ID'
+    error.value = t('schedule.detail_failed_to_load')
     return
   }
 
@@ -476,7 +478,7 @@ const loadSchedule = async () => {
     schedule.value = data.schedule
     dependencies.value = data.dependencies || { children: [], parents: [] }
   } catch (err) {
-    error.value = `Failed to load schedule: ${err}`
+    error.value = `${t('schedule.detail_failed_to_load')}: ${err}`
   } finally {
     loading.value = false
   }
@@ -502,10 +504,10 @@ const runScheduleNow = async () => {
   try {
     running.value = true
     await runScheduleNowApi(scheduleId)
-    showAlert('Success', 'Schedule execution started', 'success')
+    showAlert(t('schedule.detail_success'), t('schedule.detail_schedule_execution_started'), 'success')
     await loadSchedule()
   } catch (err) {
-    showAlert('Error', `Failed to run schedule: ${err}`, 'error')
+    showAlert(t('schedule.detail_error'), `${t('schedule.detail_failed_to_run_schedule')}: ${err}`, 'error')
   } finally {
     running.value = false
   }
@@ -516,10 +518,10 @@ const pauseSchedule = async () => {
   
   try {
     await pauseScheduleApi(scheduleId)
-    showAlert('Success', 'Schedule paused successfully', 'success')
+    showAlert(t('schedule.detail_success'), t('schedule.detail_schedule_paused_successfully'), 'success')
     await loadSchedule()
   } catch (err) {
-    showAlert('Error', `Failed to pause schedule: ${err}`, 'error')
+    showAlert(t('schedule.detail_error'), `${t('schedule.detail_failed_to_pause_schedule')}: ${err}`, 'error')
   }
 }
 
@@ -528,25 +530,25 @@ const resumeSchedule = async () => {
   
   try {
     await resumeScheduleApi(scheduleId)
-    showAlert('Success', 'Schedule resumed successfully', 'success')
+    showAlert(t('schedule.detail_success'), t('schedule.detail_schedule_resumed_successfully'), 'success')
     await loadSchedule()
   } catch (err) {
-    showAlert('Error', `Failed to resume schedule: ${err}`, 'error')
+    showAlert(t('schedule.detail_error'), `${t('schedule.detail_failed_to_resume_schedule')}: ${err}`, 'error')
   }
 }
 
 const deleteSchedule = () => {
   confirmDialog.value = {
     show: true,
-    title: 'Delete Schedule',
-    message: `Are you sure you want to delete "${schedule.value.name}"? This action cannot be undone.`,
+    title: t('schedule.detail_delete_schedule'),
+    message: t('schedule.detail_delete_confirm', { name: schedule.value.name }),
     action: async () => {
       const scheduleId = Number(route.params.id)
       try {
         await deleteScheduleApi(scheduleId)
-        showAlert('Success', 'Schedule deleted successfully', 'success', 'Go to List', () => router.push('/schedule/list'))
+        showAlert(t('schedule.detail_success'), t('schedule.detail_schedule_deleted_successfully'), 'success', t('schedule.detail_go_to_list'), () => router.push('/schedule/list'))
       } catch (err) {
-        showAlert('Error', `Failed to delete schedule: ${err}`, 'error')
+        showAlert(t('schedule.detail_error'), `${t('schedule.detail_failed_to_delete_schedule')}: ${err}`, 'error')
       }
       confirmDialog.value.show = false
     }

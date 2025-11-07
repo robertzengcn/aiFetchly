@@ -212,8 +212,12 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import ScheduleStatusBadge from './ScheduleStatusBadge.vue'
 import { TaskType, ScheduleStatus, TriggerType } from '@/entity/ScheduleTask.entity'
+
+// I18n
+const { t } = useI18n()
 
 // Props
 interface Props {
@@ -240,55 +244,55 @@ const emit = defineEmits<{
 // Table headers
 const headers = computed(() => [
   {
-    title: 'Name',
+    title: t('schedule.table_name'),
     key: 'name',
     sortable: true,
     width: '250px'
   },
   {
-    title: 'Task Type',
+    title: t('schedule.table_task_type'),
     key: 'task_type',
     sortable: true,
     width: '120px'
   },
   {
-    title: 'Status',
+    title: t('schedule.table_status'),
     key: 'status',
     sortable: true,
     width: '100px'
   },
   {
-    title: 'Trigger',
+    title: t('schedule.table_trigger'),
     key: 'trigger_type',
     sortable: true,
     width: '100px'
   },
   {
-    title: 'Schedule',
+    title: t('schedule.table_schedule'),
     key: 'cron_expression',
     sortable: false,
     width: '150px'
   },
   {
-    title: 'Next Run',
+    title: t('schedule.table_next_run'),
     key: 'next_run_time',
     sortable: true,
     width: '150px'
   },
   {
-    title: 'Last Run',
+    title: t('schedule.table_last_run'),
     key: 'last_run_time',
     sortable: true,
     width: '150px'
   },
   {
-    title: 'Executions',
+    title: t('schedule.table_executions'),
     key: 'execution_count',
     sortable: true,
     width: '100px'
   },
   {
-    title: 'Actions',
+    title: t('schedule.table_actions'),
     key: 'actions',
     sortable: false,
     width: '120px'

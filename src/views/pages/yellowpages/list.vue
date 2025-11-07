@@ -368,8 +368,8 @@ import YellowPagesTaskTable from './components/YellowPagesTaskTable.vue'
 import TaskDetailsView from './components/TaskDetailsView.vue'
 import NoticeSnackbar from '@/views/components/widgets/noticeSnackbar.vue'
 import { getYellowPagesTaskList, getYellowPagesPlatforms, killProcessByPID, startYellowPagesTask, pauseYellowPagesTask, resumeYellowPagesTask } from '@/views/api/yellowpages'
-import { TaskStatus, TaskSummary } from '@/interfaces/ITaskManager'
-import { PlatformSummary } from '@/interfaces/IPlatformConfig'
+import { TaskStatus, TaskSummary } from '@/modules/interface/ITaskManager'
+import { PlatformSummary } from '@/modules/interface/IPlatformConfig'
 
 // Router and i18n
 const router = useRouter()

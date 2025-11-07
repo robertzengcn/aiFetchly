@@ -4,12 +4,12 @@
         <div class="search_bar mt-4 d-flex jsb">
             <div class="d-flex jsb search_tool">
                 <div class="search_wrap mr-4">
-                    <v-text-field rounded class="elevation-0" density="compact" variant="solo" label="Search tasks"
+                    <v-text-field rounded class="elevation-0" density="compact" variant="solo" :label="t('home.search_tasks')"
                         append-inner-icon="mdi-magnify" single-line hide-details></v-text-field>
                 </div>
                 <div class="ml-auto">
                     <v-btn class="btn mb-4" variant="flat" prepend-icon="mdi-plus" color="#5865f2" @click="createTask()">
-                        Create Search Task
+                        {{ t('route.create_search_task') }}
                     </v-btn>
                 </div>
             </div>
@@ -23,6 +23,9 @@
 import { ref } from 'vue';
 import SearchresultTable from '@/views/pages/search/widgets/SearchResultTable.vue'
 import router from '@/views/router';
+import { useI18n } from 'vue-i18n';
+
+const { t } = useI18n();
 //const dialog = ref(false);
 
 // onMounted(() => {

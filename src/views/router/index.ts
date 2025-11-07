@@ -295,11 +295,11 @@ export const constantRoutes: RouteRecordRaw[] = [
       {
         path: 'parse',
         component: () => import('@/views/pages/proxy/proxyparse.vue'),
-        name: 'ParseProxy',
+        name: 'BatchUploadProxy',
         meta: {
           visible: true,
           title: 'route.parse_proxy',
-          icon: 'mdi-code-braces'
+          icon: 'mdi-upload-multiple'
         }
       }
     ]
@@ -488,6 +488,28 @@ export const constantRoutes: RouteRecordRaw[] = [
           visible: false,
           title: 'route.yellow_pages_results',
           icon: 'mdi-chart-bar'
+        }
+      }
+    ]
+  },
+  {
+    path: '/knowledge',
+    name: 'Knowledge_Library',
+    meta: {
+      visible: true,
+      title: 'route.knowledge_library',
+      icon: 'mdi-book-open-variant'
+    },
+    component: Layout,
+    children: [
+      {
+        path: 'library',
+        component: () => import('@/views/pages/knowledge/KnowledgeLibrary.vue'),
+        name: 'KnowledgeLibrary',
+        meta: {
+          visible: true,
+          title: 'route.knowledge_library',
+          icon: 'mdi-book-open-variant'
         }
       }
     ]

@@ -10,7 +10,7 @@ export class ElectronStoreService {
     constructor(service:string){
         // Get app name and combine with service name
         const appName = app.getName();
-        const serviceName = `${appName}:${service}`;
+        const serviceName = `${appName}_${service}`;
         this.store = new Store({name: serviceName});
     }
     public setValue(key, value:string){

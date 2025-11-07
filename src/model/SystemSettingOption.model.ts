@@ -26,5 +26,34 @@ public async findOptionBySetting(settingEntity:SystemSettingEntity): Promise<Sys
     })
 }
 
+/**
+ * Initialize language options for a language preference setting
+ * @param settingEntity - The language preference setting entity
+ */
+public async initLanguageOptions(settingEntity: SystemSettingEntity): Promise<void> {
+    const languageOptions = [
+        { value: 'en', label: 'English', description: 'English language' },
+        { value: 'zh', label: '中文', description: 'Chinese language' }
+    ];
+
+    for (const option of languageOptions) {
+        const existingOption = await this.repository.findOne({
+            where: { 
+                systemSetting: settingEntity,
+                value: option.value
+            }
+        });
+
+        if (!existingOption) {
+            const optionEntity = new SystemSettingOptionEntity();
+            optionEntity.systemSetting = settingEntity;
+            optionEntity.value = option.value;
+            optionEntity.label = option.label;
+            optionEntity.description = option.description;
+            await this.repository.save(optionEntity);
+        }
+    }
+}
+
 
 }

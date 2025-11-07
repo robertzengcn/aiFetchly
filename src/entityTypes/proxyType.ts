@@ -54,6 +54,7 @@ export type ProxyParseItem={
     pass?:string,
     protocol?:string,
     status?:number,
+    timeout?:number,
 }
 export type ProxyCheckres={
     status:boolean,

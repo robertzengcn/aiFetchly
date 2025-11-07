@@ -125,9 +125,11 @@
 import { ref, computed, onMounted, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { SystemSettingDisplay, SystemSettingGroupDisplay, OptionSettingDisplay } from "@/entityTypes/systemsettingType";
-import { getSystemSettinglist,updateSystemSetting } from "@/views/api/systemsetting";
+import { getSystemSettinglist, updateSystemSetting, updateSystemSettingWithValidation } from "@/views/api/systemsetting";
+import { updateLanguagePreference } from '@/views/api/language';
+import { language_preference } from '@/config/settinggroupInit';
 // i18n setup
-const { t } = useI18n();
+const { t, locale } = useI18n();
 import { chooseFileDialog } from "@/views/api/common"
 
 // Store references for settings, groups, and tree state
@@ -262,13 +264,25 @@ async function updateSetting(settingId: number, newValue: string | boolean|null)
     // Show loading indicator
     loadingSettings.value[settingId] = true;
     
-    // Call API to update the setting
-    await updateSystemSetting(settingId, valueToSave);
+    // Get the setting to determine if we need validation
+    const setting = settinglist.value.find(s => s.id === settingId);
+    
+    // Use validation for language preferences
+    if (setting?.key === language_preference) {
+      await updateSystemSettingWithValidation(settingId, valueToSave, setting.key);
+    } else {
+      await updateSystemSetting(settingId, valueToSave);
+    }
     
     // Update local state
-    const setting = settinglist.value.find(s => s.id === settingId);
     if (setting) {
       setting.value = valueToSave;
+      
+      // Handle language preference changes with real-time switching
+      if (setting.key === language_preference && typeof valueToSave === 'string') {
+        console.log('Language preference changed, applying real-time switch:', valueToSave);
+        await handleLanguageChange(valueToSave);
+      }
     }
     
     // Optional: Show success message
@@ -279,6 +293,25 @@ async function updateSetting(settingId: number, newValue: string | boolean|null)
     // e.g., toast.error("Failed to save")
   } finally {
     loadingSettings.value[settingId] = false;
+  }
+}
+
+// Handle language preference changes
+async function handleLanguageChange(newLanguage: string) {
+  try {
+    // Update the i18n locale immediately for real-time switching
+    locale.value = newLanguage;
+    
+    // Also update the language preference via the API for consistency
+    const success = await updateLanguagePreference(newLanguage);
+    
+    if (success) {
+      console.log('Language switched successfully to:', newLanguage);
+    } else {
+      console.warn('Language preference update failed, but UI has been updated');
+    }
+  } catch (error) {
+    console.error('Error handling language change:', error);
   }
 }
 

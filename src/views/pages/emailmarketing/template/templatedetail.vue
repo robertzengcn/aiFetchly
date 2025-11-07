@@ -15,8 +15,7 @@
           <v-textarea ref="textarea" v-model="tplcontent" :label="t('emailmarketing.content')"
             :hint="t('emailmarketing.content_hint')" :rules="[rules.required]" :readonly="loading" clearable rows="10"
             required auto-grow></v-textarea>
-        </v-col>
-        <v-col cols="12" md="1">
+        
           <v-textarea 
             v-model="tplDescription" 
             :label="t('emailmarketing.description')+' (' + t('common.optional') + ')'" 

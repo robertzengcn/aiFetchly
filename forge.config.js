@@ -239,6 +239,15 @@ module.exports={
         language: 1033,
         manufacturer: 'Robert Zeng',
         icon: './src/assets/images/icon.ico',
+        
+        // Include uninstall.exe as extra file
+        extraFiles: [
+          {
+            src: './installer-scripts/uninstall.exe',
+            dest: 'uninstall.exe'
+          }
+        ],
+        
         // Custom WiX installer options
         ui: {
           // Enable custom UI for installation location selection
@@ -284,6 +293,11 @@ module.exports={
             name: 'CreateShortcuts',
             description: 'Create desktop and start menu shortcuts',
             script: './installer-scripts/create-shortcuts.js'
+          },
+          {
+            name: 'CopyUninstaller',
+            description: 'Copy uninstall.exe to installation directory',
+            script: './installer-scripts/copy-uninstaller.js'
           }
         ],
         // Uninstall configuration

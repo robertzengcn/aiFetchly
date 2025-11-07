@@ -1,5 +1,5 @@
 // import {SystemSettingGroup,SystemSetting} from '@/model/modelIndex';
-import {InputTypeEnum} from "@/entityTypes/commonType"
+//import {InputTypeEnum} from "@/entityTypes/commonType"
 export const deepseeklocal='Deepseek-local'
 export const deepseeklocaldescription='Deepseek-local-description'
 export const deepseeklocalurl='Deepseek-url'
