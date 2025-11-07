@@ -1,7 +1,7 @@
 import { PlatformRegistry } from '@/modules/PlatformRegistry';
 import { UnifiedPlatformFactory } from '@/modules/UnifiedPlatformFactory';
-import { PlatformConfig, PlatformType, PlatformFeature } from '@/interfaces/IPlatformConfig';
-import { IBasePlatformAdapter } from '@/interfaces/IBasePlatformAdapter';
+import { PlatformConfig, PlatformType, PlatformFeature } from '@/modules/interface/IPlatformConfig';
+import { IBasePlatformAdapter } from '@/modules/interface/IBasePlatformAdapter';
 import { BaseModule } from '@/modules/baseModule';
 
 /**

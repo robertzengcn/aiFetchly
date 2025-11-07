@@ -123,7 +123,7 @@ headers.value = [
         sortable: false,
         key: 'record_time',
     },
-    { title: 'Actions', key: 'actions', sortable: false },
+    { title: computed(_ => CapitalizeFirstLetter(t("common.actions"))), key: 'actions', sortable: false },
 ];
 const itemsPerPage = ref(10);
 const serverItems = ref<Array<SearchtaskItem>>([]);

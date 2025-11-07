@@ -1,4 +1,4 @@
-import { PlatformConfig, PlatformFeature } from '@/interfaces/IPlatformConfig';
+import { PlatformConfig, PlatformFeature } from '@/modules/interface/IPlatformConfig';
 import { YellowPagesComAdapter } from '@/modules/platforms/YellowPagesComAdapter';
 
 export const Platform_yellowpages_com: PlatformConfig = {

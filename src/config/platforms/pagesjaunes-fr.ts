@@ -1,4 +1,4 @@
-import { PlatformConfig, PlatformFeature } from '@/interfaces/IPlatformConfig';
+import { PlatformConfig, PlatformFeature } from '@/modules/interface/IPlatformConfig';
 import { PagesJaunesAdapter } from '@/modules/platforms/PagesJaunesAdapter';
 
 export const Platform_pagesjaunes_fr: PlatformConfig = {

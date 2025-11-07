@@ -77,6 +77,9 @@
                             <v-icon size="small"></v-icon>
                         </v-badge>
                     </v-btn>
+                    <v-btn variant="text" icon="mdi-chat" @click="toggleChatPanel">
+                        <v-icon size="small"></v-icon>
+                    </v-btn>
                     <v-btn variant="text" append-icon="mdi-chevron-down" class="mr-2">
                         <!-- <v-avatar size="x-small" class="avatar mr-2">
                             <v-img :src="wxtx" alt="{{userName}}"></v-img>
@@ -104,18 +107,6 @@
                 </div>
                 <div style="position: fixed; right: 20px; bottom: 100px; z-index: 99999">
                     <v-btn icon="mdi-cog" />
-                </div>
-                
-                <!-- Test button for multiple messages (remove in production) -->
-                <div style="position: fixed; right: 20px; bottom: 160px; z-index: 99999">
-                    <v-btn 
-                        color="primary" 
-                        size="small" 
-                        @click="testMultipleMessages"
-                        title="Test Multiple Messages"
-                    >
-                        Test Messages
-                    </v-btn>
                 </div>
             </header>
             <div class="router">
@@ -160,6 +151,21 @@
           :type="noticeType"
           :timeout="snaptimeout"
         />
+
+        <!-- AI Chat Panel -->
+        <div class="ai-chat-panel" :class="{ 'panel-open': chatPanelOpen }">
+          <AiChatBox
+            :visible="chatPanelOpen"
+            @close="toggleChatPanel"
+          />
+        </div>
+
+        <!-- Backdrop overlay -->
+        <div
+          v-if="chatPanelOpen"
+          class="chat-backdrop"
+          @click="toggleChatPanel"
+        ></div>
     </v-layout>
    
 </template>
@@ -173,12 +179,17 @@ import { useMainStore } from '@/views/store/appMain';
 import { Signout } from '@/views/api/users'
 import {setLanguage} from '@/views/utils/cookies'
 import {useI18n} from "vue-i18n";
-import { ref,onMounted } from 'vue'
+import { ref,onMounted,onUnmounted } from 'vue'
 import {receiveSystemMessage} from '@/views/api/layout'
 import {CommonDialogMsg} from "@/entityTypes/commonType"
 import NoticeSnackbar from '@/views/components/widgets/noticeSnackbar.vue';
+import AiChatBox from '@/views/components/aiChat/AiChatBox.vue';
 import {GetloginUserInfo} from '@/views/api/users'
 import { getAppName } from '@/views/api/app'
+import { updateLanguagePreference, getLanguagePreference } from '@/views/api/language'
+import { initializeLanguageDetection } from '@/views/utils/browserLanguageDetection'
+import { initializeLanguageMigration } from '@/views/utils/languageMigration'
+import { initializeLanguageSynchronization } from '@/views/utils/languageSynchronization'
 
 
 // import {ref, watchEffect} from "vue";
@@ -214,6 +225,7 @@ const permanent = computed(() => {
 const showNotice = ref(false);
 const showCloudflareNotification = ref(false);
 const currentCloudflareNotification = ref<CommonDialogMsg | null>(null);
+const chatPanelOpen = ref(false);
 const {t,locale} = useI18n();
 const location="end"
 type languageType = {
@@ -230,12 +242,26 @@ const languages: Array<languageType> = [
 // watchEffect(() => {
 //  locale.value = languages.find((x) => x.key === selectedOption.value)!.key;
 // })
-const switchLanguage = (lang: string) => {
-    console.log(lang)
-    // i18n.locale = lang
-    locale.value=lang
-    setLanguage(lang)
-    // router.go(0)
+const switchLanguage = async (lang: string) => {
+    console.log('Switching language to:', lang)
+    
+    try {
+        // Update UI immediately for better user experience
+        locale.value = lang
+        setLanguage(lang)
+        
+        // Persist to system settings in the background
+        const success = await updateLanguagePreference(lang)
+        
+        if (success) {
+            showSuccessMessage(t('layout.language_updated_successfully') || 'Language updated successfully')
+        } else {
+            showWarningMessage(t('layout.language_update_failed') || 'Language update failed, but UI has been updated')
+        }
+    } catch (error) {
+        console.error('Error switching language:', error)
+        showErrorMessage(t('layout.language_switch_error') || 'Error switching language')
+    }
 }
 
 const gotoSystemsetting=()=>{
@@ -270,6 +296,18 @@ const getTranslatedTitle = (title: string): string => {
         return t(title);
     }
     return title;
+}
+
+const toggleChatPanel = () => {
+    chatPanelOpen.value = !chatPanelOpen.value;
+}
+
+// Keyboard shortcut for toggling chat (Ctrl/Cmd + K)
+const handleKeyboardShortcut = (e: KeyboardEvent) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault();
+        toggleChatPanel();
+    }
 }
 
 const getMessageIcon = (type: NoticeType): string => {
@@ -311,14 +349,6 @@ const showSuccessMessage = (content: string) => addMessage('success', content);
 const showErrorMessage = (content: string) => addMessage('error', content);
 const showWarningMessage = (content: string) => addMessage('warning', content);
 const showInfoMessage = (content: string) => addMessage('info', content);
-
-// Test function to demonstrate multiple messages (remove in production)
-const testMultipleMessages = () => {
-    showInfoMessage('Processing your request...');
-    setTimeout(() => showWarningMessage('This is a warning message'), 1000);
-    setTimeout(() => showSuccessMessage('Operation completed successfully!'), 2000);
-    setTimeout(() => showErrorMessage('This is an error message for testing'), 3000);
-};
 onMounted(async () => {
     await GetloginUserInfo().then(res=>{
         console.log(res)
@@ -334,6 +364,34 @@ onMounted(async () => {
         // Keep default value if loading fails
     }
     
+    // Initialize language migration first
+    await initializeLanguageMigration()
+    
+    // Load language preference from system settings
+    try {
+        const systemLanguage = await getLanguagePreference()
+        if (systemLanguage && systemLanguage !== locale.value) {
+            console.log('Loading language preference from system settings:', systemLanguage)
+            locale.value = systemLanguage
+            setLanguage(systemLanguage)
+        }
+    } catch (error) {
+        console.warn('Failed to load language preference from system settings, using current locale:', error)
+        // Keep current locale if loading fails
+    }
+    
+    // Initialize browser language detection for new users
+    initializeLanguageDetection(async (selectedLanguage) => {
+        console.log('User selected language:', selectedLanguage)
+        await switchLanguage(selectedLanguage)
+    })
+    
+    // Initialize language synchronization
+    initializeLanguageSynchronization()
+    
+    // Add keyboard shortcut listener
+    window.addEventListener('keydown', handleKeyboardShortcut)
+    
     receiveSystemMessage((res:CommonDialogMsg)=>{
        console.log(res)
         //revice system message
@@ -344,6 +402,11 @@ onMounted(async () => {
     })
 }
 )
+
+onUnmounted(() => {
+    // Clean up keyboard shortcut listener
+    window.removeEventListener('keydown', handleKeyboardShortcut)
+})
 const showDialog=(status:boolean, content:string)=>{
     // Use the new message system for multiple messages
     const messageType: NoticeType = status ? 'success' : 'error';
@@ -430,5 +493,62 @@ const showDialog=(status:boolean, content:string)=>{
 .message-item:hover {
     transform: translateX(-4px);
     box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
+}
+
+/* AI Chat Panel Styles */
+.ai-chat-panel {
+    position: fixed;
+    top: 0;
+    right: -420px;
+    width: 400px;
+    height: 100vh;
+    background-color: #ffffff;
+    box-shadow: -2px 0 16px rgba(0, 0, 0, 0.1);
+    transition: right 0.3s ease-in-out;
+    z-index: 9998;
+}
+
+.ai-chat-panel.panel-open {
+    right: 0;
+}
+
+.chat-backdrop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.3);
+    z-index: 9997;
+    animation: fadeIn 0.3s ease-in-out;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
+
+/* Dark theme support for chat panel */
+:deep(.v-theme--dark) {
+    .ai-chat-panel {
+        background-color: #1e1e1e;
+        box-shadow: -2px 0 16px rgba(0, 0, 0, 0.5);
+    }
+}
+
+/* Mobile responsiveness for chat panel */
+@media (max-width: 768px) {
+    .ai-chat-panel {
+        width: 100%;
+        right: -100%;
+    }
+
+    .ai-chat-panel.panel-open {
+        right: 0;
+    }
 }
 </style>

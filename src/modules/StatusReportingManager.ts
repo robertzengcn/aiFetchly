@@ -1,5 +1,5 @@
-import { MessageType } from '@/interfaces/IPCMessageProtocol';
-import { TaskStatus } from '@/interfaces/ITaskManager';
+import { MessageType } from '@/modules/interface/IPCMessageProtocol';
+import { TaskStatus } from '@/modules/interface/ITaskManager';
 import { BaseModule } from '@/modules/baseModule';
 import { YellowPagesTaskModel, YellowPagesTaskStatus } from '@/model/YellowPagesTask.model';
 import { YellowPagesResultModel } from '@/model/YellowPagesResult.model';

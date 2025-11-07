@@ -4,7 +4,7 @@
  */
 
 import { YellowPagesCaAdapter } from '@/modules/platforms/YellowPagesCaAdapter';
-import { PlatformConfig, PlatformFeature } from '@/interfaces/IPlatformConfig';
+import { PlatformConfig, PlatformFeature } from '@/modules/interface/IPlatformConfig';
 
 // Mock platform configuration for testing
 const mockConfig: PlatformConfig = {

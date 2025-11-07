@@ -6,7 +6,7 @@
 import { YellowPagesModule } from "@/modules/YellowPagesModule";
 import { TaskExecutorService } from "@/modules/TaskExecutorService";
 import { ScheduleTaskEntity, TaskType } from "@/entity/ScheduleTask.entity";
-import { YellowPagesTaskData, TaskStatus } from "@/interfaces/ITaskManager";
+import { YellowPagesTaskData, TaskStatus } from "@/modules/interface/ITaskManager";
 
 export class YellowPagesIntegrationTest {
     private yellowPagesModule: YellowPagesModule;

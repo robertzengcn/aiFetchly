@@ -5,7 +5,7 @@ import { YellowPagesResultModel } from "@/model/YellowPagesResult.model";
 import { PlatformRegistry } from "@/modules/PlatformRegistry";
 import { AccountCookiesModule } from "@/modules/accountCookiesModule";
 import { BaseModule } from "@/modules/baseModule";
-import { ScrapingProgress } from "@/interfaces/IPCMessage";
+import { ScrapingProgress } from "@/modules/interface/IPCMessage";
 import { 
     BackgroundProcessMessage, 
     StartTaskMessage, 
@@ -29,7 +29,7 @@ import {
     isProgressMessage,
     isCompletedMessage,
     isErrorMessage
-} from "@/interfaces/BackgroundProcessMessages";
+} from "@/modules/interface/BackgroundProcessMessages";
 import { WriteLog, getApplogspath, getRandomValues, getRecorddatetime, sendSystemMessage } from "@/modules/lib/function";
 import { USERLOGPATH, USEREMAIL } from '@/config/usersetting';
 import { Token } from "@/modules/token";

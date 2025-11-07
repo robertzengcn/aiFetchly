@@ -29,9 +29,9 @@ import {
     TaskProgress, 
     YellowPagesResult,
     PaginatedResponse
-} from '@/interfaces/ITaskManager'
+} from '@/modules/interface/ITaskManager'
 // import { PlatformConfig } from '@/interfaces/IPlatformConfig'
-import { PlatformSummary } from '@/interfaces/IPlatformConfig';
+import { PlatformSummary } from '@/modules/interface/IPlatformConfig';
 
 // Task Management
 export async function createYellowPagesTask(taskData: YellowPagesTaskData): Promise<number | null> {

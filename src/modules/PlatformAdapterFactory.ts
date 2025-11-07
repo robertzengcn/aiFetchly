@@ -1,7 +1,7 @@
 import { BaseModule } from '@/modules/baseModule';
 import { PlatformRegistry } from '@/modules/PlatformRegistry';
-import { IBasePlatformAdapter, IPlatformAdapterFactory } from '@/interfaces/IBasePlatformAdapter';
-import { PlatformConfig, PlatformSummary } from '@/interfaces/IPlatformConfig';
+import { IBasePlatformAdapter, IPlatformAdapterFactory } from '@/modules/interface/IBasePlatformAdapter';
+import { PlatformConfig, PlatformSummary } from '@/modules/interface/IPlatformConfig';
 
 /**
  * Platform Adapter Factory - Creates platform adapters based on configuration

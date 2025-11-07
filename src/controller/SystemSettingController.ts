@@ -5,6 +5,7 @@ import { SystemSettingGroupModule } from "@/modules/SystemSettingGroupModule"
 import { SystemSettingModule } from "@/modules/SystemSettingModule"
 // import {SystemSetting,SystemSettingGroup,SystemSettingDetail} from '@/model/modelIndex';  
 import { SystemSettingOptionModule } from "@/modules/SystemSettingOptionModule"
+import { language_preference } from "@/config/settinggroupInit"
 export class SystemSettingController {
     private systemSettingModule: SystemSettingModule
     private systemSettingGroupModule: SystemSettingGroupModule
@@ -62,6 +63,57 @@ export class SystemSettingController {
             return true
         } else {
             return false
+        }
+    }
+
+    // Language preference methods
+    public async getLanguagePreference(): Promise<string> {
+        try {
+            const allSettings = await this.selectAllSystemSettings();
+            
+            // Find the language preference setting
+            for (const group of allSettings) {
+                for (const setting of group.items) {
+                    if (setting.key === language_preference) {
+                        return setting.value || 'en'; // Default to English if no value
+                    }
+                }
+            }
+            
+            // If not found, return default
+            return 'en';
+        } catch (error) {
+            console.error('Error getting language preference:', error);
+            return 'en'; // Default fallback
+        }
+    }
+
+    public async updateLanguagePreference(language: string): Promise<boolean> {
+        try {
+            // Validate language code
+            const validLanguages = ['en', 'zh'];
+            if (!validLanguages.includes(language)) {
+                console.error('Invalid language code:', language);
+                return false;
+            }
+
+            const allSettings = await this.selectAllSystemSettings();
+            
+            // Find the language preference setting
+            for (const group of allSettings) {
+                for (const setting of group.items) {
+                    if (setting.key === language_preference) {
+                        const result = await this.updateSystemSettings(setting.id, language);
+                        return result;
+                    }
+                }
+            }
+            
+            console.error('Language preference setting not found');
+            return false;
+        } catch (error) {
+            console.error('Error updating language preference:', error);
+            return false;
         }
     }
 }

@@ -128,6 +128,28 @@ export type LlmCongfig={
     model:string,
     url?:string,
     apikey?:string,
+}
+
+export interface ChunkAndEmbedResponse {
+    documentId: number;
+    chunksCreated: number;
+    embeddingsGenerated: number;
+    processingTime: number;
+    success: boolean;
+    steps: {
+        chunking: boolean;
+        embedding: boolean;
+    };
+    chunkingResult?: {
+        chunksCreated: number;
+        processingTime: number;
+        message: string;
+    };
+    embeddingResult?: {
+        chunksProcessed: number;
+        processingTime: number;
+        message: string;
+    };
 }  
 export type TraditionalTranslateCongfig={
     url:string,
@@ -145,3 +167,131 @@ export type LlmDatatype={
 export type NativateDatatype={
     path:string
 }
+
+// RAG Configuration Types
+
+/**
+ * Configuration for embedding models
+ */
+export interface EmbeddingConfig {
+    model: string;
+    dimensions?: number;
+    maxTokens?: number;
+    timeout?: number;
+    retries?: number;
+}
+
+// AI Chat Types
+
+/**
+ * Chat message interface
+ */
+export interface ChatMessage {
+    id: string;
+    role: 'user' | 'assistant' | 'system';
+    content: string;
+    timestamp: Date;
+    conversationId?: string;
+}
+
+/**
+ * Chat history response
+ */
+export interface ChatHistoryResponse {
+    messages: ChatMessage[];
+    totalMessages: number;
+    conversationId: string;
+}
+
+/**
+ * Chat stream chunk
+ */
+export interface ChatStreamChunk {
+    content: string;
+    isComplete: boolean;
+    messageId?: string;
+    eventType?: string;
+    toolName?: string;
+    toolParams?: Record<string, unknown>;
+    toolId?: string;
+    toolResult?: Record<string, unknown>;
+    errorMessage?: string;
+    conversationId?: string;
+}
+
+/**
+ * Chat response from remote API
+ */
+export interface ChatApiResponse {
+    message: string;
+    conversationId: string;
+    messageId: string;
+    model: string;
+    tokensUsed?: number;
+}
+
+export interface ConfigurationResponse {
+    success: boolean;
+    data: any;
+    metadata?: {
+        version: string;
+        lastUpdated: string;
+        ttl: number;
+        autoSelected: boolean;
+        selectionReason?: string;
+    };
+}
+
+export interface ConfigurationError {
+    code: string;
+    message: string;
+    details?: any;
+}
+
+// File Upload Response Types
+export interface UploadedDocument {
+    id: number;
+    name: string;
+    title: string;
+    description?: string;
+    tags?: string[];
+    author?: string;
+    filePath: string;
+    fileSize?: number;
+    fileType?: string;
+    uploadDate?: string;
+    status: string;
+    processingStatus?: string;
+    log?: string; // Error log file path
+}
+
+export interface SaveTempFileResponse {
+    tempFilePath: string;
+    databaseSaved: boolean;
+    databaseError?: string | null;
+    document?: UploadedDocument;
+}
+
+export interface DocumentUploadResponse {
+    documentId: number;
+    chunksCreated: number;
+    processingTime: number;
+    document: UploadedDocument;
+}
+
+// RAG Statistics Types
+export interface RagSearchStats {
+    totalDocuments: number;
+    totalChunks: number;
+    indexSize: number;
+    averageChunkSize: number;
+    embeddingModel: string;
+    embeddingProvider: string;
+}
+
+export interface RagStatsResponse extends RagSearchStats {
+    defaultEmbeddingModel: string | null;
+}
+
+// Re-export metadata types for convenience
+export * from './metadataType';

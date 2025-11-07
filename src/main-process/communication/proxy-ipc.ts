@@ -10,6 +10,7 @@ import {PROXYLIST,PROXYDETAIL,PROXYSAVE,PROXYCHECK,PROXYIMPORT,PROXYDELETE} from
 export function registeProxyIpcHandlers() {
 
   ipcMain.on(CHECKALLPROXY, async (event, data) => {
+    const qdata = JSON.parse(data) as { timeout?: number };
     const proxyCon = new ProxyController()
     await proxyCon.checkAllproxy(function (num, total) {
       const process = Math.round(num / total * 100)
@@ -34,7 +35,7 @@ export function registeProxyIpcHandlers() {
         }
       }
       event.sender.send(CHECKALLPROXYMESSAGE, JSON.stringify(finmessageData))
-    })
+    }, qdata.timeout)
   })
 
   ipcMain.handle(PROXYDETAIL, async (event, data) => {
@@ -91,7 +92,7 @@ export function registeProxyIpcHandlers() {
     const qdata = JSON.parse(data) as ProxyParseItem;
 
     const proxyCon = new ProxyController()
-    const res = await proxyCon.checkProxy(qdata).catch(function (err) {
+    const res = await proxyCon.checkProxy(qdata, qdata.timeout).catch(function (err) {
       return { status: false, msg: err.message, data: false };
     })
     return res

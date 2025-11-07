@@ -1,4 +1,4 @@
-import { PlatformConfig } from '@/interfaces/IPlatformConfig';
+import { PlatformConfig } from '@/modules/interface/IPlatformConfig';
 import { BasePlatformAdapter } from '@/modules/BasePlatformAdapter';
 
 /**

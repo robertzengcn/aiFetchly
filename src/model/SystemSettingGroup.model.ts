@@ -2,16 +2,19 @@ import { BaseDb } from "@/model/Basedb";
 import { Repository } from "typeorm"
 import { SystemSettingGroupEntity } from "@/entity/SystemSettingGroup.entity"
 import {SystemSettingModel} from "@/model/SystemSetting.model"
-import {settinggroupInit} from "@/config/settinggroupInit"
+import {settinggroupInit, language_preference, embedding_group} from "@/config/settinggroupInit"
 import { SystemSettingEntity } from "@/entity/SystemSetting.entity"
+import {SystemSettingOptionModel} from "@/model/SystemSettingOption.model"
 
 export const deepseeklocalgroup = 'Deepseek-local'
 export class SystemSettingGroupModel extends BaseDb {
     private repository: Repository<SystemSettingGroupEntity>
     private systemSettingModel:SystemSettingModel
+    private systemSettingOptionModel:SystemSettingOptionModel
     constructor(filepath: string) {
         super(filepath)
         this.systemSettingModel = new SystemSettingModel(filepath)
+        this.systemSettingOptionModel = new SystemSettingOptionModel(filepath)
         this.repository = this.sqliteDb.connection.getRepository(SystemSettingGroupEntity)
        
     }
@@ -42,7 +45,12 @@ export class SystemSettingGroupModel extends BaseDb {
                             systemSettingEntity.value = settingelement.value;
                             systemSettingEntity.description = settingelement.description? settingelement.description:'';
                             systemSettingEntity.type = settingelement.type;
-                           await this.systemSettingModel.insert(systemSettingEntity)
+                           const savedSetting = await this.systemSettingModel.insert(systemSettingEntity)
+                           
+                           // Initialize language options if this is the language preference setting
+                           if (settingelement.key === language_preference) {
+                               await this.systemSettingOptionModel.initLanguageOptions(savedSetting);
+                           }
                         }else{
                             await this.systemSettingModel.updateGroup(setting,settargroup)
                         }
@@ -84,6 +92,41 @@ export class SystemSettingGroupModel extends BaseDb {
                 settings: true
             }
         });
+    }
+
+    /**
+     * Get or create embedding settings group
+     * @returns SystemSettingGroupEntity for embedding settings
+     */
+    public async getOrCreateEmbeddingGroup(): Promise<SystemSettingGroupEntity> {
+        const embeddingGroupName = embedding_group;
+        
+        let embeddingGroup = await this.repository.findOne({
+            where: { name: embeddingGroupName },
+            relations: { settings: true }
+        });
+
+        if (!embeddingGroup) {
+            const systemSettingGroupEntity = new SystemSettingGroupEntity();
+            systemSettingGroupEntity.name = embeddingGroupName;
+            systemSettingGroupEntity.description = 'Settings for embedding models and document processing';
+            embeddingGroup = await this.repository.save(systemSettingGroupEntity);
+        }
+
+        return embeddingGroup;
+    }
+
+    /**
+     * Create a new system setting group
+     * @param name Group name
+     * @param description Group description
+     * @returns Created SystemSettingGroupEntity
+     */
+    public async createGroup(name: string, description: string): Promise<SystemSettingGroupEntity> {
+        const systemSettingGroupEntity = new SystemSettingGroupEntity();
+        systemSettingGroupEntity.name = name;
+        systemSettingGroupEntity.description = description;
+        return await this.repository.save(systemSettingGroupEntity);
     }
    
 

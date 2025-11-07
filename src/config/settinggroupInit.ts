@@ -29,7 +29,11 @@ export const twocaptchadescription='2captcha-description'
 export const external_system='external_system'
 export const chrome_path='chrome_path'
 export const firefox_path='firefox_path'
-
+export const user_preferences='user_preferences'
+export const language_preference='language_preference'
+export const embedding_group='embedding_group'
+export const embedding_group_description='embedding_group_description'
+export const default_embedding_model='default_embedding_model'
 export const settinggroupInit: Array<SystemSettingGroupdf> = [
     {
         name: deepseeklocalgroup,
@@ -164,6 +168,18 @@ export const settinggroupInit: Array<SystemSettingGroupdf> = [
         ]
     },
     {
+        name: embedding_group,
+        description: embedding_group_description,
+        items: [
+            {
+                key: default_embedding_model,
+                value: '',
+                description: '',
+                type: 'select',
+            }
+        ]
+    },
+    {
         name: external_system,
         description: 'external-system-group-description',
         items: [
@@ -178,6 +194,18 @@ export const settinggroupInit: Array<SystemSettingGroupdf> = [
                 value: '',
                 description: 'firefox-path-description',
                 type: 'file',
+            }
+        ]
+    },
+    {
+        name: user_preferences,
+        description: 'user-preferences-group-description',
+        items: [
+            {
+                key: language_preference,
+                value: 'en',
+                description: 'language-preference-description',
+                type: 'select',
             }
         ]
     },

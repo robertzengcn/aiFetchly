@@ -71,7 +71,7 @@
           color="primary"
           variant="text"
           @click="viewDetails(item)"
-          title="View Details"
+          :title="t('home.view_details')"
         />
         <v-btn
           v-if="item.status === 'running'"
@@ -80,7 +80,7 @@
           color="error"
           variant="text"
           @click="cancelExecution(item)"
-          title="Cancel Execution"
+          :title="t('common.cancel')"
         />
       </div>
     </template>
@@ -94,9 +94,9 @@
     <template v-slot:no-data>
       <div class="text-center py-4">
         <v-icon size="48" color="grey-lighten-1">mdi-history</v-icon>
-        <div class="text-h6 text-grey-lighten-1 mt-4">No execution history</div>
+        <div class="text-h6 text-grey-lighten-1 mt-4">{{ t('schedule.execution_no_history') }}</div>
         <div class="text-body-2 text-grey-lighten-1">
-          This schedule hasn't been executed yet
+          {{ t('schedule.execution_never_executed') }}
         </div>
       </div>
     </template>
@@ -105,6 +105,7 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import ExecutionStatusBadge from './ExecutionStatusBadge.vue'
 import { ExecutionStatus } from '@/entity/ScheduleExecutionLog.entity'
 
@@ -124,46 +125,49 @@ const emit = defineEmits<{
   'cancel-execution': [execution: any]
 }>()
 
+// i18n
+const { t } = useI18n()
+
 // Table headers
 const headers = computed(() => [
   {
-    title: 'Start Time',
+    title: t('schedule.execution_start_time'),
     key: 'start_time',
     sortable: true,
     width: '150px'
   },
   {
-    title: 'End Time',
+    title: t('schedule.execution_end_time'),
     key: 'end_time',
     sortable: true,
     width: '150px'
   },
   {
-    title: 'Duration',
+    title: t('schedule.execution_duration'),
     key: 'duration',
     sortable: true,
     width: '100px'
   },
   {
-    title: 'Status',
+    title: t('common.status'),
     key: 'status',
     sortable: true,
     width: '100px'
   },
   {
-    title: 'Result',
+    title: t('schedule.execution_result'),
     key: 'result',
     sortable: false,
     width: '200px'
   },
   {
-    title: 'Error',
+    title: t('schedule.execution_error'),
     key: 'error_message',
     sortable: false,
     width: '200px'
   },
   {
-    title: 'Actions',
+    title: t('common.actions'),
     key: 'actions',
     sortable: false,
     width: '80px'
