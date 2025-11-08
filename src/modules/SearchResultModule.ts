@@ -2,6 +2,7 @@ import { ISearchResultApi } from "./interface/ISearchResultApi";
 import { SearchResultModel } from "@/model/SearchResult.model";
 import { SearchResEntity } from "@/entityTypes/scrapeType";
 import { BaseModule } from "./baseModule";
+import { AggregatedCount } from "@/entityTypes/dashboardType";
 
 export class SearchResultModule extends BaseModule implements ISearchResultApi {
     private searchResultModel: SearchResultModel;
@@ -52,6 +53,34 @@ export class SearchResultModule extends BaseModule implements ISearchResultApi {
         } catch (error) {
             console.error("Failed to count search results:", error);
             throw new Error(error instanceof Error ? error.message : "Failed to count search results");
+        }
+    }
+
+    async countAll(): Promise<number> {
+        try {
+            return await this.searchResultModel.countAll();
+        } catch (error) {
+            console.error("Failed to count search results:", error);
+            throw new Error(error instanceof Error ? error.message : "Failed to count search results");
+        }
+    }
+
+    async countByDateRange(startDate: Date, endDate: Date): Promise<number> {
+        try {
+            return await this.searchResultModel.countByDateRange(startDate, endDate);
+        } catch (error) {
+            console.error("Failed to count search results by date range:", error);
+            throw new Error(error instanceof Error ? error.message : "Failed to count search results by date range");
+        }
+    }
+
+    async aggregateByDateRange(startDate: Date, endDate: Date, granularity: 'day' | 'week' | 'month'): Promise<AggregatedCount[]> {
+        try {
+            const rows = await this.searchResultModel.aggregateByDateRange(startDate, endDate, granularity);
+            return rows.map(row => ({ date: row.date, count: row.count }));
+        } catch (error) {
+            console.error("Failed to aggregate search results by date range:", error);
+            throw new Error(error instanceof Error ? error.message : "Failed to aggregate search results by date range");
         }
     }
 
