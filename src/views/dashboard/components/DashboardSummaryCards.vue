@@ -12,7 +12,7 @@
       >
         <v-card-text>
           <div v-if="loading">
-            <v-skeleton-loader type="card-heading, list-item"></v-skeleton-loader>
+            <v-skeleton-loader type="article"></v-skeleton-loader>
           </div>
           <div v-else class="card-content">
             <div class="d-flex align-center mb-2">
@@ -52,7 +52,7 @@
       >
         <v-card-text>
           <div v-if="loading">
-            <v-skeleton-loader type="card-heading, list-item"></v-skeleton-loader>
+            <v-skeleton-loader type="article"></v-skeleton-loader>
           </div>
           <div v-else class="card-content">
             <div class="d-flex align-center mb-2">
@@ -92,7 +92,7 @@
       >
         <v-card-text>
           <div v-if="loading">
-            <v-skeleton-loader type="card-heading, list-item"></v-skeleton-loader>
+            <v-skeleton-loader type="article"></v-skeleton-loader>
           </div>
           <div v-else class="card-content">
             <div class="d-flex align-center mb-2">
@@ -132,7 +132,7 @@
       >
         <v-card-text>
           <div v-if="loading">
-            <v-skeleton-loader type="card-heading, list-item"></v-skeleton-loader>
+            <v-skeleton-loader type="article"></v-skeleton-loader>
           </div>
           <div v-else class="card-content">
             <div class="d-flex align-center mb-2">
