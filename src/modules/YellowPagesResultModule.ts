@@ -3,6 +3,7 @@ import { YellowPagesResultModel } from "@/model/YellowPagesResult.model";
 import { SortBy } from "@/entityTypes/commonType";
 import { YellowPagesResultEntity } from "@/entity/YellowPagesResult.entity";
 import { YellowPagesResult } from "@/modules/interface/ITaskManager";
+import { AggregatedCount } from "@/entityTypes/dashboardType";
 
 export class YellowPagesResultModule extends BaseModule {
     private yellowPagesResultModel: YellowPagesResultModel;
@@ -178,6 +179,25 @@ export class YellowPagesResultModule extends BaseModule {
             throw new Error(`Failed to count results: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
     }
+
+  async countResultsByDateRange(startDate: Date, endDate: Date): Promise<number> {
+    try {
+      return await this.yellowPagesResultModel.countByDateRange(startDate, endDate);
+    } catch (error) {
+      console.error('Error counting results by date range:', error);
+      throw new Error(`Failed to count results by date range: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  async aggregateResultsByDateRange(startDate: Date, endDate: Date, granularity: 'day' | 'week' | 'month'): Promise<AggregatedCount[]> {
+    try {
+      const rows = await this.yellowPagesResultModel.aggregateByDateRange(startDate, endDate, granularity);
+      return rows.map(row => ({ date: row.date, count: row.count }));
+    } catch (error) {
+      console.error('Error aggregating results by date range:', error);
+      throw new Error(`Failed to aggregate results by date range: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
 
     /**
      * List results with pagination and sorting

@@ -229,3 +229,9 @@ export const AI_CHAT_STREAM_COMPLETE = 'ai-chat:stream-complete'
 export const AI_CHAT_HISTORY = 'ai-chat:history'
 export const AI_CHAT_CLEAR = 'ai-chat:clear'
 export const AI_CHAT_CONVERSATIONS = 'ai-chat:conversations'
+
+// Dashboard Channels
+export const DASHBOARD_SUMMARY = 'dashboard:summary'
+export const DASHBOARD_TRENDS = 'dashboard:trends'
+export const DASHBOARD_SEARCH_ENGINES = 'dashboard:search_engines'
+export const DASHBOARD_EMAIL_STATUS = 'dashboard:email_status'
