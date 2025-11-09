@@ -2,7 +2,7 @@
   <v-card class="chart-card" elevation="2">
     <v-card-title class="d-flex align-center">
       <v-icon class="mr-2" color="primary">mdi-chart-line</v-icon>
-      <span>Trends Over Time</span>
+      <span>{{ translations.trendsOverTime }}</span>
       <v-spacer></v-spacer>
       <v-btn v-if="!loading && !error" icon size="small" variant="text" @click="refreshData">
         <v-icon>mdi-refresh</v-icon>
@@ -16,17 +16,17 @@
       
       <div v-else-if="error" class="error-state text-center py-8">
         <v-icon size="64" color="error">mdi-alert-circle-outline</v-icon>
-        <div class="text-h6 mt-4">Unable to load chart</div>
+        <div class="text-h6 mt-4">{{ translations.unableToLoadChart }}</div>
         <div class="text-body-2 text-medium-emphasis mt-2">{{ error }}</div>
         <v-btn color="primary" class="mt-4" @click="refreshData">
-          Retry
+          {{ translations.retry }}
         </v-btn>
       </div>
       
       <div v-else-if="!hasData" class="empty-state text-center py-8">
         <v-icon size="64" color="grey">mdi-chart-line-variant</v-icon>
-        <div class="text-h6 mt-4">No trend data available</div>
-        <div class="text-body-2 text-medium-emphasis mt-2">No data found for the selected period</div>
+        <div class="text-h6 mt-4">{{ translations.noTrendDataAvailable }}</div>
+        <div class="text-body-2 text-medium-emphasis mt-2">{{ translations.noDataFoundForPeriod }}</div>
       </div>
       
       <div v-else class="chart-container">
@@ -43,11 +43,29 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue';
+import { useI18n } from 'vue-i18n';
 import VueApexCharts from 'vue3-apexcharts';
 import type { TrendData } from '@/entityTypes/dashboardType';
 import { useTheme } from 'vuetify';
 
 const apexchart = VueApexCharts;
+
+// i18n
+const { t } = useI18n();
+
+// Computed translations
+const translations = computed(() => ({
+  trendsOverTime: t('home.trends_over_time'),
+  searchResults: t('home.search_results'),
+  emailsExtracted: t('home.emails_extracted'),
+  yellowPages: t('home.yellow_pages'),
+  emailsSent: t('home.emails_sent'),
+  retry: t('home.retry'),
+  unableToLoadChart: t('home.unable_to_load_chart'),
+  noTrendDataAvailable: t('home.no_trend_data_available'),
+  noDataFoundForPeriod: t('home.no_data_found_for_period'),
+  count: t('home.count')
+}));
 
 // Props
 interface Props {
@@ -80,19 +98,19 @@ const chartSeries = computed(() => {
   
   return [
     {
-      name: 'Search Results',
+      name: translations.value.searchResults,
       data: props.data.searchResults
     },
     {
-      name: 'Emails Extracted',
+      name: translations.value.emailsExtracted,
       data: props.data.emailsExtracted
     },
     {
-      name: 'Yellow Pages',
+      name: translations.value.yellowPages,
       data: props.data.yellowPagesResults
     },
     {
-      name: 'Emails Sent',
+      name: translations.value.emailsSent,
       data: props.data.emailsSent
     }
   ];
@@ -139,7 +157,7 @@ const chartOptions = computed(() => ({
   },
   yaxis: {
     title: {
-      text: 'Count',
+      text: translations.value.count,
       style: {
         color: theme.current.value.dark ? '#FFFFFF' : '#000000'
       }

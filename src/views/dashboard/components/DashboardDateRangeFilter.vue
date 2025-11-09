@@ -43,7 +43,7 @@
             <v-col cols="12" sm="5">
               <v-text-field
                 v-model="customStartDate"
-                label="Start Date"
+                :label="translations.startDate"
                 type="date"
                 variant="outlined"
                 density="compact"
@@ -54,7 +54,7 @@
             <v-col cols="12" sm="5">
               <v-text-field
                 v-model="customEndDate"
-                label="End Date"
+                :label="translations.endDate"
                 type="date"
                 variant="outlined"
                 density="compact"
@@ -69,7 +69,7 @@
                 :disabled="!isValidRange"
                 @click="applyCustomDateRange"
               >
-                Apply
+                {{ translations.apply }}
               </v-btn>
             </v-col>
           </v-row>
@@ -97,7 +97,7 @@
     >
       <v-card>
         <v-toolbar color="primary" dark>
-          <v-toolbar-title>Select Date Range</v-toolbar-title>
+          <v-toolbar-title>{{ translations.selectDateRange }}</v-toolbar-title>
           <v-spacer></v-spacer>
           <v-btn icon @click="showDatePickerDialog = false">
             <v-icon>mdi-close</v-icon>
@@ -107,7 +107,7 @@
         <v-card-text class="pa-4">
           <v-text-field
             v-model="customStartDate"
-            label="Start Date"
+            :label="translations.startDate"
             type="date"
             variant="outlined"
             class="mb-3"
@@ -116,7 +116,7 @@
           
           <v-text-field
             v-model="customEndDate"
-            label="End Date"
+            :label="translations.endDate"
             type="date"
             variant="outlined"
             class="mb-3"
@@ -141,7 +141,7 @@
             @click="showDatePickerDialog = false"
             style="min-height: 44px"
           >
-            Cancel
+            {{ translations.cancel }}
           </v-btn>
           <v-btn
             block
@@ -151,7 +151,7 @@
             style="min-height: 44px"
             class="ml-2"
           >
-            Apply
+            {{ translations.apply }}
           </v-btn>
         </v-card-actions>
       </v-card>
@@ -162,21 +162,40 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue';
 import { useDisplay } from 'vuetify';
+import { useI18n } from 'vue-i18n';
 import { getDateRangePreset, formatDateForAPI, validateDateRange } from '@/views/utils/dateUtils';
+
+// i18n
+const { t } = useI18n();
 
 // Responsive breakpoints
 const { mobile } = useDisplay();
 const isMobile = computed(() => mobile.value);
 
+// Computed translations
+const translations = computed(() => ({
+  last7Days: t('home.last_7_days'),
+  last30Days: t('home.last_30_days'),
+  last90Days: t('home.last_90_days'),
+  last365Days: t('home.last_365_days'),
+  allTime: t('home.all_time'),
+  custom: t('home.custom'),
+  startDate: t('home.start_date'),
+  endDate: t('home.end_date'),
+  apply: t('home.apply'),
+  selectDateRange: t('home.select_date_range'),
+  cancel: t('common.cancel')
+}));
+
 // Preset options
-const presets = [
-  { label: 'Last 7 days', value: 'last7' },
-  { label: 'Last 30 days', value: 'last30' },
-  { label: 'Last 90 days', value: 'last90' },
-  { label: 'Last 365 days', value: 'last365' },
-  { label: 'All time', value: 'all' },
-  { label: 'Custom', value: 'custom' }
-];
+const presets = computed(() => [
+  { label: translations.value.last7Days, value: 'last7' },
+  { label: translations.value.last30Days, value: 'last30' },
+  { label: translations.value.last90Days, value: 'last90' },
+  { label: translations.value.last365Days, value: 'last365' },
+  { label: translations.value.allTime, value: 'all' },
+  { label: translations.value.custom, value: 'custom' }
+]);
 
 // State
 const activePreset = ref<string>('last30'); // Default to last 30 days

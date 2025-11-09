@@ -2,7 +2,7 @@
   <v-card class="chart-card" elevation="2">
     <v-card-title class="d-flex align-center">
       <v-icon class="mr-2" color="info">mdi-email-check</v-icon>
-      <span>Email Status Distribution</span>
+      <span>{{ translations.emailStatusDistribution }}</span>
       <v-spacer></v-spacer>
       <v-btn v-if="!loading && !error" icon size="small" variant="text" @click="refreshData">
         <v-icon>mdi-refresh</v-icon>
@@ -16,17 +16,17 @@
       
       <div v-else-if="error" class="error-state text-center py-8">
         <v-icon size="64" color="error">mdi-alert-circle-outline</v-icon>
-        <div class="text-h6 mt-4">Unable to load chart</div>
+        <div class="text-h6 mt-4">{{ translations.unableToLoadChart }}</div>
         <div class="text-body-2 text-medium-emphasis mt-2">{{ error }}</div>
         <v-btn color="primary" class="mt-4" @click="refreshData">
-          Retry
+          {{ translations.retry }}
         </v-btn>
       </div>
       
       <div v-else-if="!hasData" class="empty-state text-center py-8">
         <v-icon size="64" color="grey">mdi-chart-donut</v-icon>
-        <div class="text-h6 mt-4">No email status data available</div>
-        <div class="text-body-2 text-medium-emphasis mt-2">No data found for the selected period</div>
+        <div class="text-h6 mt-4">{{ translations.noEmailStatusDataAvailable }}</div>
+        <div class="text-body-2 text-medium-emphasis mt-2">{{ translations.noDataFoundForPeriod }}</div>
       </div>
       
       <div v-else class="chart-container">
@@ -43,11 +43,28 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue';
+import { useI18n } from 'vue-i18n';
 import VueApexCharts from 'vue3-apexcharts';
 import type { EmailStatusBreakdown } from '@/entityTypes/dashboardType';
 import { useTheme } from 'vuetify';
 
 const apexchart = VueApexCharts;
+
+// i18n
+const { t } = useI18n();
+
+// Computed translations
+const translations = computed(() => ({
+  emailStatusDistribution: t('home.email_status_distribution'),
+  successful: t('home.successful'),
+  failed: t('home.failed'),
+  pending: t('home.pending'),
+  totalEmails: t('home.total_emails'),
+  retry: t('home.retry'),
+  unableToLoadChart: t('home.unable_to_load_chart'),
+  noEmailStatusDataAvailable: t('home.no_email_status_data_available'),
+  noDataFoundForPeriod: t('home.no_data_found_for_period')
+}));
 
 // Props
 interface Props {
@@ -97,7 +114,7 @@ const chartOptions = computed(() => ({
     height: 400
   },
   colors: ['#4CAF50', '#F44336', '#FFC107'], // Green (success), Red (failed), Yellow (pending)
-  labels: ['Successful', 'Failed', 'Pending'],
+  labels: [translations.value.successful, translations.value.failed, translations.value.pending],
   dataLabels: {
     enabled: true,
     formatter: (val: number) => val.toFixed(1) + '%'
@@ -110,7 +127,7 @@ const chartOptions = computed(() => ({
           show: true,
           total: {
             show: true,
-            label: 'Total Emails',
+            label: translations.value.totalEmails,
             fontSize: '16px',
             fontWeight: 600,
             color: theme.current.value.dark ? '#FFFFFF' : '#000000',

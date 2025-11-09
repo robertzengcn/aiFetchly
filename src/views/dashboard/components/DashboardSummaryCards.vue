@@ -17,7 +17,7 @@
           <div v-else class="card-content">
             <div class="d-flex align-center mb-2">
               <v-icon color="primary" size="32" class="mr-2">mdi-magnify</v-icon>
-              <div class="text-subtitle-2 text-medium-emphasis">Search Results</div>
+              <div class="text-subtitle-2 text-medium-emphasis">{{ translations.searchResults }}</div>
             </div>
             <div class="text-h4 font-weight-bold primary--text mb-2">
               {{ formatNumber(data?.searchResults?.periodCount ?? 0) }}
@@ -33,7 +33,7 @@
               <span :class="`text-${getTrendColor(data?.searchResults?.trendDirection)}`" class="text-body-2">
                 {{ formatTrend(data?.searchResults?.trend) }}
               </span>
-              <span class="text-medium-emphasis text-body-2 ml-1">vs previous period</span>
+              <span class="text-medium-emphasis text-body-2 ml-1">{{ translations.vsPreviousPeriod }}</span>
             </div>
           </div>
         </v-card-text>
@@ -57,7 +57,7 @@
           <div v-else class="card-content">
             <div class="d-flex align-center mb-2">
               <v-icon color="success" size="32" class="mr-2">mdi-email-multiple</v-icon>
-              <div class="text-subtitle-2 text-medium-emphasis">Emails Extracted</div>
+              <div class="text-subtitle-2 text-medium-emphasis">{{ translations.emailsExtracted }}</div>
             </div>
             <div class="text-h4 font-weight-bold success--text mb-2">
               {{ formatNumber(data?.emailsExtracted?.periodCount ?? 0) }}
@@ -73,7 +73,7 @@
               <span :class="`text-${getTrendColor(data?.emailsExtracted?.trendDirection)}`" class="text-body-2">
                 {{ formatTrend(data?.emailsExtracted?.trend) }}
               </span>
-              <span class="text-medium-emphasis text-body-2 ml-1">vs previous period</span>
+              <span class="text-medium-emphasis text-body-2 ml-1">{{ translations.vsPreviousPeriod }}</span>
             </div>
           </div>
         </v-card-text>
@@ -97,7 +97,7 @@
           <div v-else class="card-content">
             <div class="d-flex align-center mb-2">
               <v-icon color="warning" size="32" class="mr-2">mdi-book-open-page-variant</v-icon>
-              <div class="text-subtitle-2 text-medium-emphasis">Yellow Pages</div>
+              <div class="text-subtitle-2 text-medium-emphasis">{{ translations.yellowPages }}</div>
             </div>
             <div class="text-h4 font-weight-bold warning--text mb-2">
               {{ formatNumber(data?.yellowPagesResults?.periodCount ?? 0) }}
@@ -113,7 +113,7 @@
               <span :class="`text-${getTrendColor(data?.yellowPagesResults?.trendDirection)}`" class="text-body-2">
                 {{ formatTrend(data?.yellowPagesResults?.trend) }}
               </span>
-              <span class="text-medium-emphasis text-body-2 ml-1">vs previous period</span>
+              <span class="text-medium-emphasis text-body-2 ml-1">{{ translations.vsPreviousPeriod }}</span>
             </div>
           </div>
         </v-card-text>
@@ -137,7 +137,7 @@
           <div v-else class="card-content">
             <div class="d-flex align-center mb-2">
               <v-icon color="info" size="32" class="mr-2">mdi-email-send</v-icon>
-              <div class="text-subtitle-2 text-medium-emphasis">Emails Sent</div>
+              <div class="text-subtitle-2 text-medium-emphasis">{{ translations.emailsSent }}</div>
             </div>
             <div class="text-h4 font-weight-bold info--text mb-2">
               {{ formatNumber(data?.emailsSent?.periodCount ?? 0) }}
@@ -153,10 +153,10 @@
               <span :class="`text-${getTrendColor(data?.emailsSent?.trendDirection)}`" class="text-body-2">
                 {{ formatTrend(data?.emailsSent?.trend) }}
               </span>
-              <span class="text-medium-emphasis text-body-2 ml-1">vs previous period</span>
+              <span class="text-medium-emphasis text-body-2 ml-1">{{ translations.vsPreviousPeriod }}</span>
             </div>
             <div class="text-caption text-medium-emphasis">
-              Success Rate: {{ formatPercentage(data?.emailsSent?.successRate ?? 0) }}
+              {{ translations.successRate }}: {{ formatPercentage(data?.emailsSent?.successRate ?? 0) }}
             </div>
           </div>
         </v-card-text>
@@ -166,8 +166,22 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
+import { useI18n } from 'vue-i18n';
 import type { DashboardSummary } from '@/entityTypes/dashboardType';
+
+// i18n
+const { t } = useI18n();
+
+// Computed translations
+const translations = computed(() => ({
+  searchResults: t('home.search_results'),
+  emailsExtracted: t('home.emails_extracted'),
+  yellowPages: t('home.yellow_pages'),
+  emailsSent: t('home.emails_sent'),
+  vsPreviousPeriod: t('home.vs_previous_period'),
+  successRate: t('home.success_rate')
+}));
 
 // Props
 interface Props {
