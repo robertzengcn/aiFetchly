@@ -5,15 +5,15 @@
       <v-col cols="12">
         <div class="d-flex align-center mb-4">
           <v-icon size="32" color="primary" class="mr-3">mdi-view-dashboard</v-icon>
-          <h1 class="text-h4 font-weight-bold">Dashboard</h1>
+          <h1 class="text-h4 font-weight-bold">{{ translations.dashboard }}</h1>
           <v-spacer></v-spacer>
           <v-btn
             icon
             variant="text"
             @click="handleManualRefresh"
             :loading="isRefreshing"
-            title="Refresh Dashboard"
-            aria-label="Refresh dashboard data"
+            :title="translations.refreshDashboard"
+            :aria-label="translations.refreshDashboard"
           >
             <v-icon>mdi-refresh</v-icon>
           </v-btn>
@@ -26,7 +26,7 @@
       <v-col cols="12">
         <DashboardDateRangeFilter
           @date-range-changed="handleDateRangeChange"
-          aria-label="Date range filter for dashboard data"
+          :aria-label="translations.dateRangeFilter"
         />
         <v-progress-linear
           v-if="isDebouncing"
@@ -34,13 +34,13 @@
           color="primary"
           class="mt-2"
           height="2"
-          aria-label="Updating data"
+          :aria-label="translations.updatingData"
         ></v-progress-linear>
       </v-col>
     </v-row>
 
     <!-- Summary Cards -->
-    <v-row class="mt-4" role="region" aria-label="Dashboard summary statistics">
+    <v-row class="mt-4" role="region" :aria-label="translations.dashboardSummary">
       <v-col cols="12">
         <DashboardSummaryCards
           :data="summaryData"
@@ -52,9 +52,9 @@
 
     <!-- Charts Section -->
     <div ref="chartsSection">
-      <v-row class="mt-6" role="region" aria-label="Analytics and trend charts">
+      <v-row class="mt-6" role="region" :aria-label="translations.analyticsCharts">
         <v-col cols="12">
-          <h2 class="text-h5 font-weight-bold mb-4">Analytics & Trends</h2>
+          <h2 class="text-h5 font-weight-bold mb-4">{{ translations.analyticsTrends }}</h2>
         </v-col>
 
         <!-- Trends Line Chart -->
@@ -110,7 +110,7 @@
       {{ errorMessage }}
       <template v-slot:actions>
         <v-btn color="white" variant="text" @click="showErrorSnackbar = false">
-          Close
+          {{ translations.close }}
         </v-btn>
       </template>
     </v-snackbar>
@@ -118,8 +118,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { useRouter } from 'vue-router';
+import { useI18n } from 'vue-i18n';
 import DashboardDateRangeFilter from './components/DashboardDateRangeFilter.vue';
 import DashboardSummaryCards from './components/DashboardSummaryCards.vue';
 import DashboardTrendsChart from './components/DashboardTrendsChart.vue';
@@ -138,6 +139,21 @@ import type {
   SearchEngineBreakdown,
   EmailStatusBreakdown
 } from '@/entityTypes/dashboardType';
+
+// i18n
+const { t } = useI18n();
+
+// Computed translations
+const translations = computed(() => ({
+  dashboard: t('home.dashboard'),
+  refreshDashboard: t('home.refresh_dashboard'),
+  analyticsTrends: t('home.analytics_trends'),
+  close: t('common.close'),
+  dateRangeFilter: t('home.date_range_filter'),
+  updatingData: t('home.updating_data'),
+  dashboardSummary: t('home.dashboard_summary'),
+  analyticsCharts: t('home.analytics_charts')
+}));
 
 // Performance monitoring
 const performanceMarks = {
@@ -304,6 +320,7 @@ async function fetchChartsData(startDate: string, endDate: string, bypassCache =
     }
 
     if (emailStatusResponse) {
+      console.log('emailStatusResponse', emailStatusResponse);
       emailStatusData.value = emailStatusResponse;
     } else {
       throw new Error('Failed to load email status data');
@@ -402,16 +419,16 @@ function handleCardClick(metricType: string) {
   // Navigate to respective detail pages
   switch (metricType) {
     case 'search':
-      router.push('/search-results');
+      router.push('/search/tasklist');
       break;
     case 'emails':
-      router.push('/email-extraction');
+      router.push('/emailextraction/tasklist');
       break;
     case 'yellowpages':
-      router.push('/yellow-pages');
+      router.push('/yellowpages/list');
       break;
     case 'emailssent':
-      router.push('/email-marketing');
+      router.push('/emailmarketing/buckemailtask/list/');
       break;
   }
 }
