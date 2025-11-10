@@ -4,9 +4,9 @@ import { CommonDialogMsg } from "@/entityTypes/commonType";
 import { Usersearchdata, SearchtaskItem, SearchResultFetchparam } from "@/entityTypes/searchControlType"
 import { SearchController } from "@/controller/SearchController"
 import { CommonResponse, CommonMessage } from "@/entityTypes/commonType"
-import { SearchTaskUpdateData } from "@/modules/searchModule"
+import { SearchTaskUpdateData,TaskDetailsForEdit } from "@/modules/SearchModule"
 import { SearchResEntity } from "@/entityTypes/scrapeType"
-import { TaskDetailsForEdit } from "@/modules/searchModule"
+//import {  } from "@/modules/SearchModule"
 import * as path from 'path';
 import * as fs from 'fs';
 import { ItemSearchparam } from "@/entityTypes/commonType"

@@ -5,12 +5,12 @@ import {
     RateLimitingConfig, 
     AuthenticationConfig,
     ValidationResult
-} from '@/interfaces/IBasePlatformAdapter';
-import { 
+} from '@/modules/interface/IBasePlatformAdapter';
+import {
     PlatformConfig, 
     PlatformSelectors 
-} from '@/interfaces/IPlatformConfig';
-import { BusinessData } from '@/interfaces/IDataExtractor';
+} from '@/modules/interface/IPlatformConfig';
+import { BusinessData } from '@/modules/interface/IDataExtractor';
 
 /**
  * Base platform adapter that provides default implementations for all platform types

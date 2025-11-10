@@ -5,7 +5,7 @@
 
 import { PlatformAdapterFactory } from '@/modules/PlatformAdapterFactory';
 import * as Adapter192 from '@/modules/platforms/192ComAdapter';
-import { PlatformConfig } from '@/interfaces/IPlatformConfig';
+import { PlatformConfig } from '@/modules/interface/IPlatformConfig';
 
 export class ComAdapterTest192 {
     private factory: PlatformAdapterFactory;

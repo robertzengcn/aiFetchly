@@ -1,4 +1,4 @@
-import { Address } from '@/interfaces/IDataExtractor';
+import { Address } from '@/modules/interface/IDataExtractor';
 
 /**
  * Address parsing utilities for different countries and formats

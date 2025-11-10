@@ -1,0 +1,355 @@
+# RAG Remote Configuration Management PRD
+
+## 1. Overview
+
+### 1.1 Purpose
+This PRD outlines the requirements for implementing a remote configuration management system for RAG (Retrieval-Augmented Generation) embedding models. The current system requires the frontend to pass complete embedding configurations, which creates tight coupling and security concerns. This enhancement will centralize configuration management through a remote server.
+
+### 1.2 Background
+Currently, the RAG system requires the frontend to provide complete `EmbeddingConfig` objects including API keys, URLs, and other sensitive configuration data. This approach has several issues:
+- Security risk: API keys are exposed to the frontend
+- Tight coupling: Frontend needs to know internal configuration details
+- Maintenance burden: Configuration changes require frontend updates
+- Inconsistency: Multiple clients might use different configurations
+
+### 1.3 Goals
+- Centralize embedding model configuration management
+- Improve security by removing sensitive data from frontend
+- Simplify frontend integration
+- Enable dynamic configuration updates without frontend changes
+- Support multiple model providers through a unified interface
+
+## 2. Requirements
+
+### 2.1 Functional Requirements
+
+#### 2.1.1 Remote Configuration API
+- **REQ-001**: Implement a remote API endpoint to retrieve embedding model configurations
+- **REQ-002**: API should return complete `EmbeddingConfig` based on model name only
+- **REQ-003**: API should support multiple model providers (OpenAI, HuggingFace, Ollama, etc.)
+- **REQ-004**: API should handle model validation and availability checking
+- **REQ-005**: API should support configuration versioning for backward compatibility
+
+#### 2.1.2 Simplified Frontend Interface
+- **REQ-007**: Remove all sensitive configuration data and model-specific details from frontend requests
+- **REQ-008**: Maintain backward compatibility during transition period
+- **REQ-009**: Support model category discovery/listing from remote server
+- **REQ-010**: Frontend should not be aware of specific model names or providers
+- **REQ-011**: Frontend should not need to specify any model configuration - backend handles all model selection automatically
+
+#### 2.1.3 Configuration Management
+- **REQ-012**: Support dynamic configuration updates without application restart
+- **REQ-013**: Implement configuration caching with TTL (Time To Live)
+- **REQ-014**: Support fallback configurations for offline scenarios
+- **REQ-015**: Implement configuration validation and error handling
+
+
+### 2.2 Non-Functional Requirements
+
+#### 2.2.1 Performance
+- **REQ-017**: Configuration retrieval should complete within 500ms
+- **REQ-018**: Implement intelligent caching to minimize remote calls
+- **REQ-019**: Support concurrent configuration requests
+
+
+#### 2.2.3 Reliability
+- **REQ-024**: System should gracefully handle remote server unavailability
+- **REQ-025**: Implement retry logic with exponential backoff
+- **REQ-026**: Support offline mode with cached configurations
+- **REQ-027**: Implement health checks and monitoring
+
+## 3. Technical Specifications
+
+### 3.1 API Design
+
+#### 3.1.1 Get Default Model Configuration
+```
+GET /api/rag/config
+```
+
+**Request:**
+```json
+{
+  // No parameters needed - backend automatically selects best available model
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "model": "text-embedding-3-small",
+    "dimensions": 1536,
+    "maxTokens": 8191,
+    "timeout": 30000,
+    "retries": 3
+  },
+  "metadata": {
+    "version": "1.2.0",
+    "lastUpdated": "2024-01-15T10:30:00Z",
+    "ttl": 3600,
+    "autoSelected": true,
+    "selectionReason": "best_available"
+  }
+}
+```
+
+#### 3.1.2 API Implementation Structure
+Following the existing pattern in `src/api/emailServiceApi.ts`, create `src/api/ragConfigApi.ts`:
+
+```typescript
+"use strict";
+import { HttpClient } from "@/modules/lib/httpclient";
+import { EmbeddingConfig } from "@/modules/llm/EmbeddingFactory";
+import { CommonApiresp } from "@/entityTypes/commonType";
+
+export class RagConfigApi {
+    private _httpClient: HttpClient;
+
+    constructor() {
+        this._httpClient = new HttpClient();
+    }
+
+    // Get default model configuration
+    async getDefaultConfig(): Promise<CommonApiresp<EmbeddingConfig>> {
+        return this._httpClient.get('/api/rag/config');
+    }
+
+    // Get available models
+    async getAvailableModels(): Promise<CommonApiresp<ModelInfo[]>> {
+        return this._httpClient.get('/api/rag/models');
+    }
+
+    // Refresh configuration cache
+    async refreshCache(): Promise<CommonApiresp<void>> {
+        return this._httpClient.post('/api/rag/refresh');
+    }
+}
+```
+
+
+
+### 3.2 Updated Interfaces
+
+#### 3.2.1 Simplified EmbeddingConfig
+```typescript
+// Frontend no longer needs any configuration interface
+// Backend automatically handles all model selection
+
+// Full configuration (internal use only)
+export interface EmbeddingConfig {
+  model: string;
+  dimensions?: number;
+  maxTokens?: number;
+  timeout?: number;
+  retries?: number;
+  // ... other provider-specific options
+}
+
+// Model information for backend selection
+export interface ModelInfo {
+  provider: string;
+  model: string;
+  category: 'fast' | 'accurate' | 'balanced' | 'default';
+  priority: number;
+  status: 'active' | 'inactive' | 'deprecated';
+}
+```
+
+#### 3.2.2 Configuration Service Interface
+```typescript
+export interface ConfigurationService {
+  getDefaultModelConfig(): Promise<EmbeddingConfig>;
+  getAvailableModels(): Promise<ModelInfo[]>;
+  refreshCache(): Promise<void>;
+}
+```
+
+### 3.3 Architecture Changes
+
+#### 3.3.1 New Components
+1. **RagConfigApi** (`src/api/ragConfigApi.ts`): API client for remote configuration retrieval
+2. **ConfigurationService** (`src/modules/ConfigurationService.ts`): Manages remote configuration retrieval
+3. **ConfigurationCache** (`src/modules/ConfigurationCache.ts`): Handles local caching with TTL
+4. **ModelRegistry** (`src/modules/ModelRegistry.ts`): Maintains available models and their metadata
+5. **ConfigurationValidator** (`src/modules/ConfigurationValidator.ts`): Validates configurations before use
+
+#### 3.3.2 Updated Components
+1. **RagSearchModule**: Updated to use ConfigurationService instead of direct config
+2. **RagSearchController**: Simplified to work without any configuration parameters
+3. **IPC Handlers**: Updated to work with simplified interface and automatic config retrieval
+4. **EmbeddingFactory**: Updated to work with ConfigurationService
+
+#### 3.3.3 File Structure
+```
+src/
+├── api/
+│   └── ragConfigApi.ts          # New: API client for RAG configuration
+├── modules/
+│   ├── ConfigurationService.ts  # New: Core configuration management
+│   ├── ConfigurationCache.ts    # New: Local caching implementation
+│   ├── ModelRegistry.ts         # New: Model metadata management
+│   └── ConfigurationValidator.ts # New: Configuration validation
+├── controller/
+│   └── RagSearchController.ts   # Updated: Simplified interface
+├── main-process/communication/
+│   └── rag-ipc.ts              # Updated: No config parameters needed
+└── modules/llm/
+    └── EmbeddingFactory.ts     # Updated: Use ConfigurationService
+```
+
+## 4. Implementation Plan
+
+### 4.1 Phase 1: API Infrastructure
+- Create `src/api/ragConfigApi.ts` following emailServiceApi pattern
+- Implement ConfigurationService in `src/modules/ConfigurationService.ts`
+- Create ConfigurationCache for local caching
+- Add ModelRegistry for model metadata management
+
+### 4.2 Phase 2: Core Module Updates
+- Update EmbeddingConfig interface to remove sensitive fields
+- Modify RagSearchModule to use ConfigurationService
+- Update EmbeddingFactory to work with ConfigurationService
+- Implement ConfigurationValidator
+
+### 4.3 Phase 3: Controller & IPC Updates
+- Update RagSearchController to work without config parameters
+- Modify IPC handlers in `rag-ipc.ts` to use automatic config retrieval
+- Remove all embedding config parameters from IPC calls
+- Implement fallback mechanisms
+
+### 4.4 Phase 4: Testing & Deployment
+- Comprehensive testing of API integration
+- Performance optimization
+- Security audit
+- Gradual rollout
+
+## 5. API Implementation Details
+
+### 5.1 RagConfigApi Implementation
+Following the established pattern in `src/api/emailServiceApi.ts`:
+
+```typescript
+"use strict";
+import { HttpClient } from "@/modules/lib/httpclient";
+import { EmbeddingConfig } from "@/modules/llm/EmbeddingFactory";
+import { CommonApiresp } from "@/entityTypes/commonType";
+
+export interface ModelInfo {
+    model: string;
+    category: 'fast' | 'accurate' | 'balanced' | 'default';
+    priority: number;
+    status: 'active' | 'inactive' | 'deprecated';
+}
+
+export class RagConfigApi {
+    private _httpClient: HttpClient;
+
+    constructor() {
+        this._httpClient = new HttpClient();
+    }
+
+    // Get default model configuration
+    async getDefaultConfig(): Promise<CommonApiresp<EmbeddingConfig>> {
+        return this._httpClient.get('/api/rag/config');
+    }
+
+    // Get available models
+    async getAvailableModels(): Promise<CommonApiresp<ModelInfo[]>> {
+        return this._httpClient.get('/api/rag/models');
+    }
+
+    // Refresh configuration cache
+    async refreshCache(): Promise<CommonApiresp<void>> {
+        return this._httpClient.post('/api/rag/refresh');
+    }
+
+    // Check if configuration service is online
+    async isOnline(): Promise<CommonApiresp<boolean>> {
+        return this._httpClient.get('/api/rag/health');
+    }
+}
+```
+
+### 5.2 Integration with Existing Architecture
+- Uses the same `HttpClient` class as other API services
+- Follows the same error handling patterns with `CommonApiresp<T>`
+- Integrates with existing type definitions in `entityTypes`
+- Maintains consistency with existing API naming conventions
+
+### 5.3 Configuration Service Integration
+The `ConfigurationService` will use `RagConfigApi` internally:
+
+```typescript
+export class ConfigurationService {
+    private ragConfigApi: RagConfigApi;
+    private cache: ConfigurationCache;
+
+    constructor() {
+        this.ragConfigApi = new RagConfigApi();
+        this.cache = new ConfigurationCache();
+    }
+
+    async getDefaultModelConfig(): Promise<EmbeddingConfig> {
+        // Check cache first
+        const cached = this.cache.get('default');
+        if (cached && !this.cache.isExpired('default')) {
+            return cached;
+        }
+
+        // Fetch from remote API
+        const response = await this.ragConfigApi.getDefaultConfig();
+        if (response.success && response.data) {
+            this.cache.set('default', response.data);
+            return response.data;
+        }
+
+        throw new Error('Failed to retrieve configuration');
+    }
+}
+```
+
+## 6. Monitoring & Observability
+
+### 6.1 Logging
+- All configuration requests
+- Authentication events
+- Error conditions
+- Performance metrics
+
+## 7. Success Criteria
+
+### 7.1 Functional
+- Frontend requires no configuration parameters - backend handles all model selection automatically
+- `RagConfigApi` successfully integrates with existing `HttpClient` architecture
+- Remote server provides all necessary configuration data and handles model selection
+- System works offline with cached configurations
+- All existing functionality remains intact
+- Frontend is completely abstracted from all model-specific details and configuration
+
+
+## 8. Risks & Mitigation
+
+### 8.1 Technical Risks
+- **Risk**: Remote server unavailability
+- **Mitigation**: Implement robust caching and fallback mechanisms
+
+- **Risk**: Configuration inconsistencies
+- **Mitigation**: Implement validation and versioning
+
+### 8.2 Security Risks
+- **Risk**: API key exposure
+- **Mitigation**: Implement proper authentication and encryption
+
+- **Risk**: Unauthorized access
+- **Mitigation**: Implement role-based access control
+
+## 9. Future Enhancements
+
+### 9.1 Advanced Features
+- Dynamic model provisioning
+- A/B testing for model configurations
+- Real-time configuration updates
+- Multi-tenant configuration support
+

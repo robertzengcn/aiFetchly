@@ -1,5 +1,5 @@
 import { AdapterGelbeseiten } from '../GelbeseitenAdapter';
-import { PlatformConfig } from '@/interfaces/IPlatformConfig';
+import { PlatformConfig } from '@/modules/interface/IPlatformConfig';
 import { PlatformAdapterFactory } from '../PlatformAdapterFactory';
 
 /**

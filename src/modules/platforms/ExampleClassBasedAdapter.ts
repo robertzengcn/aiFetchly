@@ -1,5 +1,5 @@
-import { PlatformConfig } from '@/interfaces/IPlatformConfig';
-import { IBasePlatformAdapter } from '@/interfaces/IBasePlatformAdapter';
+import { PlatformConfig } from '@/modules/interface/IPlatformConfig';
+import { IBasePlatformAdapter } from '@/modules/interface/IBasePlatformAdapter';
 import { Page } from 'puppeteer';
 
 /**

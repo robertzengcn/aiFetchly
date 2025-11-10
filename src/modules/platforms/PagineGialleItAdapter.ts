@@ -1,6 +1,6 @@
 import { Page } from 'puppeteer';
 import { BasePlatformAdapter } from '@/modules/BasePlatformAdapter';
-import { PlatformConfig } from '@/interfaces/IPlatformConfig';
+import { PlatformConfig } from '@/modules/interface/IPlatformConfig';
 
 /**
  * PagineGialle.it Platform Adapter

@@ -10,11 +10,11 @@ import {Usersearchdata,SearchtaskEntityNum } from "@/entityTypes/searchControlTy
 //import { utilityProcess, MessageChannelMain} from "electron";
 import * as path from 'path';
 import * as fs from 'fs';
-import {SearchModule} from "@/modules/searchModule"
+import {SearchModule} from "@/modules/SearchModule"
 import { Token } from "@/modules/token"
 // import {USERSDBPATH} from '@/config/usersetting';
 import {SearchDataParam,SearchResEntityDisplay,SearchResEntityRecord} from "@/entityTypes/scrapeType"
-import {TaskDetailsForEdit} from "@/modules/searchModule"
+import {TaskDetailsForEdit} from "@/modules/SearchModule"
 // import {SEARCHEVENT} from "@/config/channellist"
 // import { SearchTaskStatus } from "@/model/SearchTask.model"
 // import { SearchKeyworddb } from "@/model/searchKeyworddb";

@@ -10,6 +10,39 @@ export enum TranslateToolEnum {
     Doubao_PRO_A="Doubao-1.5-pro-32k",
   }
 
+export enum EmbeddingModelEnum {
+    // OpenAI Models
+    OPENAI_ADA_002 = "text-embedding-ada-002",
+    OPENAI_3_SMALL = "text-embedding-3-small",
+    OPENAI_3_LARGE = "text-embedding-3-large",
+    OPENAI_3_LARGE_256 = "text-embedding-3-large-256",
+    OPENAI_3_LARGE_1024 = "text-embedding-3-large-1024",
+    
+    // HuggingFace Models
+    HF_ALL_MINI_LM_L6_V2 = "sentence-transformers/all-MiniLM-L6-v2",
+    HF_ALL_MPNET_BASE_V2 = "sentence-transformers/all-mpnet-base-v2",
+    HF_PARAPHRASE_MULTILINGUAL_MINI_LM_L12_V2 = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    HF_PARAPHRASE_MULTILINGUAL_MPNET_BASE_V2 = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2",
+    HF_ALL_MINI_LM_L12_V2 = "sentence-transformers/all-MiniLM-L12-v2",
+    HF_MULTI_QA_MINI_LM_L6_COS_V1 = "sentence-transformers/multi-qa-MiniLM-L6-cos-v1",
+    HF_MULTI_QA_MPNET_BASE_COS_V1 = "sentence-transformers/multi-qa-mpnet-base-cos-v1",
+    
+    // Ollama Models
+    OLLAMA_NOMIC_EMBED_TEXT = "nomic-embed-text",
+    OLLAMA_MXBAI_EMBED_LARGE = "mxbai-embed-large",
+    OLLAMA_ALL_MINILM = "all-minilm",
+    OLLAMA_BGE_LARGE_EN = "bge-large-en",
+    OLLAMA_BGE_BASE_EN = "bge-base-en",
+    OLLAMA_BGE_SMALL_EN = "bge-small-en",
+}
+
+export enum EmbeddingProviderEnum {
+    OPENAI = "openai",
+    HUGGINGFACE = "huggingface",
+    OLLAMA = "ollama",
+    LOCAL = "local",
+}
+
 // You can still use the imported variable elsewhere
 // export const translateToolMap = {
 //   [TranslateToolEnum.DEEPSEEK_LOCAL]: deepseeklocalgroup
