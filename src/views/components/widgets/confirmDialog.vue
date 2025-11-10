@@ -31,7 +31,7 @@
       </template>
 
       <v-card-text class="pt-4">
-        <div class="text-body-1">{{ noticeText }}</div>
+        <!-- <div class="text-body-1">{{ noticeText }}</div> -->
         <div v-if="additionalInfo" class="text-caption text-medium-emphasis mt-2">
           {{ additionalInfo }}
         </div>
