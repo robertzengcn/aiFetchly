@@ -5,14 +5,23 @@
     persistent
     @keydown.esc="closeDialog"
     @keydown.enter="okCallback"
-  >
+      >
     <v-card
       :prepend-icon="dialogIcon"
       :text="noticeText"
       :title="noticeTitle"
-      :color="dialogColor"
       class="confirm-dialog"
     >
+        <template #append>
+          <v-btn
+            icon="mdi-close"
+            variant="text"
+            color="on-surface"
+            :disabled="loading"
+            @click="closeDialog"
+          />
+        </template>
+
       <template v-slot:prepend>
         <v-icon
           :icon="dialogIcon"
@@ -22,7 +31,7 @@
       </template>
 
       <v-card-text class="pt-4">
-        <div class="text-body-1">{{ noticeText }}</div>
+        <!-- <div class="text-body-1">{{ noticeText }}</div> -->
         <div v-if="additionalInfo" class="text-caption text-medium-emphasis mt-2">
           {{ additionalInfo }}
         </div>
@@ -46,7 +55,7 @@
           :loading="loading"
           :disabled="loading"
         >
-          {{ CapitalizeFirstLetter(confirmButtonText) }}
+          {{ CapitalizeFirstLetter(t(confirmButtonText)) }}
         </v-btn>
       </template>
     </v-card>
