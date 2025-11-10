@@ -1,4 +1,4 @@
-import { PlatformConfig, PlatformFeature } from '@/interfaces/IPlatformConfig';
+import { PlatformConfig, PlatformFeature } from '@/modules/interface/IPlatformConfig';
 import { Adapter11880 } from '@/modules/platforms/11880Adapter';
 
 export const Platform_11880_de: PlatformConfig = {

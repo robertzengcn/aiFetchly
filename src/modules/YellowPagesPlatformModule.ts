@@ -1,6 +1,6 @@
 import { BaseModule } from "@/modules/baseModule";
 import { PlatformRegistry } from "@/modules/PlatformRegistry";
-import { PlatformConfig } from "@/interfaces/IPlatformConfig";
+import { PlatformConfig } from "@/modules/interface/IPlatformConfig";
 
 export class YellowPagesPlatformModule extends BaseModule {
     private registry: PlatformRegistry;

@@ -1,4 +1,4 @@
-import { PlatformConfig, PlatformFeature } from '@/interfaces/IPlatformConfig';
+import { PlatformConfig, PlatformFeature } from '@/modules/interface/IPlatformConfig';
 // import { YellComAdapter } from '@/modules/platforms/YellComAdapter';
 
 export const Platform_yell_com: PlatformConfig = {

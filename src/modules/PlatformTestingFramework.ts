@@ -3,7 +3,7 @@ import * as path from 'path'
 import * as puppeteer from 'puppeteer'
 import { addExtra } from 'puppeteer-extra'
 import StealthPlugin from 'puppeteer-extra-plugin-stealth'
-import { PlatformConfig } from '@/interfaces/IPlatformConfig'
+import { PlatformConfig } from '@/modules/interface/IPlatformConfig'
 import { BaseModule } from '@/modules/baseModule'
 import { PlatformRegistry } from '@/modules/PlatformRegistry'
 

@@ -1,4 +1,4 @@
-import {LlmFactory} from '@/modules/llm/LlmFactory';
+// import {LlmFactory} from '@/modules/llm/LlmFactory';
 import { LlmImpl } from '@/modules/interface/LlmImpl';
 import {LanguageItem} from '@/entityTypes/commonType'
 import {LlmCongfig,TraditionalTranslateCongfig} from '@/entityTypes/commonType'
@@ -34,35 +34,24 @@ export class TranslateProducer {
         }
         return Promise.resolve(undefined);
     }
-    //get translate tool like llm
+    /**
+     * Get translate tool like llm
+     * @deprecated LlmFactory has been removed. This method is no longer functional.
+     */
     getTransTool(toolName:string,llmconfig?:LlmCongfig,transConfig?:TraditionalTranslateCongfig):LlmImpl|void{
-        if(this.avaialableLlm.includes(toolName)){
-
-            if(!llmconfig){
-                throw new Error("llmconfig is required");
-            }
-            let factory=new LlmFactory();
-            let tool:LlmImpl|undefined=factory.getLlmTool(toolName,llmconfig); 
-            return tool;
-        }else if(this.availableApi.includes(toolName)){
-
-        }
+        console.warn('TranslateProducer.getTransTool() is deprecated. LlmFactory has been removed.');
+        throw new Error('LlmFactory has been removed. Use remote API-based translation instead.');
     }
     //translate with translate tool
     async translateWithTool(inputlang:string,outputlang:string,text:string,tool:LlmImpl):Promise<string|void>{
         return tool.translate(inputlang,outputlang,text);
 
     }
+    /**
+     * @deprecated LlmFactory has been removed. Use remote API-based translation instead.
+     */
     async translateWithLLM(inputlang:string,outputlang:string,text:string,toolName:string,llmconfig:LlmCongfig):Promise<string|void>{
-        let factory=new LlmFactory();
-        let tool:LlmImpl|undefined=factory.getLlmTool(toolName,llmconfig);
-       // console.log("tool",tool)
-        if(tool){
-            return tool.translate(inputlang,outputlang,text);
-        }else{
-            throw new Error("llm tool not found");
-        }
-        
+        throw new Error('LlmFactory has been removed. Use remote API-based translation instead.');
     }
 
 }

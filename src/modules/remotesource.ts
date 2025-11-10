@@ -56,7 +56,7 @@ export type jwtUser = {
   // account_id:number
   name: string,
   email: string,
-  // token:string
+  id: number,
   roles: Array<string>,
 }
 type jwtTokenUser = {
@@ -281,40 +281,40 @@ export class RemoteSource {
       });
   }
   //login user
-  async Login(username: string, password: string): Promise<jwtUser> {
-    // const FormData = require('form-data');
-    var data = new FormData();
-    data.append('username', username);
-    data.append('password', password);
-    //console.log(Array.from(data));
-    const thisobj = this
+  // async Login(username: string, password: string): Promise<jwtUser> {
+  //   // const FormData = require('form-data');
+  //   var data = new FormData();
+  //   data.append('username', username);
+  //   data.append('password', password);
+  //   //console.log(Array.from(data));
+  //   const thisobj = this
 
-    const loginInfo = await this._httpClient.post(
-      "/user/login",
-      data, 
-    ).then(function (res) {
-      // if (res.status != 200) {
-      //   throw new Error(res.statusText);
-      // }
-      if (!res.status) {
-        throw new Error(res.msg);
-      }
-      //decode jwt token
-      const decoded = thisobj.ValidateToken(res.data.Token);
-      if (decoded.name&&decoded.name.length>0) {
-        const tokenModel = new Token()
-        tokenModel.setValue(thisobj.tokenname, res.data.Token)
-      }
-      // console.log(decoded)
-      return decoded;
-      //return res.data.Token as {token:string};
-    })
-      .catch(function (error) {
-        // console.log(error);
-        throw new Error(error.message);
-      });
-    return loginInfo;
-  }
+  //   const loginInfo = await this._httpClient.post(
+  //     "/user/login",
+  //     data, 
+  //   ).then(function (res) {
+  //     // if (res.status != 200) {
+  //     //   throw new Error(res.statusText);
+  //     // }
+  //     if (!res.status) {
+  //       throw new Error(res.msg);
+  //     }
+  //     //decode jwt token
+  //     const decoded = thisobj.ValidateToken(res.data.Token);
+  //     if (decoded.name&&decoded.name.length>0) {
+  //       const tokenModel = new Token()
+  //       tokenModel.setValue(thisobj.tokenname, res.data.Token)
+  //     }
+  //     // console.log(decoded)
+  //     return decoded;
+  //     //return res.data.Token as {token:string};
+  //   })
+  //     .catch(function (error) {
+  //       // console.log(error);
+  //       throw new Error(error.message);
+  //     });
+  //   return loginInfo;
+  // }
   //get user info use token
   async GetUserInfo(): Promise<jwtUser | null> {
     const tokenModel = new Token()
@@ -352,19 +352,19 @@ export class RemoteSource {
     return loginInfo;
   }
   //validate jwt token 
-  public ValidateToken(token: string): jwtUser {
-    //console.log(token)
-    const decoded = jwt_decode(token) as jwtTokenUser;
-    //console.log(decoded)
-    const jwtuser: jwtUser = {
-      // account_id: decoded.AccountId,
-      email: decoded.Email,
-      name:decoded.Name,
-      // token:token,
-      roles: decoded.Roles ? decoded.Roles : [],
-    }
-    return jwtuser;
-  }
+  // public ValidateToken(token: string): jwtUser {
+  //   //console.log(token)
+  //   const decoded = jwt_decode(token) as jwtTokenUser;
+  //   //console.log(decoded)
+  //   const jwtuser: jwtUser = {
+  //     // account_id: decoded.AccountId,
+  //     email: decoded.Email,
+  //     name:decoded.Name,
+  //     // token:token,
+  //     roles: decoded.Roles ? decoded.Roles : [],
+  //   }
+  //   return jwtuser;
+  // }
   //remove token in remote
   public async removeRemoteToken(): Promise<void>{
     const loginInfo = await this._httpClient.get(

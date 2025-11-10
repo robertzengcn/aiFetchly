@@ -114,4 +114,59 @@ export class EmailMarketingSendLogModel extends BaseDb {
 
         return await queryBuilder.getCount();
     }
+
+    async countAll(): Promise<number> {
+        return this.repository.count();
+    }
+
+    async countByDateRange(startDate: Date, endDate: Date): Promise<number> {
+        return this.repository.createQueryBuilder('log')
+            .where('log.record_time >= :startDate', { startDate: startDate.toISOString() })
+            .andWhere('log.record_time <= :endDate', { endDate: endDate.toISOString() })
+            .getCount();
+    }
+
+    async aggregateByDateRange(startDate: Date, endDate: Date, granularity: 'day' | 'week' | 'month'): Promise<Array<{ date: string; count: number }>> {
+        const dateExpression = this.getDateExpression(granularity, 'log.record_time');
+        const rows = await this.repository.createQueryBuilder('log')
+            .select(dateExpression, 'date')
+            .addSelect('COUNT(*)', 'count')
+            .where('log.record_time >= :startDate', { startDate: startDate.toISOString() })
+            .andWhere('log.record_time <= :endDate', { endDate: endDate.toISOString() })
+            .groupBy(dateExpression)
+            .orderBy(dateExpression, 'ASC')
+            .getRawMany();
+
+        return rows.map((row: { date: string; count: string }) => ({
+            date: row.date,
+            count: parseInt(row.count, 10)
+        }));
+    }
+
+    async countByStatusWithinDateRange(startDate: Date, endDate: Date): Promise<Array<{ status: number; count: number }>> {
+        const rows = await this.repository.createQueryBuilder('log')
+            .select('log.status', 'status')
+            .addSelect('COUNT(*)', 'count')
+            .where('log.record_time >= :startDate', { startDate: startDate.toISOString() })
+            .andWhere('log.record_time <= :endDate', { endDate: endDate.toISOString() })
+            .groupBy('log.status')
+            .getRawMany();
+
+        return rows.map((row: { status: number; count: string }) => ({
+            status: Number(row.status),
+            count: parseInt(row.count, 10)
+        }));
+    }
+
+    private getDateExpression(granularity: 'day' | 'week' | 'month', column: string): string {
+        switch (granularity) {
+            case 'week':
+                return `STRFTIME('%Y-%W', ${column})`;
+            case 'month':
+                return `STRFTIME('%Y-%m', ${column})`;
+            case 'day':
+            default:
+                return `DATE(${column})`;
+        }
+    }
 } 
