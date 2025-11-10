@@ -14,6 +14,7 @@ import { EmailSearchResultDetailEntity } from "@/entity/EmailSearchResultDetail.
 import { EmailsearchTaskEntity, EmailsearchTaskStatus } from "@/model/emailsearchTaskdb";
 import { EmailsearchUrlEntity } from "@/model/emailsearchUrldb";
 import {EmailsControldata} from "@/entityTypes/emailextraction-type"
+import { AggregatedCount } from "@/entityTypes/dashboardType";
 import {WriteLog,getApplogspath,getRandomValues, readLogFile} from "@/modules/lib/function"
 import * as path from 'path';
 import * as fs from 'fs';
@@ -297,6 +298,16 @@ export class EmailSearchTaskModule extends BaseModule{
     //get task detail count
     public async getTaskResultCount(taskId: number): Promise<number> {
         return await this.emailsearchresultdb.getTaskResultCount(taskId)
+    }
+    public async countAllResults(): Promise<number> {
+        return this.emailsearchresultdb.countAll();
+    }
+    public async countResultsByDateRange(startDate: Date, endDate: Date): Promise<number> {
+        return this.emailsearchresultdb.countByDateRange(startDate, endDate);
+    }
+    public async aggregateResultsByDateRange(startDate: Date, endDate: Date, granularity: 'day' | 'week' | 'month'): Promise<AggregatedCount[]> {
+        const rows = await this.emailsearchresultdb.aggregateByDateRange(startDate, endDate, granularity);
+        return rows.map(row => ({ date: row.date, count: row.count }));
     }
     //get all email in email search task
     public async getAllEmails(taskId: number): Promise<EmailItem[]> {

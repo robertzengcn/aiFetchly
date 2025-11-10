@@ -255,6 +255,42 @@ export class YellowPagesResultModel extends BaseDb {
     return await this.repository.count();
   }
 
+  async countByDateRange(startDate: Date, endDate: Date): Promise<number> {
+    return this.repository.createQueryBuilder('result')
+      .where('result.scraped_at >= :startDate', { startDate: startDate.toISOString() })
+      .andWhere('result.scraped_at <= :endDate', { endDate: endDate.toISOString() })
+      .getCount();
+  }
+
+  async aggregateByDateRange(startDate: Date, endDate: Date, granularity: 'day' | 'week' | 'month'): Promise<Array<{ date: string; count: number }>> {
+    const dateExpression = this.getDateExpression(granularity, 'result.scraped_at');
+    const rows = await this.repository.createQueryBuilder('result')
+      .select(dateExpression, 'date')
+      .addSelect('COUNT(*)', 'count')
+      .where('result.scraped_at >= :startDate', { startDate: startDate.toISOString() })
+      .andWhere('result.scraped_at <= :endDate', { endDate: endDate.toISOString() })
+      .groupBy(dateExpression)
+      .orderBy(dateExpression, 'ASC')
+      .getRawMany();
+
+    return rows.map((row: { date: string; count: string }) => ({
+      date: row.date,
+      count: parseInt(row.count, 10)
+    }));
+  }
+
+  private getDateExpression(granularity: 'day' | 'week' | 'month', column: string): string {
+    switch (granularity) {
+      case 'week':
+        return `STRFTIME('%Y-%W', ${column})`;
+      case 'month':
+        return `STRFTIME('%Y-%m', ${column})`;
+      case 'day':
+      default:
+        return `DATE(${column})`;
+    }
+  }
+
   /**
    * Delete results by task ID
    * @param taskId The task ID
