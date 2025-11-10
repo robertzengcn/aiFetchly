@@ -62,6 +62,10 @@ jobs:
         run: yarn rebuild-sqlite3
       - name: Rebuild better sqlite
         run: yarn rebuild-better-sqlite
+      - name: Rebuild canvas
+        run: yarn rebuild-canvas
+      - name: Rebuild faiss-node
+        run: yarn rebuild-faiss-node
 
       # NEW: Build standalone uninstaller
       - name: Build standalone uninstaller
@@ -284,6 +288,12 @@ jobs:
       - name: Rebuild better sqlite
         run: |
           CXXFLAGS="-std=c++20" CFLAGS="-std=c11" yarn rebuild-better-sqlite    
+      - name: Rebuild canvas
+        run: |
+          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" yarn rebuild-canvas
+      - name: Rebuild faiss-node
+        run: |
+          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" yarn rebuild-faiss-node
       - name: yarn electron-rebuild
         run: |
           CXXFLAGS="-std=c++20" CFLAGS="-std=c11" yarn electron-rebuild
