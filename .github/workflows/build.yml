@@ -57,6 +57,7 @@ jobs:
       - name: Install dependencies
         run: yarn install
       - name: Debug - Verify lzma-native assets
+        shell: bash
         run: |
           if [ -d node_modules/lzma-native/deps ]; then
             echo "Found lzma-native deps directory"
