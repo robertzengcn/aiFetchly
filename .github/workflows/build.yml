@@ -282,8 +282,7 @@ jobs:
             cat .env
       - name: Install setuptools
         run: |
-            brew install python-setuptools           
-              
+            brew install python-setuptools                 
       - name: Install system dependencies for native modules
         run: |
             brew install xz pkg-config
@@ -299,7 +298,11 @@ jobs:
             HOMEBREW_PREFIX="${HOMEBREW_PREFIX:-/opt/homebrew}"
             ls -la ${HOMEBREW_PREFIX}/lib/liblzma* || ls -la /usr/local/lib/liblzma* || echo "liblzma libraries not found"
             ls -la ${HOMEBREW_PREFIX}/include/lzma* || ls -la /usr/local/include/lzma* || echo "liblzma headers not found"
-              
+      - name: Set Homebrew Paths for Native Modules
+        run: |
+          echo "CFLAGS=-I/opt/homebrew/include" >> $GITHUB_ENV
+          echo "LDFLAGS=-L/opt/homebrew/lib" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig" >> $GITHUB_ENV        
       - name: Install dependencies
         run: yarn install
       - name: Install DMG maker
