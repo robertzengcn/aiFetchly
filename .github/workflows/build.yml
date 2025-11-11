@@ -56,6 +56,15 @@ jobs:
           cat .env       
       - name: Install dependencies
         run: yarn install
+      - name: Debug - Verify lzma-native assets
+        run: |
+          if [ -d node_modules/lzma-native/deps ]; then
+            echo "Found lzma-native deps directory"
+            ls -la node_modules/lzma-native/deps
+            ls -la node_modules/lzma-native/deps | grep xz- || true
+          else
+            echo "lzma-native deps directory not found"
+          fi
       - name: Rebuild electron
         run: yarn electron-rebuild --force --types prod,dev,optional --module-dir .         
       - name: Rebuild sqlite3
@@ -189,16 +198,32 @@ jobs:
     steps:
       - name: Set up C++20 environment
         run: |
-          echo "CXXFLAGS=-std=c++20" >> $GITHUB_ENV
-          echo "CFLAGS=-std=c11" >> $GITHUB_ENV
+          ARCH="$(uname -m)"
+          echo "Detected host architecture: ${ARCH}"
+          if [ "$ARCH" = "arm64" ]; then
+            TARGET_ARCH="arm64"
+            ARCH_FLAGS="-arch arm64"
+            HOMEBREW_PREFIX="/opt/homebrew"
+          else
+            TARGET_ARCH="x86_64"
+            ARCH_FLAGS="-arch x86_64"
+            HOMEBREW_PREFIX="/usr/local"
+          fi
+          echo "Using target architecture: ${TARGET_ARCH}"
+          echo "ARCH_FLAGS=${ARCH_FLAGS}" >> $GITHUB_ENV
+          echo "TARGET_ARCH=${TARGET_ARCH}" >> $GITHUB_ENV
+          echo "HOMEBREW_PREFIX=${HOMEBREW_PREFIX}" >> $GITHUB_ENV
+          echo "CXXFLAGS=-std=c++20 ${ARCH_FLAGS}" >> $GITHUB_ENV
+          echo "CFLAGS=-std=c11 ${ARCH_FLAGS}" >> $GITHUB_ENV
           echo "CXX=clang++" >> $GITHUB_ENV
           echo "CC=clang" >> $GITHUB_ENV
-          echo "LDFLAGS=-std=c++20" >> $GITHUB_ENV
+          echo "LDFLAGS=-std=c++20 ${ARCH_FLAGS}" >> $GITHUB_ENV
           echo "npm_config_target_platform=darwin" >> $GITHUB_ENV
-          echo "npm_config_target_arch=x64" >> $GITHUB_ENV
+          echo "npm_config_arch=${TARGET_ARCH}" >> $GITHUB_ENV
+          echo "npm_config_target_arch=${TARGET_ARCH}" >> $GITHUB_ENV
           echo "PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig" >> $GITHUB_ENV
-          echo "LIBLZMA_CFLAGS=-I/opt/homebrew/include" >> $GITHUB_ENV
-          echo "LIBLZMA_LIBS=-L/opt/homebrew/lib -llzma" >> $GITHUB_ENV
+          echo "LIBLZMA_CFLAGS=-I${HOMEBREW_PREFIX}/include" >> $GITHUB_ENV
+          echo "LIBLZMA_LIBS=-L${HOMEBREW_PREFIX}/lib -llzma" >> $GITHUB_ENV
 
       # Make sure to use a recent Xcode version
       - name: List available Xcode versions
@@ -271,11 +296,12 @@ jobs:
             pkg-config --modversion liblzma || echo "Could not get liblzma version"
             pkg-config --cflags liblzma || echo "Could not get liblzma CFLAGS"
             pkg-config --libs liblzma || echo "Could not get liblzma LIBS"
-            ls -la /opt/homebrew/lib/liblzma* || ls -la /usr/local/lib/liblzma* || echo "liblzma libraries not found"
-            ls -la /opt/homebrew/include/lzma* || ls -la /usr/local/include/lzma* || echo "liblzma headers not found"
+            HOMEBREW_PREFIX="${HOMEBREW_PREFIX:-/opt/homebrew}"
+            ls -la ${HOMEBREW_PREFIX}/lib/liblzma* || ls -la /usr/local/lib/liblzma* || echo "liblzma libraries not found"
+            ls -la ${HOMEBREW_PREFIX}/include/lzma* || ls -la /usr/local/include/lzma* || echo "liblzma headers not found"
               
       - name: Install dependencies
-        run: yarn install --ignore-optional || yarn install
+        run: yarn install
       - name: Install DMG maker
         run: yarn add --dev @electron-forge/maker-dmg
       - name: Clean previous builds
@@ -298,6 +324,10 @@ jobs:
           echo "LDFLAGS: $LDFLAGS"
           echo "npm_config_target_platform: $npm_config_target_platform"
           echo "npm_config_target_arch: $npm_config_target_arch"
+          echo "npm_config_arch: $npm_config_arch"
+          echo "TARGET_ARCH: $TARGET_ARCH"
+          echo "ARCH_FLAGS: $ARCH_FLAGS"
+          echo "HOMEBREW_PREFIX: $HOMEBREW_PREFIX"
           echo "Platform: $(uname -s)"
           echo "Architecture: $(uname -m)"
       - name: Update native modules to latest versions
@@ -307,16 +337,20 @@ jobs:
       - name: Set C++20 environment for build
         run: |
           echo "=== Setting C++20 environment ==="
-          export CXXFLAGS="-std=c++20"
-          export CFLAGS="-std=c11"
+          ARCH_FLAGS="${ARCH_FLAGS:-}"
+          TARGET_ARCH="${TARGET_ARCH:-$(uname -m)}"
+          HOMEBREW_PREFIX="${HOMEBREW_PREFIX:-/opt/homebrew}"
+          export CXXFLAGS="-std=c++20 ${ARCH_FLAGS}"
+          export CFLAGS="-std=c11 ${ARCH_FLAGS}"
           export CXX="clang++"
           export CC="clang"
-          export LDFLAGS="-std=c++20"
+          export LDFLAGS="-std=c++20 ${ARCH_FLAGS}"
           export npm_config_target_platform="darwin"
-          export npm_config_target_arch="x64"
+          export npm_config_arch="${TARGET_ARCH}"
+          export npm_config_target_arch="${TARGET_ARCH}"
           export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig"
-          export LIBLZMA_CFLAGS="-I/opt/homebrew/include"
-          export LIBLZMA_LIBS="-L/opt/homebrew/lib -llzma"
+          export LIBLZMA_CFLAGS="-I${HOMEBREW_PREFIX}/include"
+          export LIBLZMA_LIBS="-L${HOMEBREW_PREFIX}/lib -llzma"
           echo "Environment variables set:"
           echo "CXXFLAGS: $CXXFLAGS"
           echo "CFLAGS: $CFLAGS"
@@ -325,15 +359,19 @@ jobs:
           echo "PKG_CONFIG_PATH: $PKG_CONFIG_PATH"
           echo "LIBLZMA_CFLAGS: $LIBLZMA_CFLAGS"
           echo "LIBLZMA_LIBS: $LIBLZMA_LIBS"
+          echo "ARCH_FLAGS: $ARCH_FLAGS"
           echo "npm_config_target_platform: $npm_config_target_platform"
+          echo "npm_config_arch: $npm_config_arch"
           echo "npm_config_target_arch: $npm_config_target_arch"
       - name: Download Electron headers
         run: |
-          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" npx electron-rebuild --force --types prod,dev,optional --module-dir . || \
-          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" npx electron-rebuild --force --types prod,dev --module-dir .
+          TARGET_ARCH="${TARGET_ARCH:-$(uname -m)}"
+          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" npx electron-rebuild --force --arch="${TARGET_ARCH}" --types prod,dev,optional --module-dir . || \
+          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" npx electron-rebuild --force --arch="${TARGET_ARCH}" --types prod,dev --module-dir .
       - name: Rebuild native modules
         run: |
-          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" npx electron-rebuild
+          TARGET_ARCH="${TARGET_ARCH:-$(uname -m)}"
+          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" npx electron-rebuild --arch="${TARGET_ARCH}"
       - name: Rebuild sqlite3
         run: |
           CXXFLAGS="-std=c++20" CFLAGS="-std=c11" yarn rebuild-sqlite3
@@ -348,17 +386,20 @@ jobs:
           CXXFLAGS="-std=c++20" CFLAGS="-std=c11" yarn rebuild-faiss-node
       - name: yarn electron-rebuild
         run: |
-          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" yarn electron-rebuild
+          TARGET_ARCH="${TARGET_ARCH:-$(uname -m)}"
+          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" yarn electron-rebuild --arch="${TARGET_ARCH}"
       - name: Rebuild with verbose output
         run: |
           echo "=== Rebuilding with verbose output ==="
-          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" DEBUG=* npx electron-rebuild --force --verbose || echo "Verbose rebuild failed, continuing..."
+          TARGET_ARCH="${TARGET_ARCH:-$(uname -m)}"
+          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" DEBUG=* npx electron-rebuild --force --arch="${TARGET_ARCH}" --verbose || echo "Verbose rebuild failed, continuing..."
       - name: Rebuild C modules specifically
         run: |
           echo "=== Rebuilding C modules specifically ==="
           # Rebuild bufferutil and utf-8-validate which are C modules
-          CFLAGS="-std=c11" yarn electron-rebuild -f -w bufferutil || echo "bufferutil rebuild failed"
-          CFLAGS="-std=c11" yarn electron-rebuild -f -w utf-8-validate || echo "utf-8-validate rebuild failed"
+          TARGET_ARCH="${TARGET_ARCH:-$(uname -m)}"
+          CFLAGS="-std=c11" yarn electron-rebuild --arch="${TARGET_ARCH}" -f -w bufferutil || echo "bufferutil rebuild failed"
+          CFLAGS="-std=c11" yarn electron-rebuild --arch="${TARGET_ARCH}" -f -w utf-8-validate || echo "utf-8-validate rebuild failed"
       - name: Debug - Check native modules
         run: |
           echo "=== Checking native modules ==="
