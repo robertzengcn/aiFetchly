@@ -196,6 +196,9 @@ jobs:
           echo "LDFLAGS=-std=c++20" >> $GITHUB_ENV
           echo "npm_config_target_platform=darwin" >> $GITHUB_ENV
           echo "npm_config_target_arch=x64" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig" >> $GITHUB_ENV
+          echo "LIBLZMA_CFLAGS=-I/opt/homebrew/include" >> $GITHUB_ENV
+          echo "LIBLZMA_LIBS=-L/opt/homebrew/lib -llzma" >> $GITHUB_ENV
 
       # Make sure to use a recent Xcode version
       - name: List available Xcode versions
@@ -255,8 +258,24 @@ jobs:
         run: |
             brew install python-setuptools           
               
+      - name: Install system dependencies for native modules
+        run: |
+            brew install xz pkg-config
+            echo "Installed xz (liblzma) and pkg-config"
+            
+      - name: Verify liblzma installation
+        run: |
+            echo "=== Verifying liblzma installation ==="
+            which xz || echo "xz not found in PATH"
+            pkg-config --exists liblzma && echo "✅ liblzma found via pkg-config" || echo "❌ liblzma not found via pkg-config"
+            pkg-config --modversion liblzma || echo "Could not get liblzma version"
+            pkg-config --cflags liblzma || echo "Could not get liblzma CFLAGS"
+            pkg-config --libs liblzma || echo "Could not get liblzma LIBS"
+            ls -la /opt/homebrew/lib/liblzma* || ls -la /usr/local/lib/liblzma* || echo "liblzma libraries not found"
+            ls -la /opt/homebrew/include/lzma* || ls -la /usr/local/include/lzma* || echo "liblzma headers not found"
+              
       - name: Install dependencies
-        run: yarn install
+        run: yarn install --ignore-optional || yarn install
       - name: Install DMG maker
         run: yarn add --dev @electron-forge/maker-dmg
       - name: Clean previous builds
@@ -295,16 +314,23 @@ jobs:
           export LDFLAGS="-std=c++20"
           export npm_config_target_platform="darwin"
           export npm_config_target_arch="x64"
+          export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig"
+          export LIBLZMA_CFLAGS="-I/opt/homebrew/include"
+          export LIBLZMA_LIBS="-L/opt/homebrew/lib -llzma"
           echo "Environment variables set:"
           echo "CXXFLAGS: $CXXFLAGS"
           echo "CFLAGS: $CFLAGS"
           echo "CXX: $CXX"
           echo "CC: $CC"
+          echo "PKG_CONFIG_PATH: $PKG_CONFIG_PATH"
+          echo "LIBLZMA_CFLAGS: $LIBLZMA_CFLAGS"
+          echo "LIBLZMA_LIBS: $LIBLZMA_LIBS"
           echo "npm_config_target_platform: $npm_config_target_platform"
           echo "npm_config_target_arch: $npm_config_target_arch"
       - name: Download Electron headers
         run: |
-          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" npx electron-rebuild --force --types prod,dev,optional --module-dir .
+          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" npx electron-rebuild --force --types prod,dev,optional --module-dir . || \
+          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" npx electron-rebuild --force --types prod,dev --module-dir .
       - name: Rebuild native modules
         run: |
           CXXFLAGS="-std=c++20" CFLAGS="-std=c11" npx electron-rebuild
