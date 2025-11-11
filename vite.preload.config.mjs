@@ -21,7 +21,8 @@ export default ({ mode }) => {
     sourcemap: true,
     rollupOptions: {
       external: [
-        'sqlite3'
+        'sqlite3',
+        'faiss-node'
       ]
     }
   }
