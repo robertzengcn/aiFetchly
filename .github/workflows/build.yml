@@ -309,9 +309,7 @@ jobs:
           rm -rf node_modules/.cache
           rm -rf out/
           rm -rf .vite/
-          yarn clean || echo "Clean command not available"
-      - name: Install lzma-native
-        run: yarn add --dev lzma-native  
+          yarn clean || echo "Clean command not available" 
       - name: Install node-gyp
         run: yarn add global node-gyp  
       - name: Configure npm for C++20
