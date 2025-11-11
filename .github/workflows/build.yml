@@ -287,8 +287,7 @@ jobs:
       - name: Install system dependencies for native modules
         run: |
             brew install xz pkg-config
-            echo "Installed xz (liblzma) and pkg-config"
-            
+            echo "Installed xz (liblzma) and pkg-config"         
       - name: Verify liblzma installation
         run: |
             echo "=== Verifying liblzma installation ==="
@@ -311,7 +310,7 @@ jobs:
           rm -rf out/
           rm -rf .vite/
           yarn clean || echo "Clean command not available"
-            - name: Install lzma-native
+      - name: Install lzma-native
         run: yarn add --dev lzma-native  
       - name: Install node-gyp
         run: yarn global node-gyp  
