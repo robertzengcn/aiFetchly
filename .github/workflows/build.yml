@@ -368,11 +368,14 @@ jobs:
           echo "npm_config_target_platform: $npm_config_target_platform"
           echo "npm_config_arch: $npm_config_arch"
           echo "npm_config_target_arch: $npm_config_target_arch"
-      - name: Download Electron headers
+      - name: Install and Rebuild Modules
         run: |
-          TARGET_ARCH="${TARGET_ARCH:-$(uname -m)}"
-          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" npx electron-rebuild --force --arch="${TARGET_ARCH}" --types prod,dev,optional --module-dir . || \
-          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" npx electron-rebuild --force --arch="${TARGET_ARCH}" --types prod,dev --module-dir .
+          CXXFLAGS="-std=c++20 -arch arm64 -I/opt/homebrew/include" \
+          CFLAGS="-std=c11 -arch arm64 -I/opt/homebrew/include" \
+          LDFLAGS="-L/opt/homebrew/lib -arch arm64" \
+          npx electron-rebuild --force --arch="${TARGET_ARCH}" --types prod,dev,optional --module-dir .
+        env:
+          TARGET_ARCH: arm64
       - name: Rebuild native modules
         run: |
           TARGET_ARCH="${TARGET_ARCH:-$(uname -m)}"
