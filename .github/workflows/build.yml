@@ -368,18 +368,24 @@ jobs:
           echo "npm_config_target_platform: $npm_config_target_platform"
           echo "npm_config_arch: $npm_config_arch"
           echo "npm_config_target_arch: $npm_config_target_arch"
-      - name: Install and Rebuild Modules
+      - name: Rebuild Native Modules for Electron
         run: |
-          CXXFLAGS="-std=c++20 -arch arm64 -I/opt/homebrew/include" \
-          CFLAGS="-std=c11 -arch arm64 -I/opt/homebrew/include" \
-          LDFLAGS="-L/opt/homebrew/lib -arch arm64" \
+          # Export all flags so the 'make' subprocess inherits them
+          export CFLAGS="-std=c11 -arch arm64 -I/opt/homebrew/include"
+          export CXXFLAGS="-std=c++20 -arch arm64 -I/opt/homebrew/include"
+
+          # This is the most critical fix:
+          # You MUST include -arch arm64 in LDFLAGS
+          export LDFLAGS="-L/opt/homebrew/lib -arch arm64"
+
+          # This helps find the .pc files
+          export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig"
+
+          # Now run the rebuild. The flags will be picked up.
           npx electron-rebuild --force --arch="${TARGET_ARCH}" --types prod,dev,optional --module-dir .
         env:
+          # Ensure this is set for the step
           TARGET_ARCH: arm64
-      - name: Rebuild native modules
-        run: |
-          TARGET_ARCH="${TARGET_ARCH:-$(uname -m)}"
-          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" npx electron-rebuild --arch="${TARGET_ARCH}"
       - name: Rebuild sqlite3
         run: |
           CXXFLAGS="-std=c++20" CFLAGS="-std=c11" yarn rebuild-sqlite3
