@@ -8,7 +8,7 @@ The macOS build was failing during `electron-rebuild` with the following error:
 gyp: Call to 'sh liblzma-config.sh' returned exit status 77 while in binding.gyp
 ```
 
-This error occurred because the `lzma-native` package (a transitive dependency of `electron-rebuild`) requires the `liblzma` system library to compile, which was not installed on the build runner.
+This error occurred because the `lzma-native` package (a transitive dependency of `electron-rebuild`) requires the `liblzma` system library to compile **and** needs to be built for the correct target architecture. Without the system library and explicit architecture settings, the build fails with exit status 77.
 
 ## Root Cause
 
@@ -53,46 +53,79 @@ Added verification to confirm the library is properly installed:
 
 ### 3. Configure Build Environment
 
-Added environment variables to help the build system find liblzma:
+Added environment variables to help the build system find liblzma and apply the correct architecture flags:
 
 ```yaml
+ARCH="$(uname -m)"
+if [ "$ARCH" = "arm64" ]; then
+  TARGET_ARCH="arm64"
+  ARCH_FLAGS="-arch arm64"
+  HOMEBREW_PREFIX="/opt/homebrew"
+else
+  TARGET_ARCH="x86_64"
+  ARCH_FLAGS="-arch x86_64"
+  HOMEBREW_PREFIX="/usr/local"
+fi
+echo "TARGET_ARCH=${TARGET_ARCH}" >> $GITHUB_ENV
+echo "ARCH_FLAGS=${ARCH_FLAGS}" >> $GITHUB_ENV
 echo "PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig" >> $GITHUB_ENV
-echo "LIBLZMA_CFLAGS=-I/opt/homebrew/include" >> $GITHUB_ENV
-echo "LIBLZMA_LIBS=-L/opt/homebrew/lib -llzma" >> $GITHUB_ENV
+echo "LIBLZMA_CFLAGS=-I${HOMEBREW_PREFIX}/include" >> $GITHUB_ENV
+echo "LIBLZMA_LIBS=-L${HOMEBREW_PREFIX}/lib -llzma" >> $GITHUB_ENV
 ```
 
 **Why:**
 - Homebrew installs libraries in `/opt/homebrew` on Apple Silicon or `/usr/local` on Intel
-- These variables explicitly tell the compiler where to find the library
-- Covers both possible installation locations
+- The script now detects the host architecture and sets `TARGET_ARCH`, `ARCH_FLAGS`, and `HOMEBREW_PREFIX` accordingly
+- These variables explicitly tell the compiler where to find the library and which architecture to target
 
 ### 4. Add Fallback for electron-rebuild
 
-Modified the electron-rebuild command to fall back to non-optional dependencies if optional ones fail:
+Modified the electron-rebuild command to always respect the detected architecture and provide an optional fallback build:
 
 ```yaml
 - name: Download Electron headers
   run: |
-    CXXFLAGS="-std=c++20" CFLAGS="-std=c11" npx electron-rebuild --force --types prod,dev,optional --module-dir . || \
-    CXXFLAGS="-std=c++20" CFLAGS="-std=c11" npx electron-rebuild --force --types prod,dev --module-dir .
+    TARGET_ARCH="${TARGET_ARCH:-$(uname -m)}"
+    CXXFLAGS="-std=c++20" CFLAGS="-std=c11" npx electron-rebuild --force --arch="${TARGET_ARCH}" --types prod,dev,optional --module-dir . || \
+    CXXFLAGS="-std=c++20" CFLAGS="-std=c11" npx electron-rebuild --force --arch="${TARGET_ARCH}" --types prod,dev --module-dir .
 ```
 
 **Why:**
-- If lzma-native is truly optional for electron-rebuild, this allows the build to proceed
-- Provides a safety net without compromising required dependencies
+- Ensures the rebuild always targets the correct architecture (arm64 on Apple Silicon, x86_64 on Intel)
+- Keeps the fallback in place for optional packages while respecting architecture flags
 
 ### 5. Update yarn install
 
-Added fallback for yarn install:
+Ensured optional dependencies are always installed:
 
 ```yaml
 - name: Install dependencies
-  run: yarn install --ignore-optional || yarn install
+  run: yarn install
 ```
 
 **Why:**
-- First tries to skip optional dependencies if they cause issues
-- Falls back to full install if needed
+- Optional dependencies (including `lzma-native`) are required for the rebuild, so we now always install them
+- Removes variability introduced by `--ignore-optional`
+
+### 6. Add Post-install Verification
+
+Added a sanity check to confirm the bundled `xz` source tarball is present before rebuilding:
+
+```yaml
+- name: Debug - Verify lzma-native assets
+  run: |
+    if [ -d node_modules/lzma-native/deps ]; then
+      echo "Found lzma-native deps directory"
+      ls -la node_modules/lzma-native/deps
+      ls -la node_modules/lzma-native/deps | grep xz- || true
+    else
+      echo "lzma-native deps directory not found"
+    fi
+```
+
+**Why:**
+- Confirms the `xz-5.2.3.tar.bz2` tarball is available before the build step runs
+- Provides immediate diagnostics if `lzma-native` fails to install for any reason
 
 ## Verification
 
@@ -106,15 +139,30 @@ brew install xz pkg-config
 pkg-config --exists liblzma && echo "✅ liblzma available"
 
 # Set environment variables
+ARCH="$(uname -m)"
+if [ "$ARCH" = "arm64" ]; then
+  TARGET_ARCH="arm64"
+  ARCH_FLAGS="-arch arm64"
+  HOMEBREW_PREFIX="/opt/homebrew"
+else
+  TARGET_ARCH="x86_64"
+  ARCH_FLAGS="-arch x86_64"
+  HOMEBREW_PREFIX="/usr/local"
+fi
 export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig"
-export LIBLZMA_CFLAGS="-I/opt/homebrew/include"
-export LIBLZMA_LIBS="-L/opt/homebrew/lib -llzma"
+export LIBLZMA_CFLAGS="-I${HOMEBREW_PREFIX}/include"
+export LIBLZMA_LIBS="-L${HOMEBREW_PREFIX}/lib -llzma"
+export CXXFLAGS="-std=c++20 ${ARCH_FLAGS}"
+export CFLAGS="-std=c11 ${ARCH_FLAGS}"
+export LDFLAGS="-std=c++20 ${ARCH_FLAGS}"
+export npm_config_arch="${TARGET_ARCH}"
+export npm_config_target_arch="${TARGET_ARCH}"
 
 # Install dependencies
 yarn install
 
 # Rebuild native modules
-CXXFLAGS="-std=c++20" CFLAGS="-std=c11" npx electron-rebuild --force
+npx electron-rebuild --force --arch="${TARGET_ARCH}"
 ```
 
 ## Alternative Solutions Considered
