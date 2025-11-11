@@ -304,13 +304,17 @@ jobs:
       - name: Install dependencies
         run: yarn install
       - name: Install DMG maker
-        run: yarn add --dev @electron-forge/maker-dmg
+        run: yarn add --dev @electron-forge/maker-dmg   
       - name: Clean previous builds
         run: |
           rm -rf node_modules/.cache
           rm -rf out/
           rm -rf .vite/
           yarn clean || echo "Clean command not available"
+            - name: Install lzma-native
+        run: yarn add --dev lzma-native  
+      - name: Install node-gyp
+        run: yarn global node-gyp  
       - name: Configure npm for C++20
         run: |
           echo "npm config list:"
