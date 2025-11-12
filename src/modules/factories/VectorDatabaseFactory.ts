@@ -1,11 +1,13 @@
 import { IVectorDatabase } from '@/modules/interface/IVectorDatabase';
-import { FaissVectorDatabase } from '@/modules/adapters/FaissVectorDatabase';
+// import { FaissVectorDatabase } from '@/modules/adapters/FaissVectorDatabase';
+import { SqliteVecDatabase } from '@/modules/adapters/SqliteVecDatabase';
 
 /**
  * Supported vector database types
  */
 export enum VectorDatabaseType {
     FAISS = 'faiss',
+    SQLITE_VEC = 'sqlite-vec',
     // Add more types as you implement them
     // CHROMA = 'chroma',
     // PINECONE = 'pinecone',
@@ -24,6 +26,10 @@ export interface VectorDatabaseFactoryConfig {
     faissConfig?: {
         // FAISS-specific options
     };
+    sqliteVecConfig?: {
+        // SQLite-vec specific options
+        // e.g., extension path, etc.
+    };
     // chromaConfig?: ChromaConfig;
     // pineconeConfig?: PineconeConfig;
     // etc.
@@ -39,8 +45,11 @@ export class VectorDatabaseFactory {
      */
     static createDatabase(config: VectorDatabaseFactoryConfig): IVectorDatabase {
         switch (config.type) {
-            case VectorDatabaseType.FAISS:
-                return new FaissVectorDatabase(config.baseIndexPath);
+            // case VectorDatabaseType.FAISS:
+            //     return new FaissVectorDatabase(config.baseIndexPath);
+            
+            case VectorDatabaseType.SQLITE_VEC:
+                return new SqliteVecDatabase(config.baseIndexPath);
             
             // Add cases for other database types as needed
             // case VectorDatabaseType.CHROMA:
@@ -75,9 +84,17 @@ export class VectorDatabaseFactory {
 
     /**
      * Create a FAISS database instance (convenience method)
+     * @deprecated Use createSqliteVecDatabase instead for better compatibility
      */
-    static createFaissDatabase(baseIndexPath?: string): IVectorDatabase {
-        return new FaissVectorDatabase(baseIndexPath);
+    // static createFaissDatabase(baseIndexPath?: string): IVectorDatabase {
+    //     return new FaissVectorDatabase(baseIndexPath);
+    // }
+
+    /**
+     * Create a SQLite-vec database instance (convenience method)
+     */
+    static createSqliteVecDatabase(baseIndexPath?: string): IVectorDatabase {
+        return new SqliteVecDatabase(baseIndexPath);
     }
 
     /**
@@ -101,12 +118,13 @@ export class VectorDatabaseFactory {
      * This allows for easy configuration switching
      */
     static createFromConfig(): IVectorDatabase {
-        const dbType = process.env.VECTOR_DB_TYPE || VectorDatabaseType.FAISS;
+        // Default to sqlite-vec for better compatibility
+        const dbType = process.env.VECTOR_DB_TYPE || VectorDatabaseType.SQLITE_VEC;
         const baseIndexPath = process.env.VECTOR_DB_PATH;
 
         if (!this.isSupported(dbType)) {
-            console.warn(`Unsupported vector database type: ${dbType}, falling back to FAISS`);
-            return this.createFaissDatabase(baseIndexPath);
+            console.warn(`Unsupported vector database type: ${dbType}, falling back to sqlite-vec`);
+            return this.createSqliteVecDatabase(baseIndexPath);
         }
 
         return this.createDatabase({

@@ -282,8 +282,7 @@ export default ({ mode }) => {
                     'better-sqlite3',
                     'bindings',
                     'typeorm',
-                    'canvas',  // Mark canvas as external to prevent bundling native .node files
-                    'faiss-node'  // Mark faiss-node as external to prevent bundling native .node files
+                    'canvas'  // Mark canvas as external to prevent bundling native .node files
                 ]
             },
             sourcemap: true,

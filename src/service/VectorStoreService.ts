@@ -35,7 +35,7 @@ export class VectorStoreService {
     constructor(
         // db: SqliteDb, 
         indexPath?: string, 
-        databaseType: VectorDatabaseType = VectorDatabaseType.FAISS
+        databaseType: VectorDatabaseType = VectorDatabaseType.SQLITE_VEC
     ) {
         // this.db = db;
         this.indexPath = indexPath || path.join(process.cwd(), 'data', 'vector_index');
@@ -127,7 +127,8 @@ export class VectorStoreService {
 
             await this.vectorDatabase.loadIndex(vectorDbConfig);
             
-            // Rebuild chunk ID mapping for FAISS (if it supports it) - only for document-specific indices
+            // Note: sqlite-vec stores chunk_id directly, so no need to rebuild chunk ID mapping
+            // Only FAISS needs this workaround
             if (this.databaseType === VectorDatabaseType.FAISS && 
                 'rebuildChunkIdMapping' in this.vectorDatabase &&
                 vectorDbConfig.documentId) {
@@ -455,9 +456,11 @@ export class VectorStoreService {
         switch (this.databaseType) {
             case VectorDatabaseType.FAISS:
                 return 'index';
+            case VectorDatabaseType.SQLITE_VEC:
+                return 'db';
             // Add other database types as needed
             default:
-                return 'index';
+                return 'db';
         }
     }
 
@@ -686,7 +689,8 @@ export class VectorStoreService {
 
             await this.vectorDatabase.loadIndex(vectorDbConfig);
             
-            // Rebuild chunk ID mapping for FAISS (if it supports it)
+            // Note: sqlite-vec stores chunk_id directly, so no need to rebuild chunk ID mapping
+            // Only FAISS needs this workaround
             if (this.databaseType === VectorDatabaseType.FAISS && 
                 'rebuildChunkIdMapping' in this.vectorDatabase) {
                 await (this.vectorDatabase as any).rebuildChunkIdMapping(this.ragChunkModule, documentId);
