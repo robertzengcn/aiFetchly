@@ -39,6 +39,14 @@ export class RAGChunkModule extends BaseModule {
     }
 
     /**
+     * Get chunk IDs for a document (synchronous)
+     * Uses underlying better-sqlite3 database for synchronous queries
+     */
+    getDocumentChunkIds(documentId: number): number[] {
+        return this.ragChunkModel.getDocumentChunkIds(documentId);
+    }
+
+    /**
      * Delete all chunks for a document
      */
     async deleteDocumentChunks(documentId: number): Promise<number> {

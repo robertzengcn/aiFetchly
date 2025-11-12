@@ -49,7 +49,7 @@ export class VectorDatabaseFactory {
             //     return new FaissVectorDatabase(config.baseIndexPath);
             
             case VectorDatabaseType.SQLITE_VEC:
-                return new SqliteVecDatabase(config.baseIndexPath);
+                return new SqliteVecDatabase();
             
             // Add cases for other database types as needed
             // case VectorDatabaseType.CHROMA:
@@ -93,8 +93,8 @@ export class VectorDatabaseFactory {
     /**
      * Create a SQLite-vec database instance (convenience method)
      */
-    static createSqliteVecDatabase(baseIndexPath?: string): IVectorDatabase {
-        return new SqliteVecDatabase(baseIndexPath);
+    static createSqliteVecDatabase(): IVectorDatabase {
+        return new SqliteVecDatabase();
     }
 
     /**
@@ -124,7 +124,7 @@ export class VectorDatabaseFactory {
 
         if (!this.isSupported(dbType)) {
             console.warn(`Unsupported vector database type: ${dbType}, falling back to sqlite-vec`);
-            return this.createSqliteVecDatabase(baseIndexPath);
+            return this.createSqliteVecDatabase();
         }
 
         return this.createDatabase({
