@@ -210,9 +210,6 @@ vector_indices/
 #### For Existing Users
 
 1. **Automatic Migration**: On first startup with sqlite-vec:
-   - Detect existing FAISS index files
-   - Read vectors and rebuild in SQLite format
-   - Preserve chunk ID mappings
    - Mark FAISS indices as deprecated
 
 2. **Manual Migration**: Via CLI/UI:
@@ -220,10 +217,6 @@ vector_indices/
    - Progress reporting
    - Validation step
 
-3. **Hybrid Mode**: Support both during transition:
-   - Read from FAISS if SQLite index doesn't exist
-   - Write to SQLite going forward
-   - Gradual migration as documents are reindexed
 
 #### For New Users
 
@@ -327,32 +320,6 @@ vector_indices/
 - [ ] Remove `rebuild-faiss-node` script from `package.json`
 - [ ] Remove `faiss-node` dependency from `package.json`
 - [ ] Update documentation references
-
-#### Task 8: Testing
-**Priority**: High  
-**Estimated Effort**: 2 days
-
-- [ ] Unit tests for `SqliteVecDatabase`
-  - [ ] Test vector insertion
-  - [ ] Test vector search
-  - [ ] Test edge cases (empty index, dimension mismatch)
-  - [ ] Test backup/restore
-  - [ ] Test optimization
-- [ ] Integration tests
-  - [ ] Test with `VectorStoreService`
-  - [ ] Test document indexing flow
-  - [ ] Test search accuracy compared to FAISS
-- [ ] Migration tests
-  - [ ] Test FAISS → SQLite migration
-  - [ ] Test data integrity after migration
-- [ ] Performance tests
-  - [ ] Benchmark search performance
-  - [ ] Compare with FAISS baseline
-  - [ ] Test with large datasets (10k, 100k, 1M vectors)
-- [ ] Cross-platform tests
-  - [ ] Test on Windows
-  - [ ] Test on macOS
-  - [ ] Test on Linux
 
 #### Task 9: Documentation
 **Priority**: Medium  
@@ -505,97 +472,6 @@ async search(queryVector: number[], k: number): Promise<VectorSearchResult> {
 }
 ```
 
----
-
-## 8. Testing Strategy
-
-### Test Categories
-
-#### 1. Unit Tests
-**File**: `/test/modules/SqliteVecDatabase.test.ts`
-
-```typescript
-describe('SqliteVecDatabase', () => {
-    describe('Initialization', () => {
-        it('should initialize with sqlite-vec extension');
-        it('should fail gracefully if extension not found');
-    });
-    
-    describe('Index Creation', () => {
-        it('should create index with correct dimension');
-        it('should create document-specific index');
-        it('should create model-specific index');
-        it('should throw on invalid dimensions');
-    });
-    
-    describe('Vector Operations', () => {
-        it('should add single vector');
-        it('should add multiple vectors in batch');
-        it('should reject vectors with wrong dimensions');
-        it('should handle empty vector arrays');
-    });
-    
-    describe('Search Operations', () => {
-        it('should search and return top k results');
-        it('should handle k larger than total vectors');
-        it('should return empty results on empty index');
-        it('should return correct chunk IDs');
-        it('should return sorted by distance');
-    });
-    
-    describe('Persistence', () => {
-        it('should persist vectors to disk');
-        it('should load existing index');
-        it('should handle corrupted databases');
-    });
-    
-    describe('Backup and Restore', () => {
-        it('should backup index to specified path');
-        it('should restore index from backup');
-        it('should validate restored data');
-    });
-});
-```
-
-#### 2. Integration Tests
-**File**: `/test/integration/vector-store-sqlite.test.ts`
-
-```typescript
-describe('VectorStoreService with SqliteVec', () => {
-    it('should create index via VectorStoreService');
-    it('should add document embeddings');
-    it('should search across documents');
-    it('should switch between models');
-    it('should delete document indices');
-});
-```
-
-#### 3. Migration Tests
-**File**: `/test/migration/faiss-to-sqlite.test.ts`
-
-```typescript
-describe('FAISS to SQLite Migration', () => {
-    it('should detect existing FAISS indices');
-    it('should migrate vectors correctly');
-    it('should preserve chunk ID mappings');
-    it('should validate migrated data');
-    it('should backup original FAISS files');
-    it('should handle partial migrations');
-});
-```
-
-#### 4. Performance Tests
-**File**: `/test/performance/vector-search-benchmark.test.ts`
-
-```typescript
-describe('Performance Benchmarks', () => {
-    it('should benchmark insertion speed (1k vectors)');
-    it('should benchmark search speed (10k index, k=10)');
-    it('should compare with FAISS baseline');
-    it('should test with large datasets (100k+ vectors)');
-    it('should measure memory usage');
-});
-```
 
 ### Acceptance Criteria
 
@@ -730,14 +606,6 @@ describe('Performance Benchmarks', () => {
 - [ ] Write tests (unit, integration, migration)
 - [ ] Update documentation
 
-### Testing
-
-- [ ] Run unit tests
-- [ ] Run integration tests
-- [ ] Perform migration tests with real data
-- [ ] Benchmark performance
-- [ ] Test on all platforms (Windows, macOS, Linux)
-- [ ] User acceptance testing
 
 ### Deployment
 
