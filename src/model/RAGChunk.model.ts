@@ -44,6 +44,32 @@ export class RAGChunkModel extends BaseDb {
     }
 
     /**
+     * Get chunk IDs for a document (synchronous)
+     * Uses underlying better-sqlite3 database for synchronous queries
+     */
+    getDocumentChunkIds(documentId: number): number[] {
+        try {
+            // Access underlying better-sqlite3 database through TypeORM driver
+            const driver = this.sqliteDb.connection.driver as any;
+            const database = driver.database;
+            
+            if (!database) {
+                console.warn('Unable to access underlying database for synchronous query');
+                return [];
+            }
+
+            // Execute synchronous query to get chunk IDs
+            const query = `SELECT id FROM rag_chunks WHERE documentId = ? ORDER BY chunkIndex ASC`;
+            const results = database.prepare(query).all(documentId) as Array<{ id: number }>;
+            
+            return results.map(row => row.id);
+        } catch (error) {
+            console.error('Failed to get chunk IDs for document:', error);
+            return [];
+        }
+    }
+
+    /**
      * Delete all chunks for a document
      */
     async deleteDocumentChunks(documentId: number): Promise<number> {

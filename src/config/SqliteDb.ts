@@ -46,8 +46,10 @@ import { RAGDocumentEntity } from "@/entity/RAGDocument.entity";
 import { RAGChunkEntity } from "@/entity/RAGChunk.entity";
 // import { RAGModelEntity } from "@/entity/RAGModel.entity";
 import { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
+import { VectorEntity, VectorMetadataEntity } from "@/entity/Vector.entity";
 // import sqlite3 from "sqlite3";
-
+import * as sqliteVec from "sqlite-vec";
+import Database from "better-sqlite3";
 
 import path from "node:path";
 export class SqliteDb {
@@ -112,12 +114,19 @@ export class SqliteDb {
                 RAGChunkEntity,
                 // RAGModelEntity,
                 AIChatMessageEntity,
+                VectorEntity,
+                VectorMetadataEntity,
             ],
             synchronize: true, 
             migrations: [],
             subscribers: [],
             //logging:  process.env.NODE_ENV !== 'production', /// use this for debugging
             logging:  false, 
+            prepareDatabase: (db: Database.Database) => {
+                // Load the sqlite-vec extension into the connection
+                sqliteVec.load(db);
+                console.log("sqlite-vec extension loaded.");
+              },
             // driver: {
             //     sqlite3: sqlite3
             // }

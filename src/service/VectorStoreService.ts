@@ -601,7 +601,7 @@ export class VectorStoreService {
      * @param indexType - Type of index (default: 'Flat')
      * @returns The file path of the created vector index
      */
-    async createDocumentIndex(documentId: number, modelConfig: EmbeddingModelConfig, indexType: string = 'Flat'): Promise<string> {
+    async createDocumentIndex(documentId: number, modelConfig: EmbeddingModelConfig, indexType: string = 'Flat'): Promise<string|undefined|null> {
         try {
             this.currentModel = modelConfig;
             
