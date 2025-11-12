@@ -124,13 +124,34 @@ export class SqliteDb {
             logging:  false, 
             prepareDatabase: (db: Database.Database) => {
                 // Load the sqlite-vec extension into the connection
-                sqliteVec.load(db);
-                console.log("sqlite-vec extension loaded.");
-              },
+                // Use sqliteVec.load(db) instead of db.loadExtension(sqliteVec.getLoadablePath())
+                // because getLoadablePath() doesn't work correctly in Electron bundled apps
+                try {
+                    
+                    sqliteVec.load(db);
+                    console.log("sqlite-vec extension loaded.");
+                } catch (error) { 
+                  
+                   
+                    console.error('Failed to load sqlite-vec extension:', error);
+                    // Don't throw - allow database to initialize even if extension fails
+                    // This allows the app to start, but vector operations will fail
+                    // The error will be logged for debugging
+                }
+            },
             // driver: {
             //     sqlite3: sqlite3
             // }
         })
+        // try{
+        // const driver = this.connection.driver as any; 
+        // const db = driver.database;
+        // sqliteVec.load(db);
+        // console.log("sqlite-vec extension loaded.");
+        // }catch(error){
+        //     console.error('Failed to load sqlite-vec extension:', error);
+        //     throw new Error('Failed to load sqlite-vec extension');
+        // }
     }
 
     }
