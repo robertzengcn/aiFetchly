@@ -221,7 +221,7 @@ export class VectorStoreService {
             }
 
             // Use pooled instance to add vectors
-            await this.addVectorsWithInstance(pooledInstance, [embeddingData.embedding], [embeddingData.chunkId]);
+            await this.addVectorsWithInstance(pooledInstance, embeddingData.embedding, embeddingData.chunkId);
         } else {
             throw new Error('Document ID, model, and dimensions are required for document-specific indexing');
         }
@@ -232,7 +232,7 @@ export class VectorStoreService {
      * @param vectors - Array of vectors to add
      * @param chunkIds - Array of chunk IDs corresponding to vectors
      */
-    async addVectors(vectors: number[][], chunkIds: number[]): Promise<void> {
+    async addVectors(vectors: number[], chunkIds: number): Promise<void> {
         return this.addVectorsWithInstance(this.vectorDatabase, vectors, chunkIds);
     }
 
@@ -242,31 +242,31 @@ export class VectorStoreService {
      * @param vectors - Array of vectors to add
      * @param chunkIds - Array of chunk IDs corresponding to vectors
      */
-    private async addVectorsWithInstance(instance: IVectorDatabase, vectors: number[][], chunkIds: number[]): Promise<void> {
+    private async addVectorsWithInstance(instance: IVectorDatabase, vectors: number[], chunkIds: number): Promise<void> {
         if (!instance.isInitialized()) {
             throw new Error('Vector database not initialized');
         }
 
-        if (vectors.length !== chunkIds.length) {
-            throw new Error('Vectors and chunk IDs length mismatch');
-        }
+        // if (vectors.length !== chunkIds.length) {
+        //     throw new Error('Vectors and chunk IDs length mismatch');
+        // }
 
         try {
-            const stats = instance.getIndexStats();
-            const startIndex = stats.totalVectors;
+            // const stats = instance.getIndexStats();
+            // const startIndex = stats.totalVectors;
 
             // Add each vector individually (API expects single vector)
-            for (let i = 0; i < vectors.length; i++) {
-                await instance.addVectors(vectors[i], [chunkIds[i]]);
+            // for (let i = 0; i < vectors.length; i++) {
+                await instance.addVectors(vectors, chunkIds);
                 
                 // Update chunk entity with embedding ID
-                const embeddingId = (startIndex + i).toString();
-                await this.ragChunkModule.updateChunkEmbedding(
-                    chunkIds[i], 
-                    embeddingId
-                    // stats.dimension
-                );
-            }
+                // const embeddingId = (startIndex + i).toString();
+                // await this.ragChunkModule.updateChunkEmbedding(
+                //     chunkIds[i], 
+                //     embeddingId
+                //     // stats.dimension
+                // );
+            // }
 
             console.log(`Added ${vectors.length} vectors to ${this.databaseType} index (using pool)`);
         } catch (error) {
