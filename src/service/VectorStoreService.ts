@@ -281,7 +281,7 @@ export class VectorStoreService {
      * @param k - Number of results to return
      * @returns Search results with indices, distances, and chunkIds
      */
-    async search(queryVector: number[], k: number = 10): Promise<{
+    async search(queryVector: number[], k: number = 10,distance?:number): Promise<{
         indices: number[];
         distances: number[];
         chunkIds: number[];
@@ -296,7 +296,7 @@ export class VectorStoreService {
         // }
 
         try {
-            const results = await this.vectorDatabase.search(queryVector, k);
+            const results = await this.vectorDatabase.search(queryVector, k,distance);
             
             // Vector database now returns chunkIds directly
             return {

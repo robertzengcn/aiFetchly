@@ -66,7 +66,7 @@ export interface IVectorDatabase {
     /**
      * Search for similar vectors
      */
-    search(queryVector: number[], k: number): Promise<VectorSearchResult>;
+    search(queryVector: number[], k: number, distance?: number): Promise<VectorSearchResult>;
 
     /**
      * Get index statistics
