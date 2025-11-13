@@ -6,9 +6,9 @@ import * as path from 'path';
 import { AbstractVectorDatabase } from '@/modules/interface/AbstractVectorDatabase';
 import { VectorDatabaseConfig, VectorSearchResult, IndexStats } from '@/modules/interface/IVectorDatabase';
 import { VectorEntity } from '@/entity/Vector.entity';
-import { VectorMetadataEntity } from '@/entity/Vector.entity';
+//import { VectorMetadataEntity } from '@/entity/Vector.entity';
 import { VectorModule } from '@/modules/VectorModule';
-import { VectorMetadataModule } from '@/modules/VectorMetadataModule';
+// import { VectorMetadataModule } from '@/modules/VectorMetadataModule';
 import { RAGChunkModule } from '@/modules/RAGChunkModule';
 
 /**
@@ -19,14 +19,15 @@ import { RAGChunkModule } from '@/modules/RAGChunkModule';
 export class SqliteVecDatabase extends AbstractVectorDatabase {
     // private dataSource: DataSource | null = null;
     private vectorModule: VectorModule | null = null;
-    private vectorMetadataModule: VectorMetadataModule | null = null;
+    // private vectorMetadataModule: VectorMetadataModule | null = null;
     // private vecIndexName: string = 'vec_index';
 
     constructor() { 
             super();
             this.vectorModule = new VectorModule();
-            this.vectorMetadataModule = new VectorMetadataModule();
-    }
+            // this.vectorMetadataModule = new VectorMetadataModule();
+            // this.initialized = true;
+        }
     /**
      * Initialize sqlite-vec via TypeORM
      * TypeORM will load sqlite-vec extension via prepareDatabase hook
@@ -91,15 +92,15 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
      * Tables are created automatically via TypeORM synchronize
      */
     async createIndex(config: VectorDatabaseConfig): Promise<string> {
-        // if (!this.initialized) {
-        //     await this.initialize();
-        // }
-        return 'salite_db'
+        if (!this.initialized) {
+            await this.initialize();
+        }
+        
         // this.validateConfig(config);
 
         // try {
-        //     this.config = config;
-        //     this.dimension = config.dimensions;
+           this.config = config;
+           this.dimension = config.dimensions;
 
         //     // Update index path based on whether it's document-specific or model-specific
         //     if (config.documentIndexPath) {
@@ -180,6 +181,7 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
         //     this.vectorMetadataModule = null;
         //     throw new Error(`Failed to create SQLite-vec index: ${error instanceof Error ? error.message : 'Unknown error'}`);
         // }
+        return 'salite_db'
     }
 
     /**
@@ -273,8 +275,8 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
     /**
      * Add vectors to the index using VectorModule
      */
-    async addVectors(vectors: number[], chunkIds: number[]): Promise<void> {
-        if (!this.vectorModule || !this.vectorMetadataModule) {
+    async addVectors(vectors: number[], chunkIds: number): Promise<void> {
+        if (!this.vectorModule) {
             throw new Error('Index not initialized');
         }
 
@@ -287,41 +289,32 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
             throw new Error(`Vector array length ${vectors.length} is not a multiple of dimension ${this.dimension}`);
         }
 
-        const numVectors = vectors.length / this.dimension;
-        if (numVectors !== chunkIds.length) {
-            throw new Error(`Number of vectors (${numVectors}) does not match number of chunk IDs (${chunkIds.length})`);
-        }
+        // const numVectors = vectors.length / this.dimension;
+        // if (numVectors !== chunkIds.length) {
+        //     throw new Error(`Number of vectors (${numVectors}) does not match number of chunk IDs (${chunkIds.length})`);
+        // }
 
         try {
-            // Split vectors into individual vectors
-            const vectorEntities: VectorEntity[] = [];
-            for (let i = 0; i < numVectors; i++) {
-                const startIdx = i * this.dimension;
-                const endIdx = startIdx + this.dimension;
-                const vector = vectors.slice(startIdx, endIdx);
-                
-                // Convert to Float32Array (VectorTransformer will handle Buffer conversion)
-                const vectorArray = new Float32Array(vector);
-                
-                const vectorEntity = new VectorEntity();
-                vectorEntity.chunk_id = chunkIds[i];
-                vectorEntity.embedding = vectorArray; // VectorTransformer converts to Buffer automatically
-                vectorEntities.push(vectorEntity);
-            }
+            // Convert to Float32Array (VectorTransformer will handle Buffer conversion)
+            const vectorArray = new Float32Array(vectors);
+            
+            const vectorEntity = new VectorEntity();
+            vectorEntity.chunk_id = chunkIds;
+            vectorEntity.embedding = vectorArray; // VectorTransformer converts to Buffer automatically
 
-            // Save vectors and update metadata atomically using transaction
-            // Coordinate both modules using DataSource transaction
-            // Note: vectorModule and vectorMetadataModule are already checked to be non-null at the start of this method
-            const vectorModule = this.vectorModule;
-            const vectorMetadataModule = this.vectorMetadataModule;
-            // const dataSource = vectorModule.getDataSource();
-            // await dataSource.transaction(async (manager) => {
-                // Save vectors using VectorModule method
-                await vectorModule.saveVectors(vectorEntities);
+            // Step 1: Save vector to vectorModule first
+            // Only proceed to metadata update if this succeeds
+            const result = await this.vectorModule.saveVector(vectorEntity);
+            console.log(`Saved vector to SQLite-vec index using VectorModule: ${result.id}`);
 
-                // Update metadata using VectorMetadataModule method
-                await vectorMetadataModule.incrementTotalVectors(1, numVectors);
+            // Step 2: Update metadata only after successful vector save
+            // If saveVector throws an error, this line will not execute
+            //  const metadata = await this.vectorMetadataModule.getOrCreateMetadata(1, {
+            //     dimension: this.dimension,
+            //     model_name: this.config?.modelName,
+            //     index_type: this.config?.indexType
             // });
+            // await this.vectorMetadataModule.incrementTotalVectors(result.id, 1);
 
             // Optionally try to insert into vec_index virtual table if it exists
             // This requires raw queries since TypeORM doesn't support virtual tables directly
@@ -352,13 +345,13 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
             //         }
             //     }
             //     await queryRunner.release();
-            // } catch (error) {
+            //  } catch (error) {
             //     // vec_index table doesn't exist or can't be accessed, use regular table only
             //     // This is fine - we can use vec_distance_l2 on the regular table
             //     console.warn('vec_index virtual table not available, using regular table only:', error);
-            // }
+        //    }
 
-            console.log(`Added ${numVectors} vectors to SQLite-vec index using VectorModule`);
+            console.log(`Added 1 vectors to SQLite-vec index using VectorModule`);
         } catch (error) {
             console.error('Failed to add vectors to SQLite-vec index:', error);
             throw new Error(`Failed to add vectors to SQLite-vec index: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -369,8 +362,13 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
      * Search for similar vectors using VectorModule
      * Delegates to VectorModule's searchSimilarVectors method
      * VectorModule handles validation and calls VectorModel for the actual search
+     * 
+     * @param queryVector - Query vector as number array
+     * @param k - Number of similar vectors to return (default: 10)
+     * @param distance - Maximum distance threshold to filter results (optional)
+     * @returns VectorSearchResult with chunkIds, distances, and indices
      */
-    async search(queryVector: number[], k: number = 10): Promise<VectorSearchResult> {
+    async search(queryVector: number[], k: number = 10, distance?: number): Promise<VectorSearchResult> {
         if (!this.vectorModule) {
             throw new Error('Index not initialized');
         }
@@ -379,7 +377,8 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
             // Use VectorModule's searchSimilarVectors method
             // VectorModule delegates to VectorModel which uses vec_distance_l2 function via raw SQL queries
             // Dimension validation is handled in VectorModel
-            return await this.vectorModule.searchSimilarVectors(queryVector, k, this.dimension);
+            // If distance is provided, results will be filtered to only include vectors with distance <= threshold
+            return await this.vectorModule.searchSimilarVectors(queryVector, k, this.dimension, distance);
         } catch (error) {
             console.error('Failed to search vectors in SqliteVecDatabase:', error);
             throw new Error(`Failed to perform vector search: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -392,7 +391,7 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
      * For accurate stats, the metadata should be loaded when loadIndex is called
      */
     getIndexStats(): IndexStats {
-        if (!this.vectorModule || !this.vectorMetadataModule) {
+        if (!this.vectorModule) {
             return {
                 totalVectors: 0,
                 dimension: this.dimension || 0,

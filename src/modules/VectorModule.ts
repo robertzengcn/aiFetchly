@@ -108,10 +108,11 @@ export class VectorModule extends BaseModule {
      * @param queryVector - Query vector as number array
      * @param k - Number of similar vectors to return (default: 10)
      * @param dimension - Dimension of the vectors (optional, for validation)
+     * @param distance - Maximum distance threshold to filter results (optional)
      * @returns VectorSearchResult with chunkIds, distances, and indices
      */
-    async searchSimilarVectors(queryVector: number[], k: number = 10, dimension?: number): Promise<VectorSearchResult> {
-        return await this.vectorModel.searchSimilarVectors(queryVector, k, dimension);
+    async searchSimilarVectors(queryVector: number[], k: number = 10, dimension?: number, distance?: number): Promise<VectorSearchResult> {
+        return await this.vectorModel.searchSimilarVectors(queryVector, k, dimension, distance);
     }
 
     /**

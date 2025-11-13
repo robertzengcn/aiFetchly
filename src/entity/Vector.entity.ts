@@ -30,25 +30,25 @@ export class VectorEntity extends AuditableEntity {
 /**
  * Vector metadata entity for storing index metadata
  */
-@Entity('vector_metadata')
-export class VectorMetadataEntity extends AuditableEntity {
-    @PrimaryGeneratedColumn()
-    id: number;
+// @Entity('vector_metadata')
+// export class VectorMetadataEntity extends AuditableEntity {
+//     @PrimaryGeneratedColumn()
+//     id: number;
 
-    @Order(1)
-    @Column('int', { nullable: false })
-    dimension: number;
+//     @Order(1)
+//     @Column('int', { nullable: false })
+//     dimension: number;
 
-    @Order(2)
-    @Column('int', { nullable: false, default: 0 })
-    total_vectors: number;
+//     @Order(2)
+//     @Column('int', { nullable: false, default: 0 })
+//     total_vectors: number;
 
-    @Order(3)
-    @Column('varchar', { length: 255, nullable: false })
-    model_name: string;
+//     @Order(3)
+//     @Column('varchar', { length: 255, nullable: false })
+//     model_name: string;
 
-    @Order(4)
-    @Column('varchar', { length: 50, nullable: false, default: 'flat' })
-    index_type: string;
-}
+//     @Order(4)
+//     @Column('varchar', { length: 50, nullable: false, default: 'flat' })
+//     index_type: string;
+// }
 

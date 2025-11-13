@@ -144,9 +144,10 @@ export class VectorModel extends BaseDb {
      * @param queryVector - Query vector as number array
      * @param k - Number of similar vectors to return (default: 10)
      * @param dimension - Dimension of the vectors (optional, for validation)
+     * @param distance - Maximum distance threshold to filter results (optional). If provided, only vectors with distance <= threshold are returned
      * @returns VectorSearchResult with chunkIds, distances, and indices
      */
-    async searchSimilarVectors(queryVector: number[], k: number = 10, dimension?: number): Promise<VectorSearchResult> {
+    async searchSimilarVectors(queryVector: number[], k: number = 10, dimension?: number, distance?: number): Promise<VectorSearchResult> {
         if (queryVector.length === 0) {
             return {
                 indices: [],
@@ -183,10 +184,35 @@ export class VectorModel extends BaseDb {
             // Convert to Buffer for SQL parameter (as shown in merge guide)
             const queryVectorBuffer = Buffer.from(queryVectorArray.buffer);
 
+            // Build SQL query with optional distance filter
+            // If distance is provided, filter results where distance <= distance threshold
+            // Use subquery to compute distance first, then filter
+            const queryParams: unknown[] = distance !== undefined && distance !== null
+                ? [queryVectorBuffer, distance, adjustedK]
+                : [queryVectorBuffer, adjustedK];
+
             // Use raw SQL query to access vec_distance_l2 function
             // sqlite-vec extension is already loaded in SqliteDb.ts via prepareDatabase
-            const results = await this.sqliteDb.connection.query(
+            // If distance filter is provided, use subquery to filter by distance threshold
+            const sqlQuery = distance !== undefined && distance !== null
+                ? `
+                SELECT 
+                    chunk_id, 
+                    distance 
+                FROM (
+                    SELECT 
+                        chunk_id, 
+                        vec_distance_l2(embedding, ?) AS distance 
+                    FROM 
+                        vectors 
+                ) AS distances
+                WHERE 
+                    distance <= ?
+                ORDER BY 
+                    distance ASC 
+                LIMIT ?
                 `
+                : `
                 SELECT 
                     chunk_id, 
                     vec_distance_l2(embedding, ?) AS distance 
@@ -195,8 +221,11 @@ export class VectorModel extends BaseDb {
                 ORDER BY 
                     distance ASC 
                 LIMIT ?
-                `,
-                [queryVectorBuffer, adjustedK]
+                `;
+
+            const results = await this.sqliteDb.connection.query(
+                sqlQuery,
+                queryParams
             ) as Array<{ chunk_id: number; distance: number }>;
 
             return {
