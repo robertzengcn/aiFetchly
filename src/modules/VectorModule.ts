@@ -1,6 +1,6 @@
 import { EntityManager } from 'typeorm';
 import { VectorModel } from '@/model/Vector.model';
-import { VectorEntity } from '@/entity/Vector.entity';
+import { VectorEntity, VectorMetadataEntity } from '@/entity/Vector.entity';
 import { BaseModule } from '@/modules/baseModule';
 import { VectorSearchResult } from '@/modules/interface/IVectorDatabase';
 
@@ -177,6 +177,72 @@ export class VectorModule extends BaseModule {
         }
 
         return results;
+    }
+
+    /**
+     * Create or ensure vec0 virtual table exists for a model and dimension combination
+     * This method will:
+     * 1. Get or create metadata entry for the model/dimension
+     * 2. Create the virtual table if it doesn't exist
+     * Delegates to VectorModel's ensureVirtualTable method
+     * 
+     * @param modelName - Name of the embedding model
+     * @param dimension - Dimension of the embedding vectors
+     * @param options - Optional configuration (indexType, virtualTableName)
+     * @returns Promise that resolves to the metadata entity
+     */
+    async ensureVirtualTable(
+        modelName: string,
+        dimension: number,
+        options: {
+            indexType?: string;
+            virtualTableName?: string;
+        } = {}
+    ): Promise<VectorMetadataEntity> {
+        return await this.vectorModel.ensureVirtualTable(modelName, dimension, options);
+    }
+
+    /**
+     * Create vec0 virtual table using metadata entity
+     * This method creates the virtual table based on the provided metadata
+     * 
+     * @param metadata - VectorMetadataEntity containing model, dimension, and virtual table name
+     * @returns Promise that resolves when the virtual table is created
+     */
+    async createVirtualTableFromMetadata(metadata: VectorMetadataEntity): Promise<void> {
+        const exists = await this.vectorModel.virtualTableExists(metadata.virtual_table_name);
+        
+        if (!exists) {
+            await this.vectorModel.ensureVirtualTable(
+                metadata.model_name,
+                metadata.dimension,
+                {
+                    indexType: metadata.index_type,
+                    virtualTableName: metadata.virtual_table_name
+                }
+            );
+        }
+    }
+
+    /**
+     * Check if a virtual table exists
+     * Delegates to VectorModel's virtualTableExists method
+     * 
+     * @param virtualTableName - Name of the virtual table to check
+     * @returns Promise that resolves to true if the virtual table exists
+     */
+    async virtualTableExists(virtualTableName: string): Promise<boolean> {
+        return await this.vectorModel.virtualTableExists(virtualTableName);
+    }
+
+    /**
+     * Get access to the underlying SQLite database connection
+     * Used for raw queries on virtual tables
+     * 
+     * @returns The SqliteDb instance
+     */
+    getDbConnection() {
+        return this.sqliteDb;
     }
 }
 

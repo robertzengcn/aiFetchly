@@ -1,14 +1,13 @@
-import { DataSource } from 'typeorm';
+// import { DataSource } from 'typeorm';
 // import Database from 'better-sqlite3';
 import * as fs from 'fs';
 import * as path from 'path';
 // import * as sqliteVec from 'sqlite-vec';
 import { AbstractVectorDatabase } from '@/modules/interface/AbstractVectorDatabase';
 import { VectorDatabaseConfig, VectorSearchResult, IndexStats } from '@/modules/interface/IVectorDatabase';
-import { VectorEntity } from '@/entity/Vector.entity';
-//import { VectorMetadataEntity } from '@/entity/Vector.entity';
+import { VectorEntity, VectorMetadataEntity } from '@/entity/Vector.entity';
 import { VectorModule } from '@/modules/VectorModule';
-// import { VectorMetadataModule } from '@/modules/VectorMetadataModule';
+import { VectorMetadataModule } from '@/modules/VectorMetadataModule';
 import { RAGChunkModule } from '@/modules/RAGChunkModule';
 
 /**
@@ -19,13 +18,13 @@ import { RAGChunkModule } from '@/modules/RAGChunkModule';
 export class SqliteVecDatabase extends AbstractVectorDatabase {
     // private dataSource: DataSource | null = null;
     private vectorModule: VectorModule | null = null;
-    // private vectorMetadataModule: VectorMetadataModule | null = null;
-    // private vecIndexName: string = 'vec_index';
+    private vectorMetadataModule: VectorMetadataModule | null = null;
+    private currentVirtualTableName: string | null = null;
 
     constructor() { 
             super();
             this.vectorModule = new VectorModule();
-            // this.vectorMetadataModule = new VectorMetadataModule();
+            this.vectorMetadataModule = new VectorMetadataModule();
             // this.initialized = true;
         }
     /**
@@ -90,172 +89,98 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
     /**
      * Create a new SQLite database using TypeORM with sqlite-vec
      * Tables are created automatically via TypeORM synchronize
+     * Creates vec0 virtual table using VectorMetadataModule and VectorModule
+     * 
+     * @param config - Vector database configuration
+     * @returns Promise that resolves to the virtual table name
      */
     async createIndex(config: VectorDatabaseConfig): Promise<string> {
         if (!this.initialized) {
             await this.initialize();
         }
         
-        // this.validateConfig(config);
+        if (!this.vectorModule || !this.vectorMetadataModule) {
+            throw new Error('VectorModule and VectorMetadataModule must be initialized');
+        }
 
-        // try {
-           this.config = config;
-           this.dimension = config.dimensions;
+        try {
+            this.config = config;
+            this.dimension = config.dimensions;
 
-        //     // Update index path based on whether it's document-specific or model-specific
-        //     if (config.documentIndexPath) {
-        //         this.indexPath = config.documentIndexPath;
-        //         console.log(`Creating document-specific index at specified path: ${config.documentIndexPath}`);
-        //     } else if (config.documentId) {
-        //         this.indexPath = this.getDocumentSpecificIndexPath(config, config.documentId);
-        //         console.log(`Creating document-specific index for document ${config.documentId}`);
-        //     } else {
-        //         this.indexPath = this.getModelSpecificIndexPath(config);
-        //         console.log(`Creating model-specific index for model ${config.modelName}`);
-        //     }
+            const indexType = config.indexType || 'flat';
 
-        //     // Change file extension from .index to .db
-        //     if (this.indexPath.endsWith('.index')) {
-        //         this.indexPath = this.indexPath.replace(/\.index$/, '.db');
-        //     } else if (!this.indexPath.endsWith('.db')) {
-        //         this.indexPath = this.indexPath + '.db';
-        //     }
+            // Get or create metadata entry using VectorMetadataModule
+            // This will generate a unique virtual table name for the model/dimension combination
+            const metadata = await this.vectorMetadataModule.getOrCreateMetadata(
+                config.modelName,
+                config.dimensions,
+                {
+                    indexType: indexType
+                }
+            );
 
-        //     // Create TypeORM DataSource (will auto-create tables via synchronize)
-        //     this.dataSource = await this.createDataSource(this.indexPath);
+            // Create the vec0 virtual table using VectorModule
+            // This uses the virtual table name from the metadata
+            await this.vectorModule.createVirtualTableFromMetadata(metadata);
 
-        //     // Create module instances
-        //     this.vectorModule = new VectorModule(this.dataSource);
-        //     this.vectorMetadataModule = new VectorMetadataModule(this.dataSource);
+            // Set the current virtual table name
+            this.currentVirtualTableName = metadata.virtual_table_name;
 
-        //     const indexType = config.indexType || 'flat';
-
-        //     // Try to create vec0 virtual table for optimization (optional)
-        //     // This is done via raw query since TypeORM doesn't support virtual tables directly
-        //     try {
-        //         const queryRunner = this.dataSource.createQueryRunner();
-        //         const createVecTableSQL = `
-        //             CREATE VIRTUAL TABLE IF NOT EXISTS ${this.vecIndexName} USING vec0(
-        //                 chunk_id INTEGER,
-        //                 embedding FLOAT[${config.dimensions}]
-        //             )
-        //         `;
-        //         await queryRunner.query(createVecTableSQL);
-        //         await queryRunner.release();
-        //         console.log('vec0 virtual table created successfully (optional optimization)');
-        //     } catch (error) {
-        //         // If vec0 syntax fails, that's okay - we'll use vec_distance_l2 on regular table
-        //         // This is the standard approach shown in the merge guide
-        //         console.log('vec0 virtual table not available, using vec_distance_l2 function on regular table (standard approach)');
-        //     }
-
-        //     // Create index for faster chunk lookups (if not already created by TypeORM)
-        //     try {
-        //         const queryRunner = this.dataSource.createQueryRunner();
-        //         await queryRunner.query(`
-        //             CREATE INDEX IF NOT EXISTS idx_vectors_chunk_id ON vectors(chunk_id)
-        //         `);
-        //         await queryRunner.release();
-        //     } catch (error) {
-        //         // Index might already exist, which is fine
-        //         console.warn('Failed to create index (might already exist):', error);
-        //     }
-
-        //     // Insert or update initial metadata using VectorMetadataModule
-        //     await this.vectorMetadataModule.getOrCreateMetadata(1, {
-        //         dimension: config.dimensions,
-        //         model_name: config.modelName,
-        //         index_type: indexType
-        //     });
-
-        //     console.log(`Created ${indexType} SQLite-vec index with dimension ${config.dimensions} using TypeORM`);
-        //     console.log(`Index path: ${this.indexPath}`);
-        //     return this.indexPath;
-        // } catch (error) {
-        //     console.error('Failed to create SQLite-vec index:', error);
-        //     if (this.dataSource && this.dataSource.isInitialized) {
-        //         await this.dataSource.destroy();
-        //         this.dataSource = null;
-        //     }
-        //     this.vectorModule = null;
-        //     this.vectorMetadataModule = null;
-        //     throw new Error(`Failed to create SQLite-vec index: ${error instanceof Error ? error.message : 'Unknown error'}`);
-        // }
-        return 'salite_db'
+            console.log(`Created ${indexType} SQLite-vec index with dimension ${config.dimensions} for model '${config.modelName}'`);
+            console.log(`Virtual table name: ${metadata.virtual_table_name}`);
+            
+            // Return the virtual table name instead of static string
+            return metadata.virtual_table_name;
+        } catch (error) {
+            console.error('Failed to create SQLite-vec index:', error);
+            throw new Error(`Failed to create SQLite-vec index: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
     }
 
     /**
      * Load existing SQLite database using TypeORM
+     * Finds the virtual table name using VectorMetadataModule and sets it as the current index
      */
     async loadIndex(config: VectorDatabaseConfig): Promise<void> {
         if (!this.initialized) {
             await this.initialize();
         }
 
+        if (!this.vectorModule || !this.vectorMetadataModule) {
+            throw new Error('VectorModule and VectorMetadataModule must be initialized');
+        }
+
         this.validateConfig(config);
 
-        // try {
-        //     this.config = config;
+        try {
+            this.config = config;
+            this.dimension = config.dimensions;
 
-        //     if (config.documentIndexPath) {
-        //         this.indexPath = config.documentIndexPath;
-        //         console.log(`Loading document-specific index at path ${this.indexPath}`);
-        //     } else {
-        //         // Update index path based on whether it's document-specific or model-specific
-        //         if (config.documentId) {
-        //             this.indexPath = this.getDocumentSpecificIndexPath(config, config.documentId);
-        //             console.log(`Loading document-specific index for document ${config.documentId}`);
-        //         } else {
-        //             this.indexPath = this.getModelSpecificIndexPath(config);
-        //             console.log(`Loading model-specific index for model ${config.modelName}`);
-        //         }
-        //     }
+            // Find metadata entry using VectorMetadataModule
+            // This will give us the virtual table name for the model/dimension combination
+            const metadata = await this.vectorMetadataModule.findByModelAndDimension(
+                config.modelName,
+                config.dimensions
+            );
 
-        //     // Change file extension from .index to .db if needed
-        //     if (this.indexPath.endsWith('.index')) {
-        //         this.indexPath = this.indexPath.replace(/\.index$/, '.db');
-        //     } else if (!this.indexPath.endsWith('.db')) {
-        //         // Try with .db extension
-        //         const dbPath = this.indexPath + '.db';
-        //         if (fs.existsSync(dbPath)) {
-        //             this.indexPath = dbPath;
-        //         }
-        //     }
-
-        //     if (!fs.existsSync(this.indexPath)) {
-        //         console.log(`No existing SQLite-vec index found at ${this.indexPath}, creating new one`);
-        //         await this.createIndex(config);
-        //         return;
-        //     }
-
-        //     // Create TypeORM DataSource
-        //     this.dataSource = await this.createDataSource(this.indexPath);
-
-        //     // Create module instances
-        //     this.vectorModule = new VectorModule(this.dataSource);
-        //     this.vectorMetadataModule = new VectorMetadataModule(this.dataSource);
-
-        //     // Read metadata using VectorMetadataModule
-        //     const metadata = await this.vectorMetadataModule.findById(1);
-
-        //     if (metadata) {
-        //         this.dimension = metadata.dimension;
-        //         console.log(`Loaded existing SQLite-vec index for model ${metadata.model_name} with ${metadata.total_vectors} vectors`);
-        //     } else {
-        //         // If metadata doesn't exist, try to get dimension from config
-        //         this.dimension = config.dimensions;
-        //         console.warn('No metadata found in index, using config dimensions');
-        //     }
-        // } catch (error) {
-        //     console.error('Failed to load SQLite-vec index:', error);
-        //     if (this.dataSource && this.dataSource.isInitialized) {
-        //         await this.dataSource.destroy();
-        //         this.dataSource = null;
-        //     }
-        //     this.vectorModule = null;
-        //     this.vectorMetadataModule = null;
-        //     throw new Error(`Failed to load SQLite-vec index: ${error instanceof Error ? error.message : 'Unknown error'}`);
-        // }
+            if (metadata) {
+                // Set the current virtual table name from metadata
+                this.currentVirtualTableName = metadata.virtual_table_name;
+                this.dimension = metadata.dimension;
+                
+                console.log(`Loaded existing SQLite-vec index for model '${metadata.model_name}' with dimension ${metadata.dimension}`);
+                console.log(`Virtual table name: ${this.currentVirtualTableName}`);
+                console.log(`Total vectors: ${metadata.total_vectors}`);
+            } else {
+                // If metadata doesn't exist, create a new index
+                console.log(`No existing metadata found for model '${config.modelName}' with dimension ${config.dimensions}, creating new index`);
+                const virtualTableName = await this.createIndex(config);
+                this.currentVirtualTableName = virtualTableName;
+            }
+        } catch (error) {
+            console.error('Failed to load SQLite-vec index:', error);
+            throw new Error(`Failed to load SQLite-vec index: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
     }
 
     /**
@@ -273,10 +198,11 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
     }
 
     /**
-     * Add vectors to the index using VectorModule
+     * Add vectors to the index using the virtual table
+     * Only adds to the virtual table (regular vectors table is abandoned)
      */
     async addVectors(vectors: number[], chunkIds: number): Promise<void> {
-        if (!this.vectorModule) {
+        if (!this.vectorModule || !this.vectorMetadataModule) {
             throw new Error('Index not initialized');
         }
 
@@ -285,73 +211,51 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
         }
 
         // Validate vector has the correct dimension
-        if (vectors.length % this.dimension !== 0) {
-            throw new Error(`Vector array length ${vectors.length} is not a multiple of dimension ${this.dimension}`);
+        if (vectors.length !== this.dimension) {
+            throw new Error(`Vector array length ${vectors.length} does not match dimension ${this.dimension}`);
         }
 
-        // const numVectors = vectors.length / this.dimension;
-        // if (numVectors !== chunkIds.length) {
-        //     throw new Error(`Number of vectors (${numVectors}) does not match number of chunk IDs (${chunkIds.length})`);
-        // }
+        if (!this.currentVirtualTableName) {
+            throw new Error('No current virtual table name set. Please call loadIndex or createIndex first.');
+        }
 
         try {
-            // Convert to Float32Array (VectorTransformer will handle Buffer conversion)
+            // Convert to Float32Array and Buffer for virtual table insertion
             const vectorArray = new Float32Array(vectors);
+            const vectorBuffer = Buffer.from(vectorArray.buffer);
+
+            // Check if virtual table exists
+            const exists = await this.vectorModule.virtualTableExists(this.currentVirtualTableName);
             
-            const vectorEntity = new VectorEntity();
-            vectorEntity.chunk_id = chunkIds;
-            vectorEntity.embedding = vectorArray; // VectorTransformer converts to Buffer automatically
+            if (!exists) {
+                throw new Error(`Virtual table '${this.currentVirtualTableName}' does not exist. Please ensure the index is properly initialized.`);
+            }
 
-            // Step 1: Save vector to vectorModule first
-            // Only proceed to metadata update if this succeeds
-            const result = await this.vectorModule.saveVector(vectorEntity);
-            console.log(`Saved vector to SQLite-vec index using VectorModule: ${result.id}`);
+            // Insert into virtual table using raw query
+            // Virtual tables require raw SQL since TypeORM doesn't support them directly
+            const dbConnection = this.vectorModule.getDbConnection();
+            const queryRunner = dbConnection.connection.createQueryRunner();
+            
+            await queryRunner.query(
+                `INSERT INTO ${this.currentVirtualTableName} (chunk_id, embedding) VALUES (?, ?)`,
+                [chunkIds, vectorBuffer]
+            );
+            await queryRunner.release();
+            
+            console.log(`Inserted vector into virtual table '${this.currentVirtualTableName}' (chunk_id: ${chunkIds})`);
 
-            // Step 2: Update metadata only after successful vector save
-            // If saveVector throws an error, this line will not execute
-            //  const metadata = await this.vectorMetadataModule.getOrCreateMetadata(1, {
-            //     dimension: this.dimension,
-            //     model_name: this.config?.modelName,
-            //     index_type: this.config?.indexType
-            // });
-            // await this.vectorMetadataModule.incrementTotalVectors(result.id, 1);
+            // Update metadata total vectors count
+            if (this.config) {
+                const metadata = await this.vectorMetadataModule.findByModelAndDimension(
+                    this.config.modelName,
+                    this.dimension
+                );
+                if (metadata) {
+                    await this.vectorMetadataModule.incrementTotalVectors(metadata.id, 1);
+                }
+            }
 
-            // Optionally try to insert into vec_index virtual table if it exists
-            // This requires raw queries since TypeORM doesn't support virtual tables directly
-            // try {
-            //     const dataSource = this.vectorModule.getDataSource();
-            //     const queryRunner = dataSource.createQueryRunner();
-            //     // Check if vec_index table exists
-            //     const tableCheck = await queryRunner.query(`
-            //         SELECT name FROM sqlite_master WHERE type='table' AND name=?
-            //     `, [this.vecIndexName]);
-                
-            //     if (tableCheck && tableCheck.length > 0) {
-            //         // Insert into vec_index virtual table using raw query
-            //         for (let i = 0; i < numVectors; i++) {
-            //             const startIdx = i * this.dimension;
-            //             const endIdx = startIdx + this.dimension;
-            //             const vector = vectors.slice(startIdx, endIdx);
-            //             const vectorArray = new Float32Array(vector);
-                        
-            //             try {
-            //                 await queryRunner.query(`
-            //                     INSERT INTO ${this.vecIndexName} (chunk_id, embedding) VALUES (?, ?)
-            //                 `, [chunkIds[i], vectorArray]);
-            //             } catch (error) {
-            //                 // If insertion fails, continue with regular table only
-            //                 console.warn('Failed to insert into vec_index virtual table, continuing with regular table only:', error);
-            //             }
-            //         }
-            //     }
-            //     await queryRunner.release();
-            //  } catch (error) {
-            //     // vec_index table doesn't exist or can't be accessed, use regular table only
-            //     // This is fine - we can use vec_distance_l2 on the regular table
-            //     console.warn('vec_index virtual table not available, using regular table only:', error);
-        //    }
-
-            console.log(`Added 1 vectors to SQLite-vec index using VectorModule`);
+            console.log(`Added vector to SQLite-vec index (chunk_id: ${chunkIds})`);
         } catch (error) {
             console.error('Failed to add vectors to SQLite-vec index:', error);
             throw new Error(`Failed to add vectors to SQLite-vec index: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -359,9 +263,8 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
     }
 
     /**
-     * Search for similar vectors using VectorModule
-     * Delegates to VectorModule's searchSimilarVectors method
-     * VectorModule handles validation and calls VectorModel for the actual search
+     * Search for similar vectors using the virtual table
+     * Only searches in the virtual table (regular vectors table is abandoned)
      * 
      * @param queryVector - Query vector as number array
      * @param k - Number of similar vectors to return (default: 10)
@@ -373,12 +276,19 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
             throw new Error('Index not initialized');
         }
 
+        if (!this.currentVirtualTableName) {
+            throw new Error('No current virtual table name set. Please call loadIndex or createIndex first.');
+        }
+
         try {
-            // Use VectorModule's searchSimilarVectors method
-            // VectorModule delegates to VectorModel which uses vec_distance_l2 function via raw SQL queries
-            // Dimension validation is handled in VectorModel
-            // If distance is provided, results will be filtered to only include vectors with distance <= threshold
-            return await this.vectorModule.searchSimilarVectors(queryVector, k, this.dimension, distance);
+            // Use searchSimilarVectorsWithVec0 to search in the specific virtual table
+            // This will try the virtual table MATCH syntax first, then fall back to vec_distance_l2
+            return await this.vectorModule.searchSimilarVectorsWithVec0(
+                queryVector,
+                k,
+                this.dimension,
+                this.currentVirtualTableName
+            );
         } catch (error) {
             console.error('Failed to search vectors in SqliteVecDatabase:', error);
             throw new Error(`Failed to perform vector search: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -387,11 +297,11 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
 
     /**
      * Get index statistics
-     * Note: This is a synchronous method, so we use cached config values
+     * Gets total vectors from metadata (synchronous access to database)
      * For accurate stats, the metadata should be loaded when loadIndex is called
      */
     getIndexStats(): IndexStats {
-        if (!this.vectorModule) {
+        if (!this.vectorModule || !this.vectorMetadataModule) {
             return {
                 totalVectors: 0,
                 dimension: this.dimension || 0,
@@ -401,12 +311,18 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
             };
         }
 
-        // Since this is a synchronous method, return cached values
-        // The dimension is set when loadIndex/createIndex is called
-        // For totalVectors, we'll return 0 and let async methods provide accurate counts
         try {
+            // Get total vectors from metadata synchronously
+            let totalVectors = 0;
+            if (this.config?.modelName && this.dimension) {
+                totalVectors = this.getTotalVectorsFromMetadataSync(
+                    this.config.modelName,
+                    this.dimension
+                );
+            }
+
             return {
-                totalVectors: 0, // Would need async call to get accurate count
+                totalVectors: totalVectors,
                 dimension: this.dimension || 0,
                 indexType: this.config?.indexType || 'flat',
                 isInitialized: this.initialized,
@@ -425,61 +341,98 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
     }
 
     /**
+     * Get total vectors count from metadata synchronously
+     * Uses underlying better-sqlite3 database for synchronous queries
+     */
+    private getTotalVectorsFromMetadataSync(modelName: string, dimension: number): number {
+        try {
+            const dbConnection = this.vectorModule?.getDbConnection();
+            if (!dbConnection || !dbConnection.connection.isInitialized) {
+                return 0;
+            }
+
+            // Access underlying better-sqlite3 database through TypeORM driver
+            const driver = dbConnection.connection.driver as any;
+            const database = driver.database;
+            
+            if (!database) {
+                return 0;
+            }
+
+            // Execute synchronous query to get total vectors from metadata
+            const query = `SELECT total_vectors FROM vector_metadata WHERE model_name=? AND dimension=? LIMIT 1`;
+            const result = database.prepare(query).get(modelName, dimension) as { total_vectors: number } | undefined;
+            
+            return result?.total_vectors || 0;
+        } catch (error) {
+            console.error(`Failed to get total vectors from metadata for model '${modelName}' with dimension ${dimension}:`, error);
+            return 0;
+        }
+    }
+
+    /**
      * Get total number of vectors in the index
-     * Note: This is a synchronous method, so we can't use async operations
-     * We'll return 0 and log a warning
+     * Gets count from metadata synchronously (regular vectors table is abandoned)
      */
     getTotalVectors(): number {
-        if (!this.vectorModule) {
+        if (!this.vectorModule || !this.vectorMetadataModule) {
             throw new Error('Index not initialized');
         }
 
-        // Since this is a synchronous method but VectorModule.getTotalCount is async,
-        // we'll return 0 and log a warning
-        // For accurate count, use getIndexStats or create an async version
-        console.warn('getTotalVectors called synchronously - returning 0. Use getIndexStats or async method for accurate count.');
+        // Get total vectors from metadata synchronously
+        if (this.config?.modelName && this.dimension) {
+            return this.getTotalVectorsFromMetadataSync(
+                this.config.modelName,
+                this.dimension
+            );
+        }
+
         return 0;
     }
 
     /**
      * Reset the index
+     * Deletes all vectors from the virtual table (regular vectors table is abandoned)
      */
     async resetIndex(): Promise<void> {
-    //     if (!this.vectorModule) {
-    //         throw new Error('Index not initialized');
-    //     }
+        if (!this.vectorModule) {
+            throw new Error('Index not initialized');
+        }
 
-    //     try {
-    //         const dataSource = this.vectorModule.getDataSource();
-    //         const queryRunner = dataSource.createQueryRunner();
+        if (!this.currentVirtualTableName) {
+            throw new Error('No current virtual table name set. Please call loadIndex or createIndex first.');
+        }
+
+        try {
+            // Delete all vectors from virtual table
+            const dbConnection = this.vectorModule.getDbConnection();
+            const queryRunner = dbConnection.connection.createQueryRunner();
             
-    //         // Drop tables using raw queries
-    //         await queryRunner.query(`DROP TABLE IF EXISTS ${this.vecIndexName}`);
-    //         await queryRunner.query('DROP TABLE IF EXISTS vectors');
-    //         await queryRunner.query('DROP TABLE IF EXISTS vector_metadata');
+            // Delete all rows from virtual table
+            await queryRunner.query(`DELETE FROM ${this.currentVirtualTableName}`);
+            await queryRunner.release();
             
-    //         await queryRunner.release();
+            console.log(`Deleted all vectors from virtual table '${this.currentVirtualTableName}'`);
 
-    //         // Recreate tables
-    //         if (this.config) {
-    //             // Close current DataSource
-    //             await this.dataSource?.destroy();
-    //             this.dataSource = null;
-    //             this.vectorModule = null;
-    //             this.vectorMetadataModule = null;
-                
-    //             // Recreate index (will create new DataSource and modules)
-    //             await this.createIndex(this.config);
-    //         } else {
-    //             throw new Error('No configuration available to recreate index');
-    //         }
+            // Reset metadata total vectors count
+            if (this.config && this.vectorMetadataModule) {
+                const metadata = await this.vectorMetadataModule.findByModelAndDimension(
+                    this.config.modelName,
+                    this.dimension
+                );
+                if (metadata) {
+                    await this.vectorMetadataModule.updateMetadata(metadata.id, {
+                        total_vectors: 0
+                    });
+                }
+            }
 
-    //         console.log('SQLite-vec index reset successfully');
-    //     } catch (error) {
-    //         console.error('Failed to reset SQLite-vec index:', error);
-    //         throw new Error('Failed to reset SQLite-vec index');
-    //     }
-     }
+            console.log('SQLite-vec index reset successfully');
+        } catch (error) {
+            console.error('Failed to reset SQLite-vec index:', error);
+            throw new Error(`Failed to reset SQLite-vec index: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+    }
 
     /**
      * Optimize the index
@@ -607,11 +560,15 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
     /**
      * Delete a document-specific index
      * First gets all chunks for the document using RAGChunkModule,
-     * then deletes vectors by chunk ID using VectorModule
+     * then deletes vectors by chunk ID from the virtual table (regular vectors table is abandoned)
      */
     async deleteDocumentIndex(documentId: number): Promise<void> {
         if (!this.vectorModule) {
             throw new Error('VectorModule not initialized');
+        }
+
+        if (!this.currentVirtualTableName) {
+            throw new Error('No current virtual table name set. Please call loadIndex or createIndex first.');
         }
 
         try {
@@ -629,10 +586,22 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
 
             console.log(`Found ${chunkIds.length} chunks for document ${documentId}, deleting associated vectors...`);
 
-            // Delete vectors by chunk IDs using VectorModule (batch delete for efficiency)
-            const deletedCount = await this.vectorModule.deleteByChunkIds(chunkIds);
+            // Delete from virtual table
+            await this.deleteVectorsFromVirtualTable(chunkIds);
 
-            console.log(`Deleted ${deletedCount} vectors for document ${documentId} (${chunkIds.length} chunks)`);
+            // Update metadata total vectors count
+            if (this.config && this.vectorMetadataModule) {
+                const metadata = await this.vectorMetadataModule.findByModelAndDimension(
+                    this.config.modelName,
+                    this.dimension
+                );
+                if (metadata) {
+                    // Decrement total vectors count (use negative count to decrement)
+                    await this.vectorMetadataModule.incrementTotalVectors(metadata.id, -chunkIds.length);
+                }
+            }
+
+            console.log(`Deleted vectors for document ${documentId} (${chunkIds.length} chunks)`);
         } catch (error) {
             console.error(`Failed to delete document index for document ${documentId}:`, error);
             throw new Error(`Failed to delete document index for document ${documentId}: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -640,12 +609,49 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
     }
 
     /**
+     * Delete vectors from the virtual table by chunk IDs
+     * Uses raw SQL queries since TypeORM doesn't support virtual tables directly
+     * 
+     * @param chunkIds - Array of chunk IDs to delete
+     */
+    private async deleteVectorsFromVirtualTable(chunkIds: number[]): Promise<void> {
+        if (!this.currentVirtualTableName || !this.vectorModule) {
+            throw new Error('Virtual table name or VectorModule not initialized');
+        }
+
+        try {
+            // Check if virtual table exists
+            const exists = await this.vectorModule.virtualTableExists(this.currentVirtualTableName);
+            
+            if (!exists) {
+                throw new Error(`Virtual table '${this.currentVirtualTableName}' does not exist`);
+            }
+
+            const dbConnection = this.vectorModule.getDbConnection();
+            const queryRunner = dbConnection.connection.createQueryRunner();
+
+            // Build query with placeholders for chunk IDs
+            const placeholders = chunkIds.map(() => '?').join(',');
+            const query = `DELETE FROM ${this.currentVirtualTableName} WHERE chunk_id IN (${placeholders})`;
+            
+            await queryRunner.query(query, chunkIds);
+            await queryRunner.release();
+            
+            console.log(`Deleted ${chunkIds.length} vectors from virtual table '${this.currentVirtualTableName}'`);
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            console.error(`Failed to delete from virtual table '${this.currentVirtualTableName}':`, errorMessage);
+            throw new Error(`Failed to delete from virtual table: ${errorMessage}`);
+        }
+    }
+
+    /**
      * Check if a document-specific index exists
      * Gets all chunks for the document using RAGChunkModule,
-     * then checks if vectors exist for those chunk IDs using VectorModule
+     * then checks if vectors exist for those chunk IDs in the virtual table
      */
     documentIndexExists(documentId: number): boolean {
-        if (!this.vectorModule) {
+        if (!this.vectorModule || !this.currentVirtualTableName) {
             return false;
         }
 
@@ -659,10 +665,47 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
                 return false;
             }
 
-            // Check if vectors exist for those chunk IDs using VectorModule (synchronous)
-            return this.vectorModule.hasVectorsForChunkIds(chunkIds);
+            // Check if vectors exist for those chunk IDs in the virtual table (synchronous)
+            return this.hasVectorsInVirtualTableSync(chunkIds);
         } catch (error) {
             console.error(`Failed to check if document index exists for document ${documentId}:`, error);
+            return false;
+        }
+    }
+
+    /**
+     * Check if vectors exist for chunk IDs in the virtual table (synchronous)
+     * Uses underlying better-sqlite3 database for synchronous queries
+     */
+    private hasVectorsInVirtualTableSync(chunkIds: number[]): boolean {
+        if (chunkIds.length === 0 || !this.currentVirtualTableName) {
+            return false;
+        }
+
+        try {
+            const dbConnection = this.vectorModule?.getDbConnection();
+            if (!dbConnection || !dbConnection.connection.isInitialized) {
+                return false;
+            }
+
+            // Access underlying better-sqlite3 database through TypeORM driver
+            const driver = dbConnection.connection.driver as any;
+            const database = driver.database;
+            
+            if (!database) {
+                return false;
+            }
+
+            // Build query with placeholders
+            const placeholders = chunkIds.map(() => '?').join(',');
+            const query = `SELECT COUNT(*) as count FROM ${this.currentVirtualTableName} WHERE chunk_id IN (${placeholders})`;
+            
+            // Execute synchronous query
+            const result = database.prepare(query).get(...chunkIds) as { count: number };
+            
+            return (result?.count || 0) > 0;
+        } catch (error) {
+            console.error('Failed to check if vectors exist in virtual table:', error);
             return false;
         }
     }
@@ -695,17 +738,98 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
     }
 
     /**
-     * Override indexExists to check for .db file
+     * Override indexExists to check if the virtual table exists
+     * Checks the current virtual table or finds it from metadata
      */
     indexExists(): boolean {
-        return true;
-        // // Check for .db file
-        // if (fs.existsSync(this.indexPath)) {
-        //     return true;
-        // }
-        // // Also check if .index file exists (for migration compatibility)
-        // const indexPath = this.indexPath.replace(/\.db$/, '.index');
-        // return fs.existsSync(indexPath);
+        if (!this.vectorModule || !this.vectorMetadataModule) {
+            return false;
+        }
+
+        try {
+            // If we have a current virtual table name, check if it exists
+            if (this.currentVirtualTableName) {
+                return this.checkVirtualTableExistsSync(this.currentVirtualTableName);
+            }
+
+            // If we have config with modelName and dimensions, try to find the virtual table
+            if (this.config?.modelName && this.dimension) {
+                // Try to find metadata synchronously by accessing the database directly
+                const virtualTableName = this.findVirtualTableNameSync(
+                    this.config.modelName,
+                    this.dimension
+                );
+                
+                if (virtualTableName) {
+                    return this.checkVirtualTableExistsSync(virtualTableName);
+                }
+            }
+
+            return false;
+        } catch (error) {
+            console.error('Failed to check if index exists:', error);
+            return false;
+        }
+    }
+
+    /**
+     * Check if a virtual table exists synchronously
+     * Uses underlying better-sqlite3 database for synchronous queries
+     */
+    private checkVirtualTableExistsSync(virtualTableName: string): boolean {
+        try {
+            const dbConnection = this.vectorModule?.getDbConnection();
+            if (!dbConnection || !dbConnection.connection.isInitialized) {
+                return false;
+            }
+
+            // Access underlying better-sqlite3 database through TypeORM driver
+            const driver = dbConnection.connection.driver as any;
+            const database = driver.database;
+            
+            if (!database) {
+                return false;
+            }
+
+            // Execute synchronous query to check if virtual table exists
+            const query = `SELECT name FROM sqlite_master WHERE type='table' AND name=?`;
+            const result = database.prepare(query).get(virtualTableName) as { name: string } | undefined;
+            
+            return result !== undefined && result !== null;
+        } catch (error) {
+            console.error(`Failed to check if virtual table '${virtualTableName}' exists:`, error);
+            return false;
+        }
+    }
+
+    /**
+     * Find virtual table name synchronously from metadata
+     * Uses underlying better-sqlite3 database for synchronous queries
+     */
+    private findVirtualTableNameSync(modelName: string, dimension: number): string | null {
+        try {
+            const dbConnection = this.vectorModule?.getDbConnection();
+            if (!dbConnection || !dbConnection.connection.isInitialized) {
+                return null;
+            }
+
+            // Access underlying better-sqlite3 database through TypeORM driver
+            const driver = dbConnection.connection.driver as any;
+            const database = driver.database;
+            
+            if (!database) {
+                return null;
+            }
+
+            // Execute synchronous query to find metadata
+            const query = `SELECT virtual_table_name FROM vector_metadata WHERE model_name=? AND dimension=? LIMIT 1`;
+            const result = database.prepare(query).get(modelName, dimension) as { virtual_table_name: string } | undefined;
+            
+            return result?.virtual_table_name || null;
+        } catch (error) {
+            console.error(`Failed to find virtual table name for model '${modelName}' with dimension ${dimension}:`, error);
+            return null;
+        }
     }
 }
 
