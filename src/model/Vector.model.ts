@@ -1,19 +1,23 @@
-import { DataSource, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import { VectorEntity } from '@/entity/Vector.entity';
 import { BaseDb } from '@/model/Basedb';
 import { VectorSearchResult } from '@/modules/interface/IVectorDatabase';
+import { VectorMetadataModel } from '@/model/VectorMetadata.model';
+import { VectorMetadataEntity } from '@/entity/Vector.entity';
 
 /**
  * Vector model for managing vector entities in a vector database
  * Works with a DataSource (for separate vector database files)
+ * Manages vec0 virtual tables per model/dimension combination
  */
 export class VectorModel extends BaseDb {
     private repository: Repository<VectorEntity>;
-   
+    private metadataModel: VectorMetadataModel;
 
     constructor(filepath: string) {
         super(filepath); 
-        this.repository =  this.sqliteDb.connection.getRepository(VectorEntity);
+        this.repository = this.sqliteDb.connection.getRepository(VectorEntity);
+        this.metadataModel = new VectorMetadataModel(filepath);
     }
 
     /**
@@ -339,6 +343,139 @@ export class VectorModel extends BaseDb {
         } catch (error) {
             console.error('Failed to search vectors with vec0:', error);
             throw new Error(`Failed to perform vector search. Please ensure sqlite-vec extension is properly installed and configured. Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+    }
+
+    /**
+     * Get the SQL statement to create the vec0 virtual table
+     * @param dimensions - The dimension of the embedding vectors
+     * @param virtualTableName - Name for the virtual table
+     * @returns SQL CREATE VIRTUAL TABLE statement
+     */
+    private getVirtualTableSQL(dimensions: number, virtualTableName: string): string {
+        return `
+            CREATE VIRTUAL TABLE IF NOT EXISTS ${virtualTableName} USING vec0(
+                chunk_id INTEGER,
+                embedding FLOAT[${dimensions}]
+            )
+        `.trim();
+    }
+
+    /**
+     * Create or ensure vec0 virtual table exists for a model and dimension combination
+     * This method will:
+     * 1. Get or create metadata entry for the model/dimension
+     * 2. Create the virtual table if it doesn't exist
+     * @param modelName - Name of the embedding model
+     * @param dimension - Dimension of the embedding vectors
+     * @param options - Optional configuration
+     * @returns Promise that resolves to the metadata entity
+     */
+    async ensureVirtualTable(
+        modelName: string,
+        dimension: number,
+        options: {
+            indexType?: string;
+            virtualTableName?: string;
+        } = {}
+    ): Promise<VectorMetadataEntity> {
+        if (!this.sqliteDb.connection.isInitialized) {
+            throw new Error('DataSource must be initialized before creating virtual table');
+        }
+
+        // Get or create metadata entry
+        const metadata = await this.metadataModel.getOrCreateMetadata(
+            modelName,
+            dimension,
+            options
+        );
+
+        const virtualTableName = metadata.virtual_table_name;
+
+        // Check if virtual table already exists
+        const exists = await this.virtualTableExists(virtualTableName);
+        
+        if (!exists) {
+            try {
+                const queryRunner = this.sqliteDb.connection.createQueryRunner();
+                const sql = this.getVirtualTableSQL(dimension, virtualTableName);
+                
+                await queryRunner.query(sql);
+                await queryRunner.release();
+                
+                console.log(`vec0 virtual table '${virtualTableName}' created successfully for model '${modelName}' with dimension ${dimension}`);
+            } catch (error) {
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                console.warn(`Failed to create vec0 virtual table '${virtualTableName}':`, errorMessage);
+                console.warn('Vector search will fall back to vec_distance_l2 function on regular table');
+                // Don't throw - allow application to continue with fallback method
+            }
+        }
+
+        return metadata;
+    }
+
+    /**
+     * Check if the vec0 virtual table exists
+     * @param virtualTableName - Name of the virtual table
+     * @returns Promise that resolves to true if the virtual table exists
+     */
+    async virtualTableExists(virtualTableName: string): Promise<boolean> {
+        if (!this.sqliteDb.connection.isInitialized) {
+            return false;
+        }
+
+        try {
+            const queryRunner = this.sqliteDb.connection.createQueryRunner();
+            const result = await queryRunner.query(`
+                SELECT name FROM sqlite_master 
+                WHERE type='table' AND name=?
+            `, [virtualTableName]) as Array<{ name: string }>;
+            
+            await queryRunner.release();
+            return result.length > 0;
+        } catch (error) {
+            console.warn(`Failed to check if virtual table '${virtualTableName}' exists:`, error);
+            return false;
+        }
+    }
+
+    /**
+     * Get virtual table name for a model and dimension combination
+     * Returns the virtual table name from metadata if it exists
+     * @param modelName - Name of the embedding model
+     * @param dimension - Dimension of the embedding vectors
+     * @returns Promise that resolves to the virtual table name or null if not found
+     */
+    async getVirtualTableName(modelName: string, dimension: number): Promise<string | null> {
+        const metadata = await this.metadataModel.findByModelAndDimension(modelName, dimension);
+        return metadata?.virtual_table_name || null;
+    }
+
+    /**
+     * Search for similar vectors using the appropriate virtual table for the model
+     * Automatically determines the virtual table name from metadata
+     * @param queryVector - Query vector as number array
+     * @param k - Number of similar vectors to return (default: 10)
+     * @param modelName - Name of the embedding model (required to find virtual table)
+     * @param dimension - Dimension of the vectors (optional, for validation)
+     * @returns VectorSearchResult with chunkIds, distances, and indices
+     */
+    async searchSimilarVectorsForModel(
+        queryVector: number[],
+        modelName: string,
+        k: number = 10,
+        dimension?: number
+    ): Promise<VectorSearchResult> {
+        // Get virtual table name from metadata
+        const virtualTableName = await this.getVirtualTableName(modelName, dimension || queryVector.length);
+        
+        if (virtualTableName) {
+            // Use virtual table search
+            return await this.searchSimilarVectorsWithVec0(queryVector, k, dimension, virtualTableName);
+        } else {
+            // Fallback to regular search
+            return await this.searchSimilarVectors(queryVector, k, dimension);
         }
     }
 }
