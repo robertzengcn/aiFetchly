@@ -503,16 +503,22 @@ export class RagSearchModule extends BaseModule {
      * Delete a document and its associated vector index
      * @param id - Document ID
      * @param deleteFile - Whether to delete the physical file
+     * @returns Promise that resolves to true if deletion was successful, false otherwise
      */
-    async deleteDocument(id: number, deleteFile: boolean = false): Promise<void> {
+    async deleteDocument(id: number, deleteFile: boolean = false): Promise<boolean> {
         try {
             // Delete the document from the database
             // Note: RAGDocumentModule handles deleting the vector index file using the stored vectorIndexPath
-            await this.documentService.deleteDocument(id, deleteFile);
-            console.log(`Deleted document ${id} from database`);
+            const success = await this.documentService.deleteDocument(id, deleteFile);
+            if (success) {
+                console.log(`Deleted document ${id} from database`);
+            } else {
+                console.warn(`Failed to delete document ${id} from database`);
+            }
+            return success;
         } catch (error) {
             console.error('Failed to delete document:', error);
-            throw new Error('Failed to delete document');
+            return false;
         }
     }
 

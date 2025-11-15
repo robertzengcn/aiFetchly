@@ -620,7 +620,7 @@
 
 "@electron/node-gyp@https://github.com/electron/node-gyp#06b29aafb7708acef8b3669835c8a7857ebc92d2":
   version "10.2.0-electron.1"
-  resolved "git+ssh://git@github.com/electron/node-gyp.git#06b29aafb7708acef8b3669835c8a7857ebc92d2"
+  resolved "https://git@github.com/electron/node-gyp.git#06b29aafb7708acef8b3669835c8a7857ebc92d2"
   integrity sha512-CrYo6TntjpoMO1SHjl5Pa/JoUsECNqNdB7Kx49WLQpWzPw53eEITJ2Hs9fh/ryUYDn4pxZz11StaBYBrLFJdqg==
   dependencies:
     env-paths "^2.2.0"
@@ -5191,15 +5191,6 @@ extsprintf@^1.2.0:
   resolved "https://registry.npmjs.org/extsprintf/-/extsprintf-1.4.1.tgz"
   integrity sha512-Wrk35e8ydCKDj/ArClo1VrPVmN8zph5V4AtHwIuHhvMXsKf73UT3BOD+azBIW+3wOJ4FhEH7zyaJCFvChjYvMA==
 
-faiss-node@^0.5.1:
-  version "0.5.1"
-  resolved "https://registry.npmmirror.com/faiss-node/-/faiss-node-0.5.1.tgz"
-  integrity sha512-zD8wobJn8C6OLWo68Unho+Ih8l6nSRB2w3Amj01a+xc4bsEvd2mBDLklAn7VocA9XO3WDvQL/bLpi5flkCn/XQ==
-  dependencies:
-    bindings "^1.5.0"
-    node-addon-api "^6.0.0"
-    prebuild-install "^7.1.1"
-
 fast-deep-equal@^3.1.1, fast-deep-equal@^3.1.3:
   version "3.1.3"
   resolved "https://registry.npmjs.org/fast-deep-equal/-/fast-deep-equal-3.1.3.tgz"
@@ -7687,7 +7678,7 @@ node-addon-api@^4.3.0:
   resolved "https://registry.npmjs.org/node-addon-api/-/node-addon-api-4.3.0.tgz"
   integrity sha512-73sE9+3UaLYYFmDsFZnqCInzPyh3MqIwZO9cw58yIqAZhONrrabrYyYe3TuIqtIiOuTXVhsGau8hcrhhwSsDIQ==
 
-node-addon-api@^6.0.0, node-addon-api@^6.1.0:
+node-addon-api@^6.1.0:
   version "6.1.0"
   resolved "https://registry.npmmirror.com/node-addon-api/-/node-addon-api-6.1.0.tgz"
   integrity sha512-+eawOlIgy680F0kBzPUNFhMZGtJ1YmqM6l4+Crf4IkImjYrO/mqPwRMh352g23uIaQKFItcQ64I7KMaJxHgAVA==
@@ -9838,6 +9829,42 @@ sprintf-js@~1.0.2:
   version "1.0.3"
   resolved "https://registry.npmmirror.com/sprintf-js/-/sprintf-js-1.0.3.tgz"
   integrity sha512-D9cPgkvLlV3t3IzL0D0YLvGA9Ahk4PcvVwUbN0dSGr1aP0Nrt4AEnTUbuGvquEC0mA64Gqt1fzirlRs5ibXx8g==
+
+sqlite-vec-darwin-arm64@0.1.7-alpha.2:
+  version "0.1.7-alpha.2"
+  resolved "https://registry.npmmirror.com/sqlite-vec-darwin-arm64/-/sqlite-vec-darwin-arm64-0.1.7-alpha.2.tgz#d4b0c79a072f366f1d29a99a3b3c1f210146acf3"
+  integrity sha512-raIATOqFYkeCHhb/t3r7W7Cf2lVYdf4J3ogJ6GFc8PQEgHCPEsi+bYnm2JT84MzLfTlSTIdxr4/NKv+zF7oLPw==
+
+sqlite-vec-darwin-x64@0.1.7-alpha.2:
+  version "0.1.7-alpha.2"
+  resolved "https://registry.npmmirror.com/sqlite-vec-darwin-x64/-/sqlite-vec-darwin-x64-0.1.7-alpha.2.tgz#f3800f29b45a9bc1993a63af29882bd729c2426b"
+  integrity sha512-jeZEELsQjjRsVojsvU5iKxOvkaVuE+JYC8Y4Ma8U45aAERrDYmqZoHvgSG7cg1PXL3bMlumFTAmHynf1y4pOzA==
+
+sqlite-vec-linux-arm64@0.1.7-alpha.2:
+  version "0.1.7-alpha.2"
+  resolved "https://registry.npmmirror.com/sqlite-vec-linux-arm64/-/sqlite-vec-linux-arm64-0.1.7-alpha.2.tgz#fd2882e7ce87d1513cc382b56bf168d01fa2a388"
+  integrity sha512-6Spj4Nfi7tG13jsUG+W7jnT0bCTWbyPImu2M8nWp20fNrd1SZ4g3CSlDAK8GBdavX7wRlbBHCZ+BDa++rbDewA==
+
+sqlite-vec-linux-x64@0.1.7-alpha.2:
+  version "0.1.7-alpha.2"
+  resolved "https://registry.npmmirror.com/sqlite-vec-linux-x64/-/sqlite-vec-linux-x64-0.1.7-alpha.2.tgz#dd5a1ed1ad19632e8ded25e448e863ddd2cd88ac"
+  integrity sha512-IcgrbHaDccTVhXDf8Orwdc2+hgDLAFORl6OBUhcvlmwswwBP1hqBTSEhovClG4NItwTOBNgpwOoQ7Qp3VDPWLg==
+
+sqlite-vec-windows-x64@0.1.7-alpha.2:
+  version "0.1.7-alpha.2"
+  resolved "https://registry.npmmirror.com/sqlite-vec-windows-x64/-/sqlite-vec-windows-x64-0.1.7-alpha.2.tgz#0fa5d3bf170281f9e587855c11b7e97e99317c05"
+  integrity sha512-TRP6hTjAcwvQ6xpCZvjP00pdlda8J38ArFy1lMYhtQWXiIBmWnhMaMbq4kaeCYwvTTddfidatRS+TJrwIKB/oQ==
+
+sqlite-vec@^0.1.7-alpha.2:
+  version "0.1.7-alpha.2"
+  resolved "https://registry.npmmirror.com/sqlite-vec/-/sqlite-vec-0.1.7-alpha.2.tgz#669843011c0de46e196a1924a485ac4741d04190"
+  integrity sha512-rNgRCv+4V4Ed3yc33Qr+nNmjhtrMnnHzXfLVPeGb28Dx5mmDL3Ngw/Wk8vhCGjj76+oC6gnkmMG8y73BZWGBwQ==
+  optionalDependencies:
+    sqlite-vec-darwin-arm64 "0.1.7-alpha.2"
+    sqlite-vec-darwin-x64 "0.1.7-alpha.2"
+    sqlite-vec-linux-arm64 "0.1.7-alpha.2"
+    sqlite-vec-linux-x64 "0.1.7-alpha.2"
+    sqlite-vec-windows-x64 "0.1.7-alpha.2"
 
 sqlite3@^5.1.6:
   version "5.1.7"
