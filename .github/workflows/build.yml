@@ -15,10 +15,10 @@ jobs:
  
     steps:      
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: 20.19.3
       - name: Calculate version
@@ -56,6 +56,16 @@ jobs:
           cat .env       
       - name: Install dependencies
         run: yarn install
+      - name: Debug - Verify lzma-native assets
+        shell: bash
+        run: |
+          if [ -d node_modules/lzma-native/deps ]; then
+            echo "Found lzma-native deps directory"
+            ls -la node_modules/lzma-native/deps
+            ls -la node_modules/lzma-native/deps | grep xz- || true
+          else
+            echo "lzma-native deps directory not found"
+          fi
       - name: Rebuild electron
         run: yarn electron-rebuild --force --types prod,dev,optional --module-dir .         
       - name: Rebuild sqlite3
@@ -99,7 +109,6 @@ jobs:
           cd installer-scripts
           
           # Install dependencies for uninstaller including pkg
-          # yarn install --no-lockfile
           yarn add pkg
           
           # Build the uninstaller executable
@@ -114,8 +123,20 @@ jobs:
             exit 1
           }
           
+          # Copy uninstaller to project root for easier access
+          Copy-Item "uninstall.exe" "../uninstall.exe"
+          
           # Go back to project root
           cd ..
+          
+          # Verify uninstaller is in project root
+          if (Test-Path "uninstall.exe") {
+            echo "✅ Uninstaller copied to project root"
+            Get-ChildItem "uninstall.exe" | Format-Table Name, Length, LastWriteTime
+          } else {
+            echo "❌ Failed to copy uninstaller to project root"
+            exit 1
+          }
         shell: pwsh
 
       - name: Install WiX Toolset
@@ -141,7 +162,22 @@ jobs:
           
           # Check if uninstaller was included in the installer
           echo "Checking installer contents..."
-          # This would depend on how WiX includes the uninstaller
+          
+          # Check for uninstaller in the project root
+          if (Test-Path "uninstall.exe") {
+            echo "✅ Uninstaller found in project root"
+            Get-ChildItem "uninstall.exe" | Format-Table Name, Length, LastWriteTime
+          } else {
+            echo "❌ Uninstaller not found in project root"
+          }
+          
+          # Check for uninstaller in installer-scripts directory
+          if (Test-Path "installer-scripts/uninstall.exe") {
+            echo "✅ Uninstaller found in installer-scripts directory"
+            Get-ChildItem "installer-scripts/uninstall.exe" | Format-Table Name, Length, LastWriteTime
+          } else {
+            echo "❌ Uninstaller not found in installer-scripts directory"
+          }
         shell: pwsh
 
       - name: Upload artifact
@@ -163,13 +199,32 @@ jobs:
     steps:
       - name: Set up C++20 environment
         run: |
-          echo "CXXFLAGS=-std=c++20" >> $GITHUB_ENV
-          echo "CFLAGS=-std=c11" >> $GITHUB_ENV
+          ARCH="$(uname -m)"
+          echo "Detected host architecture: ${ARCH}"
+          if [ "$ARCH" = "arm64" ]; then
+            TARGET_ARCH="arm64"
+            ARCH_FLAGS="-arch arm64"
+            HOMEBREW_PREFIX="/opt/homebrew"
+          else
+            TARGET_ARCH="x86_64"
+            ARCH_FLAGS="-arch x86_64"
+            HOMEBREW_PREFIX="/usr/local"
+          fi
+          echo "Using target architecture: ${TARGET_ARCH}"
+          echo "ARCH_FLAGS=${ARCH_FLAGS}" >> $GITHUB_ENV
+          echo "TARGET_ARCH=${TARGET_ARCH}" >> $GITHUB_ENV
+          echo "HOMEBREW_PREFIX=${HOMEBREW_PREFIX}" >> $GITHUB_ENV
+          echo "CXXFLAGS=-std=c++20 ${ARCH_FLAGS}" >> $GITHUB_ENV
+          echo "CFLAGS=-std=c11 ${ARCH_FLAGS}" >> $GITHUB_ENV
           echo "CXX=clang++" >> $GITHUB_ENV
           echo "CC=clang" >> $GITHUB_ENV
-          echo "LDFLAGS=-std=c++20" >> $GITHUB_ENV
+          echo "LDFLAGS=-std=c++20 ${ARCH_FLAGS}" >> $GITHUB_ENV
           echo "npm_config_target_platform=darwin" >> $GITHUB_ENV
-          echo "npm_config_target_arch=x64" >> $GITHUB_ENV
+          echo "npm_config_arch=${TARGET_ARCH}" >> $GITHUB_ENV
+          echo "npm_config_target_arch=${TARGET_ARCH}" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig" >> $GITHUB_ENV
+          echo "LIBLZMA_CFLAGS=-I${HOMEBREW_PREFIX}/include" >> $GITHUB_ENV
+          echo "LIBLZMA_LIBS=-L${HOMEBREW_PREFIX}/lib -llzma" >> $GITHUB_ENV
 
       # Make sure to use a recent Xcode version
       - name: List available Xcode versions
@@ -186,10 +241,10 @@ jobs:
           clang++ -E -x c++ - -o - <<< '#include <version>' | grep -i "c++" || echo "C++ version info not available"
 
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: 20.19.3
       - name: Calculate version
@@ -227,18 +282,39 @@ jobs:
             cat .env
       - name: Install setuptools
         run: |
-            brew install python-setuptools           
-              
+            brew install python-setuptools                 
+      - name: Install system dependencies for native modules
+        run: |
+            brew install xz pkg-config
+            echo "Installed xz (liblzma) and pkg-config"         
+      - name: Verify liblzma installation
+        run: |
+            echo "=== Verifying liblzma installation ==="
+            which xz || echo "xz not found in PATH"
+            pkg-config --exists liblzma && echo "✅ liblzma found via pkg-config" || echo "❌ liblzma not found via pkg-config"
+            pkg-config --modversion liblzma || echo "Could not get liblzma version"
+            pkg-config --cflags liblzma || echo "Could not get liblzma CFLAGS"
+            pkg-config --libs liblzma || echo "Could not get liblzma LIBS"
+            HOMEBREW_PREFIX="${HOMEBREW_PREFIX:-/opt/homebrew}"
+            ls -la ${HOMEBREW_PREFIX}/lib/liblzma* || ls -la /usr/local/lib/liblzma* || echo "liblzma libraries not found"
+            ls -la ${HOMEBREW_PREFIX}/include/lzma* || ls -la /usr/local/include/lzma* || echo "liblzma headers not found"
+      - name: Set Homebrew Paths for Native Modules
+        run: |
+          echo "CFLAGS=-I/opt/homebrew/include" >> $GITHUB_ENV
+          echo "LDFLAGS=-L/opt/homebrew/lib" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig" >> $GITHUB_ENV        
       - name: Install dependencies
         run: yarn install
       - name: Install DMG maker
-        run: yarn add --dev @electron-forge/maker-dmg
+        run: yarn add --dev @electron-forge/maker-dmg   
       - name: Clean previous builds
         run: |
           rm -rf node_modules/.cache
           rm -rf out/
           rm -rf .vite/
-          yarn clean || echo "Clean command not available"
+          yarn clean || echo "Clean command not available" 
+      - name: Install node-gyp
+        run: yarn add global node-gyp  
       - name: Configure npm for C++20
         run: |
           echo "npm config list:"
@@ -253,6 +329,10 @@ jobs:
           echo "LDFLAGS: $LDFLAGS"
           echo "npm_config_target_platform: $npm_config_target_platform"
           echo "npm_config_target_arch: $npm_config_target_arch"
+          echo "npm_config_arch: $npm_config_arch"
+          echo "TARGET_ARCH: $TARGET_ARCH"
+          echo "ARCH_FLAGS: $ARCH_FLAGS"
+          echo "HOMEBREW_PREFIX: $HOMEBREW_PREFIX"
           echo "Platform: $(uname -s)"
           echo "Architecture: $(uname -m)"
       - name: Update native modules to latest versions
@@ -262,26 +342,50 @@ jobs:
       - name: Set C++20 environment for build
         run: |
           echo "=== Setting C++20 environment ==="
-          export CXXFLAGS="-std=c++20"
-          export CFLAGS="-std=c11"
+          ARCH_FLAGS="${ARCH_FLAGS:-}"
+          TARGET_ARCH="${TARGET_ARCH:-$(uname -m)}"
+          HOMEBREW_PREFIX="${HOMEBREW_PREFIX:-/opt/homebrew}"
+          export CXXFLAGS="-std=c++20 ${ARCH_FLAGS}"
+          export CFLAGS="-std=c11 ${ARCH_FLAGS}"
           export CXX="clang++"
           export CC="clang"
-          export LDFLAGS="-std=c++20"
+          export LDFLAGS="-std=c++20 ${ARCH_FLAGS}"
           export npm_config_target_platform="darwin"
-          export npm_config_target_arch="x64"
+          export npm_config_arch="${TARGET_ARCH}"
+          export npm_config_target_arch="${TARGET_ARCH}"
+          export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig"
+          export LIBLZMA_CFLAGS="-I${HOMEBREW_PREFIX}/include"
+          export LIBLZMA_LIBS="-L${HOMEBREW_PREFIX}/lib -llzma"
           echo "Environment variables set:"
           echo "CXXFLAGS: $CXXFLAGS"
           echo "CFLAGS: $CFLAGS"
           echo "CXX: $CXX"
           echo "CC: $CC"
+          echo "PKG_CONFIG_PATH: $PKG_CONFIG_PATH"
+          echo "LIBLZMA_CFLAGS: $LIBLZMA_CFLAGS"
+          echo "LIBLZMA_LIBS: $LIBLZMA_LIBS"
+          echo "ARCH_FLAGS: $ARCH_FLAGS"
           echo "npm_config_target_platform: $npm_config_target_platform"
+          echo "npm_config_arch: $npm_config_arch"
           echo "npm_config_target_arch: $npm_config_target_arch"
-      - name: Download Electron headers
+      - name: Rebuild Native Modules for Electron
         run: |
-          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" npx electron-rebuild --force --types prod,dev,optional --module-dir .
-      - name: Rebuild native modules
-        run: |
-          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" npx electron-rebuild
+          # Export all flags so the 'make' subprocess inherits them
+          export CFLAGS="-std=c11 -arch arm64 -I/opt/homebrew/include"
+          export CXXFLAGS="-std=c++20 -arch arm64 -I/opt/homebrew/include"
+
+          # This is the most critical fix:
+          # You MUST include -arch arm64 in LDFLAGS
+          export LDFLAGS="-L/opt/homebrew/lib -arch arm64"
+
+          # This helps find the .pc files
+          export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig"
+
+          # Now run the rebuild. The flags will be picked up.
+          npx electron-rebuild --force --arch="${TARGET_ARCH}" --types prod,dev,optional --module-dir .
+        env:
+          # Ensure this is set for the step
+          TARGET_ARCH: arm64
       - name: Rebuild sqlite3
         run: |
           CXXFLAGS="-std=c++20" CFLAGS="-std=c11" yarn rebuild-sqlite3
@@ -296,17 +400,20 @@ jobs:
           CXXFLAGS="-std=c++20" CFLAGS="-std=c11" yarn rebuild-faiss-node
       - name: yarn electron-rebuild
         run: |
-          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" yarn electron-rebuild
+          TARGET_ARCH="${TARGET_ARCH:-$(uname -m)}"
+          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" yarn electron-rebuild --arch="${TARGET_ARCH}"
       - name: Rebuild with verbose output
         run: |
           echo "=== Rebuilding with verbose output ==="
-          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" DEBUG=* npx electron-rebuild --force --verbose || echo "Verbose rebuild failed, continuing..."
+          TARGET_ARCH="${TARGET_ARCH:-$(uname -m)}"
+          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" DEBUG=* npx electron-rebuild --force --arch="${TARGET_ARCH}" --verbose || echo "Verbose rebuild failed, continuing..."
       - name: Rebuild C modules specifically
         run: |
           echo "=== Rebuilding C modules specifically ==="
           # Rebuild bufferutil and utf-8-validate which are C modules
-          CFLAGS="-std=c11" yarn electron-rebuild -f -w bufferutil || echo "bufferutil rebuild failed"
-          CFLAGS="-std=c11" yarn electron-rebuild -f -w utf-8-validate || echo "utf-8-validate rebuild failed"
+          TARGET_ARCH="${TARGET_ARCH:-$(uname -m)}"
+          CFLAGS="-std=c11" yarn electron-rebuild --arch="${TARGET_ARCH}" -f -w bufferutil || echo "bufferutil rebuild failed"
+          CFLAGS="-std=c11" yarn electron-rebuild --arch="${TARGET_ARCH}" -f -w utf-8-validate || echo "utf-8-validate rebuild failed"
       - name: Debug - Check native modules
         run: |
           echo "=== Checking native modules ==="
