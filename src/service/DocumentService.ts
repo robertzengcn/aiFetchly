@@ -68,8 +68,9 @@ export class DocumentService {
 
     /**
      * Delete document and cleanup
+     * @returns Promise that resolves to true if deletion was successful, false otherwise
      */
-    async deleteDocument(id: number, deleteFile: boolean = false): Promise<void> {
+    async deleteDocument(id: number, deleteFile: boolean = false): Promise<boolean> {
         return await this.ragDocumentModule.deleteDocument(id, deleteFile);
     }
 
