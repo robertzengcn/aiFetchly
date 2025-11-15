@@ -8,6 +8,7 @@ const EXTERNAL_DEPENDENCIES = [
   'realm',
   'electron-squirrel-startup',
   'better-sqlite3',
+  'sqlite-vec',
   'puppeteer-cluster',
   'lodash',
 'winston',
@@ -30,7 +31,7 @@ const EXTERNAL_DEPENDENCIES = [
 'openai',
 'typeorm',
 'cheerio',
-'faiss-node'
+'sqlite-vec'
 ];
 //import { ForgeConfig } from '@electron-forge/shared-types';
 // import { AutoUnpackNativesPlugin } from "@electron-forge/plugin-auto-unpack-natives";
@@ -46,7 +47,7 @@ module.exports={
     //   unpack: "**/node_modules/better-sqlite3/**",
      
     // },
-    asar: { unpackDir: "**/node_modules/{better-sqlite3,sqlite3}/**", },
+    asar: { unpackDir: "**/node_modules/{better-sqlite3,sqlite3,sqlite-vec}/**", },
     ignore: (file) => {
       const filePath = file.toLowerCase();
       const KEEP_FILE = {

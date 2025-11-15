@@ -11,8 +11,7 @@ export default defineConfig({
     sourcemap: true,
     rollupOptions: {
       external: [
-        'canvas',  // Mark canvas as external to prevent bundling native .node files
-        'faiss-node'
+        'canvas'  // Mark canvas as external to prevent bundling native .node files
       ]
     }
   },

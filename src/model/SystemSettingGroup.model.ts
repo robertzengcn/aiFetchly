@@ -8,15 +8,49 @@ import {SystemSettingOptionModel} from "@/model/SystemSettingOption.model"
 
 export const deepseeklocalgroup = 'Deepseek-local'
 export class SystemSettingGroupModel extends BaseDb {
-    private repository: Repository<SystemSettingGroupEntity>
+    private _repository: Repository<SystemSettingGroupEntity> | null = null;
     private systemSettingModel:SystemSettingModel
     private systemSettingOptionModel:SystemSettingOptionModel
     constructor(filepath: string) {
         super(filepath)
         this.systemSettingModel = new SystemSettingModel(filepath)
         this.systemSettingOptionModel = new SystemSettingOptionModel(filepath)
-        this.repository = this.sqliteDb.connection.getRepository(SystemSettingGroupEntity)
-       
+    }
+
+    /**
+     * Get repository, ensuring DataSource is initialized first
+     */
+    private async getRepository(): Promise<Repository<SystemSettingGroupEntity>> {
+        if (!this._repository) {
+            // Ensure DataSource is initialized before getting repository
+            if (!this.sqliteDb.connection.isInitialized) {
+                try {
+                    await this.sqliteDb.connection.initialize();
+                    console.log('Database connection initialized in SystemSettingGroupModel');
+                } catch (error) {
+                    // Check if error is about already being initialized
+                    const errorMessage = error instanceof Error ? error.message : String(error);
+                    if (!errorMessage.includes('already initialized') && !errorMessage.includes('already been initialized')) {
+                        console.error('Failed to initialize database connection:', error);
+                        throw new Error(`Failed to initialize database connection: ${errorMessage}`);
+                    }
+                    // If already initialized, that's fine - continue
+                }
+            }
+            
+            // Verify the connection is initialized before getting repository
+            if (!this.sqliteDb.connection.isInitialized) {
+                throw new Error('DataSource is not initialized and initialization failed');
+            }
+            
+            try {
+                this._repository = this.sqliteDb.connection.getRepository(SystemSettingGroupEntity);
+            } catch (error) {
+                console.error('Failed to get repository for SystemSettingGroupEntity:', error);
+                throw new Error(`Failed to get repository: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            }
+        }
+        return this._repository;
     }
     public async tableInit() {
         await this.initSystemSetting()
@@ -25,22 +59,28 @@ export class SystemSettingGroupModel extends BaseDb {
     }
     public async initSystemSetting(){
         console.log(settinggroupInit)
+        const repository = await this.getRepository();
         for(const sgelement of settinggroupInit){
            console.log(sgelement)
-            let settargroup=await this.repository.findOne({
+            let settargroup = await repository.findOne({
                 where:{name: sgelement.name},
              })
                 if (!settargroup) {
                     const systemSettingGroupEntity = new SystemSettingGroupEntity();
                     systemSettingGroupEntity.name = sgelement.name;
                     systemSettingGroupEntity.description = sgelement.description? sgelement.description:'';
-                    settargroup=await this.repository.save(systemSettingGroupEntity)
+                    settargroup = await repository.save(systemSettingGroupEntity)
+                }
+                // Ensure settargroup is not null before using it
+                if (!settargroup) {
+                    console.error(`Failed to create or find setting group: ${sgelement.name}`);
+                    continue; // Skip this group if we can't create/find it
                 }
                 for(const settingelement of sgelement.items){
                     await this.systemSettingModel.getSettingItem(settingelement.key).then(async (setting)=>{
                         if(!setting){
                             const systemSettingEntity = new SystemSettingEntity();
-                            systemSettingEntity.group = settargroup;
+                            systemSettingEntity.group = settargroup!; // Safe to use ! here since we checked above
                             systemSettingEntity.key = settingelement.key;
                             systemSettingEntity.value = settingelement.value;
                             systemSettingEntity.description = settingelement.description? settingelement.description:'';
@@ -52,14 +92,15 @@ export class SystemSettingGroupModel extends BaseDb {
                                await this.systemSettingOptionModel.initLanguageOptions(savedSetting);
                            }
                         }else{
-                            await this.systemSettingModel.updateGroup(setting,settargroup)
+                            await this.systemSettingModel.updateGroup(setting, settargroup!)
                         }
                     })
                 }
         }
     }
     public async insertDeepseekgroup():Promise<SystemSettingGroupEntity>{
-        let deepseekgroup = await this.repository.findOne({
+        const repository = await this.getRepository();
+        let deepseekgroup = await repository.findOne({
             where:{name: deepseeklocalgroup},
             relations: {settings:true}
          })
@@ -68,14 +109,15 @@ export class SystemSettingGroupModel extends BaseDb {
              systemSettingGroupEntity.name = deepseeklocalgroup;
              systemSettingGroupEntity.description = 'deepseek-local-group-description';
              
- 
-             deepseekgroup=await this.repository.save(systemSettingGroupEntity)
+
+             deepseekgroup=await repository.save(systemSettingGroupEntity)
          }
          return deepseekgroup
     }
 
     public async listall(): Promise<SystemSettingGroupEntity[]> {
-        return this.repository.find({
+        const repository = await this.getRepository();
+        return repository.find({
             order: {
                 id: 'ASC'  // or 'DESC' for descending
             },
@@ -86,7 +128,8 @@ export class SystemSettingGroupModel extends BaseDb {
         })
     }
     public async getGroupItembyName(name: string): Promise<SystemSettingGroupEntity | null> {
-        return this.repository.findOne({
+        const repository = await this.getRepository();
+        return repository.findOne({
             where: { name: name },
             relations: {
                 settings: true
@@ -99,9 +142,10 @@ export class SystemSettingGroupModel extends BaseDb {
      * @returns SystemSettingGroupEntity for embedding settings
      */
     public async getOrCreateEmbeddingGroup(): Promise<SystemSettingGroupEntity> {
+        const repository = await this.getRepository();
         const embeddingGroupName = embedding_group;
         
-        let embeddingGroup = await this.repository.findOne({
+        let embeddingGroup = await repository.findOne({
             where: { name: embeddingGroupName },
             relations: { settings: true }
         });
@@ -110,7 +154,7 @@ export class SystemSettingGroupModel extends BaseDb {
             const systemSettingGroupEntity = new SystemSettingGroupEntity();
             systemSettingGroupEntity.name = embeddingGroupName;
             systemSettingGroupEntity.description = 'Settings for embedding models and document processing';
-            embeddingGroup = await this.repository.save(systemSettingGroupEntity);
+            embeddingGroup = await repository.save(systemSettingGroupEntity);
         }
 
         return embeddingGroup;
@@ -123,10 +167,11 @@ export class SystemSettingGroupModel extends BaseDb {
      * @returns Created SystemSettingGroupEntity
      */
     public async createGroup(name: string, description: string): Promise<SystemSettingGroupEntity> {
+        const repository = await this.getRepository();
         const systemSettingGroupEntity = new SystemSettingGroupEntity();
         systemSettingGroupEntity.name = name;
         systemSettingGroupEntity.description = description;
-        return await this.repository.save(systemSettingGroupEntity);
+        return await repository.save(systemSettingGroupEntity);
     }
    
 
