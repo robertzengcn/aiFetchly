@@ -55,6 +55,46 @@ export class SearchResultModel extends BaseDb {
         });
     }
 
+    async countAll(): Promise<number> {
+        return this.repository.count();
+    }
+
+    async countByDateRange(startDate: Date, endDate: Date): Promise<number> {
+        return this.repository.createQueryBuilder('result')
+            .where('result.record_time >= :startDate', { startDate: startDate.toISOString() })
+            .andWhere('result.record_time <= :endDate', { endDate: endDate.toISOString() })
+            .getCount();
+    }
+
+    async aggregateByDateRange(startDate: Date, endDate: Date, granularity: 'day' | 'week' | 'month'): Promise<Array<{ date: string; count: number }>> {
+        const dateExpression = this.getDateExpression(granularity, 'result.record_time');
+        const rows = await this.repository.createQueryBuilder('result')
+            .select(dateExpression, 'date')
+            .addSelect('COUNT(*)', 'count')
+            .where('result.record_time >= :startDate', { startDate: startDate.toISOString() })
+            .andWhere('result.record_time <= :endDate', { endDate: endDate.toISOString() })
+            .groupBy(dateExpression)
+            .orderBy(dateExpression, 'ASC')
+            .getRawMany();
+
+        return rows.map((row: { date: string; count: string }) => ({
+            date: row.date,
+            count: parseInt(row.count, 10)
+        }));
+    }
+
+    private getDateExpression(granularity: 'day' | 'week' | 'month', column: string): string {
+        switch (granularity) {
+            case 'week':
+                return `STRFTIME('%Y-%W', ${column})`;
+            case 'month':
+                return `STRFTIME('%Y-%m', ${column})`;
+            case 'day':
+            default:
+                return `DATE(${column})`;
+        }
+    }
+
     /**
      * Get search results by specific task ID
      */

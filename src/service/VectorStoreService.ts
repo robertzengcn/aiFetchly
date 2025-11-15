@@ -35,7 +35,7 @@ export class VectorStoreService {
     constructor(
         // db: SqliteDb, 
         indexPath?: string, 
-        databaseType: VectorDatabaseType = VectorDatabaseType.FAISS
+        databaseType: VectorDatabaseType = VectorDatabaseType.SQLITE_VEC
     ) {
         // this.db = db;
         this.indexPath = indexPath || path.join(process.cwd(), 'data', 'vector_index');
@@ -127,7 +127,8 @@ export class VectorStoreService {
 
             await this.vectorDatabase.loadIndex(vectorDbConfig);
             
-            // Rebuild chunk ID mapping for FAISS (if it supports it) - only for document-specific indices
+            // Note: sqlite-vec stores chunk_id directly, so no need to rebuild chunk ID mapping
+            // Only FAISS needs this workaround
             if (this.databaseType === VectorDatabaseType.FAISS && 
                 'rebuildChunkIdMapping' in this.vectorDatabase &&
                 vectorDbConfig.documentId) {
@@ -220,7 +221,7 @@ export class VectorStoreService {
             }
 
             // Use pooled instance to add vectors
-            await this.addVectorsWithInstance(pooledInstance, [embeddingData.embedding], [embeddingData.chunkId]);
+            await this.addVectorsWithInstance(pooledInstance, embeddingData.embedding, embeddingData.chunkId);
         } else {
             throw new Error('Document ID, model, and dimensions are required for document-specific indexing');
         }
@@ -231,7 +232,7 @@ export class VectorStoreService {
      * @param vectors - Array of vectors to add
      * @param chunkIds - Array of chunk IDs corresponding to vectors
      */
-    async addVectors(vectors: number[][], chunkIds: number[]): Promise<void> {
+    async addVectors(vectors: number[], chunkIds: number): Promise<void> {
         return this.addVectorsWithInstance(this.vectorDatabase, vectors, chunkIds);
     }
 
@@ -241,31 +242,31 @@ export class VectorStoreService {
      * @param vectors - Array of vectors to add
      * @param chunkIds - Array of chunk IDs corresponding to vectors
      */
-    private async addVectorsWithInstance(instance: IVectorDatabase, vectors: number[][], chunkIds: number[]): Promise<void> {
+    private async addVectorsWithInstance(instance: IVectorDatabase, vectors: number[], chunkIds: number): Promise<void> {
         if (!instance.isInitialized()) {
             throw new Error('Vector database not initialized');
         }
 
-        if (vectors.length !== chunkIds.length) {
-            throw new Error('Vectors and chunk IDs length mismatch');
-        }
+        // if (vectors.length !== chunkIds.length) {
+        //     throw new Error('Vectors and chunk IDs length mismatch');
+        // }
 
         try {
-            const stats = instance.getIndexStats();
-            const startIndex = stats.totalVectors;
+            // const stats = instance.getIndexStats();
+            // const startIndex = stats.totalVectors;
 
             // Add each vector individually (API expects single vector)
-            for (let i = 0; i < vectors.length; i++) {
-                await instance.addVectors(vectors[i], [chunkIds[i]]);
+            // for (let i = 0; i < vectors.length; i++) {
+                await instance.addVectors(vectors, chunkIds);
                 
                 // Update chunk entity with embedding ID
-                const embeddingId = (startIndex + i).toString();
-                await this.ragChunkModule.updateChunkEmbedding(
-                    chunkIds[i], 
-                    embeddingId
-                    // stats.dimension
-                );
-            }
+                // const embeddingId = (startIndex + i).toString();
+                // await this.ragChunkModule.updateChunkEmbedding(
+                //     chunkIds[i], 
+                //     embeddingId
+                //     // stats.dimension
+                // );
+            // }
 
             console.log(`Added ${vectors.length} vectors to ${this.databaseType} index (using pool)`);
         } catch (error) {
@@ -280,7 +281,7 @@ export class VectorStoreService {
      * @param k - Number of results to return
      * @returns Search results with indices, distances, and chunkIds
      */
-    async search(queryVector: number[], k: number = 10): Promise<{
+    async search(queryVector: number[], k: number = 10,distance?:number): Promise<{
         indices: number[];
         distances: number[];
         chunkIds: number[];
@@ -295,7 +296,7 @@ export class VectorStoreService {
         // }
 
         try {
-            const results = await this.vectorDatabase.search(queryVector, k);
+            const results = await this.vectorDatabase.search(queryVector, k,distance);
             
             // Vector database now returns chunkIds directly
             return {
@@ -455,9 +456,11 @@ export class VectorStoreService {
         switch (this.databaseType) {
             case VectorDatabaseType.FAISS:
                 return 'index';
+            case VectorDatabaseType.SQLITE_VEC:
+                return 'db';
             // Add other database types as needed
             default:
-                return 'index';
+                return 'db';
         }
     }
 
@@ -598,7 +601,7 @@ export class VectorStoreService {
      * @param indexType - Type of index (default: 'Flat')
      * @returns The file path of the created vector index
      */
-    async createDocumentIndex(documentId: number, modelConfig: EmbeddingModelConfig, indexType: string = 'Flat'): Promise<string> {
+    async createDocumentIndex(documentId: number, modelConfig: EmbeddingModelConfig, indexType: string = 'Flat'): Promise<string|undefined|null> {
         try {
             this.currentModel = modelConfig;
             
@@ -686,7 +689,8 @@ export class VectorStoreService {
 
             await this.vectorDatabase.loadIndex(vectorDbConfig);
             
-            // Rebuild chunk ID mapping for FAISS (if it supports it)
+            // Note: sqlite-vec stores chunk_id directly, so no need to rebuild chunk ID mapping
+            // Only FAISS needs this workaround
             if (this.databaseType === VectorDatabaseType.FAISS && 
                 'rebuildChunkIdMapping' in this.vectorDatabase) {
                 await (this.vectorDatabase as any).rebuildChunkIdMapping(this.ragChunkModule, documentId);
@@ -723,6 +727,34 @@ export class VectorStoreService {
         } catch (error) {
             console.error(`Failed to delete document-specific index for document ${documentId}:`, error);
             throw new Error(`Failed to delete document-specific index for document ${documentId}`);
+        }
+    }
+
+    /**
+     * Delete vectors by chunk IDs from the vector database
+     * @param chunkIds - Array of chunk IDs to delete
+     */
+    async deleteVectorsByChunkIds(chunkIds: number[]): Promise<void> {
+        if (!this.vectorDatabase.isInitialized()) {
+            throw new Error('Vector database not initialized');
+        }
+
+        if (chunkIds.length === 0) {
+            console.log('No chunk IDs provided, nothing to delete');
+            return;
+        }
+
+        try {
+            // Check if the vector database supports deleteVectorsByChunkIds
+            if (typeof (this.vectorDatabase as any).deleteVectorsByChunkIds === 'function') {
+                await (this.vectorDatabase as any).deleteVectorsByChunkIds(chunkIds);
+                console.log(`Deleted ${chunkIds.length} vectors by chunk IDs`);
+            } else {
+                throw new Error('Vector database does not support deleteVectorsByChunkIds method');
+            }
+        } catch (error) {
+            console.error('Failed to delete vectors by chunk IDs:', error);
+            throw new Error(`Failed to delete vectors by chunk IDs: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
     }
 

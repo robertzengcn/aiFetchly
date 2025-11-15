@@ -1,0 +1,137 @@
+---
+description: The foundational constitution establishing core principles, values, and governance for the aiFetchly project
+globs: **/*
+alwaysApply: true
+---
+
+# aiFetchly Project Constitution
+
+This constitution establishes the fundamental principles, values, and guidelines that govern all development work on the aiFetchly project. All developers, contributors, and AI assistants must adhere to these principles.
+
+## Core Principles
+
+- **Type Safety First**
+  - TypeScript is the primary language for this project
+  - Follow [typescript.mdc](mdc:.cursor/rules/typescript.mdc) strictly - never use `any` types
+  - All code must have proper type definitions
+  - Use `unknown` instead of `any` when types are truly unknown
+  - Leverage TypeScript's type system to prevent runtime errors
+
+- **Security by Design**
+  - All user input must be validated and sanitized
+  - IPC communication must be secured (see [electron-rules.mdc](mdc:.cursor/rules/electron-rules.mdc))
+  - Context isolation must be enabled
+  - Node.js integration in renderer should be disabled unless absolutely necessary
+  - All external API calls must use HTTPS
+  - Never trust user input or external data sources
+
+- **Code Quality Standards**
+  - Follow the structure defined in [electron-rules.mdc](mdc:.cursor/rules/electron-rules.mdc)
+  - Use static imports only - no dynamic imports (`import()`)
+  - Maintain consistent code organization and naming conventions
+  - All functions must have explicit return types
+  - Error handling must use `unknown` type, not `any`
+  - Code must be maintainable and self-documenting
+
+- **Continuous Improvement**
+  - Follow [self_improve.mdc](mdc:.cursor/rules/self_improve.mdc) for rule evolution
+  - Update rules when new patterns emerge (3+ file usage threshold)
+  - Document all architectural decisions
+  - Refactor proactively to prevent technical debt
+  - Learn from implementation patterns and codify best practices
+
+## Project-Specific Guidelines
+
+- **Electron Architecture**
+  - Main process handles all system-level operations
+  - Renderer process is for UI only - no heavy computation
+  - Use IPC for all main-renderer communication
+  - Follow MVC pattern for code organization
+  - Use Vue.js for component-based UI architecture
+
+- **AI Integration Standards**
+  - All AI tool functions must be properly typed
+  - Tool configurations must be centralized (see `src/config/aiTools.config.ts`)
+  - API responses must have proper TypeScript interfaces
+  - Error handling for AI operations must be comprehensive
+  - Rate limiting and retry logic must be implemented
+
+- **File Organization**
+  - Follow the directory structure in [electron-rules.mdc](mdc:.cursor/rules/electron-rules.mdc)
+  - Controllers in `src/controller/`
+  - Services in `src/service/`
+  - Entities in `src/entity/`
+  - Views/components in `src/views/`
+  - Config files in `src/config/`
+  - Main process code in `src/main-process/`
+
+- **Dependency Management**
+  - Always use `yarn` for package management
+  - Keep dependencies up to date for security
+  - Document why specific versions are required
+  - Avoid unnecessary dependencies
+
+## Development Workflow
+
+- **Before Writing Code**
+  1. Review relevant rule files ([cursor_rules.mdc](mdc:.cursor/rules/cursor_rules.mdc), [typescript.mdc](mdc:.cursor/rules/typescript.mdc), [electron-rules.mdc](mdc:.cursor/rules/electron-rules.mdc))
+  2. Understand the existing codebase patterns
+  3. Check for similar implementations to maintain consistency
+  4. Plan type definitions before implementation
+
+- **During Development**
+  1. Write type-safe code from the start
+  2. Follow existing patterns and conventions
+  3. Add proper error handling
+  4. Write self-documenting code with clear naming
+  5. Test IPC communication thoroughly
+  6. Validate all external inputs
+
+- **After Implementation**
+  1. Verify no `any` types were introduced
+  2. Check that error handling is comprehensive
+  3. Ensure code follows project structure
+  4. Update rules if new patterns emerged (per [self_improve.mdc](mdc:.cursor/rules/self_improve.mdc))
+  5. Document any architectural decisions
+
+## Rule Hierarchy
+
+Rules are applied in the following order of precedence:
+
+1. **This Constitution** - Fundamental principles that cannot be violated
+2. **TypeScript Rules** ([typescript.mdc](mdc:.cursor/rules/typescript.mdc)) - Type safety requirements
+3. **Electron Rules** ([electron-rules.mdc](mdc:.cursor/rules/electron-rules.mdc)) - Framework-specific guidelines
+4. **Cursor Rules** ([cursor_rules.mdc](mdc:.cursor/rules/cursor_rules.mdc)) - Rule formatting and structure
+5. **Self-Improvement Rules** ([self_improve.mdc](mdc:.cursor/rules/self_improve.mdc)) - Rule evolution process
+
+## Enforcement
+
+- **Type Safety Violations**: Must be fixed immediately - no exceptions
+- **Security Issues**: Critical priority - must be addressed before merge
+- **Code Quality**: Should be addressed in code review
+- **Rule Updates**: Should be proposed when patterns emerge
+
+## Amendment Process
+
+This constitution can be amended when:
+- New fundamental principles are identified
+- Project architecture significantly changes
+- Security requirements evolve
+- Team consensus is reached on new standards
+
+Amendments must:
+- Follow the format in [cursor_rules.mdc](mdc:.cursor/rules/cursor_rules.mdc)
+- Reference existing rules appropriately
+- Include examples from actual codebase
+- Be reviewed and approved before implementation
+
+## References
+
+- [TypeScript Rules](mdc:.cursor/rules/typescript.mdc) - Type safety and best practices
+- [Electron Rules](mdc:.cursor/rules/electron-rules.mdc) - Framework guidelines
+- [Cursor Rules](mdc:.cursor/rules/cursor_rules.mdc) - Rule formatting standards
+- [Self-Improvement Rules](mdc:.cursor/rules/self_improve.mdc) - Rule evolution process
+
+---
+
+*This constitution is a living document. It should evolve with the project while maintaining its core principles.*

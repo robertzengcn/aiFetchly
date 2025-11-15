@@ -129,7 +129,8 @@ export class VectorSearchService {
                             dimensions: parseInt(dimensions),
                             documentIndexPath: doc.vectorIndexPath || undefined
                         });
-                        const documentResults = await this.vectorStore.search(queryVector, options.limit || 10);
+                        const distance = options.threshold || 0.5;
+                        const documentResults = await this.vectorStore.search(queryVector, options.limit || 10, distance);
                         
                         allResults.push({
                             chunkIds: documentResults.chunkIds,
