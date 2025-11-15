@@ -95,6 +95,7 @@
       :loading="loading"
       :items-per-page="10"
       show-select
+      return-object
       class="document-table"
     >
       <template v-slot:item.name="{ item }">
@@ -179,10 +180,10 @@
         <v-icon left>mdi-delete</v-icon>
         {{ t('knowledge.delete_selected', { count: selectedDocuments.length }) }}
       </v-btn>
-      <v-btn color="warning" @click="bulkUpdateStatus('archived')">
+      <!-- <v-btn color="warning" @click="bulkUpdateStatus('archived')">
         <v-icon left>mdi-archive</v-icon>
         {{ t('knowledge.archive_selected') }}
-      </v-btn>
+      </v-btn> -->
     </div>
 
     <!-- Upload Dialog -->
@@ -603,8 +604,8 @@ const { t } = useI18n();
           console.log('Bulk deleting:', selectedDocuments.value);
           
           // Delete all selected documents
-          const deletePromises = selectedDocuments.value.map(doc => 
-            deleteDocumentAPI(doc.id, true)
+          const deletePromises = selectedDocuments.value.map(async (doc) => 
+             await deleteDocumentAPI(doc.id, true)
           );
           
           const results = await Promise.allSettled(deletePromises);
@@ -633,16 +634,16 @@ const { t } = useI18n();
       }
     };
 
-    const bulkUpdateStatus = async (status) => {
-      try {
-        // Mock bulk status update
-        console.log('Bulk updating status to:', status, selectedDocuments.value);
-        selectedDocuments.value = [];
-        loadDocuments();
-      } catch (error) {
-        console.error('Bulk update error:', error);
-      }
-    };
+    // const bulkUpdateStatus = async (status) => {
+    //   try {
+    //     // Mock bulk status update
+    //     console.log('Bulk updating status to:', status, selectedDocuments.value);
+    //     selectedDocuments.value = [];
+    //     loadDocuments();
+    //   } catch (error) {
+    //     console.error('Bulk update error:', error);
+    //   }
+    // };
 
     const showErrorLog = async (doc: DocumentInfo) => {
       try {

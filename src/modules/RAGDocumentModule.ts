@@ -6,6 +6,9 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import { WriteLog, getLogPath } from "@/modules/lib/function";
 import { app } from 'electron';
+import { VectorStoreService } from '@/service/VectorStoreService';
+import { VectorDatabaseType } from '@/modules/factories/VectorDatabaseFactory';
+import { RAGChunkModule } from '@/modules/RAGChunkModule';
 
 export interface DocumentUploadOptions {
     filePath: string;
@@ -184,21 +187,68 @@ export class RAGDocumentModule extends BaseModule {
 
     /**
      * Delete document and cleanup
+     * @param id - Document ID to delete
+     * @param deleteFile - Whether to delete the physical file
+     * @param deleteVectorIndex - Whether to delete the vector index
+     * @returns Promise that resolves to true if deletion was successful, false otherwise
      */
-    async deleteDocument(id: number, deleteFile: boolean = false, deleteVectorIndex: boolean = true): Promise<void> {
+    async deleteDocument(id: number, deleteFile: boolean = false, deleteVectorIndex: boolean = true): Promise<boolean> {
         const document = await this.ragDocumentModel.getDocumentById(id);
 
         if (!document) {
-            throw new Error('Document not found');
+            console.warn(`Document ${id} not found`);
+            return false;
         }
 
-        // Delete vector index if path exists and deletion is requested
-        if (deleteVectorIndex && document.vectorIndexPath && fs.existsSync(document.vectorIndexPath)) {
+        // Delete vectors from vector database if deletion is requested
+        if (deleteVectorIndex) {
             try {
-                fs.unlinkSync(document.vectorIndexPath);
-                console.log(`Deleted vector index: ${document.vectorIndexPath}`);
+                // Get chunks for the document
+                const ragChunkModule = new RAGChunkModule();
+                const chunks = await ragChunkModule.getDocumentChunks(id);
+
+                if (chunks.length > 0 && document.modelName && document.vectorDimensions) {
+                    // Extract chunk IDs
+                    const chunkIds = chunks.map(chunk => chunk.id);
+                    console.log(`Found ${chunkIds.length} chunks for document ${id}, deleting associated vectors...`);
+
+                    // Create VectorStoreService instance
+                    const vectorStoreService = new VectorStoreService(
+                        document.vectorIndexPath,
+                        VectorDatabaseType.SQLITE_VEC
+                    );
+
+                    // Initialize and load the index
+                    await vectorStoreService.initialize();
+                    
+                    // Load index with model configuration
+                    await vectorStoreService.loadIndex({
+                        name: document.modelName,
+                        dimensions: document.vectorDimensions,
+                        documentIndexPath: document.vectorIndexPath
+                    });
+
+                    // Delete vectors by chunk IDs using VectorStoreService
+                    await vectorStoreService.deleteVectorsByChunkIds(chunkIds);
+                    console.log(`Deleted ${chunkIds.length} vectors from vector database for document ${id}`);
+                } else if (chunks.length > 0 && (!document.modelName || !document.vectorDimensions)) {
+                    console.warn(`Document ${id} has chunks but missing model information (modelName: ${document.modelName}, vectorDimensions: ${document.vectorDimensions}), skipping vector deletion`);
+                } else {
+                    console.log(`Document ${id} has no chunks, skipping vector deletion`);
+                }
             } catch (error) {
-                console.warn(`Failed to delete vector index: ${document.vectorIndexPath}`, error);
+                console.error(`Failed to delete vectors from vector database for document ${id}:`, error);
+                // Don't return false - continue with file and database deletion even if vector deletion fails
+            }
+
+            // Delete vector index file if path exists (legacy cleanup)
+            if (document.vectorIndexPath && fs.existsSync(document.vectorIndexPath)) {
+                try {
+                    fs.unlinkSync(document.vectorIndexPath);
+                    console.log(`Deleted vector index file: ${document.vectorIndexPath}`);
+                } catch (error) {
+                    console.warn(`Failed to delete vector index file: ${document.vectorIndexPath}`, error);
+                }
             }
         }
 
@@ -215,8 +265,11 @@ export class RAGDocumentModule extends BaseModule {
         // Delete from database (cascade will handle chunks)
         const success = await this.ragDocumentModel.deleteDocument(id);
         if (!success) {
-            throw new Error('Failed to delete document from database');
+            console.error(`Failed to delete document ${id} from database`);
+            return false;
         }
+
+        return true;
     }
 
     /**

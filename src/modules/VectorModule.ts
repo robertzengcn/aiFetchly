@@ -102,6 +102,35 @@ export class VectorModule extends BaseModule {
     }
 
     /**
+     * Add a vector to a vec0 virtual table
+     * Delegates to VectorModel's addVectorToVirtualTable method
+     * 
+     * @param vectors - Vector as number array
+     * @param chunkId - Chunk ID to associate with the vector
+     * @param virtualTableName - Name of the vec0 virtual table
+     * @param dimension - Expected dimension of the vector (for validation)
+     */
+    async addVectorToVirtualTable(
+        vectors: number[], 
+        chunkId: number, 
+        virtualTableName: string,
+        dimension: number
+    ): Promise<void> {
+        return await this.vectorModel.addVectorToVirtualTable(vectors, chunkId, virtualTableName, dimension);
+    }
+
+    /**
+     * Delete vectors from a vec0 virtual table by chunk IDs
+     * Delegates to VectorModel's deleteVectorsFromVirtualTable method
+     * 
+     * @param chunkIds - Array of chunk IDs to delete
+     * @param virtualTableName - Name of the vec0 virtual table
+     */
+    async deleteVectorsFromVirtualTable(chunkIds: number[], virtualTableName: string): Promise<void> {
+        return await this.vectorModel.deleteVectorsFromVirtualTable(chunkIds, virtualTableName);
+    }
+
+    /**
      * Search for similar vectors using vec_distance_l2 function
      * Delegates to VectorModel's searchSimilarVectors method
      * 

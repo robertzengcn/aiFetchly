@@ -125,6 +125,12 @@ export interface IVectorDatabase {
     deleteDocumentIndex(documentId: number): Promise<void>;
 
     /**
+     * Delete vectors by chunk IDs from the vector database
+     * @param chunkIds - Array of chunk IDs to delete
+     */
+    deleteVectorsByChunkIds?(chunkIds: number[]): Promise<void>;
+
+    /**
      * Check if a document-specific index exists
      * @param documentId - Document ID to check
      */

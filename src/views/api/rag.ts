@@ -184,7 +184,7 @@ export async function deleteDocument(id: number, deleteFile: boolean = true): Pr
       success: true,
       message: ''
     };
-  } catch (error) {
+  } catch (error) {``
     console.error('Error deleting document:', error);
     return {
       success: false,
