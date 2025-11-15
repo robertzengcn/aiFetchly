@@ -731,6 +731,34 @@ export class VectorStoreService {
     }
 
     /**
+     * Delete vectors by chunk IDs from the vector database
+     * @param chunkIds - Array of chunk IDs to delete
+     */
+    async deleteVectorsByChunkIds(chunkIds: number[]): Promise<void> {
+        if (!this.vectorDatabase.isInitialized()) {
+            throw new Error('Vector database not initialized');
+        }
+
+        if (chunkIds.length === 0) {
+            console.log('No chunk IDs provided, nothing to delete');
+            return;
+        }
+
+        try {
+            // Check if the vector database supports deleteVectorsByChunkIds
+            if (typeof (this.vectorDatabase as any).deleteVectorsByChunkIds === 'function') {
+                await (this.vectorDatabase as any).deleteVectorsByChunkIds(chunkIds);
+                console.log(`Deleted ${chunkIds.length} vectors by chunk IDs`);
+            } else {
+                throw new Error('Vector database does not support deleteVectorsByChunkIds method');
+            }
+        } catch (error) {
+            console.error('Failed to delete vectors by chunk IDs:', error);
+            throw new Error(`Failed to delete vectors by chunk IDs: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+    }
+
+    /**
      * Check if a document-specific index exists
      * @param documentId - Document ID
      * @param modelConfig - Embedding model configuration

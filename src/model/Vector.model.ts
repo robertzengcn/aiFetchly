@@ -84,10 +84,161 @@ export class VectorModel extends BaseDb {
     }
 
     /**
+     * Add a vector to a vec0 virtual table
+     * Uses raw SQL queries since TypeORM doesn't support virtual tables directly
+     * 
+     * @param vectors - Vector as number array
+     * @param chunkId - Chunk ID to associate with the vector
+     * @param virtualTableName - Name of the vec0 virtual table
+     * @param dimension - Expected dimension of the vector (for validation)
+     * @returns Promise that resolves when insertion is complete
+     */
+    async addVectorToVirtualTable(
+        vectors: number[], 
+        chunkId: number, 
+        virtualTableName: string,
+        dimension: number
+    ): Promise<void> {
+        if (vectors.length === 0) {
+            throw new Error('Vector array cannot be empty');
+        }
+
+        // Validate vector has the correct dimension
+        if (vectors.length !== dimension) {
+            throw new Error(`Vector array length ${vectors.length} does not match expected dimension ${dimension}`);
+        }
+
+        if (!this.sqliteDb.connection.isInitialized) {
+            throw new Error('DataSource must be initialized before adding to virtual table');
+        }
+
+        try {
+            // Validate table name format (alphanumeric, underscores, hyphens only)
+            if (!/^[a-zA-Z0-9_-]+$/.test(virtualTableName)) {
+                throw new Error(`Invalid virtual table name format: '${virtualTableName}'. Only alphanumeric characters, underscores, and hyphens are allowed.`);
+            }
+
+            // Check if virtual table exists
+            const exists = await this.virtualTableExists(virtualTableName);
+            
+            if (!exists) {
+                throw new Error(`Virtual table '${virtualTableName}' does not exist`);
+            }
+
+            // Convert to Float32Array and Buffer for virtual table insertion
+            const vectorArray = new Float32Array(vectors);
+            const vectorBuffer = Buffer.from(vectorArray.buffer);
+
+            const queryRunner = this.sqliteDb.connection.createQueryRunner();
+            
+            // Ensure chunkId is an integer (SQLite requires INTEGER type, not FLOAT)
+            const chunkIdInt = Math.floor(chunkId);
+            
+            // Insert into virtual table using raw query
+            // Note: Table names cannot be parameterized in SQLite, but we validate the format above
+            await queryRunner.query(
+                `INSERT INTO ${virtualTableName} (chunk_id, embedding) VALUES (CAST(? AS INTEGER), ?)`,
+                [chunkIdInt, vectorBuffer]
+            );
+            await queryRunner.release();
+            
+            console.log(`Inserted vector into virtual table '${virtualTableName}' (chunk_id: ${chunkId})`);
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            console.error(`Failed to add vector to virtual table '${virtualTableName}':`, errorMessage);
+            throw new Error(`Failed to add vector to virtual table: ${errorMessage}`);
+        }
+    }
+
+    /**
+     * Delete vectors from a vec0 virtual table by chunk IDs
+     * Uses raw SQL queries since TypeORM doesn't support virtual tables directly
+     * 
+     * @param chunkIds - Array of chunk IDs to delete
+     * @param virtualTableName - Name of the vec0 virtual table
+     * @returns Promise that resolves when deletion is complete
+     */
+    async deleteVectorsFromVirtualTable(chunkIds: number[], virtualTableName: string): Promise<void> {
+        if (chunkIds.length === 0) {
+            console.log('No chunk IDs provided, nothing to delete');
+            return;
+        }
+
+        if (!this.sqliteDb.connection.isInitialized) {
+            throw new Error('DataSource must be initialized before deleting from virtual table');
+        }
+
+        try {
+            // Validate table name format (alphanumeric, underscores, hyphens only)
+            if (!/^[a-zA-Z0-9_-]+$/.test(virtualTableName)) {
+                throw new Error(`Invalid virtual table name format: '${virtualTableName}'. Only alphanumeric characters, underscores, and hyphens are allowed.`);
+            }
+
+            // Check if virtual table exists
+            const exists = await this.virtualTableExists(virtualTableName);
+            
+            if (!exists) {
+                throw new Error(`Virtual table '${virtualTableName}' does not exist`);
+            }
+
+            const queryRunner = this.sqliteDb.connection.createQueryRunner();
+
+            // Build query with placeholders for chunk IDs
+            const placeholders = chunkIds.map(() => '?').join(',');
+            // Note: Table names cannot be parameterized in SQLite, but we validate the format above
+            const query = `DELETE FROM ${virtualTableName} WHERE chunk_id IN (${placeholders})`;
+            
+            await queryRunner.query(query, chunkIds);
+            await queryRunner.release();
+            
+            console.log(`Deleted ${chunkIds.length} vectors from virtual table '${virtualTableName}'`);
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            console.error(`Failed to delete from virtual table '${virtualTableName}':`, errorMessage);
+            throw new Error(`Failed to delete from virtual table: ${errorMessage}`);
+        }
+    }
+
+    /**
      * Get total vector count
      */
     async getTotalCount(): Promise<number> {
         return await this.repository.count();
+    }
+
+    /**
+     * Get total vector count from a specific vec0 virtual table
+     * @param vecIndexName - Name of the vec0 virtual table
+     * @returns Promise that resolves to the total number of vectors in the virtual table
+     */
+    async getTotalCountFromVecIndex(vecIndexName: string): Promise<number> {
+        try {
+            // Validate table name format (alphanumeric, underscores, hyphens only)
+            if (!/^[a-zA-Z0-9_-]+$/.test(vecIndexName)) {
+                console.error(`Invalid vec index name format: '${vecIndexName}'. Only alphanumeric characters, underscores, and hyphens are allowed.`);
+                return 0;
+            }
+
+            // Check if virtual table exists first
+            const exists = await this.virtualTableExists(vecIndexName);
+            if (!exists) {
+                return 0;
+            }
+
+            // Count rows from the virtual table
+            // Note: Table names cannot be parameterized in SQLite, but we validate the format above
+            const queryRunner = this.sqliteDb.connection.createQueryRunner();
+            const result = await queryRunner.query(
+                `SELECT COUNT(*) as count FROM ${vecIndexName}`,
+                []
+            ) as Array<{ count: number }>;
+            
+            await queryRunner.release();
+            return result[0]?.count || 0;
+        } catch (error) {
+            console.error(`Failed to get total count from vec index '${vecIndexName}':`, error);
+            return 0;
+        }
     }
 
     /**
@@ -268,8 +419,8 @@ export class VectorModel extends BaseDb {
         }
 
         try {
-            // Get total number of vectors
-            const totalVectors = await this.getTotalCount();
+            // Get total number of vectors from the specified vec0 virtual table
+            const totalVectors = await this.getTotalCountFromVecIndex(vecIndexName);
 
             if (totalVectors === 0) {
                 return {
@@ -282,7 +433,7 @@ export class VectorModel extends BaseDb {
             // Adjust k if necessary
             const adjustedK = Math.min(k, totalVectors);
             if (adjustedK !== k) {
-                console.log(`Adjusted k from ${k} to ${adjustedK} (total vectors: ${totalVectors})`);
+                console.log(`Adjusted k from ${k} to ${adjustedK} (total vectors in '${vecIndexName}': ${totalVectors})`);
             }
 
             // Validate dimension if provided
@@ -292,7 +443,7 @@ export class VectorModel extends BaseDb {
 
             // Convert query vector to Float32Array and Buffer
             const queryVectorArray = new Float32Array(queryVector);
-            // Convert to Buffer for SQL parameter (as shown in merge guide)
+            // Convert to Buffer for SQL parameter (required for proper distance calculation)
             const queryVectorBuffer = Buffer.from(queryVectorArray.buffer);
 
             // Check if vec_index virtual table exists
@@ -309,20 +460,19 @@ export class VectorModel extends BaseDb {
             }
 
             // Try vec0 virtual table MATCH syntax first (if available)
+            // vec0 requires 'k = ?' constraint in the MATCH clause, not just LIMIT
+            // Explicitly calculate distance using vec_distance_l2 to ensure correct distance values
             if (vecTableExists) {
                 try {
                     const results = await this.sqliteDb.connection.query(
                         `
                         SELECT 
                             chunk_id, 
-                            distance 
+                            vec_distance_l2(embedding, ?) AS distance 
                         FROM 
                             ${vecIndexName} 
-                        WHERE 
-                            embedding MATCH ? 
                         ORDER BY 
-                            distance ASC 
-                        LIMIT ?
+                            distance ASC LIMIT ?
                         `,
                         [queryVectorBuffer, adjustedK]
                     ) as Array<{ chunk_id: number; distance: number }>;

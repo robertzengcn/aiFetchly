@@ -3,7 +3,7 @@ import { RagSearchController } from '@/controller/RagSearchController';
 import { SearchRequest, SearchResponse } from '@/modules/RagSearchModule';
 import { CommonMessage, SaveTempFileResponse, DocumentUploadResponse, ChunkAndEmbedResponse, UploadedDocument, RagStatsResponse } from '@/entityTypes/commonType';
 import { DocumentInfo } from '@/views/api/rag';
-import { RagConfigApi, ModelInfo, AvailableModelsResponse } from '@/api/ragConfigApi';
+import { RagConfigApi, AvailableModelsResponse } from '@/api/ragConfigApi';
 import * as fs from 'fs';
 import * as path from 'path';
 import {
@@ -583,13 +583,21 @@ export function registerRagIpcHandlers(): void {
                 return errorResponse;
             }
             const ragSearchController = await createRagController();
-            await ragSearchController.deleteDocument(id, deleteFile || false);
+            const success = await ragSearchController.deleteDocument(id, deleteFile || false);
             
-            const response: CommonMessage<void> = {
-                status: true,
-                msg: "Document deleted successfully"
-            };
-            return response;
+            if (success) {
+                const response: CommonMessage<void> = {
+                    status: true,
+                    msg: "Document deleted successfully"
+                };
+                return response;
+            } else {
+                const errorResponse: CommonMessage<void> = {
+                    status: false,
+                    msg: "Failed to delete document"
+                };
+                return errorResponse;
+            }
         } catch (error) {
             console.error('RAG delete document error:', error);
             const errorResponse: CommonMessage<void> = {

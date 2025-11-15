@@ -5,7 +5,7 @@ import * as path from 'path';
 // import * as sqliteVec from 'sqlite-vec';
 import { AbstractVectorDatabase } from '@/modules/interface/AbstractVectorDatabase';
 import { VectorDatabaseConfig, VectorSearchResult, IndexStats } from '@/modules/interface/IVectorDatabase';
-import { VectorEntity, VectorMetadataEntity } from '@/entity/Vector.entity';
+// import { VectorEntity, VectorMetadataEntity } from '@/entity/Vector.entity';
 import { VectorModule } from '@/modules/VectorModule';
 import { VectorMetadataModule } from '@/modules/VectorMetadataModule';
 import { RAGChunkModule } from '@/modules/RAGChunkModule';
@@ -220,29 +220,13 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
         }
 
         try {
-            // Convert to Float32Array and Buffer for virtual table insertion
-            const vectorArray = new Float32Array(vectors);
-            const vectorBuffer = Buffer.from(vectorArray.buffer);
-
-            // Check if virtual table exists
-            const exists = await this.vectorModule.virtualTableExists(this.currentVirtualTableName);
-            
-            if (!exists) {
-                throw new Error(`Virtual table '${this.currentVirtualTableName}' does not exist. Please ensure the index is properly initialized.`);
-            }
-
-            // Insert into virtual table using raw query
-            // Virtual tables require raw SQL since TypeORM doesn't support them directly
-            const dbConnection = this.vectorModule.getDbConnection();
-            const queryRunner = dbConnection.connection.createQueryRunner();
-            
-            await queryRunner.query(
-                `INSERT INTO ${this.currentVirtualTableName} (chunk_id, embedding) VALUES (?, ?)`,
-                [chunkIds, vectorBuffer]
+            // Use VectorModule's addVectorToVirtualTable method for centralized vector insertion
+            await this.vectorModule.addVectorToVirtualTable(
+                vectors,
+                chunkIds,
+                this.currentVirtualTableName,
+                this.dimension
             );
-            await queryRunner.release();
-            
-            console.log(`Inserted vector into virtual table '${this.currentVirtualTableName}' (chunk_id: ${chunkIds})`);
 
             // Update metadata total vectors count
             if (this.config) {
@@ -586,8 +570,8 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
 
             console.log(`Found ${chunkIds.length} chunks for document ${documentId}, deleting associated vectors...`);
 
-            // Delete from virtual table
-            await this.deleteVectorsFromVirtualTable(chunkIds);
+            // Delete from virtual table using VectorModel's method
+            await this.vectorModule.deleteVectorsFromVirtualTable(chunkIds, this.currentVirtualTableName);
 
             // Update metadata total vectors count
             if (this.config && this.vectorMetadataModule) {
@@ -610,39 +594,40 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
 
     /**
      * Delete vectors from the virtual table by chunk IDs
-     * Uses raw SQL queries since TypeORM doesn't support virtual tables directly
+     * Public method to delete vectors by specific chunk IDs
      * 
      * @param chunkIds - Array of chunk IDs to delete
      */
-    private async deleteVectorsFromVirtualTable(chunkIds: number[]): Promise<void> {
-        if (!this.currentVirtualTableName || !this.vectorModule) {
-            throw new Error('Virtual table name or VectorModule not initialized');
+    async deleteVectorsByChunkIds(chunkIds: number[]): Promise<void> {
+        if (chunkIds.length === 0) {
+            console.log('No chunk IDs provided, nothing to delete');
+            return;
         }
 
-        try {
-            // Check if virtual table exists
-            const exists = await this.vectorModule.virtualTableExists(this.currentVirtualTableName);
-            
-            if (!exists) {
-                throw new Error(`Virtual table '${this.currentVirtualTableName}' does not exist`);
+        if (!this.vectorModule) {
+            throw new Error('VectorModule not initialized');
+        }
+
+        if (!this.currentVirtualTableName) {
+            throw new Error('No current virtual table name set. Please call loadIndex or createIndex first.');
+        }
+
+        // Use VectorModel's deleteVectorsFromVirtualTable method
+        await this.vectorModule.deleteVectorsFromVirtualTable(chunkIds, this.currentVirtualTableName);
+
+        // Update metadata total vectors count
+        if (this.config && this.vectorMetadataModule) {
+            const metadata = await this.vectorMetadataModule.findByModelAndDimension(
+                this.config.modelName,
+                this.dimension
+            );
+            if (metadata) {
+                // Decrement total vectors count (use negative count to decrement)
+                await this.vectorMetadataModule.incrementTotalVectors(metadata.id, -chunkIds.length);
             }
-
-            const dbConnection = this.vectorModule.getDbConnection();
-            const queryRunner = dbConnection.connection.createQueryRunner();
-
-            // Build query with placeholders for chunk IDs
-            const placeholders = chunkIds.map(() => '?').join(',');
-            const query = `DELETE FROM ${this.currentVirtualTableName} WHERE chunk_id IN (${placeholders})`;
-            
-            await queryRunner.query(query, chunkIds);
-            await queryRunner.release();
-            
-            console.log(`Deleted ${chunkIds.length} vectors from virtual table '${this.currentVirtualTableName}'`);
-        } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            console.error(`Failed to delete from virtual table '${this.currentVirtualTableName}':`, errorMessage);
-            throw new Error(`Failed to delete from virtual table: ${errorMessage}`);
         }
+
+        console.log(`Deleted ${chunkIds.length} vectors by chunk IDs from virtual table '${this.currentVirtualTableName}'`);
     }
 
     /**
