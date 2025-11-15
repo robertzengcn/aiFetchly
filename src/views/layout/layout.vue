@@ -66,8 +66,8 @@
                 <v-spacer></v-spacer>
                 <div v-if="!mainStore.isMobile" style="width: 220px" class="search_ip mr-2">
                     <!-- <div id="docsearch"></div> -->
-                    <v-text-field rounded density="compact" variant="outlined" label="Search here"
-                        prepend-inner-icon="mdi-magnify" single-line hide-details clearable></v-text-field>
+                    <!-- <v-text-field rounded density="compact" variant="outlined" label="Search here"
+                        prepend-inner-icon="mdi-magnify" single-line hide-details clearable></v-text-field> -->
                 </div>
                 <div class="tool_btns">
                     <v-btn @click="mainStore.onTheme" variant="text" :icon="mainStore.theme === 'light' ? 'mdi-weather-sunny' : 'mdi-weather-night'

@@ -41,7 +41,7 @@ export abstract class AbstractVectorDatabase implements IVectorDatabase {
      * @param vectors - Array of vectors to add
      * @param chunkIds - Array of chunk IDs corresponding to vectors
      */
-    abstract addVectors(vectors: number[], chunkIds: number[]): Promise<void>;
+    abstract addVectors(vectors: number[], chunkIds: number): Promise<void>;
 
     /**
      * Search for similar vectors (to be implemented by subclasses)
@@ -128,7 +128,7 @@ export abstract class AbstractVectorDatabase implements IVectorDatabase {
      */
     protected getModelSpecificIndexPath(config: VectorDatabaseConfig): string {
         const baseDir = path.dirname(this.indexPath);
-        const fileName = `index_${config.modelId}_${config.dimensions}.${this.getFileExtension()}`;
+        const fileName = `index_${config.modelName}_${config.dimensions}.${this.getFileExtension()}`;
         return path.join(baseDir, 'models', fileName);
     }
 

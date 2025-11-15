@@ -7,6 +7,7 @@ import { SystemSettingModel } from '@/model/SystemSetting.model';
 import { SystemSettingGroupModel } from '@/model/SystemSettingGroup.model';
 import { SystemSettingModule } from '@/modules/SystemSettingModule';
 import { SystemSettingGroupModule } from '@/modules/SystemSettingGroupModule';
+import { RAGChunkModule } from '@/modules/RAGChunkModule';
 
 export class RagSearchController {
     private ragSearchModule: RagSearchModule;
@@ -14,13 +15,15 @@ export class RagSearchController {
     // private systemSettingModel: SystemSettingModel;
     // private systemSettingGroupModel: SystemSettingGroupModel;
     private systemSettingModule: SystemSettingModule;
-    private systemSettingGroupModule: SystemSettingGroupModule; 
+    private systemSettingGroupModule: SystemSettingGroupModule;
+    private ragChunkModule: RAGChunkModule;
     constructor() {
         this.ragSearchModule = new RagSearchModule();
         this.ragConfigApi = new RagConfigApi();
         // Initialize system setting models with default database path
         this.systemSettingModule = new SystemSettingModule();
         this.systemSettingGroupModule = new SystemSettingGroupModule();
+        this.ragChunkModule = new RAGChunkModule();
     }
 
     /**
@@ -162,12 +165,27 @@ export class RagSearchController {
     }
 
     /**
-     * Delete a document
+     * Delete a document and its associated vector index
      * @param id - Document ID
      * @param deleteFile - Whether to delete the physical file
+     * @returns Promise that resolves to true if deletion was successful, false otherwise
      */
-    async deleteDocument(id: number, deleteFile: boolean = false): Promise<void> {
-        return await this.ragSearchModule.deleteDocument(id, deleteFile);
+    async deleteDocument(id: number, deleteFile: boolean = false): Promise<boolean> {
+        const success = await this.ragSearchModule.deleteDocument(id, deleteFile);
+        
+        // If document deletion was successful, delete associated chunks
+        if (success) {
+            try {
+                const deletedChunksCount = await this.ragChunkModule.deleteDocumentChunks(id);
+                console.log(`Deleted ${deletedChunksCount} chunks for document ${id}`);
+            } catch (error) {
+                console.error(`Failed to delete chunks for document ${id}:`, error);
+                // Don't return false - document was already deleted successfully
+                // Chunks deletion failure is logged but doesn't affect the overall success
+            }
+        }
+        
+        return success;
     }
 
     /**

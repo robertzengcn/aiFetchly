@@ -71,6 +71,34 @@ function platformCopyPlugin() {
                 fs.mkdirSync(iconDestDir, { recursive: true });
             }
 
+            // Copy sqlite-vec native extension to build directory
+            console.log('Copying sqlite-vec native extension to build folder...');
+            try {
+                const arch = process.arch;
+                // Map Node.js arch to sqlite-vec package arch
+                const archMap = {
+                    'x64': 'x64',
+                    'arm64': 'aarch64',
+                    'ia32': 'x86'
+                };
+                const sqliteVecArch = archMap[arch] || arch;
+                const os = process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'macos' : 'linux';
+                const packageName = `sqlite-vec-${os}-${sqliteVecArch}`;
+                const extensionName = process.platform === 'win32' ? 'vec0.dll' : process.platform === 'darwin' ? 'vec0.dylib' : 'vec0.so';
+                const sourcePath = path.join('node_modules', packageName, extensionName);
+                const destPath = path.join(iconDestDir, extensionName);
+
+                if (fs.existsSync(sourcePath)) {
+                    fs.copyFileSync(sourcePath, destPath);
+                    console.log(`Copied sqlite-vec extension: ${extensionName} to ${destPath}`);
+                } else {
+                    console.warn(`sqlite-vec extension not found at: ${sourcePath}`);
+                    console.warn(`Platform: ${process.platform}, Arch: ${arch}, Package: ${packageName}`);
+                }
+            } catch (error) {
+                console.error('Failed to copy sqlite-vec extension:', error);
+                // Don't fail the build if extension copy fails
+            }
             
             // Copy platform-specific icons
             if (process.platform === 'win32') {
@@ -283,7 +311,7 @@ export default ({ mode }) => {
                     'bindings',
                     'typeorm',
                     'canvas',  // Mark canvas as external to prevent bundling native .node files
-                    'faiss-node'  // Mark faiss-node as external to prevent bundling native .node files
+                    'sqlite-vec',
                 ]
             },
             sourcemap: true,
