@@ -241,17 +241,8 @@ export function registerAiChatIpcHandlers(): void {
                 return pendingToolCalls.size === 0;
             };
 
-            // Helper function to send deferred completion if ready
-            const sendDeferredCompletionIfReady = (): void => {
-                if (canSendCompletion() && deferredCompletionChunk) {
-                    event.sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(deferredCompletionChunk));
-                    deferredCompletionChunk = null;
-                    console.log('Sent deferred completion message');
-                }
-            };
-
-            // Stream message with event handler
-            await aiChatApi.streamMessage(chatRequest, (streamEvent: StreamEvent) => {
+            // Common handler for processing a single stream event and forwarding to UI
+            const processStreamEvent = (streamEvent: StreamEvent): void => {
                 const eventType = streamEvent.event;
                 
                 // Extract content from the event data
@@ -324,6 +315,7 @@ export function registerAiChatIpcHandlers(): void {
                             
                             // Execute the tool locally (async, don't block)
                             (async () => {
+                                const toolStartMs = Date.now();
                                 try {
                                     let toolResult: Record<string, unknown> = {};
                                     
@@ -427,6 +419,33 @@ export function registerAiChatIpcHandlers(): void {
                                         toolResult: toolResult
                                     };
                                     event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(resultChunk));
+
+                                    // Also send tool result back to AI server to continue the stream
+                                    try {
+                                        const { success: _s, ...resultWithoutSuccess } = toolResult as Record<string, unknown> & { success?: unknown };
+                                        const successFlag = typeof (toolResult as { success?: unknown }).success === 'boolean'
+                                            ? (toolResult as { success?: boolean }).success as boolean
+                                            : true;
+                                        const execMs = Date.now() - toolStartMs;
+
+                                        const aiToolResult = [{
+                                            tool_call_id: toolId,
+                                            tool_name: toolName,
+                                            success: successFlag,
+                                            result: resultWithoutSuccess,
+                                            execution_time_ms: execMs
+                                        }];
+
+                                        // Reuse the same event processor for the continue stream
+                                        await aiChatApi.streamContinueWithToolResults(
+                                            streamConversationId,
+                                            aiToolResult,
+                                            processStreamEvent,
+                                            AVAILABLE_TOOL_FUNCTIONS
+                                        );
+                                    } catch (sendErr) {
+                                        console.error('Failed to send tool result to AI server:', sendErr);
+                                    }
                                     
                                     // Remove tool from pending set
                                     if (toolId) {
@@ -605,6 +624,20 @@ export function registerAiChatIpcHandlers(): void {
                         console.warn('Unknown stream event type:', eventType);
                         break;
                 }
+            };
+
+            // Helper function to send deferred completion if ready
+            const sendDeferredCompletionIfReady = (): void => {
+                if (canSendCompletion() && deferredCompletionChunk) {
+                    event.sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(deferredCompletionChunk));
+                    deferredCompletionChunk = null;
+                    console.log('Sent deferred completion message');
+                }
+            };
+
+            // Stream message with event handler
+            await aiChatApi.streamMessage(chatRequest, (streamEvent: StreamEvent) => {
+                processStreamEvent(streamEvent);
             });
 
             // Save assistant message to database if we have content

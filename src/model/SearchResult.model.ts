@@ -42,7 +42,8 @@ export class SearchResultModel extends BaseDb {
             link: result.link,
             title: result.title,
             snippet: result.snippet,
-            visible_link: result.domain
+            visible_link: result.domain,
+            record_time: result.record_time
         }));
     }
 
