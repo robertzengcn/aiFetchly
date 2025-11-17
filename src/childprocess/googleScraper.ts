@@ -409,60 +409,85 @@ export class GoogleScraper extends SearchScrape {
             try {
                 const input = await this.page.$(selector);
                 if (input) {
-                    // Get input element position
-                    const inputBox = await input.boundingBox();
-                    if (!inputBox) {
-                        throw new Error('Could not get input box position');
-                    }
-
-                    // Generate random coordinates within the input box
-                    const randomX = inputBox.x + Math.random() * inputBox.width;
-                    const randomY = inputBox.y + Math.random() * inputBox.height;
-
-                    // Move mouse with random speed
-                    const steps = 10 + Math.floor(Math.random() * 20); // Random number of steps
-                    const stepDelay = 50 + Math.random() * 100; // Random delay between steps
-
-                    for (let i = 0; i < steps; i++) {
-                        const progress = i / steps;
-                        const currentX = randomX * progress;
-                        const currentY = randomY * progress;
-
-                        await this.page.mouse.move(currentX, currentY);
-                        //await this.page.waitForTimeout(stepDelay);
-                        await new Promise(resolve => setTimeout(resolve, stepDelay));
-                    }
-
-                    // Final click with random delay
-                    //await this.page.waitForTimeout(100 + Math.random() * 200);
-                    await new Promise(resolve => setTimeout(resolve, 100 + Math.random() * 200));
-                    await this.page.mouse.click(randomX, randomY);
-                    // Type each character with random delays to simulate human typing
-                    for (const char of keyword) {
-                        await this.page.keyboard.type(char, {
-                            delay: 50 + Math.random() * 150 // Random delay between 50-200ms per character
-                        });
-                        // Add occasional longer pauses between words
-                        if (char === ' ') {
-                            await new Promise(resolve => setTimeout(resolve, 200 + Math.random() * 300));
-                        }
-                    }
-                    //await this.set_input_value(selector, keyword);
+                    // Check if the element is a textarea
+                    const tagName = await this.page.evaluate((el) => el.tagName.toLowerCase(), input);
                     
-                    await this.page.evaluate(async () => {
-                        await new Promise(function (resolve) {
-                            setTimeout(resolve, 1000)
+                    if (tagName === 'textarea') {
+                        // Handle textarea: focus, type, press Enter, wait for navigation
+                        await input.focus();
+                        await this.page.keyboard.type(keyword, { delay: Math.random() * 100 + 50 });
+                        await this.page.keyboard.press('Enter');
+                        
+                        // Wait for navigation
+                        try {
+                            await this.page.waitForNavigation({ timeout: 5000 });
+                        } catch {
+                            // If navigation doesn't happen, find the form and submit it
+                            await input.evaluate((el) => {
+                                const form = el.closest('form') as HTMLFormElement;
+                                if (form) {
+                                    console.log("Form found and submitting");
+                                    form.submit();
+                                }
+                            });
+                        }
+                        return;
+                    } else {
+                        // Handle input elements with the original mouse movement approach
+                        // Get input element position
+                        const inputBox = await input.boundingBox();
+                        if (!inputBox) {
+                            throw new Error('Could not get input box position');
+                        }
+
+                        // Generate random coordinates within the input box
+                        const randomX = inputBox.x + Math.random() * inputBox.width;
+                        const randomY = inputBox.y + Math.random() * inputBox.height;
+
+                        // Move mouse with random speed
+                        const steps = 10 + Math.floor(Math.random() * 20); // Random number of steps
+                        const stepDelay = 50 + Math.random() * 100; // Random delay between steps
+
+                        for (let i = 0; i < steps; i++) {
+                            const progress = i / steps;
+                            const currentX = randomX * progress;
+                            const currentY = randomY * progress;
+
+                            await this.page.mouse.move(currentX, currentY);
+                            await new Promise(resolve => setTimeout(resolve, stepDelay));
+                        }
+
+                        // Final click with random delay
+                        await new Promise(resolve => setTimeout(resolve, 100 + Math.random() * 200));
+                        await this.page.mouse.click(randomX, randomY);
+                        // Type each character with random delays to simulate human typing
+                        for (const char of keyword) {
+                            await this.page.keyboard.type(char, {
+                                delay: 50 + Math.random() * 150 // Random delay between 50-200ms per character
+                            });
+                            // Add occasional longer pauses between words
+                            if (char === ' ') {
+                                await new Promise(resolve => setTimeout(resolve, 200 + Math.random() * 300));
+                            }
+                        }
+                        
+                        await this.page.evaluate(async () => {
+                            await new Promise(function (resolve) {
+                                setTimeout(resolve, 1000)
+                            });
                         });
-                    });
-                    await input.focus();
-                    await this.page.keyboard.press("Enter");
-                    return;
+                        await input.focus();
+                        await this.page.keyboard.press("Enter");
+                        return;
+                    }
+                }else{
+                    throw new CustomError("input keyword button not found", 202405301120303)
                 }
             } catch (error) {
                 continue;
             }
         }
-        throw new CustomError("input keyword button not found", 202405301120303)
+       
     }
     //click next page
     async next_page(): Promise<boolean | void> {

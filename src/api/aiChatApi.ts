@@ -39,6 +39,26 @@ export interface ToolFunction {
 }
 
 /**
+ * Tool execution result payload item
+ */
+export interface ToolExecutionResult {
+    tool_call_id: string;
+    tool_name: string;
+    success: boolean;
+    result: Record<string, unknown>;
+    execution_time_ms: number;
+}
+
+/**
+ * Continue request data format for sending tool results
+ */
+interface ContinueRequestData {
+    conversation_id: string;
+    tool_results: ToolExecutionResult[];
+    client_tools?: ToolFunction[];
+}
+
+/**
  * Chat stream response interface
  */
 export interface ChatStreamResponse {
@@ -377,6 +397,124 @@ export class AiChatApi {
      */
     async testConnection(): Promise<CommonApiresp<boolean>> {
         return this._httpClient.get('/api/ai/chat/healthcheck');
+    }
+
+    /**
+     * Send tool execution results to continue the AI response (SSE)
+     * 
+     * Sends results of previously requested tool calls to the AI server and
+     * streams the assistant's continued response as SSE.
+     * 
+     * @param conversationId - Conversation identifier to continue
+     * @param toolResults - Array of tool execution results
+     * @param onEvent - Callback to receive parsed SSE events
+     * @param clientTools - Optional client tool definitions to include
+     */
+    async streamContinueWithToolResults(
+        conversationId: string,
+        toolResults: ToolExecutionResult[],
+        onEvent: (event: StreamEvent) => void,
+        clientTools?: ToolFunction[]
+    ): Promise<void> {
+        const data: ContinueRequestData = {
+            conversation_id: conversationId,
+            tool_results: toolResults
+        };
+        if (clientTools && clientTools.length > 0) {
+            data.client_tools = clientTools;
+        }
+
+        const response = await this._httpClient.postStream('/api/ai/ask/continue', data);
+
+        if (!response.ok || response.status !== 200) {
+            const errorText = await response.text().catch(() => 'Unknown error');
+            throw new Error(`Server returned ${response.status}: ${errorText}`);
+        }
+        if (!response.body) {
+            throw new Error('Response body is null');
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let currentEvent: Partial<StreamEvent> = {};
+
+        try {
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || '';
+
+                for (const line of lines) {
+                    const trimmedLine = line.trim();
+                    if (!trimmedLine) {
+                        if (currentEvent.event && currentEvent.data) {
+                            onEvent(currentEvent as StreamEvent);
+                            currentEvent = {};
+                        }
+                        continue;
+                    }
+
+                    if (trimmedLine.startsWith('{')) {
+                        try {
+                            const jsonStr = trimmedLine.includes("'")
+                                ? pythonDictToJson(trimmedLine)
+                                : trimmedLine;
+                            const event: StreamEvent = JSON.parse(jsonStr);
+                            onEvent(event);
+                            continue;
+                        } catch {
+                            // fall through to SSE parsing
+                        }
+                    }
+
+                    if (trimmedLine.startsWith('event:')) {
+                        const eventType = trimmedLine.substring(6).trim();
+                        currentEvent.event = eventType as StreamEventType;
+                    } else if (trimmedLine.startsWith('data:')) {
+                        const dataStr = trimmedLine.substring(5).trim();
+                        if (dataStr === 'pong' || (!dataStr.startsWith('{') && !dataStr.startsWith('['))) {
+                            continue;
+                        }
+                        try {
+                            currentEvent.data = JSON.parse(dataStr);
+                        } catch (error) {
+                            console.error('Error parsing event data:', error, 'Data:', dataStr);
+                            try {
+                                const jsonStr = dataStr.startsWith('{') && dataStr.includes("'")
+                                    ? pythonDictToJson(dataStr)
+                                    : dataStr;
+                                currentEvent.data = JSON.parse(jsonStr);
+                            } catch (err) {
+                                console.error('Error parsing event data:', err, 'Data:', dataStr);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (currentEvent.event && currentEvent.data) {
+                onEvent(currentEvent as StreamEvent);
+            }
+
+            if (buffer.trim() && buffer.trim().startsWith('{')) {
+                try {
+                    const bufferStr = buffer.trim();
+                    const jsonStr = bufferStr.includes("'")
+                        ? pythonDictToJson(bufferStr)
+                        : bufferStr;
+                    const event: StreamEvent = JSON.parse(jsonStr);
+                    onEvent(event);
+                } catch (error) {
+                    console.error('Error parsing final stream event:', error);
+                }
+            }
+        } finally {
+            reader.releaseLock();
+        }
     }
 }
 
