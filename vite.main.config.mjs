@@ -29,7 +29,7 @@ function emptyModulesPlugin() {
         'pg', 'pg-query-stream', 'pg-native',
         'mongodb', 'mssql', 'oracledb',
         'hdb-pool', 'redis', 'ioredis', 'sql.js',
-        'canvas'  // Add canvas to empty modules for fallback
+          // Add canvas to empty modules for fallback
     ];
 
     return {
