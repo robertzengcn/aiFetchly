@@ -562,7 +562,7 @@ async function handleSendMessage() {
       (chunk: ChatStreamChunk) => {
         // Handle different event types
         const eventType = chunk.eventType;
-
+        console.log('chunk', chunk);
         switch (eventType) {
           case 'token':
             console.log('token', chunk);
@@ -704,7 +704,7 @@ async function handleSendMessage() {
         isTyping.value = false;
         isLoading.value = false;
         isExecutingTool.value = false;
-        showToolResult.value = false;
+        // showToolResult.value = false;
         scrollToBottom();
       },
       conversationId.value,

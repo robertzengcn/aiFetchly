@@ -351,7 +351,7 @@ export function registerAiChatIpcHandlers(): void {
                                             
                                             // Poll task status until complete or error (max 60 seconds)
                                             let taskStatus: SearchTaskStatus | null = null;
-                                            const maxWaitTime = 60000; // 60 seconds
+                                            const maxWaitTime = 600000; // 600 seconds
                                             const pollInterval = 1000; // 1 second
                                             const startTime = Date.now();
                                             
