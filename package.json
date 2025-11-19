@@ -66,7 +66,7 @@
     "vitest-video": "vitest --config vite.main.config.mjs -t video-download",
     "tsc": "tsc --noEmit --watch",
     "rebuild-better-sqlite": "electron-rebuild -f -w better-sqlite3",
-    "rebuild-canvas": "electron-rebuild canvas",
+   
     "prepackage": "npm run rebuild-sqlite3",
     "rebuild-sqlite3": "electron-rebuild -f -w sqlite3",
     "vue-check": "vue-tsc --noEmit --watch",
@@ -80,6 +80,7 @@
   "dependencies": {
     "@lem0-packages/puppeteer-page-proxy": "^1.4.1",
     "@mdi/font": "7.4.47",
+    "@napi-rs/canvas": "^0.1.82",
     "@rollup/plugin-alias": "^5.1.0",
     "@types/better-sqlite3": "^7.6.9",
     "@types/turndown": "^5.0.5",
@@ -90,7 +91,6 @@
     "argparse": "^2.0.1",
     "better-sqlite3": "^11.9.1",
     "bufferutil": "^4.0.8",
-    "sqlite-vec": "^0.1.7-alpha.2",
     "cheerio": "^1.0.0-rc.3",
     "core-js": "^3.33.0",
     "cron": "^2.3.0",
@@ -142,6 +142,7 @@
     "roboto-fontface": "*",
     "socks5-http-client": "^1.0.4",
     "source-map": "^0.7.4",
+    "sqlite-vec": "^0.1.7-alpha.2",
     "sqlite3": "^5.1.6",
     "turndown": "^7.2.1",
     "typeorm": "^0.3.20",
@@ -243,6 +244,9 @@
     "vue-template-compiler": "^2.7.14",
     "vue-tsc": "^2.0.28"
   },
+  "overrides": {
+    "canvas": "npm:@napi-rs/canvas"
+  },
   "eslintConfig": {
     "root": true,
     "env": {
@@ -281,6 +285,6 @@
     "url": "https://github.com/robertzengcn/aiFetchly.git"
   },
   "resolutions": {
-    "canvas": "^3.0.2"
+    "canvas": "npm:@napi-rs/canvas"
   }
 }
