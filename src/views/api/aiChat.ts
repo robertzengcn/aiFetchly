@@ -126,6 +126,7 @@ export async function streamChatMessage(
     // Set up completion listener
     const completeHandler = (completeData: string) => {
       try {
+        console.log('completeData', completeData);
         const chunk: ChatStreamChunk = JSON.parse(completeData);
         
         // Check if this is an error completion
