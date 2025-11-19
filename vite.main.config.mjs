@@ -299,6 +299,7 @@ export default ({ mode }) => {
                 "redis": path.resolve(__dirname, "./src/utils/typeorm-shim.ts"),  // Add this line
                 "ioredis": path.resolve(__dirname, "./src/utils/typeorm-shim.ts"),  // Add this line
                 "sql.js": path.resolve(__dirname, "./src/utils/typeorm-shim.ts"),  // Add this line
+                "canvas": '@napi-rs/canvas',
             },
             conditions: ['node'],
             // mainFields: ['main', 'module', 'browser']
