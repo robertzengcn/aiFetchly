@@ -31,7 +31,8 @@ const EXTERNAL_DEPENDENCIES = [
 'openai',
 'typeorm',
 'cheerio',
-'sqlite-vec'
+'sqlite-vec',
+'canvas'
 ];
 //import { ForgeConfig } from '@electron-forge/shared-types';
 // import { AutoUnpackNativesPlugin } from "@electron-forge/plugin-auto-unpack-natives";
