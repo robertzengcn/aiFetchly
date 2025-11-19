@@ -288,7 +288,10 @@ export function registerAiChatIpcHandlers(): void {
                         // Handle nested data structure: data.data contains {name, id, arguments}
                         {
                             const toolCallData = streamEvent.data.data;
-                            const toolName = toolCallData?.name || 'Unknown Tool';
+                            const toolName = toolCallData?.name || undefined;
+                            if(!toolName){
+                                throw new Error('tool name is required');
+                            }
                             const toolParams = toolCallData?.arguments || {};
                             const toolId = toolCallData?.id || `tool-${Date.now()}`;
                             const content = typeof streamEvent.data.content === 'string' 
@@ -326,7 +329,9 @@ export function registerAiChatIpcHandlers(): void {
                                             const searchModule = new SearchModule();
                                             const query = typeof toolParams.query === 'string' ? toolParams.query : '';
                                             const numResults = typeof toolParams.num_results === 'number' ? toolParams.num_results : 10;
-                                            
+                                            if(!query){
+                                                throw new Error('parameter of Query is required');
+                                            }
                                             // Map tool name to engine name
                                             const engineName = toolName === 'scrape_urls_from_google' ? 'Google' : 'Bing';
                                             
@@ -651,6 +656,9 @@ export function registerAiChatIpcHandlers(): void {
                 });
             }
         } catch (error) {
+            if(error instanceof Error && error.message.includes('tool name is required')){
+                return;
+            }
             console.error('AI Chat stream error:', error);
             const errorChunk: ChatStreamChunk = {
                 content: '',
