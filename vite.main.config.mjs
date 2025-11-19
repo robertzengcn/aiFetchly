@@ -311,8 +311,9 @@ export default ({ mode }) => {
                     'better-sqlite3',
                     'bindings',
                     'typeorm',
-                    'canvas',  // Mark canvas as external to prevent bundling native .node files
                     'sqlite-vec',
+                    'canvas', 
+                    '@napi-rs/canvas'
                 ]
             },
             sourcemap: true,
