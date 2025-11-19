@@ -56,8 +56,8 @@ jobs:
           cat .env       
       - name: Install dependencies
         run: yarn install
-      - name: Run postinstall script
-        run: yarn postinstall
+      # - name: Run postinstall script
+      #   run: yarn postinstall
       - name: Debug - Verify lzma-native assets
         shell: bash
         run: |
@@ -305,8 +305,8 @@ jobs:
           echo "PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig" >> $GITHUB_ENV        
       - name: Install dependencies
         run: yarn install
-      - name: Run postinstall script
-        run: yarn postinstall
+      # - name: Run postinstall script
+      #   run: yarn postinstall
       - name: Install DMG maker
         run: yarn add --dev @electron-forge/maker-dmg   
       - name: Clean previous builds
