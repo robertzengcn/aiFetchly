@@ -13,6 +13,7 @@
     }
   },
   "scripts": {
+    "postinstall": "electron-builder install-app-deps",
     "serve": "vite preview",
     "build": "vite build",
     "lint": "vue-cli-service lint",
