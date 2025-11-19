@@ -32,7 +32,8 @@ const EXTERNAL_DEPENDENCIES = [
 'typeorm',
 'cheerio',
 'sqlite-vec',
-'canvas'
+'canvas',
+'@napi-rs/canvas'
 ];
 //import { ForgeConfig } from '@electron-forge/shared-types';
 // import { AutoUnpackNativesPlugin } from "@electron-forge/plugin-auto-unpack-natives";
