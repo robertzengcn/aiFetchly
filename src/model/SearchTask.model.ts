@@ -121,7 +121,7 @@ export class SearchTaskModel extends BaseDb {
   async updateTaskPID(taskId: number, pid: number | null): Promise<void> {
     await this.repository.update(
       { id: taskId },
-      { pid: pid ?? undefined }
+      { pid: pid ?? 0 }
     );
   }
 
