@@ -11,6 +11,7 @@ export interface SaveMessageOptions {
     model?: string;
     tokensUsed?: number;
     metadata?: any;
+    messageType?: 'message' | 'tool_call' | 'tool_result';
 }
 
 export class AIChatModule extends BaseModule {
@@ -34,6 +35,7 @@ export class AIChatModule extends BaseModule {
         message.model = options.model;
         message.tokensUsed = options.tokensUsed;
         message.metadata = options.metadata ? JSON.stringify(options.metadata) : undefined;
+        message.messageType = options.messageType || 'message';
 
         const messageId = await this.chatMessageModel.saveMessage(message);
         const savedMessage = await this.chatMessageModel.getMessageById(messageId);
