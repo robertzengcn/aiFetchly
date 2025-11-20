@@ -14,10 +14,12 @@ export class SearchResultModule extends BaseModule implements ISearchResultApi {
 
     /**
      * Save a search result
+     * @param data Search result entity data
+     * @param taskId The task ID this result belongs to
      */
-    async saveResult(data: SearchResEntity): Promise<number> {
+    async saveResult(data: SearchResEntity, taskId: number): Promise<number> {
         try {
-            return await this.searchResultModel.saveResult(data);
+            return await this.searchResultModel.saveResult(data, taskId);
         } catch (error) {
             console.error("Failed to save search result:", error);
             throw new Error(error instanceof Error ? error.message : "Failed to save search result");

@@ -325,7 +325,8 @@ export function registerAiChatIpcHandlers(): void {
                                     // Check which function is being called and execute it
                                     switch (toolName) {
                                         case 'scrape_urls_from_google':
-                                        case 'scrape_urls_from_bing': {
+                                        case 'scrape_urls_from_bing':
+                                        case 'scrape_urls_from_yandex': {
                                             const searchModule = new SearchModule();
                                             const query = typeof toolParams.query === 'string' ? toolParams.query : '';
                                             const numResults = typeof toolParams.num_results === 'number' ? toolParams.num_results : 10;
@@ -333,7 +334,9 @@ export function registerAiChatIpcHandlers(): void {
                                                 throw new Error('parameter of Query is required');
                                             }
                                             // Map tool name to engine name
-                                            const engineName = toolName === 'scrape_urls_from_google' ? 'Google' : 'Bing';
+                                            const engineName = toolName === 'scrape_urls_from_google' ? 'Google' : 
+                                                             toolName === 'scrape_urls_from_bing' ? 'Bing' : 
+                                                             'Yandex';
                                             
                                             // Calculate num_pages based on num_results (assuming ~10 results per page)
                                             const numPages = Math.ceil(numResults / 10);
