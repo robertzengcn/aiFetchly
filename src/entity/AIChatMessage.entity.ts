@@ -2,6 +2,7 @@ import "reflect-metadata";
 import { Entity, Column, Index, PrimaryGeneratedColumn } from 'typeorm';
 import AuditableEntity from './Auditable.entity';
 import { Order } from './order.decorator';
+import { MessageType } from '@/entityTypes/commonType';
 
 @Entity('ai_chat_messages')
 @Index(['conversationId', 'timestamp'])
@@ -43,8 +44,14 @@ export class AIChatMessageEntity extends AuditableEntity {
     metadata?: string; // JSON string for additional data
 
     @Order(9)
-    @Column('varchar', { length: 20, default: 'message', nullable: false })
-    messageType: string; // 'message', 'tool_call', 'tool_result'
+    @Column({
+        type: 'varchar',
+        length: 20,
+        default: MessageType.MESSAGE,
+        nullable: false,
+        enum: MessageType
+    })
+    messageType: MessageType;
 }
 
 
