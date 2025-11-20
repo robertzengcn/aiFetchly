@@ -610,6 +610,7 @@ export default {
     search:{
         google:"Google.com",
         bing:"Bing.com",
+        yandex:"Yandex.com",
         baidu:"Baidu.com",
         platform:"平台",
         keyword:"关键词",
@@ -637,6 +638,8 @@ export default {
         concurrency_must_be_between:"并发数必须在1到10之间",
         save_only:"仅保存",
         task_saved_successfully:"任务保存成功",
+        yandex_local_browser_tip:"提示：为了获得更好的Yandex搜索结果，我们建议使用本地浏览器。请启用'使用本地浏览器'选项。",
+        google_account_tip:"提示：为了获得更好的Google搜索结果，我们建议使用搜索引擎账户。请启用'使用搜索引擎账户'选项。",
         task_id:"任务ID",
         run_task:"运行任务",
         task_status_not_start:"未开始",

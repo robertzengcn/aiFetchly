@@ -5,7 +5,8 @@
             <div class="d-flex jsb search_tool">
                 <div class="search_wrap mr-4">
                     <v-text-field rounded class="elevation-0" density="compact" variant="solo" :label="t('home.search_tasks')"
-                        append-inner-icon="mdi-magnify" single-line hide-details></v-text-field>
+                        append-inner-icon="mdi-magnify" single-line hide-details v-model="searchText"
+                        @keyup.enter="handleSearch" @click:append-inner="handleSearch"></v-text-field>
                 </div>
                 <div class="ml-auto">
                     <v-btn class="btn mb-4" variant="flat" prepend-icon="mdi-plus" color="#5865f2" @click="createTask()">
@@ -15,7 +16,7 @@
             </div>
         </div>
        
-        <SearchresultTable />
+        <SearchresultTable :search="searchText" />
     </div>
 </template>
 <script setup lang="ts">
@@ -26,11 +27,12 @@ import router from '@/views/router';
 import { useI18n } from 'vue-i18n';
 
 const { t } = useI18n();
-//const dialog = ref(false);
+const searchText = ref('');
 
-// onMounted(() => {
-    
-// });
+const handleSearch = () => {
+    // Search is handled by SearchResultTable component via prop
+    // This function can be used for immediate search on Enter/click
+}
 
 const createTask = () => {
     console.log("create search task")

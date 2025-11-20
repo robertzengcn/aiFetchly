@@ -50,6 +50,7 @@ export type SearchtaskItem = {
     keywords:Array<string>,
     keywordline?:string,
     status: string,
+    pid?: number,
 }
 export type SearchDetailquery = {
 taskId: number

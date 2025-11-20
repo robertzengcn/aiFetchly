@@ -13,10 +13,13 @@ export class SearchResultModel extends BaseDb {
 
     /**
      * Save search result
+     * @param data Search result entity data
+     * @param taskId The task ID this result belongs to
      */
-    async saveResult(data: SearchResEntity): Promise<number> {
+    async saveResult(data: SearchResEntity, taskId: number): Promise<number> {
         const resultEntity = new SearchResultEntity();
-        resultEntity.task_id = data.keyword_id;
+        resultEntity.task_id = taskId;
+        resultEntity.keyword_id = data.keyword_id;
         resultEntity.title = data.title ?? "";
         resultEntity.link = data.link;
         resultEntity.snippet = data.snippet ?? "";
@@ -32,13 +35,14 @@ export class SearchResultModel extends BaseDb {
      */
     async listSearchresult(keywords: number[], page: number, size: number): Promise<SearchResEntity[]> {
         const results = await this.repository.find({
-            where: { task_id: In(keywords) },
+            where: { keyword_id: In(keywords) },
             skip: page,
             take: size
         });
 
         return results.map(result => ({
-            keyword_id: result.task_id,
+            id: result.id,
+            keyword_id: result.keyword_id,
             link: result.link,
             title: result.title,
             snippet: result.snippet,
@@ -52,7 +56,7 @@ export class SearchResultModel extends BaseDb {
      */
     async countSearchResult(keywords: number[]): Promise<number> {
         return await this.repository.count({
-            where: { task_id: In(keywords) }
+            where: { keyword_id: In(keywords) }
         });
     }
 
@@ -115,11 +119,13 @@ export class SearchResultModel extends BaseDb {
 
         // Convert to SearchResEntity format
         const searchResults: SearchResEntity[] = results.map(result => ({
-            keyword_id: result.task_id,
+            id: result.id,
+            keyword_id: result.keyword_id,
             link: result.link,
             title: result.title,
             snippet: result.snippet,
-            visible_link: result.domain
+            visible_link: result.domain,
+            record_time: result.record_time
         }));
 
         return {
@@ -138,11 +144,13 @@ export class SearchResultModel extends BaseDb {
         });
 
         return results.map(result => ({
-            keyword_id: result.task_id,
+            id: result.id,
+            keyword_id: result.keyword_id,
             link: result.link,
             title: result.title,
             snippet: result.snippet,
-            visible_link: result.domain
+            visible_link: result.domain,
+            record_time: result.record_time
         }));
     }
 

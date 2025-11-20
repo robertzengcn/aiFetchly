@@ -3,7 +3,7 @@ import { SEARCHSCRAPERAPI } from '@/config/channellist'
 import { SearchtaskItem,SearchResultFetchparam } from "@/entityTypes/searchControlType"
 import { SearchResult} from '@/views/api/types'
 import { windowInvoke,windowReceive,windowSend } from '@/views/utils/apirequest'
-import {LISTSESARCHRESUT,TASKSEARCHRESULTLIST,SAVESEARCHERRORLOG,RETRYSEARCHTASK,GET_SEARCH_TASK_DETAILS,UPDATE_SEARCH_TASK,SEARCH_TASK_UPDATE_EVENT,CREATE_SEARCH_TASK_ONLY} from "@/config/channellist";
+import {LISTSESARCHRESUT,TASKSEARCHRESULTLIST,SAVESEARCHERRORLOG,RETRYSEARCHTASK,GET_SEARCH_TASK_DETAILS,UPDATE_SEARCH_TASK,SEARCH_TASK_UPDATE_EVENT,CREATE_SEARCH_TASK_ONLY,EXPORT_SEARCH_RESULTS,KILL_SEARCH_PROCESS} from "@/config/channellist";
 import {SearchResEntityDisplay} from "@/entityTypes/scrapeType"
 import {ItemSearchparam} from "@/entityTypes/commonType"
 import {TaskDetailsForEdit, SearchTaskUpdateData} from "@/modules/SearchModule"
@@ -99,6 +99,34 @@ export function receiveSearchTaskUpdateEvent(callback: (data: unknown) => void) 
  */
 export async function createSearchTaskOnly(data: Usersearchdata): Promise<number> {
     const resp = await windowInvoke(CREATE_SEARCH_TASK_ONLY, data);
+    if (!resp) {
+        throw new Error("Unknown error");
+    }
+    return resp;
+}
+
+/**
+ * Export search results for a task
+ * @param taskId The task ID
+ * @param format Export format ('json' or 'csv')
+ * @returns Promise with file path or error
+ */
+export async function exportSearchResults(taskId: number, format: 'json' | 'csv' = 'csv'): Promise<string> {
+    const resp = await windowInvoke(EXPORT_SEARCH_RESULTS, { taskId, format });
+    if (!resp) {
+        throw new Error(resp?.msg || "Unknown error");
+    }
+    return resp;
+}
+
+/**
+ * Kill a search process
+ * @param pid Optional process ID
+ * @param taskId Optional task ID
+ * @returns Promise with kill result
+ */
+export async function killSearchProcess(pid?: number, taskId?: number): Promise<{success: boolean, taskId?: number, pid?: number, message: string}> {
+    const resp = await windowInvoke(KILL_SEARCH_PROCESS, { pid, taskId });
     if (!resp) {
         throw new Error("Unknown error");
     }
