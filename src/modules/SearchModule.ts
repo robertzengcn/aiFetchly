@@ -293,9 +293,18 @@ export class SearchModule extends BaseModule {
             LOCAL_BROWSER_EXCUTE_PATH: localBrowserexcutepath,
             //USEDATADIR: userDataDir
         }} )
-        child.on("spawn", () => {
+        child.on("spawn", async () => {
             console.log("child process satart, pid is"+child.pid)
             this.updateTaskStatus(taskId,SearchTaskStatus.Processing)
+            // Store PID in database
+            if (child.pid) {
+                this.updateTaskPID(taskId, child.pid).catch(err => {
+                    console.error(`Failed to update PID for task ${taskId}:`, err);
+                });
+                // Register process with SearchController
+                const searchController = (await import('@/controller/SearchController')).SearchController.getInstance();
+                searchController.registerProcess(taskId, child);
+            }
             child.postMessage(JSON.stringify({action:"searchscraper",data:data}),[port1])
            // this.searhModel.updateTaskLog(taskId,runLogfile,errorLogfile)
         })
@@ -317,7 +326,16 @@ export class SearchModule extends BaseModule {
             }
             
         })
-        child.on("exit", (code) => {
+        child.on("exit", async (code) => {
+            // Clear PID and unregister process
+            try {
+                await this.updateTaskPID(taskId, null);
+                const searchController = (await import('@/controller/SearchController')).SearchController.getInstance();
+                searchController.unregisterProcess(taskId);
+            } catch (error) {
+                console.error(`Failed to clear PID for task ${taskId}:`, error);
+            }
+            
             if (code !== 0) {
                 console.error(`Child process exited with code ${code}`);
                 this.updateTaskStatus(taskId,SearchTaskStatus.Error)
@@ -447,7 +465,7 @@ export class SearchModule extends BaseModule {
         return enginerName
     }
     //convert search engine name to platform ID (for social accounts)
-    // Google -> 4, Bing -> 5
+    // Google -> 4, Bing -> 5, Yandex -> 6
     private convertSEtoPlatformId(engineName: string): number | undefined {
         const lowerCaseName = engineName.toLowerCase();
         switch (lowerCaseName) {
@@ -455,6 +473,8 @@ export class SearchModule extends BaseModule {
                 return 4;
             case "bing":
                 return 5;
+            case "yandex":
+                return 6;
             default:
                 return undefined;
         }
@@ -493,7 +513,7 @@ export class SearchModule extends BaseModule {
                                 snippet: sitem.snippet,
                                 visible_link: sitem.visible_link,
                             }
-                            const res = await this.serResultModel.saveResult(reEntity)
+                            const res = await this.serResultModel.saveResult(reEntity, taskId)
                             console.log(`save result is: ${res}`);
                             linkearr.push(sitem.link)
                         }
@@ -515,14 +535,28 @@ export class SearchModule extends BaseModule {
         this.taskdbModel.updateTaskLog(taskId, errorLog)
     }
     //return data for search list 
-    public async listSearchtask(page: number, size: number, sortBy?: SortBy): Promise<SearchtaskEntityNum> {
+    public async listSearchtask(page: number, size: number, sortBy?: SortBy, search?: string): Promise<SearchtaskEntityNum> {
         // const tokenService = new Token()
         // const dbpath = await tokenService.getValue(USERSDBPATH)
         // if (!dbpath) {
         //     throw new Error("user path not exist")
         // }
         //const taskdbModel=new SearchTaskdb(this.dbpath)
-        const tasklist = await this.taskdbModel.listTask(page, size, sortBy)
+        
+        // If search is provided, get all tasks first, then filter and paginate
+        // Otherwise, use normal pagination
+        let tasklist;
+        let allTasks: Array<SearchtaskItem> = [];
+        
+        if (search && search.trim().length > 0) {
+            // Get all tasks for filtering
+            const totalCount = await this.taskdbModel.getTaskTotal();
+            tasklist = await this.taskdbModel.listTask(0, totalCount, sortBy);
+        } else {
+            // Normal pagination
+            tasklist = await this.taskdbModel.listTask(page, size, sortBy);
+        }
+        
         // const searchKeydb=new SearchKeyworddb(this.dbpath)
         const taskdata: Array<SearchtaskItem> = []
 
@@ -537,17 +571,40 @@ export class SearchModule extends BaseModule {
                 enginer_name: this.convertNumtoSE(Math.round(item.enginer_id)),
                 status: this.taskdbModel.taskStatusToString(item.status),
                 keywords: keywords,
-                record_time: item.record_time
+                record_time: item.record_time,
+                pid: item.pid ?? undefined
             }
             data.keywordline = data.keywords.join(',')
 
             taskdata.push(data)
         }
-        //check number
-        const number = await this.taskdbModel.getTaskTotal()
+        
+        // Apply search filter if provided
+        let filteredTasks = taskdata;
+        let total: number;
+        
+        if (search && search.trim().length > 0) {
+            const searchLower = search.toLowerCase().trim();
+            filteredTasks = taskdata.filter(task => 
+                task.id.toString().includes(searchLower) ||
+                task.enginer_name?.toLowerCase().includes(searchLower) ||
+                task.keywordline?.toLowerCase().includes(searchLower) ||
+                task.status?.toLowerCase().includes(searchLower) ||
+                task.record_time?.toLowerCase().includes(searchLower)
+            );
+            total = filteredTasks.length;
+            
+            // Apply pagination to filtered results
+            const startIndex = page * size;
+            const endIndex = startIndex + size;
+            filteredTasks = filteredTasks.slice(startIndex, endIndex);
+        } else {
+            total = await this.taskdbModel.getTaskTotal();
+        }
+        
         const data: SearchtaskEntityNum = {
-            total: number,
-            records: taskdata
+            total: total,
+            records: filteredTasks
         }
         return data
     }
@@ -557,8 +614,26 @@ export class SearchModule extends BaseModule {
     }
 
     //get search result list by task id
-    public async listSearchResult(taskId: number, page: number, size: number): Promise<Array<SearchResEntity>> {
+    public async listSearchResult(taskId: number, page: number, size: number, search?: string): Promise<Array<SearchResEntity>> {
         const keyarr = await this.getKeywrodsbyTask(taskId)
+        
+        // If search term is provided, use SearchResultModule's filtering capability
+        if (search && search.trim().length > 0) {
+            // Get all results and filter them
+            const allResults = await this.serResultModel.listSearchresult(keyarr, 0, 10000)
+            const searchLower = search.toLowerCase().trim()
+            const filteredResults = allResults.filter(result => 
+                result.title?.toLowerCase().includes(searchLower) ||
+                result.snippet?.toLowerCase().includes(searchLower) ||
+                result.link?.toLowerCase().includes(searchLower) ||
+                result.visible_link?.toLowerCase().includes(searchLower)
+            )
+            // Apply pagination
+            const startIndex = page * size
+            const endIndex = startIndex + size
+            return filteredResults.slice(startIndex, endIndex)
+        }
+        
         return await this.serResultModel.listSearchresult(keyarr, page, size)
     }
 
@@ -779,6 +854,34 @@ export class SearchModule extends BaseModule {
     public async getTaskStatus(taskId: number): Promise<SearchTaskStatus | null> {
         const taskEntity = await this.taskdbModel.getTaskEntity(taskId);
         return taskEntity ? taskEntity.status : null;
+    }
+
+    /**
+     * Get task ID by PID
+     * @param pid The process ID
+     * @returns The task ID or null if not found
+     */
+    public async getTaskIdByPID(pid: number): Promise<number | null> {
+        const task = await this.taskdbModel.getTaskEntityByPID(pid);
+        return task ? task.id : null;
+    }
+
+    /**
+     * Get task PID
+     * @param taskId The task ID
+     * @returns The process ID or null if not set
+     */
+    public async getTaskPID(taskId: number): Promise<number | null> {
+        return await this.taskdbModel.getTaskPID(taskId);
+    }
+
+    /**
+     * Update task PID
+     * @param taskId The task ID
+     * @param pid The process ID (or null to clear)
+     */
+    public async updateTaskPID(taskId: number, pid: number | null): Promise<void> {
+        await this.taskdbModel.updateTaskPID(taskId, pid);
     }
 
     /**

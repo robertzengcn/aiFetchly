@@ -4,9 +4,10 @@ export interface ISearchResultApi {
   /**
    * Save a search result
    * @param data - Search result data to save
+   * @param taskId - The task ID this result belongs to
    * @returns Promise<number> - ID of the saved search result
    */
-  saveResult(data: SearchResEntity): Promise<number>;
+  saveResult(data: SearchResEntity, taskId: number): Promise<number>;
 
   /**
    * List search results with pagination for multiple keywords

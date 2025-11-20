@@ -49,6 +49,16 @@
           >
           mdi-play
           </v-icon>
+          <v-icon 
+          size="small"
+          class="me-2"
+          v-if="item.status=='Processing' && item.pid"
+          @click="killProcess(item)"
+          title="Kill Process"
+          color="error"
+          >
+          mdi-stop-circle
+          </v-icon>
         </template>
     </v-data-table-server>
     
@@ -57,14 +67,18 @@
 
 <script setup lang="ts">
 import {useI18n} from "vue-i18n";
-import { listSearchresult,Errorlogquery, retrySearchTask } from '@/views/api/search'
-import { ref,computed,onMounted,onUnmounted,reactive } from 'vue'
+import { listSearchresult,Errorlogquery, retrySearchTask, killSearchProcess } from '@/views/api/search'
+import { ref,computed,onMounted,onUnmounted,reactive,watch } from 'vue'
 import { SearchResult } from '@/views/api/types'
 // import type { VDataTable } from 'vuetify/lib/components/index.mjs'
 import router from '@/views/router';
 import {SearchtaskItem } from "@/entityTypes/searchControlType"
 import {CapitalizeFirstLetter} from "@/views/utils/function"
 const {t} = useI18n({inheritLocale: true});
+
+const props = defineProps<{
+    search?: string
+}>()
 
 
 const options = reactive({
@@ -130,7 +144,24 @@ const serverItems = ref<Array<SearchtaskItem>>([]);
 const loading = ref(false);
 
 const totalItems = ref(0);
-const search = ref('');
+const search = ref(props.search || '');
+
+// Watch for search prop changes from parent
+watch(() => props.search, (newVal) => {
+    if (newVal !== undefined) {
+        search.value = newVal;
+        // Debounce search to avoid too many API calls
+        if (searchTimeout) {
+            clearTimeout(searchTimeout);
+        }
+        searchTimeout = setTimeout(() => {
+            loadItems({ page: 1, itemsPerPage: options.itemsPerPage, sortBy: "" });
+        }, 500);
+    }
+});
+
+let searchTimeout: ReturnType<typeof setTimeout> | null = null;
+
 const startAutoRefresh = () => {
     refreshInterval = setInterval(function(){
         loadItems({ page: options.page, itemsPerPage: options.itemsPerPage, sortBy: "" });
@@ -240,6 +271,24 @@ const runTask = async (item: any) => {
         loadItems({ page: options.page, itemsPerPage: options.itemsPerPage, sortBy: "" });
     } catch (error) {
         console.error('Error running task:', error);
+    }
+}
+
+// Kill process function
+const killProcess = async (item: any) => {
+    try {
+        const result = await killSearchProcess(item.pid, item.id);
+        if (result.success) {
+            console.log(`Successfully killed process for task ${item.id}: ${result.message}`);
+            // Refresh the table after successful kill
+            loadItems({ page: options.page, itemsPerPage: options.itemsPerPage, sortBy: "" });
+        } else {
+            console.error(`Failed to kill process: ${result.message}`);
+            alert(result.message);
+        }
+    } catch (error) {
+        console.error('Error killing process:', error);
+        alert(error instanceof Error ? error.message : 'Failed to kill process');
     }
 }
 onMounted(() => {

@@ -113,6 +113,8 @@ export const GET_SEARCH_TASK_DETAILS='search:task:get_details'
 export const UPDATE_SEARCH_TASK='search:task:update'
 export const SEARCH_TASK_UPDATE_EVENT='search:task:update:event'
 export const CREATE_SEARCH_TASK_ONLY='search:task:create_only'
+export const EXPORT_SEARCH_RESULTS='search:result:export'
+export const KILL_SEARCH_PROCESS='search:kill_process'
 
 // Schedule Management Channels
 export const SCHEDULE_CREATE = 'schedule:create'
