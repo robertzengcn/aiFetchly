@@ -41,6 +41,10 @@ export class AIChatMessageEntity extends AuditableEntity {
     @Order(8)
     @Column('text', { nullable: true })
     metadata?: string; // JSON string for additional data
+
+    @Order(9)
+    @Column('varchar', { length: 20, default: 'message', nullable: false })
+    messageType: string; // 'message', 'tool_call', 'tool_result'
 }
 
 

@@ -3,6 +3,7 @@ import { AiChatApi, ChatRequest, StreamEvent, StreamEventType } from '@/api/aiCh
 import { AVAILABLE_TOOL_FUNCTIONS } from '@/config/aiTools.config';
 import { CommonMessage, ChatMessage, ChatHistoryResponse, ChatStreamChunk } from '@/entityTypes/commonType';
 import { AIChatModule } from '@/modules/AIChatModule';
+import { AIChatMessageEntity } from '@/entity/AIChatMessage.entity';
 import { RagSearchModule, SearchRequest, SearchResponse } from '@/modules/RagSearchModule';
 import { SearchModule } from '@/modules/SearchModule';
 import { SearchTaskStatus } from '@/model/SearchTask.model';
@@ -27,6 +28,59 @@ function generateConversationId(): string {
     const tokenService = new Token();
     const userId = tokenService.getValue(USERID) || 'anonymous';
     return `${userId}:${uuidv4()}`;
+}
+
+/**
+ * Format search results as a readable list for LLM consumption
+ * Extracts only Title, URL, and Snippet/Description
+ */
+function formatSearchResultsForLLM(results: Array<{
+    title?: string | null;
+    link: string;
+    snippet?: string | null;
+    visible_link?: string | null;
+}>): string {
+    if (results.length === 0) {
+        return 'No search results found.';
+    }
+
+    const formattedResults = results.map((result, index) => {
+        const title = result.title || 'No title';
+        const url = result.link || '';
+        const snippet = result.snippet || result.visible_link || 'No description available';
+        
+        // Clean up snippet (remove excessive whitespace, HTML entities if any)
+        const cleanSnippet = snippet
+            .replace(/\s+/g, ' ')
+            .trim()
+            .substring(0, 200); // Limit snippet length
+        
+        return `${index + 1}. **${title}**\n   URL: ${url}\n   ${cleanSnippet}`;
+    }).join('\n\n');
+
+    return `Found ${results.length} search result${results.length === 1 ? '' : 's'}:\n\n${formattedResults}`;
+}
+
+/**
+ * Format search results summary for tool result metadata
+ */
+function formatSearchResultsSummary(results: Array<{
+    title?: string | null;
+    link: string;
+    snippet?: string | null;
+}>): string {
+    if (results.length === 0) {
+        return 'No results found';
+    }
+    
+    const topResults = results.slice(0, 3).map((r, i) => {
+        const title = r.title || 'Untitled';
+        return `${i + 1}. ${title.substring(0, 50)}${title.length > 50 ? '...' : ''}`;
+    }).join('; ');
+    
+    return results.length > 3 
+        ? `${topResults} ... and ${results.length - 3} more`
+        : topResults;
 }
 
 /**
@@ -61,7 +115,8 @@ export function registerAiChatIpcHandlers(): void {
                 conversationId,
                 role: 'user',
                 content: requestData.message,
-                timestamp: new Date()
+                timestamp: new Date(),
+                messageType: 'message'
             });
 
             // If useRAG is true, perform local RAG search and append results to the message
@@ -118,7 +173,8 @@ export function registerAiChatIpcHandlers(): void {
                     content: apiResponse.data.message,
                     timestamp: new Date(),
                     model: apiResponse.data.model,
-                    tokensUsed: apiResponse.data.tokensUsed
+                    tokensUsed: apiResponse.data.tokensUsed,
+                    messageType: 'message'
                 });
 
                 const assistantMessage: ChatMessage = {
@@ -180,7 +236,8 @@ export function registerAiChatIpcHandlers(): void {
                 conversationId,
                 role: 'user',
                 content: requestData.message,
-                timestamp: new Date()
+                timestamp: new Date(),
+                messageType: 'message'
             });
 
             // If useRAG is true, perform local RAG search and append results to the message
@@ -304,6 +361,32 @@ export function registerAiChatIpcHandlers(): void {
                                 console.log(`Tool call started: ${toolName} (ID: ${toolId}), pending: ${pendingToolCalls.size}`);
                             }
 
+                            // Save tool call to database
+                            (async () => {
+                                try {
+                                    const toolCallMessageId = `tool-call-${toolId}`;
+                                    await chatModule.saveMessage({
+                                        messageId: toolCallMessageId,
+                                        conversationId: streamConversationId,
+                                        role: 'assistant',
+                                        content: JSON.stringify({
+                                            toolName,
+                                            toolParams,
+                                            toolId
+                                        }),
+                                        timestamp: new Date(),
+                                        messageType: 'tool_call',
+                                        metadata: {
+                                            toolName,
+                                            toolId,
+                                            toolParams
+                                        }
+                                    });
+                                } catch (saveError) {
+                                    console.error('Failed to save tool call to database:', saveError);
+                                }
+                            })();
+
                             // Notify UI that tool is being executed
                             const chunk: ChatStreamChunk = {
                                 content: content,
@@ -377,18 +460,28 @@ export function registerAiChatIpcHandlers(): void {
                                             // Get search results
                                             const results = await searchModule.listSearchResult(taskId, 1, numResults);
                                             
+                                            // Extract clean results (Title, URL, Snippet only)
+                                            const cleanResults = results.map(r => ({
+                                                title: r.title || null,
+                                                link: r.link,
+                                                snippet: r.snippet || r.visible_link || null,
+                                                visible_link: r.visible_link || null
+                                            }));
+                                            
+                                            // Format results for LLM consumption (readable list format)
+                                            const formattedResults = formatSearchResultsForLLM(cleanResults);
+                                            
+                                            // Create comprehensive tool result
                                             toolResult = {
                                                 success: true,
                                                 taskId: taskId,
                                                 query: query,
                                                 engine: engineName,
-                                                results: results.map(r => ({
-                                                    title: r.title,
-                                                    link: r.link,
-                                                    snippet: r.snippet,
-                                                    visible_link: r.visible_link
-                                                })),
-                                                totalResults: results.length
+                                                totalResults: results.length,
+                                                // Formatted summary for LLM
+                                                summary: formattedResults,
+                                                // Clean structured data (no HTML blobs or messy metadata)
+                                                results: cleanResults
                                             };
                                             break;
                                         }
@@ -418,6 +511,45 @@ export function registerAiChatIpcHandlers(): void {
                                             };
                                     }
                                     
+                                    // Save tool result to database
+                                    (async () => {
+                                        try {
+                                            const toolResultMessageId = `tool-result-${toolId}`;
+                                            const successFlag = typeof (toolResult as { success?: unknown }).success === 'boolean'
+                                                ? (toolResult as { success?: boolean }).success as boolean
+                                                : true;
+                                            
+                                            // Prepare metadata with summary for search results
+                                            const metadata: Record<string, unknown> = {
+                                                toolName,
+                                                toolId,
+                                                executionTimeMs: Date.now() - toolStartMs,
+                                                success: successFlag
+                                            };
+                                            
+                                            // Add summary for search results
+                                            if (toolName.includes('scrape_urls') && (toolResult as { summary?: string }).summary) {
+                                                const searchResult = toolResult as { query: string; engine: string; totalResults: number; summary: string };
+                                                metadata.summary = searchResult.summary;
+                                                metadata.query = searchResult.query;
+                                                metadata.engine = searchResult.engine;
+                                                metadata.totalResults = searchResult.totalResults;
+                                            }
+                                            
+                                            await chatModule.saveMessage({
+                                                messageId: toolResultMessageId,
+                                                conversationId: streamConversationId,
+                                                role: 'assistant',
+                                                content: JSON.stringify(toolResult),
+                                                timestamp: new Date(),
+                                                messageType: 'tool_result',
+                                                metadata
+                                            });
+                                        } catch (saveError) {
+                                            console.error('Failed to save tool result to database:', saveError);
+                                        }
+                                    })();
+
                                     // Send tool result to UI
                                     const resultChunk: ChatStreamChunk = {
                                         content: '',
@@ -430,17 +562,48 @@ export function registerAiChatIpcHandlers(): void {
 
                                     // Also send tool result back to AI server to continue the stream
                                     try {
-                                        const { success: _s, ...resultWithoutSuccess } = toolResult as Record<string, unknown> & { success?: unknown };
                                         const successFlag = typeof (toolResult as { success?: unknown }).success === 'boolean'
                                             ? (toolResult as { success?: boolean }).success as boolean
                                             : true;
                                         const execMs = Date.now() - toolStartMs;
 
+                                        // Format result for LLM - use summary if available (for search results)
+                                        // Otherwise use the full result without success flag
+                                        let formattedResultForLLM: Record<string, unknown>;
+                                        
+                                        if (toolName.includes('scrape_urls') && (toolResult as { summary?: string }).summary) {
+                                            // For search results, send formatted summary + structured data
+                                            const searchResult = toolResult as {
+                                                query: string;
+                                                engine: string;
+                                                totalResults: number;
+                                                summary: string;
+                                                results: Array<{ title?: string | null; link: string; snippet?: string | null }>;
+                                            };
+                                            
+                                            formattedResultForLLM = {
+                                                query: searchResult.query,
+                                                engine: searchResult.engine,
+                                                totalResults: searchResult.totalResults,
+                                                formatted_summary: searchResult.summary,
+                                                // Include clean structured results (no HTML blobs)
+                                                results: searchResult.results.map(r => ({
+                                                    title: r.title || 'No title',
+                                                    url: r.link,
+                                                    description: r.snippet || 'No description'
+                                                }))
+                                            };
+                                        } else {
+                                            // For other tools, exclude success flag but keep other data
+                                            const { success: _s, ...resultWithoutSuccess } = toolResult as Record<string, unknown> & { success?: unknown };
+                                            formattedResultForLLM = resultWithoutSuccess;
+                                        }
+
                                         const aiToolResult = [{
                                             tool_call_id: toolId,
                                             tool_name: toolName,
                                             success: successFlag,
-                                            result: resultWithoutSuccess,
+                                            result: formattedResultForLLM,
                                             execution_time_ms: execMs
                                         }];
 
@@ -479,6 +642,32 @@ export function registerAiChatIpcHandlers(): void {
                                     };
                                     event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(errorResult));
                                     
+                                    // Save error tool result to database
+                                    (async () => {
+                                        try {
+                                            const toolResultMessageId = `tool-result-${toolId}`;
+                                            await chatModule.saveMessage({
+                                                messageId: toolResultMessageId,
+                                                conversationId: streamConversationId,
+                                                role: 'assistant',
+                                                content: JSON.stringify({
+                                                    success: false,
+                                                    error: errorMessage
+                                                }),
+                                                timestamp: new Date(),
+                                                messageType: 'tool_result',
+                                                metadata: {
+                                                    toolName,
+                                                    toolId,
+                                                    success: false,
+                                                    error: errorMessage
+                                                }
+                                            });
+                                        } catch (saveError) {
+                                            console.error('Failed to save error tool result to database:', saveError);
+                                        }
+                                    })();
+
                                     // Remove tool from pending set even on error
                                     if (toolId) {
                                         pendingToolCalls.delete(toolId);
@@ -518,6 +707,33 @@ export function registerAiChatIpcHandlers(): void {
                             const toolResult = streamEvent.data.content;
                             const toolCallData = streamEvent.data.data;
                             const toolId = toolCallData?.id;
+                            const toolName = toolCallData?.name;
+
+                            // Save tool result from server to database
+                            if (toolId) {
+                                (async () => {
+                                    try {
+                                        const toolResultMessageId = `tool-result-${toolId}`;
+                                        await chatModule.saveMessage({
+                                            messageId: toolResultMessageId,
+                                            conversationId: streamConversationId,
+                                            role: 'assistant',
+                                            content: typeof toolResult === 'string' 
+                                                ? toolResult 
+                                                : JSON.stringify(toolResult),
+                                            timestamp: new Date(),
+                                            messageType: 'tool_result',
+                                            metadata: {
+                                                toolName,
+                                                toolId,
+                                                source: 'server'
+                                            }
+                                        });
+                                    } catch (saveError) {
+                                        console.error('Failed to save server tool result to database:', saveError);
+                                    }
+                                })();
+                            }
 
                             // Remove tool from pending set if this is a server result
                             if (toolId && pendingToolCalls.has(toolId)) {
@@ -655,7 +871,8 @@ export function registerAiChatIpcHandlers(): void {
                     conversationId: streamConversationId,
                     role: 'assistant',
                     content: fullContent,
-                    timestamp: new Date()
+                    timestamp: new Date(),
+                    messageType: 'message'
                 });
             }
         } catch (error) {
@@ -683,13 +900,27 @@ export function registerAiChatIpcHandlers(): void {
             const messageEntities = await chatModule.getConversationMessages(requestConversationId);
 
             // Convert entities to ChatMessage format
-            const messages: ChatMessage[] = messageEntities.map(entity => ({
-                id: entity.messageId,
-                role: entity.role as 'user' | 'assistant' | 'system',
-                content: entity.content,
-                timestamp: entity.timestamp,
-                conversationId: entity.conversationId
-            }));
+            const messages: ChatMessage[] = messageEntities.map(entity => {
+                const message: ChatMessage = {
+                    id: entity.messageId,
+                    role: entity.role as 'user' | 'assistant' | 'system',
+                    content: entity.content,
+                    timestamp: entity.timestamp,
+                    conversationId: entity.conversationId,
+                    messageType: entity.messageType as 'message' | 'tool_call' | 'tool_result' | undefined
+                };
+                
+                // Parse metadata if available
+                if (entity.metadata) {
+                    try {
+                        message.metadata = JSON.parse(entity.metadata);
+                    } catch (e) {
+                        console.warn('Failed to parse message metadata:', e);
+                    }
+                }
+                
+                return message;
+            });
 
             // Extract conversationId from messages if not provided in request
             // Use the conversationId from the first message if available, otherwise use the request ID

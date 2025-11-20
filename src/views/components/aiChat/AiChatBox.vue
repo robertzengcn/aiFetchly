@@ -77,35 +77,109 @@
         v-for="message in messages"
         :key="message.id"
         class="message-wrapper"
-        :class="message.role"
+        :class="[message.role, message.messageType || 'message']"
       >
         <div class="message-content">
           <div class="message-avatar">
             <v-icon v-if="message.role === 'user'" color="primary">mdi-account</v-icon>
+            <v-icon v-else-if="message.messageType === 'tool_call'" color="purple">mdi-toolbox</v-icon>
+            <v-icon v-else-if="message.messageType === 'tool_result'" color="success">mdi-check-circle</v-icon>
             <v-icon v-else color="purple">mdi-robot</v-icon>
           </div>
-          <div class="message-bubble" :class="{ 'assistant-message': message.role === 'assistant' }">
-            <div 
-              class="message-header" 
-              v-if="message.role === 'assistant' && message.content && message.content.trim()"
-              :class="{ 'copied': copiedMessageId === message.id }"
-            >
-              <v-btn
-                icon
-                size="x-small"
-                variant="text"
-                class="copy-button"
-                @click="handleCopyMessage(message.content, message.id)"
-                :title="copiedMessageId === message.id ? 'Copied!' : 'Copy message'"
+          <div class="message-bubble" :class="{
+            'assistant-message': message.role === 'assistant' && message.messageType === 'message',
+            'tool-call-message': message.messageType === 'tool_call',
+            'tool-result-message': message.messageType === 'tool_result'
+          }">
+            <!-- Tool Call Message -->
+            <template v-if="message.messageType === 'tool_call'">
+              <div class="tool-call-header">
+                <v-icon size="small" color="purple" class="mr-1">mdi-toolbox</v-icon>
+                <span><strong>Tool Call</strong></span>
+              </div>
+              <div class="tool-call-content">
+                <div v-if="message.metadata?.toolName" class="tool-name">
+                  <strong>Tool:</strong> {{ message.metadata.toolName }}
+                </div>
+                <div v-if="message.metadata?.toolId" class="tool-id">
+                  <strong>ID:</strong> {{ message.metadata.toolId }}
+                </div>
+                <details v-if="message.metadata?.toolParams" class="tool-params-details">
+                  <summary>Parameters</summary>
+                  <pre>{{ JSON.stringify(message.metadata.toolParams, null, 2) }}</pre>
+                </details>
+                <details v-if="message.content" class="tool-content-details">
+                  <summary>Raw Content</summary>
+                  <pre>{{ message.content }}</pre>
+                </details>
+              </div>
+              <div class="message-timestamp" :title="formatFullTimestamp(message.timestamp)">
+                <v-icon size="x-small" class="mr-1">mdi-clock-outline</v-icon>
+                {{ formatTimestamp(message.timestamp) }}
+              </div>
+            </template>
+
+            <!-- Tool Result Message -->
+            <template v-else-if="message.messageType === 'tool_result'">
+              <div class="tool-result-header">
+                <v-icon size="small" :color="message.metadata?.success === false ? 'error' : 'success'" class="mr-1">
+                  {{ message.metadata?.success === false ? 'mdi-alert-circle' : 'mdi-check-circle' }}
+                </v-icon>
+                <span><strong>Tool Result</strong></span>
+                <v-chip v-if="message.metadata?.executionTimeMs" size="x-small" variant="outlined" class="ml-2">
+                  {{ Math.round((message.metadata.executionTimeMs as number) / 1000) }}s
+                </v-chip>
+              </div>
+              <div class="tool-result-content">
+                <div v-if="message.metadata?.toolName" class="tool-name">
+                  <strong>Tool:</strong> {{ message.metadata.toolName }}
+                </div>
+                <div v-if="message.metadata?.success === false && message.metadata?.error" class="tool-error">
+                  <strong>Error:</strong> {{ message.metadata.error }}
+                </div>
+                <!-- Show formatted summary for search results -->
+                <div v-if="message.metadata?.summary" class="tool-summary">
+                  <div class="summary-header">
+                    <v-icon size="small" class="mr-1">mdi-format-list-bulleted</v-icon>
+                    <strong>Search Results Summary</strong>
+                  </div>
+                  <div class="summary-content" v-html="formatMessage(message.metadata.summary as string)"></div>
+                </div>
+                <details class="tool-result-details">
+                  <summary>{{ message.metadata?.summary ? 'View Full JSON Data' : 'View Result' }}</summary>
+                  <pre>{{ message.content }}</pre>
+                </details>
+              </div>
+              <div class="message-timestamp" :title="formatFullTimestamp(message.timestamp)">
+                <v-icon size="x-small" class="mr-1">mdi-clock-outline</v-icon>
+                {{ formatTimestamp(message.timestamp) }}
+              </div>
+            </template>
+
+            <!-- Regular Message -->
+            <template v-else>
+              <div 
+                class="message-header" 
+                v-if="message.role === 'assistant' && message.content && message.content.trim()"
+                :class="{ 'copied': copiedMessageId === message.id }"
               >
-                <v-icon size="small">{{ copiedMessageId === message.id ? 'mdi-check' : 'mdi-content-copy' }}</v-icon>
-              </v-btn>
-            </div>
-            <div class="message-text" v-html="formatMessage(message.content)"></div>
-            <div class="message-timestamp" :title="formatFullTimestamp(message.timestamp)">
-              <v-icon size="x-small" class="mr-1">mdi-clock-outline</v-icon>
-              {{ formatTimestamp(message.timestamp) }}
-            </div>
+                <v-btn
+                  icon
+                  size="x-small"
+                  variant="text"
+                  class="copy-button"
+                  @click="handleCopyMessage(message.content, message.id)"
+                  :title="copiedMessageId === message.id ? 'Copied!' : 'Copy message'"
+                >
+                  <v-icon size="small">{{ copiedMessageId === message.id ? 'mdi-check' : 'mdi-content-copy' }}</v-icon>
+                </v-btn>
+              </div>
+              <div class="message-text" v-html="formatMessage(message.content)"></div>
+              <div class="message-timestamp" :title="formatFullTimestamp(message.timestamp)">
+                <v-icon size="x-small" class="mr-1">mdi-clock-outline</v-icon>
+                {{ formatTimestamp(message.timestamp) }}
+              </div>
+            </template>
           </div>
         </div>
       </div>
@@ -1134,8 +1208,58 @@ onMounted(() => {
   }
 }
 
-/* Tool Result Styles */
-.tool-result {
+/* Tool Call Message Styles */
+.tool-call-message {
+  background-color: rgba(156, 39, 176, 0.08) !important;
+  border: 1px solid rgba(156, 39, 176, 0.3);
+}
+
+.tool-call-header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 8px;
+  color: rgb(156, 39, 176);
+  font-weight: 600;
+}
+
+.tool-call-content {
+  font-size: 14px;
+  line-height: 1.6;
+  
+  .tool-name, .tool-id {
+    margin-bottom: 4px;
+    color: rgb(var(--v-theme-on-surface));
+  }
+  
+  .tool-params-details, .tool-content-details {
+    margin-top: 8px;
+    cursor: pointer;
+    
+    summary {
+      font-size: 12px;
+      color: rgba(156, 39, 176, 0.9);
+      font-weight: 500;
+      user-select: none;
+      
+      &:hover {
+        color: rgb(156, 39, 176);
+      }
+    }
+    
+    pre {
+      margin-top: 8px;
+      padding: 8px;
+      background-color: rgba(var(--v-theme-on-surface), 0.05);
+      border-radius: 4px;
+      font-size: 11px;
+      overflow-x: auto;
+      max-height: 200px;
+    }
+  }
+}
+
+/* Tool Result Message Styles */
+.tool-result-message {
   background-color: rgba(76, 175, 80, 0.08) !important;
   border: 1px solid rgba(76, 175, 80, 0.3);
 }
@@ -1143,8 +1267,97 @@ onMounted(() => {
 .tool-result-header {
   display: flex;
   align-items: center;
-  margin-bottom: 4px;
+  margin-bottom: 8px;
   color: rgb(76, 175, 80);
+  font-weight: 600;
+}
+
+.tool-result-content {
+  font-size: 14px;
+  line-height: 1.6;
+  
+  .tool-name {
+    margin-bottom: 4px;
+    color: rgb(var(--v-theme-on-surface));
+  }
+  
+  .tool-error {
+    margin-top: 8px;
+    padding: 8px;
+    background-color: rgba(244, 67, 54, 0.1);
+    border-radius: 4px;
+    color: rgb(244, 67, 54);
+    font-size: 13px;
+  }
+  
+  .tool-summary {
+    margin-top: 12px;
+    padding: 12px;
+    background-color: rgba(76, 175, 80, 0.05);
+    border-left: 3px solid rgba(76, 175, 80, 0.5);
+    border-radius: 4px;
+    
+    .summary-header {
+      display: flex;
+      align-items: center;
+      margin-bottom: 8px;
+      color: rgb(76, 175, 80);
+      font-weight: 600;
+      font-size: 13px;
+    }
+    
+    .summary-content {
+      color: rgb(var(--v-theme-on-surface));
+      white-space: pre-wrap;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      line-height: 1.6;
+      
+      :deep(code) {
+        background-color: rgba(var(--v-theme-on-surface), 0.08);
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-family: 'Courier New', monospace;
+        font-size: 0.9em;
+      }
+      
+      :deep(strong) {
+        font-weight: 600;
+        color: rgb(var(--v-theme-on-surface));
+      }
+    }
+  }
+  
+  .tool-result-details {
+    margin-top: 8px;
+    cursor: pointer;
+    
+    summary {
+      font-size: 12px;
+      color: rgba(76, 175, 80, 0.9);
+      font-weight: 500;
+      user-select: none;
+      
+      &:hover {
+        color: rgb(76, 175, 80);
+      }
+    }
+    
+    pre {
+      margin-top: 8px;
+      padding: 8px;
+      background-color: rgba(var(--v-theme-on-surface), 0.05);
+      border-radius: 4px;
+      font-size: 11px;
+      overflow-x: auto;
+      max-height: 200px;
+    }
+  }
+}
+
+/* Legacy Tool Result Styles (for streaming) */
+.tool-result {
+  background-color: rgba(76, 175, 80, 0.08) !important;
+  border: 1px solid rgba(76, 175, 80, 0.3);
 }
 
 .tool-result details {

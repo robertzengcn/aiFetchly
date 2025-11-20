@@ -192,6 +192,8 @@ export interface ChatMessage {
     content: string;
     timestamp: Date;
     conversationId?: string;
+    messageType?: 'message' | 'tool_call' | 'tool_result';
+    metadata?: Record<string, unknown>;
 }
 
 /**
