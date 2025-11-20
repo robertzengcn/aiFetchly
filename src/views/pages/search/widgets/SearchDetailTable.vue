@@ -1,11 +1,15 @@
 <template>
-    <div class="search_bar mt-4 d-flex jsb">
+    <div class="search_bar mt-4 d-flex jsb mb-4">
         <div class="d-flex jsb search_tool">
             <div class="search_wrap mr-4">
                 <v-text-field rounded class="elevation-0" density="compact" variant="solo" label="Search sample"
-                    append-inner-icon="mdi-magnify" single-line hide-details></v-text-field>
+                    append-inner-icon="mdi-magnify" single-line hide-details v-model="search"
+                    @keyup.enter="handleSearch" @click:append-inner="handleSearch"></v-text-field>
             </div>
-            <v-btn class="btn" variant="flat" prepend-icon="mdi-filter-variant"><span> {{t('common.more')}}</span></v-btn>
+            <!-- <v-btn class="btn mr-2" variant="flat" prepend-icon="mdi-filter-variant"><span> {{t('common.more')}}</span></v-btn> -->
+            <v-btn class="btn" variant="flat" color="primary" prepend-icon="mdi-download" @click="handleExport" :loading="exporting">
+                <span>{{t('common.export')}}</span>
+            </v-btn>
         </div>     
     </div>
     <v-data-table-server v-model:items-per-page="itemsPerPage" :search="search" :headers="headers" 
@@ -18,8 +22,8 @@
 
 <script setup lang="ts">
 import {useI18n} from "vue-i18n";
-import { gettaskresult } from '@/views/api/search'
-import { ref,computed,onMounted } from 'vue'
+import { gettaskresult, exportSearchResults } from '@/views/api/search'
+import { ref,computed,onMounted,watch } from 'vue'
 import { SearchResult } from '@/views/api/types'
 import {SearchResEntityDisplay} from "@/entityTypes/scrapeType"
 //import router from '@/views/router';
@@ -108,8 +112,31 @@ const serverItems = ref<Array<SearchResEntityDisplay>>([]);
 const loading = ref(false);
 const totalItems = ref(0);
 const search = ref('');
+const exporting = ref(false);
+const currentPage = ref(1);
+
+// Debounce search to avoid too many API calls
+let searchTimeout: ReturnType<typeof setTimeout> | null = null;
+watch(search, () => {
+    if (searchTimeout) {
+        clearTimeout(searchTimeout);
+    }
+    searchTimeout = setTimeout(() => {
+        // Reset to first page when search changes
+        currentPage.value = 1;
+        // Trigger reload by calling loadItems with current options
+        if (taskid) {
+            loadItems({ 
+                page: 1, 
+                itemsPerPage: itemsPerPage.value, 
+                sortBy: '' 
+            });
+        }
+    }, 500); // 500ms debounce
+});
 
 function loadItems({ page, itemsPerPage, sortBy }) {
+    currentPage.value = page;
     loading.value = true
     //console.log(taskid)
     if(!taskid){
@@ -136,7 +163,42 @@ function loadItems({ page, itemsPerPage, sortBy }) {
             loading.value = false
         }).catch(function (error) {
             console.error(error);
+            loading.value = false
         })
+}
+
+function handleSearch() {
+    // Reset to first page and reload
+    currentPage.value = 1;
+    if (taskid) {
+        loadItems({ 
+            page: 1, 
+            itemsPerPage: itemsPerPage.value, 
+            sortBy: '' 
+        });
+    }
+}
+
+async function handleExport() {
+    if (!taskid) {
+        return;
+    }
+    console.log(taskid)
+    exporting.value = true;
+    try {
+        // Export as CSV by default (can be extended to support format selection)
+        const filePath = await exportSearchResults(taskid, 'csv');
+        if (filePath) {
+            // Show success message (you might want to use a toast/snackbar component)
+            console.log(`Export successful: ${filePath}`);
+        }
+    } catch (error) {
+        console.error('Export failed:', error);
+        // Show error message (you might want to use a toast/snackbar component)
+        alert(error instanceof Error ? error.message : 'Export failed');
+    } finally {
+        exporting.value = false;
+    }
 }
 // },
 // }
