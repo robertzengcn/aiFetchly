@@ -127,8 +127,8 @@ export async function exportSearchResults(taskId: number, format: 'json' | 'csv'
  */
 export async function killSearchProcess(pid?: number, taskId?: number): Promise<{success: boolean, taskId?: number, pid?: number, message: string}> {
     const resp = await windowInvoke(KILL_SEARCH_PROCESS, { pid, taskId });
-    if (!resp || !resp.status) {
-        throw new Error(resp?.msg || "Unknown error");
+    if (!resp) {
+        throw new Error("Unknown error");
     }
-    return resp.data;
+    return resp;
 }
