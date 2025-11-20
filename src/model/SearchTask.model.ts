@@ -102,10 +102,37 @@ export class SearchTaskModel extends BaseDb {
    * @param status The new status
    */
   async updateTaskStatus(taskId: number, status: SearchTaskStatus): Promise<void> {
+    const updateData: any = { status: status };
+    // Clear PID when task completes or errors
+    if (status === SearchTaskStatus.Complete || status === SearchTaskStatus.Error || status === SearchTaskStatus.NotStart) {
+      updateData.pid = null;
+    }
     await this.repository.update(
       { id: taskId },
-      { status: status }
+      updateData
     );
+  }
+
+  /**
+   * Update task PID
+   * @param taskId The task ID
+   * @param pid The process ID (or null to clear)
+   */
+  async updateTaskPID(taskId: number, pid: number | null): Promise<void> {
+    await this.repository.update(
+      { id: taskId },
+      { pid: pid ?? 0 }
+    );
+  }
+
+  /**
+   * Get task PID
+   * @param taskId The task ID
+   * @returns The process ID or null if not set
+   */
+  async getTaskPID(taskId: number): Promise<number | null> {
+    const task = await this.getTaskEntity(taskId);
+    return task?.pid ?? null;
   }
 
   /**
@@ -182,6 +209,17 @@ export class SearchTaskModel extends BaseDb {
     return this.repository.findOne({
       where: { id: taskId }
     }) 
+  }
+
+  /**
+   * Get task by PID
+   * @param pid The process ID
+   * @returns The task entity or null if not found
+   */
+  async getTaskEntityByPID(pid: number): Promise<SearchTaskEntity | null> {
+    return this.repository.findOne({
+      where: { pid: pid }
+    });
   }
 
   /**
