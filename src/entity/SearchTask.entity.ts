@@ -29,4 +29,6 @@ export class SearchTaskEntity extends AuditableEntity {
     useLocalbrowserdata:number
     @Column("text", { nullable: true })
     localBrowser:string
+    @Column("integer", { nullable: true })
+    pid: number;
 }

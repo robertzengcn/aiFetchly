@@ -13,10 +13,11 @@ import * as fs from 'fs';
 import {SearchModule} from "@/modules/SearchModule"
 import { Token } from "@/modules/token"
 // import {USERSDBPATH} from '@/config/usersetting';
-import {SearchDataParam,SearchResEntityDisplay,SearchResEntityRecord} from "@/entityTypes/scrapeType"
+import {SearchDataParam,SearchResEntityDisplay,SearchResEntityRecord,SearchResEntity} from "@/entityTypes/scrapeType"
 import {TaskDetailsForEdit} from "@/modules/SearchModule"
+import {SearchResultModule} from "@/modules/SearchResultModule"
 // import {SEARCHEVENT} from "@/config/channellist"
-// import { SearchTaskStatus } from "@/model/SearchTask.model"
+import { SearchTaskStatus } from "@/model/SearchTask.model"
 // import { SearchKeyworddb } from "@/model/searchKeyworddb";
 //import { CustomError } from "@/modules/customError";
 import {USERLOGPATH,USEREMAIL} from '@/config/usersetting';
@@ -27,14 +28,64 @@ import {SortBy} from "@/entityTypes/commonType";
 // import {twocaptchagroup,twocaptchatoken,twocaptcha_enabled,chrome_path,firefox_path,external_system} from '@/config/settinggroupInit'
 // import { AccountCookiesModule } from "@/modules/accountCookiesModule"
 // import {CookiesType} from "@/entityTypes/cookiesType"
+import type { UtilityProcess } from 'electron';
+
+/**
+ * Search Controller
+ * 
+ * Provides business logic for managing search scraping tasks.
+ * Implemented as a Singleton to ensure:
+ * - Single instance across the application
+ * - Shared state for process management
+ * - Consistent resource allocation
+ * - Centralized control over search operations
+ */
 export class SearchController {
+    private static instance: SearchController | null = null;
+    
     private searchModel:SearchModule;
+    private searchResultModule:SearchResultModule;
+    private processMap: Map<number, UtilityProcess> = new Map();
     // private accountCookiesModule: AccountCookiesModule;
    //private systemSettingGroupModule: SystemSettingGroupModule
-    constructor() {
+
+    /**
+     * Private constructor to prevent direct instantiation
+     * Use getInstance() method to access the singleton instance
+     */
+    private constructor() {
         // this.accountCookiesModule=new AccountCookiesModule()
         this.searchModel=new SearchModule()
+        this.searchResultModule=new SearchResultModule()
         //this.systemSettingGroupModule=new SystemSettingGroupModule()
+    }
+
+    /**
+     * Get the singleton instance of SearchController
+     * Creates a new instance if one doesn't exist
+     * @returns The singleton instance of SearchController
+     */
+    public static getInstance(): SearchController {
+        if (SearchController.instance === null) {
+            SearchController.instance = new SearchController();
+        }
+        return SearchController.instance;
+    }
+
+    /**
+     * Reset the singleton instance (useful for testing or cleanup)
+     * @private - Use with caution, mainly for testing purposes
+     */
+    public static resetInstance(): void {
+        SearchController.instance = null;
+    }
+
+    /**
+     * Check if a singleton instance exists
+     * @returns true if an instance exists, false otherwise
+     */
+    public static hasInstance(): boolean {
+        return SearchController.instance !== null;
     }
     //save user search task, and run task
     public async searchData(data: Usersearchdata) {
@@ -333,21 +384,22 @@ export class SearchController {
     //     });
     }
     //return search result
-    public async listSearchresult(page:number,size:number,sortBy?:SortBy):Promise<SearchtaskEntityNum>{
+    public async listSearchresult(page:number,size:number,sortBy?:SortBy,search?:string):Promise<SearchtaskEntityNum>{
         // const seModel=new searhModel()
         // await seModel.init();
-        const res=await this.searchModel.listSearchtask(page,size, sortBy)
+        const res=await this.searchModel.listSearchtask(page,size, sortBy, search)
         return res;
     }   
     //list task search result
-    public async listtaskSearchResult(taskId:number,page:number,size:number):Promise<SearchResEntityRecord>{
+    public async listtaskSearchResult(taskId:number,page:number,size:number,search?:string):Promise<SearchResEntityRecord>{
         // const seModel=new searhModel()
-        const res=await this.searchModel.listSearchResult(taskId,page,size)
+        const res=await this.searchModel.listSearchResult(taskId,page,size,search)
 
         const datas: Array<SearchResEntityDisplay> = []
         //const SearchKeyDb=new SearchKeyworddb(this.dbpath)
 
-        res.forEach(async (item) => {
+        // Use Promise.all to properly handle async operations
+        await Promise.all(res.map(async (item) => {
             //console.log(item)
             //console.log(item.keyword_id)
             const keyEntity = await this.searchModel.getkeywrodsEntitybyId(item.keyword_id)
@@ -363,10 +415,37 @@ export class SearchController {
                 keyword: keyEntity?.keyword??""
             }
             datas.push(data)
-        })
+        }))
         //return datas
 
-        const total=await this.searchModel.countSearchResult(taskId)
+        // Get total count - if search is provided, get filtered count, otherwise get all count
+        let total: number;
+        if (search && search.trim().length > 0) {
+            // For search, get all results with keywords and count filtered ones
+            const allResults = await this.searchResultModule.getAllSearchResultsByTaskId(taskId)
+            const searchLower = search.toLowerCase().trim()
+            
+            // Enrich all results with keywords for filtering
+            const enrichedResults = await Promise.all(allResults.map(async (item) => {
+                const keyEntity = await this.searchModel.getkeywrodsEntitybyId(item.keyword_id)
+                return {
+                    ...item,
+                    keyword: keyEntity?.keyword ?? ""
+                }
+            }))
+            
+            const filteredResults = enrichedResults.filter(result => 
+                result.keyword?.toLowerCase().includes(searchLower) ||
+                result.title?.toLowerCase().includes(searchLower) ||
+                result.snippet?.toLowerCase().includes(searchLower) ||
+                result.link?.toLowerCase().includes(searchLower) ||
+                result.visible_link?.toLowerCase().includes(searchLower)
+            )
+            total = filteredResults.length
+        } else {
+            total = await this.searchModel.countSearchResult(taskId)
+        }
+        
         const data:SearchResEntityRecord={
             total:total,
             record:datas
@@ -455,5 +534,297 @@ export class SearchController {
         return await this.searchModel.getTaskDetailsForEdit(taskId);
     }
 
+    /**
+     * Export search results for a task
+     * @param taskId The task ID
+     * @param format Export format ('json' or 'csv')
+     * @returns Exported data
+     */
+    public async exportSearchResults(taskId: number, format: 'json' | 'csv' = 'csv'): Promise<any> {
+        if (!taskId || taskId <= 0) {
+            throw new Error("Task ID is required");
+        }
+
+        // Get all results for the task using SearchResultModule
+        const allResults = await this.searchResultModule.getAllSearchResultsByTaskId(taskId);
+        
+        // Get keyword information for each result
+        const resultsWithKeywords: Array<SearchResEntityDisplay> = [];
+        for (const item of allResults) {
+            const keyEntity = await this.searchModel.getkeywrodsEntitybyId(item.keyword_id);
+            const data: SearchResEntityDisplay = {
+                id: item.id,
+                keyword_id: item.keyword_id,
+                title: item.title,
+                link: item.link,
+                snippet: item.snippet,
+                record_time: item.record_time,
+                visible_link: item.visible_link,
+                keyword: keyEntity?.keyword ?? ""
+            };
+            resultsWithKeywords.push(data);
+        }
+
+        if (format === 'csv') {
+            return this.convertToCSV(resultsWithKeywords);
+        } else {
+            return {
+                total: resultsWithKeywords.length,
+                results: resultsWithKeywords,
+                exportDate: new Date().toISOString(),
+                taskId: taskId
+            };
+        }
+    }
+
+    /**
+     * Convert search results to CSV format
+     * @param results Array of search result entities
+     * @returns CSV string
+     */
+    private convertToCSV(results: Array<SearchResEntityDisplay>): string {
+        if (results.length === 0) {
+            return '';
+        }
+
+        const headers = ['ID', 'Keyword', 'Title', 'Link', 'Visible Link', 'Snippet', 'Record Time'];
+        const rows = results.map(result => [
+            result.id?.toString() ?? '',
+            result.keyword ?? '',
+            this.escapeCSV(result.title ?? ''),
+            result.link ?? '',
+            result.visible_link ?? '',
+            this.escapeCSV(result.snippet ?? ''),
+            result.record_time ?? ''
+        ]);
+
+        const csvRows = [
+            headers.join(','),
+            ...rows.map(row => row.join(','))
+        ];
+
+        return csvRows.join('\n');
+    }
+
+    /**
+     * Escape CSV field values
+     * @param value The value to escape
+     * @returns Escaped value
+     */
+    private escapeCSV(value: string): string {
+        if (value.includes(',') || value.includes('"') || value.includes('\n')) {
+            return `"${value.replace(/"/g, '""')}"`;
+        }
+        return value;
+    }
+
+    /**
+     * Register a process for a task
+     * @param taskId The task ID
+     * @param process The utility process instance
+     */
+    public registerProcess(taskId: number, process: UtilityProcess): void {
+        this.processMap.set(taskId, process);
+    }
+
+    /**
+     * Unregister a process for a task
+     * @param taskId The task ID
+     */
+    public unregisterProcess(taskId: number): void {
+        this.processMap.delete(taskId);
+    }
+
+    /**
+     * Get process by task ID
+     * @param taskId The task ID
+     * @returns The utility process or undefined
+     */
+    public getProcessByTaskId(taskId: number): UtilityProcess | undefined {
+        return this.processMap.get(taskId);
+    }
+
+    /**
+     * Get task ID by PID
+     * @param pid The process ID
+     * @returns The task ID or null if not found
+     */
+    public async getTaskIdByPID(pid: number): Promise<number | null> {
+        // Search through processMap
+        for (const [taskId, process] of this.processMap.entries()) {
+            if (process.pid === pid) {
+                return taskId;
+            }
+        }
+        // If not found in memory, check database
+        const taskId = await this.searchModel.getTaskIdByPID(pid);
+        return taskId;
+    }
+
+    /**
+     * Kill a child process by PID
+     * @param pid The process ID to kill
+     * @returns Promise that resolves with kill result
+     */
+    public async killProcessByPID(pid: number): Promise<{
+        success: boolean;
+        taskId?: number;
+        message: string;
+    }> {
+        try {
+            console.log(`Killing search process with PID ${pid}`);
+            
+            // Find task by PID
+            const taskId = await this.getTaskIdByPID(pid);
+            
+            if (!taskId) {
+                // Try to kill process directly using system kill command
+                try {
+                    const { exec } = require('child_process');
+                    const isWindows = require('process').platform === 'win32';
+                    exec(isWindows ? `taskkill /PID ${pid} /F` : `kill -9 ${pid}`, (error: unknown) => {
+                        if (error) {
+                            console.error(`Failed to kill process ${pid}:`, error);
+                        }
+                    });
+                    return {
+                        success: true,
+                        message: `Process ${pid} killed successfully (task not found in memory)`
+                    };
+                } catch (error) {
+                    return {
+                        success: false,
+                        message: `Failed to kill process ${pid}: Task not found`
+                    };
+                }
+            }
+
+            // Get process from map
+            const utilityProcess = this.processMap.get(taskId);
+            
+            if (utilityProcess && utilityProcess.pid === pid) {
+                try {
+                    // Kill the process
+                    utilityProcess.kill();
+                    console.log(`Successfully killed process ${pid} for task ${taskId}`);
+                } catch (error) {
+                    console.error(`Error killing process ${pid}:`, error);
+                    // Try system kill as fallback
+                    try {
+                        const { exec } = require('child_process');
+                        const isWindows = require('process').platform === 'win32';
+                        exec(isWindows ? `taskkill /PID ${pid} /F` : `kill -9 ${pid}`);
+                    } catch (killError) {
+                        console.error(`Failed to kill process ${pid} using system command:`, killError);
+                    }
+                }
+            } else {
+                // Process not in map, try system kill
+                try {
+                    const { exec } = require('child_process');
+                    const isWindows = require('process').platform === 'win32';
+                    exec(isWindows ? `taskkill /PID ${pid} /F` : `kill -9 ${pid}`);
+                } catch (error) {
+                    console.error(`Failed to kill process ${pid}:`, error);
+                }
+            }
+
+            // Update task status
+            if (taskId) {
+                try {
+                    await this.searchModel.updateTaskStatus(taskId, SearchTaskStatus.Error);
+                    await this.searchModel.updateTaskPID(taskId, null);
+                    console.log(`Updated task ${taskId} status to Error after killing process`);
+                } catch (statusUpdateError) {
+                    console.warn(`Failed to update task ${taskId} status:`, statusUpdateError);
+                }
+            }
+
+            // Remove from process map
+            if (taskId) {
+                this.processMap.delete(taskId);
+            }
+
+            return {
+                success: true,
+                taskId,
+                message: `Process ${pid} killed successfully and task status updated`
+            };
+        } catch (error) {
+            console.error(`Failed to kill process ${pid}:`, error);
+            throw error;
+        }
+    }
+
+    /**
+     * Kill a child process by task ID
+     * @param taskId The task ID
+     * @returns Promise that resolves with kill result
+     */
+    public async killProcessByTaskId(taskId: number): Promise<{
+        success: boolean;
+        pid?: number;
+        message: string;
+    }> {
+        try {
+            console.log(`Killing process for task ${taskId}`);
+            
+            // Get process from map
+            const utilityProcess = this.processMap.get(taskId);
+            
+            if (!utilityProcess) {
+                // Try to get PID from database and kill it
+                const pid = await this.searchModel.getTaskPID(taskId);
+                if (pid) {
+                    return await this.killProcessByPID(pid);
+                }
+                return {
+                    success: false,
+                    message: `No process found for task ${taskId}`
+                };
+            }
+
+            const pid = utilityProcess.pid;
+            
+            try {
+                // Kill the process
+                utilityProcess.kill();
+                console.log(`Successfully killed process ${pid} for task ${taskId}`);
+            } catch (error) {
+                console.error(`Error killing process for task ${taskId}:`, error);
+                // Try system kill as fallback
+                if (pid) {
+                    try {
+                        const { exec } = require('child_process');
+                        const isWindows = require('process').platform === 'win32';
+                        exec(isWindows ? `taskkill /PID ${pid} /F` : `kill -9 ${pid}`);
+                    } catch (killError) {
+                        console.error(`Failed to kill process ${pid} using system command:`, killError);
+                    }
+                }
+            }
+
+            // Update task status
+            try {
+                await this.searchModel.updateTaskStatus(taskId, SearchTaskStatus.Error);
+                await this.searchModel.updateTaskPID(taskId, null);
+                console.log(`Updated task ${taskId} status to Error after killing process`);
+            } catch (statusUpdateError) {
+                console.warn(`Failed to update task ${taskId} status:`, statusUpdateError);
+            }
+
+            // Remove from process map
+            this.processMap.delete(taskId);
+
+            return {
+                success: true,
+                pid,
+                message: `Process ${pid} killed successfully for task ${taskId}`
+            };
+        } catch (error) {
+            console.error(`Failed to kill process for task ${taskId}:`, error);
+            throw error;
+        }
+    }
 
 }

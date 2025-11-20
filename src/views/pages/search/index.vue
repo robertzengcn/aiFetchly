@@ -108,7 +108,7 @@ type SearchOption = {
   name: string;
   index: number;
 };
-import { ref, onMounted } from "vue";
+import { ref, onMounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
 //import router from '@/views/router';
 import { SearhEnginer } from "@/config/searchSetting"
@@ -147,6 +147,8 @@ const rules = {
 };
 const useLocalBrowser = ref(false)
 const enginer = ref<string>();
+const yandexTipShown = ref(false); // Track if tip has been shown to avoid repeated alerts
+const googleAccountTipShown = ref(false); // Track if Google account tip has been shown
 const keywords = ref();
 const searchplatform = ref<Array<SearchOption>>([]);
 const showinbrwoser = ref(0);
@@ -277,6 +279,68 @@ const setAlert = (
     alert.value = false;
   }, 5000);
 };
+
+// Watch for Yandex selection and show tip if local browser is not used
+watch([enginer, useLocalBrowser], ([newEngine, newUseLocalBrowser], [oldEngine, oldUseLocalBrowser]) => {
+  const isYandex = newEngine && newEngine.toLowerCase() === 'yandex';
+  const wasYandex = oldEngine && oldEngine.toLowerCase() === 'yandex';
+  
+  // Show tip when:
+  // 1. User selects Yandex and local browser is not enabled
+  // 2. User disables local browser while Yandex is selected
+  // Only show once per session unless user switches away and back
+  if (isYandex && !newUseLocalBrowser) {
+    // Reset tip flag if user switched away from Yandex
+    if (!wasYandex) {
+      yandexTipShown.value = false;
+    }
+    
+    // Show tip if not already shown for this Yandex selection
+    if (!yandexTipShown.value) {
+      setTimeout(() => {
+        setAlert(t('search.yandex_local_browser_tip'), t('search.use_local_browser'), 'info');
+        yandexTipShown.value = true;
+      }, 500);
+    }
+  } else if (isYandex && newUseLocalBrowser) {
+    // Reset flag when local browser is enabled
+    yandexTipShown.value = false;
+  } else if (!isYandex) {
+    // Reset flag when switching away from Yandex
+    yandexTipShown.value = false;
+  }
+}, { immediate: false });
+
+// Watch for Google selection and show tip if account is not used
+watch([enginer, useAccount], ([newEngine, newUseAccount], [oldEngine, oldUseAccount]) => {
+  const isGoogle = newEngine && newEngine.toLowerCase() === 'google';
+  const wasGoogle = oldEngine && oldEngine.toLowerCase() === 'google';
+  
+  // Show tip when:
+  // 1. User selects Google and account is not enabled
+  // 2. User disables account while Google is selected
+  // Only show once per session unless user switches away and back
+  if (isGoogle && !newUseAccount) {
+    // Reset tip flag if user switched away from Google
+    if (!wasGoogle) {
+      googleAccountTipShown.value = false;
+    }
+    
+    // Show tip if not already shown for this Google selection
+    if (!googleAccountTipShown.value) {
+      setTimeout(() => {
+        setAlert(t('search.google_account_tip'), t('search.use_search_enginer_account'), 'info');
+        googleAccountTipShown.value = true;
+      }, 500);
+    }
+  } else if (isGoogle && newUseAccount) {
+    // Reset flag when account is enabled
+    googleAccountTipShown.value = false;
+  } else if (!isGoogle) {
+    // Reset flag when switching away from Google
+    googleAccountTipShown.value = false;
+  }
+}, { immediate: false });
 
 onMounted(async () => {
   initialize();

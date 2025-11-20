@@ -620,6 +620,7 @@ export default {
     search:{
         google:"Google.com",
         bing:"Bing.com",
+        yandex:"Yandex.com",
         baidu:"Baidu.com",
         platform:"platform",
         keyword:"Keyword",
@@ -647,6 +648,8 @@ export default {
         concurrency_must_be_between:"Concurrency must be between 1 and 10",
         save_only:"Save Only",
         task_saved_successfully:"Task saved successfully",
+        yandex_local_browser_tip:"Tip: For better results with Yandex, we recommend using a local browser. Please enable 'Use Local Browser' option.",
+        google_account_tip:"Tip: For better results with Google, we recommend using a search engine account. Please enable 'Use Search Engine Account' option.",
         task_id:"Task ID",
         run_task:"Run Task",
         task_status_not_start:"Not Start",

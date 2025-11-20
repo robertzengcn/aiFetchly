@@ -199,6 +199,25 @@ export class BingScraper extends SearchScrape {
             waitUntil: "networkidle2",
             timeout: 60000
         });
+        
+        // Wait for page to be fully loaded
+        await this.page.waitForFunction(() => {
+            return document.readyState === 'complete';
+        }, { timeout: this.STANDARD_TIMEOUT });
+
+        // Check for and click cookie consent button if present
+        try {
+            const cookieButton = await this.page.$('#bnp_btn_accept');
+            if (cookieButton) {
+                this.logger.info('Found cookie consent button, clicking it');
+                await cookieButton.click();
+                // Wait a bit for the cookie banner to disappear
+                await new Promise(resolve => setTimeout(resolve, 500));
+            }
+        } catch (error) {
+            // Cookie button not found or already dismissed - this is fine
+            this.logger.debug('Cookie consent button not found or already dismissed');
+        }
 
         // await this.page.waitForSelector('textarea[name="q"]', { timeout: this.STANDARD_TIMEOUT });
 
