@@ -77,22 +77,22 @@
         v-for="message in messages"
         :key="message.id"
         class="message-wrapper"
-        :class="[message.role, message.messageType || 'message']"
+        :class="[message.role, message.messageType || MESSAGE_TYPE.MESSAGE]"
       >
         <div class="message-content">
           <div class="message-avatar">
             <v-icon v-if="message.role === 'user'" color="primary">mdi-account</v-icon>
-            <v-icon v-else-if="message.messageType === 'tool_call'" color="purple">mdi-toolbox</v-icon>
-            <v-icon v-else-if="message.messageType === 'tool_result'" color="success">mdi-check-circle</v-icon>
+            <v-icon v-else-if="message.messageType === MESSAGE_TYPE.TOOL_CALL" color="purple">mdi-toolbox</v-icon>
+            <v-icon v-else-if="message.messageType === MESSAGE_TYPE.TOOL_RESULT" color="success">mdi-check-circle</v-icon>
             <v-icon v-else color="purple">mdi-robot</v-icon>
           </div>
           <div class="message-bubble" :class="{
-            'assistant-message': message.role === 'assistant' && message.messageType === 'message',
-            'tool-call-message': message.messageType === 'tool_call',
-            'tool-result-message': message.messageType === 'tool_result'
+            'assistant-message': message.role === 'assistant' && message.messageType === MESSAGE_TYPE.MESSAGE,
+            'tool-call-message': message.messageType === MESSAGE_TYPE.TOOL_CALL,
+            'tool-result-message': message.messageType === MESSAGE_TYPE.TOOL_RESULT
           }">
             <!-- Tool Call Message -->
-            <template v-if="message.messageType === 'tool_call'">
+            <template v-if="message.messageType === MESSAGE_TYPE.TOOL_CALL">
               <div class="tool-call-header">
                 <v-icon size="small" color="purple" class="mr-1">mdi-toolbox</v-icon>
                 <span><strong>Tool Call</strong></span>
@@ -120,7 +120,7 @@
             </template>
 
             <!-- Tool Result Message -->
-            <template v-else-if="message.messageType === 'tool_result'">
+            <template v-else-if="message.messageType === MESSAGE_TYPE.TOOL_RESULT">
               <div class="tool-result-header">
                 <v-icon size="small" :color="message.metadata?.success === false ? 'error' : 'success'" class="mr-1">
                   {{ message.metadata?.success === false ? 'mdi-alert-circle' : 'mdi-check-circle' }}
@@ -389,6 +389,14 @@ import { ref, onMounted, nextTick, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { sendChatMessage, streamChatMessage, getChatHistory, clearChatHistory, getConversations, ConversationMetadata } from '@/views/api/aiChat';
 import { ChatMessage, ChatStreamChunk } from '@/entityTypes/commonType';
+import { MessageType } from '@/entityTypes/commonType';
+
+// Message type constants for template use
+const MESSAGE_TYPE = {
+    MESSAGE: MessageType.MESSAGE,
+    TOOL_CALL: MessageType.TOOL_CALL,
+    TOOL_RESULT: MessageType.TOOL_RESULT
+} as const;
 
 // i18n setup
 const { t } = useI18n();

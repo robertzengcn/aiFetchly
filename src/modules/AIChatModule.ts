@@ -1,6 +1,7 @@
 import { BaseModule } from "@/modules/baseModule";
 import { AIChatMessageModel } from "@/model/AIChatMessage.model";
 import { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
+import { MessageType } from "@/entityTypes/commonType";
 
 export interface SaveMessageOptions {
     messageId: string;
@@ -11,7 +12,7 @@ export interface SaveMessageOptions {
     model?: string;
     tokensUsed?: number;
     metadata?: any;
-    messageType?: 'message' | 'tool_call' | 'tool_result';
+    messageType?: MessageType;
 }
 
 export class AIChatModule extends BaseModule {
@@ -35,7 +36,7 @@ export class AIChatModule extends BaseModule {
         message.model = options.model;
         message.tokensUsed = options.tokensUsed;
         message.metadata = options.metadata ? JSON.stringify(options.metadata) : undefined;
-        message.messageType = options.messageType || 'message';
+        message.messageType = options.messageType || MessageType.MESSAGE;
 
         const messageId = await this.chatMessageModel.saveMessage(message);
         const savedMessage = await this.chatMessageModel.getMessageById(messageId);
