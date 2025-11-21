@@ -495,7 +495,8 @@ async function loadChatHistory() {
       if (response.data.conversationId && !conversationId.value) {
         conversationId.value = response.data.conversationId;
       }
-      
+      toolResult.value=null
+      streamError.value = null
       await nextTick();
       scrollToBottom();
     }
