@@ -34,7 +34,8 @@ const EXTERNAL_DEPENDENCIES = [
 'sqlite-vec',
 'canvas',
 '@napi-rs/canvas',
-'reflect-metadata'
+'reflect-metadata',
+'@mixmark-io/domino',
 ];
 //import { ForgeConfig } from '@electron-forge/shared-types';
 // import { AutoUnpackNativesPlugin } from "@electron-forge/plugin-auto-unpack-natives";
