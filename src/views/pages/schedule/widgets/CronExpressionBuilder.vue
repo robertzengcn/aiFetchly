@@ -7,14 +7,14 @@
       @click="showBuilder = true"
     >
       <v-icon class="mr-1">mdi-tools</v-icon>
-      Builder
+      {{ t('schedule.cron_builder_button') }}
     </v-btn>
 
     <v-dialog v-model="showBuilder" max-width="600">
       <v-card>
         <v-card-title class="d-flex align-center">
           <v-icon class="mr-2">mdi-clock-outline</v-icon>
-          Cron Expression Builder
+          {{ t('schedule.cron_builder_title') }}
         </v-card-title>
 
         <v-card-text>
@@ -22,7 +22,7 @@
             <!-- Preset Options -->
             <v-row>
               <v-col cols="12">
-                <h4 class="text-subtitle-1 mb-2">Quick Presets</h4>
+                <h4 class="text-subtitle-1 mb-2">{{ t('schedule.cron_builder_quick_presets') }}</h4>
                 <v-chip-group>
                   <v-chip
                     v-for="preset in presets"
@@ -42,17 +42,30 @@
             <!-- Custom Builder -->
             <v-row>
               <v-col cols="12">
-                <h4 class="text-subtitle-1 mb-2">Custom Schedule</h4>
+                <v-btn
+                  color="primary"
+                  variant="outlined"
+                  class="text-subtitle-1 font-weight-medium"
+                  @click="showCustomSchedule = !showCustomSchedule"
+                  block
+                >
+                  <v-icon class="mr-2" :class="{ 'rotate-180': showCustomSchedule }">
+                    mdi-chevron-down
+                  </v-icon>
+                  {{ t('schedule.cron_builder_custom_schedule') }}
+                </v-btn>
               </v-col>
             </v-row>
 
-            <!-- Minutes -->
+            <v-expand-transition>
+              <div v-show="showCustomSchedule">
+                <!-- Minutes -->
             <v-row>
               <v-col cols="12" md="6">
                 <v-select
                   v-model="customSchedule.minutes"
                   :items="minuteOptions"
-                  label="Minutes"
+                  :label="t('schedule.cron_builder_minutes')"
                   @update:model-value="updateExpression"
                 />
               </v-col>
@@ -60,7 +73,7 @@
                 <v-text-field
                   v-if="customSchedule.minutes === 'custom'"
                   v-model="customSchedule.minutesValue"
-                  label="Custom Minutes"
+                  :label="t('schedule.cron_builder_custom_minutes')"
                   placeholder="0,15,30,45"
                   @update:model-value="updateExpression"
                 />
@@ -73,7 +86,7 @@
                 <v-select
                   v-model="customSchedule.hours"
                   :items="hourOptions"
-                  label="Hours"
+                  :label="t('schedule.cron_builder_hours')"
                   @update:model-value="updateExpression"
                 />
               </v-col>
@@ -81,7 +94,7 @@
                 <v-text-field
                   v-if="customSchedule.hours === 'custom'"
                   v-model="customSchedule.hoursValue"
-                  label="Custom Hours"
+                  :label="t('schedule.cron_builder_custom_hours')"
                   placeholder="0,6,12,18"
                   @update:model-value="updateExpression"
                 />
@@ -94,7 +107,7 @@
                 <v-select
                   v-model="customSchedule.days"
                   :items="dayOptions"
-                  label="Days"
+                  :label="t('schedule.cron_builder_days')"
                   @update:model-value="updateExpression"
                 />
               </v-col>
@@ -102,7 +115,7 @@
                 <v-text-field
                   v-if="customSchedule.days === 'custom'"
                   v-model="customSchedule.daysValue"
-                  label="Custom Days"
+                  :label="t('schedule.cron_builder_custom_days')"
                   placeholder="1,15"
                   @update:model-value="updateExpression"
                 />
@@ -115,7 +128,7 @@
                 <v-select
                   v-model="customSchedule.months"
                   :items="monthOptions"
-                  label="Months"
+                  :label="t('schedule.cron_builder_months')"
                   @update:model-value="updateExpression"
                 />
               </v-col>
@@ -123,7 +136,7 @@
                 <v-text-field
                   v-if="customSchedule.months === 'custom'"
                   v-model="customSchedule.monthsValue"
-                  label="Custom Months"
+                  :label="t('schedule.cron_builder_custom_months')"
                   placeholder="1,6,12"
                   @update:model-value="updateExpression"
                 />
@@ -136,7 +149,7 @@
                 <v-select
                   v-model="customSchedule.weekdays"
                   :items="weekdayOptions"
-                  label="Weekdays"
+                  :label="t('schedule.cron_builder_weekdays')"
                   @update:model-value="updateExpression"
                 />
               </v-col>
@@ -144,12 +157,14 @@
                 <v-text-field
                   v-if="customSchedule.weekdays === 'custom'"
                   v-model="customSchedule.weekdaysValue"
-                  label="Custom Weekdays"
+                  :label="t('schedule.cron_builder_custom_weekdays')"
                   placeholder="1,3,5"
                   @update:model-value="updateExpression"
                 />
               </v-col>
             </v-row>
+              </div>
+            </v-expand-transition>
 
             <!-- Generated Expression -->
             <v-row>
@@ -169,7 +184,7 @@
                       variant="outlined"
                       @click="copyExpression"
                     >
-                      Copy
+                      {{ t('schedule.cron_builder_copy') }}
                     </v-btn>
                   </div>
                 </v-alert>
@@ -201,13 +216,13 @@
             variant="outlined"
             @click="showBuilder = false"
           >
-            Cancel
+            {{ t('common.cancel') }}
           </v-btn>
           <v-btn
             color="primary"
             @click="applyExpression"
           >
-            Apply Expression
+            {{ t('schedule.cron_builder_apply_expression') }}
           </v-btn>
         </v-card-actions>
       </v-card>
@@ -217,6 +232,9 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 // Emits
 const emit = defineEmits<{
@@ -225,6 +243,7 @@ const emit = defineEmits<{
 
 // Reactive data
 const showBuilder = ref(false)
+const showCustomSchedule = ref(false)
 const generatedExpression = ref('* * * * *')
 
 // Custom schedule configuration
@@ -242,56 +261,56 @@ const customSchedule = ref({
 })
 
 // Preset expressions
-const presets = [
-  { name: 'Every Minute', expression: '* * * * *' },
-  { name: 'Every Hour', expression: '0 * * * *' },
-  { name: 'Daily', expression: '0 0 * * *' },
-  { name: 'Weekly', expression: '0 0 * * 0' },
-  { name: 'Monthly', expression: '0 0 1 * *' },
-  { name: 'Every 15 Min', expression: '*/15 * * * *' },
-  { name: 'Every 30 Min', expression: '*/30 * * * *' },
-  { name: 'Every 2 Hours', expression: '0 */2 * * *' },
-  { name: 'Weekdays 9 AM', expression: '0 9 * * 1-5' },
-  { name: 'Weekends 10 AM', expression: '0 10 * * 0,6' }
-]
+const presets = computed(() => [
+  { name: t('schedule.cron_preset_every_minute'), expression: '* * * * *' },
+  { name: t('schedule.cron_preset_every_hour'), expression: '0 * * * *' },
+  { name: t('schedule.cron_preset_daily'), expression: '0 0 * * *' },
+  { name: t('schedule.cron_preset_weekly'), expression: '0 0 * * 0' },
+  { name: t('schedule.cron_preset_monthly'), expression: '0 0 1 * *' },
+  { name: t('schedule.cron_preset_every_15_min'), expression: '*/15 * * * *' },
+  { name: t('schedule.cron_preset_every_30_min'), expression: '*/30 * * * *' },
+  { name: t('schedule.cron_preset_every_2_hours'), expression: '0 */2 * * *' },
+  { name: t('schedule.cron_preset_weekdays_9_am'), expression: '0 9 * * 1-5' },
+  { name: t('schedule.cron_preset_weekends_10_am'), expression: '0 10 * * 0,6' }
+])
 
 // Options for selects
-const minuteOptions = [
-  { title: 'Every Minute', value: 'every' },
-  { title: 'Every 5 Minutes', value: '*/5' },
-  { title: 'Every 15 Minutes', value: '*/15' },
-  { title: 'Every 30 Minutes', value: '*/30' },
-  { title: 'Specific Minutes', value: 'custom' }
-]
+const minuteOptions = computed(() => [
+  { title: t('schedule.cron_option_every_minute'), value: 'every' },
+  { title: t('schedule.cron_option_every_5_minutes'), value: '*/5' },
+  { title: t('schedule.cron_option_every_15_minutes'), value: '*/15' },
+  { title: t('schedule.cron_option_every_30_minutes'), value: '*/30' },
+  { title: t('schedule.cron_option_specific_minutes'), value: 'custom' }
+])
 
-const hourOptions = [
-  { title: 'Every Hour', value: 'every' },
-  { title: 'Every 2 Hours', value: '*/2' },
-  { title: 'Every 6 Hours', value: '*/6' },
-  { title: 'Every 12 Hours', value: '*/12' },
-  { title: 'Specific Hours', value: 'custom' }
-]
+const hourOptions = computed(() => [
+  { title: t('schedule.cron_option_every_hour'), value: 'every' },
+  { title: t('schedule.cron_option_every_2_hours'), value: '*/2' },
+  { title: t('schedule.cron_option_every_6_hours'), value: '*/6' },
+  { title: t('schedule.cron_option_every_12_hours'), value: '*/12' },
+  { title: t('schedule.cron_option_specific_hours'), value: 'custom' }
+])
 
-const dayOptions = [
-  { title: 'Every Day', value: 'every' },
-  { title: 'Every 2 Days', value: '*/2' },
-  { title: 'Every Week', value: '*/7' },
-  { title: 'Specific Days', value: 'custom' }
-]
+const dayOptions = computed(() => [
+  { title: t('schedule.cron_option_every_day'), value: 'every' },
+  { title: t('schedule.cron_option_every_2_days'), value: '*/2' },
+  { title: t('schedule.cron_option_every_week'), value: '*/7' },
+  { title: t('schedule.cron_option_specific_days'), value: 'custom' }
+])
 
-const monthOptions = [
-  { title: 'Every Month', value: 'every' },
-  { title: 'Every 3 Months', value: '*/3' },
-  { title: 'Every 6 Months', value: '*/6' },
-  { title: 'Specific Months', value: 'custom' }
-]
+const monthOptions = computed(() => [
+  { title: t('schedule.cron_option_every_month'), value: 'every' },
+  { title: t('schedule.cron_option_every_3_months'), value: '*/3' },
+  { title: t('schedule.cron_option_every_6_months'), value: '*/6' },
+  { title: t('schedule.cron_option_specific_months'), value: 'custom' }
+])
 
-const weekdayOptions = [
-  { title: 'Every Day', value: 'every' },
-  { title: 'Weekdays Only', value: '1-5' },
-  { title: 'Weekends Only', value: '0,6' },
-  { title: 'Specific Days', value: 'custom' }
-]
+const weekdayOptions = computed(() => [
+  { title: t('schedule.cron_option_every_day'), value: 'every' },
+  { title: t('schedule.cron_option_weekdays_only'), value: '1-5' },
+  { title: t('schedule.cron_option_weekends_only'), value: '0,6' },
+  { title: t('schedule.cron_option_specific_weekdays'), value: 'custom' }
+])
 
 // Computed properties
 const expressionDescription = computed(() => {
@@ -301,33 +320,33 @@ const expressionDescription = computed(() => {
   let description = ''
 
   // Minutes
-  if (minute === '*') description += 'Every minute'
-  else if (minute === '0') description += 'At minute 0'
-  else if (minute.startsWith('*/')) description += `Every ${minute.slice(2)} minutes`
-  else description += `At minutes ${minute}`
+  if (minute === '*') description += t('schedule.cron_desc_every_minute')
+  else if (minute === '0') description += t('schedule.cron_desc_at_minute_0')
+  else if (minute.startsWith('*/')) description += t('schedule.cron_desc_every_n_minutes', { count: minute.slice(2) })
+  else description += t('schedule.cron_desc_at_minutes', { minutes: minute })
 
   // Hours
-  if (hour === '*') description += ' of every hour'
-  else if (hour === '0') description += ' at midnight'
-  else if (hour.startsWith('*/')) description += ` every ${hour.slice(2)} hours`
-  else description += ` at ${hour}:00`
+  if (hour === '*') description += t('schedule.cron_desc_of_every_hour')
+  else if (hour === '0') description += t('schedule.cron_desc_at_midnight')
+  else if (hour.startsWith('*/')) description += t('schedule.cron_desc_every_n_hours', { count: hour.slice(2) })
+  else description += t('schedule.cron_desc_at_hour', { hour })
 
   // Days
-  if (day === '*') description += ' of every day'
-  else if (day === '1') description += ' on the 1st'
-  else if (day.startsWith('*/')) description += ` every ${day.slice(2)} days`
-  else description += ` on day ${day}`
+  if (day === '*') description += t('schedule.cron_desc_of_every_day')
+  else if (day === '1') description += t('schedule.cron_desc_on_the_1st')
+  else if (day.startsWith('*/')) description += t('schedule.cron_desc_every_n_days', { count: day.slice(2) })
+  else description += t('schedule.cron_desc_on_day', { day })
 
   // Months
-  if (month === '*') description += ' of every month'
-  else if (month.startsWith('*/')) description += ` every ${month.slice(2)} months`
-  else description += ` in month ${month}`
+  if (month === '*') description += t('schedule.cron_desc_of_every_month')
+  else if (month.startsWith('*/')) description += t('schedule.cron_desc_every_n_months', { count: month.slice(2) })
+  else description += t('schedule.cron_desc_in_month', { month })
 
   // Weekdays
   if (weekday === '*') description += ''
-  else if (weekday === '1-5') description += ' on weekdays'
-  else if (weekday === '0,6') description += ' on weekends'
-  else description += ` on weekday ${weekday}`
+  else if (weekday === '1-5') description += t('schedule.cron_desc_on_weekdays')
+  else if (weekday === '0,6') description += t('schedule.cron_desc_on_weekends')
+  else description += t('schedule.cron_desc_on_weekday', { weekday })
 
   return description
 })
@@ -406,5 +425,10 @@ const applyExpression = () => {
 
 .v-chip-group {
   flex-wrap: wrap;
+}
+
+.rotate-180 {
+  transform: rotate(180deg);
+  transition: transform 0.3s ease;
 }
 </style> 
