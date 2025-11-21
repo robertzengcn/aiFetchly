@@ -124,7 +124,7 @@ export default ({ mode }) => {
                     // 'puppeteer',
                     // '@lem0-packages/puppeteer-page-proxy',
                     // 'nodemailer',
-                    // '@langchain/ollama',
+                
                 ],
             },
             // target: 'es6',

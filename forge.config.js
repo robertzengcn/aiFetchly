@@ -20,7 +20,6 @@ const EXTERNAL_DEPENDENCIES = [
 'puppeteer-extra-plugin-recaptcha',
 '@lem0-packages/puppeteer-page-proxy',
 'nodemailer',
-'@langchain/ollama',
 'decamelize',
 'camelcase',
 'js-tiktoken',
