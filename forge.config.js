@@ -20,7 +20,6 @@ const EXTERNAL_DEPENDENCIES = [
 'puppeteer-extra-plugin-recaptcha',
 '@lem0-packages/puppeteer-page-proxy',
 'nodemailer',
-'@langchain/ollama',
 'decamelize',
 'camelcase',
 'js-tiktoken',
@@ -33,7 +32,9 @@ const EXTERNAL_DEPENDENCIES = [
 'cheerio',
 'sqlite-vec',
 'canvas',
-'@napi-rs/canvas'
+'@napi-rs/canvas',
+'reflect-metadata',
+'@mixmark-io/domino',
 ];
 //import { ForgeConfig } from '@electron-forge/shared-types';
 // import { AutoUnpackNativesPlugin } from "@electron-forge/plugin-auto-unpack-natives";
