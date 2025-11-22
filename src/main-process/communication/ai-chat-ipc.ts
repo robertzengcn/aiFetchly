@@ -240,10 +240,32 @@ export function registerAiChatIpcHandlers(): void {
             const pendingToolCalls = new Set<string>();
             // Store deferred completion chunks to send when all tools are done
             let deferredCompletionChunk: ChatStreamChunk | null = null;
+            // Track if message has been saved to database
+            let messageSaved = false;
 
             // Helper function to check if we can send completion
             const canSendCompletion = (): boolean => {
                 return pendingToolCalls.size === 0;
+            };
+
+            // Helper function to save message to database
+            const saveMessageToDatabase = async (): Promise<void> => {
+                if (!messageSaved && fullContent.trim()) {
+                    try {
+                        await chatModule.saveMessage({
+                            messageId: assistantMessageId,
+                            conversationId: streamConversationId,
+                            role: 'assistant',
+                            content: fullContent,
+                            timestamp: new Date(),
+                            messageType: MessageType.MESSAGE
+                        });
+                        messageSaved = true;
+                        console.log('Saved assistant message to database');
+                    } catch (saveError) {
+                        console.error('Failed to save assistant message to database:', saveError);
+                    }
+                }
             };
 
             // Common handler for processing a single stream event and forwarding to UI
@@ -520,6 +542,7 @@ export function registerAiChatIpcHandlers(): void {
                                         pendingToolCalls.delete(toolId);
                                         console.log(`Tool call completed: ${toolName} (ID: ${toolId}), pending: ${pendingToolCalls.size}`);
                                         // Check if we can send deferred completion
+                                        // This will also save the message if all tools are done
                                         sendDeferredCompletionIfReady();
                                     }
                                     
@@ -587,6 +610,10 @@ export function registerAiChatIpcHandlers(): void {
                                         
                                         // Check if we can send completion (no other pending tools)
                                         if (canSendCompletion()) {
+                                            // Save message before sending error completion
+                                            saveMessageToDatabase().catch(err => {
+                                                console.error('Error saving message on tool error completion:', err);
+                                            });
                                             event.sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(errorCompletionChunk));
                                             console.log(`Sent error completion for tool ${toolName} (ID: ${toolId})`);
                                         } else {
@@ -594,6 +621,7 @@ export function registerAiChatIpcHandlers(): void {
                                             console.log(`Deferring error completion due to ${pendingToolCalls.size} pending tool calls`);
                                             deferredCompletionChunk = errorCompletionChunk;
                                             // Still check if we can send deferred completion
+                                            // This will also save the message if all tools are done
                                             sendDeferredCompletionIfReady();
                                         }
                                     }
@@ -676,6 +704,10 @@ export function registerAiChatIpcHandlers(): void {
                             
                             // Only send completion if no pending tool calls
                             if (canSendCompletion()) {
+                                // Save message before sending error completion
+                                saveMessageToDatabase().catch(err => {
+                                    console.error('Error saving message on ERROR event:', err);
+                                });
                                 event.sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(errorChunk));
                             } else {
                                 console.log(`Deferring ERROR completion due to ${pendingToolCalls.size} pending tool calls`);
@@ -697,6 +729,10 @@ export function registerAiChatIpcHandlers(): void {
                             
                             // Only send completion if no pending tool calls
                             if (canSendCompletion()) {
+                                // Save message before sending completion
+                                saveMessageToDatabase().catch(err => {
+                                    console.error('Error saving message on DONE:', err);
+                                });
                                 event.sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(completeChunk));
                             } else {
                                 console.log(`Deferring DONE completion due to ${pendingToolCalls.size} pending tool calls`);
@@ -736,6 +772,10 @@ export function registerAiChatIpcHandlers(): void {
                             
                             // Only send completion if no pending tool calls
                             if (canSendCompletion()) {
+                                // Save message before sending completion
+                                saveMessageToDatabase().catch(err => {
+                                    console.error('Error saving message on CONVERSATION_END:', err);
+                                });
                                 event.sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(chunk));
                             } else {
                                 console.log(`Deferring CONVERSATION_END completion due to ${pendingToolCalls.size} pending tool calls`);
@@ -760,6 +800,10 @@ export function registerAiChatIpcHandlers(): void {
             // Helper function to send deferred completion if ready
             const sendDeferredCompletionIfReady = (): void => {
                 if (canSendCompletion() && deferredCompletionChunk) {
+                    // Save message before sending deferred completion
+                    saveMessageToDatabase().catch(err => {
+                        console.error('Error saving message on deferred completion:', err);
+                    });
                     event.sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(deferredCompletionChunk));
                     deferredCompletionChunk = null;
                     console.log('Sent deferred completion message');
@@ -771,17 +815,9 @@ export function registerAiChatIpcHandlers(): void {
                 processStreamEvent(streamEvent);
             });
 
-            // Save assistant message to database if we have content
-            if (fullContent.trim()) {
-                await chatModule.saveMessage({
-                    messageId: assistantMessageId,
-                    conversationId: streamConversationId,
-                    role: 'assistant',
-                    content: fullContent,
-                    timestamp: new Date(),
-                    messageType: MessageType.MESSAGE
-                });
-            }
+            // Note: Message saving is now handled in completion event handlers (DONE, CONVERSATION_END)
+            // or in sendDeferredCompletionIfReady to ensure all content from streamContinueWithToolResults
+            // is included before saving
         } catch (error) {
             if(error instanceof Error && error.message.includes('tool name is required')){
                 return;
