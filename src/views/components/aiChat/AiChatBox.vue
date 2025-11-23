@@ -487,6 +487,7 @@ async function loadChatHistory() {
   
   isLoadingHistory.value = true;
   try {
+    if(!conversationId.value) return;
     const response = await getChatHistory(conversationId.value);
     if (response && response.data) {
       messages.value = response.data.messages;
