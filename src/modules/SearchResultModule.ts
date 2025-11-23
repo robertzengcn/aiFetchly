@@ -176,6 +176,21 @@ export class SearchResultModule extends BaseModule implements ISearchResultApi {
     }
 
     /**
+     * Get search results breakdown by search engine
+     * @param startDate Start date for filtering results
+     * @param endDate End date for filtering results
+     * @returns Array of engine counts with engine_id
+     */
+    async getBreakdownByEngine(startDate: Date, endDate: Date): Promise<Array<{ engineId: number; count: number }>> {
+        try {
+            return await this.searchResultModel.getBreakdownByEngine(startDate, endDate);
+        } catch (error) {
+            console.error("Failed to get breakdown by engine:", error);
+            throw new Error(error instanceof Error ? error.message : "Failed to get breakdown by engine");
+        }
+    }
+
+    /**
      * Delete search results by task ID
      */
     async deleteSearchResultsByTaskId(taskId: number): Promise<number> {
