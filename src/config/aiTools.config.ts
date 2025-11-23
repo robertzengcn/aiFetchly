@@ -97,10 +97,14 @@ export const AVAILABLE_TOOL_FUNCTIONS: ToolFunction[] = [
     {
         type: "function",
         name: 'search_yellow_pages',
-        description: 'Search Yellow Pages business directory for companies, contact information, and business details by category, name, or location.',
+        description: 'Search Yellow Pages business directory for companies, contact information, and business details by category, name, or location. Use get_available_yellow_pages_platforms first to see available platforms.',
         parameters: {
             type: 'object',
             properties: {
+                platform: {
+                    type: 'string',
+                    description: 'Platform name (e.g., "yellowpages.com"). Use get_available_yellow_pages_platforms to see available options.'
+                },
                 search_term: {
                     type: 'string',
                     description: 'Business name, category, or keyword to search for'
@@ -120,7 +124,17 @@ export const AVAILABLE_TOOL_FUNCTIONS: ToolFunction[] = [
                     default: false
                 }
             },
-            required: ['search_term', 'location']
+            required: ['platform', 'search_term', 'location']
+        }
+    },
+    {
+        type: "function",
+        name: 'get_available_yellow_pages_platforms',
+        description: 'Get a list of available Yellow Pages platforms that can be used for business directory searches. Returns platform names, countries, languages, and authentication requirements.',
+        parameters: {
+            type: 'object',
+            properties: {},
+            required: []
         }
     }
 ];
