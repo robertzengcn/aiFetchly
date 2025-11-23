@@ -226,6 +226,40 @@ export class ToolExecutionService {
                     description: r.snippet || 'No description'
                 }))
             };
+        } else if (toolName === 'search_yellow_pages' &&
+            typeof toolResult === 'object' &&
+            toolResult !== null &&
+            'summary' in toolResult) {
+
+            const yellowPagesResult = toolResult as {
+                platform: string;
+                search_term: string;
+                location: string;
+                totalResults: number;
+                resultsReturned: number;
+                summary: string;
+                results: Array<{
+                    business_name: string;
+                    phone?: string;
+                    email?: string;
+                    website?: string;
+                    address?: object;
+                    rating?: number;
+                    review_count?: number;
+                    categories?: string[];
+                    platform: string;
+                }>;
+            };
+
+            return {
+                platform: yellowPagesResult.platform,
+                search_term: yellowPagesResult.search_term,
+                location: yellowPagesResult.location,
+                totalResults: yellowPagesResult.totalResults,
+                resultsReturned: yellowPagesResult.resultsReturned,
+                formatted_summary: yellowPagesResult.summary,
+                results: yellowPagesResult.results
+            };
         } else {
             // For other tools, exclude success flag but keep other data
             const resultRecord = toolResult as Record<string, unknown>;
