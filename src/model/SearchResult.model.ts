@@ -1,6 +1,7 @@
 import { BaseDb } from "@/model/Basedb";
 import { Repository, In } from "typeorm";
 import { SearchResultEntity } from "@/entity/SearchResult.entity";
+import { SearchTaskEntity } from "@/entity/SearchTask.entity";
 import { SearchResEntity } from "@/entityTypes/scrapeType";
 
 export class SearchResultModel extends BaseDb {
@@ -13,10 +14,24 @@ export class SearchResultModel extends BaseDb {
 
     /**
      * Save search result
+     * Checks if link already exists in database - if exists, returns existing item ID
+     * If not exists, creates a new record and returns new ID
      * @param data Search result entity data
      * @param taskId The task ID this result belongs to
+     * @returns ID of existing or newly created search result
      */
     async saveResult(data: SearchResEntity, taskId: number): Promise<number> {
+        // Check if a result with this link already exists
+        const existingResult = await this.repository.findOne({
+            where: { link: data.link }
+        });
+
+        // If link exists, return existing item ID
+        if (existingResult) {
+            return existingResult.id;
+        }
+
+        // If link doesn't exist, create new record
         const resultEntity = new SearchResultEntity();
         resultEntity.task_id = taskId;
         resultEntity.keyword_id = data.keyword_id;
@@ -152,6 +167,54 @@ export class SearchResultModel extends BaseDb {
             visible_link: result.domain,
             record_time: result.record_time
         }));
+    }
+
+    /**
+     * Get search results breakdown by search engine
+     * Joins SearchResult with SearchTask to get engine_id and groups by engine
+     * Note: enginer_id is stored as text in SearchTaskEntity, so we parse it after grouping
+     * @param startDate Start date for filtering results
+     * @param endDate End date for filtering results
+     * @returns Array of engine counts with engine_id
+     */
+    async getBreakdownByEngine(startDate: Date, endDate: Date): Promise<Array<{ engineId: number; count: number }>> {
+        // Join SearchResult with SearchTask to get engine information
+        // Group by engine_id (stored as text) and count results
+        const rows = await this.repository
+            .createQueryBuilder('result')
+            .innerJoin(SearchTaskEntity, 'task', 'task.id = result.task_id')
+            .select('task.enginer_id', 'engineId')
+            .addSelect('COUNT(*)', 'count')
+            .where('result.record_time >= :startDate', { startDate: startDate.toISOString() })
+            .andWhere('result.record_time <= :endDate', { endDate: endDate.toISOString() })
+            .andWhere('task.enginer_id IS NOT NULL')
+            .andWhere("task.enginer_id != ''")
+            .groupBy('task.enginer_id')
+            .orderBy('count', 'DESC')
+            .getRawMany();
+
+        // Parse engine IDs from text to numbers and filter out invalid values
+        return rows.map((row: { engineId: string | number | null; count: string }) => {
+            // Parse engine ID - it's stored as text but should be a number
+            let engineId: number;
+            if (typeof row.engineId === 'string') {
+                engineId = parseInt(row.engineId.trim(), 10);
+            } else if (typeof row.engineId === 'number') {
+                engineId = row.engineId;
+            } else {
+                return null;
+            }
+
+            // Validate engine ID
+            if (isNaN(engineId) || engineId <= 0) {
+                return null;
+            }
+
+            return {
+                engineId,
+                count: parseInt(row.count, 10)
+            };
+        }).filter((item): item is { engineId: number; count: number } => item !== null);
     }
 
     /**
