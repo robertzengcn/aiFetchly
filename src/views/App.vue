@@ -43,6 +43,7 @@ const handleLogoutNotification = (data: NativateDatatype) => {
 };
 
 onMounted(() => {
+  
   // Listen for navigation commands from main process (including logout)
   receiveRedirectevent(NATIVATECOMMAND, handleLogoutNotification);
 });

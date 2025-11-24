@@ -54,7 +54,7 @@ export class HttpClient {
         // Sign out user (this will also navigate to login page)
         try {
           const userModel = new User();
-          await userModel.Signout();
+          await userModel.removeToken();
         } catch (error) {
           console.error('Error during signout:', error);
         }
@@ -190,7 +190,7 @@ export class HttpClient {
         // Sign out user (this will also navigate to login page)
         try {
           const userModel = new User();
-          await userModel.Signout();
+          await userModel.removeToken();
         } catch (error) {
           console.error('Error during signout:', error);
         }
