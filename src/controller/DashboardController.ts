@@ -6,12 +6,15 @@ import {
   SearchEngineBreakdown,
   EmailStatusBreakdown,
   DateRange,
-  AggregatedCount
+  AggregatedCount,
+  EngineMetric
 } from '@/entityTypes/dashboardType';
 import { SearchResultModule } from '@/modules/SearchResultModule';
 import { EmailSearchTaskModule } from '@/modules/EmailSearchTaskModule';
 import { YellowPagesResultModule } from '@/modules/YellowPagesResultModule';
 import { EmailMarketingSendLogModule } from '@/modules/emailMarketingSendLogModule';
+import { SearhEnginer } from '@/config/searchSetting';
+import { getEnumValueByNumber } from '@/modules/lib/function';
 
 export class DashboardController {
   private readonly searchResultModule: SearchResultModule;
@@ -88,13 +91,22 @@ export class DashboardController {
    */
   async getSearchEngineBreakdown(startDate: Date, endDate: Date): Promise<SearchEngineBreakdown> {
     try {
-      const totalCount = await this.searchResultModule.countByDateRange(startDate, endDate);
+      // Get breakdown by engine ID
+      const engineBreakdown = await this.searchResultModule.getBreakdownByEngine(startDate, endDate);
 
-      // Placeholder: Return aggregate count as "All Search Engines"
-      // TODO: Implement actual breakdown once engine metadata is available
-      return {
-        engines: [{ name: 'All Search Engines', count: totalCount }]
-      };
+      // Map engine IDs to engine names
+      const engines: EngineMetric[] = engineBreakdown.map(item => {
+        const engineName = getEnumValueByNumber(SearhEnginer, item.engineId);
+        return {
+          name: engineName || `Unknown Engine (${item.engineId})`,
+          count: item.count
+        };
+      });
+
+      // Sort by count descending
+      engines.sort((a, b) => b.count - a.count);
+
+      return { engines };
     } catch (error) {
       console.error('Error fetching search engine breakdown:', error);
       return { engines: [] };

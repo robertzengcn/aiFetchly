@@ -50,7 +50,7 @@ export const openPage = async() => {
 }
 
 export function receiveRedirectevent(channel:string,cb:(data:NativateDatatype)=>void){
-   
+  console.log("receive redirect event")
   windowReceive(channel,cb)
 }
 

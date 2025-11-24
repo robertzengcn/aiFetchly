@@ -323,7 +323,7 @@ export class SearchScrape implements searchEngineImpl {
 
         }
 
-        return await this.load_start_page();
+        return true
     }
     async searchData(data: clusterData): Promise<void> {
         //achieve it in child
@@ -416,6 +416,7 @@ export class SearchScrape implements searchEngineImpl {
             this.result_rank = 1;
 //console.log("keyword is "+keyword)
             try {
+                await this.load_start_page();
 
                 // if (this.pluggable && this.pluggable.before_keyword_scraped) {
                 //     await this.pluggable.before_keyword_scraped({
