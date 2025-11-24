@@ -7,6 +7,8 @@ export type HttpClientOptions = {
 //import { AuthInterceptor } from '@/modules/lib/authInterceptor';
 import {Token} from "@/modules/token"
 import {TOKENNAME} from '@/config/usersetting';
+import { User } from '@/modules/user';
+
 // export type RemoteResp = {
 //   status: boolean,
 //   msg: string,
@@ -44,6 +46,25 @@ export class HttpClient {
           headers: this._headers,
         }
        );
+       
+      // Handle 403 Forbidden - Token expired
+      if (res.status === 403) {
+        console.warn('Received 403 Forbidden - Token expired, signing out user');
+        
+        // Sign out user (this will also navigate to login page)
+        try {
+          const userModel = new User();
+          await userModel.Signout();
+        } catch (error) {
+          console.error('Error during signout:', error);
+        }
+        
+        // Clear Authorization header
+        delete this._headers['Authorization'];
+        
+        // Throw error to prevent further processing
+        throw new Error('Authentication failed: Token expired. Please login again.');
+      }
        
       if (!res.ok) throw new Error(res.statusText);
   
@@ -161,6 +182,25 @@ export class HttpClient {
           'Content-Type': 'application/json'
         },
       });
+      
+      // Handle 403 Forbidden - Token expired
+      if (res.status === 403) {
+        console.warn('Received 403 Forbidden - Token expired, signing out user');
+        
+        // Sign out user (this will also navigate to login page)
+        try {
+          const userModel = new User();
+          await userModel.Signout();
+        } catch (error) {
+          console.error('Error during signout:', error);
+        }
+        
+        // Clear Authorization header
+        delete this._headers['Authorization'];
+        
+        // Throw error to prevent further processing
+        throw new Error('Authentication failed: Token expired. Please login again.');
+      }
       
       if (!res.ok) throw new Error(res.statusText);
       return res;
