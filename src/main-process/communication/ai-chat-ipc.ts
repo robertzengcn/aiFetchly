@@ -1,11 +1,16 @@
 import { ipcMain } from 'electron';
 import { AiChatApi, ChatRequest, StreamEvent, StreamEventType } from '@/api/aiChatApi';
 import { AVAILABLE_TOOL_FUNCTIONS } from '@/config/aiTools.config';
-import { CommonMessage, ChatMessage, ChatHistoryResponse, ChatStreamChunk } from '@/entityTypes/commonType';
+import { CommonMessage, ChatMessage, ChatHistoryResponse, ChatStreamChunk, MessageType } from '@/entityTypes/commonType';
 import { AIChatModule } from '@/modules/AIChatModule';
 import { RagSearchModule, SearchRequest, SearchResponse } from '@/modules/RagSearchModule';
 import { SearchModule } from '@/modules/SearchModule';
 import { SearchTaskStatus } from '@/model/SearchTask.model';
+import { ToolExecutor } from '@/service/ToolExecutor';
+import { YellowPagesController } from '@/controller/YellowPagesController';
+import { TaskStatus } from '@/modules/interface/ITaskManager';
+import { YellowPagesResult } from '@/modules/interface/ITaskManager';
+import { StreamEventProcessor, StreamState } from '@/service/StreamEventProcessor';
 // import { SearchResult } from '@/service/VectorSearchService';
 import {
     AI_CHAT_MESSAGE,
@@ -28,6 +33,105 @@ function generateConversationId(): string {
     const userId = tokenService.getValue(USERID) || 'anonymous';
     return `${userId}:${uuidv4()}`;
 }
+
+/**
+ * Enhance message with RAG context if enabled
+ */
+async function enhanceMessageWithRAG(
+    message: string,
+    useRAG: boolean,
+    ragLimit: number | undefined,
+    ragSearchModule: RagSearchModule
+): Promise<string> {
+    if (!useRAG) {
+        return message;
+    }
+
+    try {
+        const searchRequest: SearchRequest = {
+            query: message,
+            options: {
+                limit: ragLimit || 5
+            }
+        };
+
+        const searchResponse: SearchResponse = await ragSearchModule.search(searchRequest);
+
+        if (searchResponse.results.length > 0) {
+            // Format RAG results as context
+            const ragContext = searchResponse.results
+                .map((result, index) => {
+                    return `[Document ${index + 1}: ${result.document.name}]\n${result.content}`;
+                })
+                .join('\n\n');
+
+            // Prepend RAG context to the message
+            const enhancedMessage = `Based on the following context from knowledge base:\n\n${ragContext}\n\n---\n\nUser question: ${message}`;
+
+            console.log(`RAG search found ${searchResponse.results.length} relevant documents`);
+            return enhancedMessage;
+        } else {
+            console.log('RAG search returned no results, proceeding with original message');
+            return message;
+        }
+    } catch (ragError) {
+        console.error('RAG search failed, proceeding without RAG context:', ragError);
+        // Continue with original message if RAG fails
+        return message;
+    }
+}
+
+/**
+ * Format Yellow Pages results for LLM consumption
+ * Creates a readable list format with key business information
+ */
+export function formatYellowPagesResultsForLLM(results: YellowPagesResult[]): string {
+    if (results.length === 0) {
+        return 'No business results found.';
+    }
+
+    const formattedResults = results.map((result, index) => {
+        const businessName = result.business_name || 'Unknown Business';
+        const phone = result.phone ? `Phone: ${result.phone}` : '';
+        const email = result.email ? `Email: ${result.email}` : '';
+        const website = result.website ? `Website: ${result.website}` : '';
+        
+        // Format address
+        const addressParts: string[] = [];
+        if (result.address?.street) addressParts.push(result.address.street);
+        if (result.address?.city) addressParts.push(result.address.city);
+        if (result.address?.state) addressParts.push(result.address.state);
+        if (result.address?.zip) addressParts.push(result.address.zip);
+        const address = addressParts.length > 0 ? `Address: ${addressParts.join(', ')}` : '';
+        
+        // Format categories
+        const categories = result.categories && Array.isArray(result.categories) && result.categories.length > 0
+            ? `Categories: ${result.categories.join(', ')}`
+            : '';
+        
+        // Format rating
+        const rating = result.rating ? `Rating: ${result.rating}/5` : '';
+        const reviewCount = result.review_count ? `(${result.review_count} reviews)` : '';
+        const ratingInfo = rating ? `${rating} ${reviewCount}`.trim() : '';
+
+        // Build contact info
+        const contactInfo = [phone, email, website].filter(Boolean).join(' | ');
+
+        // Build result string
+        const parts = [
+            `${index + 1}. **${businessName}**`,
+            contactInfo && `   ${contactInfo}`,
+            address && `   ${address}`,
+            categories && `   ${categories}`,
+            ratingInfo && `   ${ratingInfo}`
+        ].filter(Boolean);
+
+        return parts.join('\n');
+    }).join('\n\n');
+
+    return `Found ${results.length} business result${results.length === 1 ? '' : 's'}:\n\n${formattedResults}`;
+}
+
 
 /**
  * Register AI Chat IPC handlers
@@ -61,7 +165,8 @@ export function registerAiChatIpcHandlers(): void {
                 conversationId,
                 role: 'user',
                 content: requestData.message,
-                timestamp: new Date()
+                timestamp: new Date(),
+                messageType: MessageType.MESSAGE
             });
 
             // If useRAG is true, perform local RAG search and append results to the message
@@ -118,7 +223,8 @@ export function registerAiChatIpcHandlers(): void {
                     content: apiResponse.data.message,
                     timestamp: new Date(),
                     model: apiResponse.data.model,
-                    tokensUsed: apiResponse.data.tokensUsed
+                    tokensUsed: apiResponse.data.tokensUsed,
+                    messageType: MessageType.MESSAGE
                 });
 
                 const assistantMessage: ChatMessage = {
@@ -180,7 +286,8 @@ export function registerAiChatIpcHandlers(): void {
                 conversationId,
                 role: 'user',
                 content: requestData.message,
-                timestamp: new Date()
+                timestamp: new Date(),
+                messageType: MessageType.MESSAGE
             });
 
             // If useRAG is true, perform local RAG search and append results to the message
@@ -228,418 +335,32 @@ export function registerAiChatIpcHandlers(): void {
             };
 
             const assistantMessageId = `assistant-${Date.now()}`;
-            let fullContent = '';
-            let streamConversationId = conversationId;
-            let hasStartedConversation = false;
-            // Track pending tool calls by tool ID
-            const pendingToolCalls = new Set<string>();
-            // Store deferred completion chunks to send when all tools are done
-            let deferredCompletionChunk: ChatStreamChunk | null = null;
-
-            // Helper function to check if we can send completion
-            const canSendCompletion = (): boolean => {
-                return pendingToolCalls.size === 0;
+            
+            // Create stream state
+            const streamState: StreamState = {
+                assistantMessageId,
+                fullContent: '',
+                streamConversationId: conversationId,
+                hasStartedConversation: false,
+                pendingToolCalls: new Set<string>(),
+                deferredCompletionChunk: null,
+                messageSaved: false,
+                chatModule,
+                aiChatApi
             };
+
+            // Create stream event processor
+            const processor = new StreamEventProcessor(event, streamState);
 
             // Common handler for processing a single stream event and forwarding to UI
             const processStreamEvent = (streamEvent: StreamEvent): void => {
-                const eventType = streamEvent.event;
-                
-                // Extract content from the event data
-                const extractContent = (): string => {
-                    if (typeof streamEvent.data.content === 'string') {
-                        return streamEvent.data.content;
+                try {
+                    processor.processEvent(streamEvent);
+                } catch (error) {
+                    if (error instanceof Error && error.message.includes('tool name is required')) {
+                        return;
                     }
-                    return JSON.stringify(streamEvent.data.content);
-                };
-
-                switch (eventType) {
-                    case StreamEventType.TOKEN:
-                        // Individual response tokens - append to message and stream to UI
-                        {
-                            // Send conversation_start event on first token if not already sent
-                            if (!hasStartedConversation) {
-                                const startChunk: ChatStreamChunk = {
-                                    content: '',
-                                    isComplete: false,
-                                    messageId: assistantMessageId,
-                                    eventType: StreamEventType.CONVERSATION_START,
-                                    conversationId: streamConversationId
-                                };
-                                event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(startChunk));
-                                hasStartedConversation = true;
-                            }
-
-                            const content = extractContent();
-                            fullContent += content;
-
-                            const chunk: ChatStreamChunk = {
-                                content: content,
-                                isComplete: false,
-                                messageId: assistantMessageId,
-                                eventType: StreamEventType.TOKEN
-                            };
-                            event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(chunk));
-                        }
-                        break;
-
-                    case StreamEventType.TOOL_CALL:
-                        // Tool execution request - execute locally and send result to UI
-                        // Handle nested data structure: data.data contains {name, id, arguments}
-                        {
-                            const toolCallData = streamEvent.data.data;
-                            const toolName = toolCallData?.name || undefined;
-                            if(!toolName){
-                                throw new Error('tool name is required');
-                            }
-                            const toolParams = toolCallData?.arguments || {};
-                            const toolId = toolCallData?.id || `tool-${Date.now()}`;
-                            const content = typeof streamEvent.data.content === 'string' 
-                                ? streamEvent.data.content 
-                                : `Executing tool: ${toolName}`;
-
-                            // Add tool to pending set
-                            if (toolId) {
-                                pendingToolCalls.add(toolId);
-                                console.log(`Tool call started: ${toolName} (ID: ${toolId}), pending: ${pendingToolCalls.size}`);
-                            }
-
-                            // Notify UI that tool is being executed
-                            const chunk: ChatStreamChunk = {
-                                content: content,
-                                isComplete: false,
-                                messageId: assistantMessageId,
-                                eventType: StreamEventType.TOOL_CALL,
-                                toolName: toolName,
-                                toolParams: toolParams,
-                                toolId: toolId
-                            };
-                            event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(chunk));
-                            
-                            // Execute the tool locally (async, don't block)
-                            (async () => {
-                                const toolStartMs = Date.now();
-                                try {
-                                    let toolResult: Record<string, unknown> = {};
-                                    
-                                    // Check which function is being called and execute it
-                                    switch (toolName) {
-                                        case 'scrape_urls_from_google':
-                                        case 'scrape_urls_from_bing':
-                                        case 'scrape_urls_from_yandex': {
-                                            const searchModule = new SearchModule();
-                                            const query = typeof toolParams.query === 'string' ? toolParams.query : '';
-                                            const numResults = typeof toolParams.num_results === 'number' ? toolParams.num_results : 10;
-                                            if(!query){
-                                                throw new Error('parameter of Query is required');
-                                            }
-                                            // Map tool name to engine name
-                                            const engineName = toolName === 'scrape_urls_from_google' ? 'Google' : 
-                                                             toolName === 'scrape_urls_from_bing' ? 'Bing' : 
-                                                             'Yandex';
-                                            
-                                            // Calculate num_pages based on num_results (assuming ~10 results per page)
-                                            const numPages = Math.ceil(numResults / 10);
-                                            
-                                            // Execute search
-                                            const taskId = await searchModule.searchByKeywordAndEngine(
-                                                [query],
-                                                engineName,
-                                                {
-                                                    num_pages: numPages,
-                                                    concurrency: 1,
-                                                    notShowBrowser: false
-                                                }
-                                            );
-                                            
-                                            // Poll task status until complete or error (max 60 seconds)
-                                            let taskStatus: SearchTaskStatus | null = null;
-                                            const maxWaitTime = 600000; // 600 seconds
-                                            const pollInterval = 1000; // 1 second
-                                            const startTime = Date.now();
-                                            
-                                            while (Date.now() - startTime < maxWaitTime) {
-                                                taskStatus = await searchModule.getTaskStatus(taskId);
-                                                if (taskStatus === null) {
-                                                    throw new Error(`Task ${taskId} not found`);
-                                                }
-                                                if (taskStatus === SearchTaskStatus.Complete || taskStatus === SearchTaskStatus.Error) {
-                                                    break;
-                                                }
-                                                await new Promise(resolve => setTimeout(resolve, pollInterval));
-                                            }
-                                            
-                                            // Check if task completed successfully
-                                            if (taskStatus !== SearchTaskStatus.Complete) {
-                                                throw new Error(`Search task ${taskId} did not complete successfully. Status: ${taskStatus}`);
-                                            }
-                                            
-                                            // Get search results
-                                            const results = await searchModule.listSearchResult(taskId, 1, numResults);
-                                            
-                                            toolResult = {
-                                                success: true,
-                                                taskId: taskId,
-                                                query: query,
-                                                engine: engineName,
-                                                results: results.map(r => ({
-                                                    title: r.title,
-                                                    link: r.link,
-                                                    snippet: r.snippet,
-                                                    visible_link: r.visible_link
-                                                })),
-                                                totalResults: results.length
-                                            };
-                                            break;
-                                        }
-                                        
-                                        case 'search_yellow_pages': {
-                                            // TODO: Implement Yellow Pages search when module is available
-                                            toolResult = {
-                                                success: false,
-                                                error: 'Yellow Pages search not yet implemented'
-                                            };
-                                            break;
-                                        }
-                                        
-                                        case 'extract_emails_from_results': {
-                                            // TODO: Implement email extraction when module is available
-                                            toolResult = {
-                                                success: false,
-                                                error: 'Email extraction not yet implemented'
-                                            };
-                                            break;
-                                        }
-                                        
-                                        default:
-                                            toolResult = {
-                                                success: false,
-                                                error: `Unknown tool: ${toolName}`
-                                            };
-                                    }
-                                    
-                                    // Send tool result to UI
-                                    const resultChunk: ChatStreamChunk = {
-                                        content: '',
-                                        isComplete: false,
-                                        messageId: assistantMessageId,
-                                        eventType: StreamEventType.TOOL_RESULT,
-                                        toolResult: toolResult
-                                    };
-                                    event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(resultChunk));
-
-                                    // Also send tool result back to AI server to continue the stream
-                                    try {
-                                        const { success: _s, ...resultWithoutSuccess } = toolResult as Record<string, unknown> & { success?: unknown };
-                                        const successFlag = typeof (toolResult as { success?: unknown }).success === 'boolean'
-                                            ? (toolResult as { success?: boolean }).success as boolean
-                                            : true;
-                                        const execMs = Date.now() - toolStartMs;
-
-                                        const aiToolResult = [{
-                                            tool_call_id: toolId,
-                                            tool_name: toolName,
-                                            success: successFlag,
-                                            result: resultWithoutSuccess,
-                                            execution_time_ms: execMs
-                                        }];
-
-                                        // Reuse the same event processor for the continue stream
-                                        await aiChatApi.streamContinueWithToolResults(
-                                            streamConversationId,
-                                            aiToolResult,
-                                            processStreamEvent,
-                                            AVAILABLE_TOOL_FUNCTIONS
-                                        );
-                                    } catch (sendErr) {
-                                        console.error('Failed to send tool result to AI server:', sendErr);
-                                    }
-                                    
-                                    // Remove tool from pending set
-                                    if (toolId) {
-                                        pendingToolCalls.delete(toolId);
-                                        console.log(`Tool call completed: ${toolName} (ID: ${toolId}), pending: ${pendingToolCalls.size}`);
-                                        // Check if we can send deferred completion
-                                        sendDeferredCompletionIfReady();
-                                    }
-                                    
-                                } catch (error) {
-                                    console.error(`Error executing tool ${toolName}:`, error);
-                                    const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
-                                    
-                                    const errorResult: ChatStreamChunk = {
-                                        content: '',
-                                        isComplete: false,
-                                        messageId: assistantMessageId,
-                                        eventType: StreamEventType.TOOL_RESULT,
-                                        toolResult: {
-                                            success: false,
-                                            error: errorMessage
-                                        }
-                                    };
-                                    event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(errorResult));
-                                    
-                                    // Remove tool from pending set even on error
-                                    if (toolId) {
-                                        pendingToolCalls.delete(toolId);
-                                        console.log(`Tool call failed: ${toolName} (ID: ${toolId}), pending: ${pendingToolCalls.size}`);
-                                        
-                                        // Send completion message to AI_CHAT_STREAM_COMPLETE on error
-                                        const errorCompletionChunk: ChatStreamChunk = {
-                                            content: '',
-                                            isComplete: true,
-                                            messageId: assistantMessageId,
-                                            eventType: StreamEventType.ERROR,
-                                            errorMessage: `Tool execution failed: ${errorMessage}`,
-                                            toolName: toolName,
-                                            toolId: toolId
-                                        };
-                                        
-                                        // Check if we can send completion (no other pending tools)
-                                        if (canSendCompletion()) {
-                                            event.sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(errorCompletionChunk));
-                                            console.log(`Sent error completion for tool ${toolName} (ID: ${toolId})`);
-                                        } else {
-                                            // Store as deferred completion if other tools are pending
-                                            console.log(`Deferring error completion due to ${pendingToolCalls.size} pending tool calls`);
-                                            deferredCompletionChunk = errorCompletionChunk;
-                                            // Still check if we can send deferred completion
-                                            sendDeferredCompletionIfReady();
-                                        }
-                                    }
-                                }
-                            })();
-                        }
-                        break;
-
-                    case StreamEventType.TOOL_RESULT:
-                        // Tool execution result from server - notify UI and continue streaming
-                        {
-                            const toolResult = streamEvent.data.content;
-                            const toolCallData = streamEvent.data.data;
-                            const toolId = toolCallData?.id;
-
-                            // Remove tool from pending set if this is a server result
-                            if (toolId && pendingToolCalls.has(toolId)) {
-                                pendingToolCalls.delete(toolId);
-                                console.log(`Tool result received from server (ID: ${toolId}), pending: ${pendingToolCalls.size}`);
-                                // Check if we can send deferred completion
-                                sendDeferredCompletionIfReady();
-                            }
-
-                            const chunk: ChatStreamChunk = {
-                                content: '',
-                                isComplete: false,
-                                messageId: assistantMessageId,
-                                eventType: StreamEventType.TOOL_RESULT,
-                                toolResult: typeof toolResult === 'object' ? toolResult as Record<string, unknown> : { result: toolResult }
-                            };
-                            event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(chunk));
-                        }
-                        break;
-
-                    case StreamEventType.ERROR:
-                        // Error occurred - notify UI and stop streaming
-                        {
-                            const errorMessage =  extractContent() || 'An error occurred during streaming';
-
-                            const errorChunk: ChatStreamChunk = {
-                                content: '',
-                                isComplete: true,
-                                messageId: assistantMessageId,
-                                eventType: StreamEventType.ERROR,
-                                errorMessage: errorMessage
-                            };
-                            
-                            // Only send completion if no pending tool calls
-                            if (canSendCompletion()) {
-                                event.sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(errorChunk));
-                            } else {
-                                console.log(`Deferring ERROR completion due to ${pendingToolCalls.size} pending tool calls`);
-                                // Store error and wait for tool calls to complete
-                                deferredCompletionChunk = errorChunk;
-                            }
-                        }
-                        break;
-
-                    case StreamEventType.DONE:
-                        // Streaming complete - finalize message
-                        {
-                            const completeChunk: ChatStreamChunk = {
-                                content: '',
-                                isComplete: true,
-                                messageId: assistantMessageId,
-                                eventType: StreamEventType.DONE
-                            };
-                            
-                            // Only send completion if no pending tool calls
-                            if (canSendCompletion()) {
-                                event.sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(completeChunk));
-                            } else {
-                                console.log(`Deferring DONE completion due to ${pendingToolCalls.size} pending tool calls`);
-                                // Store completion and wait for tool calls to complete
-                                deferredCompletionChunk = completeChunk;
-                            }
-                        }
-                        break;
-
-                    case StreamEventType.CONVERSATION_START:
-                        // Conversation initialization
-                        {
-                            // if (streamEvent.data?.data?.conversationId) {
-                            //     streamConversationId = streamEvent.data.conversationId;
-                            // }
-
-                            const chunk: ChatStreamChunk = {
-                                content: '',
-                                isComplete: false,
-                                messageId: assistantMessageId,
-                                eventType: StreamEventType.CONVERSATION_START,
-                                conversationId: streamConversationId
-                            };
-                            event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(chunk));
-                        }
-                        break;
-
-                    case StreamEventType.CONVERSATION_END:
-                        // Conversation termination
-                        {
-                            const chunk: ChatStreamChunk = {
-                                content: '',
-                                isComplete: true,
-                                messageId: assistantMessageId,
-                                eventType: StreamEventType.CONVERSATION_END
-                            };
-                            
-                            // Only send completion if no pending tool calls
-                            if (canSendCompletion()) {
-                                event.sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(chunk));
-                            } else {
-                                console.log(`Deferring CONVERSATION_END completion due to ${pendingToolCalls.size} pending tool calls`);
-                                // Store completion and wait for tool calls to complete
-                                deferredCompletionChunk = chunk;
-                            }
-                        }
-                        break;
-
-                    case StreamEventType.PONG:
-                        // Keep-alive - no action needed, just log
-                        console.log('Received keep-alive pong');
-                        break;
-
-                    default:
-                        // Unknown event type - log and potentially handle as token
-                        console.warn('Unknown stream event type:', eventType);
-                        break;
-                }
-            };
-
-            // Helper function to send deferred completion if ready
-            const sendDeferredCompletionIfReady = (): void => {
-                if (canSendCompletion() && deferredCompletionChunk) {
-                    event.sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(deferredCompletionChunk));
-                    deferredCompletionChunk = null;
-                    console.log('Sent deferred completion message');
+                    console.error('Error processing stream event:', error);
                 }
             };
 
@@ -648,16 +369,9 @@ export function registerAiChatIpcHandlers(): void {
                 processStreamEvent(streamEvent);
             });
 
-            // Save assistant message to database if we have content
-            if (fullContent.trim()) {
-                await chatModule.saveMessage({
-                    messageId: assistantMessageId,
-                    conversationId: streamConversationId,
-                    role: 'assistant',
-                    content: fullContent,
-                    timestamp: new Date()
-                });
-            }
+            // Note: Message saving is now handled in StreamEventProcessor completion event handlers (DONE, CONVERSATION_END)
+            // or in sendDeferredCompletionIfReady to ensure all content from streamContinueWithToolResults
+            // is included before saving
         } catch (error) {
             if(error instanceof Error && error.message.includes('tool name is required')){
                 return;
@@ -679,42 +393,56 @@ export function registerAiChatIpcHandlers(): void {
             const requestData = data ? JSON.parse(data) : {};
             const requestConversationId = requestData.conversationId;
 
+            if (!requestConversationId) {
+                return {
+                    status: false,
+                    msg: 'Conversation ID is required',
+                    data: null
+                };
+            }
+
             const chatModule = new AIChatModule();
             const messageEntities = await chatModule.getConversationMessages(requestConversationId);
 
             // Convert entities to ChatMessage format
-            const messages: ChatMessage[] = messageEntities.map(entity => ({
-                id: entity.messageId,
-                role: entity.role as 'user' | 'assistant' | 'system',
-                content: entity.content,
-                timestamp: entity.timestamp,
-                conversationId: entity.conversationId
-            }));
+            const messages: ChatMessage[] = messageEntities.map(entity => {
+                const message: ChatMessage = {
+                    id: entity.messageId,
+                    role: entity.role as 'user' | 'assistant' | 'system',
+                    content: entity.content,
+                    timestamp: entity.timestamp,
+                    conversationId: entity.conversationId,
+                    messageType: entity.messageType
+                };
+                
+                // Parse metadata if available
+                if (entity.metadata) {
+                    try {
+                        message.metadata = JSON.parse(entity.metadata);
+                    } catch (parseError) {
+                        console.warn('Failed to parse message metadata:', parseError);
+                    }
+                }
 
-            // Extract conversationId from messages if not provided in request
-            // Use the conversationId from the first message if available, otherwise use the request ID
-            const resolvedConversationId = messages.length > 0 
-                ? messages[0].conversationId 
-                : requestConversationId;
+                return message;
+            });
 
-            const response: CommonMessage<ChatHistoryResponse> = {
+            return {
                 status: true,
-                msg: "Chat history retrieved successfully",
+                msg: 'Chat history retrieved successfully',
                 data: {
-                    messages,
-                    totalMessages: messages.length,
-                    conversationId: resolvedConversationId
+                    conversationId: requestConversationId,
+                    messages: messages,
+                    totalMessages: messages.length
                 }
             };
-            return response;
         } catch (error) {
-            console.error('AI Chat history error:', error);
-            const errorResponse: CommonMessage<null> = {
+            console.error('Error getting chat history:', error);
+            return {
                 status: false,
-                msg: error instanceof Error ? error.message : "Unknown error occurred",
+                msg: error instanceof Error ? error.message : 'Unknown error occurred',
                 data: null
             };
-            return errorResponse;
         }
     });
 
@@ -784,4 +512,3 @@ export function registerAiChatIpcHandlers(): void {
         }
     });
 }
-
