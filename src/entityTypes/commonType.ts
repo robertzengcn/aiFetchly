@@ -184,6 +184,15 @@ export interface EmbeddingConfig {
 // AI Chat Types
 
 /**
+ * Message type enum for AI chat messages
+ */
+export enum MessageType {
+    MESSAGE = 'message',
+    TOOL_CALL = 'tool_call',
+    TOOL_RESULT = 'tool_result'
+}
+
+/**
  * Chat message interface
  */
 export interface ChatMessage {
@@ -192,6 +201,8 @@ export interface ChatMessage {
     content: string;
     timestamp: Date;
     conversationId?: string;
+    messageType?: MessageType;
+    metadata?: Record<string, unknown>;
 }
 
 /**
