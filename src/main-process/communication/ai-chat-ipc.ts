@@ -6,11 +6,11 @@ import { AIChatModule } from '@/modules/AIChatModule';
 import { RagSearchModule, SearchRequest, SearchResponse } from '@/modules/RagSearchModule';
 import { SearchModule } from '@/modules/SearchModule';
 import { SearchTaskStatus } from '@/model/SearchTask.model';
-import { ToolExecutionService } from '@/services/ToolExecutionService';
+import { ToolExecutor } from '@/service/ToolExecutor';
 import { YellowPagesController } from '@/controller/YellowPagesController';
 import { TaskStatus } from '@/modules/interface/ITaskManager';
 import { YellowPagesResult } from '@/modules/interface/ITaskManager';
-import { StreamEventProcessor, StreamState } from '@/services/StreamEventProcessor';
+import { StreamEventProcessor, StreamState } from '@/service/StreamEventProcessor';
 // import { SearchResult } from '@/service/VectorSearchService';
 import {
     AI_CHAT_MESSAGE,
