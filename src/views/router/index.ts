@@ -51,6 +51,18 @@ export const constantRoutes: RouteRecordRaw[] = [
           },
           component: () => import('@/views/pages/systemsetting/index.vue'),
           children: [],
+      },
+      {
+        path: 'mcp',
+        name: 'system_setting_mcp',
+          meta: {
+              title: 'route.mcp_tools',
+              icon: 'mdi-toolbox',
+              keepAlive: false,
+              visible: false,
+          },
+          component: () => import('@/views/pages/systemsetting/mcp.vue'),
+          children: [],
       }
     ],
   },

@@ -117,6 +117,7 @@ export default {
         email_service_create: "创建邮件服务",
         email_service_edit: "编辑邮件服务",
         knowledge_library: "知识库",
+        mcp_tools: "MCP工具",
         login: "登录",
         not_found: "未找到"
     },
@@ -907,7 +908,9 @@ export default {
         "firefox-path-description":"输入Firefox路径",
         "chrome_path":"Chrome路径",
         "firefox_path":"Firefox路径",
-        "external-system-group-description":"外部系统组设置"
+        "external-system-group-description":"外部系统组设置",
+        "mcp_tools":"MCP工具",
+        "manage_mcp_tools":"管理MCP工具"
     },
     schedule:{
         create_new_schedule:"创建新计划",

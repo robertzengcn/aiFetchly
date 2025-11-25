@@ -8,6 +8,17 @@
           <v-card-text>
             <v-treeview :items="groupItems" color="warning" activatable open-all item-value="id" item-title="name"
               item-children="children" v-model:activated="activeGroups" />
+            <v-divider class="my-4"></v-divider>
+            <v-btn
+              color="primary"
+              variant="outlined"
+              block
+              @click="navigateToMCP"
+              class="mb-2"
+            >
+              <v-icon left>mdi-toolbox</v-icon>
+              {{ t('system_settings.manage_mcp_tools') }}
+            </v-btn>
           </v-card-text>
         </v-card>
       </v-col>
@@ -124,12 +135,14 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { useRouter } from 'vue-router';
 import { SystemSettingDisplay, SystemSettingGroupDisplay, OptionSettingDisplay } from "@/entityTypes/systemsettingType";
 import { getSystemSettinglist, updateSystemSetting, updateSystemSettingWithValidation } from "@/views/api/systemsetting";
 import { updateLanguagePreference } from '@/views/api/language';
 import { language_preference } from '@/config/settinggroupInit';
 // i18n setup
 const { t, locale } = useI18n();
+const router = useRouter();
 import { chooseFileDialog } from "@/views/api/common"
 
 // Store references for settings, groups, and tree state
@@ -327,6 +340,10 @@ async function openFileDialog(settingId: number) {
   }catch(error){
     console.error('Failed to open file dialog:', error);
   }
+}
+
+function navigateToMCP() {
+  router.push({ name: 'system_setting_mcp' });
 }
 
 onMounted(() => {
