@@ -30,6 +30,15 @@
           icon
           size="small"
           variant="text"
+          @click="showMCPToolManager = true"
+          title="Manage MCP Tools"
+        >
+          <v-icon size="small">mdi-toolbox</v-icon>
+        </v-btn>
+        <v-btn
+          icon
+          size="small"
+          variant="text"
           @click="handleNewConversation"
           title="Start new conversation"
         >
@@ -317,6 +326,9 @@
       </v-textarea>
     </div>
 
+    <!-- MCP Tool Manager Dialog -->
+    <MCPToolManager v-model="showMCPToolManager" />
+
     <!-- Conversations Dialog -->
     <v-dialog v-model="showConversationsDialog" max-width="600" scrollable>
       <v-card>
@@ -390,6 +402,7 @@ import { useI18n } from 'vue-i18n';
 import { sendChatMessage, streamChatMessage, getChatHistory, clearChatHistory, getConversations, ConversationMetadata } from '@/views/api/aiChat';
 import { ChatMessage, ChatStreamChunk } from '@/entityTypes/commonType';
 import { MessageType } from '@/entityTypes/commonType';
+import MCPToolManager from './MCPToolManager.vue';
 
 // Message type constants for template use
 const MESSAGE_TYPE = {
@@ -436,6 +449,7 @@ const showConversationsDialog = ref(false);
 const conversations = ref<ConversationMetadata[]>([]);
 const isLoadingConversations = ref(false);
 const copiedMessageId = ref<string | null>(null);
+const showMCPToolManager = ref(false);
 
 /**
  * Load chat history when component mounts

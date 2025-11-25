@@ -1,7 +1,8 @@
 import { ToolFunction } from '@/api/aiChatApi';
+import { MCPToolService } from '@/service/MCPToolService';
 
-// Centralized list of available tool functions advertised to the AI server
-export const AVAILABLE_TOOL_FUNCTIONS: ToolFunction[] = [
+// Static tool functions
+const STATIC_TOOL_FUNCTIONS: ToolFunction[] = [
     {
         type: "function",
         name: 'scrape_urls_from_google',
@@ -138,6 +139,30 @@ export const AVAILABLE_TOOL_FUNCTIONS: ToolFunction[] = [
         }
     }
 ];
+
+/**
+ * Get all available tool functions including MCP tools
+ * This function dynamically loads MCP tools from the database
+ */
+export async function getAvailableToolFunctions(): Promise<ToolFunction[]> {
+    const staticTools = [...STATIC_TOOL_FUNCTIONS];
+    
+    try {
+        const mcpService = new MCPToolService();
+        const mcpTools = await mcpService.getEnabledMCPToolsAsFunctions();
+        return [...staticTools, ...mcpTools];
+    } catch (error) {
+        console.error('Failed to load MCP tools:', error);
+        // Return static tools if MCP tools fail to load
+        return staticTools;
+    }
+}
+
+/**
+ * Legacy export for backward compatibility
+ * @deprecated Use getAvailableToolFunctions() instead
+ */
+export const AVAILABLE_TOOL_FUNCTIONS: ToolFunction[] = STATIC_TOOL_FUNCTIONS;
 
 
 
