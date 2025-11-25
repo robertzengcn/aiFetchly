@@ -232,6 +232,16 @@ export const AI_CHAT_HISTORY = 'ai-chat:history'
 export const AI_CHAT_CLEAR = 'ai-chat:clear'
 export const AI_CHAT_CONVERSATIONS = 'ai-chat:conversations'
 
+// MCP Tool Management Channels
+export const MCP_TOOL_LIST = 'mcp:tool:list'
+export const MCP_TOOL_ADD = 'mcp:tool:add'
+export const MCP_TOOL_UPDATE = 'mcp:tool:update'
+export const MCP_TOOL_DELETE = 'mcp:tool:delete'
+export const MCP_TOOL_DISCOVER = 'mcp:tool:discover'
+export const MCP_TOOL_TOGGLE_SERVER = 'mcp:tool:toggle:server'
+export const MCP_TOOL_TOGGLE_TOOL = 'mcp:tool:toggle:tool'
+export const MCP_TOOL_TEST_CONNECTION = 'mcp:tool:test:connection'
+
 // Dashboard Channels
 export const DASHBOARD_SUMMARY = 'dashboard:summary'
 export const DASHBOARD_TRENDS = 'dashboard:trends'

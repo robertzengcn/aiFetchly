@@ -1,21 +1,20 @@
 import { ipcMain } from 'electron';
 import { AiChatApi, ChatRequest, StreamEvent, StreamEventType } from '@/api/aiChatApi';
-import { AVAILABLE_TOOL_FUNCTIONS } from '@/config/aiTools.config';
+import { getAvailableToolFunctions } from '@/config/aiTools.config';
 import { CommonMessage, ChatMessage, ChatHistoryResponse, ChatStreamChunk, MessageType } from '@/entityTypes/commonType';
 import { AIChatModule } from '@/modules/AIChatModule';
 import { RagSearchModule, SearchRequest, SearchResponse } from '@/modules/RagSearchModule';
-import { SearchModule } from '@/modules/SearchModule';
-import { SearchTaskStatus } from '@/model/SearchTask.model';
-import { ToolExecutor } from '@/service/ToolExecutor';
-import { YellowPagesController } from '@/controller/YellowPagesController';
-import { TaskStatus } from '@/modules/interface/ITaskManager';
+// import { SearchModule } from '@/modules/SearchModule';
+// import { SearchTaskStatus } from '@/model/SearchTask.model';
+// import { ToolExecutor } from '@/service/ToolExecutor';
+// import { YellowPagesController } from '@/controller/YellowPagesController';
+// import { TaskStatus } from '@/modules/interface/ITaskManager';
 import { YellowPagesResult } from '@/modules/interface/ITaskManager';
 import { StreamEventProcessor, StreamState } from '@/service/StreamEventProcessor';
 // import { SearchResult } from '@/service/VectorSearchService';
 import {
     AI_CHAT_MESSAGE,
     AI_CHAT_STREAM,
-    AI_CHAT_STREAM_CHUNK,
     AI_CHAT_STREAM_COMPLETE,
     AI_CHAT_HISTORY,
     AI_CHAT_CLEAR,
@@ -203,13 +202,17 @@ export function registerAiChatIpcHandlers(): void {
                 }
             }
 
+            // Get available tools (static + MCP)
+            const availableTools = await getAvailableToolFunctions();
+
             // Send to remote API
             const chatRequest: ChatRequest = {
                 message: enhancedMessage,
                 conversationId,
                 model: requestData.model,
                 useRAG: requestData.useRAG,
-                ragLimit: requestData.ragLimit
+                ragLimit: requestData.ragLimit,
+                functions: availableTools
             };
 
             const apiResponse = await aiChatApi.sendMessage(chatRequest);
@@ -324,6 +327,9 @@ export function registerAiChatIpcHandlers(): void {
                 }
             }
 
+            // Get available tools (static + MCP)
+            const availableTools = await getAvailableToolFunctions();
+
             // Send to remote API for streaming
             const chatRequest: ChatRequest = {
                 message: enhancedMessage,
@@ -331,7 +337,7 @@ export function registerAiChatIpcHandlers(): void {
                 model: requestData.model,
                 useRAG: requestData.useRAG,
                 ragLimit: requestData.ragLimit,
-                functions: AVAILABLE_TOOL_FUNCTIONS
+                functions: availableTools
             };
 
             const assistantMessageId = `assistant-${Date.now()}`;
