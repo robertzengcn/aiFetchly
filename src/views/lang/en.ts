@@ -125,6 +125,7 @@ export default {
         email_service_create: "Email Service Create",
         email_service_edit: "Email Service Edit",
         knowledge_library: "Knowledge Library",
+        mcp_tools: "MCP Tools",
         login: "Login",
         not_found: "Not Found"
     },
@@ -917,7 +918,9 @@ export default {
     "firefox-path-description":"input firefox path",
     "chrome_path":"chrome path",
     "firefox_path":"firefox path",
-    "external-system-group-description":"external system group setting"
+    "external-system-group-description":"external system group setting",
+    "mcp_tools":"MCP Tools",
+    "manage_mcp_tools":"Manage MCP Tools"
     },
     schedule:{
         create_new_schedule:"Create New Schedule",

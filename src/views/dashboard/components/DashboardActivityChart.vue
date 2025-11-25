@@ -118,7 +118,6 @@ const chartSeries = computed(() => {
 
 const chartOptions = computed(() => ({
   chart: {
-    type: 'area',
     height: 400,
     stacked: true,
     toolbar: {
@@ -126,7 +125,7 @@ const chartOptions = computed(() => ({
     },
     animations: {
       enabled: true,
-      easing: 'easeinout',
+      easing: 'easeinout' as const,
       speed: 800
     }
   },
@@ -135,11 +134,11 @@ const chartOptions = computed(() => ({
     enabled: false
   },
   stroke: {
-    curve: 'smooth',
+    curve: 'smooth' as const,
     width: 2
   },
   fill: {
-    type: 'gradient',
+    type: 'gradient' as const,
     gradient: {
       opacityFrom: 0.6,
       opacityTo: 0.1,
@@ -171,8 +170,8 @@ const chartOptions = computed(() => ({
     }
   },
   legend: {
-    position: 'top',
-    horizontalAlign: 'center',
+    position: 'top' as const,
+    horizontalAlign: 'center' as const,
     labels: {
       colors: theme.current.value.dark ? '#FFFFFF' : '#000000'
     }
@@ -180,7 +179,7 @@ const chartOptions = computed(() => ({
   tooltip: {
     shared: true,
     intersect: false,
-    theme: theme.current.value.dark ? 'dark' : 'light',
+    theme: (theme.current.value.dark ? 'dark' : 'light') as 'dark' | 'light',
     y: {
       formatter: (val: number) => val.toLocaleString()
     }
@@ -196,7 +195,7 @@ const chartOptions = computed(() => ({
           height: 300
         },
         legend: {
-          position: 'bottom'
+          position: 'bottom' as const
         }
       }
     }
