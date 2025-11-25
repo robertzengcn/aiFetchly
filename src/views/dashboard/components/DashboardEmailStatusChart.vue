@@ -110,7 +110,6 @@ const chartSeries = computed(() => {
 
 const chartOptions = computed(() => ({
   chart: {
-    type: 'donut',
     height: 400
   },
   colors: ['#4CAF50', '#F44336', '#FFC107'], // Green (success), Red (failed), Yellow (pending)
@@ -122,7 +121,7 @@ const chartOptions = computed(() => ({
   plotOptions: {
     pie: {
       donut: {
-        size: '70%',
+        size: '70%' as const,
         labels: {
           show: true,
           total: {
@@ -147,8 +146,8 @@ const chartOptions = computed(() => ({
     }
   },
   legend: {
-    position: 'bottom',
-    horizontalAlign: 'center',
+    position: 'bottom' as const,
+    horizontalAlign: 'center' as const,
     labels: {
       colors: theme.current.value.dark ? '#FFFFFF' : '#000000'
     },
@@ -158,7 +157,7 @@ const chartOptions = computed(() => ({
     }
   },
   tooltip: {
-    theme: theme.current.value.dark ? 'dark' : 'light',
+    theme: (theme.current.value.dark ? 'dark' : 'light') as 'dark' | 'light',
     y: {
       formatter: (val: number) => {
         const percent = ((val / totalEmails.value) * 100).toFixed(1);
@@ -176,7 +175,7 @@ const chartOptions = computed(() => ({
         plotOptions: {
           pie: {
             donut: {
-              size: '65%',
+              size: '65%' as const,
               labels: {
                 total: {
                   fontSize: '14px'

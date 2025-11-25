@@ -118,7 +118,6 @@ const chartSeries = computed(() => {
 
 const chartOptions = computed(() => ({
   chart: {
-    type: 'line',
     height: 400,
     toolbar: {
       show: true,
@@ -133,7 +132,7 @@ const chartOptions = computed(() => ({
     },
     animations: {
       enabled: true,
-      easing: 'easeinout',
+      easing: 'easeinout' as const,
       speed: 800
     }
   },
@@ -142,7 +141,7 @@ const chartOptions = computed(() => ({
     enabled: false
   },
   stroke: {
-    curve: 'smooth',
+    curve: 'smooth' as const,
     width: 3
   },
   xaxis: {
@@ -169,8 +168,8 @@ const chartOptions = computed(() => ({
     }
   },
   legend: {
-    position: 'top',
-    horizontalAlign: 'center',
+    position: 'top' as const,
+    horizontalAlign: 'center' as const,
     labels: {
       colors: theme.current.value.dark ? '#FFFFFF' : '#000000'
     }
@@ -178,7 +177,7 @@ const chartOptions = computed(() => ({
   tooltip: {
     shared: true,
     intersect: false,
-    theme: theme.current.value.dark ? 'dark' : 'light'
+    theme: (theme.current.value.dark ? 'dark' : 'light') as 'dark' | 'light'
   },
   grid: {
     borderColor: theme.current.value.dark ? '#404040' : '#e0e0e0'
@@ -191,7 +190,7 @@ const chartOptions = computed(() => ({
           height: 300
         },
         legend: {
-          position: 'bottom'
+          position: 'bottom' as const
         }
       }
     }
