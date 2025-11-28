@@ -146,6 +146,38 @@ export interface AvailableChatModelsResponse {
 }
 
 /**
+ * Keyword generation configuration
+ */
+export interface KeywordGenerationConfig {
+    num_keywords: number;
+    keyword_type: string;
+}
+
+/**
+ * Single batch keyword generation request item
+ */
+export interface BatchKeywordGenerationRequestItem {
+    seed_keywords: string[];
+    config: KeywordGenerationConfig;
+}
+
+/**
+ * Batch keyword generation response item
+ */
+export interface BatchKeywordGenerationResponseItem {
+    seed_keywords: string[];
+    keywords: string[];
+    config: KeywordGenerationConfig;
+}
+
+/**
+ * Batch keyword generation response
+ */
+export interface BatchKeywordGenerationResponse {
+    results: BatchKeywordGenerationResponseItem[];
+}
+
+/**
  * API client for AI Chat management
  * 
  * Handles communication with remote AI chat service to send messages,
@@ -397,6 +429,45 @@ export class AiChatApi {
      */
     async testConnection(): Promise<CommonApiresp<boolean>> {
         return this._httpClient.get('/api/ai/chat/healthcheck');
+    }
+
+    /**
+     * Batch generate keywords from seed keywords
+     * 
+     * Sends multiple keyword generation requests in a single batch to the remote server.
+     * Each request item contains seed keywords and configuration for keyword generation.
+     * 
+     * @param requests - Array of keyword generation requests
+     * @returns Promise resolving to batch keyword generation response
+     * @throws {Error} When network request fails
+     * 
+     * @example
+     * ```typescript
+     * const response = await api.batchGenerateKeywords([
+     *   {
+     *     seed_keywords: ["cloud storage"],
+     *     config: {
+     *       num_keywords: 15,
+     *       keyword_type: "seo"
+     *     }
+     *   },
+     *   {
+     *     seed_keywords: ["file sharing"],
+     *     config: {
+     *       num_keywords: 15,
+     *       keyword_type: "seo"
+     *     }
+     *   }
+     * ]);
+     * if (response.status) {
+     *   console.log('Generated keywords:', response.data?.results);
+     * }
+     * ```
+     */
+    async batchGenerateKeywords(
+        requests: BatchKeywordGenerationRequestItem[]
+    ): Promise<CommonApiresp<BatchKeywordGenerationResponse>> {
+        return this._httpClient.postJson('/api/ai/keywords/generate/batch', requests);
     }
 
     /**
