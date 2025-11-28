@@ -1,5 +1,5 @@
 import { ipcMain } from 'electron';
-import { AiChatApi, ChatRequest, StreamEvent, StreamEventType } from '@/api/aiChatApi';
+import { AiChatApi, ChatRequest, StreamEvent, StreamEventType, BatchKeywordGenerationRequestItem } from '@/api/aiChatApi';
 import { getAvailableToolFunctions } from '@/config/aiTools.config';
 import { CommonMessage, ChatMessage, ChatHistoryResponse, ChatStreamChunk, MessageType } from '@/entityTypes/commonType';
 import { AIChatModule } from '@/modules/AIChatModule';
@@ -18,7 +18,8 @@ import {
     AI_CHAT_STREAM_COMPLETE,
     AI_CHAT_HISTORY,
     AI_CHAT_CLEAR,
-    AI_CHAT_CONVERSATIONS
+    AI_CHAT_CONVERSATIONS,
+    AI_KEYWORDS_GENERATE
 } from '@/config/channellist';
 import { Token } from '@/modules/token';
 import { USERID } from '@/config/usersetting';
@@ -512,6 +513,71 @@ export function registerAiChatIpcHandlers(): void {
             const errorResponse: CommonMessage<null> = {
                 status: false,
                 msg: error instanceof Error ? error.message : "Unknown error occurred",
+                data: null
+            };
+            return errorResponse;
+        }
+    });
+
+    // Generate keywords using AI
+    ipcMain.handle(AI_KEYWORDS_GENERATE, async (event, data): Promise<CommonMessage<string[] | null>> => {
+        try {
+            const requestData = data ? JSON.parse(data) : {};
+            const seedKeywords: string[] = requestData.keywords || [];
+            const numKeywords: number = requestData.num_keywords || 15;
+            const keywordType: string = requestData.keyword_type || 'seo';
+
+            if (!seedKeywords || seedKeywords.length === 0) {
+                return {
+                    status: false,
+                    msg: 'Seed keywords are required',
+                    data: null
+                };
+            }
+
+            const aiChatApi = new AiChatApi();
+
+            // Prepare batch request - one request per seed keyword
+            const batchRequests: BatchKeywordGenerationRequestItem[] = seedKeywords.map(seedKeyword => ({
+                seed_keywords: [seedKeyword],
+                config: {
+                    num_keywords: numKeywords,
+                    keyword_type: keywordType
+                }
+            }));
+
+            // Call the batch generate API
+            const apiResponse = await aiChatApi.batchGenerateKeywords(batchRequests);
+
+            if (apiResponse.status && apiResponse.data && apiResponse.data.results) {
+                // Flatten all generated keywords from all results
+                const allKeywords: string[] = [];
+                apiResponse.data.results.forEach(result => {
+                    if (result.keywords && Array.isArray(result.keywords)) {
+                        allKeywords.push(...result.keywords);
+                    }
+                });
+
+                // Remove duplicates and return
+                const uniqueKeywords = Array.from(new Set(allKeywords));
+
+                return {
+                    status: true,
+                    msg: 'Keywords generated successfully',
+                    data: uniqueKeywords
+                };
+            } else {
+                return {
+                    status: false,
+                    msg: apiResponse.msg || 'Failed to generate keywords',
+                    data: null
+                };
+            }
+        } catch (error) {
+            console.error('AI Keywords generation error:', error);
+            const errorResponse: CommonMessage<null> = {
+                status: false,
+                msg: error instanceof Error ? error.message : 'Unknown error occurred',
                 data: null
             };
             return errorResponse;
