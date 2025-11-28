@@ -656,6 +656,9 @@ export default {
         task_id:"Task ID",
         run_task:"Run Task",
         task_status_not_start:"Not Start",
+        generate_related_keywords:"Generate Related Keywords (AI)",
+        keywords_generated_successfully:"Successfully generated {count} related keywords",
+        no_keywords_generated:"No keywords were generated",
     },
     searchtask:{
         id:"Task Id",

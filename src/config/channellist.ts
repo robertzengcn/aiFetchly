@@ -231,6 +231,7 @@ export const AI_CHAT_STREAM_COMPLETE = 'ai-chat:stream-complete'
 export const AI_CHAT_HISTORY = 'ai-chat:history'
 export const AI_CHAT_CLEAR = 'ai-chat:clear'
 export const AI_CHAT_CONVERSATIONS = 'ai-chat:conversations'
+export const AI_KEYWORDS_GENERATE = 'ai-keywords:generate'
 
 // MCP Tool Management Channels
 export const MCP_TOOL_LIST = 'mcp:tool:list'

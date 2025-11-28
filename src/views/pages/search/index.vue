@@ -3,6 +3,15 @@
     <v-form ref="form" @submit.prevent="onSubmit">
       <h3>{{ isEditMode ? t('search.edit_task') : t('search.use_hint') }}</h3>
       <v-textarea class="mt-3" v-model="keywords" :label="t('search.input_keywords_hint')"></v-textarea>
+      <v-btn 
+        color="primary" 
+        class="mt-2 mb-3" 
+        @click="onGenerateKeywords" 
+        :loading="generatingKeywords"
+        :disabled="!keywords || keywords.trim().length === 0"
+      >
+        {{ t('search.generate_related_keywords') }}
+      </v-btn>
       <v-select v-model="enginer" :items="searchplatform" :label="t('search.search_enginer_name')" required
         :readonly="loading" :rules="[rules.required]" class="mt-3" item-title="name" item-value="key"></v-select>
 
@@ -113,7 +122,7 @@ import { useI18n } from "vue-i18n";
 //import router from '@/views/router';
 import { SearhEnginer } from "@/config/searchSetting"
 import { ToArray, CapitalizeFirstLetter } from "@/views/utils/function"
-import { submitScraper, receiveSearchevent, getSearchTaskDetails, updateSearchTask, createSearchTaskOnly } from "@/views/api/search"
+import { submitScraper, receiveSearchevent, getSearchTaskDetails, updateSearchTask, createSearchTaskOnly, generateRelatedKeywords } from "@/views/api/search"
 import { getSocialaccountinfo } from "@/views/api/socialaccount"
 import { Usersearchdata } from "@/entityTypes/searchControlType"
 import { convertNumberToBoolean } from "@/views/utils/function"
@@ -157,6 +166,7 @@ const concurrent_quantity = ref(1);
 const proxyValue = ref<Array<ProxyEntity>>([]);
 const proxytableshow = ref(false);
 const accounts = ref<Array<SocialAccountListData>>([])
+const generatingKeywords = ref(false);
 const initialize = () => {
   //searchplatform.value = ToArray(SearhEnginer);
   const seArr: string[] = ToArray(SearhEnginer);
@@ -586,6 +596,62 @@ async function onSaveOnly() {
     setAlert(translatedMessage, 'Error', 'error');
   } finally {
     loading.value = false;
+  }
+}
+
+/**
+ * Generate related keywords using AI
+ */
+async function onGenerateKeywords() {
+  if (!keywords.value || keywords.value.trim().length === 0) {
+    setAlert(t("search.keywords_empty"), "Error", "error");
+    return;
+  }
+
+  try {
+    generatingKeywords.value = true;
+    
+    // Get current keywords from textarea
+    const currentKeywords = keywords.value
+      .split('\n')
+      .map(k => k.trim())
+      .filter(k => k.length > 0);
+
+    if (currentKeywords.length === 0) {
+      setAlert(t("search.keywords_empty"), "Error", "error");
+      return;
+    }
+
+    // Call the API to generate related keywords
+    const generatedKeywords = await generateRelatedKeywords(currentKeywords, 15, 'seo');
+
+    if (generatedKeywords && generatedKeywords.length > 0) {
+      // Combine original keywords with generated ones, remove duplicates
+      const allKeywords = [...currentKeywords, ...generatedKeywords];
+      const uniqueKeywords = Array.from(new Set(allKeywords));
+      
+      // Update the textarea with all keywords
+      keywords.value = uniqueKeywords.join('\n');
+      
+      setAlert(
+        t('search.keywords_generated_successfully', { count: generatedKeywords.length }),
+        t('common.success') || 'Success',
+        'success'
+      );
+    } else {
+      setAlert(
+        t('search.no_keywords_generated'),
+        t('common.warning') || 'Warning',
+        'warning'
+      );
+    }
+  } catch (error) {
+    console.error('Error generating keywords:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Failed to generate keywords';
+    const translatedMessage = errorMessage.startsWith('search.') ? t(errorMessage) : errorMessage;
+    setAlert(translatedMessage, 'Error', 'error');
+  } finally {
+    generatingKeywords.value = false;
   }
 }
 </script>
