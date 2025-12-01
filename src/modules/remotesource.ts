@@ -331,7 +331,8 @@ export class RemoteSource {
      "/api/user/info",
    ).then(function (res) {
       // console.log(res);
-      
+      console.log("get user info response")
+      console.log(res)
       if (res.status == false) {
         if(res.code==403){
         //remove token

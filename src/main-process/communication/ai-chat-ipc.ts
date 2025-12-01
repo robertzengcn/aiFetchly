@@ -21,17 +21,17 @@ import {
     AI_CHAT_CONVERSATIONS,
     AI_KEYWORDS_GENERATE
 } from '@/config/channellist';
-import { Token } from '@/modules/token';
-import { USERID } from '@/config/usersetting';
+// import { Token } from '@/modules/token';
+// import { USERID } from '@/config/usersetting';
 import { v4 as uuidv4 } from 'uuid';
 
 /**
  * Generate a unique conversation ID in format: user_id:uuid
  */
 function generateConversationId(): string {
-    const tokenService = new Token();
-    const userId = tokenService.getValue(USERID) || 'anonymous';
-    return `${userId}:${uuidv4()}`;
+    // const tokenService = new Token();
+    // const userId = tokenService.getValue(USERID) || 'anonymous';
+    return uuidv4();
 }
 
 /**
