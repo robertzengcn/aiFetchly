@@ -7,14 +7,18 @@
                     @keyup.enter="handleSearch" @click:append-inner="handleSearch"></v-text-field>
             </div>
             <!-- <v-btn class="btn mr-2" variant="flat" prepend-icon="mdi-filter-variant"><span> {{t('common.more')}}</span></v-btn> -->
+            <v-btn class="btn mr-2" variant="flat" color="success" prepend-icon="mdi-email-search" @click="handleScrapeEmail" :disabled="selectedCount === 0">
+                <span>{{ buttonText }}</span>
+            </v-btn>
             <v-btn class="btn" variant="flat" color="primary" prepend-icon="mdi-download" @click="handleExport" :loading="exporting">
                 <span>{{t('common.export')}}</span>
             </v-btn>
         </div>     
     </div>
     <div class="table-scroll-container">
-        <v-data-table-server v-model:items-per-page="itemsPerPage" :search="search" :headers="headers" 
-            :items-length="totalItems" :items="serverItems" :loading="loading" item-value="name" @update:options="loadItems" class="custom-data-table mt5">
+        <v-data-table-server v-model:items-per-page="itemsPerPage" v-model:selected="selectedItems" 
+            :search="search" :headers="headers" :items-length="totalItems" :items="serverItems" 
+            :loading="loading" :item-value="getItemValue" show-select @update:options="loadItems" class="custom-data-table mt5">
             <template v-slot:[`item.link`]="{ item }">
                 <div class="link-cell-container">
                     <v-tooltip location="top" :text="item.link">
@@ -53,7 +57,7 @@ import { gettaskresult, exportSearchResults } from '@/views/api/search'
 import { ref,computed,onMounted,watch } from 'vue'
 import { SearchResult } from '@/views/api/types'
 import {SearchResEntityDisplay} from "@/entityTypes/scrapeType"
-//import router from '@/views/router';
+import router from '@/views/router';
 import { useRoute } from "vue-router";
 import { SearchResultFetchparam } from "@/entityTypes/searchControlType"
 import {CapitalizeFirstLetter} from "@/views/utils/function"
@@ -138,11 +142,53 @@ headers.value = [
 ];
 const itemsPerPage = ref(10);
 const serverItems = ref<Array<SearchResEntityDisplay>>([]);
+// When using item-value function, selectedItems stores the VALUES, not objects
+const selectedItems = ref<Array<string | number>>([]);
 const loading = ref(false);
 const totalItems = ref(0);
 const search = ref('');
 const exporting = ref(false);
 const currentPage = ref(1);
+
+/**
+ * Get unique value for table item (for selection)
+ * Returns a unique identifier for each item
+ */
+function getItemValue(item: SearchResEntityDisplay): string | number {
+    // Use id if available (most reliable)
+    if (item.id !== undefined && item.id !== null) {
+        return item.id;
+    }
+    // Fallback: use composite key with link and index
+    // This ensures uniqueness even if id is missing
+    const index = item.index !== undefined ? item.index : 0;
+    return `${item.link}_${index}`;
+}
+
+/**
+ * Computed property for selected items count
+ */
+const selectedCount = computed(() => {
+    return selectedItems.value.length;
+});
+
+/**
+ * Computed property for button text
+ */
+const buttonText = computed(() => {
+    const baseText = t('emailextraction.extract_emails') || 'Extract Emails';
+    const count = selectedItems.value.length;
+    if (count > 0) {
+        return `${baseText} (${count})`;
+    }
+    return baseText;
+});
+
+// Watch selectedItems to debug
+watch(selectedItems, (newVal) => {
+    console.log('Selected items changed:', newVal);
+    console.log('Selected count:', newVal.length);
+}, { deep: true });
 
 // Debounce search to avoid too many API calls
 let searchTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -183,12 +229,16 @@ function loadItems({ page, itemsPerPage, sortBy }) {
         ({ data, total }) => {
              console.log(data)
             // console.log(total)
-            data.map((item, index) => {
-                item.index = index + 1
+            // Ensure each item has a unique identifier and index
+            data.forEach((item, index) => {
+                item.index = (fetchitem.page - 1) * fetchitem.itemsPerPage + index + 1;
+                // If item doesn't have an id, we'll use the composite key in getItemValue
             })
         
             serverItems.value = data
             totalItems.value = total
+            // Clear selected items when data changes (new page or search)
+            selectedItems.value = []
             loading.value = false
         }).catch(function (error) {
             console.error(error);
@@ -228,6 +278,56 @@ async function handleExport() {
     } finally {
         exporting.value = false;
     }
+}
+
+/**
+ * Navigate to email extraction page with URLs from selected search results
+ */
+function handleScrapeEmail() {
+    if (selectedItems.value.length === 0) {
+        alert('Please select at least one item to extract emails from');
+        return;
+    }
+    
+    console.log('Selected items (values):', selectedItems.value);
+    
+    // selectedItems contains VALUES (ids or composite keys), not objects
+    // We need to find the actual items from serverItems
+    const selectedItemValues = new Set(selectedItems.value);
+    const actualSelectedItems = serverItems.value.filter(item => {
+        const itemValue = getItemValue(item);
+        return selectedItemValues.has(itemValue);
+    });
+    
+    console.log('Actual selected items:', actualSelectedItems);
+    
+    // Collect all unique URLs from selected items
+    const urlSet = new Set<string>();
+    actualSelectedItems.forEach(item => {
+        if (item.link && item.link.trim()) {
+            urlSet.add(item.link.trim());
+        }
+    });
+    
+    const urls = Array.from(urlSet);
+    
+    if (urls.length === 0) {
+        alert('No valid URLs found in selected items');
+        return;
+    }
+    
+    console.log('URLs to scrape:', urls);
+    
+    // Navigate to email extraction form with URLs as query parameter
+    // Using a single 'urls' query param with newline-separated URLs
+    const urlsParam = urls.join('\n');
+    
+    router.push({
+        name: 'Email_Extraction_Form',
+        query: {
+            urls: urlsParam
+        }
+    });
 }
 
 /**

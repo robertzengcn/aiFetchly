@@ -241,6 +241,15 @@ onMounted(() => {
   if (isEditMode.value) {
     loadTaskData();
   } else {
+    // Check for URLs in query parameters (from search results)
+    if (route.query.urls && typeof route.query.urls === 'string') {
+      const urlsFromQuery = route.query.urls.split('\n').map(url => url.trim()).filter(url => url.length > 0);
+      if (urlsFromQuery.length > 0) {
+        urls.value = urlsFromQuery.join('\n');
+        // Set extraction type to ManualInputUrl (index 0)
+        emailtype.value = emailTypelist.value.find(item => item.index === 0);
+      }
+    }
     receiveMsg();
   }
 })
