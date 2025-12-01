@@ -536,7 +536,7 @@ function makeSingleInstance() {
 async function handleDeepLink(url: string) {
   try {
     const parsedUrl = new URL(url);
-    console.log(parsedUrl)
+    // console.log(parsedUrl)
     const token = parsedUrl.searchParams.get('token'); // Example: Extract a token from the URL
     if (token) {
       //console.log(`Token received: ${token}`);
