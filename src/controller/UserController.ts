@@ -290,15 +290,19 @@ export class UserController {
                                 }
                             }
                    
+                }else{
+                    throw new Error("User email is empty in remote source");
                 }
+            }else{
+                throw new Error("User info not found in remote source");
             }
                 return res;
             })
             .catch(function (error) {
                 console.log(error);
                 //debug(error);
-                //throw new Error(error.message);
-                return null;
+                throw new Error(error.message);
+                // return null;
             });
         return userInfo;
     }
