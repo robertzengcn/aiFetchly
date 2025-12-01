@@ -63,7 +63,6 @@
     "vitest-getyoutubeurl": "vitest --config vite.taskCode.config.mjs -t get-youtube-url",
     "vitest-getyoutubeplaylisturl": "vitest --config vite.taskCode.config.mjs -t get-youtube-url-playerlist",
     "make-file-back": "vitest --config vite.utilityCode.config.mjs -t make-file-back",
-    "vitest-video": "vitest --config vite.main.config.mjs -t video-download",
     "tsc": "tsc --noEmit --watch",
     "rebuild-better-sqlite": "electron-rebuild -f -w better-sqlite3",
    

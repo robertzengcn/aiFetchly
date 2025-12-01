@@ -102,7 +102,6 @@ const chartSeries = computed(() => {
 
 const chartOptions = computed(() => ({
   chart: {
-    type: 'bar',
     height: 400,
     toolbar: {
       show: true
@@ -120,10 +119,10 @@ const chartOptions = computed(() => ({
   plotOptions: {
     bar: {
       borderRadius: 4,
-      horizontal: false,
+      horizontal: false as const,
       distributed: true,
       dataLabels: {
-        position: 'top'
+        position: 'top' as const
       }
     }
   },
@@ -162,7 +161,7 @@ const chartOptions = computed(() => ({
     show: false
   },
   tooltip: {
-    theme: theme.current.value.dark ? 'dark' : 'light',
+    theme: (theme.current.value.dark ? 'dark' : 'light') as 'dark' | 'light',
     y: {
       formatter: (val: number) => val.toLocaleString() + ' ' + translations.value.results
     }
@@ -179,7 +178,7 @@ const chartOptions = computed(() => ({
         },
         plotOptions: {
           bar: {
-            horizontal: true
+            horizontal: true as const
           }
         },
         dataLabels: {
