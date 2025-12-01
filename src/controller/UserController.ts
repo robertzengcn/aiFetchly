@@ -5,7 +5,7 @@ import { getUserpath, checkAndCreatePath, getApplogspath } from "@/modules/lib/f
 // import {SequelizeConfig} from "@/config/SequelizeConfig"
 // import * as fs from 'fs';
 // import * as path from 'path';
-import { USERSDBPATH, USERLOGPATH, USEREMAIL,USERNAME, USERROLES, USERID } from '@/config/usersetting';
+import { USERSDBPATH, USERLOGPATH, USEREMAIL,USERNAME} from '@/config/usersetting';
 import { Token } from "@/modules/token"
 //import {runAfterTableCreate} from "@/modules/lib/databaseinit"
 import { SqliteDb } from "@/config/SqliteDb"
@@ -248,7 +248,7 @@ export class UserController {
                             //tokenService.setValue('useremail',res.email)
                             tokenService.setValue(USEREMAIL, res.email)
                             tokenService.setValue(USERNAME, res.name)
-                            tokenService.setValue(USERID, res.id.toString())
+                            // tokenService.setValue(USERID, res.id.toString())
                             tokenService.setValue(USERSDBPATH, userdataPath)
                             tokenService.setValue(USERLOGPATH, logPath)
                             //const scraperModel = Scraperdb.getInstance(userdataPath);
