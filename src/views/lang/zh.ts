@@ -646,6 +646,9 @@ export default {
         task_id:"任务ID",
         run_task:"运行任务",
         task_status_not_start:"未开始",
+        generate_related_keywords:"使用AI生成相关关键词",
+        keywords_generated_successfully:"成功生成 {count} 个相关关键词",
+        no_keywords_generated:"未生成关键词",
     },
     searchtask:{
         id:"任务ID",
