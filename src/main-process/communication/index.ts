@@ -17,7 +17,7 @@ import {registerSystemSettingIpcHandlers} from "@/main-process/communication/sys
 import {registerUserIpcHandlers} from "@/main-process/communication/userIpc";
 import {registerPlatformIpcHandlers} from "@/main-process/communication/platform-ipc";
 import {registerSessionRecordingIpcHandlers} from "@/main-process/communication/sessionRecording-ipc";
-import {registerLanguagePreferenceIpcHandlers} from "@/main-process/ipc/language-ipc";
+import {registerLanguagePreferenceIpcHandlers} from "@/main-process/communication/language-ipc";
 import {registerRagIpcHandlers} from "@/main-process/communication/rag-ipc";
 import {registerAiChatIpcHandlers} from "@/main-process/communication/ai-chat-ipc";
 import {registerDashboardIpcHandlers} from "@/main-process/communication/dashboard-ipc";
