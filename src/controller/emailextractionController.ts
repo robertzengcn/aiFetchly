@@ -1,4 +1,4 @@
-import { EmailsControldata,EmailResult,EmailsearchTaskEntityDisplay,EmailResultDisplay} from '@/entityTypes/emailextraction-type'
+import { EmailsControldata,EmailsearchTaskEntityDisplay,EmailResultDisplay} from '@/entityTypes/emailextraction-type'
 import {EmailSearchTaskModule} from "@/modules/EmailSearchTaskModule"
 // import { utilityProcess, MessageChannelMain} from "electron";
 // import { Token } from "@/modules/token"
