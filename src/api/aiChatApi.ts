@@ -1,6 +1,6 @@
 "use strict";
 import { HttpClient } from "@/modules/lib/httpclient";
-import { CommonApiresp, ChatApiResponse, ChatMessage } from "@/entityTypes/commonType";
+import { CommonApiresp, ChatApiResponse } from "@/entityTypes/commonType";
 
 /**
  * Chat request interface

@@ -208,6 +208,83 @@ export class EmailSearchTaskModule extends BaseModule{
         return Number(taskId)
     }
 
+    /**
+     * Create and execute a search task from a URL list
+     * 
+     * This method creates a new email search task with the provided URLs and configuration,
+     * then immediately starts executing the search task.
+     * 
+     * @param urls - Array of URLs to search for emails
+     * @param options - Optional configuration parameters
+     * @param options.type - Email extraction type (default: ManualInputUrl)
+     * @param options.concurrency - Number of concurrent requests (default: 1)
+     * @param options.pagelength - Page length limit (default: 0)
+     * @param options.notShowBrowser - Whether to hide browser (default: false)
+     * @param options.proxys - Array of proxy entities (optional)
+     * @param options.processTimeout - Process timeout in seconds (default: 30)
+     * @param options.maxPageNumber - Maximum number of pages to crawl (default: 0)
+     * @param options.searchResultId - Search result ID (optional)
+     * @returns Promise resolving to the created task ID
+     * @throws {Error} When URLs array is empty or invalid
+     * 
+     * @example
+     * ```typescript
+     * const taskId = await emailSearchTaskModule.createAndExecuteTask(
+     *   ['https://example.com', 'https://test.com'],
+     *   {
+     *     concurrency: 2,
+     *     notShowBrowser: true,
+     *     processTimeout: 60
+     *   }
+     * );
+     * ```
+     */
+    public async createAndExecuteTask(
+        urls: string[],
+        options?: {
+            type?: EmailExtractionTypes;
+            concurrency?: number;
+            pagelength?: number;
+            notShowBrowser?: boolean;
+            proxys?: ProxyEntity[];
+            processTimeout?: number;
+            maxPageNumber?: number;
+            searchResultId?: number;
+        }
+    ): Promise<number> {
+        // Validate URLs
+        if (!urls || urls.length === 0) {
+            throw new Error('URL list cannot be empty');
+        }
+
+        // Filter out empty or invalid URLs
+        const validUrls = urls.filter(url => url && url.trim().length > 0);
+        if (validUrls.length === 0) {
+            throw new Error('No valid URLs provided');
+        }
+
+        // Create EmailsControldata with defaults
+        const taskData: EmailsControldata = {
+            validUrls: validUrls,
+            type: options?.type ?? EmailExtractionTypes.ManualInputUrl,
+            concurrency: options?.concurrency ?? 1,
+            pagelength: options?.pagelength ?? 0,
+            notShowBrowser: options?.notShowBrowser ?? false,
+            proxys: options?.proxys,
+            processTimeout: options?.processTimeout ?? 30,
+            maxPageNumber: options?.maxPageNumber ?? 0,
+            searchResultId: options?.searchResultId
+        };
+
+        // Create the task
+        const taskId = await this.saveSearchtask(taskData);
+
+        // Execute the search task
+        await this.searchEmail(taskId);
+
+        return taskId;
+    }
+
     //update task runtime log and error log path
     public async updateTaskLog(taskId: number, runtimeLog: string, errorLog: string) {
         if (runtimeLog) {

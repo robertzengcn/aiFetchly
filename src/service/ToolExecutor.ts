@@ -1,10 +1,13 @@
 import { SearchModule } from '@/modules/SearchModule';
 import { SearchTaskStatus } from '@/model/SearchTask.model';
 import { YellowPagesController } from '@/controller/YellowPagesController';
-import { TaskStatus } from '@/modules/interface/ITaskManager';
+import { TaskStatus as YellowPagesTaskStatus } from '@/modules/interface/ITaskManager';
+import { TaskStatus } from '@/entityTypes/commonType';
 import { ToolExecutionService } from '@/service/ToolExecutionService';
 import { formatYellowPagesResultsForLLM } from '@/main-process/communication/ai-chat-ipc';
 import { MCPToolService } from '@/service/MCPToolService';
+import { EmailSearchTaskModule } from '@/modules/EmailSearchTaskModule';
+import { EmailExtractionTypes } from '@/config/emailextraction';
 
 /**
  * Execute tools called by the AI
@@ -204,7 +207,7 @@ export class ToolExecutor {
         await yellowPagesController.startTask(taskId);
 
         // Poll task status until complete or error (max 10 minutes)
-        let taskStatus: TaskStatus | null = null;
+        let taskStatus: YellowPagesTaskStatus | null = null;
         const maxWaitTime = 600000; // 10 minutes
         const pollInterval = 2000; // 2 seconds
         const startTime = Date.now();
@@ -213,14 +216,14 @@ export class ToolExecutor {
             const taskInfo = await yellowPagesController.getTask(taskId);
             taskStatus = taskInfo.status;
 
-            if (taskStatus === TaskStatus.Completed || taskStatus === TaskStatus.Failed) {
+            if (taskStatus === YellowPagesTaskStatus.Completed || taskStatus === YellowPagesTaskStatus.Failed) {
                 break;
             }
             await new Promise(resolve => setTimeout(resolve, pollInterval));
         }
 
         // Check if task completed successfully
-        if (taskStatus !== TaskStatus.Completed) {
+        if (taskStatus !== YellowPagesTaskStatus.Completed) {
             const taskInfo = await yellowPagesController.getTask(taskId);
             const errorMsg = taskInfo.task.error_log || `Task ${taskId} did not complete successfully. Status: ${taskStatus}`;
             throw new Error(errorMsg);
@@ -298,15 +301,125 @@ export class ToolExecutor {
     }
 
     /**
-     * Execute email extraction (placeholder)
+     * Execute email extraction from URLs
      */
     private static async executeEmailExtraction(
         toolParams: Record<string, unknown>
     ): Promise<Record<string, unknown>> {
-        // TODO: Implement email extraction when module is available
+        const emailSearchTaskModule = new EmailSearchTaskModule();
+        
+        // Extract URLs from parameters
+        let urls: string[] = [];
+        
+        if (toolParams.urls && Array.isArray(toolParams.urls)) {
+            urls = toolParams.urls.filter((url): url is string => typeof url === 'string' && url.trim().length > 0);
+        } else if (toolParams.content && typeof toolParams.content === 'string') {
+            // For content-based extraction, we would need a different approach
+            // For now, we'll return an error suggesting to use URLs
+            return {
+                success: false,
+                error: 'Content-based email extraction is not yet supported. Please provide URLs instead.'
+            };
+        }
+        
+        if (urls.length === 0) {
+            throw new Error('URLs parameter is required and must be a non-empty array of strings');
+        }
+
+        // Extract optional configuration parameters
+        const concurrency = typeof toolParams.concurrency === 'number' ? toolParams.concurrency : 1;
+        const processTimeout = typeof toolParams.process_timeout === 'number' ? toolParams.process_timeout : 30;
+        const maxPageNumber = typeof toolParams.max_page_number === 'number' ? toolParams.max_page_number : 10;
+        const notShowBrowser = typeof toolParams.not_show_browser === 'boolean' ? toolParams.not_show_browser : true;
+
+        // Create and execute the email extraction task
+        const taskId = await emailSearchTaskModule.createAndExecuteTask(
+            urls,
+            {
+                type: EmailExtractionTypes.ManualInputUrl,
+                concurrency: concurrency,
+                processTimeout: processTimeout,
+                maxPageNumber: maxPageNumber,
+                notShowBrowser: notShowBrowser
+            }
+        );
+
+        // Poll task status until complete or error (max 10 minutes)
+        let taskStatus: TaskStatus | null = null;
+        const maxWaitTime = 600000; // 10 minutes
+        const pollInterval = 2000; // 2 seconds
+        const startTime = Date.now();
+
+        while (Date.now() - startTime < maxWaitTime) {
+            const taskDetail = await emailSearchTaskModule.getTaskDetail(taskId);
+            if (!taskDetail) {
+                throw new Error(`Email extraction task ${taskId} not found`);
+            }
+            taskStatus = taskDetail.status;
+
+            if (taskStatus === TaskStatus.Complete || taskStatus === TaskStatus.Error) {
+                break;
+            }
+            await new Promise(resolve => setTimeout(resolve, pollInterval));
+        }
+
+        // Check if task completed successfully
+        if (taskStatus !== TaskStatus.Complete) {
+            const taskDetail = await emailSearchTaskModule.getTaskDetail(taskId);
+            const errorMsg = taskDetail?.status === TaskStatus.Error 
+                ? `Email extraction task ${taskId} failed` 
+                : `Email extraction task ${taskId} did not complete successfully. Status: ${taskStatus}`;
+            throw new Error(errorMsg);
+        }
+
+        // Get extraction results
+        const resultCount = await emailSearchTaskModule.getTaskResultCount(taskId);
+        const results = await emailSearchTaskModule.getTaskResult(taskId, 0, resultCount);
+
+        // Format results for LLM consumption
+        const extractedEmails: string[] = [];
+        const urlEmailMap: Record<string, string[]> = {};
+
+        for (const result of results) {
+            if (result.emails && result.emails.length > 0) {
+                extractedEmails.push(...result.emails);
+                urlEmailMap[result.url] = result.emails;
+            }
+        }
+
+        // Remove duplicates
+        const uniqueEmails = Array.from(new Set(extractedEmails));
+
+        // Create formatted summary for LLM
+        const formattedSummary = uniqueEmails.length > 0
+            ? `Email Extraction Results:\n\n` +
+              `Total unique emails found: ${uniqueEmails.length}\n` +
+              `Total URLs processed: ${results.length}\n\n` +
+              `Emails by URL:\n${results.map((r, idx) => 
+                  `${idx + 1}. ${r.url}${r.pageTitle ? ` (${r.pageTitle})` : ''}\n   Emails: ${r.emails.length > 0 ? r.emails.join(', ') : 'None found'}`
+              ).join('\n\n')}\n\n` +
+              `All unique emails:\n${uniqueEmails.map((email, idx) => `${idx + 1}. ${email}`).join('\n')}`
+            : `Email Extraction Results:\n\nNo emails found in ${results.length} processed URL(s).`;
+
+        // Create comprehensive tool result
         return {
-            success: false,
-            error: 'Email extraction not yet implemented'
+            success: true,
+            taskId: taskId,
+            urlsProcessed: results.length,
+            totalUrls: urls.length,
+            totalEmailsFound: extractedEmails.length,
+            uniqueEmailsFound: uniqueEmails.length,
+            // Formatted summary for LLM
+            summary: formattedSummary,
+            // Clean structured data
+            emails: uniqueEmails,
+            results: results.map(r => ({
+                url: r.url,
+                pageTitle: r.pageTitle,
+                emails: r.emails,
+                recordTime: r.recordTime
+            })),
+            urlEmailMap: urlEmailMap
         };
     }
 }
