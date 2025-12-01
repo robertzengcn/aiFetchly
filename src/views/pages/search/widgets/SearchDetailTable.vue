@@ -12,10 +12,37 @@
             </v-btn>
         </div>     
     </div>
-    <v-data-table-server v-model:items-per-page="itemsPerPage" :search="search" :headers="headers" 
-        :items-length="totalItems" :items="serverItems" :loading="loading" item-value="name" @update:options="loadItems" class="custom-data-table mt5">
-         
-    </v-data-table-server>
+    <div class="table-scroll-container">
+        <v-data-table-server v-model:items-per-page="itemsPerPage" :search="search" :headers="headers" 
+            :items-length="totalItems" :items="serverItems" :loading="loading" item-value="name" @update:options="loadItems" class="custom-data-table mt5">
+            <template v-slot:[`item.link`]="{ item }">
+                <div class="link-cell-container">
+                    <v-tooltip location="top" :text="item.link">
+                        <template v-slot:activator="{ props }">
+                            <a :href="item.link" target="_blank" rel="noopener noreferrer" v-bind="props" class="link-cell">
+                                {{ truncateLink(item.link) }}
+                            </a>
+                        </template>
+                    </v-tooltip>
+                    <v-tooltip location="top" text="Copy link">
+                        <template v-slot:activator="{ props }">
+                            <v-btn
+                                icon
+                                size="small"
+                                variant="text"
+                                density="compact"
+                                v-bind="props"
+                                @click="copyLink(item.link)"
+                                class="copy-btn"
+                            >
+                                <v-icon size="small">mdi-content-copy</v-icon>
+                            </v-btn>
+                        </template>
+                    </v-tooltip>
+                </div>
+            </template>
+        </v-data-table-server>
+    </div>
     
     
 </template>
@@ -90,7 +117,9 @@ headers.value = [
         align: 'start',
         sortable: false,
         key: 'link',
-        width: '20px'
+        width: '300px',
+        minWidth: '250px',
+        maxWidth: '400px'
         // value: computed(value => value.join(', '))
     },
     {
@@ -200,6 +229,43 @@ async function handleExport() {
         exporting.value = false;
     }
 }
+
+/**
+ * Truncate link to a maximum length with ellipsis
+ */
+function truncateLink(link: string, maxLength: number = 50): string {
+    if (!link) return '';
+    if (link.length <= maxLength) return link;
+    return link.substring(0, maxLength) + '...';
+}
+
+/**
+ * Copy link to clipboard
+ */
+async function copyLink(link: string): Promise<void> {
+    try {
+        await navigator.clipboard.writeText(link);
+        // You could show a toast notification here if available
+        console.log('Link copied to clipboard:', link);
+    } catch (error) {
+        console.error('Failed to copy link:', error);
+        // Fallback for older browsers
+        try {
+            const textArea = document.createElement('textarea');
+            textArea.value = link;
+            textArea.style.position = 'fixed';
+            textArea.style.left = '-999999px';
+            document.body.appendChild(textArea);
+            textArea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textArea);
+            console.log('Link copied to clipboard (fallback):', link);
+        } catch (fallbackError) {
+            console.error('Fallback copy failed:', fallbackError);
+            alert('Failed to copy link to clipboard');
+        }
+    }
+}
 // },
 // }
 // const editItem = (item) => {
@@ -212,11 +278,78 @@ async function handleExport() {
 
 </script>
 <style scoped>
+.table-scroll-container {
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: visible;
+  -webkit-overflow-scrolling: touch; /* Smooth scrolling on iOS */
+}
+
+.table-scroll-container::-webkit-scrollbar {
+  height: 8px;
+}
+
+.table-scroll-container::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 4px;
+}
+
+.table-scroll-container::-webkit-scrollbar-thumb {
+  background: #888;
+  border-radius: 4px;
+}
+
+.table-scroll-container::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
+
+.custom-data-table {
+  min-width: 100%;
+  width: max-content;
+}
+
 .custom-data-table .v-data-table__wrapper tr {
   height: 50px; /* Set the desired row height */
 }
 
 .custom-data-table .v-data-table__wrapper td {
   height: 50px; /* Set the desired cell height */
+}
+
+.link-cell-container {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.link-cell {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: inherit;
+  text-decoration: none;
+  min-width: 0; /* Allows flex item to shrink below content size */
+}
+
+.link-cell:hover {
+  text-decoration: underline;
+}
+
+.copy-btn {
+  flex-shrink: 0;
+  opacity: 0.7;
+  transition: opacity 0.2s;
+}
+
+.copy-btn:hover {
+  opacity: 1;
+}
+
+/* Ensure the link column doesn't grow beyond max-width */
+.custom-data-table :deep(.v-data-table__wrapper) td:nth-child(3) {
+  max-width: 400px;
+  overflow: hidden;
 }
 </style>
