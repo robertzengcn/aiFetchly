@@ -162,19 +162,21 @@ export interface BatchKeywordGenerationRequestItem {
 }
 
 /**
- * Batch keyword generation response item
+ * Single keyword item with category
  */
-export interface BatchKeywordGenerationResponseItem {
-    seed_keywords: string[];
-    keywords: string[];
-    config: KeywordGenerationConfig;
+export interface KeywordItem {
+    category: string;
+    keyword: string;
 }
 
 /**
  * Batch keyword generation response
+ * Matches the actual server response structure
  */
 export interface BatchKeywordGenerationResponse {
-    results: BatchKeywordGenerationResponseItem[];
+    keywords: KeywordItem[];
+    seed_keywords: string[];
+    total_keywords: number;
 }
 
 /**
@@ -459,8 +461,10 @@ export class AiChatApi {
      *     }
      *   }
      * ]);
-     * if (response.status) {
-     *   console.log('Generated keywords:', response.data?.results);
+     * if (response.status && response.data) {
+     *   console.log('Generated keywords:', response.data.keywords);
+     *   console.log('Seed keywords:', response.data.seed_keywords);
+     *   console.log('Total keywords:', response.data.total_keywords);
      * }
      * ```
      */

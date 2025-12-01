@@ -549,21 +549,19 @@ export function registerAiChatIpcHandlers(): void {
             // Call the batch generate API
             const apiResponse = await aiChatApi.batchGenerateKeywords(batchRequests);
 
-            if (apiResponse.status && apiResponse.data && apiResponse.data.results) {
-                // Flatten all generated keywords from all results
-                const allKeywords: string[] = [];
-                apiResponse.data.results.forEach(result => {
-                    if (result.keywords && Array.isArray(result.keywords)) {
-                        allKeywords.push(...result.keywords);
-                    }
-                });
+            if (apiResponse.status && apiResponse.data) {
+                // Extract keywords from the response structure
+                // apiResponse.data.keywords is an array of KeywordItem objects with category and keyword
+                // Each KeywordItem has: { category: string, keyword: string }
+                const keywordItems = apiResponse.data.keywords || [];
+                const allKeywords: string[] = keywordItems.map(item => item.keyword);
 
                 // Remove duplicates and return
                 const uniqueKeywords = Array.from(new Set(allKeywords));
 
                 return {
                     status: true,
-                    msg: 'Keywords generated successfully',
+                    msg: apiResponse.msg || 'Keywords generated successfully',
                     data: uniqueKeywords
                 };
             } else {
