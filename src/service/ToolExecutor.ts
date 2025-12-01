@@ -2,8 +2,9 @@ import { SearchModule } from '@/modules/SearchModule';
 import { SearchTaskStatus } from '@/model/SearchTask.model';
 import { YellowPagesController } from '@/controller/YellowPagesController';
 import { TaskStatus } from '@/modules/interface/ITaskManager';
-import { ToolExecutionService } from './ToolExecutionService';
+import { ToolExecutionService } from '@/service/ToolExecutionService';
 import { formatYellowPagesResultsForLLM } from '@/main-process/communication/ai-chat-ipc';
+import { MCPToolService } from '@/service/MCPToolService';
 
 /**
  * Execute tools called by the AI
@@ -17,6 +18,11 @@ export class ToolExecutor {
         toolParams: Record<string, unknown>,
         conversationId: string
     ): Promise<Record<string, unknown>> {
+        // Check if this is an MCP tool (format: mcp_<serverId>_<toolName>)
+        if (toolName.startsWith('mcp_')) {
+            return await this.executeMCPTool(toolName, toolParams);
+        }
+
         switch (toolName) {
             case 'scrape_urls_from_google':
             case 'scrape_urls_from_bing':
@@ -37,6 +43,50 @@ export class ToolExecutor {
                     success: false,
                     error: `Unknown tool: ${toolName}`
                 };
+        }
+    }
+
+    /**
+     * Execute MCP tool
+     * Tool name format: mcp_<serverId>_<toolName>
+     */
+    private static async executeMCPTool(
+        toolName: string,
+        toolParams: Record<string, unknown>
+    ): Promise<Record<string, unknown>> {
+        try {
+            // Parse tool name: mcp_<serverId>_<toolName>
+            const parts = toolName.split('_');
+            if (parts.length < 3 || parts[0] !== 'mcp') {
+                return {
+                    success: false,
+                    error: `Invalid MCP tool name format: ${toolName}`
+                };
+            }
+
+            const serverId = parseInt(parts[1], 10);
+            const actualToolName = parts.slice(2).join('_'); // Handle tool names with underscores
+
+            if (isNaN(serverId)) {
+                return {
+                    success: false,
+                    error: `Invalid server ID in tool name: ${toolName}`
+                };
+            }
+
+            const mcpService = new MCPToolService();
+            const result = await mcpService.executeMCPTool(serverId, actualToolName, toolParams);
+
+            return {
+                success: true,
+                result
+            };
+        } catch (error) {
+            console.error('MCP tool execution error:', error);
+            return {
+                success: false,
+                error: error instanceof Error ? error.message : 'Unknown error executing MCP tool'
+            };
         }
     }
 
