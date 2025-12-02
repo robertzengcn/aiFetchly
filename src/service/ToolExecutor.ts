@@ -36,7 +36,7 @@ export class ToolExecutor {
                 return await this.executeYellowPagesSearch(toolParams);
 
             case 'get_available_yellow_pages_platforms':
-                return await this.executeGetYellowPagesPlatforms();
+                return await this.executeGetYellowPagesPlatforms(toolParams);
 
             case 'extract_emails_from_results':
                 return await this.executeEmailExtraction(toolParams);
@@ -268,9 +268,22 @@ export class ToolExecutor {
     /**
      * Get available Yellow Pages platforms
      */
-    private static async executeGetYellowPagesPlatforms(): Promise<Record<string, unknown>> {
+    private static async executeGetYellowPagesPlatforms(
+        toolParams: Record<string, unknown>
+    ): Promise<Record<string, unknown>> {
         const yellowPagesController = YellowPagesController.getInstance();
-        const platforms = await yellowPagesController.getAvailablePlatforms();
+        let platforms = await yellowPagesController.getAvailablePlatforms();
+
+        // Filter by country code if provided
+        const countryCode = typeof toolParams.country_code === 'string' 
+            ? toolParams.country_code.toUpperCase().trim() 
+            : undefined;
+        
+        if (countryCode) {
+            platforms = platforms.filter(platform => 
+                platform.country?.toUpperCase() === countryCode
+            );
+        }
 
         // Format platforms for LLM consumption
         const formattedPlatforms = platforms.map(platform => ({
@@ -286,15 +299,19 @@ export class ToolExecutor {
         }));
 
         // Create formatted summary for LLM
+        const countryFilterNote = countryCode ? ` (filtered by country code: ${countryCode})` : '';
         const formattedSummary = platforms.length > 0
-            ? `Available Yellow Pages Platforms (${platforms.length}):\n\n${platforms.map((p, idx) => 
+            ? `Available Yellow Pages Platforms${countryFilterNote} (${platforms.length}):\n\n${platforms.map((p, idx) => 
                 `${idx + 1}. **${p.display_name}** (${p.name})\n   Country: ${p.country}, Language: ${p.language}\n   ${p.is_active ? '✅ Active' : '❌ Inactive'}${p.locationRequired ? ' | Location Required' : ''}\n   Rate Limit: ${p.rate_limit} requests/hour${p.authentication?.requiresCookies ? ' | Requires Cookies/Authentication' : ''}`
             ).join('\n\n')}`
-            : 'No Yellow Pages platforms are currently available.';
+            : countryCode 
+                ? `No Yellow Pages platforms found for country code: ${countryCode}`
+                : 'No Yellow Pages platforms are currently available.';
 
         return {
             success: true,
             totalPlatforms: platforms.length,
+            countryCode: countryCode || null,
             summary: formattedSummary,
             platforms: formattedPlatforms
         };

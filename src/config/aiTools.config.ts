@@ -131,10 +131,15 @@ const STATIC_TOOL_FUNCTIONS: ToolFunction[] = [
     {
         type: "function",
         name: 'get_available_yellow_pages_platforms',
-        description: 'A function return a list of available Yellow Pages platforms that can be used for business directory searches. Returns platform names, countries, languages, and authentication requirements.',
+        description: 'A function that returns the live, up-to-date, authenticated list of Yellow Pages platforms integrated with the system\'s current APIs, including their latest API version and supported country codes.',
         parameters: {
             type: 'object',
-            properties: {}
+            properties: {
+                country_code: {
+                    type: 'string',
+                    description: 'Optional ISO 3166-1 alpha-2 country code to filter available platforms (e.g., "US", "DE", "FR").'
+                }
+            }
         }
     }
 ];
@@ -145,7 +150,7 @@ const STATIC_TOOL_FUNCTIONS: ToolFunction[] = [
  */
 export async function getAvailableToolFunctions(): Promise<ToolFunction[]> {
     const staticTools = [...STATIC_TOOL_FUNCTIONS];
-    
+
     try {
         const mcpService = new MCPToolService();
         const mcpTools = await mcpService.getEnabledMCPToolsAsFunctions();
