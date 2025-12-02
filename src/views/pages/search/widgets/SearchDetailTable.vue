@@ -16,7 +16,7 @@
         </div>     
     </div>
     <div class="table-scroll-container">
-        <v-data-table-server v-model:items-per-page="itemsPerPage" v-model:selected="selectedItems" 
+        <v-data-table-server v-model:items-per-page="itemsPerPage" v-model="selectedItems" 
             :search="search" :headers="headers" :items-length="totalItems" :items="serverItems" 
             :loading="loading" :item-value="getItemValue" show-select @update:options="loadItems" class="custom-data-table mt5">
             <template v-slot:[`item.link`]="{ item }">
