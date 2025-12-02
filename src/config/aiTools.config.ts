@@ -134,8 +134,7 @@ const STATIC_TOOL_FUNCTIONS: ToolFunction[] = [
         description: 'Get a list of available Yellow Pages platforms that can be used for business directory searches. Returns platform names, countries, languages, and authentication requirements.',
         parameters: {
             type: 'object',
-            properties: {},
-            required: []
+            properties: {}
         }
     }
 ];
