@@ -637,6 +637,7 @@ export default {
         keywords_empty:"keywords empty",
         page_number:"page number",
         choose_proxy:"choose proxy",
+        select_proxy:"Select proxy",
         search_enginer_invalid:"search enginer invalid",
         use_local_chrome_data:"use local chrome browser profile",
         use_local_browser:"use local browser",

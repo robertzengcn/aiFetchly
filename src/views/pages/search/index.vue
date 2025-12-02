@@ -20,7 +20,7 @@
 
       <v-text-field v-model="concurrent_quantity" :label="t('search.concurrent_quantity')" clearable
         class="mt-3"></v-text-field>
-      <v-combobox v-model="proxyValue" :items="proxyValue" label="Select proxy" item-title="host" multiple return-object
+      <v-combobox v-model="proxyValue" :items="proxyValue" :label="t('search.select_proxy')" item-title="host" multiple return-object
         chips clearable></v-combobox>
       <v-btn color="primary" @click="showProxytable">{{ t('search.choose_proxy') }}</v-btn>
 
