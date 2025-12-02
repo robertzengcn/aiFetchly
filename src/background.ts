@@ -1,7 +1,7 @@
 'use strict'
 import 'reflect-metadata';
 // import {ipcMain as ipc} from 'electron-better-ipc';
-import { app, BrowserWindow, dialog, autoUpdater, Menu } from 'electron'
+import { app, BrowserWindow, dialog, autoUpdater, Menu, session } from 'electron'
 // import { createProtocol } from 'vue-cli-plugin-electron-builder/lib'
 import installExtension, { VUEJS3_DEVTOOLS } from 'electron-devtools-installer'
 import { registerCommunicationIpcHandlers } from "./main-process/communication/";
@@ -89,6 +89,9 @@ function initialize() {
     // app.setAsDefaultProtocolClient(protocolScheme);
   }
   makeSingleInstance()
+
+  // Configure Content Security Policy
+  configureContentSecurityPolicy()
 
   // Helper function to try alternative HTML file paths with detailed error handling
   async function tryAlternativePaths(win: BrowserWindow, originalPath: string, log: any, dialog: any): Promise<void> {
@@ -498,6 +501,56 @@ function initialize() {
 
 
 
+
+/**
+ * Configure Content Security Policy for the application
+ * This prevents the Electron security warning about missing CSP
+ */
+function configureContentSecurityPolicy() {
+  const defaultSession = session.defaultSession;
+
+  // Set CSP based on environment
+  // In development, we need 'unsafe-eval' for Vite's HMR
+  // In production, we can be more restrictive
+  const cspDirectives = isDevelopment
+    ? [
+        "default-src 'self'",
+        "script-src 'self' 'unsafe-eval' 'unsafe-inline' http://localhost:* https://localhost:*",
+        "style-src 'self' 'unsafe-inline'",
+        "img-src 'self' data: https: http:",
+        "font-src 'self' data:",
+        "connect-src 'self' http://localhost:* https://localhost:* https: http:",
+        "frame-src 'self'",
+        "object-src 'none'",
+        "base-uri 'self'",
+        "form-action 'self'",
+        "frame-ancestors 'none'"
+      ].join('; ')
+    : [
+        "default-src 'self'",
+        "script-src 'self'",
+        "style-src 'self' 'unsafe-inline'",
+        "img-src 'self' data: https:",
+        "font-src 'self' data:",
+        "connect-src 'self' https:",
+        "frame-src 'self'",
+        "object-src 'none'",
+        "base-uri 'self'",
+        "form-action 'self'",
+        "frame-ancestors 'none'"
+      ].join('; ');
+
+  defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': [cspDirectives]
+      }
+    });
+  });
+
+  log.info(`Content Security Policy configured for ${isDevelopment ? 'development' : 'production'} mode`);
+}
 
 function makeSingleInstance() {
 
