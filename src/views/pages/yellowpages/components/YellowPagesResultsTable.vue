@@ -133,7 +133,7 @@
             @click="$emit('view-details', item)"
             :title="t('home.view_details')"
           />
-          <v-btn
+          <!-- <v-btn
             v-if="item.website"
             icon="mdi-open-in-new"
             size="small"
@@ -141,7 +141,7 @@
             color="blue"
             @click="openWebsite(item.website)"
             :title="t('home.open_website')"
-          />
+          /> -->
           <v-btn
             v-if="item.email"
             icon="mdi-email-outline"

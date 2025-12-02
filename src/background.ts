@@ -90,9 +90,6 @@ function initialize() {
   }
   makeSingleInstance()
 
-  // Configure Content Security Policy
-  configureContentSecurityPolicy()
-
   // Helper function to try alternative HTML file paths with detailed error handling
   async function tryAlternativePaths(win: BrowserWindow, originalPath: string, log: any, dialog: any): Promise<void> {
     const alternativePaths = [
@@ -397,6 +394,9 @@ function initialize() {
   // initialization and is ready to create browser windows.
   // Some APIs can only be used after this event occurs.
   app.whenReady().then(async () => {
+    // Configure Content Security Policy (must be called after app is ready)
+    configureContentSecurityPolicy()
+
     const tokenService = new Token()
 
     // Initialize and set application menu
