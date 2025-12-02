@@ -627,6 +627,7 @@ export default {
         keywords_empty:"关键词为空",
         page_number:"页数",
         choose_proxy:"选择代理",
+        select_proxy:"选择代理",
         search_enginer_invalid:"搜索引擎无效",
         use_local_chrome_data:"使用本地Chrome浏览器配置文件",
         use_local_browser:"使用本地浏览器",
