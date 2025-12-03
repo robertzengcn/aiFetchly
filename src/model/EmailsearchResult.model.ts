@@ -46,6 +46,12 @@ export class EmailsearchResultModel extends BaseDb {
         });
     }
 
+    async getAllResultsByTaskId(taskId: number): Promise<EmailSearchResultEntity[]> {
+        return this.repository.find({
+            where: { task_id: taskId }
+        });
+    }
+
     async getTaskResultCount(taskId: number): Promise<number> {
         return this.repository.count({ where: { task_id: taskId } });
     }

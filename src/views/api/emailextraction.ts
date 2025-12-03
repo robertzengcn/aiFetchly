@@ -1,6 +1,6 @@
 import {EmailscFormdata,EmailResultDisplay,EmailsearchtaskResultquery} from '@/entityTypes/emailextraction-type'
 import { windowInvoke,windowReceive,windowSend } from '@/views/utils/apirequest'
-import {EMAILEXTRACTIONAPI, EMAILSEARCHTASK_ERROR_LOG_DOWNLOAD, GETEMAILSEARCHTASK, UPDATEEMAILSEARCHTASK, DELETEEMAILSEARCHTASK} from '@/config/channellist'
+import {EMAILEXTRACTIONAPI, EMAILSEARCHTASK_ERROR_LOG_DOWNLOAD, GETEMAILSEARCHTASK, UPDATEEMAILSEARCHTASK, DELETEEMAILSEARCHTASK, EMAILEXTRACTION_RESULT_EXPORT} from '@/config/channellist'
 import { SearchResult} from '@/views/api/types'
 import {ItemSearchparam} from "@/entityTypes/commonType"
 import {LISTEMAILSEARCHTASK,EMAILSEARCHTASKRESULT} from "@/config/channellist";
@@ -144,6 +144,26 @@ export async function deleteEmailSearchTask(taskId: number): Promise<string> {
         return resp.data
     } catch (error) {
         console.error('Error deleting task:', error)
+        throw error
+    }
+}
+
+/**
+ * Export email extraction results for a task
+ * @param taskId The task ID
+ * @param format Export format ('json' or 'csv')
+ * @returns Promise with file path or error
+ */
+export async function exportEmailResults(taskId: number, format: 'json' | 'csv' = 'csv'): Promise<string> {
+    try {
+        const querydata = { taskId, format }
+        const resp = await windowInvoke(EMAILEXTRACTION_RESULT_EXPORT, querydata)
+        if (!resp) {
+            throw new Error(resp?.msg || "Failed to export results")
+        }
+        return resp
+    } catch (error) {
+        console.error('Error exporting results:', error)
         throw error
     }
 }

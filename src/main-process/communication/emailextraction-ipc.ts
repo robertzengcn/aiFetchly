@@ -1,5 +1,7 @@
-import { ipcMain } from 'electron';
-import { EMAILEXTRACTIONAPI, EMAILEXTRACTIONMESSAGE,LISTEMAILSEARCHTASK,EMAILSEARCHTASKRESULT, EMAILSEARCHTASK_ERROR_LOG_DOWNLOAD, GETEMAILSEARCHTASK, UPDATEEMAILSEARCHTASK, DELETEEMAILSEARCHTASK } from "@/config/channellist";
+import { ipcMain, dialog, app } from 'electron';
+import { EMAILEXTRACTIONAPI, EMAILEXTRACTIONMESSAGE,LISTEMAILSEARCHTASK,EMAILSEARCHTASKRESULT, EMAILSEARCHTASK_ERROR_LOG_DOWNLOAD, GETEMAILSEARCHTASK, UPDATEEMAILSEARCHTASK, DELETEEMAILSEARCHTASK, EMAILEXTRACTION_RESULT_EXPORT } from "@/config/channellist";
+import * as path from 'path';
+import * as fs from 'fs';
 import { EmailscFormdata } from '@/entityTypes/emailextraction-type'
 import { CommonDialogMsg } from "@/entityTypes/commonType";
 import { isValidUrl } from "@/views/utils/function"
@@ -377,6 +379,66 @@ export function registerEmailextractionIpcHandlers() {
                 }
                 return resp
             }
+        }
+    });
+
+    // Export email extraction results
+    ipcMain.handle(EMAILEXTRACTION_RESULT_EXPORT, async (event, data): Promise<CommonMessage<string | null>> => {
+        const qdata = JSON.parse(data) as { taskId: number; format?: 'json' | 'csv' };
+        
+        if (!qdata.taskId || qdata.taskId <= 0) {
+            const resp: CommonMessage<null> = {
+                status: false,
+                msg: "Task ID is required",
+            };
+            return resp;
+        }
+
+        try {
+            const emailController = new EmailextractionController();
+            const format = qdata.format || 'csv';
+            const exportData = await emailController.exportEmailResults(qdata.taskId, format);
+            
+            // Show save dialog
+            const fileExtension = format === 'csv' ? 'csv' : 'json';
+            const defaultFilename = `email_results_task_${qdata.taskId}_${new Date().toISOString().split('T')[0]}.${fileExtension}`;
+            
+            const { filePath } = await dialog.showSaveDialog({
+                title: `Export Email Results as ${format.toUpperCase()}`,
+                defaultPath: path.join(app.getPath('documents'), defaultFilename),
+                filters: [
+                    { name: format === 'csv' ? 'CSV Files' : 'JSON Files', extensions: [fileExtension] },
+                    { name: 'All Files', extensions: ['*'] }
+                ]
+            });
+
+            if (filePath) {
+                if (format === 'csv') {
+                    fs.writeFileSync(filePath, exportData, 'utf-8');
+                } else {
+                    fs.writeFileSync(filePath, JSON.stringify(exportData, null, 2), 'utf-8');
+                }
+                
+                const resp: CommonMessage<string> = {
+                    status: true,
+                    msg: "Email results exported successfully",
+                    data: filePath
+                };
+                return resp;
+            } else {
+                const resp: CommonMessage<null> = {
+                    status: false,
+                    msg: "Export cancelled by user",
+                };
+                return resp;
+            }
+        } catch (error) {
+            console.error('Export email results error:', error);
+            const resp: CommonMessage<null> = {
+                status: false,
+                msg: error instanceof Error ? error.message : "Unknown error occurred",
+            };
+            return resp;
         }
     });
 }

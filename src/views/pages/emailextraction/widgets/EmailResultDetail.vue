@@ -1,5 +1,16 @@
 <template>
-
+    <div>
+        <v-btn
+            color="primary"
+            @click="handleExport"
+            :loading="exporting"
+            :disabled="exporting"
+            class="mb-4"
+        >
+            <v-icon start>mdi-download</v-icon>
+            {{ t('common.export') || 'Export' }}
+        </v-btn>
+    </div>
     <v-data-table-server v-model:items-per-page="itemsPerPage" :search="search" :headers="headers"
         :items-length="totalItems" :items="serverItems" :loading="loading" item-value="name" @update:options="loadItems" class="custom-data-table" show-expand :show-select="isSelectedtable" select-strategy="single" >
         <template v-slot:[`item.actions`]="{ item }" v-if="isSelectedtable==true">
@@ -38,7 +49,7 @@
 
 <script setup lang="ts">
 import {useI18n} from "vue-i18n";
-import { getEmailtaskdetail} from '@/views/api/emailextraction'
+import { getEmailtaskdetail, exportEmailResults} from '@/views/api/emailextraction'
 import {EmailResultDisplay} from '@/entityTypes/emailextraction-type'
 import { ref,computed,onMounted,onUnmounted,reactive } from 'vue'
 import { SearchResult } from '@/views/api/types'
@@ -114,6 +125,7 @@ const loading = ref(false);
 const totalItems = ref(0);
 const search = ref('');
 const emailresulttaskdetailId=ref(0);
+const exporting = ref(false);
 const startAutoRefresh = () => {
     refreshInterval = setInterval(function(){
         loadItems({ page: options.page, itemsPerPage: options.itemsPerPage, sortBy: "" });
@@ -185,6 +197,28 @@ const downloadErrorlog=(item)=>{
         // const link = document.createElement('a');
         // link.href
    
+}
+
+async function handleExport() {
+    const taskid = parseInt($route.params.id.toString())
+    if (!taskid) {
+        return;
+    }
+    exporting.value = true;
+    try {
+        // Export as CSV by default (can be extended to support format selection)
+        const filePath = await exportEmailResults(taskid, 'csv');
+        if (filePath) {
+            // Show success message (you might want to use a toast/snackbar component)
+            console.log(`Export successful: ${filePath}`);
+        }
+    } catch (error) {
+        console.error('Export failed:', error);
+        // Show error message (you might want to use a toast/snackbar component)
+        alert(error instanceof Error ? error.message : 'Export failed');
+    } finally {
+        exporting.value = false;
+    }
 }
 const initialize = async () => {
     
