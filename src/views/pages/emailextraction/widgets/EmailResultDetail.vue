@@ -210,12 +210,12 @@ async function handleExport() {
         const filePath = await exportEmailResults(taskid, 'csv');
         if (filePath) {
             // Show success message (you might want to use a toast/snackbar component)
-            console.log(`Export successful: ${filePath}`);
+            console.log(`${t('common.export_success')}: ${filePath}`);
         }
     } catch (error) {
-        console.error('Export failed:', error);
+        console.error(t('common.export_failed'), error);
         // Show error message (you might want to use a toast/snackbar component)
-        alert(error instanceof Error ? error.message : 'Export failed');
+        alert(error instanceof Error ? error.message : t('common.export_failed'));
     } finally {
         exporting.value = false;
     }
