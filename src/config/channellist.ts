@@ -35,6 +35,7 @@ export const EMAILSEARCHTASK_ERROR_LOG_DOWNLOAD='email:search:task:error:log:dow
 export const GETEMAILSEARCHTASK='email:search:task:get'
 export const UPDATEEMAILSEARCHTASK='email:search:task:update'
 export const DELETEEMAILSEARCHTASK='email:search:task:delete'
+export const EMAILEXTRACTION_RESULT_EXPORT='email:extraction:result:export'
 
 export const EMAILMARKETINGTEMPLIST='email:marketing:template:list'
 export const EMAILMARKETINGTEMPDETAIL='email:marketing:template:detail'

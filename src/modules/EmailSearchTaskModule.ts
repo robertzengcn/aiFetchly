@@ -356,8 +356,38 @@ export class EmailSearchTaskModule extends BaseModule{
             if (!value.title) {
                 value.title = ""
             }
-            if (!value.record_time) {
-                value.record_time = ""
+            // if (!value.record_time) {
+            //     value.record_time = ""
+            // }
+
+            const item: EmailResultDisplay = {
+                id: value.id,
+                url: value.url,
+                pageTitle: value.title,
+                emails: emailsArr,
+                recordTime: value.createdAt ? this.formatDateTime(value.createdAt) : ""
+            }
+            result.push(item)
+        }
+
+        return result
+    }
+    //get all task results for export (no pagination)
+    public async getAllTaskResults(taskId: number): Promise<EmailResultDisplay[]> {
+        console.log("get all task results for export, task id is" + taskId)
+        const res = await this.emailsearchresultdb.getAllResultsByTaskId(taskId)
+        const result: EmailResultDisplay[] = []
+        for (const value of res) {
+            if (!value.id) {
+                value.id = 0
+            }
+            const emails = await this.emailsearchResultDetaildb.getItemsByResultId(value.id)
+            const emailsArr: string[] = []
+            for (const email of emails) {
+                emailsArr.push(email.email)
+            }
+            if (!value.title) {
+                value.title = ""
             }
 
             const item: EmailResultDisplay = {
@@ -365,7 +395,7 @@ export class EmailSearchTaskModule extends BaseModule{
                 url: value.url,
                 pageTitle: value.title,
                 emails: emailsArr,
-                recordTime: value.record_time
+                recordTime: value.createdAt ? this.formatDateTime(value.createdAt) : ""
             }
             result.push(item)
         }
@@ -503,6 +533,27 @@ export class EmailSearchTaskModule extends BaseModule{
 
         // Delete main task
         await this.emailsearchTaskdb.deleteTask(taskId)
+    }
+
+    /**
+     * Formats a Date object to "MM/DD/YYYY, HH:MM:SS AM/PM" format
+     * @param date - The date to format
+     * @returns Formatted date string
+     */
+    private formatDateTime(date: Date): string {
+        const month = (date.getMonth() + 1).toString().padStart(2, '0')
+        const day = date.getDate().toString().padStart(2, '0')
+        const year = date.getFullYear()
+        
+        let hours = date.getHours()
+        const minutes = date.getMinutes().toString().padStart(2, '0')
+        const seconds = date.getSeconds().toString().padStart(2, '0')
+        const ampm = hours >= 12 ? 'PM' : 'AM'
+        hours = hours % 12
+        hours = hours ? hours : 12 // the hour '0' should be '12'
+        const hoursStr = hours.toString().padStart(2, '0')
+        
+        return `${month}/${day}/${year}, ${hoursStr}:${minutes}:${seconds} ${ampm}`
     }
 
 }

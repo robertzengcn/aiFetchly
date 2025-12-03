@@ -131,7 +131,7 @@ export class EmailextractionController {
             const urls=await this.emailSeachTaskModule.getTaskurls(value.id,0,10)
             const displayValue:EmailsearchTaskEntityDisplay={
                 id:value.id,
-                record_time:value.record_time,
+                record_time:value.createdAt ? this.formatDateTime(value.createdAt) : undefined,
                 statusName:taskStatus,
                 typeName:taskType,  
                 urls:urls
@@ -150,6 +150,78 @@ export class EmailextractionController {
     public async EmailtaskresultCount(taskId:number):Promise<number>{
         const res=await this.emailSeachTaskModule.getTaskResultCount(taskId)
         return res
+    }
+
+    /**
+     * Export email extraction results for a task
+     * @param taskId The task ID
+     * @param format Export format ('json' or 'csv')
+     * @returns Exported data
+     */
+    public async exportEmailResults(taskId: number, format: 'json' | 'csv' = 'csv'): Promise<any> {
+        if (!taskId || taskId <= 0) {
+            throw new Error("Task ID is required");
+        }
+
+        // Get all results for the task
+        const allResults = await this.emailSeachTaskModule.getAllTaskResults(taskId);
+
+        if (format === 'csv') {
+            return this.convertToCSV(allResults);
+        } else {
+            return {
+                total: allResults.length,
+                results: allResults,
+                exportDate: new Date().toISOString(),
+                taskId: taskId
+            };
+        }
+    }
+
+    /**
+     * Convert email results to CSV format
+     * @param results Array of email result displays
+     * @returns CSV string
+     */
+    private convertToCSV(results: EmailResultDisplay[]): string {
+        if (results.length === 0) {
+            return '';
+        }
+
+        const headers = ['ID', 'URL', 'Page Title', 'Emails', 'Record Time'];
+        const rows = results.map(result => [
+            this.escapeCSV(result.id?.toString() ?? ''),
+            this.escapeCSV(result.url ?? ''),
+            this.escapeCSV(result.pageTitle ?? ''),
+            this.escapeCSV(result.emails.join('; ') ?? ''),
+            this.escapeCSV(result.recordTime ?? '')
+        ]);
+
+        const csvRows = [
+            headers.join(','),
+            ...rows.map(row => row.join(','))
+        ];
+
+        return csvRows.join('\n');
+    }
+
+    /**
+     * Escape CSV field values according to RFC 4180
+     * Handles commas, quotes, and newlines by wrapping in double quotes
+     * and escaping existing double quotes by doubling them
+     * @param value The value to escape
+     * @returns Escaped value
+     */
+    private escapeCSV(value: string): string {
+        // Convert to string if not already
+        const stringValue = String(value);
+        
+        // If value contains comma, quote, or newline, wrap in quotes
+        if (stringValue.includes(',') || stringValue.includes('"') || stringValue.includes('\n') || stringValue.includes('\r')) {
+            // Escape existing double quotes by doubling them
+            return `"${stringValue.replace(/"/g, '""')}"`;
+        }
+        return stringValue;
     }
 
     public async readTaskErrorlog(taskId: number): Promise<string> {
@@ -255,6 +327,27 @@ export class EmailextractionController {
 
         // Delete the task
         await this.emailSeachTaskModule.deleteTask(taskId)
+    }
+
+    /**
+     * Formats a Date object to "MM/DD/YYYY, HH:MM:SS AM/PM" format
+     * @param date - The date to format
+     * @returns Formatted date string
+     */
+    private formatDateTime(date: Date): string {
+        const month = (date.getMonth() + 1).toString().padStart(2, '0')
+        const day = date.getDate().toString().padStart(2, '0')
+        const year = date.getFullYear()
+        
+        let hours = date.getHours()
+        const minutes = date.getMinutes().toString().padStart(2, '0')
+        const seconds = date.getSeconds().toString().padStart(2, '0')
+        const ampm = hours >= 12 ? 'PM' : 'AM'
+        hours = hours % 12
+        hours = hours ? hours : 12 // the hour '0' should be '12'
+        const hoursStr = hours.toString().padStart(2, '0')
+        
+        return `${month}/${day}/${year}, ${hoursStr}:${minutes}:${seconds} ${ampm}`
     }
   
     
