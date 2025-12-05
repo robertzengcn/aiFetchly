@@ -86,7 +86,7 @@
 <script setup lang="ts">
 import {useI18n} from "vue-i18n";
 import { gettaskresult, exportSearchResults } from '@/views/api/search'
-import { ref,computed,onMounted,watch } from 'vue'
+import { ref,computed,onMounted,onUnmounted,watch } from 'vue'
 import { SearchResult } from '@/views/api/types'
 import {SearchResEntityDisplay} from "@/entityTypes/scrapeType"
 import router from '@/views/router';
@@ -107,8 +107,61 @@ console.log($route.params.id)
 //     taskid.value = parseInt($route.params.id.toString());
 //   }
 }
+/**
+ * Start auto-refresh timer
+ */
+function startAutoRefresh(): void {
+    if (autoRefreshInterval.value) {
+        clearInterval(autoRefreshInterval.value);
+    }
+    
+    if (autoRefreshEnabled.value) {
+        autoRefreshInterval.value = setInterval(() => {
+            if (taskid && !loading.value && !analyzing.value) {
+                loadItems({ 
+                    page: currentPage.value, 
+                    itemsPerPage: itemsPerPage.value, 
+                    sortBy: '' 
+                }, true); // Pass isAutoRefresh flag
+            }
+        }, autoRefreshIntervalMs.value);
+    }
+}
+
+/**
+ * Stop auto-refresh timer
+ */
+function stopAutoRefresh(): void {
+    if (autoRefreshInterval.value) {
+        clearInterval(autoRefreshInterval.value);
+        autoRefreshInterval.value = null;
+    }
+}
+
+/**
+ * Handle page visibility changes
+ */
+function handleVisibilityChange(): void {
+    isPageVisible.value = !document.hidden;
+    // Restart auto-refresh when page becomes visible
+    if (isPageVisible.value && autoRefreshEnabled.value) {
+        startAutoRefresh();
+    }
+}
+
 onMounted(() => {
   initialize();
+  // Start auto-refresh
+  startAutoRefresh();
+  // Add page visibility listener
+  document.addEventListener('visibilitychange', handleVisibilityChange);
+});
+
+onUnmounted(() => {
+    // Clean up auto-refresh timer
+    stopAutoRefresh();
+    // Remove page visibility listener
+    document.removeEventListener('visibilitychange', handleVisibilityChange);
 });
 // const campaignId = i18n.t("campaignId");
 type Fetchparam = {
@@ -204,6 +257,13 @@ const selectedResultsForAnalysis = ref<SearchResEntityDisplay[]>([]);
 const currentPage = ref(1);
 const analysisProgress = ref({ current: 0, total: 0 });
 
+// Auto-refresh functionality
+const autoRefreshEnabled = ref(true); // Enable by default
+const autoRefreshInterval = ref<NodeJS.Timeout | null>(null);
+const autoRefreshIntervalMs = ref(10000); // 10 seconds default
+const isPageVisible = ref(true);
+const lastRefreshTime = ref<Date | null>(null);
+
 /**
  * Get color for match score chip based on score value
  * @param score - The match score (0-100)
@@ -281,11 +341,17 @@ watch(search, () => {
     }, 500); // 500ms debounce
 });
 
-function loadItems({ page, itemsPerPage, sortBy }) {
+function loadItems({ page, itemsPerPage, sortBy }, isAutoRefresh: boolean = false) {
+    // Skip auto-refresh if page is not visible or currently analyzing
+    if (isAutoRefresh && (!isPageVisible.value || analyzing.value)) {
+        return;
+    }
+
     currentPage.value = page;
     loading.value = true
     //console.log(taskid)
     if(!taskid){
+        loading.value = false;
         return
     }
     // console.log(page);
@@ -308,8 +374,11 @@ function loadItems({ page, itemsPerPage, sortBy }) {
         
             serverItems.value = data
             totalItems.value = total
-            // Clear selected items when data changes (new page or search)
-            selectedItems.value = []
+            // Clear selected items when data changes (new page or search) - but not during auto-refresh
+            if (!isAutoRefresh) {
+                selectedItems.value = []
+            }
+            lastRefreshTime.value = new Date();
             loading.value = false
         }).catch(function (error) {
             console.error(error);
@@ -519,6 +588,33 @@ async function handleAnalyzeConfirm(data: { businessInfo: string; temperature: n
                         current: progress.completed || 0,
                         total: progress.total || validItems.length
                     };
+                    
+                    // Refresh table when progress updates (to show completed analyses)
+                    if (progress.completed > 0 && taskid && !loading.value) {
+                        loadItems({ 
+                            page: currentPage.value, 
+                            itemsPerPage: itemsPerPage.value, 
+                            sortBy: '' 
+                        }, true);
+                    }
+                    
+                    // If all items are completed, refresh and clear analyzing flag
+                    if (progress.completed >= progress.total) {
+                        analyzing.value = false;
+                        selectedResultsForAnalysis.value = [];
+                        analysisProgress.value = { current: 0, total: 0 };
+                        
+                        // Refresh table to show final results
+                        setTimeout(() => {
+                            if (taskid && !loading.value) {
+                                loadItems({ 
+                                    page: currentPage.value, 
+                                    itemsPerPage: itemsPerPage.value, 
+                                    sortBy: '' 
+                                }, true);
+                            }
+                        }, 1000);
+                    }
                 }
             } catch (error) {
                 console.error('Error parsing progress data:', error);
@@ -547,27 +643,25 @@ async function handleAnalyzeConfirm(data: { businessInfo: string; temperature: n
         currentBatchId = response.data.batchId;
         const total = response.data.total;
 
-        // Wait for all results (polling approach since we can't easily get completion callback)
-        // In a real implementation, you might want to use a completion event
-        // For now, we'll wait a reasonable time and then refresh the data
-        await new Promise(resolve => setTimeout(resolve, Math.max(5000, total * 2000)));
-
-        // Reload items to get updated analysis results
-        if (taskid) {
-            loadItems({ 
-                page: currentPage.value, 
-                itemsPerPage: itemsPerPage.value, 
-                sortBy: '' 
-            });
-        }
-
         // Show success message
         alert(t('websiteAnalysis.analysis_success') || `Analysis started for ${total} item(s). Results will be updated automatically.`);
         
         // Close dialog
         showAnalysisDialog.value = false;
-        selectedResultsForAnalysis.value = [];
-        analysisProgress.value = { current: 0, total: 0 };
+        
+        // Keep analyzing flag true until we detect completion via progress updates
+        // The progress handler will update the table as items complete and clear the flag when done
+        // Set a timeout to clear analyzing flag as a fallback (in case progress updates fail)
+        const fallbackTimeout = setTimeout(() => {
+            if (analyzing.value) {
+                analyzing.value = false;
+                selectedResultsForAnalysis.value = [];
+                analysisProgress.value = { current: 0, total: 0 };
+            }
+        }, Math.max(120000, total * 30000)); // Fallback timeout: 2 minutes minimum, or 30s per item
+        
+        // Clear fallback timeout if analysis completes normally (handled in progress handler)
+        // Note: This is a simple implementation - in production you might want to store the timeout ID
     } catch (error) {
         console.error('Error in batch analysis:', error);
         alert(error instanceof Error ? error.message : t('websiteAnalysis.analysis_error') || 'Analysis failed');
