@@ -63,6 +63,7 @@ export default {
         exporting:"导出中...",
         download_template:"下载模板",
         drag_drop_file:"拖拽文件到此处或点击选择文件",
+        search:"搜索",
     },
     route: {
         dashboard: "仪表板",
@@ -1160,5 +1161,21 @@ export default {
         cron_desc_on_weekdays:"在工作日",
         cron_desc_on_weekends:"在周末",
         cron_desc_on_weekday:"在星期{weekday}"
+    },
+    websiteAnalysis: {
+        analyze_button: "AI分析",
+        dialog_title: "网站分析",
+        analyzing_multiple: "正在分析 {itemCount} 个选中的项目",
+        business_info_label: "客户业务信息",
+        business_info_placeholder: "请输入您的业务描述，例如：我们是一家专注于B2B SaaS解决方案的公司，主要开发项目管理和团队协作工具。",
+        business_info_required: "业务信息是必填项",
+        temperature_label: "温度参数",
+        temperature_range_error: "温度值必须在0到2之间",
+        save_for_future: "保存以供将来使用",
+        customer_industry: "客户行业",
+        probability: "潜在客户概率",
+        analysis_result: "分析结果",
+        analysis_success: "分析成功",
+        analysis_error: "分析失败"
     }
 }

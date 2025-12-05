@@ -71,6 +71,7 @@ export default {
         exporting:"Exporting...",
         download_template:"Download Template",
         drag_drop_file:"Drag and drop your file here or click to select file",
+        search:"Search",
     },
     route: {
         dashboard: "Dashboard",
@@ -1170,6 +1171,22 @@ export default {
         cron_desc_on_weekdays:" on weekdays",
         cron_desc_on_weekends:" on weekends",
         cron_desc_on_weekday:" on weekday {weekday}"
+    },
+    websiteAnalysis: {
+        analyze_button: "AI Analyze",
+        dialog_title: "Website Analysis",
+        analyzing_multiple: "Analyzing {itemCount} selected items",
+        business_info_label: "Client Business Information",
+        business_info_placeholder: "Please enter your business description, e.g., We are a company specializing in B2B SaaS solutions, focusing on developing project management and team collaboration tools.",
+        business_info_required: "Business information is required",
+        temperature_label: "Temperature",
+        temperature_range_error: "Temperature must be between 0 and 2",
+        save_for_future: "Save for future use",
+        customer_industry: "Customer Industry",
+        probability: "Probability of Potential Customers",
+        analysis_result: "Analysis Result",
+        analysis_success: "Analysis completed successfully",
+        analysis_error: "Analysis failed"
     }
 
 }
