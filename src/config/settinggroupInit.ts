@@ -31,6 +31,7 @@ export const chrome_path='chrome_path'
 export const firefox_path='firefox_path'
 export const user_preferences='user_preferences'
 export const language_preference='language_preference'
+export const ai_website_analysis_business_info='ai_website_analysis_business_info'
 export const embedding_group='embedding_group'
 export const embedding_group_description='embedding_group_description'
 export const default_embedding_model='default_embedding_model'
@@ -206,6 +207,12 @@ export const settinggroupInit: Array<SystemSettingGroupdf> = [
                 value: 'en',
                 description: 'language-preference-description',
                 type: 'select',
+            },
+            {
+                key: ai_website_analysis_business_info,
+                value: JSON.stringify({ business: '', temperature: 0.7 }),
+                description: 'ai-website-analysis-business-info-description',
+                type: 'input',
             }
         ]
     },

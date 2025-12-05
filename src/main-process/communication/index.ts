@@ -22,6 +22,7 @@ import {registerRagIpcHandlers} from "@/main-process/communication/rag-ipc";
 import {registerAiChatIpcHandlers} from "@/main-process/communication/ai-chat-ipc";
 import {registerDashboardIpcHandlers} from "@/main-process/communication/dashboard-ipc";
 import {registerMCPToolIpcHandlers} from "@/main-process/communication/mcp-tool-ipc";
+import {registerSearchResultIpcHandlers} from "@/main-process/communication/search-result-ipc";
 export function registerCommunicationIpcHandlers(win: BrowserWindow) {
     try{
     SyncMsg(win)
@@ -44,6 +45,7 @@ export function registerCommunicationIpcHandlers(win: BrowserWindow) {
     registerAiChatIpcHandlers()
     registerDashboardIpcHandlers()
     registerMCPToolIpcHandlers()
+    registerSearchResultIpcHandlers()
     AsyncMsg()
     }catch(e){
         console.log("registerCommunicationIpcHandlers error:")

@@ -239,10 +239,20 @@ export type SearchResEntity = {
   snippet: string|null|undefined, 
   visible_link: string|null|undefined
   record_time?: string|null|undefined
+  ai_industry?: string | null
+  ai_match_score?: number | null
+  ai_reasoning?: string | null
+  ai_client_business?: string | null
+  ai_analysis_time?: string | null
 }
 export interface SearchResEntityDisplay extends SearchResEntity {
   keyword:string, 
   index?:number
+  ai_industry?: string | null
+  ai_match_score?: number | null
+  ai_reasoning?: string | null
+  ai_client_business?: string | null
+  ai_analysis_time?: string | null
 }
 export type SearchResEntityRecord = {
  record:Array<SearchResEntityDisplay>

@@ -140,7 +140,12 @@ export class SearchResultModel extends BaseDb {
             title: result.title,
             snippet: result.snippet,
             visible_link: result.domain,
-            record_time: result.record_time
+            record_time: result.record_time,
+            ai_industry: result.ai_industry ?? null,
+            ai_match_score: result.ai_match_score ?? null,
+            ai_reasoning: result.ai_reasoning ?? null,
+            ai_client_business: result.ai_client_business ?? null,
+            ai_analysis_time: result.ai_analysis_time ?? null
         }));
 
         return {
@@ -165,7 +170,12 @@ export class SearchResultModel extends BaseDb {
             title: result.title,
             snippet: result.snippet,
             visible_link: result.domain,
-            record_time: result.record_time
+            record_time: result.record_time,
+            ai_industry: result.ai_industry ?? null,
+            ai_match_score: result.ai_match_score ?? null,
+            ai_reasoning: result.ai_reasoning ?? null,
+            ai_client_business: result.ai_client_business ?? null,
+            ai_analysis_time: result.ai_analysis_time ?? null
         }));
     }
 
@@ -215,6 +225,41 @@ export class SearchResultModel extends BaseDb {
                 count: parseInt(row.count, 10)
             };
         }).filter((item): item is { engineId: number; count: number } => item !== null);
+    }
+
+    /**
+     * Update AI analysis fields for a search result
+     * @param resultId The search result ID to update
+     * @param analysisData The AI analysis data to save
+     * @returns True if update was successful
+     */
+    async updateAiAnalysis(resultId: number, analysisData: {
+        industry: string;
+        match_score: number;
+        reasoning: string;
+        client_business: string;
+    }): Promise<boolean> {
+        try {
+            const result = await this.repository.findOne({
+                where: { id: resultId }
+            });
+
+            if (!result) {
+                throw new Error(`Search result with ID ${resultId} not found`);
+            }
+
+            result.ai_industry = analysisData.industry;
+            result.ai_match_score = analysisData.match_score;
+            result.ai_reasoning = analysisData.reasoning;
+            result.ai_client_business = analysisData.client_business;
+            result.ai_analysis_time = new Date().toISOString();
+
+            await this.repository.save(result);
+            return true;
+        } catch (error) {
+            console.error('Error updating AI analysis:', error);
+            throw error;
+        }
     }
 
     /**

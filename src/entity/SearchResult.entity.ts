@@ -26,4 +26,19 @@ export class SearchResultEntity extends AuditableEntity {
     
     @Column("text", { nullable: true })
     record_time: string;
+    
+    @Column("text", { nullable: true })
+    ai_industry: string;
+    
+    @Column("integer", { nullable: true })
+    ai_match_score: number;
+    
+    @Column("text", { nullable: true })
+    ai_reasoning: string;
+    
+    @Column("text", { nullable: true })
+    ai_client_business: string;
+    
+    @Column("text", { nullable: true })
+    ai_analysis_time: string;
 }
