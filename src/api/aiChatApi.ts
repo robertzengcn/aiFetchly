@@ -180,6 +180,25 @@ export interface BatchKeywordGenerationResponse {
 }
 
 /**
+ * Website analysis request interface
+ */
+export interface WebsiteAnalysisRequest {
+    website_content: string;
+    client_business: string;
+    temperature?: number;
+}
+
+/**
+ * Website analysis response interface
+ * Matches the actual server response structure
+ */
+export interface WebsiteAnalysisResponse {
+    industry: string;
+    match_score: number;
+    reasoning: string;
+}
+
+/**
  * API client for AI Chat management
  * 
  * Handles communication with remote AI chat service to send messages,
@@ -472,6 +491,46 @@ export class AiChatApi {
         requests: BatchKeywordGenerationRequestItem[]
     ): Promise<CommonApiresp<BatchKeywordGenerationResponse>> {
         return this._httpClient.postJson('/api/ai/keywords/generate/batch', requests);
+    }
+
+    /**
+     * Analyze whether a website is a target customer
+     * 
+     * Analyzes website content against client business description to determine
+     * if the website represents a potential target customer.
+     * 
+     * @param request - Website analysis request containing website content, client business, and optional temperature
+     * @returns Promise resolving to website analysis response
+     * @throws {Error} When network request fails
+     * 
+     * @example
+     * ```typescript
+     * const response = await api.analyzeWebsite({
+     *   website_content: "# TechInsights - Technology Blog\n\n## Mission\n...",
+     *   client_business: "We are a content marketing agency...",
+     *   temperature: 0.7
+     * });
+     * if (response.status && response.data) {
+     *   console.log('Industry:', response.data.industry);
+     *   console.log('Match score:', response.data.match_score);
+     *   console.log('Reasoning:', response.data.reasoning);
+     * }
+     * ```
+     */
+    async analyzeWebsite(
+        request: WebsiteAnalysisRequest
+    ): Promise<CommonApiresp<WebsiteAnalysisResponse>> {
+        const data: WebsiteAnalysisRequest = {
+            website_content: request.website_content,
+            client_business: request.client_business
+        };
+        
+        // Only include temperature if specified
+        if (request.temperature !== undefined) {
+            data.temperature = request.temperature;
+        }
+        
+        return this._httpClient.postJson('/api/ai/website/analyze', data);
     }
 
     /**
