@@ -30,6 +30,7 @@ export class ToolExecutor {
             case 'scrape_urls_from_google':
             case 'scrape_urls_from_bing':
             case 'scrape_urls_from_yandex':
+            case 'scrape_urls_from_baidu':
                 return await this.executeSearchEngineTool(toolName, toolParams);
 
             case 'search_yellow_pages':
@@ -94,7 +95,7 @@ export class ToolExecutor {
     }
 
     /**
-     * Execute search engine tool (Google, Bing, Yandex)
+     * Execute search engine tool (Google, Bing, Yandex, Baidu)
      */
     private static async executeSearchEngineTool(
         toolName: string,
@@ -111,6 +112,7 @@ export class ToolExecutor {
         // Map tool name to engine name
         const engineName = toolName === 'scrape_urls_from_google' ? 'Google' : 
                          toolName === 'scrape_urls_from_bing' ? 'Bing' : 
+                         toolName === 'scrape_urls_from_baidu' ? 'Baidu' :
                          'Yandex';
 
         // Calculate num_pages based on num_results (assuming ~10 results per page)
