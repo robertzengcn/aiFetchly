@@ -3,7 +3,7 @@ import {YellowPagesInitModule} from "@/modules/YellowPagesInitModule"
 
 export async function runafterbootup(){ 
     // console.log("run after bootup");
-    console.log("run after bootup")
+    //console.log("run after bootup")
     const systemSettingGroupModule=new SystemSettingGroupModule()
     await systemSettingGroupModule.tableInit()
 
