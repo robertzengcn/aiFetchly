@@ -1175,7 +1175,12 @@ export default {
         customer_industry: "客户行业",
         probability: "潜在客户概率",
         analysis_result: "分析结果",
-        analysis_success: "分析成功",
-        analysis_error: "分析失败"
+        analysis_success: "分析任务已启动成功",
+        analysis_error: "分析失败",
+        status: "分析状态",
+        status_completed: "已完成",
+        status_analyzing: "分析中",
+        status_failed: "失败",
+        status_pending: "待处理"
     }
 }

@@ -45,19 +45,6 @@
           class="mb-4"
         />
 
-        <v-text-field
-          v-model.number="temperature"
-          :label="CapitalizeFirstLetter(t('websiteAnalysis.temperature_label'))"
-          type="number"
-          min="0"
-          max="2"
-          step="0.1"
-          variant="outlined"
-          :disabled="loading"
-          :rules="[rules.temperature]"
-          class="mb-4"
-        />
-
         <v-checkbox
           v-model="saveForFuture"
           :label="CapitalizeFirstLetter(t('websiteAnalysis.save_for_future'))"
@@ -113,11 +100,10 @@ const props = withDefaults(defineProps<Props>(), {
 
 const emit = defineEmits<{
   (e: 'dialogclose'): void;
-  (e: 'analyze', data: { businessInfo: string; temperature: number; saveForFuture: boolean }): void;
+  (e: 'analyze', data: { businessInfo: string; saveForFuture: boolean }): void;
 }>();
 
 const businessInfo = ref('');
-const temperature = ref(0.7);
 const saveForFuture = ref(false);
 
 const rules = {
@@ -126,19 +112,11 @@ const rules = {
       return t('websiteAnalysis.business_info_required') || 'Business information is required';
     }
     return true;
-  },
-  temperature: (value: number) => {
-    if (value < 0 || value > 2) {
-      return t('websiteAnalysis.temperature_range_error') || 'Temperature must be between 0 and 2';
-    }
-    return true;
   }
 };
 
 const isValid = computed(() => {
-  return businessInfo.value.trim().length > 0 && 
-         temperature.value >= 0 && 
-         temperature.value <= 2;
+  return businessInfo.value.trim().length > 0;
 });
 
 /**
@@ -158,9 +136,6 @@ async function loadSavedBusinessInfo(): Promise<void> {
             const savedData = JSON.parse(businessInfoSetting.value);
             if (savedData.business) {
               businessInfo.value = savedData.business;
-            }
-            if (savedData.temperature !== undefined) {
-              temperature.value = savedData.temperature;
             }
           } catch (error) {
             console.error('Error parsing saved business info:', error);
@@ -192,8 +167,7 @@ async function saveBusinessInfo(): Promise<void> {
         
         if (businessInfoSetting) {
           const dataToSave = {
-            business: businessInfo.value.trim(),
-            temperature: temperature.value
+            business: businessInfo.value.trim()
           };
           
           await updateSystemSetting(businessInfoSetting.id, JSON.stringify(dataToSave));
@@ -219,7 +193,6 @@ function handleAnalyze(): void {
 
   emit('analyze', {
     businessInfo: businessInfo.value.trim(),
-    temperature: temperature.value,
     saveForFuture: saveForFuture.value
   });
 }

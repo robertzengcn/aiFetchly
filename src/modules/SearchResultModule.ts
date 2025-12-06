@@ -242,4 +242,44 @@ export class SearchResultModule extends BaseModule implements ISearchResultApi {
             throw new Error(error instanceof Error ? error.message : 'Failed to update AI analysis');
         }
     }
+
+    /**
+     * Update AI analysis status for a search result
+     * @param resultId The search result ID to update
+     * @param status The status to set ('pending', 'analyzing', 'completed', 'failed')
+     */
+    async updateAiAnalysisStatus(resultId: number, status: string): Promise<void> {
+        try {
+            if (!resultId || resultId <= 0) {
+                throw new Error('Invalid result ID');
+            }
+
+            const success = await this.searchResultModel.updateAiAnalysisStatus(resultId, status);
+            if (!success) {
+                throw new Error('Failed to update AI analysis status');
+            }
+        } catch (error) {
+            console.error('Failed to update AI analysis status:', error);
+            throw new Error(error instanceof Error ? error.message : 'Failed to update AI analysis status');
+        }
+    }
+
+    /**
+     * Update AI analysis status for multiple search results
+     * @param resultIds Array of search result IDs to update
+     * @param status The status to set
+     * @returns Number of updated records
+     */
+    async updateAiAnalysisStatusBatch(resultIds: number[], status: string): Promise<number> {
+        try {
+            if (!resultIds || resultIds.length === 0) {
+                return 0;
+            }
+
+            return await this.searchResultModel.updateAiAnalysisStatusBatch(resultIds, status);
+        } catch (error) {
+            console.error('Failed to update AI analysis status batch:', error);
+            throw new Error(error instanceof Error ? error.message : 'Failed to update AI analysis status batch');
+        }
+    }
 } 

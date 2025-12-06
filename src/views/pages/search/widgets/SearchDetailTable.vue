@@ -69,6 +69,19 @@
                     <span v-else class="text-grey">-</span>
                 </div>
             </template>
+            <template v-slot:[`item.ai_analysis_status`]="{ item }">
+                <div class="ai-status-cell">
+                    <v-chip 
+                        v-if="item.ai_analysis_status" 
+                        size="small" 
+                        :color="getStatusColor(item.ai_analysis_status)"
+                        variant="flat"
+                    >
+                        {{ getStatusText(item.ai_analysis_status) }}
+                    </v-chip>
+                    <span v-else class="text-grey">-</span>
+                </div>
+            </template>
         </v-data-table-server>
     </div>
     
@@ -85,7 +98,7 @@
 
 <script setup lang="ts">
 import {useI18n} from "vue-i18n";
-import { gettaskresult, exportSearchResults } from '@/views/api/search'
+import { gettaskresult, exportSearchResults, analyzeWebsiteBatch, receiveAnalyzeWebsiteProgress, type AnalyzeWebsiteProgressData } from '@/views/api/search'
 import { ref,computed,onMounted,onUnmounted,watch } from 'vue'
 import { SearchResult } from '@/views/api/types'
 import {SearchResEntityDisplay} from "@/entityTypes/scrapeType"
@@ -94,8 +107,8 @@ import { useRoute } from "vue-router";
 import { SearchResultFetchparam } from "@/entityTypes/searchControlType"
 import {CapitalizeFirstLetter} from "@/views/utils/function"
 import WebsiteAnalysisDialog from '@/views/components/widgets/websiteAnalysisDialog.vue'
-import { windowInvoke, windowReceive } from '@/views/utils/apirequest'
-import { ANALYZE_WEBSITE, ANALYZE_WEBSITE_PROGRESS } from '@/config/channellist'
+import { getSystemSettinglist, updateSystemSetting } from '@/views/api/systemsetting'
+import { ai_website_analysis_business_info } from '@/config/settinggroupInit'
 
 const $route = useRoute();
 const {t} = useI18n({inheritLocale: true});
@@ -242,6 +255,14 @@ headers.value = [
         width: '180px',
         minWidth: '150px',
     },
+    {
+        title: computed(_ => CapitalizeFirstLetter(t("websiteAnalysis.status") || 'Analysis Status')),
+        align: 'start',
+        sortable: false,
+        key: 'ai_analysis_status',
+        width: '150px',
+        minWidth: '120px',
+    },
 ];
 const itemsPerPage = ref(10);
 const serverItems = ref<Array<SearchResEntityDisplay>>([]);
@@ -278,6 +299,46 @@ function getMatchScoreColor(score: number): string {
         return 'warning'; // Orange for medium scores
     } else {
         return 'error'; // Red for low scores
+    }
+}
+
+/**
+ * Get color for analysis status chip
+ * @param status - The analysis status
+ * @returns Color name for the chip
+ */
+function getStatusColor(status: string): string {
+    switch (status) {
+        case 'completed':
+            return 'success'; // Green for completed
+        case 'analyzing':
+            return 'info'; // Blue for in progress
+        case 'failed':
+            return 'error'; // Red for failed
+        case 'pending':
+            return 'warning'; // Orange for pending
+        default:
+            return 'grey'; // Grey for unknown
+    }
+}
+
+/**
+ * Get display text for analysis status
+ * @param status - The analysis status
+ * @returns Display text
+ */
+function getStatusText(status: string): string {
+    switch (status) {
+        case 'completed':
+            return t('websiteAnalysis.status_completed') || 'Completed';
+        case 'analyzing':
+            return t('websiteAnalysis.status_analyzing') || 'Analyzing';
+        case 'failed':
+            return t('websiteAnalysis.status_failed') || 'Failed';
+        case 'pending':
+            return t('websiteAnalysis.status_pending') || 'Pending';
+        default:
+            return status;
     }
 }
 
@@ -551,9 +612,37 @@ function closeAnalysisDialog(): void {
 }
 
 /**
+ * Save business info to system settings
+ */
+async function saveBusinessInfoToSettings(businessInfo: string): Promise<void> {
+    try {
+        const settingsGroups = await getSystemSettinglist();
+        
+        // Find the setting in user_preferences group
+        for (const group of settingsGroups) {
+            if (group.name === 'user_preferences') {
+                const businessInfoSetting = group.items.find(s => s.key === ai_website_analysis_business_info);
+                
+                if (businessInfoSetting) {
+                    const dataToSave = {
+                        business: businessInfo.trim()
+                    };
+                    
+                    await updateSystemSetting(businessInfoSetting.id, JSON.stringify(dataToSave));
+                }
+                break;
+            }
+        }
+    } catch (error) {
+        console.error('Error saving business info to settings:', error);
+        throw error;
+    }
+}
+
+/**
  * Handle analyze confirmation from dialog
  */
-async function handleAnalyzeConfirm(data: { businessInfo: string; temperature: number; saveForFuture: boolean }): Promise<void> {
+async function handleAnalyzeConfirm(data: { businessInfo: string; saveForFuture: boolean }): Promise<void> {
     if (selectedResultsForAnalysis.value.length === 0) {
         return;
     }
@@ -575,76 +664,77 @@ async function handleAnalyzeConfirm(data: { businessInfo: string; temperature: n
 
     try {
         // Set up progress listener
-        const progressHandler = (event: unknown) => {
-            try {
-                // windowReceive passes the event object, extract data from it
-                const eventData = event as { data?: string } | string;
-                const progressData = typeof eventData === 'string' ? eventData : (eventData.data || '');
-                if (!progressData) return;
+        const progressHandler = (progress: AnalyzeWebsiteProgressData) => {
+            if (progress.batchId === currentBatchId) {
+                analysisProgress.value = {
+                    current: progress.completed || 0,
+                    total: progress.total || validItems.length
+                };
                 
-                const progress = JSON.parse(progressData);
-                if (progress.batchId === currentBatchId) {
-                    analysisProgress.value = {
-                        current: progress.completed || 0,
-                        total: progress.total || validItems.length
-                    };
-                    
-                    // Refresh table when progress updates (to show completed analyses)
-                    if (progress.completed > 0 && taskid && !loading.value) {
-                        loadItems({ 
-                            page: currentPage.value, 
-                            itemsPerPage: itemsPerPage.value, 
-                            sortBy: '' 
-                        }, true);
-                    }
-                    
-                    // If all items are completed, refresh and clear analyzing flag
-                    if (progress.completed >= progress.total) {
-                        analyzing.value = false;
-                        selectedResultsForAnalysis.value = [];
-                        analysisProgress.value = { current: 0, total: 0 };
-                        
-                        // Refresh table to show final results
-                        setTimeout(() => {
-                            if (taskid && !loading.value) {
-                                loadItems({ 
-                                    page: currentPage.value, 
-                                    itemsPerPage: itemsPerPage.value, 
-                                    sortBy: '' 
-                                }, true);
-                            }
-                        }, 1000);
-                    }
+                // Refresh table when progress updates (to show completed analyses)
+                if (progress.completed > 0 && taskid && !loading.value) {
+                    loadItems({ 
+                        page: currentPage.value, 
+                        itemsPerPage: itemsPerPage.value, 
+                        sortBy: '' 
+                    }, true);
                 }
-            } catch (error) {
-                console.error('Error parsing progress data:', error);
+                
+                // If all items are completed, refresh and clear analyzing flag
+                if (progress.completed >= progress.total) {
+                    analyzing.value = false;
+                    selectedResultsForAnalysis.value = [];
+                    analysisProgress.value = { current: 0, total: 0 };
+                    
+                    // Refresh table to show final results
+                    setTimeout(() => {
+                        if (taskid && !loading.value) {
+                            loadItems({ 
+                                page: currentPage.value, 
+                                itemsPerPage: itemsPerPage.value, 
+                                sortBy: '' 
+                            }, true);
+                        }
+                    }, 1000);
+                }
             }
         };
 
-        windowReceive(ANALYZE_WEBSITE_PROGRESS, progressHandler);
+        receiveAnalyzeWebsiteProgress(progressHandler);
 
         // Prepare batch request
+        // TypeScript: validItems are already filtered to have id and link
         const batchRequest = {
             items: validItems.map(item => ({
-                resultId: item.id,
-                url: item.link
+                resultId: item.id as number, // Safe: already filtered for id existence
+                url: item.link as string // Safe: already filtered for link existence
             })),
             clientBusiness: data.businessInfo,
-            temperature: data.temperature
+            temperature: 0.7 // Default temperature value
         };
 
         // Send batch request
-        const response = await windowInvoke(ANALYZE_WEBSITE, batchRequest);
-
-        if (!response || !response.status || !response.data) {
-            throw new Error(response?.msg || 'Failed to start batch analysis');
+        const response = await analyzeWebsiteBatch(batchRequest);
+        console.log(response)
+        if (!response) {
+            throw new Error('Failed to start batch analysis');
         }
 
-        currentBatchId = response.data.batchId;
-        const total = response.data.total;
+        currentBatchId = response.batchId;
+        const total = response.total;
+
+        // Save business info to system settings if requested
+        if (data.saveForFuture) {
+            try {
+                await saveBusinessInfoToSettings(data.businessInfo);
+            } catch (error) {
+                console.error('Error saving business info to settings:', error);
+                // Don't block the analysis if saving fails
+            }
+        }
 
         // Show success message
-        alert(t('websiteAnalysis.analysis_success') || `Analysis started for ${total} item(s). Results will be updated automatically.`);
+        alert(t('websiteAnalysis.analysis_success') || `Analysis task started successfully for ${total} item(s). Results will be updated automatically.`);
         
         // Close dialog
         showAnalysisDialog.value = false;
@@ -757,6 +847,12 @@ async function handleAnalyzeConfirm(data: { businessInfo: string; temperature: n
 }
 
 .ai-match-score-cell {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.ai-status-cell {
   display: flex;
   align-items: center;
   justify-content: flex-start;

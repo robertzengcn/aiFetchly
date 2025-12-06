@@ -80,7 +80,7 @@ export class WebsiteAnalysisQueue {
      * Initialize child process path
      */
     private initializeChildProcessPath(): void {
-        let childPath = path.join(__dirname, '../childprocess/websiteContentScraper.js');
+        let childPath = path.join(__dirname, './childprocess/websiteContentScraper.js');
         if (!fs.existsSync(childPath)) {
             const altPath = path.join(process.cwd(), 'dist/childprocess/websiteContentScraper.js');
             if (fs.existsSync(altPath)) {
@@ -210,11 +210,22 @@ export class WebsiteAnalysisQueue {
                 error: 'Child process file not found'
             };
             this.results.set(job.id, errorResult);
+            // Set status to failed
+            try {
+                const searchResultModule = new SearchResultModule();
+                await searchResultModule.updateAiAnalysisStatus(job.resultId, 'failed');
+            } catch (error) {
+                console.error('Failed to update status to failed:', error);
+            }
             this.updateProgress(batchId);
             return;
         }
 
         try {
+            // Set status to analyzing when starting
+            const searchResultModule = new SearchResultModule();
+            await searchResultModule.updateAiAnalysisStatus(job.resultId, 'analyzing');
+            
             // Update progress with current URL
             this.notifyProgress(batchId, job.url);
 
@@ -229,6 +240,8 @@ export class WebsiteAnalysisQueue {
                     error: 'No content extracted from website'
                 };
                 this.results.set(job.id, errorResult);
+                // Set status to failed
+                await searchResultModule.updateAiAnalysisStatus(job.resultId, 'failed');
                 this.updateProgress(batchId);
                 return;
             }
@@ -251,12 +264,13 @@ export class WebsiteAnalysisQueue {
                     error: response.msg || 'AI analysis failed'
                 };
                 this.results.set(job.id, errorResult);
+                // Set status to failed
+                await searchResultModule.updateAiAnalysisStatus(job.resultId, 'failed');
                 this.updateProgress(batchId);
                 return;
             }
 
-            // Update database
-            const searchResultModule = new SearchResultModule();
+            // Update database (this will set status to 'completed' automatically)
             await searchResultModule.updateAiAnalysis(job.resultId, {
                 industry: response.data.industry,
                 match_score: response.data.match_score,
@@ -285,6 +299,13 @@ export class WebsiteAnalysisQueue {
                 error: error instanceof Error ? error.message : 'Unknown error occurred'
             };
             this.results.set(job.id, errorResult);
+            // Set status to failed
+            try {
+                const searchResultModule = new SearchResultModule();
+                await searchResultModule.updateAiAnalysisStatus(job.resultId, 'failed');
+            } catch (statusError) {
+                console.error('Failed to update status to failed:', statusError);
+            }
             this.updateProgress(batchId);
         }
     }
@@ -311,7 +332,7 @@ export class WebsiteAnalysisQueue {
             const timeout = setTimeout(() => {
                 childProcess.kill();
                 reject(new Error('Website scraping timeout'));
-            }, 60000); // 60 second timeout
+            }, 600000); // 600 second timeout
 
             const messageHandler = (rawMessage: unknown) => {
                 let message: ScrapeWebsiteResponse;
