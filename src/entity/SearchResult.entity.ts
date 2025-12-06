@@ -41,4 +41,7 @@ export class SearchResultEntity extends AuditableEntity {
     
     @Column("text", { nullable: true })
     ai_analysis_time: string;
+    
+    @Column("text", { nullable: true, default: null })
+    ai_analysis_status: string; // 'pending', 'analyzing', 'completed', 'failed'
 }

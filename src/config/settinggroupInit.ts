@@ -210,7 +210,7 @@ export const settinggroupInit: Array<SystemSettingGroupdf> = [
             },
             {
                 key: ai_website_analysis_business_info,
-                value: JSON.stringify({ business: '', temperature: 0.7 }),
+                value: JSON.stringify({ business: '' }),
                 description: 'ai-website-analysis-business-info-description',
                 type: 'input',
             }

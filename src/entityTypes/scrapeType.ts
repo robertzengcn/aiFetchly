@@ -244,6 +244,7 @@ export type SearchResEntity = {
   ai_reasoning?: string | null
   ai_client_business?: string | null
   ai_analysis_time?: string | null
+  ai_analysis_status?: string | null // 'pending', 'analyzing', 'completed', 'failed'
 }
 export interface SearchResEntityDisplay extends SearchResEntity {
   keyword:string, 
@@ -253,6 +254,7 @@ export interface SearchResEntityDisplay extends SearchResEntity {
   ai_reasoning?: string | null
   ai_client_business?: string | null
   ai_analysis_time?: string | null
+  ai_analysis_status?: string | null // 'pending', 'analyzing', 'completed', 'failed'
 }
 export type SearchResEntityRecord = {
  record:Array<SearchResEntityDisplay>

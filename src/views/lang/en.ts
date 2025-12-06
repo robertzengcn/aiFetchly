@@ -1185,8 +1185,13 @@ export default {
         customer_industry: "Customer Industry",
         probability: "Probability of Potential Customers",
         analysis_result: "Analysis Result",
-        analysis_success: "Analysis completed successfully",
-        analysis_error: "Analysis failed"
+        analysis_success: "Analysis task started successfully",
+        analysis_error: "Analysis failed",
+        status: "Analysis Status",
+        status_completed: "Completed",
+        status_analyzing: "Analyzing",
+        status_failed: "Failed",
+        status_pending: "Pending"
     }
 
 }

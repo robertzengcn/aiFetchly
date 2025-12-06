@@ -1,6 +1,7 @@
 import { ipcMain } from 'electron';
 import { ANALYZE_WEBSITE, ANALYZE_WEBSITE_PROGRESS } from '@/config/channellist';
 import { WebsiteAnalysisQueue } from '@/modules/WebsiteAnalysisQueue';
+import { SearchResultModule } from '@/modules/SearchResultModule';
 import { CommonMessage } from '@/entityTypes/commonType';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -97,6 +98,16 @@ export function registerSearchResultIpcHandlers(): void {
 
             // Generate batch ID
             const batchId = `batch-${uuidv4()}`;
+
+            // Set status to 'analyzing' for all items when batch starts
+            const searchResultModule = new SearchResultModule();
+            const resultIds = validItems.map(item => item.resultId);
+            try {
+                await searchResultModule.updateAiAnalysisStatusBatch(resultIds, 'analyzing');
+            } catch (error) {
+                console.error('Failed to update status to analyzing:', error);
+                // Continue even if status update fails
+            }
 
             // Set up progress callback to send updates via IPC
             const progressCallback = (progress: QueueProgress) => {

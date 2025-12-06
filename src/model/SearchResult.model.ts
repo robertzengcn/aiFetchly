@@ -253,11 +253,63 @@ export class SearchResultModel extends BaseDb {
             result.ai_reasoning = analysisData.reasoning;
             result.ai_client_business = analysisData.client_business;
             result.ai_analysis_time = new Date().toISOString();
+            result.ai_analysis_status = 'completed';
 
             await this.repository.save(result);
             return true;
         } catch (error) {
             console.error('Error updating AI analysis:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Update AI analysis status for a search result
+     * @param resultId The search result ID to update
+     * @param status The status to set ('pending', 'analyzing', 'completed', 'failed')
+     * @returns True if update was successful
+     */
+    async updateAiAnalysisStatus(resultId: number, status: string): Promise<boolean> {
+        try {
+            const result = await this.repository.findOne({
+                where: { id: resultId }
+            });
+
+            if (!result) {
+                throw new Error(`Search result with ID ${resultId} not found`);
+            }
+
+            result.ai_analysis_status = status;
+            await this.repository.save(result);
+            return true;
+        } catch (error) {
+            console.error('Error updating AI analysis status:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Update AI analysis status for multiple search results
+     * @param resultIds Array of search result IDs to update
+     * @param status The status to set
+     * @returns Number of updated records
+     */
+    async updateAiAnalysisStatusBatch(resultIds: number[], status: string): Promise<number> {
+        try {
+            if (!resultIds || resultIds.length === 0) {
+                return 0;
+            }
+
+            const updateResult = await this.repository
+                .createQueryBuilder()
+                .update(SearchResultEntity)
+                .set({ ai_analysis_status: status })
+                .where('id IN (:...ids)', { ids: resultIds })
+                .execute();
+
+            return updateResult.affected || 0;
+        } catch (error) {
+            console.error('Error updating AI analysis status batch:', error);
             throw error;
         }
     }
