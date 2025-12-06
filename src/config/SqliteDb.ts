@@ -67,16 +67,24 @@ function getSqliteVecExtensionPath(): string | null {
         const arch = process.arch;
         
         // Map Node.js arch to sqlite-vec package arch
+        // Note: For macOS (darwin), use 'arm64' directly, not 'aarch64'
+        // For Linux, arm64 maps to aarch64
         const archMap: Record<string, string> = {
             'x64': 'x64',
-            'arm64': 'aarch64',
+            'arm64': platform === 'darwin' ? 'arm64' : 'aarch64', // macOS uses arm64, Linux uses aarch64
             'ia32': 'x86'
         };
         
         const sqliteVecArch = archMap[arch] || arch;
-        const os = platform === 'win32' ? 'windows' : platform === 'darwin' ? 'macos' : 'linux';
-        const packageName = `sqlite-vec-${os}-${sqliteVecArch}`;
+        // Use 'darwin' for macOS package name, not 'macos'
+        const os = platform === 'win32' ? 'windows' : platform === 'darwin' ? 'darwin' : 'linux';
         const extensionName = platform === 'win32' ? 'vec0.dll' : platform === 'darwin' ? 'vec0.dylib' : 'vec0.so';
+        
+        // Try both mapped architecture and original architecture for compatibility
+        const packageNames = [
+            `sqlite-vec-${os}-${sqliteVecArch}`, // Try mapped architecture first
+            ...(sqliteVecArch !== arch ? [`sqlite-vec-${os}-${arch}`] : []) // Fallback to original arch if different
+        ];
         
         // Method 1: Try to find extension in build directory (copied by Vite plugin)
         // This is the most reliable method for both development and production
@@ -149,11 +157,14 @@ function getSqliteVecExtensionPath(): string | null {
             // sqlite-vec package is in node_modules/sqlite-vec
             // Platform-specific package is in node_modules/sqlite-vec-{os}-{arch} (sibling)
             const nodeModulesDir = path.dirname(sqliteVecDir);
-            const platformPackagePath = path.join(nodeModulesDir, packageName, extensionName);
             
-            if (fs.existsSync(platformPackagePath)) {
-                console.log(`Found sqlite-vec extension at (via require.resolve): ${platformPackagePath}`);
-                return platformPackagePath;
+            // Try both mapped and original architecture
+            for (const pkgName of packageNames) {
+                const platformPackagePath = path.join(nodeModulesDir, pkgName, extensionName);
+                if (fs.existsSync(platformPackagePath)) {
+                    console.log(`Found sqlite-vec extension at (via require.resolve): ${platformPackagePath}`);
+                    return platformPackagePath;
+                }
             }
         } catch (error) {
             // require.resolve might fail in bundled apps, continue with other methods
@@ -216,18 +227,20 @@ function getSqliteVecExtensionPath(): string | null {
         // Try to find the extension file using base paths
         for (const basePath of uniqueBasePaths) {
             try {
-                // Try direct node_modules path
-                const directPath = path.join(basePath, 'node_modules', packageName, extensionName);
-                if (fs.existsSync(directPath)) {
-                    console.log(`Found sqlite-vec extension at: ${directPath}`);
-                    return directPath;
+                // Try both mapped and original architecture
+                for (const pkgName of packageNames) {
+                    const directPath = path.join(basePath, 'node_modules', pkgName, extensionName);
+                    if (fs.existsSync(directPath)) {
+                        console.log(`Found sqlite-vec extension at: ${directPath}`);
+                        return directPath;
+                    }
                 }
             } catch (error) {
                 // Path might be invalid, continue
             }
         }
         
-        console.warn(`Could not find sqlite-vec extension file: ${packageName}/${extensionName}`);
+        console.warn(`Could not find sqlite-vec extension file. Tried packages: ${packageNames.join(', ')}`);
         console.warn('Tried build paths:', buildExtensionPaths);
         console.warn('Tried base paths:', uniqueBasePaths);
         return null;
