@@ -70,6 +70,26 @@ const STATIC_TOOL_FUNCTIONS: ToolFunction[] = [
     },
     {
         type: "function",
+        name: 'scrape_urls_from_baidu',
+        description: 'scrape website, urls in Baidu using a query string. Returns search results including titles, snippets, and URLs.this tool is not use for search information',
+        parameters: {
+            type: 'object',
+            properties: {
+                query: {
+                    type: 'string',
+                    description: 'The search query to send to Baidu'
+                },
+                num_results: {
+                    type: 'number',
+                    description: 'Number of search results to return (default: 10)',
+                    default: 10
+                }
+            },
+            required: ['query']
+        }
+    },
+    {
+        type: "function",
         name: 'extract_emails_from_results',
         description: 'Extract email addresses from search results or web pages. Can parse HTML content or plain text to find email addresses.',
         parameters: {
