@@ -23,13 +23,11 @@ export const useMainStore = defineStore('main', () => {
     const _isMobile = getIsMobile();
     const isMobile = ref(_isMobile);
 
-    const scheme = window.matchMedia('(prefers-color-scheme: dark)');
-    scheme.addEventListener('change', () => {
-        theme.value = scheme.matches ? 'dark' : 'light';
-    });
+    // Removed automatic system theme detection - theme is now manually controlled
     const root = document.querySelector(':root');
-    root?.setAttribute('theme', scheme.matches ? 'dark' : 'light');
-    const theme = ref(scheme.matches ? 'dark' : 'light');
+    // Default theme is 'light' - user can toggle manually via onTheme()
+    const theme = ref('light');
+    root?.setAttribute('theme', theme.value);
 
     const onTheme = () => {
         theme.value = theme.value === 'light' ? 'dark' : 'light';
