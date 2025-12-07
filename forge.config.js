@@ -336,6 +336,10 @@ module.exports={
             entry: 'src/childprocess/yellowPagesScraper.ts',
             config: 'vite.yellowPages.config.mjs'
           },
+          {
+            entry: 'src/childprocess/websiteContentScraper.ts',
+            config: 'vite.websiteContentScraper.config.mjs'
+          },
           // {
           //   entry: 'src/buckEmail.ts',
           //   config: 'vite.buckEmail.config.mjs'

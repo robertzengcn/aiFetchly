@@ -194,6 +194,10 @@ export const YELLOW_PAGES_HANDLE_PREVIOUS_SESSION = 'yellow_pages:handle_previou
 export const LANGUAGE_PREFERENCE_GET = 'language:preference:get'
 export const LANGUAGE_PREFERENCE_UPDATE = 'language:preference:update'
 
+// Website Analysis Channels
+export const ANALYZE_WEBSITE = 'search:analyze-website'
+export const ANALYZE_WEBSITE_PROGRESS = 'search:analyze-website:progress'
+
 // RAG (Retrieval-Augmented Generation) Channels
 export const RAG_INITIALIZE = 'rag:initialize'
 export const RAG_QUERY = 'rag:query'
