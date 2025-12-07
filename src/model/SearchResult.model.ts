@@ -62,7 +62,13 @@ export class SearchResultModel extends BaseDb {
             title: result.title,
             snippet: result.snippet,
             visible_link: result.domain,
-            record_time: result.record_time
+            record_time: result.record_time,
+            ai_industry: result.ai_industry,
+            ai_match_score: result.ai_match_score,
+            ai_reasoning: result.ai_reasoning,
+            ai_client_business: result.ai_client_business,
+            ai_analysis_time: result.ai_analysis_time,
+            ai_analysis_status: result.ai_analysis_status
         }));
     }
 

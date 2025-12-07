@@ -417,7 +417,8 @@ export class SearchController {
                 ai_match_score: item.ai_match_score ?? null,
                 ai_reasoning: item.ai_reasoning ?? null,
                 ai_client_business: item.ai_client_business ?? null,
-                ai_analysis_time: item.ai_analysis_time ?? null
+                ai_analysis_time: item.ai_analysis_time ?? null,
+                ai_analysis_status: item.ai_analysis_status ?? null
             }
             datas.push(data)
         }))
