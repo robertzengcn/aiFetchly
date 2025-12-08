@@ -95,7 +95,8 @@
             <v-icon v-else-if="message.messageType === MESSAGE_TYPE.TOOL_RESULT" color="success">mdi-check-circle</v-icon>
             <v-icon v-else color="purple">mdi-robot</v-icon>
           </div>
-          <div class="message-bubble" :class="{
+          <div
+class="message-bubble" :class="{
             'assistant-message': message.role === 'assistant' && message.messageType === MESSAGE_TYPE.MESSAGE,
             'tool-call-message': message.messageType === MESSAGE_TYPE.TOOL_CALL,
             'tool-result-message': message.messageType === MESSAGE_TYPE.TOOL_RESULT
@@ -405,6 +406,7 @@ import { MessageType } from '@/entityTypes/commonType';
 import MCPToolManager from './MCPToolManager.vue';
 
 // Stream state enum for type safety
+// This ensures type safety for stream state management
 enum StreamState {
   INACTIVE = 'inactive',
   PENDING = 'pending',
@@ -708,15 +710,15 @@ async function handleSendMessage() {
         const eventType = chunk.eventType;
         console.log('chunk', chunk);
         switch (eventType) {
-          case 'token':
+          case 'token': {
             console.log('token', chunk);
             console.log('messages.value', messages.value);
             // Hide typing indicator once content starts arriving
             // isTyping.value = false;
-            
+
             // Append token content and display immediately
             assistantContent += chunk.content;
-            
+
             // Find and update the assistant message
             let lastIndex = messages.value.length - 1;
             // console.log('lastIndex', lastIndex);
@@ -752,6 +754,7 @@ async function handleSendMessage() {
               scrollToBottom();
             });
             break;
+          }
 
           case 'tool_call':
             console.log('tool_call', chunk);
