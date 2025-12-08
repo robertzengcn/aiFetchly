@@ -404,6 +404,14 @@ import { ChatMessage, ChatStreamChunk } from '@/entityTypes/commonType';
 import { MessageType } from '@/entityTypes/commonType';
 import MCPToolManager from './MCPToolManager.vue';
 
+// Stream state enum for type safety
+enum StreamState {
+  INACTIVE = 'inactive',
+  PENDING = 'pending',
+  ACTIVE = 'active',
+  ERROR = 'error'
+}
+
 // Message type constants for template use
 const MESSAGE_TYPE = {
     MESSAGE: MessageType.MESSAGE,
@@ -451,8 +459,21 @@ const isLoadingConversations = ref(false);
 const copiedMessageId = ref<string | null>(null);
 const showMCPToolManager = ref(false);
 const activeStreamConversationId = ref<string | undefined>(undefined);
-const streamChunkHandler = ref<((chunk: ChatStreamChunk) => void) | null>(null);
-const streamCompleteHandler = ref<(() => void) | null>(null);
+
+/**
+ * Validate if a stream chunk belongs to the active conversation
+ */
+function isValidStreamChunk(chunk: ChatStreamChunk, activeId: string | undefined): boolean {
+  if (!activeId) return false;
+
+  const chunkId = chunk.conversationId;
+
+  // If chunk has no conversationId, only accept if we're in pending state
+  if (!chunkId) return activeId === StreamState.PENDING;
+
+  // Accept exact matches or pending->actual ID transitions
+  return chunkId === activeId || (chunkId === StreamState.PENDING && activeId !== StreamState.PENDING);
+}
 
 /**
  * Load chat history when component mounts
@@ -482,7 +503,7 @@ watch(() => props.visible, (newVal) => {
  * Watch for conversationId changes to reload history
  */
 watch(conversationId, (newId, oldId) => {
-  if (newId && newId !== oldId && newId !== 'pending') {
+  if (newId && newId !== oldId && newId !== StreamState.PENDING) {
     loadChatHistory();
   }
 });
@@ -625,7 +646,7 @@ async function handleSendMessage() {
   streamError.value = null;
 
   // Track the conversation ID for this stream
-  const streamConversationId = conversationId.value || 'pending';
+  const streamConversationId = conversationId.value || StreamState.PENDING;
   activeStreamConversationId.value = streamConversationId;
 
   // Reset tool-related states
@@ -642,7 +663,7 @@ async function handleSendMessage() {
     role: 'user',
     content: userMessageContent,
     timestamp: new Date(),
-    conversationId: conversationId.value || 'pending'
+    conversationId: conversationId.value || StreamState.PENDING
   };
   messages.value.push(userMessage);
   
@@ -658,9 +679,9 @@ async function handleSendMessage() {
       role: 'assistant',
       content: '',
       timestamp: new Date(),
-      conversationId: conversationId.value || 'pending'
+      conversationId: conversationId.value || StreamState.PENDING
     };
-    
+
     // Add placeholder message
     messages.value.push(assistantMessage);
 
@@ -670,44 +691,19 @@ async function handleSendMessage() {
       (chunk: ChatStreamChunk) => {
         // Validate that this chunk belongs to the current active conversation
         // Ignore chunks from old conversations that are still streaming
-        
-        // If no active stream is expected, ignore all chunks
-        if (!activeStreamConversationId.value) {
-          console.log('Ignoring chunk: no active stream expected');
+        if (!isValidStreamChunk(chunk, activeStreamConversationId.value)) {
+          if (activeStreamConversationId.value) {
+            console.log('Ignoring chunk from different conversation:', {
+              chunkConvId: chunk.conversationId,
+              activeConvId: activeStreamConversationId.value,
+              eventType: chunk.eventType
+            });
+          } else {
+            console.log('Ignoring chunk: no active stream expected');
+          }
           return;
         }
-        
-        const chunkConvId = chunk.conversationId;
-        const activeConvId = activeStreamConversationId.value;
-        
-        // If chunk has a conversationId, it must match the active stream
-        if (chunkConvId) {
-          // Allow matching if:
-          // 1. Exact match
-          // 2. Both are 'pending' (initial stream setup)
-          // 3. Chunk is 'pending' and active is the actual ID (transition period)
-          if (chunkConvId !== activeConvId && 
-              !(chunkConvId === 'pending' && activeConvId === 'pending') &&
-              !(chunkConvId === 'pending' && activeConvId !== 'pending')) {
-            console.log('Ignoring chunk from different conversation:', {
-              chunkConvId,
-              activeConvId,
-              eventType: chunk.eventType
-            });
-            return;
-          }
-        } else {
-          // Chunk without conversationId - only accept if active stream is 'pending'
-          // (legacy chunks or initial stream setup)
-          if (activeConvId !== 'pending') {
-            console.log('Ignoring chunk without conversationId when active stream has ID:', {
-              activeConvId,
-              eventType: chunk.eventType
-            });
-            return;
-          }
-        }
-        
+
         // Handle different event types
         const eventType = chunk.eventType;
         console.log('chunk', chunk);
@@ -734,7 +730,7 @@ async function handleSendMessage() {
                 role: 'assistant',
                 content: '',
                 timestamp: new Date(),
-                conversationId: conversationId.value || 'pending'
+                conversationId: conversationId.value || StreamState.PENDING
               };
               messages.value.push(newAssistantMessage);
               lastIndex = messages.value.length - 1;
@@ -783,13 +779,13 @@ async function handleSendMessage() {
               conversationId.value = chunk.conversationId;
               
               // Update active stream conversation ID if it was 'pending'
-              if (activeStreamConversationId.value === 'pending') {
+              if (activeStreamConversationId.value === StreamState.PENDING) {
                 activeStreamConversationId.value = chunk.conversationId;
               }
-              
+
               // Update conversationId for all messages with 'pending' conversationId
               messages.value.forEach(msg => {
-                if (msg.conversationId === 'pending') {
+                if (msg.conversationId === StreamState.PENDING) {
                   msg.conversationId = chunk.conversationId!;
                 }
               });
@@ -799,7 +795,7 @@ async function handleSendMessage() {
             //   role: 'assistant',
             //   content: '',
             //   timestamp: new Date(),
-            //   conversationId: chunk.conversationId || 'pending'
+            //   conversationId: chunk.conversationId || StreamState.PENDING
             // });
             }
             break;
@@ -889,7 +885,7 @@ async function handleSendMessage() {
         role: 'assistant',
         content: `Error: ${streamError.value}`,
         timestamp: new Date(),
-        conversationId: conversationId.value || 'error'
+        conversationId: conversationId.value || StreamState.ERROR
       };
       messages.value.push(errorMessage);
       scrollToBottom();
