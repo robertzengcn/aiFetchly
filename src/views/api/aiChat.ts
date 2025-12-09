@@ -77,7 +77,7 @@ export async function sendChatMessage(
  * 
  * @param message - User message to send
  * @param onChunk - Callback for each chunk received
- * @param onComplete - Callback when streaming is complete
+ * @param onComplete - Callback when streaming is complete (receives conversationId)
  * @param conversationId - Optional conversation ID for context
  * @param model - Optional specific model to use
  * @param useRAG - Optional flag to enable RAG context from knowledge base
@@ -89,7 +89,7 @@ export async function sendChatMessage(
  * await streamChatMessage(
  *   'Explain quantum computing',
  *   (chunk) => console.log('Chunk:', chunk.content),
- *   () => console.log('Stream complete'),
+ *   (conversationId) => console.log('Stream complete for:', conversationId),
  *   undefined,
  *   undefined,
  *   true
@@ -99,7 +99,7 @@ export async function sendChatMessage(
 export async function streamChatMessage(
   message: string,
   onChunk?: (chunk: ChatStreamChunk) => void,
-  onComplete?: () => void,
+  onComplete?: (conversationId?: string) => void,
   conversationId?: string,
   model?: string,
   useRAG?: boolean,
@@ -136,7 +136,7 @@ export async function streamChatMessage(
         }
         
         if (onComplete) {
-          onComplete();
+          onComplete(chunk.conversationId);
         }
         
         resolve();
