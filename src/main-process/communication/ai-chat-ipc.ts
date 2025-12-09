@@ -155,8 +155,11 @@ export function registerAiChatIpcHandlers(): void {
             const ragSearchModule = new RagSearchModule();
             await ragSearchModule.initialize();
             
-            // Generate new conversationId if not provided
-            const conversationId = requestData.conversationId || generateConversationId();
+            // Generate new conversationId if not provided or if it's 'pending' (which causes errors)
+            // 'pending' is used as a placeholder in the frontend but should not be sent to backend
+            const conversationId = (requestData.conversationId && requestData.conversationId !== 'pending')
+                ? requestData.conversationId
+                : generateConversationId();
 
             // Save user message to database
             const userMessageId = `user-${Date.now()}`;
@@ -280,8 +283,11 @@ export function registerAiChatIpcHandlers(): void {
             const ragSearchModule = new RagSearchModule();
             await ragSearchModule.initialize();
             
-            // Generate new conversationId if not provided
-            const conversationId = requestData.conversationId || generateConversationId();
+            // Generate new conversationId if not provided or if it's 'pending' (which causes errors)
+            // 'pending' is used as a placeholder in the frontend but should not be sent to backend
+            const conversationId = (requestData.conversationId && requestData.conversationId !== 'pending')
+                ? requestData.conversationId
+                : generateConversationId();
 
             // Save user message to database
             const userMessageId = `user-${Date.now()}`;
