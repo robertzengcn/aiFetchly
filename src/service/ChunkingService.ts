@@ -166,16 +166,24 @@ export class ChunkingService {
         // Get configuration from cache or remote API
         const remoteConfig = await this.getChunkingConfig();
         
-        // Merge remote config with default options and user-provided options
+        // Start with defaults, then override with remote config only if values are defined
         const chunkingOptions: ChunkingOptions = {
-            ...this.defaultOptions,
-            chunkSize: remoteConfig.chunkSize,
-            overlapSize: remoteConfig.overlapSize,
-            strategy: remoteConfig.strategy,
-            preserveWhitespace: remoteConfig.preserveWhitespace,
-            minChunkSize: remoteConfig.minChunkSize,
-            ...options // User options override everything
+            chunkSize: remoteConfig.chunkSize ?? this.defaultOptions.chunkSize,
+            overlapSize: remoteConfig.overlapSize ?? this.defaultOptions.overlapSize,
+            strategy: remoteConfig.strategy ?? this.defaultOptions.strategy,
+            preserveWhitespace: remoteConfig.preserveWhitespace ?? this.defaultOptions.preserveWhitespace ?? true,
+            minChunkSize: remoteConfig.minChunkSize ?? this.defaultOptions.minChunkSize ?? 100,
         };
+        
+        // Apply user-provided options only if they are defined (not undefined)
+        // This ensures undefined values in options don't override remote config
+        if (options) {
+            if (options.chunkSize !== undefined) chunkingOptions.chunkSize = options.chunkSize;
+            if (options.overlapSize !== undefined) chunkingOptions.overlapSize = options.overlapSize;
+            if (options.strategy !== undefined) chunkingOptions.strategy = options.strategy;
+            if (options.preserveWhitespace !== undefined) chunkingOptions.preserveWhitespace = options.preserveWhitespace;
+            if (options.minChunkSize !== undefined) chunkingOptions.minChunkSize = options.minChunkSize;
+        }
         
         // Read document content
         const documentContent = await this.extractDocumentContent(document);
