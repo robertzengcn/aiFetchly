@@ -466,6 +466,11 @@ const activeStreamConversationId = ref<string | undefined>(undefined);
  * Validate if a stream chunk belongs to the active conversation
  */
 function isValidStreamChunk(chunk: ChatStreamChunk, activeId: string | undefined): boolean {
+  // Always allow conversation_start events - they establish the conversation ID
+  if (chunk.eventType === 'conversation_start') {
+    return true;
+  }
+
   if (!activeId) return false;
 
   const chunkId = chunk.conversationId;
@@ -777,6 +782,7 @@ async function handleSendMessage() {
             break;
 
           case 'conversation_start':
+            console.log('conversation_start', chunk);
             // Update conversation ID if provided and update all pending messages
             if (chunk.conversationId) {
               conversationId.value = chunk.conversationId;
@@ -784,6 +790,7 @@ async function handleSendMessage() {
               // Update active stream conversation ID if it was 'pending'
               if (activeStreamConversationId.value === StreamState.PENDING) {
                 activeStreamConversationId.value = chunk.conversationId;
+                console.log('activeStreamConversationId.value', activeStreamConversationId.value);
               }
 
               // Update conversationId for all messages with 'pending' conversationId
