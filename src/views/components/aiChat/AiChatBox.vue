@@ -855,12 +855,13 @@ async function handleSendMessage() {
             break;
         }
       },
-      () => {
+      (completedConversationId) => {
         // Stream complete - only handle cleanup, content is already updated
         // No need to update content again since we've been updating it as tokens arrived
         
         // Only reset states if this is still the active stream
-        if (activeStreamConversationId.value === streamConversationId) {
+        if (activeStreamConversationId.value === streamConversationId || 
+            activeStreamConversationId.value === completedConversationId) {
           // Reset all states
           isTyping.value = false;
           isLoading.value = false;
@@ -870,7 +871,8 @@ async function handleSendMessage() {
         }
         
         // Clear active stream tracking if this was the active stream
-        if (activeStreamConversationId.value === streamConversationId) {
+        if (activeStreamConversationId.value === streamConversationId || 
+            activeStreamConversationId.value === completedConversationId) {
           activeStreamConversationId.value = undefined;
         }
       },
