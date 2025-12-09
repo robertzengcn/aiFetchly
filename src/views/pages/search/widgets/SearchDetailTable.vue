@@ -2,11 +2,14 @@
     <div class="search_bar mt-4 d-flex jsb mb-4">
         <div class="d-flex jsb search_tool">
             <div class="search_wrap mr-4">
-                <v-text-field rounded class="elevation-0" density="compact" variant="solo" label="Search sample"
+                <v-text-field rounded class="elevation-0" density="compact" variant="solo" :label="t('common.search') || 'Search'"
                     append-inner-icon="mdi-magnify" single-line hide-details v-model="search"
                     @keyup.enter="handleSearch" @click:append-inner="handleSearch"></v-text-field>
             </div>
             <!-- <v-btn class="btn mr-2" variant="flat" prepend-icon="mdi-filter-variant"><span> {{t('common.more')}}</span></v-btn> -->
+            <v-btn class="btn mr-2" variant="flat" color="info" prepend-icon="mdi-robot" @click="handleAiAnalyze" :disabled="selectedCount === 0" :loading="analyzing">
+                <span>{{t('websiteAnalysis.analyze_button') || 'AI Analyze'}} {{ selectedCount > 0 ? `(${selectedCount})` : '' }}</span>
+            </v-btn>
             <v-btn class="btn mr-2" variant="flat" color="success" prepend-icon="mdi-email-search" @click="handleScrapeEmail" :disabled="selectedCount === 0">
                 <span>{{ buttonText }}</span>
             </v-btn>
@@ -45,22 +48,67 @@
                     </v-tooltip>
                 </div>
             </template>
+            <template v-slot:[`item.ai_industry`]="{ item }">
+                <div class="ai-industry-cell">
+                    <v-chip v-if="item.ai_industry" size="small" color="primary" variant="outlined">
+                        {{ item.ai_industry }}
+                    </v-chip>
+                    <span v-else class="text-grey">-</span>
+                </div>
+            </template>
+            <template v-slot:[`item.ai_match_score`]="{ item }">
+                <div class="ai-match-score-cell">
+                    <v-chip 
+                        v-if="item.ai_match_score !== null && item.ai_match_score !== undefined" 
+                        size="small" 
+                        :color="getMatchScoreColor(item.ai_match_score)"
+                        variant="flat"
+                    >
+                        {{ item.ai_match_score }}%
+                    </v-chip>
+                    <span v-else class="text-grey">-</span>
+                </div>
+            </template>
+            <template v-slot:[`item.ai_analysis_status`]="{ item }">
+                <div class="ai-status-cell">
+                    <v-chip 
+                        v-if="item.ai_analysis_status" 
+                        size="small" 
+                        :color="getStatusColor(item.ai_analysis_status)"
+                        variant="flat"
+                    >
+                        {{ getStatusText(item.ai_analysis_status) }}
+                    </v-chip>
+                    <span v-else class="text-grey">-</span>
+                </div>
+            </template>
         </v-data-table-server>
     </div>
     
-    
+    <!-- Website Analysis Dialog -->
+    <WebsiteAnalysisDialog
+        :showDialog="showAnalysisDialog"
+        :loading="analyzing"
+        :itemCount="selectedResultsForAnalysis.length"
+        :progress="analysisProgress"
+        @dialogclose="closeAnalysisDialog"
+        @analyze="handleAnalyzeConfirm"
+    />
 </template>
 
 <script setup lang="ts">
 import {useI18n} from "vue-i18n";
-import { gettaskresult, exportSearchResults } from '@/views/api/search'
-import { ref,computed,onMounted,watch } from 'vue'
+import { gettaskresult, exportSearchResults, analyzeWebsiteBatch, receiveAnalyzeWebsiteProgress, type AnalyzeWebsiteProgressData } from '@/views/api/search'
+import { ref,computed,onMounted,onUnmounted,watch } from 'vue'
 import { SearchResult } from '@/views/api/types'
 import {SearchResEntityDisplay} from "@/entityTypes/scrapeType"
 import router from '@/views/router';
 import { useRoute } from "vue-router";
 import { SearchResultFetchparam } from "@/entityTypes/searchControlType"
 import {CapitalizeFirstLetter} from "@/views/utils/function"
+import WebsiteAnalysisDialog from '@/views/components/widgets/websiteAnalysisDialog.vue'
+import { getSystemSettinglist, updateSystemSetting } from '@/views/api/systemsetting'
+import { ai_website_analysis_business_info } from '@/config/settinggroupInit'
 
 const $route = useRoute();
 const {t} = useI18n({inheritLocale: true});
@@ -72,8 +120,61 @@ console.log($route.params.id)
 //     taskid.value = parseInt($route.params.id.toString());
 //   }
 }
+/**
+ * Start auto-refresh timer
+ */
+function startAutoRefresh(): void {
+    if (autoRefreshInterval.value) {
+        clearInterval(autoRefreshInterval.value);
+    }
+    
+    if (autoRefreshEnabled.value) {
+        autoRefreshInterval.value = setInterval(() => {
+            if (taskid && !loading.value && !analyzing.value) {
+                loadItems({ 
+                    page: currentPage.value, 
+                    itemsPerPage: itemsPerPage.value, 
+                    sortBy: '' 
+                }, true); // Pass isAutoRefresh flag
+            }
+        }, autoRefreshIntervalMs.value);
+    }
+}
+
+/**
+ * Stop auto-refresh timer
+ */
+function stopAutoRefresh(): void {
+    if (autoRefreshInterval.value) {
+        clearInterval(autoRefreshInterval.value);
+        autoRefreshInterval.value = null;
+    }
+}
+
+/**
+ * Handle page visibility changes
+ */
+function handleVisibilityChange(): void {
+    isPageVisible.value = !document.hidden;
+    // Restart auto-refresh when page becomes visible
+    if (isPageVisible.value && autoRefreshEnabled.value) {
+        startAutoRefresh();
+    }
+}
+
 onMounted(() => {
   initialize();
+  // Start auto-refresh
+  startAutoRefresh();
+  // Add page visibility listener
+  document.addEventListener('visibilitychange', handleVisibilityChange);
+});
+
+onUnmounted(() => {
+    // Clean up auto-refresh timer
+    stopAutoRefresh();
+    // Remove page visibility listener
+    document.removeEventListener('visibilitychange', handleVisibilityChange);
 });
 // const campaignId = i18n.t("campaignId");
 type Fetchparam = {
@@ -138,7 +239,30 @@ headers.value = [
         sortable: false,
         key: 'record_time',
     },
-
+    {
+        title: computed(_ => CapitalizeFirstLetter(t("websiteAnalysis.customer_industry") || 'Customer Industry')),
+        align: 'start',
+        sortable: false,
+        key: 'ai_industry',
+        width: '200px',
+        minWidth: '150px',
+    },
+    {
+        title: computed(_ => CapitalizeFirstLetter(t("websiteAnalysis.probability") || 'Probability of Potential Customers')),
+        align: 'start',
+        sortable: false,
+        key: 'ai_match_score',
+        width: '180px',
+        minWidth: '150px',
+    },
+    {
+        title: computed(_ => CapitalizeFirstLetter(t("websiteAnalysis.status") || 'Analysis Status')),
+        align: 'start',
+        sortable: false,
+        key: 'ai_analysis_status',
+        width: '150px',
+        minWidth: '120px',
+    },
 ];
 const itemsPerPage = ref(10);
 const serverItems = ref<Array<SearchResEntityDisplay>>([]);
@@ -148,7 +272,75 @@ const loading = ref(false);
 const totalItems = ref(0);
 const search = ref('');
 const exporting = ref(false);
+const analyzing = ref(false);
+const showAnalysisDialog = ref(false);
+const selectedResultsForAnalysis = ref<SearchResEntityDisplay[]>([]);
 const currentPage = ref(1);
+const analysisProgress = ref({ current: 0, total: 0 });
+
+// Auto-refresh functionality
+const autoRefreshEnabled = ref(true); // Enable by default
+const autoRefreshInterval = ref<NodeJS.Timeout | null>(null);
+const autoRefreshIntervalMs = ref(10000); // 10 seconds default
+const isPageVisible = ref(true);
+const lastRefreshTime = ref<Date | null>(null);
+
+/**
+ * Get color for match score chip based on score value
+ * @param score - The match score (0-100)
+ * @returns Color name for the chip
+ */
+function getMatchScoreColor(score: number): string {
+    if (score >= 80) {
+        return 'success'; // Green for high scores
+    } else if (score >= 60) {
+        return 'info'; // Blue for medium-high scores
+    } else if (score >= 40) {
+        return 'warning'; // Orange for medium scores
+    } else {
+        return 'error'; // Red for low scores
+    }
+}
+
+/**
+ * Get color for analysis status chip
+ * @param status - The analysis status
+ * @returns Color name for the chip
+ */
+function getStatusColor(status: string): string {
+    switch (status) {
+        case 'completed':
+            return 'success'; // Green for completed
+        case 'analyzing':
+            return 'info'; // Blue for in progress
+        case 'failed':
+            return 'error'; // Red for failed
+        case 'pending':
+            return 'warning'; // Orange for pending
+        default:
+            return 'grey'; // Grey for unknown
+    }
+}
+
+/**
+ * Get display text for analysis status
+ * @param status - The analysis status
+ * @returns Display text
+ */
+function getStatusText(status: string): string {
+    switch (status) {
+        case 'completed':
+            return t('websiteAnalysis.status_completed') || 'Completed';
+        case 'analyzing':
+            return t('websiteAnalysis.status_analyzing') || 'Analyzing';
+        case 'failed':
+            return t('websiteAnalysis.status_failed') || 'Failed';
+        case 'pending':
+            return t('websiteAnalysis.status_pending') || 'Pending';
+        default:
+            return status;
+    }
+}
 
 /**
  * Get unique value for table item (for selection)
@@ -210,11 +402,17 @@ watch(search, () => {
     }, 500); // 500ms debounce
 });
 
-function loadItems({ page, itemsPerPage, sortBy }) {
+function loadItems({ page, itemsPerPage, sortBy }, isAutoRefresh: boolean = false) {
+    // Skip auto-refresh if page is not visible or currently analyzing
+    if (isAutoRefresh && (!isPageVisible.value || analyzing.value)) {
+        return;
+    }
+
     currentPage.value = page;
     loading.value = true
     //console.log(taskid)
     if(!taskid){
+        loading.value = false;
         return
     }
     // console.log(page);
@@ -237,8 +435,11 @@ function loadItems({ page, itemsPerPage, sortBy }) {
         
             serverItems.value = data
             totalItems.value = total
-            // Clear selected items when data changes (new page or search)
-            selectedItems.value = []
+            // Clear selected items when data changes (new page or search) - but not during auto-refresh
+            if (!isAutoRefresh) {
+                selectedItems.value = []
+            }
+            lastRefreshTime.value = new Date();
             loading.value = false
         }).catch(function (error) {
             console.error(error);
@@ -366,6 +567,199 @@ async function copyLink(link: string): Promise<void> {
         }
     }
 }
+
+/**
+ * Handle AI Analyze button click
+ */
+function handleAiAnalyze(): void {
+    if (selectedItems.value.length === 0) {
+        alert('Please select at least one item to analyze');
+        return;
+    }
+
+    // Find all selected items
+    const selectedItemValues = new Set(selectedItems.value);
+    const selectedItemsList = serverItems.value.filter(item => {
+        const itemValue = getItemValue(item);
+        return selectedItemValues.has(itemValue);
+    });
+
+    // Filter out items without valid URLs
+    const validItems = selectedItemsList.filter(item => item.link && item.link.trim());
+
+    if (validItems.length === 0) {
+        alert('Selected items do not have valid URLs');
+        return;
+    }
+
+    if (validItems.length < selectedItemsList.length) {
+        alert(`Warning: ${selectedItemsList.length - validItems.length} selected item(s) do not have valid URLs and will be skipped.`);
+    }
+
+    selectedResultsForAnalysis.value = validItems;
+    showAnalysisDialog.value = true;
+}
+
+/**
+ * Close analysis dialog
+ */
+function closeAnalysisDialog(): void {
+    if (!analyzing.value) {
+        showAnalysisDialog.value = false;
+        selectedResultsForAnalysis.value = [];
+        analysisProgress.value = { current: 0, total: 0 };
+    }
+}
+
+/**
+ * Save business info to system settings
+ */
+async function saveBusinessInfoToSettings(businessInfo: string): Promise<void> {
+    try {
+        const settingsGroups = await getSystemSettinglist();
+        
+        // Find the setting in user_preferences group
+        for (const group of settingsGroups) {
+            if (group.name === 'user_preferences') {
+                const businessInfoSetting = group.items.find(s => s.key === ai_website_analysis_business_info);
+                
+                if (businessInfoSetting) {
+                    const dataToSave = {
+                        business: businessInfo.trim()
+                    };
+                    
+                    await updateSystemSetting(businessInfoSetting.id, JSON.stringify(dataToSave));
+                }
+                break;
+            }
+        }
+    } catch (error) {
+        console.error('Error saving business info to settings:', error);
+        throw error;
+    }
+}
+
+/**
+ * Handle analyze confirmation from dialog
+ */
+async function handleAnalyzeConfirm(data: { businessInfo: string; saveForFuture: boolean }): Promise<void> {
+    if (selectedResultsForAnalysis.value.length === 0) {
+        return;
+    }
+
+    analyzing.value = true;
+    analysisProgress.value = { current: 0, total: selectedResultsForAnalysis.value.length };
+
+    // Filter valid items
+    const validItems = selectedResultsForAnalysis.value.filter(item => item && item.link && item.id);
+    
+    if (validItems.length === 0) {
+        alert('No valid items to analyze');
+        analyzing.value = false;
+        return;
+    }
+
+    let currentBatchId: string | null = null;
+    const resultsMap = new Map<number, { success: boolean; data?: any; error?: string }>();
+
+    try {
+        // Set up progress listener
+        const progressHandler = (progress: AnalyzeWebsiteProgressData) => {
+            if (progress.batchId === currentBatchId) {
+                analysisProgress.value = {
+                    current: progress.completed || 0,
+                    total: progress.total || validItems.length
+                };
+                
+                // Refresh table when progress updates (to show completed analyses)
+                if (progress.completed > 0 && taskid && !loading.value) {
+                    loadItems({ 
+                        page: currentPage.value, 
+                        itemsPerPage: itemsPerPage.value, 
+                        sortBy: '' 
+                    }, true);
+                }
+                
+                // If all items are completed, refresh and clear analyzing flag
+                if (progress.completed >= progress.total) {
+                    analyzing.value = false;
+                    selectedResultsForAnalysis.value = [];
+                    analysisProgress.value = { current: 0, total: 0 };
+                    
+                    // Refresh table to show final results
+                    setTimeout(() => {
+                        if (taskid && !loading.value) {
+                            loadItems({ 
+                                page: currentPage.value, 
+                                itemsPerPage: itemsPerPage.value, 
+                                sortBy: '' 
+                            }, true);
+                        }
+                    }, 1000);
+                }
+            }
+        };
+
+        receiveAnalyzeWebsiteProgress(progressHandler);
+
+        // Prepare batch request
+        // TypeScript: validItems are already filtered to have id and link
+        const batchRequest = {
+            items: validItems.map(item => ({
+                resultId: item.id as number, // Safe: already filtered for id existence
+                url: item.link as string // Safe: already filtered for link existence
+            })),
+            clientBusiness: data.businessInfo,
+            temperature: 0.7 // Default temperature value
+        };
+
+        // Send batch request
+        const response = await analyzeWebsiteBatch(batchRequest);
+        console.log(response)
+        if (!response) {
+            throw new Error('Failed to start batch analysis');
+        }
+
+        currentBatchId = response.batchId;
+        const total = response.total;
+
+        // Save business info to system settings if requested
+        if (data.saveForFuture) {
+            try {
+                await saveBusinessInfoToSettings(data.businessInfo);
+            } catch (error) {
+                console.error('Error saving business info to settings:', error);
+                // Don't block the analysis if saving fails
+            }
+        }
+
+        // Show success message
+        alert(t('websiteAnalysis.analysis_success') || `Analysis task started successfully for ${total} item(s). Results will be updated automatically.`);
+        
+        // Close dialog
+        showAnalysisDialog.value = false;
+        
+        // Keep analyzing flag true until we detect completion via progress updates
+        // The progress handler will update the table as items complete and clear the flag when done
+        // Set a timeout to clear analyzing flag as a fallback (in case progress updates fail)
+        const fallbackTimeout = setTimeout(() => {
+            if (analyzing.value) {
+                analyzing.value = false;
+                selectedResultsForAnalysis.value = [];
+                analysisProgress.value = { current: 0, total: 0 };
+            }
+        }, Math.max(120000, total * 30000)); // Fallback timeout: 2 minutes minimum, or 30s per item
+        
+        // Clear fallback timeout if analysis completes normally (handled in progress handler)
+        // Note: This is a simple implementation - in production you might want to store the timeout ID
+    } catch (error) {
+        console.error('Error in batch analysis:', error);
+        alert(error instanceof Error ? error.message : t('websiteAnalysis.analysis_error') || 'Analysis failed');
+    } finally {
+        analyzing.value = false;
+        analysisProgress.value = { current: 0, total: 0 };
+    }
+}
 // },
 // }
 // const editItem = (item) => {
@@ -445,6 +839,23 @@ async function copyLink(link: string): Promise<void> {
 
 .copy-btn:hover {
   opacity: 1;
+}
+
+.ai-industry-cell {
+  display: flex;
+  align-items: center;
+}
+
+.ai-match-score-cell {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.ai-status-cell {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
 }
 
 /* Ensure the link column doesn't grow beyond max-width */
