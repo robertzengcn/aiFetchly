@@ -116,7 +116,8 @@ export class StreamEventProcessor {
             content: content,
             isComplete: false,
             messageId: this.state.assistantMessageId,
-            eventType: StreamEventType.TOKEN
+            eventType: StreamEventType.TOKEN,
+            conversationId: this.state.streamConversationId
         };
         this.event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(chunk));
     }
@@ -161,7 +162,8 @@ export class StreamEventProcessor {
             eventType: StreamEventType.TOOL_CALL,
             toolName: toolName,
             toolParams: toolParams,
-            toolId: toolId
+            toolId: toolId,
+            conversationId: this.state.streamConversationId
         };
         this.event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(chunk));
 
@@ -191,7 +193,8 @@ export class StreamEventProcessor {
                 isComplete: false,
                 messageId: this.state.assistantMessageId,
                 eventType: StreamEventType.TOOL_RESULT,
-                toolResult: toolResult
+                toolResult: toolResult,
+                conversationId: this.state.streamConversationId
             };
             this.event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(resultChunk));
 
@@ -307,7 +310,8 @@ export class StreamEventProcessor {
             toolResult: {
                 success: false,
                 error: errorMessage
-            }
+            },
+            conversationId: this.state.streamConversationId
         };
         this.event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(errorResult));
 
@@ -354,7 +358,8 @@ export class StreamEventProcessor {
                     eventType: StreamEventType.ERROR,
                     errorMessage: `Tool execution failed: ${errorMessage}`,
                     toolName: toolName,
-                    toolId: toolId
+                    toolId: toolId,
+                    conversationId: this.state.streamConversationId
                 };
                 this.event.sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(errorCompletionChunk));
                 console.log(`Sent error completion for tool ${toolName} (ID: ${toolId})`);
@@ -367,7 +372,8 @@ export class StreamEventProcessor {
                     eventType: StreamEventType.ERROR,
                     errorMessage: `Tool execution failed: ${errorMessage}`,
                     toolName: toolName,
-                    toolId: toolId
+                    toolId: toolId,
+                    conversationId: this.state.streamConversationId
                 };
                 this.sendDeferredCompletionIfReady();
             }
@@ -426,7 +432,8 @@ export class StreamEventProcessor {
             isComplete: false,
             messageId: this.state.assistantMessageId,
             eventType: StreamEventType.TOOL_RESULT,
-            toolResult: typeof toolResult === 'object' ? toolResult as Record<string, unknown> : { result: toolResult }
+            toolResult: typeof toolResult === 'object' ? toolResult as Record<string, unknown> : { result: toolResult },
+            conversationId: this.state.streamConversationId
         };
         this.event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(chunk));
     }
@@ -442,7 +449,8 @@ export class StreamEventProcessor {
             isComplete: true,
             messageId: this.state.assistantMessageId,
             eventType: StreamEventType.ERROR,
-            errorMessage: errorMessage
+            errorMessage: errorMessage,
+            conversationId: this.state.streamConversationId
         };
 
         if (this.canSendCompletion()) {
@@ -464,7 +472,8 @@ export class StreamEventProcessor {
             content: '',
             isComplete: true,
             messageId: this.state.assistantMessageId,
-            eventType: StreamEventType.DONE
+            eventType: StreamEventType.DONE,
+            conversationId: this.state.streamConversationId
         };
 
         if (this.canSendCompletion()) {
@@ -500,7 +509,8 @@ export class StreamEventProcessor {
             content: '',
             isComplete: true,
             messageId: this.state.assistantMessageId,
-            eventType: StreamEventType.CONVERSATION_END
+            eventType: StreamEventType.CONVERSATION_END,
+            conversationId: this.state.streamConversationId
         };
 
         if (this.canSendCompletion()) {

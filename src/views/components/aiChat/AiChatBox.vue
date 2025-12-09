@@ -95,7 +95,8 @@
             <v-icon v-else-if="message.messageType === MESSAGE_TYPE.TOOL_RESULT" color="success">mdi-check-circle</v-icon>
             <v-icon v-else color="purple">mdi-robot</v-icon>
           </div>
-          <div class="message-bubble" :class="{
+          <div
+class="message-bubble" :class="{
             'assistant-message': message.role === 'assistant' && message.messageType === MESSAGE_TYPE.MESSAGE,
             'tool-call-message': message.messageType === MESSAGE_TYPE.TOOL_CALL,
             'tool-result-message': message.messageType === MESSAGE_TYPE.TOOL_RESULT
@@ -404,6 +405,15 @@ import { ChatMessage, ChatStreamChunk } from '@/entityTypes/commonType';
 import { MessageType } from '@/entityTypes/commonType';
 import MCPToolManager from './MCPToolManager.vue';
 
+// Stream state enum for type safety
+// This ensures type safety for stream state management
+enum StreamState {
+  INACTIVE = 'inactive',
+  PENDING = 'pending',
+  ACTIVE = 'active',
+  ERROR = 'error'
+}
+
 // Message type constants for template use
 const MESSAGE_TYPE = {
     MESSAGE: MessageType.MESSAGE,
@@ -450,6 +460,22 @@ const conversations = ref<ConversationMetadata[]>([]);
 const isLoadingConversations = ref(false);
 const copiedMessageId = ref<string | null>(null);
 const showMCPToolManager = ref(false);
+const activeStreamConversationId = ref<string | undefined>(undefined);
+
+/**
+ * Validate if a stream chunk belongs to the active conversation
+ */
+function isValidStreamChunk(chunk: ChatStreamChunk, activeId: string | undefined): boolean {
+  if (!activeId) return false;
+
+  const chunkId = chunk.conversationId;
+
+  // If chunk has no conversationId, only accept if we're in pending state
+  if (!chunkId) return activeId === StreamState.PENDING;
+
+  // Accept exact matches or pending->actual ID transitions
+  return chunkId === activeId || (chunkId === StreamState.PENDING && activeId !== StreamState.PENDING);
+}
 
 /**
  * Load chat history when component mounts
@@ -479,7 +505,7 @@ watch(() => props.visible, (newVal) => {
  * Watch for conversationId changes to reload history
  */
 watch(conversationId, (newId, oldId) => {
-  if (newId && newId !== oldId && newId !== 'pending') {
+  if (newId && newId !== oldId && newId !== StreamState.PENDING) {
     loadChatHistory();
   }
 });
@@ -551,6 +577,9 @@ async function loadConversations() {
  * Handle conversation selection
  */
 async function handleSelectConversation(selectedConversationId: string) {
+  // Clear active stream tracking when switching conversations
+  activeStreamConversationId.value = undefined;
+  
   conversationId.value = selectedConversationId;
   showConversationsDialog.value = false;
   await loadChatHistory();
@@ -618,6 +647,10 @@ async function handleSendMessage() {
   isTyping.value = true;
   streamError.value = null;
 
+  // Track the conversation ID for this stream
+  const streamConversationId = conversationId.value || StreamState.PENDING;
+  activeStreamConversationId.value = streamConversationId;
+
   // Reset tool-related states
   isExecutingTool.value = false;
   currentToolName.value = '';
@@ -632,7 +665,7 @@ async function handleSendMessage() {
     role: 'user',
     content: userMessageContent,
     timestamp: new Date(),
-    conversationId: conversationId.value || 'pending'
+    conversationId: conversationId.value || StreamState.PENDING
   };
   messages.value.push(userMessage);
   
@@ -648,9 +681,9 @@ async function handleSendMessage() {
       role: 'assistant',
       content: '',
       timestamp: new Date(),
-      conversationId: conversationId.value || 'pending'
+      conversationId: conversationId.value || StreamState.PENDING
     };
-    
+
     // Add placeholder message
     messages.value.push(assistantMessage);
 
@@ -658,19 +691,34 @@ async function handleSendMessage() {
     await streamChatMessage(
       userMessageContent,
       (chunk: ChatStreamChunk) => {
+        // Validate that this chunk belongs to the current active conversation
+        // Ignore chunks from old conversations that are still streaming
+        if (!isValidStreamChunk(chunk, activeStreamConversationId.value)) {
+          if (activeStreamConversationId.value) {
+            console.log('Ignoring chunk from different conversation:', {
+              chunkConvId: chunk.conversationId,
+              activeConvId: activeStreamConversationId.value,
+              eventType: chunk.eventType
+            });
+          } else {
+            console.log('Ignoring chunk: no active stream expected');
+          }
+          return;
+        }
+
         // Handle different event types
         const eventType = chunk.eventType;
         console.log('chunk', chunk);
         switch (eventType) {
-          case 'token':
+          case 'token': {
             console.log('token', chunk);
             console.log('messages.value', messages.value);
             // Hide typing indicator once content starts arriving
             // isTyping.value = false;
-            
+
             // Append token content and display immediately
             assistantContent += chunk.content;
-            
+
             // Find and update the assistant message
             let lastIndex = messages.value.length - 1;
             // console.log('lastIndex', lastIndex);
@@ -684,7 +732,7 @@ async function handleSendMessage() {
                 role: 'assistant',
                 content: '',
                 timestamp: new Date(),
-                conversationId: conversationId.value || 'pending'
+                conversationId: conversationId.value || StreamState.PENDING
               };
               messages.value.push(newAssistantMessage);
               lastIndex = messages.value.length - 1;
@@ -706,6 +754,7 @@ async function handleSendMessage() {
               scrollToBottom();
             });
             break;
+          }
 
           case 'tool_call':
             console.log('tool_call', chunk);
@@ -732,9 +781,14 @@ async function handleSendMessage() {
             if (chunk.conversationId) {
               conversationId.value = chunk.conversationId;
               
+              // Update active stream conversation ID if it was 'pending'
+              if (activeStreamConversationId.value === StreamState.PENDING) {
+                activeStreamConversationId.value = chunk.conversationId;
+              }
+
               // Update conversationId for all messages with 'pending' conversationId
               messages.value.forEach(msg => {
-                if (msg.conversationId === 'pending') {
+                if (msg.conversationId === StreamState.PENDING) {
                   msg.conversationId = chunk.conversationId!;
                 }
               });
@@ -744,7 +798,7 @@ async function handleSendMessage() {
             //   role: 'assistant',
             //   content: '',
             //   timestamp: new Date(),
-            //   conversationId: chunk.conversationId || 'pending'
+            //   conversationId: chunk.conversationId || StreamState.PENDING
             // });
             }
             break;
@@ -798,35 +852,52 @@ async function handleSendMessage() {
         // Stream complete - only handle cleanup, content is already updated
         // No need to update content again since we've been updating it as tokens arrived
         
-        // Reset all states
-        isTyping.value = false;
-        isLoading.value = false;
-        isExecutingTool.value = false;
-        // showToolResult.value = false;
-        scrollToBottom();
+        // Only reset states if this is still the active stream
+        if (activeStreamConversationId.value === streamConversationId) {
+          // Reset all states
+          isTyping.value = false;
+          isLoading.value = false;
+          isExecutingTool.value = false;
+          // showToolResult.value = false;
+          scrollToBottom();
+        }
+        
+        // Clear active stream tracking if this was the active stream
+        if (activeStreamConversationId.value === streamConversationId) {
+          activeStreamConversationId.value = undefined;
+        }
       },
-      conversationId.value,
+      streamConversationId,
       undefined, // model
       useRAGContext.value, // useRAG flag
       5 // ragLimit
     );
   } catch (error) {
     console.error('Error sending message:', error);
-    streamError.value = error instanceof Error ? error.message : 'Failed to send message';
-    isTyping.value = false;
-    isLoading.value = false;
-    isExecutingTool.value = false;
     
-    // Show error message
-    const errorMessage: ChatMessage = {
-      id: `error-${Date.now()}`,
-      role: 'assistant',
-      content: `Error: ${streamError.value}`,
-      timestamp: new Date(),
-      conversationId: conversationId.value || 'error'
-    };
-    messages.value.push(errorMessage);
-    scrollToBottom();
+    // Only show error if this is still the active stream
+    if (activeStreamConversationId.value === streamConversationId) {
+      streamError.value = error instanceof Error ? error.message : 'Failed to send message';
+      isTyping.value = false;
+      isLoading.value = false;
+      isExecutingTool.value = false;
+      
+      // Show error message
+      const errorMessage: ChatMessage = {
+        id: `error-${Date.now()}`,
+        role: 'assistant',
+        content: `Error: ${streamError.value}`,
+        timestamp: new Date(),
+        conversationId: conversationId.value || StreamState.ERROR
+      };
+      messages.value.push(errorMessage);
+      scrollToBottom();
+    }
+    
+    // Clear active stream tracking
+    if (activeStreamConversationId.value === streamConversationId) {
+      activeStreamConversationId.value = undefined;
+    }
   }
 }
 
@@ -834,6 +905,9 @@ async function handleSendMessage() {
  * Start a new conversation
  */
 async function handleNewConversation() {
+  // Clear active stream tracking when starting new conversation
+  activeStreamConversationId.value = undefined;
+  
   // Reset conversation ID to start fresh
   conversationId.value = undefined;
   
