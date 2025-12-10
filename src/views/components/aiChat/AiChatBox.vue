@@ -82,24 +82,32 @@
         <p class="text-grey mt-4">{{ t('knowledge.start_conversation') }}</p>
       </div>
 
-      <div
-        v-for="message in messages"
-        :key="message.id"
-        class="message-wrapper"
-        :class="[message.role, message.messageType || MESSAGE_TYPE.MESSAGE]"
-      >
-        <div class="message-content">
-          <div class="message-avatar">
-            <v-icon v-if="message.role === 'user'" color="primary">mdi-account</v-icon>
-            <v-icon v-else-if="message.messageType === MESSAGE_TYPE.TOOL_CALL" color="purple">mdi-toolbox</v-icon>
-            <v-icon v-else-if="message.messageType === MESSAGE_TYPE.TOOL_RESULT" color="success">mdi-check-circle</v-icon>
-            <v-icon v-else color="purple">mdi-robot</v-icon>
-          </div>
-          <div
+        <div
+          v-for="message in messages"
+          :key="message.id"
+          class="message-wrapper"
+          :class="[message.role, message.messageType || MESSAGE_TYPE.MESSAGE]"
+        >
+          <div class="message-content">
+            <div class="message-avatar">
+              <v-icon v-if="message.role === 'user'" color="primary">mdi-account</v-icon>
+              <v-icon v-else-if="message.messageType === MESSAGE_TYPE.TOOL_CALL" color="purple">mdi-toolbox</v-icon>
+              <v-icon v-else-if="message.messageType === MESSAGE_TYPE.TOOL_RESULT" color="success">mdi-check-circle</v-icon>
+              <v-icon v-else-if="message.messageType === MESSAGE_TYPE.PLAN_CREATED" color="indigo">mdi-clipboard-list</v-icon>
+              <v-icon v-else-if="message.messageType === MESSAGE_TYPE.PLAN_STEP_COMPLETE" color="indigo">mdi-check-decagram</v-icon>
+              <v-icon v-else-if="message.messageType === MESSAGE_TYPE.PLAN_EXECUTE_PAUSE" color="warning">mdi-pause-circle</v-icon>
+              <v-icon v-else-if="message.messageType === MESSAGE_TYPE.PLAN_EXECUTE_RESUME" color="success">mdi-play-circle</v-icon>
+              <v-icon v-else color="purple">mdi-robot</v-icon>
+            </div>
+            <div
 class="message-bubble" :class="{
             'assistant-message': message.role === 'assistant' && message.messageType === MESSAGE_TYPE.MESSAGE,
             'tool-call-message': message.messageType === MESSAGE_TYPE.TOOL_CALL,
-            'tool-result-message': message.messageType === MESSAGE_TYPE.TOOL_RESULT
+            'tool-result-message': message.messageType === MESSAGE_TYPE.TOOL_RESULT,
+            'plan-created-message': message.messageType === MESSAGE_TYPE.PLAN_CREATED,
+            'plan-step-message': message.messageType === MESSAGE_TYPE.PLAN_STEP_COMPLETE,
+            'plan-pause-message': message.messageType === MESSAGE_TYPE.PLAN_EXECUTE_PAUSE,
+            'plan-resume-message': message.messageType === MESSAGE_TYPE.PLAN_EXECUTE_RESUME
           }">
             <!-- Tool Call Message -->
             <template v-if="message.messageType === MESSAGE_TYPE.TOOL_CALL">
@@ -159,6 +167,106 @@ class="message-bubble" :class="{
                   <summary>{{ message.metadata?.summary ? 'View Full JSON Data' : 'View Result' }}</summary>
                   <pre>{{ message.content }}</pre>
                 </details>
+              </div>
+              <div class="message-timestamp" :title="formatFullTimestamp(message.timestamp)">
+                <v-icon size="x-small" class="mr-1">mdi-clock-outline</v-icon>
+                {{ formatTimestamp(message.timestamp) }}
+              </div>
+            </template>
+
+            <!-- Plan Created Message -->
+            <template v-else-if="message.messageType === MESSAGE_TYPE.PLAN_CREATED">
+              <div class="plan-message-header">
+                <v-icon size="small" color="indigo" class="mr-1">mdi-clipboard-list</v-icon>
+                <span><strong>Plan Created</strong></span>
+              </div>
+              <div class="plan-message-content">
+                <div class="plan-title">
+                  <strong>{{ (message.metadata?.plan as Plan)?.title || 'Execution Plan' }}</strong>
+                </div>
+                <div v-if="(message.metadata?.plan as Plan)?.description" class="plan-description-text">
+                  {{ (message.metadata?.plan as Plan)?.description }}
+                </div>
+                <div class="plan-steps-summary">
+                  <v-icon size="x-small" class="mr-1">mdi-format-list-numbered</v-icon>
+                  {{ (message.metadata?.plan as Plan)?.steps?.length || 0 }} steps planned
+                </div>
+                <details class="plan-steps-details">
+                  <summary>View Steps</summary>
+                  <div class="steps-list">
+                    <div 
+                      v-for="(step, index) in (message.metadata?.plan as Plan)?.steps || []" 
+                      :key="step.stepId" 
+                      class="step-item"
+                    >
+                      <span class="step-number">{{ index + 1 }}.</span>
+                      <span class="step-title">{{ step.title }}</span>
+                    </div>
+                  </div>
+                </details>
+              </div>
+              <div class="message-timestamp" :title="formatFullTimestamp(message.timestamp)">
+                <v-icon size="x-small" class="mr-1">mdi-clock-outline</v-icon>
+                {{ formatTimestamp(message.timestamp) }}
+              </div>
+            </template>
+
+            <!-- Plan Step Complete Message -->
+            <template v-else-if="message.messageType === MESSAGE_TYPE.PLAN_STEP_COMPLETE">
+              <div class="plan-step-header">
+                <v-icon 
+                  size="small" 
+                  :color="(message.metadata?.planStep as PlanStep)?.status === 'completed' ? 'success' : 'error'" 
+                  class="mr-1"
+                >
+                  {{ (message.metadata?.planStep as PlanStep)?.status === 'completed' ? 'mdi-check-decagram' : 'mdi-alert-decagram' }}
+                </v-icon>
+                <span>
+                  <strong>Step {{ (message.metadata?.planStep as PlanStep)?.stepNumber || '' }} {{ (message.metadata?.planStep as PlanStep)?.status === 'completed' ? 'Completed' : 'Failed' }}</strong>
+                </span>
+              </div>
+              <div class="plan-step-content">
+                <div class="step-title-display">
+                  {{ (message.metadata?.planStep as PlanStep)?.title }}
+                </div>
+                <div v-if="(message.metadata?.planStep as PlanStep)?.result" class="step-result-display">
+                  <v-icon size="x-small" color="success" class="mr-1">mdi-check</v-icon>
+                  {{ (message.metadata?.planStep as PlanStep)?.result }}
+                </div>
+                <div v-if="(message.metadata?.planStep as PlanStep)?.error" class="step-error-display">
+                  <v-icon size="x-small" color="error" class="mr-1">mdi-alert</v-icon>
+                  {{ (message.metadata?.planStep as PlanStep)?.error }}
+                </div>
+              </div>
+              <div class="message-timestamp" :title="formatFullTimestamp(message.timestamp)">
+                <v-icon size="x-small" class="mr-1">mdi-clock-outline</v-icon>
+                {{ formatTimestamp(message.timestamp) }}
+              </div>
+            </template>
+
+            <!-- Plan Execute Pause Message -->
+            <template v-else-if="message.messageType === MESSAGE_TYPE.PLAN_EXECUTE_PAUSE">
+              <div class="plan-pause-header">
+                <v-icon size="small" color="warning" class="mr-1">mdi-pause-circle</v-icon>
+                <span><strong>Plan Paused</strong></span>
+              </div>
+              <div class="plan-pause-content">
+                {{ message.content || 'Plan execution has been paused' }}
+              </div>
+              <div class="message-timestamp" :title="formatFullTimestamp(message.timestamp)">
+                <v-icon size="x-small" class="mr-1">mdi-clock-outline</v-icon>
+                {{ formatTimestamp(message.timestamp) }}
+              </div>
+            </template>
+
+            <!-- Plan Execute Resume Message -->
+            <template v-else-if="message.messageType === MESSAGE_TYPE.PLAN_EXECUTE_RESUME">
+              <div class="plan-resume-header">
+                <v-icon size="small" color="success" class="mr-1">mdi-play-circle</v-icon>
+                <span><strong>Plan Resumed</strong></span>
+              </div>
+              <div class="plan-resume-content">
+                {{ message.content || 'Plan execution has resumed' }}
               </div>
               <div class="message-timestamp" :title="formatFullTimestamp(message.timestamp)">
                 <v-icon size="x-small" class="mr-1">mdi-clock-outline</v-icon>
@@ -238,6 +346,91 @@ class="message-bubble" :class="{
               <summary>View Result</summary>
               <pre>{{ JSON.stringify(toolResult, null, 2) }}</pre>
             </details>
+          </div>
+        </div>
+      </div>
+
+      <!-- Plan Execution Display -->
+      <div v-if="currentPlan && isPlanExecuting" class="message-wrapper assistant plan-execution">
+        <div class="message-content">
+          <div class="message-avatar">
+            <v-icon color="indigo">mdi-clipboard-list</v-icon>
+          </div>
+          <div class="message-bubble plan-bubble">
+            <div class="plan-header">
+              <v-icon size="small" color="indigo" class="mr-1">mdi-clipboard-list</v-icon>
+              <span><strong>{{ currentPlan.title }}</strong></span>
+              <v-chip 
+                v-if="isPlanPaused" 
+                size="x-small" 
+                color="warning" 
+                variant="outlined" 
+                class="ml-2"
+              >
+                Paused
+              </v-chip>
+              <v-chip 
+                v-else 
+                size="x-small" 
+                color="primary" 
+                variant="outlined" 
+                class="ml-2"
+              >
+                {{ currentPlan.status }}
+              </v-chip>
+            </div>
+            <div v-if="currentPlan.description" class="plan-description">
+              {{ currentPlan.description }}
+            </div>
+            <div class="plan-steps">
+              <div 
+                v-for="step in currentPlan.steps" 
+                :key="step.stepId" 
+                class="plan-step"
+                :class="{ 
+                  'step-active': step.status === 'in_progress',
+                  'step-completed': step.status === 'completed',
+                  'step-failed': step.status === 'failed'
+                }"
+              >
+                <div class="step-indicator">
+                  <v-icon 
+                    size="small" 
+                    :color="getStepStatusColor(step.status)"
+                    :class="{ 'mdi-spin': step.status === 'in_progress' }"
+                  >
+                    {{ getStepStatusIcon(step.status) }}
+                  </v-icon>
+                </div>
+                <div class="step-content">
+                  <div class="step-title">
+                    <strong>Step {{ step.stepNumber }}:</strong> {{ step.title }}
+                  </div>
+                  <div v-if="step.description" class="step-description">
+                    {{ step.description }}
+                  </div>
+                  <div v-if="step.result && step.status === 'completed'" class="step-result">
+                    <v-icon size="x-small" color="success" class="mr-1">mdi-check</v-icon>
+                    {{ step.result }}
+                  </div>
+                  <div v-if="step.error && step.status === 'failed'" class="step-error">
+                    <v-icon size="x-small" color="error" class="mr-1">mdi-alert</v-icon>
+                    {{ step.error }}
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="plan-progress">
+              <v-progress-linear
+                :model-value="planProgress"
+                color="indigo"
+                height="6"
+                rounded
+              ></v-progress-linear>
+              <div class="progress-text">
+                {{ completedStepsCount }} / {{ totalStepsCount }} steps completed
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -398,10 +591,10 @@ class="message-bubble" :class="{
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, nextTick, watch } from 'vue';
+import { ref, computed, onMounted, nextTick, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { sendChatMessage, streamChatMessage, getChatHistory, clearChatHistory, getConversations, ConversationMetadata } from '@/views/api/aiChat';
-import { ChatMessage, ChatStreamChunk } from '@/entityTypes/commonType';
+import { ChatMessage, ChatStreamChunk, Plan, PlanStep, PlanStepStatus } from '@/entityTypes/commonType';
 import { MessageType } from '@/entityTypes/commonType';
 import MCPToolManager from './MCPToolManager.vue';
 
@@ -418,7 +611,12 @@ enum StreamState {
 const MESSAGE_TYPE = {
     MESSAGE: MessageType.MESSAGE,
     TOOL_CALL: MessageType.TOOL_CALL,
-    TOOL_RESULT: MessageType.TOOL_RESULT
+    TOOL_RESULT: MessageType.TOOL_RESULT,
+    PLAN_CREATED: MessageType.PLAN_CREATED,
+    PLAN_STEP_START: MessageType.PLAN_STEP_START,
+    PLAN_STEP_COMPLETE: MessageType.PLAN_STEP_COMPLETE,
+    PLAN_EXECUTE_PAUSE: MessageType.PLAN_EXECUTE_PAUSE,
+    PLAN_EXECUTE_RESUME: MessageType.PLAN_EXECUTE_RESUME
 } as const;
 
 // i18n setup
@@ -461,6 +659,47 @@ const isLoadingConversations = ref(false);
 const copiedMessageId = ref<string | null>(null);
 const showMCPToolManager = ref(false);
 const activeStreamConversationId = ref<string | undefined>(undefined);
+
+// Plan execute agent state
+const currentPlan = ref<Plan | null>(null);
+const isPlanExecuting = ref(false);
+const isPlanPaused = ref(false);
+const currentPlanStep = ref<PlanStep | null>(null);
+
+// Performance optimization: throttle scroll to bottom
+let scrollTimeout: number | null = null;
+
+// Computed properties for plan state optimization
+const planProgress = computed(() => {
+  if (!currentPlan.value || currentPlan.value.steps.length === 0) {
+    return 0;
+  }
+  const completedSteps = currentPlan.value.steps.filter(s => s.status === PlanStepStatus.COMPLETED).length;
+  return Math.round((completedSteps / currentPlan.value.steps.length) * 100);
+});
+
+const completedStepsCount = computed(() => {
+  if (!currentPlan.value) return 0;
+  return currentPlan.value.steps.filter(s => s.status === PlanStepStatus.COMPLETED).length;
+});
+
+const totalStepsCount = computed(() => {
+  return currentPlan.value?.steps.length || 0;
+});
+
+const allStepsCompleted = computed(() => {
+  if (!currentPlan.value) return false;
+  return currentPlan.value.steps.every(
+    s => s.status === PlanStepStatus.COMPLETED ||
+         s.status === PlanStepStatus.FAILED ||
+         s.status === PlanStepStatus.SKIPPED
+  );
+});
+
+const activeStepIndex = computed(() => {
+  if (!currentPlan.value) return -1;
+  return currentPlan.value.steps.findIndex(s => s.status === PlanStepStatus.IN_PROGRESS);
+});
 
 /**
  * Validate if a stream chunk belongs to the active conversation
@@ -828,6 +1067,31 @@ async function handleSendMessage() {
             // Keep-alive, no action needed
             break;
 
+          case 'plan_created':
+            console.log('plan_created', chunk);
+            handlePlanCreated(chunk);
+            break;
+
+          case 'plan_step_start':
+            console.log('plan_step_start', chunk);
+            handlePlanStepStart(chunk);
+            break;
+
+          case 'plan_step_complete':
+            console.log('plan_step_complete', chunk);
+            handlePlanStepComplete(chunk);
+            break;
+
+          case 'plan_execute_pause':
+            console.log('plan_execute_pause', chunk);
+            handlePlanExecutePause(chunk);
+            break;
+
+          case 'plan_execute_resume':
+            console.log('plan_execute_resume', chunk);
+            handlePlanExecuteResume(chunk);
+            break;
+
           default:
             // Handle unknown or unspecified event types as tokens
             console.log('default', chunk);
@@ -930,6 +1194,12 @@ async function handleNewConversation() {
   toolResult.value = null;
   showToolResult.value = false;
   
+  // Reset plan-related states
+  currentPlan.value = null;
+  isPlanExecuting.value = false;
+  isPlanPaused.value = false;
+  currentPlanStep.value = null;
+  
   // Reset error states
   streamError.value = null;
   isTyping.value = false;
@@ -957,6 +1227,230 @@ async function handleClearChat() {
     // }
   } catch (error) {
     console.error('Error clearing chat:', error);
+  }
+}
+
+// ==================== Plan Execute Agent Handlers ====================
+
+/**
+ * Handle plan_created event with error boundaries
+ */
+function handlePlanCreated(chunk: ChatStreamChunk): void {
+  try {
+    if (!chunk.plan || !chunk.planId) {
+      console.warn('Invalid plan data received in handlePlanCreated');
+      return;
+    }
+
+    // Validate plan structure
+    if (!chunk.plan.title || !Array.isArray(chunk.plan.steps)) {
+      console.warn('Invalid plan structure received');
+      return;
+    }
+
+    currentPlan.value = chunk.plan;
+    isPlanExecuting.value = true;
+    isPlanPaused.value = false;
+
+    // Add plan created message to chat
+    const planMessage: ChatMessage = {
+      id: `plan-${chunk.planId}-${Date.now()}`,
+      role: 'assistant',
+      content: '',
+      timestamp: new Date(),
+      conversationId: chunk.conversationId || conversationId.value,
+      messageType: MessageType.PLAN_CREATED,
+      metadata: {
+        plan: chunk.plan,
+        planId: chunk.planId
+      }
+    };
+    messages.value.push(planMessage);
+    throttledScrollToBottom();
+  } catch (error) {
+    console.error('Error handling plan created event:', error);
+  }
+}
+
+/**
+ * Handle plan_step_start event
+ */
+function handlePlanStepStart(chunk: ChatStreamChunk): void {
+  try {
+    if (!chunk.planStep || !chunk.stepId) {
+      console.warn('Invalid plan step data received in handlePlanStepStart');
+      return;
+    }
+
+    currentPlanStep.value = chunk.planStep;
+
+    // Update step in current plan
+    if (currentPlan.value) {
+      const stepIndex = currentPlan.value.steps.findIndex(s => s.stepId === chunk.stepId);
+      if (stepIndex >= 0) {
+        currentPlan.value.steps[stepIndex].status = PlanStepStatus.IN_PROGRESS;
+        currentPlan.value.steps[stepIndex].startTime = new Date();
+      }
+      currentPlan.value.currentStepIndex = (chunk.planStep.stepNumber || 1) - 1;
+    }
+
+    throttledScrollToBottom();
+  } catch (error) {
+    console.error('Error handling plan step start event:', error);
+  }
+}
+
+/**
+ * Handle plan_step_complete event with error boundaries
+ */
+function handlePlanStepComplete(chunk: ChatStreamChunk): void {
+  try {
+    if (!chunk.planStep || !chunk.stepId) {
+      console.warn('Invalid plan step completion data received');
+      return;
+    }
+
+    // Update step in current plan
+    if (currentPlan.value) {
+      const stepIndex = currentPlan.value.steps.findIndex(s => s.stepId === chunk.stepId);
+      if (stepIndex >= 0) {
+        currentPlan.value.steps[stepIndex].status = chunk.planStep.status;
+        currentPlan.value.steps[stepIndex].endTime = new Date();
+        currentPlan.value.steps[stepIndex].result = chunk.planStep.result;
+        currentPlan.value.steps[stepIndex].error = chunk.planStep.error;
+      }
+
+      // Check if all steps are completed using computed property
+      if (allStepsCompleted.value) {
+        currentPlan.value.status = 'completed';
+        isPlanExecuting.value = false;
+        currentPlanStep.value = null;
+      }
+    }
+
+    // Add step completion message
+    const stepMessage: ChatMessage = {
+      id: `step-${chunk.stepId}-${Date.now()}`,
+      role: 'assistant',
+      content: '',
+      timestamp: new Date(),
+      conversationId: chunk.conversationId || conversationId.value,
+      messageType: MessageType.PLAN_STEP_COMPLETE,
+      metadata: {
+        planStep: chunk.planStep,
+        planId: chunk.planId,
+        stepId: chunk.stepId
+      }
+    };
+    messages.value.push(stepMessage);
+
+    throttledScrollToBottom();
+  } catch (error) {
+    console.error('Error handling plan step complete event:', error);
+  }
+}
+
+/**
+ * Handle plan_execute_pause event
+ */
+function handlePlanExecutePause(chunk: ChatStreamChunk): void {
+  try {
+    isPlanPaused.value = true;
+
+    if (currentPlan.value) {
+      currentPlan.value.status = 'paused';
+    }
+
+    // Add pause message
+    const pauseMessage: ChatMessage = {
+      id: `pause-${chunk.planId || 'unknown'}-${Date.now()}`,
+      role: 'assistant',
+      content: chunk.pauseReason || 'Plan execution paused',
+      timestamp: new Date(),
+      conversationId: chunk.conversationId || conversationId.value,
+      messageType: MessageType.PLAN_EXECUTE_PAUSE,
+      metadata: {
+        planId: chunk.planId,
+        pauseReason: chunk.pauseReason
+      }
+    };
+    messages.value.push(pauseMessage);
+
+    throttledScrollToBottom();
+  } catch (error) {
+    console.error('Error handling plan execute pause event:', error);
+  }
+}
+
+/**
+ * Handle plan_execute_resume event
+ */
+function handlePlanExecuteResume(chunk: ChatStreamChunk): void {
+  try {
+    isPlanPaused.value = false;
+
+    if (currentPlan.value) {
+      currentPlan.value.status = 'in_progress';
+    }
+
+    // Add resume message
+    const resumeMessage: ChatMessage = {
+      id: `resume-${chunk.planId || 'unknown'}-${Date.now()}`,
+      role: 'assistant',
+      content: chunk.resumeReason || 'Plan execution resumed',
+      timestamp: new Date(),
+      conversationId: chunk.conversationId || conversationId.value,
+      messageType: MessageType.PLAN_EXECUTE_RESUME,
+      metadata: {
+        planId: chunk.planId,
+        resumeReason: chunk.resumeReason
+      }
+    };
+    messages.value.push(resumeMessage);
+
+    throttledScrollToBottom();
+  } catch (error) {
+    console.error('Error handling plan execute resume event:', error);
+  }
+}
+
+/**
+ * Get step status icon
+ */
+function getStepStatusIcon(status: PlanStepStatus): string {
+  switch (status) {
+    case PlanStepStatus.PENDING:
+      return 'mdi-clock-outline';
+    case PlanStepStatus.IN_PROGRESS:
+      return 'mdi-loading mdi-spin';
+    case PlanStepStatus.COMPLETED:
+      return 'mdi-check-circle';
+    case PlanStepStatus.FAILED:
+      return 'mdi-alert-circle';
+    case PlanStepStatus.SKIPPED:
+      return 'mdi-skip-forward';
+    default:
+      return 'mdi-circle-outline';
+  }
+}
+
+/**
+ * Get step status color
+ */
+function getStepStatusColor(status: PlanStepStatus): string {
+  switch (status) {
+    case PlanStepStatus.PENDING:
+      return 'grey';
+    case PlanStepStatus.IN_PROGRESS:
+      return 'blue';
+    case PlanStepStatus.COMPLETED:
+      return 'success';
+    case PlanStepStatus.FAILED:
+      return 'error';
+    case PlanStepStatus.SKIPPED:
+      return 'warning';
+    default:
+      return 'grey';
   }
 }
 
@@ -1013,6 +1507,19 @@ function scrollToBottom() {
       showScrollButton.value = false;
     }
   });
+}
+
+/**
+ * Throttled version of scrollToBottom to improve performance during rapid updates
+ */
+function throttledScrollToBottom(): void {
+  if (scrollTimeout) {
+    clearTimeout(scrollTimeout);
+  }
+  scrollTimeout = window.setTimeout(() => {
+    scrollToBottom();
+    scrollTimeout = null;
+  }, 16); // ~60fps
 }
 
 /**
@@ -1547,6 +2054,286 @@ onMounted(() => {
   font-weight: 500;
   line-height: 1.4;
   word-break: break-word;
+}
+
+/* Plan Execution Styles */
+.plan-execution {
+  animation: slideInPlan 0.3s ease-out;
+}
+
+@keyframes slideInPlan {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.plan-bubble {
+  background-color: rgba(63, 81, 181, 0.08) !important;
+  border: 1px solid rgba(63, 81, 181, 0.3);
+  max-width: 100%;
+}
+
+.plan-header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 12px;
+  color: rgb(63, 81, 181);
+  font-weight: 600;
+}
+
+.plan-description {
+  font-size: 14px;
+  color: rgb(var(--v-theme-on-surface-variant));
+  margin-bottom: 12px;
+  line-height: 1.5;
+}
+
+.plan-steps {
+  margin: 12px 0;
+}
+
+.plan-step {
+  display: flex;
+  align-items: flex-start;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(var(--v-border-color), 0.1);
+  transition: background-color 0.2s ease;
+  
+  &:last-child {
+    border-bottom: none;
+  }
+  
+  &.step-active {
+    background-color: rgba(33, 150, 243, 0.08);
+    border-radius: 4px;
+    padding: 8px;
+    margin: 4px -8px;
+  }
+  
+  &.step-completed {
+    .step-title {
+      color: rgb(76, 175, 80);
+    }
+  }
+  
+  &.step-failed {
+    .step-title {
+      color: rgb(244, 67, 54);
+    }
+  }
+}
+
+.step-indicator {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 12px;
+}
+
+.step-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.step-title {
+  font-size: 14px;
+  color: rgb(var(--v-theme-on-surface));
+  line-height: 1.4;
+}
+
+.step-description {
+  font-size: 12px;
+  color: rgb(var(--v-theme-on-surface-variant));
+  margin-top: 4px;
+}
+
+.step-result {
+  font-size: 12px;
+  color: rgb(76, 175, 80);
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+}
+
+.step-error {
+  font-size: 12px;
+  color: rgb(244, 67, 54);
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+}
+
+.plan-progress {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(var(--v-border-color), 0.2);
+}
+
+.progress-text {
+  font-size: 12px;
+  color: rgb(var(--v-theme-on-surface-variant));
+  margin-top: 6px;
+  text-align: center;
+}
+
+/* Plan Message Styles */
+.plan-created-message {
+  background-color: rgba(63, 81, 181, 0.08) !important;
+  border: 1px solid rgba(63, 81, 181, 0.3);
+}
+
+.plan-step-message {
+  background-color: rgba(63, 81, 181, 0.05) !important;
+  border: 1px solid rgba(63, 81, 181, 0.2);
+}
+
+.plan-pause-message {
+  background-color: rgba(255, 152, 0, 0.08) !important;
+  border: 1px solid rgba(255, 152, 0, 0.3);
+}
+
+.plan-resume-message {
+  background-color: rgba(76, 175, 80, 0.08) !important;
+  border: 1px solid rgba(76, 175, 80, 0.3);
+}
+
+.plan-message-header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 8px;
+  color: rgb(63, 81, 181);
+  font-weight: 600;
+}
+
+.plan-message-content {
+  font-size: 14px;
+  line-height: 1.6;
+  
+  .plan-title {
+    margin-bottom: 4px;
+    color: rgb(var(--v-theme-on-surface));
+  }
+  
+  .plan-description-text {
+    color: rgb(var(--v-theme-on-surface-variant));
+    margin-bottom: 8px;
+  }
+  
+  .plan-steps-summary {
+    display: flex;
+    align-items: center;
+    font-size: 12px;
+    color: rgb(63, 81, 181);
+    margin-bottom: 8px;
+  }
+}
+
+.plan-steps-details {
+  cursor: pointer;
+  
+  summary {
+    font-size: 12px;
+    color: rgba(63, 81, 181, 0.9);
+    font-weight: 500;
+    user-select: none;
+    
+    &:hover {
+      color: rgb(63, 81, 181);
+    }
+  }
+  
+  .steps-list {
+    margin-top: 8px;
+    padding: 8px;
+    background-color: rgba(var(--v-theme-on-surface), 0.03);
+    border-radius: 4px;
+    
+    .step-item {
+      display: flex;
+      align-items: flex-start;
+      padding: 4px 0;
+      font-size: 13px;
+      
+      .step-number {
+        flex-shrink: 0;
+        width: 24px;
+        color: rgb(63, 81, 181);
+        font-weight: 600;
+      }
+      
+      .step-title {
+        color: rgb(var(--v-theme-on-surface));
+      }
+    }
+  }
+}
+
+.plan-step-header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+.plan-step-content {
+  font-size: 14px;
+  line-height: 1.6;
+  
+  .step-title-display {
+    color: rgb(var(--v-theme-on-surface));
+    margin-bottom: 4px;
+  }
+  
+  .step-result-display {
+    display: flex;
+    align-items: center;
+    color: rgb(76, 175, 80);
+    font-size: 13px;
+    margin-top: 4px;
+  }
+  
+  .step-error-display {
+    display: flex;
+    align-items: center;
+    color: rgb(244, 67, 54);
+    font-size: 13px;
+    margin-top: 4px;
+  }
+}
+
+.plan-pause-header, .plan-resume-header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+.plan-pause-content, .plan-resume-content {
+  font-size: 14px;
+  line-height: 1.5;
+  color: rgb(var(--v-theme-on-surface));
+}
+
+/* Animation for spinning icon */
+.mdi-spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 </style>
 

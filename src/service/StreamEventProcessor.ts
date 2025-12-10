@@ -1,6 +1,14 @@
 import { IpcMainEvent } from 'electron';
 import { StreamEvent, StreamEventType } from '@/api/aiChatApi';
-import { ChatStreamChunk } from '@/entityTypes/commonType';
+import {
+    ChatStreamChunk,
+    Plan,
+    PlanStep,
+    PlanStepStatus,
+    PlanCreatedEventData,
+    PlanStepEventData,
+    PlanControlEventData
+} from '@/entityTypes/commonType';
 import {
     AI_CHAT_STREAM_CHUNK,
     AI_CHAT_STREAM_COMPLETE
@@ -25,6 +33,8 @@ export interface StreamState {
     messageSaved: boolean;
     chatModule: AIChatModule;
     aiChatApi: AiChatApi;
+    // Plan execute agent state
+    currentPlan: Plan | null;
 }
 
 /**
@@ -84,6 +94,27 @@ export class StreamEventProcessor {
 
             case StreamEventType.PONG:
                 console.log('Received keep-alive pong');
+                break;
+
+            // Plan execute agent events
+            case StreamEventType.PLAN_CREATED:
+                this.handlePlanCreatedEvent(streamEvent);
+                break;
+
+            case StreamEventType.PLAN_STEP_START:
+                this.handlePlanStepStartEvent(streamEvent);
+                break;
+
+            case StreamEventType.PLAN_STEP_COMPLETE:
+                this.handlePlanStepCompleteEvent(streamEvent);
+                break;
+
+            case StreamEventType.PLAN_EXECUTE_PAUSE:
+                this.handlePlanExecutePauseEvent(streamEvent);
+                break;
+
+            case StreamEventType.PLAN_EXECUTE_RESUME:
+                this.handlePlanExecuteResumeEvent(streamEvent);
                 break;
 
             default:
@@ -563,6 +594,447 @@ export class StreamEventProcessor {
                 console.log('Saved assistant message to database');
             } catch (saveError) {
                 console.error('Failed to save assistant message to database:', saveError);
+            }
+        }
+    }
+
+    // ==================== Plan Execute Agent Event Handlers ====================
+
+    /**
+     * Handle PLAN_CREATED event - a new plan has been created
+     */
+    private handlePlanCreatedEvent(streamEvent: StreamEvent): void {
+        try {
+            const planData = this.validatePlanCreatedData(streamEvent.data.content);
+            if (!planData) {
+                console.error('Invalid plan creation data received');
+                return;
+            }
+
+            // Build the plan object from validated event data
+            const plan: Plan = {
+                planId: planData.plan_id || `plan-${Date.now()}`,
+                title: planData.title || 'Execution Plan',
+                description: planData.description,
+                steps: this.parseStepsFromPlanData(planData),
+                status: 'created',
+                createdAt: new Date(),
+                currentStepIndex: 0
+            };
+
+            // Store the plan in state
+            this.state.currentPlan = plan;
+
+            console.log(`Plan created: ${plan.title} with ${plan.steps.length} steps`);
+
+            // Save plan created message to database
+            this.savePlanMessage(plan.planId, MessageType.PLAN_CREATED, {
+                planId: plan.planId,
+                title: plan.title,
+                description: plan.description,
+                totalSteps: plan.steps.length,
+                steps: plan.steps.map(s => ({ stepId: s.stepId, stepNumber: s.stepNumber, title: s.title }))
+            }).catch(err => console.error('Failed to save plan created message:', err));
+
+            // Send chunk to UI
+            const chunk: ChatStreamChunk = {
+                content: '',
+                isComplete: false,
+                messageId: this.state.assistantMessageId,
+                eventType: StreamEventType.PLAN_CREATED,
+                conversationId: this.state.streamConversationId,
+                plan: plan,
+                planId: plan.planId
+            };
+            this.event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(chunk));
+        } catch (error) {
+            console.error('Error handling plan created event:', error);
+        }
+    }
+
+    /**
+     * Handle PLAN_STEP_START event - a plan step has started
+     */
+    private handlePlanStepStartEvent(streamEvent: StreamEvent): void {
+        try {
+            const stepData = this.validatePlanStepData(streamEvent.data.content);
+            if (!stepData || !stepData.step_id) {
+                console.error('Invalid plan step start data received');
+                return;
+            }
+
+            const stepId = stepData.step_id;
+            const stepNumber = stepData.step_number || 1;
+            const title = stepData.title || `Step ${stepNumber}`;
+            const description = stepData.description;
+
+            // Update step in current plan
+            if (this.state.currentPlan) {
+                const stepIndex = this.state.currentPlan.steps.findIndex(s => s.stepId === stepId);
+                if (stepIndex >= 0) {
+                    this.state.currentPlan.steps[stepIndex].status = PlanStepStatus.IN_PROGRESS;
+                    this.state.currentPlan.steps[stepIndex].startTime = new Date();
+                }
+                this.state.currentPlan.status = 'in_progress';
+                this.state.currentPlan.currentStepIndex = stepNumber - 1;
+            }
+
+            const planStep: PlanStep = {
+                stepId,
+                stepNumber,
+                title,
+                description,
+                status: PlanStepStatus.IN_PROGRESS,
+                startTime: new Date()
+            };
+
+            console.log(`Plan step started: ${title} (Step ${stepNumber})`);
+
+            // Send chunk to UI
+            const chunk: ChatStreamChunk = {
+                content: '',
+                isComplete: false,
+                messageId: this.state.assistantMessageId,
+                eventType: StreamEventType.PLAN_STEP_START,
+                conversationId: this.state.streamConversationId,
+                planStep: planStep,
+                planId: this.state.currentPlan?.planId,
+                stepId: stepId
+            };
+            this.event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(chunk));
+        } catch (error) {
+            console.error('Error handling plan step start event:', error);
+        }
+    }
+
+    /**
+     * Handle PLAN_STEP_COMPLETE event - a plan step has completed
+     */
+    private handlePlanStepCompleteEvent(streamEvent: StreamEvent): void {
+        try {
+            const stepData = this.validatePlanStepData(streamEvent.data.content);
+            if (!stepData || !stepData.step_id) {
+                console.error('Invalid plan step complete data received');
+                return;
+            }
+
+            const stepId = stepData.step_id;
+            const stepNumber = stepData.step_number || 1;
+            const title = stepData.title || `Step ${stepNumber}`;
+            const result = stepData.result;
+            const error = stepData.error;
+            const success = stepData.success !== false;
+
+            // Update step in current plan
+            if (this.state.currentPlan) {
+                const stepIndex = this.state.currentPlan.steps.findIndex(s => s.stepId === stepId);
+                if (stepIndex >= 0) {
+                    this.state.currentPlan.steps[stepIndex].status = success ? PlanStepStatus.COMPLETED : PlanStepStatus.FAILED;
+                    this.state.currentPlan.steps[stepIndex].endTime = new Date();
+                    this.state.currentPlan.steps[stepIndex].result = result;
+                    this.state.currentPlan.steps[stepIndex].error = error;
+                }
+
+                // Check if all steps are completed
+                const allCompleted = this.state.currentPlan.steps.every(
+                    s => s.status === PlanStepStatus.COMPLETED || s.status === PlanStepStatus.FAILED || s.status === PlanStepStatus.SKIPPED
+                );
+                if (allCompleted) {
+                    this.state.currentPlan.status = 'completed';
+                }
+            }
+
+            const planStep: PlanStep = {
+                stepId,
+                stepNumber,
+                title,
+                status: success ? PlanStepStatus.COMPLETED : PlanStepStatus.FAILED,
+                result,
+                error,
+                endTime: new Date()
+            };
+
+            console.log(`Plan step completed: ${title} (Step ${stepNumber}) - ${success ? 'Success' : 'Failed'}`);
+
+            // Save step completion to database
+            this.savePlanMessage(stepId, MessageType.PLAN_STEP_COMPLETE, {
+                stepId,
+                stepNumber,
+                title,
+                success,
+                result,
+                error,
+                planId: this.state.currentPlan?.planId
+            }).catch(err => console.error('Failed to save plan step completion:', err));
+
+            // Send chunk to UI
+            const chunk: ChatStreamChunk = {
+                content: '',
+                isComplete: false,
+                messageId: this.state.assistantMessageId,
+                eventType: StreamEventType.PLAN_STEP_COMPLETE,
+                conversationId: this.state.streamConversationId,
+                planStep: planStep,
+                planId: this.state.currentPlan?.planId,
+                stepId: stepId,
+                plan: this.state.currentPlan || undefined
+            };
+            this.event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(chunk));
+        } catch (error) {
+            console.error('Error handling plan step complete event:', error);
+        }
+    }
+
+    /**
+     * Handle PLAN_EXECUTE_PAUSE event - plan execution has been paused
+     */
+    private handlePlanExecutePauseEvent(streamEvent: StreamEvent): void {
+        try {
+            const pauseData = this.validatePlanControlData(streamEvent.data.content);
+
+            const planId = pauseData?.plan_id || this.state.currentPlan?.planId;
+            const pauseReason = pauseData?.reason || 'Execution paused';
+
+            // Update plan status
+            if (this.state.currentPlan) {
+                this.state.currentPlan.status = 'paused';
+            }
+
+            console.log(`Plan execution paused: ${pauseReason}`);
+
+            // Send chunk to UI
+            const chunk: ChatStreamChunk = {
+                content: '',
+                isComplete: false,
+                messageId: this.state.assistantMessageId,
+                eventType: StreamEventType.PLAN_EXECUTE_PAUSE,
+                conversationId: this.state.streamConversationId,
+                planId: planId,
+                pauseReason: pauseReason,
+                plan: this.state.currentPlan || undefined
+            };
+            this.event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(chunk));
+        } catch (error) {
+            console.error('Error handling plan execute pause event:', error);
+        }
+    }
+
+    /**
+     * Handle PLAN_EXECUTE_RESUME event - plan execution has resumed
+     */
+    private handlePlanExecuteResumeEvent(streamEvent: StreamEvent): void {
+        try {
+            const resumeData = this.validatePlanControlData(streamEvent.data.content);
+
+            const planId = resumeData?.plan_id || this.state.currentPlan?.planId;
+            const resumeReason = resumeData?.reason || 'Execution resumed';
+
+            // Update plan status
+            if (this.state.currentPlan) {
+                this.state.currentPlan.status = 'in_progress';
+            }
+
+            console.log(`Plan execution resumed: ${resumeReason}`);
+
+            // Send chunk to UI
+            const chunk: ChatStreamChunk = {
+                content: '',
+                isComplete: false,
+                messageId: this.state.assistantMessageId,
+                eventType: StreamEventType.PLAN_EXECUTE_RESUME,
+                conversationId: this.state.streamConversationId,
+                planId: planId,
+                resumeReason: resumeReason,
+                plan: this.state.currentPlan || undefined
+            };
+            this.event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(chunk));
+        } catch (error) {
+            console.error('Error handling plan execute resume event:', error);
+        }
+    }
+
+    /**
+     * Validate plan control event data (pause/resume)
+     */
+    private validatePlanControlData(data: unknown): PlanControlEventData | null {
+        if (!data || typeof data !== 'object') {
+            console.warn('Plan control data is not an object');
+            return null;
+        }
+
+        const controlData = data as Record<string, unknown>;
+        const validated: PlanControlEventData = {};
+
+        if (controlData.plan_id && typeof controlData.plan_id === 'string') {
+            validated.plan_id = controlData.plan_id;
+        }
+
+        if (controlData.reason && typeof controlData.reason === 'string') {
+            validated.reason = controlData.reason;
+        }
+
+        return validated;
+    }
+
+    /**
+     * Parse steps from plan data with validation
+     */
+    private parseStepsFromPlanData(planData: PlanCreatedEventData): PlanStep[] {
+        if (!planData.steps || !Array.isArray(planData.steps)) {
+            console.warn('No valid steps array found in plan data');
+            return [];
+        }
+
+        return planData.steps
+            .filter((step): step is NonNullable<typeof step> => step != null)
+            .map((step, index) => ({
+                stepId: step.step_id || `step-${index + 1}`,
+                stepNumber: step.step_number || index + 1,
+                title: step.title || `Step ${index + 1}`,
+                description: step.description,
+                status: PlanStepStatus.PENDING
+            }));
+    }
+
+    /**
+     * Validate plan created event data
+     */
+    private validatePlanCreatedData(data: unknown): PlanCreatedEventData | null {
+        if (!data || typeof data !== 'object') {
+            console.warn('Plan created data is not an object');
+            return null;
+        }
+
+        const planData = data as Record<string, unknown>;
+
+        // Validate required fields
+        if (!planData.plan_id || typeof planData.plan_id !== 'string') {
+            console.warn('Missing or invalid plan_id in plan data');
+            return null;
+        }
+
+        if (!planData.title || typeof planData.title !== 'string') {
+            console.warn('Missing or invalid title in plan data');
+            return null;
+        }
+
+        // Validate optional fields
+        const validated: PlanCreatedEventData = {
+            plan_id: planData.plan_id,
+            title: planData.title
+        };
+
+        if (planData.description && typeof planData.description === 'string') {
+            validated.description = planData.description;
+        }
+
+        if (Array.isArray(planData.steps)) {
+            validated.steps = planData.steps
+                .filter(step => step != null && typeof step === 'object')
+                .map(step => ({
+                    step_id: typeof step === 'object' && step.step_id ? String(step.step_id) : undefined,
+                    step_number: typeof step === 'object' && step.step_number ? Number(step.step_number) : undefined,
+                    title: typeof step === 'object' && step.title ? String(step.title) : undefined,
+                    description: typeof step === 'object' && step.description ? String(step.description) : undefined
+                }));
+        }
+
+        return validated;
+    }
+
+    /**
+     * Validate plan step event data
+     */
+    private validatePlanStepData(data: unknown): PlanStepEventData | null {
+        if (!data || typeof data !== 'object') {
+            console.warn('Plan step data is not an object');
+            return null;
+        }
+
+        const stepData = data as Record<string, unknown>;
+        const validated: PlanStepEventData = {};
+
+        if (stepData.step_id && typeof stepData.step_id === 'string') {
+            validated.step_id = stepData.step_id;
+        }
+
+        if (stepData.step_number && typeof stepData.step_number === 'number') {
+            validated.step_number = stepData.step_number;
+        }
+
+        if (stepData.title && typeof stepData.title === 'string') {
+            validated.title = stepData.title;
+        }
+
+        if (stepData.description && typeof stepData.description === 'string') {
+            validated.description = stepData.description;
+        }
+
+        if (stepData.result && typeof stepData.result === 'string') {
+            validated.result = stepData.result;
+        }
+
+        if (stepData.error && typeof stepData.error === 'string') {
+            validated.error = stepData.error;
+        }
+
+        if (typeof stepData.success === 'boolean') {
+            validated.success = stepData.success;
+        }
+
+        if (stepData.plan_id && typeof stepData.plan_id === 'string') {
+            validated.plan_id = stepData.plan_id;
+        }
+
+        if (stepData.reason && typeof stepData.reason === 'string') {
+            validated.reason = stepData.reason;
+        }
+
+        return validated;
+    }
+
+    /**
+     * Save plan-related message to database with improved error handling
+     */
+    private async savePlanMessage(
+        messageId: string,
+        messageType: MessageType,
+        metadata: Record<string, unknown>
+    ): Promise<void> {
+        if (!this.state.streamConversationId) {
+            console.warn('Cannot save plan message: no conversation ID available');
+            return;
+        }
+
+        try {
+            const messageData = {
+                messageId: `plan-${messageId}-${Date.now()}`,
+                conversationId: this.state.streamConversationId,
+                role: 'assistant' as const,
+                content: JSON.stringify(metadata),
+                timestamp: new Date(),
+                messageType: messageType,
+                metadata: JSON.stringify(metadata)
+            };
+
+            await this.state.chatModule.saveMessage(messageData);
+        } catch (err) {
+            const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+            console.error(`Failed to save plan message (${messageType}):`, errorMessage);
+
+            // Optionally emit an error event to the UI
+            try {
+                const errorChunk: ChatStreamChunk = {
+                    content: '',
+                    isComplete: false,
+                    messageId: this.state.assistantMessageId,
+                    eventType: StreamEventType.ERROR,
+                    conversationId: this.state.streamConversationId,
+                    errorMessage: `Failed to save plan message: ${errorMessage}`
+                };
+                this.event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(errorChunk));
+            } catch (emitError) {
+                console.error('Failed to emit error chunk:', emitError);
             }
         }
     }

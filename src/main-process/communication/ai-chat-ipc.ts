@@ -359,7 +359,8 @@ export function registerAiChatIpcHandlers(): void {
                 deferredCompletionChunk: null,
                 messageSaved: false,
                 chatModule,
-                aiChatApi
+                aiChatApi,
+                currentPlan: null
             };
 
             // Create stream event processor
