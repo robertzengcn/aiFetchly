@@ -99,7 +99,13 @@ export enum StreamEventType {
     DONE = "done",                            // Response completion
     CONVERSATION_START = "conversation_start", // Session initialization
     CONVERSATION_END = "conversation_end",    // Conversation termination
-    PONG = "pong"                             // Keep alive
+    PONG = "pong",                            // Keep alive
+    // Plan execute agent events
+    PLAN_CREATED = "plan_created",            // Plan has been created
+    PLAN_STEP_START = "plan_step_start",      // A plan step has started
+    PLAN_STEP_COMPLETE = "plan_step_complete", // A plan step has completed
+    PLAN_EXECUTE_PAUSE = "plan_execute_pause", // Plan execution paused
+    PLAN_EXECUTE_RESUME = "plan_execute_resume" // Plan execution resumed
 }
 
 /**

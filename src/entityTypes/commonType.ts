@@ -189,7 +189,89 @@ export interface EmbeddingConfig {
 export enum MessageType {
     MESSAGE = 'message',
     TOOL_CALL = 'tool_call',
-    TOOL_RESULT = 'tool_result'
+    TOOL_RESULT = 'tool_result',
+    PLAN_CREATED = 'plan_created',
+    PLAN_STEP_START = 'plan_step_start',
+    PLAN_STEP_COMPLETE = 'plan_step_complete',
+    PLAN_EXECUTE_PAUSE = 'plan_execute_pause',
+    PLAN_EXECUTE_RESUME = 'plan_execute_resume'
+}
+
+/**
+ * Plan step status
+ */
+export enum PlanStepStatus {
+    PENDING = 'pending',
+    IN_PROGRESS = 'in_progress',
+    COMPLETED = 'completed',
+    FAILED = 'failed',
+    SKIPPED = 'skipped'
+}
+
+/**
+ * Plan step interface
+ */
+export interface PlanStep {
+    stepId: string;
+    stepNumber: number;
+    title: string;
+    description?: string;
+    status: PlanStepStatus;
+    result?: string;
+    error?: string;
+    startTime?: Date;
+    endTime?: Date;
+}
+
+/**
+ * Plan interface for AI agent execution
+ */
+export interface Plan {
+    planId: string;
+    title: string;
+    description?: string;
+    steps: PlanStep[];
+    status: 'created' | 'in_progress' | 'paused' | 'completed' | 'failed';
+    createdAt: Date;
+    currentStepIndex: number;
+}
+
+/**
+ * Plan creation event data
+ */
+export interface PlanCreatedEventData {
+    plan_id: string;
+    title: string;
+    description?: string;
+    steps?: Array<{
+        step_id?: string;
+        step_number?: number;
+        title?: string;
+        description?: string;
+    }>;
+}
+
+/**
+ * Plan step event data
+ */
+export interface PlanStepEventData {
+    step_id?: string;
+    step_number?: number;
+    title?: string;
+    description?: string;
+    result?: string;
+    error?: string;
+    success?: boolean;
+    plan_id?: string;
+    reason?: string;
+}
+
+/**
+ * Plan execution pause/resume event data
+ */
+export interface PlanControlEventData {
+    plan_id?: string;
+    reason?: string;
 }
 
 /**
@@ -228,6 +310,13 @@ export interface ChatStreamChunk {
     toolResult?: Record<string, unknown>;
     errorMessage?: string;
     conversationId?: string;
+    // Plan execute agent fields
+    plan?: Plan;
+    planStep?: PlanStep;
+    planId?: string;
+    stepId?: string;
+    pauseReason?: string;
+    resumeReason?: string;
 }
 
 /**
