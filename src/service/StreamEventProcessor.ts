@@ -21,6 +21,17 @@ import { ToolExecutor } from './ToolExecutor';
 import { MessageType } from '@/entityTypes/commonType';
 
 /**
+ * Configuration constants for plan execution
+ */
+const PLAN_CONFIG = {
+    MAX_PLAN_STEPS: 50,
+    MAX_STEP_TITLE_LENGTH: 200,
+    MAX_STEP_DESCRIPTION_LENGTH: 1000,
+    MAX_PLAN_TITLE_LENGTH: 300,
+    MAX_PLAN_DESCRIPTION_LENGTH: 2000
+} as const;
+
+/**
  * Interface for stream processing state
  */
 export interface StreamState {
@@ -533,9 +544,62 @@ export class StreamEventProcessor {
     }
 
     /**
+     * Clean up plan data to prevent memory leaks
+     */
+    private cleanupPlanData(): void {
+        if (this.state.currentPlan) {
+            console.log(`Cleaning up plan: ${this.state.currentPlan.planId}`);
+            this.state.currentPlan = null;
+        }
+    }
+
+    /**
+     * Recover plan state from inconsistency
+     */
+    private recoverPlanState(error: Error, context: string): void {
+        console.error(`Plan state inconsistency detected in ${context}:`, error);
+
+        if (this.state.currentPlan) {
+            // Mark current step as failed if there's an active step
+            const currentStepIndex = this.state.currentPlan.currentStepIndex;
+            if (currentStepIndex >= 0 && currentStepIndex < this.state.currentPlan.steps.length) {
+                const currentStep = this.state.currentPlan.steps[currentStepIndex];
+                if (currentStep.status === PlanStepStatus.IN_PROGRESS) {
+                    currentStep.status = PlanStepStatus.FAILED;
+                    currentStep.endTime = new Date();
+                    currentStep.error = `State recovery: ${error.message}`;
+
+                    // Send step failure notification
+                    const chunk: ChatStreamChunk = {
+                        content: '',
+                        isComplete: false,
+                        messageId: this.state.assistantMessageId,
+                        eventType: StreamEventType.PLAN_STEP_COMPLETE,
+                        conversationId: this.state.streamConversationId,
+                        planStep: currentStep,
+                        planId: this.state.currentPlan.planId,
+                        stepId: currentStep.stepId
+                    };
+                    this.event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(chunk));
+                }
+            }
+
+            // Mark plan as failed if too many steps have failed
+            const failedSteps = this.state.currentPlan.steps.filter(s => s.status === PlanStepStatus.FAILED).length;
+            if (failedSteps > Math.ceil(this.state.currentPlan.steps.length * 0.5)) {
+                this.state.currentPlan.status = 'failed';
+                console.warn(`Plan ${this.state.currentPlan.planId} marked as failed due to too many step failures`);
+            }
+        }
+    }
+
+    /**
      * Handle CONVERSATION_END event
      */
     private handleConversationEndEvent(): void {
+        // Clean up plan data when conversation ends
+        this.cleanupPlanData();
+
         const chunk: ChatStreamChunk = {
             content: '',
             isComplete: true,
@@ -636,15 +700,30 @@ export class StreamEventProcessor {
                 steps: plan.steps.map(s => ({ stepId: s.stepId, stepNumber: s.stepNumber, title: s.title }))
             }).catch(err => console.error('Failed to save plan created message:', err));
 
-            // Send chunk to UI
+            // Send chunk to UI with optimized payload
             const chunk: ChatStreamChunk = {
                 content: '',
                 isComplete: false,
                 messageId: this.state.assistantMessageId,
                 eventType: StreamEventType.PLAN_CREATED,
                 conversationId: this.state.streamConversationId,
-                plan: plan,
-                planId: plan.planId
+                planId: plan.planId,
+                // Only send essential plan data - UI can reconstruct full plan if needed
+                plan: {
+                    planId: plan.planId,
+                    title: plan.title,
+                    description: plan.description,
+                    status: plan.status,
+                    createdAt: plan.createdAt,
+                    currentStepIndex: plan.currentStepIndex,
+                    // Only include step summaries to reduce payload size
+                    steps: plan.steps.map(s => ({
+                        stepId: s.stepId,
+                        stepNumber: s.stepNumber,
+                        title: s.title,
+                        status: s.status
+                    }))
+                } as Plan
             };
             this.event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(chunk));
         } catch (error) {
@@ -659,8 +738,7 @@ export class StreamEventProcessor {
         try {
             const stepData = this.validatePlanStepData(streamEvent.data.content);
             if (!stepData || !stepData.step_id) {
-                console.error('Invalid plan step start data received');
-                return;
+                throw new Error('Invalid plan step start data - missing step_id');
             }
 
             const stepId = stepData.step_id;
@@ -690,20 +768,23 @@ export class StreamEventProcessor {
 
             console.log(`Plan step started: ${title} (Step ${stepNumber})`);
 
-            // Send chunk to UI
+            // Send chunk to UI with optimized payload
             const chunk: ChatStreamChunk = {
                 content: '',
                 isComplete: false,
                 messageId: this.state.assistantMessageId,
                 eventType: StreamEventType.PLAN_STEP_START,
                 conversationId: this.state.streamConversationId,
-                planStep: planStep,
                 planId: this.state.currentPlan?.planId,
-                stepId: stepId
+                stepId: stepId,
+                // Only send essential step data
+                stepNumber: stepNumber,
+                stepTitle: title,
+                stepDescription: description
             };
             this.event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(chunk));
         } catch (error) {
-            console.error('Error handling plan step start event:', error);
+            this.recoverPlanState(error instanceof Error ? error : new Error(String(error)), 'plan step start');
         }
     }
 
@@ -714,8 +795,7 @@ export class StreamEventProcessor {
         try {
             const stepData = this.validatePlanStepData(streamEvent.data.content);
             if (!stepData || !stepData.step_id) {
-                console.error('Invalid plan step complete data received');
-                return;
+                throw new Error('Invalid plan step complete data - missing step_id');
             }
 
             const stepId = stepData.step_id;
@@ -767,21 +847,32 @@ export class StreamEventProcessor {
                 planId: this.state.currentPlan?.planId
             }).catch(err => console.error('Failed to save plan step completion:', err));
 
-            // Send chunk to UI
+            // Send chunk to UI with optimized payload
             const chunk: ChatStreamChunk = {
                 content: '',
                 isComplete: false,
                 messageId: this.state.assistantMessageId,
                 eventType: StreamEventType.PLAN_STEP_COMPLETE,
                 conversationId: this.state.streamConversationId,
-                planStep: planStep,
                 planId: this.state.currentPlan?.planId,
                 stepId: stepId,
-                plan: this.state.currentPlan || undefined
+                stepNumber: stepNumber,
+                stepTitle: title,
+                stepSuccess: success,
+                stepResult: success ? result : undefined,
+                stepError: success ? undefined : error,
+                // Only include plan status update, not full plan object
+                planStatus: this.state.currentPlan?.status,
+                planProgress: this.state.currentPlan ? {
+                    completed: this.state.currentPlan.steps.filter(s =>
+                        s.status === PlanStepStatus.COMPLETED || s.status === PlanStepStatus.FAILED
+                    ).length,
+                    total: this.state.currentPlan.steps.length
+                } : undefined
             };
             this.event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(chunk));
         } catch (error) {
-            console.error('Error handling plan step complete event:', error);
+            this.recoverPlanState(error instanceof Error ? error : new Error(String(error)), 'plan step complete');
         }
     }
 
@@ -802,7 +893,7 @@ export class StreamEventProcessor {
 
             console.log(`Plan execution paused: ${pauseReason}`);
 
-            // Send chunk to UI
+            // Send chunk to UI with optimized payload
             const chunk: ChatStreamChunk = {
                 content: '',
                 isComplete: false,
@@ -810,8 +901,8 @@ export class StreamEventProcessor {
                 eventType: StreamEventType.PLAN_EXECUTE_PAUSE,
                 conversationId: this.state.streamConversationId,
                 planId: planId,
-                pauseReason: pauseReason,
-                plan: this.state.currentPlan || undefined
+                pauseReason: pauseReason
+                // Don't send full plan object on pause/resume to save bandwidth
             };
             this.event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(chunk));
         } catch (error) {
@@ -836,7 +927,7 @@ export class StreamEventProcessor {
 
             console.log(`Plan execution resumed: ${resumeReason}`);
 
-            // Send chunk to UI
+            // Send chunk to UI with optimized payload
             const chunk: ChatStreamChunk = {
                 content: '',
                 isComplete: false,
@@ -844,8 +935,8 @@ export class StreamEventProcessor {
                 eventType: StreamEventType.PLAN_EXECUTE_RESUME,
                 conversationId: this.state.streamConversationId,
                 planId: planId,
-                resumeReason: resumeReason,
-                plan: this.state.currentPlan || undefined
+                resumeReason: resumeReason
+                // Don't send full plan object on pause/resume to save bandwidth
             };
             this.event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(chunk));
         } catch (error) {
@@ -897,7 +988,7 @@ export class StreamEventProcessor {
     }
 
     /**
-     * Validate plan created event data
+     * Validate plan created event data with strict checks
      */
     private validatePlanCreatedData(data: unknown): PlanCreatedEventData | null {
         if (!data || typeof data !== 'object') {
@@ -908,27 +999,46 @@ export class StreamEventProcessor {
         const planData = data as Record<string, unknown>;
 
         // Validate required fields
-        if (!planData.plan_id || typeof planData.plan_id !== 'string') {
+        if (!planData.plan_id || typeof planData.plan_id !== 'string' || planData.plan_id.trim().length === 0) {
             console.warn('Missing or invalid plan_id in plan data');
             return null;
         }
 
-        if (!planData.title || typeof planData.title !== 'string') {
+        if (!planData.title || typeof planData.title !== 'string' || planData.title.trim().length === 0) {
             console.warn('Missing or invalid title in plan data');
             return null;
         }
 
+        // Validate size limits
+        if (planData.title.length > PLAN_CONFIG.MAX_PLAN_TITLE_LENGTH) {
+            console.warn(`Plan title exceeds maximum length of ${PLAN_CONFIG.MAX_PLAN_TITLE_LENGTH} characters`);
+            return null;
+        }
+
+        if (planData.description && typeof planData.description === 'string') {
+            if (planData.description.length > PLAN_CONFIG.MAX_PLAN_DESCRIPTION_LENGTH) {
+                console.warn(`Plan description exceeds maximum length of ${PLAN_CONFIG.MAX_PLAN_DESCRIPTION_LENGTH} characters`);
+                return null;
+            }
+        }
+
         // Validate optional fields
         const validated: PlanCreatedEventData = {
-            plan_id: planData.plan_id,
-            title: planData.title
+            plan_id: planData.plan_id.trim(),
+            title: planData.title.trim()
         };
 
         if (planData.description && typeof planData.description === 'string') {
-            validated.description = planData.description;
+            validated.description = planData.description.trim();
         }
 
         if (Array.isArray(planData.steps)) {
+            // Check plan size limits
+            if (planData.steps.length > PLAN_CONFIG.MAX_PLAN_STEPS) {
+                console.warn(`Plan exceeds maximum steps limit of ${PLAN_CONFIG.MAX_PLAN_STEPS}`);
+                return null;
+            }
+
             validated.steps = planData.steps
                 .filter(step => step != null && typeof step === 'object')
                 .map(step => ({
@@ -943,7 +1053,7 @@ export class StreamEventProcessor {
     }
 
     /**
-     * Validate plan step event data
+     * Validate plan step event data with strict checks
      */
     private validatePlanStepData(data: unknown): PlanStepEventData | null {
         if (!data || typeof data !== 'object') {
@@ -954,23 +1064,54 @@ export class StreamEventProcessor {
         const stepData = data as Record<string, unknown>;
         const validated: PlanStepEventData = {};
 
-        if (stepData.step_id && typeof stepData.step_id === 'string') {
-            validated.step_id = stepData.step_id;
+        // step_id is required for proper step tracking
+        if (!stepData.step_id || typeof stepData.step_id !== 'string' || stepData.step_id.trim().length === 0) {
+            console.warn('Missing or invalid step_id in plan step data');
+            return null;
         }
+        validated.step_id = stepData.step_id.trim();
 
-        if (stepData.step_number && typeof stepData.step_number === 'number') {
+        // step_number is optional but must be positive if provided
+        if (stepData.step_number !== undefined) {
+            if (typeof stepData.step_number !== 'number' || stepData.step_number <= 0 || !Number.isInteger(stepData.step_number)) {
+                console.warn('Invalid step_number in plan step data - must be positive integer');
+                return null;
+            }
             validated.step_number = stepData.step_number;
         }
 
-        if (stepData.title && typeof stepData.title === 'string') {
-            validated.title = stepData.title;
+        // title validation with size limits
+        if (stepData.title !== undefined) {
+            if (typeof stepData.title !== 'string' || stepData.title.trim().length === 0) {
+                console.warn('Invalid title in plan step data - must be non-empty string');
+                return null;
+            }
+            if (stepData.title.length > PLAN_CONFIG.MAX_STEP_TITLE_LENGTH) {
+                console.warn(`Step title exceeds maximum length of ${PLAN_CONFIG.MAX_STEP_TITLE_LENGTH} characters`);
+                return null;
+            }
+            validated.title = stepData.title.trim();
         }
 
-        if (stepData.description && typeof stepData.description === 'string') {
-            validated.description = stepData.description;
+        // description validation with size limits
+        if (stepData.description !== undefined) {
+            if (typeof stepData.description !== 'string') {
+                console.warn('Invalid description in plan step data - must be string');
+                return null;
+            }
+            if (stepData.description.length > PLAN_CONFIG.MAX_STEP_DESCRIPTION_LENGTH) {
+                console.warn(`Step description exceeds maximum length of ${PLAN_CONFIG.MAX_STEP_DESCRIPTION_LENGTH} characters`);
+                return null;
+            }
+            validated.description = stepData.description.trim();
         }
 
-        if (stepData.result && typeof stepData.result === 'string') {
+        // result validation
+        if (stepData.result !== undefined) {
+            if (typeof stepData.result !== 'string') {
+                console.warn('Invalid result in plan step data - must be string');
+                return null;
+            }
             validated.result = stepData.result;
         }
 
