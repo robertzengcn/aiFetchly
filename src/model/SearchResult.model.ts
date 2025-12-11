@@ -124,7 +124,7 @@ export class SearchResultModel extends BaseDb {
     /**
      * Get search results by specific task ID
      */
-    async getSearchResultsByTaskId(taskId: number, page: number = 0, size: number = 10): Promise<{ results: SearchResEntity[], total: number }> {
+    async getSearchResultsByTaskId(taskId: number, page = 0, size = 10): Promise<{ results: SearchResEntity[], total: number }> {
         // Get total count for pagination
         const total = await this.repository.count({
             where: { task_id: taskId }
@@ -182,6 +182,37 @@ export class SearchResultModel extends BaseDb {
             ai_reasoning: result.ai_reasoning ?? null,
             ai_client_business: result.ai_client_business ?? null,
             ai_analysis_time: result.ai_analysis_time ?? null
+        }));
+    }
+
+    /**
+     * Get search results by IDs
+     * @param resultIds Array of search result IDs
+     * @returns Array of search result entities
+     */
+    async getSearchResultsByIds(resultIds: number[]): Promise<SearchResEntity[]> {
+        if (!resultIds || resultIds.length === 0) {
+            return [];
+        }
+
+        const results = await this.repository.find({
+            where: { id: In(resultIds) }
+        });
+
+        return results.map(result => ({
+            id: result.id,
+            keyword_id: result.keyword_id,
+            link: result.link,
+            title: result.title,
+            snippet: result.snippet,
+            visible_link: result.domain,
+            record_time: result.record_time,
+            ai_industry: result.ai_industry ?? null,
+            ai_match_score: result.ai_match_score ?? null,
+            ai_reasoning: result.ai_reasoning ?? null,
+            ai_client_business: result.ai_client_business ?? null,
+            ai_analysis_time: result.ai_analysis_time ?? null,
+            ai_analysis_status: result.ai_analysis_status ?? null
         }));
     }
 

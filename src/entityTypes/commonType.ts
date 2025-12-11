@@ -317,6 +317,18 @@ export interface ChatStreamChunk {
     stepId?: string;
     pauseReason?: string;
     resumeReason?: string;
+    // Optimized plan fields (reduced payload)
+    stepNumber?: number;
+    stepTitle?: string;
+    stepDescription?: string;
+    stepSuccess?: boolean;
+    stepResult?: string;
+    stepError?: string;
+    planStatus?: string;
+    planProgress?: {
+        completed: number;
+        total: number;
+    };
 }
 
 /**
