@@ -1003,25 +1003,65 @@ async function handleSendMessage() {
             break;
           }
 
-          case 'tool_call':
+          case 'tool_call': {
             console.log('tool_call', chunk);
             // Show tool execution indicator
             isExecutingTool.value = true;
             currentToolName.value = chunk.toolName || 'Unknown Tool';
             currentToolParams.value = chunk.toolParams || {};
             isTyping.value = false; // Pause typing indicator during tool execution
-            break;
 
-          case 'tool_result':
+            // Add tool call message to chat history
+            const toolCallMessage: ChatMessage = {
+              id: `tool-call-${chunk.toolId || Date.now()}-${Date.now()}`,
+              role: 'assistant',
+              content: chunk.content || `Executing tool: ${chunk.toolName || 'Unknown Tool'}`,
+              timestamp: new Date(),
+              conversationId: chunk.conversationId || conversationId.value,
+              messageType: MessageType.TOOL_CALL,
+              metadata: {
+                toolName: chunk.toolName,
+                toolId: chunk.toolId,
+                toolParams: chunk.toolParams
+              }
+            };
+            messages.value.push(toolCallMessage);
+            throttledScrollToBottom();
+            break;
+          }
+
+          case 'tool_result': {
             console.log('tool_result', chunk);
             // Hide tool execution indicator and show result
             isExecutingTool.value = false;
             if (chunk.toolResult) {
               toolResult.value = chunk.toolResult;
               showToolResult.value = true;
+
+              // Add tool result message to chat history
+              const toolResultMessage: ChatMessage = {
+                id: `tool-result-${chunk.toolId || Date.now()}-${Date.now()}`,
+                role: 'assistant',
+                content: '',
+                timestamp: new Date(),
+                conversationId: chunk.conversationId || conversationId.value,
+                messageType: MessageType.TOOL_RESULT,
+                metadata: {
+                  toolName: chunk.toolName,
+                  toolId: chunk.toolId,
+                  toolResult: chunk.toolResult,
+                  success: (chunk.toolResult as { success?: boolean })?.success !== false,
+                  executionTimeMs: (chunk.toolResult as { executionTimeMs?: number })?.executionTimeMs,
+                  summary: (chunk.toolResult as { summary?: string })?.summary,
+                  error: (chunk.toolResult as { error?: string })?.error
+                }
+              };
+              messages.value.push(toolResultMessage);
+              throttledScrollToBottom();
             }
             isTyping.value = true; // Resume typing indicator
             break;
+          }
 
           case 'conversation_start':
             console.log('conversation_start', chunk);
