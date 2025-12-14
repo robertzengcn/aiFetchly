@@ -366,26 +366,24 @@ export class StreamEventProcessor {
         errorMessage: string,
         toolStartMs: number
     ): Promise<void> {
+        const errorToolResult = {
+            success: false,
+            error: errorMessage
+        };
+
+        // Send error result to UI
         const errorResult: ChatStreamChunk = {
             content: '',
             isComplete: false,
             messageId: this.state.assistantMessageId,
             eventType: StreamEventType.TOOL_RESULT,
-            toolResult: {
-                success: false,
-                error: errorMessage
-            },
+            toolResult: errorToolResult,
             conversationId: this.state.streamConversationId
         };
         this.event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(errorResult));
 
         // Save error tool result to database
         try {
-            const errorToolResult = {
-                success: false,
-                error: errorMessage
-            };
-
             const errorMetadata = ToolExecutionService.prepareToolMetadata(
                 toolName,
                 toolId,
@@ -407,40 +405,21 @@ export class StreamEventProcessor {
             console.error('Failed to save error tool result to database:', saveError);
         }
 
+        // Send error tool result back to AI server to continue the stream
+        // This allows the AI to respond appropriately to the failure
+        try {
+            await this.sendToolResultToAI(toolId, toolName, errorToolResult, toolStartMs);
+        } catch (sendErr) {
+            console.error('Failed to send error tool result to AI server:', sendErr);
+        }
+
         // Remove tool from pending set even on error
         if (toolId) {
             this.state.pendingToolCalls.delete(toolId);
             console.log(`Tool call failed: ${toolName} (ID: ${toolId}), pending: ${this.state.pendingToolCalls.size}`);
             
-            // Handle completion on error
-            if (this.canSendCompletion()) {
-                await this.saveMessageToDatabase();
-                const errorCompletionChunk: ChatStreamChunk = {
-                    content: '',
-                    isComplete: true,
-                    messageId: this.state.assistantMessageId,
-                    eventType: StreamEventType.ERROR,
-                    errorMessage: `Tool execution failed: ${errorMessage}`,
-                    toolName: toolName,
-                    toolId: toolId,
-                    conversationId: this.state.streamConversationId
-                };
-                this.event.sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(errorCompletionChunk));
-                console.log(`Sent error completion for tool ${toolName} (ID: ${toolId})`);
-            } else {
-                console.log(`Deferring error completion due to ${this.state.pendingToolCalls.size} pending tool calls`);
-                this.state.deferredCompletionChunk = {
-                    content: '',
-                    isComplete: true,
-                    messageId: this.state.assistantMessageId,
-                    eventType: StreamEventType.ERROR,
-                    errorMessage: `Tool execution failed: ${errorMessage}`,
-                    toolName: toolName,
-                    toolId: toolId,
-                    conversationId: this.state.streamConversationId
-                };
-                this.sendDeferredCompletionIfReady();
-            }
+            // Check if we can send completion (deferred completion will be handled when stream ends)
+            this.sendDeferredCompletionIfReady();
         }
     }
 
