@@ -238,6 +238,9 @@ export interface Plan {
 
 /**
  * Plan creation event data
+ * Supports both formats:
+ * 1. Old format: { plan_id, title, description?, steps?: [...] }
+ * 2. New format: { plan_id, title, description?, plan?: string[] } where plan is array of step strings
  */
 export interface PlanCreatedEventData {
     plan_id: string;
@@ -249,6 +252,8 @@ export interface PlanCreatedEventData {
         title?: string;
         description?: string;
     }>;
+    // New format: array of step strings like "Step 1: Use the 'scrape_urls_from_google' tool..."
+    plan?: string[];
 }
 
 /**

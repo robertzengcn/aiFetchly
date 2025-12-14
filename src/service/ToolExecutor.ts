@@ -9,15 +9,98 @@ import { MCPToolService } from '@/service/MCPToolService';
 import { EmailSearchTaskModule } from '@/modules/EmailSearchTaskModule';
 import { EmailExtractionTypes } from '@/config/emailextraction';
 import { WebsiteAnalysisService } from '@/service/WebsiteAnalysisService';
+import { RateLimiter, RateLimitConfig } from './RateLimiter';
+
+/**
+ * Rate limiting configuration for tool execution
+ */
+const RATE_LIMIT_CONFIG = {
+    websiteAnalysis: {
+        maxPerMinute: 10,
+        maxConcurrent: 3,
+        cooldownMs: 1000
+    },
+    emailExtraction: {
+        maxPerMinute: 20,
+        maxConcurrent: 5,
+        cooldownMs: 500
+    },
+    yellowPages: {
+        maxPerMinute: 15,
+        maxConcurrent: 3,
+        cooldownMs: 800
+    },
+    default: {
+        maxPerMinute: 30,
+        maxConcurrent: 5,
+        cooldownMs: 200
+    }
+} as const;
+
+/**
+ * Rate limiter instances for different tool types
+ */
+class RateLimiterManager {
+    private static limiters = new Map<string, RateLimiter>();
+
+    static getLimiter(toolName: string): RateLimiter {
+        if (!this.limiters.has(toolName)) {
+            const config = this.getRateLimitConfig(toolName);
+            this.limiters.set(toolName, new RateLimiter(config));
+        }
+        return this.limiters.get(toolName)!;
+    }
+
+    private static getRateLimitConfig(toolName: string): RateLimitConfig {
+        if (toolName.includes('website') || toolName.includes('analyze')) {
+            return RATE_LIMIT_CONFIG.websiteAnalysis;
+        } else if (toolName.includes('email') || toolName.includes('extract')) {
+            return RATE_LIMIT_CONFIG.emailExtraction;
+        } else if (toolName.includes('yellow') || toolName.includes('yellowpages')) {
+            return RATE_LIMIT_CONFIG.yellowPages;
+        } else {
+            return RATE_LIMIT_CONFIG.default;
+        }
+    }
+
+    static getStatus(toolName: string) {
+        return this.getLimiter(toolName).getStatus();
+    }
+}
 
 /**
  * Execute tools called by the AI
  */
 export class ToolExecutor {
     /**
-     * Execute a tool by name
+     * Execute a tool by name with rate limiting
      */
     static async execute(
+        toolName: string,
+        toolParams: Record<string, unknown>,
+        conversationId: string
+    ): Promise<Record<string, unknown>> {
+        const rateLimiter = RateLimiterManager.getLimiter(toolName);
+
+        try {
+            // Acquire rate limit slot
+            await rateLimiter.acquire();
+
+            // Check rate limit status before execution
+            const status = rateLimiter.getStatus();
+            console.log(`Executing tool '${toolName}' - Rate limit status:`, status);
+
+            return await this.executeInternal(toolName, toolParams, conversationId);
+        } finally {
+            // Always release the rate limit slot
+            rateLimiter.release();
+        }
+    }
+
+    /**
+     * Internal execution method without rate limiting
+     */
+    private static async executeInternal(
         toolName: string,
         toolParams: Record<string, unknown>,
         conversationId: string
@@ -464,8 +547,8 @@ export class ToolExecutor {
             ? toolParams.client_business.trim() 
             : '';
         
-        const temperature = typeof toolParams.temperature === 'number' 
-            ? Math.max(0, Math.min(1, toolParams.temperature)) 
+        const temperature = typeof toolParams.temperature === 'number'
+            ? Math.max(0, Math.min(1, toolParams.temperature))
             : 0.7;
 
         if (resultIds.length === 0) {
@@ -548,8 +631,8 @@ export class ToolExecutor {
             ? toolParams.client_business.trim() 
             : '';
         
-        const temperature = typeof toolParams.temperature === 'number' 
-            ? Math.max(0, Math.min(1, toolParams.temperature)) 
+        const temperature = typeof toolParams.temperature === 'number'
+            ? Math.max(0, Math.min(1, toolParams.temperature))
             : 0.7;
 
         if (urls.length === 0) {

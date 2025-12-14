@@ -184,8 +184,14 @@ class="message-bubble" :class="{
                 <div class="plan-title">
                   <strong>{{ (message.metadata?.plan as Plan)?.title || 'Execution Plan' }}</strong>
                 </div>
-                <div v-if="(message.metadata?.plan as Plan)?.description" class="plan-description-text">
-                  {{ (message.metadata?.plan as Plan)?.description }}
+                <div v-if="(message.metadata?.plan as Plan)?.description" class="plan-reasoning-section">
+                  <div class="plan-reasoning-label">
+                    <v-icon size="x-small" class="mr-1">mdi-lightbulb-on</v-icon>
+                    <strong>Reasoning:</strong>
+                  </div>
+                  <div class="plan-reasoning-text">
+                    {{ (message.metadata?.plan as Plan)?.description }}
+                  </div>
                 </div>
                 <div class="plan-steps-summary">
                   <v-icon size="x-small" class="mr-1">mdi-format-list-numbered</v-icon>
@@ -245,7 +251,7 @@ class="message-bubble" :class="{
             </template>
 
             <!-- Plan Execute Pause Message -->
-            <template v-else-if="message.messageType === MESSAGE_TYPE.PLAN_EXECUTE_PAUSE">
+            <!-- <template v-else-if="message.messageType === MESSAGE_TYPE.PLAN_EXECUTE_PAUSE">
               <div class="plan-pause-header">
                 <v-icon size="small" color="warning" class="mr-1">mdi-pause-circle</v-icon>
                 <span><strong>Plan Paused</strong></span>
@@ -257,7 +263,7 @@ class="message-bubble" :class="{
                 <v-icon size="x-small" class="mr-1">mdi-clock-outline</v-icon>
                 {{ formatTimestamp(message.timestamp) }}
               </div>
-            </template>
+            </template> -->
 
             <!-- Plan Execute Resume Message -->
             <template v-else-if="message.messageType === MESSAGE_TYPE.PLAN_EXECUTE_RESUME">
@@ -361,16 +367,7 @@ class="message-bubble" :class="{
               <v-icon size="small" color="indigo" class="mr-1">mdi-clipboard-list</v-icon>
               <span><strong>{{ currentPlan.title }}</strong></span>
               <v-chip 
-                v-if="isPlanPaused" 
-                size="x-small" 
-                color="warning" 
-                variant="outlined" 
-                class="ml-2"
-              >
-                Paused
-              </v-chip>
-              <v-chip 
-                v-else 
+                v-if="currentPlan.status !== 'paused'"
                 size="x-small" 
                 color="primary" 
                 variant="outlined" 
@@ -379,8 +376,14 @@ class="message-bubble" :class="{
                 {{ currentPlan.status }}
               </v-chip>
             </div>
-            <div v-if="currentPlan.description" class="plan-description">
-              {{ currentPlan.description }}
+            <div v-if="currentPlan.description" class="plan-reasoning-section">
+              <div class="plan-reasoning-label">
+                <v-icon size="x-small" class="mr-1">mdi-lightbulb-on</v-icon>
+                <strong>Reasoning:</strong>
+              </div>
+              <div class="plan-reasoning-text">
+                {{ currentPlan.description }}
+              </div>
             </div>
             <div class="plan-steps">
               <div 
@@ -1248,7 +1251,7 @@ function handlePlanCreated(chunk: ChatStreamChunk): void {
       return;
     }
 
-    currentPlan.value = chunk.plan;
+    // currentPlan.value = chunk.plan;
     isPlanExecuting.value = true;
     isPlanPaused.value = false;
 
@@ -1352,6 +1355,7 @@ function handlePlanStepComplete(chunk: ChatStreamChunk): void {
 
 /**
  * Handle plan_execute_pause event
+ * Note: This event only updates internal state, no UI display needed
  */
 function handlePlanExecutePause(chunk: ChatStreamChunk): void {
   try {
@@ -1360,23 +1364,9 @@ function handlePlanExecutePause(chunk: ChatStreamChunk): void {
     if (currentPlan.value) {
       currentPlan.value.status = 'paused';
     }
-
-    // Add pause message
-    const pauseMessage: ChatMessage = {
-      id: `pause-${chunk.planId || 'unknown'}-${Date.now()}`,
-      role: 'assistant',
-      content: chunk.pauseReason || 'Plan execution paused',
-      timestamp: new Date(),
-      conversationId: chunk.conversationId || conversationId.value,
-      messageType: MessageType.PLAN_EXECUTE_PAUSE,
-      metadata: {
-        planId: chunk.planId,
-        pauseReason: chunk.pauseReason
-      }
-    };
-    messages.value.push(pauseMessage);
-
-    throttledScrollToBottom();
+    
+    // No UI message displayed for pause event - only state update
+    console.log('Plan paused:', chunk.pauseReason || 'No reason provided');
   } catch (error) {
     console.error('Error handling plan execute pause event:', error);
   }
@@ -2225,6 +2215,29 @@ onMounted(() => {
   .plan-description-text {
     color: rgb(var(--v-theme-on-surface-variant));
     margin-bottom: 8px;
+  }
+  
+  .plan-reasoning-section {
+    margin: 12px 0;
+    padding: 12px;
+    background-color: rgba(255, 193, 7, 0.08);
+    border-left: 3px solid rgba(255, 193, 7, 0.5);
+    border-radius: 4px;
+    
+    .plan-reasoning-label {
+      display: flex;
+      align-items: center;
+      margin-bottom: 8px;
+      color: rgb(255, 152, 0);
+      font-size: 13px;
+      font-weight: 600;
+    }
+    
+    .plan-reasoning-text {
+      color: rgb(var(--v-theme-on-surface));
+      line-height: 1.6;
+      white-space: pre-wrap;
+    }
   }
   
   .plan-steps-summary {
