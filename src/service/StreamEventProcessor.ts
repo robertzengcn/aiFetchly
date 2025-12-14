@@ -19,16 +19,38 @@ import { AVAILABLE_TOOL_FUNCTIONS } from '@/config/aiTools.config';
 import { ToolExecutionService } from './ToolExecutionService';
 import { ToolExecutor } from './ToolExecutor';
 import { MessageType } from '@/entityTypes/commonType';
+import { PlanValidator } from './ValidationUtils';
+import { ErrorClassifier, ClassifiedError, RecoveryStrategy } from './ErrorClassification';
 
 /**
  * Configuration constants for plan execution
  */
-const PLAN_CONFIG = {
+export const PLAN_CONFIG = {
     MAX_PLAN_STEPS: 50,
     MAX_STEP_TITLE_LENGTH: 200,
     MAX_STEP_DESCRIPTION_LENGTH: 1000,
     MAX_PLAN_TITLE_LENGTH: 300,
     MAX_PLAN_DESCRIPTION_LENGTH: 2000
+} as const;
+
+/**
+ * Configuration constants for timeouts and limits
+ */
+const EXECUTION_CONFIG = {
+    // Tool execution timeouts
+    TOOL_EXECUTION_TIMEOUT: 300000, // 5 minutes
+    CHILD_PROCESS_TIMEOUT: 600000,  // 10 minutes
+
+    // Batch processing limits
+    MAX_BATCH_SIZE: 100,
+    BATCH_COMPLETION_TIMEOUT: 600000, // 10 minutes
+    BATCH_POLL_INTERVAL: 2000,        // 2 seconds
+
+    // Error recovery thresholds
+    MAX_FAILED_STEP_PERCENTAGE: 0.5,  // 50%
+
+    // Rate limiting
+    MAX_CONCURRENT_TOOLS: 5
 } as const;
 
 /**
@@ -554,42 +576,173 @@ export class StreamEventProcessor {
     }
 
     /**
-     * Recover plan state from inconsistency
+     * Recover plan state from inconsistency using error classification
      */
     private recoverPlanState(error: Error, context: string): void {
-        console.error(`Plan state inconsistency detected in ${context}:`, error);
+        const classifiedError = ErrorClassifier.classify(error, context);
+        console.error(`Plan state inconsistency detected in ${context}:`, classifiedError);
+
+        if (!this.state.currentPlan) return;
+
+        this.applyRecoveryStrategy(classifiedError);
+    }
+
+    /**
+     * Apply appropriate recovery strategy based on error classification
+     */
+    private applyRecoveryStrategy(classifiedError: ClassifiedError): void {
+        switch (classifiedError.recoveryStrategy) {
+            case RecoveryStrategy.RETRY:
+                this.handleRetryableError(classifiedError);
+                break;
+
+            case RecoveryStrategy.SKIP:
+                this.handleSkippableError(classifiedError);
+                break;
+
+            case RecoveryStrategy.ABORT:
+                this.handleAbortError(classifiedError);
+                break;
+
+            case RecoveryStrategy.FALLBACK:
+                this.handleFallbackError(classifiedError);
+                break;
+
+            case RecoveryStrategy.CONTINUE:
+            default:
+                this.handleContinueError(classifiedError);
+                break;
+        }
+    }
+
+    /**
+     * Handle retryable errors (network, timeout)
+     */
+    private handleRetryableError(classifiedError: ClassifiedError): void {
+        console.log(`Retryable error detected: ${ErrorClassifier.getErrorDescription(classifiedError)}`);
+        // Mark current step as failed but don't abort the plan
+        this.failCurrentStep(classifiedError.originalError);
+        this.checkPlanFailureThreshold();
+    }
+
+    /**
+     * Handle skippable errors (execution failures)
+     */
+    private handleSkippableError(classifiedError: ClassifiedError): void {
+        console.log(`Skippable error detected: ${ErrorClassifier.getErrorDescription(classifiedError)}`);
+        // Mark current step as failed but continue with plan
+        this.failCurrentStep(classifiedError.originalError);
+        // Don't check failure threshold for skippable errors
+    }
+
+    /**
+     * Handle abort errors (validation, permission)
+     */
+    private handleAbortError(classifiedError: ClassifiedError): void {
+        console.error(`Abort error detected: ${ErrorClassifier.getErrorDescription(classifiedError)}`);
 
         if (this.state.currentPlan) {
-            // Mark current step as failed if there's an active step
-            const currentStepIndex = this.state.currentPlan.currentStepIndex;
-            if (currentStepIndex >= 0 && currentStepIndex < this.state.currentPlan.steps.length) {
-                const currentStep = this.state.currentPlan.steps[currentStepIndex];
-                if (currentStep.status === PlanStepStatus.IN_PROGRESS) {
-                    currentStep.status = PlanStepStatus.FAILED;
-                    currentStep.endTime = new Date();
-                    currentStep.error = `State recovery: ${error.message}`;
-
-                    // Send step failure notification
-                    const chunk: ChatStreamChunk = {
-                        content: '',
-                        isComplete: false,
-                        messageId: this.state.assistantMessageId,
-                        eventType: StreamEventType.PLAN_STEP_COMPLETE,
-                        conversationId: this.state.streamConversationId,
-                        planStep: currentStep,
-                        planId: this.state.currentPlan.planId,
-                        stepId: currentStep.stepId
-                    };
-                    this.event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(chunk));
+            // Mark entire plan as failed
+            this.state.currentPlan.status = 'failed';
+            this.state.currentPlan.steps.forEach(step => {
+                if (step.status === PlanStepStatus.IN_PROGRESS) {
+                    step.status = PlanStepStatus.FAILED;
+                    step.endTime = new Date();
+                    step.error = `Plan aborted: ${classifiedError.originalError.message}`;
                 }
-            }
+            });
 
-            // Mark plan as failed if too many steps have failed
-            const failedSteps = this.state.currentPlan.steps.filter(s => s.status === PlanStepStatus.FAILED).length;
-            if (failedSteps > Math.ceil(this.state.currentPlan.steps.length * 0.5)) {
-                this.state.currentPlan.status = 'failed';
-                console.warn(`Plan ${this.state.currentPlan.planId} marked as failed due to too many step failures`);
-            }
+            // Send plan failure notification
+            this.sendPlanAbortNotification(classifiedError);
+        }
+    }
+
+    /**
+     * Handle fallback errors (resource issues)
+     */
+    private handleFallbackError(classifiedError: ClassifiedError): void {
+        console.warn(`Fallback error detected: ${ErrorClassifier.getErrorDescription(classifiedError)}`);
+        // Try to continue but mark current step as failed
+        this.failCurrentStep(classifiedError.originalError);
+        this.checkPlanFailureThreshold();
+    }
+
+    /**
+     * Handle continue errors (unknown)
+     */
+    private handleContinueError(classifiedError: ClassifiedError): void {
+        console.log(`Continue error detected: ${ErrorClassifier.getErrorDescription(classifiedError)}`);
+        // Try to continue without marking step as failed
+        // Just log the error and proceed
+    }
+
+    /**
+     * Send plan abort notification to UI
+     */
+    private sendPlanAbortNotification(classifiedError: ClassifiedError): void {
+        if (!this.state.currentPlan) return;
+
+        const chunk: ChatStreamChunk = {
+            content: '',
+            isComplete: false,
+            messageId: this.state.assistantMessageId,
+            eventType: StreamEventType.ERROR,
+            conversationId: this.state.streamConversationId,
+            errorMessage: `Plan aborted: ${ErrorClassifier.getErrorDescription(classifiedError)}`
+        };
+        this.event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(chunk));
+    }
+
+    /**
+     * Mark the current step as failed
+     */
+    private failCurrentStep(error: Error): void {
+        if (!this.state.currentPlan) return;
+
+        const { currentStepIndex, steps } = this.state.currentPlan;
+
+        if (currentStepIndex < 0 || currentStepIndex >= steps.length) return;
+
+        const currentStep = steps[currentStepIndex];
+        if (currentStep.status !== PlanStepStatus.IN_PROGRESS) return;
+
+        currentStep.status = PlanStepStatus.FAILED;
+        currentStep.endTime = new Date();
+        currentStep.error = `State recovery: ${error.message}`;
+
+        this.sendStepFailureNotification(currentStep);
+    }
+
+    /**
+     * Send step failure notification to UI
+     */
+    private sendStepFailureNotification(step: PlanStep): void {
+        if (!this.state.currentPlan) return;
+
+        const chunk: ChatStreamChunk = {
+            content: '',
+            isComplete: false,
+            messageId: this.state.assistantMessageId,
+            eventType: StreamEventType.PLAN_STEP_COMPLETE,
+            conversationId: this.state.streamConversationId,
+            planId: this.state.currentPlan.planId,
+            stepId: step.stepId
+        };
+        this.event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(chunk));
+    }
+
+    /**
+     * Check if plan should be marked as failed due to too many step failures
+     */
+    private checkPlanFailureThreshold(): void {
+        if (!this.state.currentPlan) return;
+
+        const failedSteps = this.state.currentPlan.steps.filter(s => s.status === PlanStepStatus.FAILED).length;
+        const failureThreshold = Math.ceil(this.state.currentPlan.steps.length * EXECUTION_CONFIG.MAX_FAILED_STEP_PERCENTAGE);
+
+        if (failedSteps > failureThreshold) {
+            this.state.currentPlan.status = 'failed';
+            console.warn(`Plan ${this.state.currentPlan.planId} marked as failed due to too many step failures`);
         }
     }
 
@@ -669,66 +822,110 @@ export class StreamEventProcessor {
      */
     private handlePlanCreatedEvent(streamEvent: StreamEvent): void {
         try {
-            const planData = this.validatePlanCreatedData(streamEvent.data.content);
+            const planDataInput = this.extractPlanDataFromEvent(streamEvent);
+            const planData = this.validatePlanCreatedData(planDataInput);
+
             if (!planData) {
                 console.error('Invalid plan creation data received');
                 return;
             }
 
-            // Build the plan object from validated event data
-            const plan: Plan = {
-                planId: planData.plan_id || `plan-${Date.now()}`,
-                title: planData.title || 'Execution Plan',
-                description: planData.description,
-                steps: this.parseStepsFromPlanData(planData),
-                status: 'created',
-                createdAt: new Date(),
-                currentStepIndex: 0
-            };
-
-            // Store the plan in state
-            this.state.currentPlan = plan;
+            const plan = this.buildPlanFromData(planData);
+            this.storePlanInState(plan);
 
             console.log(`Plan created: ${plan.title} with ${plan.steps.length} steps`);
 
-            // Save plan created message to database
-            this.savePlanMessage(plan.planId, MessageType.PLAN_CREATED, {
-                planId: plan.planId,
-                title: plan.title,
-                description: plan.description,
-                totalSteps: plan.steps.length,
-                steps: plan.steps.map(s => ({ stepId: s.stepId, stepNumber: s.stepNumber, title: s.title }))
-            }).catch(err => console.error('Failed to save plan created message:', err));
-
-            // Send chunk to UI with optimized payload
-            const chunk: ChatStreamChunk = {
-                content: '',
-                isComplete: false,
-                messageId: this.state.assistantMessageId,
-                eventType: StreamEventType.PLAN_CREATED,
-                conversationId: this.state.streamConversationId,
-                planId: plan.planId,
-                // Only send essential plan data - UI can reconstruct full plan if needed
-                plan: {
-                    planId: plan.planId,
-                    title: plan.title,
-                    description: plan.description,
-                    status: plan.status,
-                    createdAt: plan.createdAt,
-                    currentStepIndex: plan.currentStepIndex,
-                    // Only include step summaries to reduce payload size
-                    steps: plan.steps.map(s => ({
-                        stepId: s.stepId,
-                        stepNumber: s.stepNumber,
-                        title: s.title,
-                        status: s.status
-                    }))
-                } as Plan
-            };
-            this.event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(chunk));
+            this.savePlanCreatedMessage(plan);
+            this.sendPlanCreatedChunk(plan);
         } catch (error) {
             console.error('Error handling plan created event:', error);
         }
+    }
+
+    /**
+     * Extract plan data from stream event
+     */
+    private extractPlanDataFromEvent(streamEvent: StreamEvent): Record<string, unknown> {
+        const eventData = streamEvent.data;
+
+        // Check if data.data exists and is an object (new format)
+        if (eventData.data && typeof eventData.data === 'object' && !('name' in eventData.data) && !('id' in eventData.data)) {
+            // This is plan data, not ToolCallData
+            return { ...eventData, ...(eventData.data as unknown as Record<string, unknown>) };
+        } else if (typeof eventData.content === 'object' && eventData.content !== null) {
+            // Content is an object (might be plan data)
+            return eventData.content as Record<string, unknown>;
+        } else {
+            // Fallback to eventData itself
+            return eventData as unknown as Record<string, unknown>;
+        }
+    }
+
+    /**
+     * Build plan object from validated plan data
+     */
+    private buildPlanFromData(planData: PlanCreatedEventData): Plan {
+        return {
+            planId: planData.plan_id || `plan-${Date.now()}`,
+            title: planData.title || 'Execution Plan',
+            description: planData.description,
+            steps: this.parseStepsFromPlanData(planData),
+            status: 'created',
+            createdAt: new Date(),
+            currentStepIndex: 0
+        };
+    }
+
+    /**
+     * Store plan in component state
+     */
+    private storePlanInState(plan: Plan): void {
+        this.state.currentPlan = plan;
+    }
+
+    /**
+     * Save plan created message to database
+     */
+    private savePlanCreatedMessage(plan: Plan): void {
+        this.savePlanMessage(plan.planId, MessageType.PLAN_CREATED, {
+            planId: plan.planId,
+            title: plan.title,
+            description: plan.description,
+            reasoning: plan.description, // Reasoning is stored as description
+            totalSteps: plan.steps.length,
+            steps: plan.steps.map(s => ({ stepId: s.stepId, stepNumber: s.stepNumber, title: s.title }))
+        }).catch(err => console.error('Failed to save plan created message:', err));
+    }
+
+    /**
+     * Send plan created chunk to UI
+     */
+    private sendPlanCreatedChunk(plan: Plan): void {
+        const chunk: ChatStreamChunk = {
+            content: '',
+            isComplete: false,
+            messageId: this.state.assistantMessageId,
+            eventType: StreamEventType.PLAN_CREATED,
+            conversationId: this.state.streamConversationId,
+            planId: plan.planId,
+            // Only send essential plan data - UI can reconstruct full plan if needed
+            plan: {
+                planId: plan.planId,
+                title: plan.title,
+                description: plan.description,
+                status: plan.status,
+                createdAt: plan.createdAt,
+                currentStepIndex: plan.currentStepIndex,
+                // Only include step summaries to reduce payload size
+                steps: plan.steps.map(s => ({
+                    stepId: s.stepId,
+                    stepNumber: s.stepNumber,
+                    title: s.title,
+                    status: s.status
+                }))
+            } as Plan
+        };
+        this.event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(chunk));
     }
 
     /**
@@ -756,15 +953,6 @@ export class StreamEventProcessor {
                 this.state.currentPlan.status = 'in_progress';
                 this.state.currentPlan.currentStepIndex = stepNumber - 1;
             }
-
-            const planStep: PlanStep = {
-                stepId,
-                stepNumber,
-                title,
-                description,
-                status: PlanStepStatus.IN_PROGRESS,
-                startTime: new Date()
-            };
 
             console.log(`Plan step started: ${title} (Step ${stepNumber})`);
 
@@ -798,82 +986,111 @@ export class StreamEventProcessor {
                 throw new Error('Invalid plan step complete data - missing step_id');
             }
 
-            const stepId = stepData.step_id;
-            const stepNumber = stepData.step_number || 1;
-            const title = stepData.title || `Step ${stepNumber}`;
-            const result = stepData.result;
-            const error = stepData.error;
-            const success = stepData.success !== false;
+            const stepInfo = this.extractStepInfo(stepData);
+            this.updatePlanStepState(stepInfo);
+            this.updatePlanCompletionStatus();
 
-            // Update step in current plan
-            if (this.state.currentPlan) {
-                const stepIndex = this.state.currentPlan.steps.findIndex(s => s.stepId === stepId);
-                if (stepIndex >= 0) {
-                    this.state.currentPlan.steps[stepIndex].status = success ? PlanStepStatus.COMPLETED : PlanStepStatus.FAILED;
-                    this.state.currentPlan.steps[stepIndex].endTime = new Date();
-                    this.state.currentPlan.steps[stepIndex].result = result;
-                    this.state.currentPlan.steps[stepIndex].error = error;
-                }
+            console.log(`Plan step completed: ${stepInfo.title} (Step ${stepInfo.stepNumber}) - ${stepInfo.success ? 'Success' : 'Failed'}`);
 
-                // Check if all steps are completed
-                const allCompleted = this.state.currentPlan.steps.every(
-                    s => s.status === PlanStepStatus.COMPLETED || s.status === PlanStepStatus.FAILED || s.status === PlanStepStatus.SKIPPED
-                );
-                if (allCompleted) {
-                    this.state.currentPlan.status = 'completed';
-                }
-            }
-
-            const planStep: PlanStep = {
-                stepId,
-                stepNumber,
-                title,
-                status: success ? PlanStepStatus.COMPLETED : PlanStepStatus.FAILED,
-                result,
-                error,
-                endTime: new Date()
-            };
-
-            console.log(`Plan step completed: ${title} (Step ${stepNumber}) - ${success ? 'Success' : 'Failed'}`);
-
-            // Save step completion to database
-            this.savePlanMessage(stepId, MessageType.PLAN_STEP_COMPLETE, {
-                stepId,
-                stepNumber,
-                title,
-                success,
-                result,
-                error,
-                planId: this.state.currentPlan?.planId
-            }).catch(err => console.error('Failed to save plan step completion:', err));
-
-            // Send chunk to UI with optimized payload
-            const chunk: ChatStreamChunk = {
-                content: '',
-                isComplete: false,
-                messageId: this.state.assistantMessageId,
-                eventType: StreamEventType.PLAN_STEP_COMPLETE,
-                conversationId: this.state.streamConversationId,
-                planId: this.state.currentPlan?.planId,
-                stepId: stepId,
-                stepNumber: stepNumber,
-                stepTitle: title,
-                stepSuccess: success,
-                stepResult: success ? result : undefined,
-                stepError: success ? undefined : error,
-                // Only include plan status update, not full plan object
-                planStatus: this.state.currentPlan?.status,
-                planProgress: this.state.currentPlan ? {
-                    completed: this.state.currentPlan.steps.filter(s =>
-                        s.status === PlanStepStatus.COMPLETED || s.status === PlanStepStatus.FAILED
-                    ).length,
-                    total: this.state.currentPlan.steps.length
-                } : undefined
-            };
-            this.event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(chunk));
+            this.saveStepCompletionMessage(stepInfo);
+            this.sendStepCompleteChunk(stepInfo);
         } catch (error) {
             this.recoverPlanState(error instanceof Error ? error : new Error(String(error)), 'plan step complete');
         }
+    }
+
+    /**
+     * Extract step information from validated step data
+     */
+    private extractStepInfo(stepData: PlanStepEventData) {
+        const stepId = stepData.step_id!;
+        const stepNumber = stepData.step_number || 1;
+        const title = stepData.title || `Step ${stepNumber}`;
+        const result = stepData.result;
+        const error = stepData.error;
+        const success = stepData.success !== false;
+
+        return {
+            stepId,
+            stepNumber,
+            title,
+            result,
+            error,
+            success
+        };
+    }
+
+    /**
+     * Update step state in current plan
+     */
+    private updatePlanStepState(stepInfo: ReturnType<typeof this.extractStepInfo>): void {
+        if (!this.state.currentPlan) return;
+
+        const stepIndex = this.state.currentPlan.steps.findIndex(s => s.stepId === stepInfo.stepId);
+        if (stepIndex >= 0) {
+            this.state.currentPlan.steps[stepIndex].status = stepInfo.success ? PlanStepStatus.COMPLETED : PlanStepStatus.FAILED;
+            this.state.currentPlan.steps[stepIndex].endTime = new Date();
+            this.state.currentPlan.steps[stepIndex].result = stepInfo.result;
+            this.state.currentPlan.steps[stepIndex].error = stepInfo.error;
+        }
+    }
+
+    /**
+     * Update overall plan completion status
+     */
+    private updatePlanCompletionStatus(): void {
+        if (!this.state.currentPlan) return;
+
+        const allCompleted = this.state.currentPlan.steps.every(
+            s => s.status === PlanStepStatus.COMPLETED || s.status === PlanStepStatus.FAILED || s.status === PlanStepStatus.SKIPPED
+        );
+        if (allCompleted) {
+            this.state.currentPlan.status = 'completed';
+        }
+    }
+
+    /**
+     * Save step completion message to database
+     */
+    private saveStepCompletionMessage(stepInfo: ReturnType<typeof this.extractStepInfo>): void {
+        this.savePlanMessage(stepInfo.stepId, MessageType.PLAN_STEP_COMPLETE, {
+            stepId: stepInfo.stepId,
+            stepNumber: stepInfo.stepNumber,
+            title: stepInfo.title,
+            success: stepInfo.success,
+            result: stepInfo.result,
+            error: stepInfo.error,
+            planId: this.state.currentPlan?.planId
+        }).catch(err => console.error('Failed to save plan step completion:', err));
+    }
+
+    /**
+     * Send step complete chunk to UI
+     */
+    private sendStepCompleteChunk(stepInfo: ReturnType<typeof this.extractStepInfo>): void {
+        const chunk: ChatStreamChunk = {
+            content: '',
+            isComplete: false,
+            messageId: this.state.assistantMessageId,
+            eventType: StreamEventType.PLAN_STEP_COMPLETE,
+            conversationId: this.state.streamConversationId,
+            planId: this.state.currentPlan?.planId,
+            stepId: stepInfo.stepId,
+            stepNumber: stepInfo.stepNumber,
+            stepTitle: stepInfo.title,
+            stepSuccess: stepInfo.success,
+            stepResult: stepInfo.success ? stepInfo.result : undefined,
+            stepError: stepInfo.success ? undefined : stepInfo.error,
+            // Only include plan status update, not full plan object
+            planStatus: this.state.currentPlan?.status,
+            planProgress: this.state.currentPlan ? {
+                completed: this.state.currentPlan.steps.filter(s =>
+                    s.status === PlanStepStatus.COMPLETED || s.status === PlanStepStatus.FAILED
+                ).length,
+                total: this.state.currentPlan.steps.length
+            } : undefined
+        };
+        this.event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(chunk));
     }
 
     /**
@@ -945,193 +1162,102 @@ export class StreamEventProcessor {
     }
 
     /**
-     * Validate plan control event data (pause/resume)
+     * Validate plan control event data (pause/resume) using validation utilities
      */
     private validatePlanControlData(data: unknown): PlanControlEventData | null {
-        if (!data || typeof data !== 'object') {
-            console.warn('Plan control data is not an object');
+        const validation = PlanValidator.validatePlanControlData(data);
+
+        if (!validation.isValid) {
+            console.warn('Plan control validation failed:', validation.errors.join(', '));
             return null;
         }
 
-        const controlData = data as Record<string, unknown>;
-        const validated: PlanControlEventData = {};
-
-        if (controlData.plan_id && typeof controlData.plan_id === 'string') {
-            validated.plan_id = controlData.plan_id;
-        }
-
-        if (controlData.reason && typeof controlData.reason === 'string') {
-            validated.reason = controlData.reason;
-        }
-
-        return validated;
+        return validation.data || null;
     }
 
     /**
      * Parse steps from plan data with validation
+     * Supports both formats:
+     * 1. Old format: steps array with step objects
+     * 2. New format: plan array with step strings
      */
     private parseStepsFromPlanData(planData: PlanCreatedEventData): PlanStep[] {
-        if (!planData.steps || !Array.isArray(planData.steps)) {
-            console.warn('No valid steps array found in plan data');
-            return [];
+        // Check if this is the new format with plan array (string array)
+        if (planData.plan && Array.isArray(planData.plan)) {
+            return planData.plan
+                .filter((stepStr): stepStr is string => typeof stepStr === 'string' && stepStr.trim().length > 0)
+                .map((stepStr, index) => {
+                    // Extract step number and title from string like "Step 1: Use the 'scrape_urls_from_google' tool..."
+                    const stepMatch = stepStr.match(/^Step\s+(\d+):\s*(.+)$/i);
+                    let stepNumber = index + 1;
+                    let title = stepStr;
+                    
+                    if (stepMatch) {
+                        stepNumber = parseInt(stepMatch[1], 10) || index + 1;
+                        title = stepMatch[2].trim();
+                    } else {
+                        // If no "Step X:" prefix, try to extract from beginning
+                        const colonIndex = stepStr.indexOf(':');
+                        if (colonIndex > 0) {
+                            title = stepStr.substring(colonIndex + 1).trim();
+                        }
+                    }
+                    
+                    return {
+                        stepId: `step-${stepNumber}`,
+                        stepNumber: stepNumber,
+                        title: title.length > PLAN_CONFIG.MAX_STEP_TITLE_LENGTH 
+                            ? title.substring(0, PLAN_CONFIG.MAX_STEP_TITLE_LENGTH - 3) + '...'
+                            : title,
+                        description: stepStr, // Full step string as description
+                        status: PlanStepStatus.PENDING
+                    };
+                });
         }
-
-        return planData.steps
-            .filter((step): step is NonNullable<typeof step> => step != null)
-            .map((step, index) => ({
-                stepId: step.step_id || `step-${index + 1}`,
-                stepNumber: step.step_number || index + 1,
-                title: step.title || `Step ${index + 1}`,
-                description: step.description,
-                status: PlanStepStatus.PENDING
-            }));
-    }
-
-    /**
-     * Validate plan created event data with strict checks
-     */
-    private validatePlanCreatedData(data: unknown): PlanCreatedEventData | null {
-        if (!data || typeof data !== 'object') {
-            console.warn('Plan created data is not an object');
-            return null;
-        }
-
-        const planData = data as Record<string, unknown>;
-
-        // Validate required fields
-        if (!planData.plan_id || typeof planData.plan_id !== 'string' || planData.plan_id.trim().length === 0) {
-            console.warn('Missing or invalid plan_id in plan data');
-            return null;
-        }
-
-        if (!planData.title || typeof planData.title !== 'string' || planData.title.trim().length === 0) {
-            console.warn('Missing or invalid title in plan data');
-            return null;
-        }
-
-        // Validate size limits
-        if (planData.title.length > PLAN_CONFIG.MAX_PLAN_TITLE_LENGTH) {
-            console.warn(`Plan title exceeds maximum length of ${PLAN_CONFIG.MAX_PLAN_TITLE_LENGTH} characters`);
-            return null;
-        }
-
-        if (planData.description && typeof planData.description === 'string') {
-            if (planData.description.length > PLAN_CONFIG.MAX_PLAN_DESCRIPTION_LENGTH) {
-                console.warn(`Plan description exceeds maximum length of ${PLAN_CONFIG.MAX_PLAN_DESCRIPTION_LENGTH} characters`);
-                return null;
-            }
-        }
-
-        // Validate optional fields
-        const validated: PlanCreatedEventData = {
-            plan_id: planData.plan_id.trim(),
-            title: planData.title.trim()
-        };
-
-        if (planData.description && typeof planData.description === 'string') {
-            validated.description = planData.description.trim();
-        }
-
-        if (Array.isArray(planData.steps)) {
-            // Check plan size limits
-            if (planData.steps.length > PLAN_CONFIG.MAX_PLAN_STEPS) {
-                console.warn(`Plan exceeds maximum steps limit of ${PLAN_CONFIG.MAX_PLAN_STEPS}`);
-                return null;
-            }
-
-            validated.steps = planData.steps
-                .filter(step => step != null && typeof step === 'object')
-                .map(step => ({
-                    step_id: typeof step === 'object' && step.step_id ? String(step.step_id) : undefined,
-                    step_number: typeof step === 'object' && step.step_number ? Number(step.step_number) : undefined,
-                    title: typeof step === 'object' && step.title ? String(step.title) : undefined,
-                    description: typeof step === 'object' && step.description ? String(step.description) : undefined
+        
+        // Old format: steps array with step objects
+        if (planData.steps && Array.isArray(planData.steps)) {
+            return planData.steps
+                .filter((step): step is NonNullable<typeof step> => step != null)
+                .map((step, index) => ({
+                    stepId: step.step_id || `step-${index + 1}`,
+                    stepNumber: step.step_number || index + 1,
+                    title: step.title || `Step ${index + 1}`,
+                    description: step.description,
+                    status: PlanStepStatus.PENDING
                 }));
         }
 
-        return validated;
+        console.warn('No valid steps array found in plan data');
+        return [];
     }
 
     /**
-     * Validate plan step event data with strict checks
+     * Validate plan created event data using validation utilities
+     */
+    private validatePlanCreatedData(data: unknown): PlanCreatedEventData | null {
+        const validation = PlanValidator.validatePlanCreatedData(data);
+
+        if (!validation.isValid) {
+            console.warn('Plan creation validation failed:', validation.errors.join(', '));
+            return null;
+        }
+
+        return validation.data || null;
+    }
+
+    /**
+     * Validate plan step event data using validation utilities
      */
     private validatePlanStepData(data: unknown): PlanStepEventData | null {
-        if (!data || typeof data !== 'object') {
-            console.warn('Plan step data is not an object');
+        const validation = PlanValidator.validatePlanStepData(data);
+
+        if (!validation.isValid) {
+            console.warn('Plan step validation failed:', validation.errors.join(', '));
             return null;
         }
 
-        const stepData = data as Record<string, unknown>;
-        const validated: PlanStepEventData = {};
-
-        // step_id is required for proper step tracking
-        if (!stepData.step_id || typeof stepData.step_id !== 'string' || stepData.step_id.trim().length === 0) {
-            console.warn('Missing or invalid step_id in plan step data');
-            return null;
-        }
-        validated.step_id = stepData.step_id.trim();
-
-        // step_number is optional but must be positive if provided
-        if (stepData.step_number !== undefined) {
-            if (typeof stepData.step_number !== 'number' || stepData.step_number <= 0 || !Number.isInteger(stepData.step_number)) {
-                console.warn('Invalid step_number in plan step data - must be positive integer');
-                return null;
-            }
-            validated.step_number = stepData.step_number;
-        }
-
-        // title validation with size limits
-        if (stepData.title !== undefined) {
-            if (typeof stepData.title !== 'string' || stepData.title.trim().length === 0) {
-                console.warn('Invalid title in plan step data - must be non-empty string');
-                return null;
-            }
-            if (stepData.title.length > PLAN_CONFIG.MAX_STEP_TITLE_LENGTH) {
-                console.warn(`Step title exceeds maximum length of ${PLAN_CONFIG.MAX_STEP_TITLE_LENGTH} characters`);
-                return null;
-            }
-            validated.title = stepData.title.trim();
-        }
-
-        // description validation with size limits
-        if (stepData.description !== undefined) {
-            if (typeof stepData.description !== 'string') {
-                console.warn('Invalid description in plan step data - must be string');
-                return null;
-            }
-            if (stepData.description.length > PLAN_CONFIG.MAX_STEP_DESCRIPTION_LENGTH) {
-                console.warn(`Step description exceeds maximum length of ${PLAN_CONFIG.MAX_STEP_DESCRIPTION_LENGTH} characters`);
-                return null;
-            }
-            validated.description = stepData.description.trim();
-        }
-
-        // result validation
-        if (stepData.result !== undefined) {
-            if (typeof stepData.result !== 'string') {
-                console.warn('Invalid result in plan step data - must be string');
-                return null;
-            }
-            validated.result = stepData.result;
-        }
-
-        if (stepData.error && typeof stepData.error === 'string') {
-            validated.error = stepData.error;
-        }
-
-        if (typeof stepData.success === 'boolean') {
-            validated.success = stepData.success;
-        }
-
-        if (stepData.plan_id && typeof stepData.plan_id === 'string') {
-            validated.plan_id = stepData.plan_id;
-        }
-
-        if (stepData.reason && typeof stepData.reason === 'string') {
-            validated.reason = stepData.reason;
-        }
-
-        return validated;
+        return validation.data || null;
     }
 
     /**
