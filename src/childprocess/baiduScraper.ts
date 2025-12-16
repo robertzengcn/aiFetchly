@@ -137,7 +137,7 @@ export class BaiduScraper extends SearchScrape {
 
         this.last_response = await this.page.goto(startUrl, {
             waitUntil: "networkidle2",
-            timeout: 60000
+            timeout: 100000
         });
 
         // await this.page.waitForSelector('textarea[name="q"]', { timeout: this.STANDARD_TIMEOUT });
