@@ -56,6 +56,7 @@ interface ContinueRequestData {
     conversation_id: string;
     tool_results: ToolExecutionResult[];
     client_tools?: ToolFunction[];
+    thread_id?: string;
 }
 
 /**
@@ -324,11 +325,13 @@ export class AiChatApi {
         let currentEvent: Partial<StreamEvent> = {};
 
         try {
-            while (true) {
+            let streamActive = true;
+            while (streamActive) {
                 const { done, value } = await reader.read();
-                
+
                 if (done) {
-                    break;
+                    streamActive = false;
+                    continue;
                 }
 
                 buffer += decoder.decode(value, { stream: true });
@@ -554,7 +557,8 @@ export class AiChatApi {
         conversationId: string,
         toolResults: ToolExecutionResult[],
         onEvent: (event: StreamEvent) => void,
-        clientTools?: ToolFunction[]
+        clientTools?: ToolFunction[],
+        threadId?: string
     ): Promise<void> {
         const data: ContinueRequestData = {
             conversation_id: conversationId,
@@ -562,6 +566,9 @@ export class AiChatApi {
         };
         if (clientTools && clientTools.length > 0) {
             data.client_tools = clientTools;
+        }
+        if (threadId) {
+            data.thread_id = threadId;
         }
 
         const response = await this._httpClient.postStream('/api/ai/ask/continue', data);
@@ -580,9 +587,13 @@ export class AiChatApi {
         let currentEvent: Partial<StreamEvent> = {};
 
         try {
-            while (true) {
+            let streamActive = true;
+            while (streamActive) {
                 const { done, value } = await reader.read();
-                if (done) break;
+                if (done) {
+                    streamActive = false;
+                    continue;
+                }
 
                 buffer += decoder.decode(value, { stream: true });
                 const lines = buffer.split('\n');

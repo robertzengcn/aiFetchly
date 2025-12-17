@@ -15,7 +15,7 @@ import {
 } from '@/config/channellist';
 import { AIChatModule } from '@/modules/AIChatModule';
 import { AiChatApi } from '@/api/aiChatApi';
-import { AVAILABLE_TOOL_FUNCTIONS } from '@/config/aiTools.config';
+import { getAvailableToolFunctions } from '@/config/aiTools.config';
 import { ToolExecutionService } from './ToolExecutionService';
 import { ToolExecutor } from './ToolExecutor';
 import { MessageType } from '@/entityTypes/commonType';
@@ -68,6 +68,7 @@ export interface StreamState {
     aiChatApi: AiChatApi;
     // Plan execute agent state
     currentPlan: Plan | null;
+    planThreadId?: string;
 }
 
 /**
@@ -263,7 +264,7 @@ export class StreamEventProcessor {
             this.event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(resultChunk));
 
             // Send tool result back to AI server to continue the stream
-            await this.sendToolResultToAI(toolId, toolName, toolResult, toolStartMs);
+            await this.sendToolResultToAI(toolId, toolName, toolResult, toolStartMs, this.state.planThreadId);
 
             // Remove tool from pending set
             if (toolId) {
@@ -272,7 +273,7 @@ export class StreamEventProcessor {
                 this.sendDeferredCompletionIfReady();
             }
 
-        } catch (error) {
+        }catch (error) {
             console.error(`Error executing tool ${toolName}:`, error);
             const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
             
@@ -323,7 +324,8 @@ export class StreamEventProcessor {
         toolId: string,
         toolName: string,
         toolResult: Record<string, unknown>,
-        toolStartMs: number
+        toolStartMs: number,
+        threadId?: string
     ): Promise<void> {
         try {
             const successFlag = typeof (toolResult as { success?: unknown }).success === 'boolean'
@@ -345,12 +347,16 @@ export class StreamEventProcessor {
                 execution_time_ms: execMs
             }];
 
+            // Get available tools (static + MCP)
+            const availableTools = await getAvailableToolFunctions();
+
             // Continue the stream with tool results
             await this.state.aiChatApi.streamContinueWithToolResults(
                 this.state.streamConversationId,
                 aiToolResult,
                 (streamEvent: StreamEvent) => this.processEvent(streamEvent),
-                AVAILABLE_TOOL_FUNCTIONS
+                availableTools,
+                threadId
             );
         } catch (sendErr) {
             console.error('Failed to send tool result to AI server:', sendErr);
@@ -408,7 +414,7 @@ export class StreamEventProcessor {
         // Send error tool result back to AI server to continue the stream
         // This allows the AI to respond appropriately to the failure
         try {
-            await this.sendToolResultToAI(toolId, toolName, errorToolResult, toolStartMs);
+            await this.sendToolResultToAI(toolId, toolName, errorToolResult, toolStartMs, this.state.planThreadId);
         } catch (sendErr) {
             console.error('Failed to send error tool result to AI server:', sendErr);
         }
@@ -810,11 +816,15 @@ export class StreamEventProcessor {
             }
 
             const plan = this.buildPlanFromData(planData);
+            const threadId = (planData as { thread_id?: unknown }).thread_id && typeof (planData as { thread_id?: unknown }).thread_id === 'string'
+                ? (planData as { thread_id: string }).thread_id
+                : (planDataInput as { thread_id?: string; threadId?: string }).thread_id || (planDataInput as { threadId?: string }).threadId;
+            this.state.planThreadId = threadId;
             this.storePlanInState(plan);
 
             console.log(`Plan created: ${plan.title} with ${plan.steps.length} steps`);
 
-            this.savePlanCreatedMessage(plan);
+            this.savePlanCreatedMessage(plan, threadId || undefined);
             this.sendPlanCreatedChunk(plan);
         } catch (error) {
             console.error('Error handling plan created event:', error);
@@ -864,15 +874,21 @@ export class StreamEventProcessor {
 
     /**
      * Save plan created message to database
+     * Note: Structure must match UI expectations: message.metadata.plan.{title, description, steps}
      */
-    private savePlanCreatedMessage(plan: Plan): void {
-        this.savePlanMessage(plan.planId, MessageType.PLAN_CREATED, {
-            planId: plan.planId,
+    private savePlanCreatedMessage(plan: Plan, threadId?: string): void {
+        // Wrap plan data in 'plan' property to match UI template expectations
+        // UI expects: message.metadata.plan.title, message.metadata.plan.description, message.metadata.plan.steps
+        const planData = {
             title: plan.title,
             description: plan.description,
-            reasoning: plan.description, // Reasoning is stored as description
-            totalSteps: plan.steps.length,
             steps: plan.steps.map(s => ({ stepId: s.stepId, stepNumber: s.stepNumber, title: s.title }))
+        };
+        
+        this.savePlanMessage(plan.planId, MessageType.PLAN_CREATED, {
+            plan: planData,
+            planId: plan.planId,
+            threadId
         }).catch(err => console.error('Failed to save plan created message:', err));
     }
 
@@ -887,6 +903,7 @@ export class StreamEventProcessor {
             eventType: StreamEventType.PLAN_CREATED,
             conversationId: this.state.streamConversationId,
             planId: plan.planId,
+            threadId: this.state.planThreadId,
             // Only send essential plan data - UI can reconstruct full plan if needed
             plan: {
                 planId: plan.planId,
@@ -982,7 +999,7 @@ export class StreamEventProcessor {
      * Extract step information from validated step data
      */
     private extractStepInfo(stepData: PlanStepEventData) {
-        const stepId = stepData.step_id!;
+        const stepId = stepData.step_id || '';
         const stepNumber = stepData.step_number || 1;
         const title = stepData.title || `Step ${stepNumber}`;
         const result = stepData.result;
