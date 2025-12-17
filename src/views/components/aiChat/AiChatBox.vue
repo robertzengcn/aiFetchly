@@ -161,6 +161,7 @@ class="message-bubble" :class="{
                     <v-icon size="small" class="mr-1">mdi-format-list-bulleted</v-icon>
                     <strong>Search Results Summary</strong>
                   </div>
+                  <!-- eslint-disable-next-line vue/no-v-html -->
                   <div class="summary-content" v-html="formatMessage(message.metadata.summary as string)"></div>
                 </div>
                 <details class="tool-result-details">
@@ -298,6 +299,7 @@ class="message-bubble" :class="{
                   <v-icon size="small">{{ copiedMessageId === message.id ? 'mdi-check' : 'mdi-content-copy' }}</v-icon>
                 </v-btn>
               </div>
+              <!-- eslint-disable-next-line vue/no-v-html -->
               <div class="message-text" v-html="formatMessage(message.content)"></div>
               <div class="message-timestamp" :title="formatFullTimestamp(message.timestamp)">
                 <v-icon size="x-small" class="mr-1">mdi-clock-outline</v-icon>
@@ -596,7 +598,7 @@ class="message-bubble" :class="{
 <script setup lang="ts">
 import { ref, computed, onMounted, nextTick, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { sendChatMessage, streamChatMessage, getChatHistory, clearChatHistory, getConversations, ConversationMetadata } from '@/views/api/aiChat';
+import { streamChatMessage, getChatHistory, clearChatHistory, getConversations, ConversationMetadata } from '@/views/api/aiChat';
 import { ChatMessage, ChatStreamChunk, Plan, PlanStep, PlanStepStatus } from '@/entityTypes/commonType';
 import { MessageType } from '@/entityTypes/commonType';
 import MCPToolManager from './MCPToolManager.vue';
@@ -634,7 +636,7 @@ const props = withDefaults(defineProps<Props>(), {
   visible: false
 });
 
-// Emits
+// Emits - eslint-disable-next-line @typescript-eslint/no-unused-vars
 const emit = defineEmits<{
   close: [];
 }>();
@@ -699,6 +701,7 @@ const allStepsCompleted = computed(() => {
   );
 });
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const activeStepIndex = computed(() => {
   if (!currentPlan.value) return -1;
   return currentPlan.value.steps.findIndex(s => s.status === PlanStepStatus.IN_PROGRESS);
@@ -777,7 +780,50 @@ async function loadChatHistory() {
     if(!conversationId.value) return;
     const response = await getChatHistory(conversationId.value);
     if (response && response.data) {
-      messages.value = response.data.messages;
+      // Transform messages to normalize plan_created message structure
+      const transformedMessages = response.data.messages.map((message: ChatMessage) => {
+        // Handle plan_created messages that might be in old format or have content as JSON
+        if (message.messageType === MessageType.PLAN_CREATED) {
+          let normalizedMetadata = message.metadata || {};
+          
+          // If content is a JSON string, try to parse it
+          if (message.content && typeof message.content === 'string' && message.content.trim().startsWith('{')) {
+            try {
+              const parsedContent = JSON.parse(message.content);
+              // If parsed content has plan fields, merge with metadata
+              if (parsedContent.title || parsedContent.planId || parsedContent.steps) {
+                normalizedMetadata = { ...normalizedMetadata, ...parsedContent };
+              }
+            } catch (e) {
+              // Content is not valid JSON, ignore
+            }
+          }
+          
+          // Transform old format (plan data at metadata root) to new format (metadata.plan)
+          // Old format: metadata = { title, description, steps, planId, ... }
+          // New format: metadata = { plan: { title, description, steps }, planId }
+          if (!normalizedMetadata.plan && (normalizedMetadata.title || normalizedMetadata.steps)) {
+            normalizedMetadata = {
+              plan: {
+                title: normalizedMetadata.title || 'Execution Plan',
+                description: normalizedMetadata.description || normalizedMetadata.reasoning,
+                steps: normalizedMetadata.steps || []
+              },
+              planId: normalizedMetadata.planId,
+              threadId: normalizedMetadata.threadId
+            };
+          }
+          
+          return {
+            ...message,
+            metadata: normalizedMetadata
+          };
+        }
+        
+        return message;
+      });
+      
+      messages.value = transformedMessages;
       
       // Update conversationId if it was returned and we didn't have one
       if (response.data.conversationId && !conversationId.value) {
@@ -1036,7 +1082,7 @@ async function handleSendMessage() {
             isExecutingTool.value = false;
             if (chunk.toolResult) {
               toolResult.value = chunk.toolResult;
-              showToolResult.value = true;
+              showToolResult.value = false;
 
               // Add tool result message to chat history
               const toolResultMessage: ChatMessage = {
@@ -1078,7 +1124,7 @@ async function handleSendMessage() {
               // Update conversationId for all messages with 'pending' conversationId
               messages.value.forEach(msg => {
                 if (msg.conversationId === StreamState.PENDING) {
-                  msg.conversationId = chunk.conversationId!;
+                  msg.conversationId = chunk.conversationId || '';
                 }
               });
             // Push an empty assistant message as the last message at conversation start
@@ -1305,7 +1351,8 @@ function handlePlanCreated(chunk: ChatStreamChunk): void {
       messageType: MessageType.PLAN_CREATED,
       metadata: {
         plan: chunk.plan,
-        planId: chunk.planId
+        planId: chunk.planId,
+        threadId: chunk.threadId
       }
     };
     messages.value.push(planMessage);

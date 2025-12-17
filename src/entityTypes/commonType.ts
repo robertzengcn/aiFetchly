@@ -95,13 +95,13 @@ export type Header = {
     sortable: boolean;
     key: string;
     width?: string;
-    value?:any;
+    value?: unknown;
 };
 export type VslotHeader = {
     step: number;
-    title:string
-    rules?:	any;
-     valid: boolean
+    title: string;
+    rules?: Array<unknown>;
+    valid: boolean;
 }
 export enum TaskStatus {
     Notstart = 0,
@@ -254,6 +254,8 @@ export interface PlanCreatedEventData {
     }>;
     // New format: array of step strings like "Step 1: Use the 'scrape_urls_from_google' tool..."
     plan?: string[];
+    // Execution thread identifier for tool result continuation
+    thread_id?: string;
 }
 
 /**
@@ -320,6 +322,7 @@ export interface ChatStreamChunk {
     planStep?: PlanStep;
     planId?: string;
     stepId?: string;
+    threadId?: string;
     pauseReason?: string;
     resumeReason?: string;
     // Optimized plan fields (reduced payload)
@@ -349,7 +352,7 @@ export interface ChatApiResponse {
 
 export interface ConfigurationResponse {
     success: boolean;
-    data: any;
+    data: Record<string, unknown>;
     metadata?: {
         version: string;
         lastUpdated: string;
@@ -362,7 +365,7 @@ export interface ConfigurationResponse {
 export interface ConfigurationError {
     code: string;
     message: string;
-    details?: any;
+    details?: Record<string, unknown>;
 }
 
 // File Upload Response Types
