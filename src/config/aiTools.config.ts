@@ -90,8 +90,8 @@ const STATIC_TOOL_FUNCTIONS: ToolFunction[] = [
     },
     {
         type: "function",
-        name: 'extract_emails_from_results',
-        description: 'Extract email addresses from search results or web pages. Can parse HTML content or plain text to find email addresses.',
+        name: 'extract_emails_from_urls',
+        description: 'Extract email addresses from url or web pages. Can parse HTML content or plain text to find email addresses.',
         parameters: {
             type: 'object',
             properties: {

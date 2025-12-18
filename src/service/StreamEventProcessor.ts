@@ -1094,10 +1094,20 @@ export class StreamEventProcessor {
      */
     private handlePlanExecutePauseEvent(streamEvent: StreamEvent): void {
         try {
-            const pauseData = this.validatePlanControlData(streamEvent.data.content);
+            // Try to get control data from data.data first, then fall back to data.content
+            const controlDataInput = streamEvent.data.data && typeof streamEvent.data.data === 'object'
+                ? streamEvent.data.data
+                : streamEvent.data.content;
+            
+            const pauseData = this.validatePlanControlData(controlDataInput);
+
+            // Extract content message if available
+            const contentMessage = typeof streamEvent.data.content === 'string'
+                ? streamEvent.data.content
+                : 'Execution paused';
 
             const planId = pauseData?.plan_id || this.state.currentPlan?.planId;
-            const pauseReason = pauseData?.reason || 'Execution paused';
+            const pauseReason = pauseData?.reason || contentMessage;
 
             // Update plan status
             if (this.state.currentPlan) {
@@ -1128,10 +1138,20 @@ export class StreamEventProcessor {
      */
     private handlePlanExecuteResumeEvent(streamEvent: StreamEvent): void {
         try {
-            const resumeData = this.validatePlanControlData(streamEvent.data.content);
+            // Try to get control data from data.data first, then fall back to data.content
+            const controlDataInput = streamEvent.data.data && typeof streamEvent.data.data === 'object'
+                ? streamEvent.data.data
+                : streamEvent.data.content;
+            
+            const resumeData = this.validatePlanControlData(controlDataInput);
+
+            // Extract content message if available
+            const contentMessage = typeof streamEvent.data.content === 'string'
+                ? streamEvent.data.content
+                : 'Execution resumed';
 
             const planId = resumeData?.plan_id || this.state.currentPlan?.planId;
-            const resumeReason = resumeData?.reason || 'Execution resumed';
+            const resumeReason = resumeData?.reason || contentMessage;
 
             // Update plan status
             if (this.state.currentPlan) {
