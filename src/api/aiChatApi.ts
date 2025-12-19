@@ -56,6 +56,7 @@ interface ContinueRequestData {
     conversation_id: string;
     tool_results: ToolExecutionResult[];
     client_tools?: ToolFunction[];
+    thread_id?: string;
 }
 
 /**
@@ -99,7 +100,13 @@ export enum StreamEventType {
     DONE = "done",                            // Response completion
     CONVERSATION_START = "conversation_start", // Session initialization
     CONVERSATION_END = "conversation_end",    // Conversation termination
-    PONG = "pong"                             // Keep alive
+    PONG = "pong",                            // Keep alive
+    // Plan execute agent events
+    PLAN_CREATED = "plan_created",            // Plan has been created
+    PLAN_STEP_START = "plan_step_start",      // A plan step has started
+    PLAN_STEP_COMPLETE = "plan_step_complete", // A plan step has completed
+    PLAN_EXECUTE_PAUSE = "plan_execute_pause", // Plan execution paused
+    PLAN_EXECUTE_RESUME = "plan_execute_resume" // Plan execution resumed
 }
 
 /**
@@ -318,11 +325,13 @@ export class AiChatApi {
         let currentEvent: Partial<StreamEvent> = {};
 
         try {
-            while (true) {
+            let streamActive = true;
+            while (streamActive) {
                 const { done, value } = await reader.read();
-                
+
                 if (done) {
-                    break;
+                    streamActive = false;
+                    continue;
                 }
 
                 buffer += decoder.decode(value, { stream: true });
@@ -337,8 +346,14 @@ export class AiChatApi {
                     if (!trimmedLine) {
                         // Empty line signals end of event in SSE format
                         if (currentEvent.event && currentEvent.data) {
-                            onEvent(currentEvent as StreamEvent);
-                            currentEvent = {};
+                            // Create a copy of the event to avoid reference issues
+                            const eventToProcess: StreamEvent = {
+                                event: currentEvent.event,
+                                data: currentEvent.data
+                            };
+                            // Reset immediately before calling onEvent to prevent multiple empty lines from re-processing the same event
+                            currentEvent = { event: undefined, data: undefined };
+                            onEvent(eventToProcess);
                         }
                         continue;
                     }
@@ -371,21 +386,17 @@ export class AiChatApi {
                         }
                         
                         try {
-                            // Convert Python-style dict to JSON if needed
-                            // const jsonStr = dataStr.startsWith('{') && dataStr.includes("'") 
-                            //     ? pythonDictToJson(dataStr) 
-                            //     : dataStr;
                             currentEvent.data = JSON.parse(dataStr);
                         } catch (error) {
                             console.error('Error parsing event data:', error, 'Data:', dataStr);
-                            try{
-                            const jsonStr = dataStr.startsWith('{') && dataStr.includes("'") 
-                            ? pythonDictToJson(dataStr) 
-                            : dataStr;
-                            currentEvent.data = JSON.parse(jsonStr);
-                        } catch (error) {
-                            console.error('Error parsing event data:', error, 'Data:', dataStr);
-                        }
+                            try {
+                                const jsonStr = dataStr.startsWith('{') && dataStr.includes("'") 
+                                    ? pythonDictToJson(dataStr) 
+                                    : dataStr;
+                                currentEvent.data = JSON.parse(jsonStr);
+                            } catch (fallbackError) {
+                                console.error('Error parsing event data with fallback:', fallbackError, 'Data:', dataStr);
+                            }
                         }
                     }
                 }
@@ -548,7 +559,8 @@ export class AiChatApi {
         conversationId: string,
         toolResults: ToolExecutionResult[],
         onEvent: (event: StreamEvent) => void,
-        clientTools?: ToolFunction[]
+        clientTools?: ToolFunction[],
+        threadId?: string
     ): Promise<void> {
         const data: ContinueRequestData = {
             conversation_id: conversationId,
@@ -556,6 +568,9 @@ export class AiChatApi {
         };
         if (clientTools && clientTools.length > 0) {
             data.client_tools = clientTools;
+        }
+        if (threadId) {
+            data.thread_id = threadId;
         }
 
         const response = await this._httpClient.postStream('/api/ai/ask/continue', data);
@@ -574,9 +589,13 @@ export class AiChatApi {
         let currentEvent: Partial<StreamEvent> = {};
 
         try {
-            while (true) {
+            let streamActive = true;
+            while (streamActive) {
                 const { done, value } = await reader.read();
-                if (done) break;
+                if (done) {
+                    streamActive = false;
+                    continue;
+                }
 
                 buffer += decoder.decode(value, { stream: true });
                 const lines = buffer.split('\n');

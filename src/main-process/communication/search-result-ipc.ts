@@ -1,23 +1,13 @@
-import { ipcMain } from 'electron';
+import { ipcMain, IpcMainInvokeEvent } from 'electron';
 import { ANALYZE_WEBSITE, ANALYZE_WEBSITE_PROGRESS } from '@/config/channellist';
-import { WebsiteAnalysisQueue } from '@/modules/WebsiteAnalysisQueue';
-import { SearchResultModule } from '@/modules/SearchResultModule';
+import { WebsiteAnalysisService } from '@/service/WebsiteAnalysisService';
 import { CommonMessage } from '@/entityTypes/commonType';
-import { v4 as uuidv4 } from 'uuid';
 
 interface AnalyzeWebsiteBatchRequest {
     items: Array<{
         resultId: number;
         url: string;
     }>;
-    clientBusiness: string;
-    temperature?: number;
-}
-
-interface AnalysisJob {
-    id: string;
-    resultId: number;
-    url: string;
     clientBusiness: string;
     temperature?: number;
 }
@@ -36,7 +26,7 @@ export function registerSearchResultIpcHandlers(): void {
      * Handle batch website analysis request
      * Uses queue system to process multiple URLs concurrently
      */
-    ipcMain.handle(ANALYZE_WEBSITE, async (event, data: string | AnalyzeWebsiteBatchRequest): Promise<CommonMessage<{
+    ipcMain.handle(ANALYZE_WEBSITE, async (event: IpcMainInvokeEvent, data: string | AnalyzeWebsiteBatchRequest): Promise<CommonMessage<{
         batchId: string;
         total: number;
     } | null>> => {
@@ -61,71 +51,46 @@ export function registerSearchResultIpcHandlers(): void {
                 };
             }
 
-            // Validate URLs
-            const validItems: Array<{ resultId: number; url: string }> = [];
-            for (const item of requestData.items) {
-                if (!item.resultId || !item.url) {
-                    continue;
-                }
-                try {
-                    new URL(item.url);
-                    validItems.push(item);
-                } catch {
-                    // Invalid URL, skip
-                    continue;
-                }
-            }
+            // Extract result IDs from items
+            const resultIds = requestData.items
+                .map(item => item.resultId)
+                .filter((id): id is number => typeof id === 'number' && id > 0);
 
-            if (validItems.length === 0) {
+            if (resultIds.length === 0) {
                 return {
                     status: false,
-                    msg: 'No valid URLs found in items array',
+                    msg: 'No valid result IDs found in items array',
                     data: null
                 };
             }
 
-            // Create jobs for queue
-            const jobs: AnalysisJob[] = validItems.map(item => ({
-                id: uuidv4(),
-                resultId: item.resultId,
-                url: item.url,
-                clientBusiness: requestData.clientBusiness,
-                temperature: requestData.temperature ?? 0.7
-            }));
-
-            // Get queue instance
-            const queue = WebsiteAnalysisQueue.getInstance();
-
-            // Generate batch ID
-            const batchId = `batch-${uuidv4()}`;
-
-            // Set status to 'analyzing' for all items when batch starts
-            const searchResultModule = new SearchResultModule();
-            const resultIds = validItems.map(item => item.resultId);
-            try {
-                await searchResultModule.updateAiAnalysisStatusBatch(resultIds, 'analyzing');
-            } catch (error) {
-                console.error('Failed to update status to analyzing:', error);
-                // Continue even if status update fails
-            }
-
             // Set up progress callback to send updates via IPC
+            let batchId: string | null = null;
             const progressCallback = (progress: QueueProgress) => {
-                event.sender.send(ANALYZE_WEBSITE_PROGRESS, JSON.stringify({
-                    batchId: batchId,
-                    ...progress
-                }));
+                if (batchId) {
+                    event.sender.send(ANALYZE_WEBSITE_PROGRESS, JSON.stringify({
+                        batchId: batchId,
+                        ...progress
+                    }));
+                }
             };
 
-            // Add batch to queue
-            await queue.addBatch(jobs, progressCallback);
+            // Start batch analysis using service
+            const batchInfo = await WebsiteAnalysisService.startBatchAnalysis({
+                resultIds,
+                clientBusiness: requestData.clientBusiness,
+                temperature: requestData.temperature,
+                onProgress: progressCallback
+            });
+
+            batchId = batchInfo.batchId;
 
             return {
                 status: true,
                 msg: 'Batch analysis started',
                 data: {
-                    batchId,
-                    total: validItems.length
+                    batchId: batchInfo.batchId,
+                    total: batchInfo.total
                 }
             };
         } catch (error) {

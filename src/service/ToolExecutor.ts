@@ -8,15 +8,99 @@ import { formatYellowPagesResultsForLLM } from '@/main-process/communication/ai-
 import { MCPToolService } from '@/service/MCPToolService';
 import { EmailSearchTaskModule } from '@/modules/EmailSearchTaskModule';
 import { EmailExtractionTypes } from '@/config/emailextraction';
+import { WebsiteAnalysisService } from '@/service/WebsiteAnalysisService';
+import { RateLimiter, RateLimitConfig } from './RateLimiter';
+
+/**
+ * Rate limiting configuration for tool execution
+ */
+const RATE_LIMIT_CONFIG = {
+    websiteAnalysis: {
+        maxPerMinute: 10,
+        maxConcurrent: 3,
+        cooldownMs: 1000
+    },
+    emailExtraction: {
+        maxPerMinute: 20,
+        maxConcurrent: 5,
+        cooldownMs: 500
+    },
+    yellowPages: {
+        maxPerMinute: 15,
+        maxConcurrent: 3,
+        cooldownMs: 800
+    },
+    default: {
+        maxPerMinute: 30,
+        maxConcurrent: 5,
+        cooldownMs: 200
+    }
+} as const;
+
+/**
+ * Rate limiter instances for different tool types
+ */
+class RateLimiterManager {
+    private static limiters = new Map<string, RateLimiter>();
+
+    static getLimiter(toolName: string): RateLimiter {
+        if (!this.limiters.has(toolName)) {
+            const config = this.getRateLimitConfig(toolName);
+            this.limiters.set(toolName, new RateLimiter(config));
+        }
+        return this.limiters.get(toolName)!;
+    }
+
+    private static getRateLimitConfig(toolName: string): RateLimitConfig {
+        if (toolName.includes('website') || toolName.includes('analyze')) {
+            return RATE_LIMIT_CONFIG.websiteAnalysis;
+        } else if (toolName.includes('email') || toolName.includes('extract')) {
+            return RATE_LIMIT_CONFIG.emailExtraction;
+        } else if (toolName.includes('yellow') || toolName.includes('yellowpages')) {
+            return RATE_LIMIT_CONFIG.yellowPages;
+        } else {
+            return RATE_LIMIT_CONFIG.default;
+        }
+    }
+
+    static getStatus(toolName: string) {
+        return this.getLimiter(toolName).getStatus();
+    }
+}
 
 /**
  * Execute tools called by the AI
  */
 export class ToolExecutor {
     /**
-     * Execute a tool by name
+     * Execute a tool by name with rate limiting
      */
     static async execute(
+        toolName: string,
+        toolParams: Record<string, unknown>,
+        conversationId: string
+    ): Promise<Record<string, unknown>> {
+        const rateLimiter = RateLimiterManager.getLimiter(toolName);
+
+        try {
+            // Acquire rate limit slot
+            await rateLimiter.acquire();
+
+            // Check rate limit status before execution
+            const status = rateLimiter.getStatus();
+            console.log(`Executing tool '${toolName}' - Rate limit status:`, status);
+
+            return await this.executeInternal(toolName, toolParams, conversationId);
+        } finally {
+            // Always release the rate limit slot
+            rateLimiter.release();
+        }
+    }
+
+    /**
+     * Internal execution method without rate limiting
+     */
+    private static async executeInternal(
         toolName: string,
         toolParams: Record<string, unknown>,
         conversationId: string
@@ -39,8 +123,14 @@ export class ToolExecutor {
             case 'get_available_yellow_pages_platforms':
                 return await this.executeGetYellowPagesPlatforms(toolParams);
 
-            case 'extract_emails_from_results':
+            case 'extract_emails_from_urls':
                 return await this.executeEmailExtraction(toolParams);
+
+            case 'analyze_website_batch':
+                return await this.executeWebsiteBatchAnalysis(toolParams);
+
+            case 'analyze_websites':
+                return await this.executeWebsiteDirectAnalysis(toolParams);
 
             default:
                 return {
@@ -439,6 +529,165 @@ export class ToolExecutor {
                 recordTime: r.recordTime
             })),
             urlEmailMap: urlEmailMap
+        };
+    }
+
+    /**
+     * Execute website batch analysis
+     */
+    private static async executeWebsiteBatchAnalysis(
+        toolParams: Record<string, unknown>
+    ): Promise<Record<string, unknown>> {
+        // Extract and validate parameters
+        const resultIds = Array.isArray(toolParams.result_ids) 
+            ? toolParams.result_ids.filter((id): id is number => typeof id === 'number' && id > 0)
+            : [];
+        
+        const clientBusiness = typeof toolParams.client_business === 'string' 
+            ? toolParams.client_business.trim() 
+            : '';
+        
+        const temperature = typeof toolParams.temperature === 'number'
+            ? Math.max(0, Math.min(1, toolParams.temperature))
+            : 0.7;
+
+        if (resultIds.length === 0) {
+            throw new Error('result_ids parameter is required and must be a non-empty array of numbers');
+        }
+
+        if (!clientBusiness) {
+            throw new Error('client_business parameter is required and must be a non-empty string');
+        }
+
+        // Start batch analysis
+        const batchInfo = await WebsiteAnalysisService.startBatchAnalysis({
+            resultIds,
+            clientBusiness,
+            temperature
+        });
+
+        // Wait for completion (max 10 minutes)
+        const results = await WebsiteAnalysisService.waitForBatchCompletion(
+            batchInfo.batchId,
+            resultIds, // Pass result IDs for status checking
+            600000, // 10 minutes
+            2000    // 2 seconds polling interval
+        );
+
+        // Format results for LLM consumption
+        const successful = results.filter(r => r.success);
+        const failed = results.filter(r => !r.success);
+
+        const formattedSummary = results.length > 0
+            ? `Website Batch Analysis Results:\n\n` +
+              `Total analyzed: ${results.length}\n` +
+              `Successful: ${successful.length}\n` +
+              `Failed: ${failed.length}\n\n` +
+              (successful.length > 0 
+                ? `Successful Analyses:\n${successful.map((r, idx) => 
+                    `${idx + 1}. Result ID ${r.resultId}\n   Industry: ${r.industry || 'N/A'}\n   Match Score: ${r.match_score?.toFixed(2) || 'N/A'}\n   Reasoning: ${r.reasoning || 'N/A'}`
+                  ).join('\n\n')}\n\n`
+                : '') +
+              (failed.length > 0
+                ? `Failed Analyses:\n${failed.map((r, idx) => 
+                    `${idx + 1}. Result ID ${r.resultId}: ${r.error || 'Unknown error'}`
+                  ).join('\n\n')}`
+                : '')
+            : 'No results to analyze.';
+
+        // Create comprehensive tool result
+        return {
+            success: true,
+            batchId: batchInfo.batchId,
+            totalAnalyzed: results.length,
+            successful: successful.length,
+            failed: failed.length,
+            // Formatted summary for LLM
+            summary: formattedSummary,
+            // Clean structured data
+            results: results.map(r => ({
+                resultId: r.resultId,
+                success: r.success,
+                industry: r.industry,
+                match_score: r.match_score,
+                reasoning: r.reasoning,
+                error: r.error
+            }))
+        };
+    }
+
+    /**
+     * Execute website direct analysis (no database save)
+     */
+    private static async executeWebsiteDirectAnalysis(
+        toolParams: Record<string, unknown>
+    ): Promise<Record<string, unknown>> {
+        // Extract and validate parameters
+        const urls = Array.isArray(toolParams.urls) 
+            ? toolParams.urls.filter((url): url is string => typeof url === 'string' && url.trim().length > 0)
+            : [];
+        
+        const clientBusiness = typeof toolParams.client_business === 'string' 
+            ? toolParams.client_business.trim() 
+            : '';
+        
+        const temperature = typeof toolParams.temperature === 'number'
+            ? Math.max(0, Math.min(1, toolParams.temperature))
+            : 0.7;
+
+        if (urls.length === 0) {
+            throw new Error('urls parameter is required and must be a non-empty array of strings');
+        }
+
+        if (!clientBusiness) {
+            throw new Error('client_business parameter is required and must be a non-empty string');
+        }
+
+        // Analyze websites directly (no database save)
+        const results = await WebsiteAnalysisService.analyzeWebsitesDirectly(
+            urls,
+            clientBusiness,
+            temperature
+        );
+
+        // Format results for LLM consumption
+        const successful = results.filter(r => r.success);
+        const failed = results.filter(r => !r.success);
+
+        const formattedSummary = results.length > 0
+            ? `Website Analysis Results (Not Saved to Database):\n\n` +
+              `Total analyzed: ${results.length}\n` +
+              `Successful: ${successful.length}\n` +
+              `Failed: ${failed.length}\n\n` +
+              (successful.length > 0 
+                ? `Successful Analyses:\n${successful.map((r, idx) => 
+                    `${idx + 1}. ${r.url}\n   Industry: ${r.industry || 'N/A'}\n   Match Score: ${r.match_score?.toFixed(2) || 'N/A'}\n   Reasoning: ${r.reasoning || 'N/A'}`
+                  ).join('\n\n')}\n\n`
+                : '') +
+              (failed.length > 0
+                ? `Failed Analyses:\n${failed.map((r, idx) => 
+                    `${idx + 1}. ${r.url}: ${r.error || 'Unknown error'}`
+                  ).join('\n\n')}`
+                : '')
+            : 'No URLs to analyze.';
+
+        // Create comprehensive tool result
+        return {
+            success: true,
+            totalAnalyzed: results.length,
+            successful: successful.length,
+            failed: failed.length,
+            // Formatted summary for LLM
+            summary: formattedSummary,
+            // Clean structured data
+            results: results.map(r => ({
+                url: r.url,
+                success: r.success,
+                industry: r.industry,
+                match_score: r.match_score,
+                reasoning: r.reasoning,
+                error: r.error
+            }))
         };
     }
 }
