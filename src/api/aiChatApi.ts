@@ -346,8 +346,14 @@ export class AiChatApi {
                     if (!trimmedLine) {
                         // Empty line signals end of event in SSE format
                         if (currentEvent.event && currentEvent.data) {
-                            onEvent(currentEvent as StreamEvent);
+                            // Create a copy of the event to avoid reference issues
+                            const eventToProcess: StreamEvent = {
+                                event: currentEvent.event,
+                                data: currentEvent.data
+                            } as StreamEvent;
+                            // Reset immediately before calling onEvent to prevent multiple empty lines from re-processing the same event
                             currentEvent = {};
+                            onEvent(eventToProcess);
                         }
                         continue;
                     }
@@ -380,21 +386,17 @@ export class AiChatApi {
                         }
                         
                         try {
-                            // Convert Python-style dict to JSON if needed
-                            // const jsonStr = dataStr.startsWith('{') && dataStr.includes("'") 
-                            //     ? pythonDictToJson(dataStr) 
-                            //     : dataStr;
                             currentEvent.data = JSON.parse(dataStr);
                         } catch (error) {
                             console.error('Error parsing event data:', error, 'Data:', dataStr);
-                            try{
-                            const jsonStr = dataStr.startsWith('{') && dataStr.includes("'") 
-                            ? pythonDictToJson(dataStr) 
-                            : dataStr;
-                            currentEvent.data = JSON.parse(jsonStr);
-                        } catch (error) {
-                            console.error('Error parsing event data:', error, 'Data:', dataStr);
-                        }
+                            try {
+                                const jsonStr = dataStr.startsWith('{') && dataStr.includes("'") 
+                                    ? pythonDictToJson(dataStr) 
+                                    : dataStr;
+                                currentEvent.data = JSON.parse(jsonStr);
+                            } catch (fallbackError) {
+                                console.error('Error parsing event data with fallback:', fallbackError, 'Data:', dataStr);
+                            }
                         }
                     }
                 }

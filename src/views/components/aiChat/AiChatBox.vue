@@ -83,7 +83,7 @@
       </div>
 
         <div
-          v-for="message in messages"
+          v-for="message in visibleMessages"
           :key="message.id"
           class="message-wrapper"
           :class="[message.role, message.messageType || MESSAGE_TYPE.MESSAGE]"
@@ -674,6 +674,13 @@ const currentPlanStep = ref<PlanStep | null>(null);
 // Performance optimization: throttle scroll to bottom
 let scrollTimeout: number | null = null;
 
+// Filter out messages with empty content (unless they have a messageType like tool calls, plans, etc.)
+const visibleMessages = computed(() => {
+  return messages.value.filter(message => 
+    message.content?.trim() || message.messageType
+  );
+});
+
 // Computed properties for plan state optimization
 const planProgress = computed(() => {
   if (!currentPlan.value || currentPlan.value.steps.length === 0) {
@@ -1001,7 +1008,7 @@ async function handleSendMessage() {
 
         // Handle different event types
         const eventType = chunk.eventType;
-        console.log('chunk', chunk);
+        // console.log('chunk', chunk);
         switch (eventType) {
           case 'token': {
             console.log('token', chunk);
@@ -1012,13 +1019,19 @@ async function handleSendMessage() {
             // Append token content and display immediately
             assistantContent += chunk.content;
 
-            // Find and update the assistant message
+            // Explanation:
+            // This block ensures that the assistant's message is updated reactively with context being streamed in.
+            // 1. Find the last message in messages.value.
+            // 2. If it's a user message, add a new empty assistant message (for streaming).
+            // 3. Update the latest assistant message's content with the current accumulated streamed content.
+
             let lastIndex = messages.value.length - 1;
-            // console.log('lastIndex', lastIndex);
-            // console.log('messages.value[lastIndex].role', messages.value[lastIndex].role);
-            // console.log('messages.value[lastIndex].id', messages.value[lastIndex].id);
-            // If the last message is 'user', push a new empty assistant message and reset lastIndex
-            if (messages.value[lastIndex].role === 'user') {
+            const lastMessage = messages.value[lastIndex];
+
+            // If the last message is NOT an assistant message OR if it's a plan_execute_resume message,
+            // append a new assistant message so we can stream into it
+            // This handles cases where the last message is from 'user', 'system', 'tool', plan_execute_resume, or any other role
+            if (lastMessage.role !== 'assistant' || lastMessage.messageType === MESSAGE_TYPE.PLAN_EXECUTE_RESUME) {
               const newAssistantMessageId = `assistant-${Date.now()}`;
               const newAssistantMessage: ChatMessage = {
                 id: newAssistantMessageId,
@@ -1028,20 +1041,15 @@ async function handleSendMessage() {
                 conversationId: conversationId.value || StreamState.PENDING
               };
               messages.value.push(newAssistantMessage);
-              lastIndex = messages.value.length - 1;
+              lastIndex = messages.value.length - 1; // Update to point at the new assistant message
             }
-            // console.log('messages.value[lastIndex].role', messages.value[lastIndex].role);
-            // console.log('messages.value[lastIndex].id', messages.value[lastIndex].id);
-            // console.log('assistantMessageId', assistantMessageId);
-            if ( 
-                messages.value[lastIndex].role === 'assistant') {
-              // Replace the entire message object to trigger Vue reactivity
-              // console.log('replay message')
-              messages.value[lastIndex] = {
-                ...messages.value[lastIndex],
-                content: assistantContent
-              };
-            }
+
+            // Update the assistant message's content so Vue can reactively show tokens as they stream in
+            // At this point, lastIndex is guaranteed to point to an assistant message
+            messages.value[lastIndex] = {
+              ...messages.value[lastIndex],
+              content: assistantContent // Replace the content with the accumulated streamed content
+            };
             
             nextTick(() => {
               scrollToBottom();
