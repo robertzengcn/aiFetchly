@@ -382,6 +382,7 @@ export function registerAiChatIpcHandlers(): void {
 
             // Stream message with event handler
             await aiChatApi.streamMessage(chatRequest, (streamEvent: StreamEvent) => {
+               console.log('streamEvent in 385', streamEvent);
                 processStreamEvent(streamEvent);
             });
 

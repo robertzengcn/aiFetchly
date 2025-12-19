@@ -123,7 +123,7 @@ export class ToolExecutor {
             case 'get_available_yellow_pages_platforms':
                 return await this.executeGetYellowPagesPlatforms(toolParams);
 
-            case 'extract_emails_from_results':
+            case 'extract_emails_from_urls':
                 return await this.executeEmailExtraction(toolParams);
 
             case 'analyze_website_batch':
