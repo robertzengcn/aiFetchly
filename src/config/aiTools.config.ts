@@ -90,8 +90,8 @@ const STATIC_TOOL_FUNCTIONS: ToolFunction[] = [
     },
     {
         type: "function",
-        name: 'extract_emails_from_results',
-        description: 'Extract email addresses from search results or web pages. Can parse HTML content or plain text to find email addresses.',
+        name: 'extract_emails_from_urls',
+        description: 'Extract email addresses from url or web pages. Can parse HTML content or plain text to find email addresses.',
         parameters: {
             type: 'object',
             properties: {
@@ -160,6 +160,64 @@ const STATIC_TOOL_FUNCTIONS: ToolFunction[] = [
                     description: 'Optional ISO 3166-1 alpha-2 country code to filter available platforms (e.g., "US", "DE", "FR").'
                 }
             }
+        }
+    },
+    {
+        type: "function",
+        name: 'analyze_website_batch',
+        description: 'Analyze multiple websites from search results using AI to determine industry, match score, and reasoning. This tool scrapes website content and uses AI to analyze how well each website matches a given client business description. Results are saved to the database.',
+        parameters: {
+            type: 'object',
+            properties: {
+                result_ids: {
+                    type: 'array',
+                    items: {
+                        type: 'number'
+                    },
+                    description: 'Array of search result IDs to analyze. Each ID should correspond to a search result that has a URL.'
+                },
+                client_business: {
+                    type: 'string',
+                    description: 'Description of the client business to match against. This is used by the AI to determine how well each website matches the business.'
+                },
+                temperature: {
+                    type: 'number',
+                    description: 'Temperature for AI analysis (0.0-1.0). Higher values make the analysis more creative. Default is 0.7.',
+                    default: 0.7,
+                    minimum: 0.0,
+                    maximum: 1.0
+                }
+            },
+            required: ['result_ids', 'client_business']
+        }
+    },
+    {
+        type: "function",
+        name: 'analyze_websites',
+        description: 'Analyze multiple websites directly from URLs using AI to determine industry, match score, and reasoning. This tool scrapes website content and uses AI to analyze how well each website matches a given client business description. Results are NOT saved to the database - use this for quick analysis without persistence.',
+        parameters: {
+            type: 'object',
+            properties: {
+                urls: {
+                    type: 'array',
+                    items: {
+                        type: 'string'
+                    },
+                    description: 'Array of website URLs to analyze. Each URL should be a valid HTTP/HTTPS URL.'
+                },
+                client_business: {
+                    type: 'string',
+                    description: 'Description of the client business to match against. This is used by the AI to determine how well each website matches the business.'
+                },
+                temperature: {
+                    type: 'number',
+                    description: 'Temperature for AI analysis (0.0-1.0). Higher values make the analysis more creative. Default is 0.7.',
+                    default: 0.7,
+                    minimum: 0.0,
+                    maximum: 1.0
+                }
+            },
+            required: ['urls', 'client_business']
         }
     }
 ];

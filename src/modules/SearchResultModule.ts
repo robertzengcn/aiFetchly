@@ -89,7 +89,7 @@ export class SearchResultModule extends BaseModule implements ISearchResultApi {
     /**
      * Get search results by specific task ID with pagination
      */
-    async getSearchResultsByTaskId(taskId: number, page: number = 0, size: number = 10): Promise<{ results: SearchResEntity[], total: number }> {
+    async getSearchResultsByTaskId(taskId: number, page = 0, size = 10): Promise<{ results: SearchResEntity[], total: number }> {
         try {
             if (!taskId || taskId <= 0) {
                 return { results: [], total: 0 };
@@ -135,8 +135,8 @@ export class SearchResultModule extends BaseModule implements ISearchResultApi {
      */
     async getSearchResultsWithFilter(
         taskIds: number[],
-        page: number = 0,
-        size: number = 10,
+        page = 0,
+        size = 10,
         searchTerm?: string
     ): Promise<{ results: SearchResEntity[], total: number }> {
         try {
@@ -280,6 +280,24 @@ export class SearchResultModule extends BaseModule implements ISearchResultApi {
         } catch (error) {
             console.error('Failed to update AI analysis status batch:', error);
             throw new Error(error instanceof Error ? error.message : 'Failed to update AI analysis status batch');
+        }
+    }
+
+    /**
+     * Get search results by IDs
+     * @param resultIds Array of search result IDs
+     * @returns Array of search result entities
+     */
+    async getSearchResultsByIds(resultIds: number[]): Promise<SearchResEntity[]> {
+        try {
+            if (!resultIds || resultIds.length === 0) {
+                return [];
+            }
+
+            return await this.searchResultModel.getSearchResultsByIds(resultIds);
+        } catch (error) {
+            console.error('Failed to get search results by IDs:', error);
+            throw new Error(error instanceof Error ? error.message : 'Failed to get search results by IDs');
         }
     }
 } 

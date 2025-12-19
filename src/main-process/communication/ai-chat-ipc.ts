@@ -37,6 +37,7 @@ function generateConversationId(): string {
 /**
  * Enhance message with RAG context if enabled
  */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 async function enhanceMessageWithRAG(
     message: string,
     useRAG: boolean,
@@ -359,7 +360,9 @@ export function registerAiChatIpcHandlers(): void {
                 deferredCompletionChunk: null,
                 messageSaved: false,
                 chatModule,
-                aiChatApi
+                aiChatApi,
+                currentPlan: null,
+                planThreadId: undefined
             };
 
             // Create stream event processor
@@ -491,6 +494,7 @@ export function registerAiChatIpcHandlers(): void {
     });
 
     // Get all conversations with metadata
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     ipcMain.handle(AI_CHAT_CONVERSATIONS, async (event, data): Promise<CommonMessage<Array<{
         conversationId: string;
         lastMessage: string;
