@@ -674,9 +674,20 @@ const currentPlanStep = ref<PlanStep | null>(null);
 // Performance optimization: throttle scroll to bottom
 let scrollTimeout: number | null = null;
 
+// Helper function to create assistant messages
+function createAssistantMessage(content = ''): ChatMessage {
+  return {
+    id: `assistant-${Date.now()}`,
+    role: 'assistant',
+    content,
+    timestamp: new Date(),
+    conversationId: conversationId.value || StreamState.PENDING
+  };
+}
+
 // Filter out messages with empty content (unless they have a messageType like tool calls, plans, etc.)
 const visibleMessages = computed(() => {
-  return messages.value.filter(message => 
+  return messages.value.filter(message =>
     message.content?.trim() || message.messageType
   );
 });
@@ -1008,11 +1019,8 @@ async function handleSendMessage() {
 
         // Handle different event types
         const eventType = chunk.eventType;
-        // console.log('chunk', chunk);
         switch (eventType) {
           case 'token': {
-            console.log('token', chunk);
-            console.log('messages.value', messages.value);
             // Hide typing indicator once content starts arriving
             // isTyping.value = false;
 
@@ -1032,15 +1040,7 @@ async function handleSendMessage() {
             // append a new assistant message so we can stream into it
             // This handles cases where the last message is from 'user', 'system', 'tool', plan_execute_resume, or any other role
             if (lastMessage.role !== 'assistant' || lastMessage.messageType === MESSAGE_TYPE.PLAN_EXECUTE_RESUME) {
-              const newAssistantMessageId = `assistant-${Date.now()}`;
-              const newAssistantMessage: ChatMessage = {
-                id: newAssistantMessageId,
-                role: 'assistant',
-                content: '',
-                timestamp: new Date(),
-                conversationId: conversationId.value || StreamState.PENDING
-              };
-              messages.value.push(newAssistantMessage);
+              messages.value.push(createAssistantMessage());
               lastIndex = messages.value.length - 1; // Update to point at the new assistant message
             }
 
