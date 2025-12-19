@@ -350,9 +350,9 @@ export class AiChatApi {
                             const eventToProcess: StreamEvent = {
                                 event: currentEvent.event,
                                 data: currentEvent.data
-                            } as StreamEvent;
+                            };
                             // Reset immediately before calling onEvent to prevent multiple empty lines from re-processing the same event
-                            currentEvent = {};
+                            currentEvent = { event: undefined, data: undefined };
                             onEvent(eventToProcess);
                         }
                         continue;
