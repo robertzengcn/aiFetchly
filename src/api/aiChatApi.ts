@@ -340,12 +340,16 @@ export class AiChatApi {
                 // Keep the last incomplete line in the buffer
                 buffer = lines.pop() || '';
 
+                // Track if we've already processed an event in this batch to prevent duplicates
+                let eventProcessedInBatch = false;
+
                 for (const line of lines) {
                     const trimmedLine = line.trim();
                     
                     if (!trimmedLine) {
                         // Empty line signals end of event in SSE format
-                        if (currentEvent.event && currentEvent.data) {
+                        // Only process if we have an event and haven't already processed one in this batch
+                        if (!eventProcessedInBatch && currentEvent.event && currentEvent.data) {
                             // Create a copy of the event to avoid reference issues
                             const eventToProcess: StreamEvent = {
                                 event: currentEvent.event,
@@ -353,6 +357,7 @@ export class AiChatApi {
                             };
                             // Reset immediately before calling onEvent to prevent multiple empty lines from re-processing the same event
                             currentEvent = { event: undefined, data: undefined };
+                            eventProcessedInBatch = true;
                             onEvent(eventToProcess);
                         }
                         continue;
