@@ -1,7 +1,7 @@
 'use strict'
 import 'reflect-metadata';
 // import {ipcMain as ipc} from 'electron-better-ipc';
-import { app, BrowserWindow, dialog, autoUpdater, Menu } from 'electron'
+import { app, BrowserWindow, dialog, autoUpdater, Menu, session } from 'electron'
 // import { createProtocol } from 'vue-cli-plugin-electron-builder/lib'
 import installExtension, { VUEJS3_DEVTOOLS } from 'electron-devtools-installer'
 import { registerCommunicationIpcHandlers } from "./main-process/communication/";
@@ -20,6 +20,8 @@ import { NATIVATECOMMAND } from '@/config/channellist'
 import { NativateDatatype } from '@/entityTypes/commonType'
 import { ScheduleManager } from '@/modules/ScheduleManager';
 import { runafterbootup } from "@/modules/bootuprun"
+import { YellowPagesController } from './controller/YellowPagesController';
+// import { RAGIpcHandlers } from '@/main-process/ragIpcHandlers';
 // import { createProtocol } from 'electron';
 const isDevelopment = process.env.NODE_ENV !== 'production'
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string;
@@ -59,7 +61,6 @@ process.on('unhandledRejection', (reason) => {
 
 let win: BrowserWindow | null;
 function initialize() {
-  //console.log(import.meta.env.VITE_REMOTEADD)
   // protocol.registerSchemesAsPrivileged([
 
   //   { scheme: appName, privileges: { secure: true, 
@@ -72,10 +73,10 @@ function initialize() {
     }
 
   } else {
-    //console.log('protocolScheme:', protocolScheme)
-   // console.log('process.execPath:', process.execPath)
-   // console.log('path.resolve(process.argv[1]):', path.resolve(process.argv[1]))
-    // console.log('path:', path.resolve(process.argv[1]))
+  console.log('protocolScheme:', protocolScheme)
+   console.log('process.execPath:', process.execPath)
+   console.log('path.resolve(process.argv[1]):', path.resolve(process.argv[1]))
+    console.log('path:', path.resolve(process.argv[1]))
     ProtocolRegistry.register(protocolScheme, `"${process.execPath}" "${path.resolve(process.argv[1])}" "$_URL_"`,
       {
         override: true,
@@ -83,7 +84,7 @@ function initialize() {
         terminal: true,
       }
     ).then(() => console.log('Successfully registered'))
-      .catch(console.error);
+      .catch(e => console.error(e));
     // app.setAsDefaultProtocolClient(protocolScheme);
   }
   makeSingleInstance()
@@ -392,6 +393,9 @@ function initialize() {
   // initialization and is ready to create browser windows.
   // Some APIs can only be used after this event occurs.
   app.whenReady().then(async () => {
+    // Configure Content Security Policy (must be called after app is ready)
+    configureContentSecurityPolicy()
+
     const tokenService = new Token()
 
     // Initialize and set application menu
@@ -426,6 +430,14 @@ function initialize() {
         await appDataSource.connection.initialize()
       }
 
+      // Initialize RAG IPC handlers
+      // try {
+      //   const ragHandlers = new RAGIpcHandlers(appDataSource);
+      //   log.info('RAG IPC handlers initialized successfully');
+      // } catch (error) {
+      //   log.error('Failed to initialize RAG IPC handlers:', error);
+      // }
+
       // Initialize ScheduleManager with auto-start functionality
       try {
         await runafterbootup()
@@ -438,7 +450,6 @@ function initialize() {
 
       // Check for orphaned Yellow Pages processes on startup
       try {
-        const { YellowPagesController } = await import('./controller/YellowPagesController');
         const yellowPagesCtrl = YellowPagesController.getInstance();
 
         // Handle tasks from previous session first
@@ -490,6 +501,56 @@ function initialize() {
 
 
 
+/**
+ * Configure Content Security Policy for the application
+ * This prevents the Electron security warning about missing CSP
+ */
+function configureContentSecurityPolicy() {
+  const defaultSession = session.defaultSession;
+
+  // Set CSP based on environment
+  // In development, we need 'unsafe-eval' for Vite's HMR
+  // In production, we can be more restrictive
+  const cspDirectives = isDevelopment
+    ? [
+        "default-src 'self'",
+        "script-src 'self' 'unsafe-eval' 'unsafe-inline' http://localhost:* https://localhost:*",
+        "style-src 'self' 'unsafe-inline'",
+        "img-src 'self' data: https: http:",
+        "font-src 'self' data:",
+        "connect-src 'self' http://localhost:* https://localhost:* https: http:",
+        "frame-src 'self'",
+        "object-src 'none'",
+        "base-uri 'self'",
+        "form-action 'self'",
+        "frame-ancestors 'none'"
+      ].join('; ')
+    : [
+        "default-src 'self'",
+        "script-src 'self'",
+        "style-src 'self' 'unsafe-inline'",
+        "img-src 'self' data: https:",
+        "font-src 'self' data:",
+        "connect-src 'self' https:",
+        "frame-src 'self'",
+        "object-src 'none'",
+        "base-uri 'self'",
+        "form-action 'self'",
+        "frame-ancestors 'none'"
+      ].join('; ');
+
+  defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': [cspDirectives]
+      }
+    });
+  });
+
+  log.info(`Content Security Policy configured for ${isDevelopment ? 'development' : 'production'} mode`);
+}
+
 function makeSingleInstance() {
 
   if (process.mas) return
@@ -527,6 +588,7 @@ function makeSingleInstance() {
 async function handleDeepLink(url: string) {
   try {
     const parsedUrl = new URL(url);
+    // console.log(parsedUrl)
     const token = parsedUrl.searchParams.get('token'); // Example: Extract a token from the URL
     if (token) {
       //console.log(`Token received: ${token}`);

@@ -51,6 +51,18 @@ export const constantRoutes: RouteRecordRaw[] = [
           },
           component: () => import('@/views/pages/systemsetting/index.vue'),
           children: [],
+      },
+      {
+        path: 'mcp',
+        name: 'system_setting_mcp',
+          meta: {
+              title: 'route.mcp_tools',
+              icon: 'mdi-toolbox',
+              keepAlive: false,
+              visible: false,
+          },
+          component: () => import('@/views/pages/systemsetting/mcp.vue'),
+          children: [],
       }
     ],
   },
@@ -488,6 +500,28 @@ export const constantRoutes: RouteRecordRaw[] = [
           visible: false,
           title: 'route.yellow_pages_results',
           icon: 'mdi-chart-bar'
+        }
+      }
+    ]
+  },
+  {
+    path: '/knowledge',
+    name: 'Knowledge_Library',
+    meta: {
+      visible: true,
+      title: 'route.knowledge_library',
+      icon: 'mdi-book-open-variant'
+    },
+    component: Layout,
+    children: [
+      {
+        path: 'library',
+        component: () => import('@/views/pages/knowledge/KnowledgeLibrary.vue'),
+        name: 'KnowledgeLibrary',
+        meta: {
+          visible: true,
+          title: 'route.knowledge_library',
+          icon: 'mdi-book-open-variant'
         }
       }
     ]

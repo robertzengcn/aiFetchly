@@ -5,6 +5,7 @@ import { EmailMarketingSendLogEntity } from "@/entity/EmailMarketingSendLog.enti
 import { EmailMarketingSendLogModel } from "@/model/emailMarketingSendLog.model"
 import { SortBy } from "@/entityTypes/commonType"
 import { BaseModule } from "@/modules/baseModule";
+import { AggregatedCount } from "@/entityTypes/dashboardType";
 export class EmailMarketingSendLogModule extends BaseModule{
     //private dbpath: string
     private emailMarketingSendLogdb: EmailMarketingSendLogModel
@@ -41,5 +42,18 @@ export class EmailMarketingSendLogModule extends BaseModule{
     }
     getStatusName(status: number): string {
         return this.emailMarketingSendLogdb.getSendStatusName(status)
+    }
+    async countAll(): Promise<number> {
+        return this.emailMarketingSendLogdb.countAll();
+    }
+    async countByDateRange(startDate: Date, endDate: Date): Promise<number> {
+        return this.emailMarketingSendLogdb.countByDateRange(startDate, endDate);
+    }
+    async aggregateByDateRange(startDate: Date, endDate: Date, granularity: 'day' | 'week' | 'month'): Promise<AggregatedCount[]> {
+        const rows = await this.emailMarketingSendLogdb.aggregateByDateRange(startDate, endDate, granularity);
+        return rows.map(row => ({ date: row.date, count: row.count }));
+    }
+    async countStatusByDateRange(startDate: Date, endDate: Date): Promise<Array<{ status: number; count: number }>> {
+        return this.emailMarketingSendLogdb.countByStatusWithinDateRange(startDate, endDate);
     }
 }

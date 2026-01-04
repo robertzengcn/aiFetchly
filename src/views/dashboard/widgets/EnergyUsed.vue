@@ -30,22 +30,21 @@ const chartOptions = computed(() => {
             // sparkline: {
             //     enabled: true,
             // },
-            type: 'area',
             toolbar: {
                 show: false,
             },
         },
         theme: {
-            mode: mainStore.theme, // light
+            mode: mainStore.theme as 'light' | 'dark', // light
         },
         dataLabels: {
             enabled: false,
         },
         stroke: {
-            curve: 'smooth',
+            curve: 'smooth' as const,
         },
         xaxis: {
-            type: 'string',
+            type: 'category' as const,
             categories: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
         },
         tooltip: {

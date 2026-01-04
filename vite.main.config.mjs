@@ -28,7 +28,8 @@ function emptyModulesPlugin() {
         'mysql', 'mysql2',
         'pg', 'pg-query-stream', 'pg-native',
         'mongodb', 'mssql', 'oracledb',
-        'hdb-pool', 'redis', 'ioredis', 'sql.js'
+        'hdb-pool', 'redis', 'ioredis', 'sql.js',
+          // Add canvas to empty modules for fallback
     ];
 
     return {
@@ -41,7 +42,7 @@ function emptyModulesPlugin() {
         },
         load(id) {
             if (id === 'virtual:empty-module') {
-                return 'export default {}; export const Stream = {}; export const Readable = {}; export const Writable = {}; export const PassThrough = {};';
+                return 'export default {}; export const Stream = {}; export const Readable = {}; export const Writable = {}; export const PassThrough = {}; export const createCanvas = () => ({}); export const loadImage = () => ({});';
             }
             return null;
         }
@@ -70,6 +71,50 @@ function platformCopyPlugin() {
                 fs.mkdirSync(iconDestDir, { recursive: true });
             }
 
+            // Copy sqlite-vec native extension to build directory
+            console.log('Copying sqlite-vec native extension to build folder...');
+            try {
+                const arch = process.arch;
+                // Map Node.js arch to sqlite-vec package arch
+                // Note: For macOS (darwin), use 'arm64' directly, not 'aarch64'
+                // For Linux, arm64 maps to aarch64
+                const archMap = {
+                    'x64': 'x64',
+                    'arm64': process.platform === 'darwin' ? 'arm64' : 'aarch64', // macOS uses arm64, Linux uses aarch64
+                    'ia32': 'x86'
+                };
+                const sqliteVecArch = archMap[arch] || arch;
+                // Use 'darwin' for macOS package name, not 'macos'
+                const os = process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'darwin' : 'linux';
+                const extensionName = process.platform === 'win32' ? 'vec0.dll' : process.platform === 'darwin' ? 'vec0.dylib' : 'vec0.so';
+                
+                // Try both mapped architecture and original architecture for compatibility
+                const packageNames = [
+                    `sqlite-vec-${os}-${sqliteVecArch}`, // Try mapped architecture first
+                    ...(sqliteVecArch !== arch ? [`sqlite-vec-${os}-${arch}`] : []) // Fallback to original arch if different
+                ];
+                
+                const destPath = path.join(iconDestDir, extensionName);
+                let copied = false;
+                
+                for (const packageName of packageNames) {
+                    const sourcePath = path.join('node_modules', packageName, extensionName);
+                    if (fs.existsSync(sourcePath)) {
+                        fs.copyFileSync(sourcePath, destPath);
+                        console.log(`Copied sqlite-vec extension: ${extensionName} from ${packageName} to ${destPath}`);
+                        copied = true;
+                        break;
+                    }
+                }
+                
+                if (!copied) {
+                    console.warn(`sqlite-vec extension not found. Tried packages: ${packageNames.join(', ')}`);
+                    console.warn(`Platform: ${process.platform}, Arch: ${arch}`);
+                }
+            } catch (error) {
+                console.error('Failed to copy sqlite-vec extension:', error);
+                // Don't fail the build if extension copy fails
+            }
             
             // Copy platform-specific icons
             if (process.platform === 'win32') {
@@ -270,6 +315,7 @@ export default ({ mode }) => {
                 "redis": path.resolve(__dirname, "./src/utils/typeorm-shim.ts"),  // Add this line
                 "ioredis": path.resolve(__dirname, "./src/utils/typeorm-shim.ts"),  // Add this line
                 "sql.js": path.resolve(__dirname, "./src/utils/typeorm-shim.ts"),  // Add this line
+                "canvas": '@napi-rs/canvas',
             },
             conditions: ['node'],
             // mainFields: ['main', 'module', 'browser']
@@ -280,7 +326,10 @@ export default ({ mode }) => {
                     'sqlite3',  // Mark sqlite3 as external
                     'better-sqlite3',
                     'bindings',
-                    'typeorm'
+                    'typeorm',
+                    'sqlite-vec',
+                    'canvas', 
+                    '@napi-rs/canvas'
                 ]
             },
             sourcemap: true,
