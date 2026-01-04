@@ -61,7 +61,6 @@ process.on('unhandledRejection', (reason) => {
 
 let win: BrowserWindow | null;
 function initialize() {
-  //console.log(import.meta.env.VITE_REMOTEADD)
   // protocol.registerSchemesAsPrivileged([
 
   //   { scheme: appName, privileges: { secure: true, 

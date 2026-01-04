@@ -19,7 +19,7 @@ export class HttpClient {
     private baseUrl: string;
     constructor() {
       //AuthInterceptor()
-      this.baseUrl = import.meta.env.VITE_REMOTEADD;
+      this.baseUrl = import.meta.env.VITE_LOGIN_URL+"/apis";
       this.setheaderToken()
       // const tokenModel=new Token()
       // const tokenval=tokenModel.getValue("social-market-token")
