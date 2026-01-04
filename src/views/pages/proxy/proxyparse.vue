@@ -5,14 +5,14 @@
     <v-row>
       <v-file-input
         v-model="files"
-        label="Drag and drop your file here or click to select file"
+        :label="t('common.drag_drop_file')"
         accept=".csv"
         outlined
         clearable
         show-size
         @change="handleFileUpload"
       ></v-file-input>
-      <v-btn class="ml-5" @click="outPutcsv">Download Template</v-btn>
+      <v-btn class="ml-5" @click="outPutcsv">{{ t('common.download_template') }}</v-btn>
       <v-btn
         icon
         variant="text"
@@ -35,14 +35,14 @@
     >
       <template v-slot:title>
         <!-- <v-icon class="mr-2">mdi-information</v-icon> -->
-        How to Batch Upload Proxies
+        {{ t('proxy.how_to_batch_upload') }}
       </template>
       <ol class="mt-2">
-        <li><strong>Download Template:</strong> Click the "Download Template" button to get the CSV template file</li>
-        <li><strong>Edit Template:</strong> Open the downloaded CSV file and add your proxy information (host, port, protocol, username, password)</li>
-        <li><strong>The protocol can be http, https, socks5</strong></li>
-        <li><strong>Upload File:</strong> Select your edited CSV file using the file input below</li>
-        <li><strong>Check Proxies:</strong> Use "Check Proxy" to validate the uploaded proxies</li>
+        <li><strong>{{ t('common.download_template') }}:</strong> {{ t('proxy.download_template_hint') }}</li>
+        <li><strong>{{ t('proxy.edit_template') }}:</strong> {{ t('proxy.edit_template_hint') }}</li>
+        <li><strong>{{ t('proxy.protocol_hint') }}</strong></li>
+        <li><strong>{{ t('proxy.upload_file') }}:</strong> {{ t('proxy.upload_file_hint') }}</li>
+        <li><strong>{{ t('proxy.check_proxies') }}:</strong> {{ t('proxy.check_proxies_hint') }}</li>
         <li><strong>Save to System:</strong> Click "Save to My Proxy" to import valid proxies to your account</li>
       </ol>
     </v-alert>
@@ -51,21 +51,21 @@
     <v-card v-if="showtable" class="mb-4" variant="outlined">
       <v-card-title class="d-flex align-center">
         <v-icon class="mr-2">mdi-cog</v-icon>
-        {{ $t('proxy.check_settings') }}
+        {{ t('proxy.check_settings') }}
       </v-card-title>
       <v-card-text>
         <v-row>
           <v-col cols="12" md="4">
             <v-text-field
               v-model.number="checkTimeout"
-              :label="$t('proxy.check_timeout')"
+              :label="t('proxy.check_timeout')"
               type="number"
               min="1"
               max="60"
               suffix="seconds"
               variant="outlined"
               density="compact"
-              :hint="$t('proxy.check_timeout_hint')"
+              :hint="t('proxy.check_timeout_hint')"
               persistent-hint
             ></v-text-field>
           </v-col>
@@ -83,7 +83,7 @@
               class="elevation-0"
               density="compact"
               variant="solo"
-              :label="$t('proxy.search')"
+              :label="t('proxy.search')"
               append-inner-icon="mdi-magnify"
               single-line
               hide-details
@@ -94,7 +94,7 @@
             class="btn"
             variant="flat"
             prepend-icon="mdi-filter-variant"
-            ><span> {{ $t('proxy.clear_table') }}</span></v-btn
+            ><span> {{ t('proxy.clear_table') }}</span></v-btn
           >
           <v-btn
           
@@ -103,7 +103,7 @@
             class="btn ml-1"
             variant="flat"
             prepend-icon="mdi-filter-variant"
-            ><span> {{ $t('proxy.check_proxy') }}</span></v-btn
+            ><span> {{ t('proxy.check_proxy') }}</span></v-btn
           >
           <v-btn
           color="blue"
@@ -111,7 +111,7 @@
             class="btn ml-1"
             variant="flat"
             prepend-icon="mdi-filter-variant"
-            ><span> {{ $t('proxy.save_to_my_proxy') }}</span></v-btn
+            ><span> {{ t('proxy.save_to_my_proxy') }}</span></v-btn
           >
           <v-btn
           color="red"
@@ -119,7 +119,7 @@
             class="btn ml-1"
             variant="flat"
             prepend-icon="mdi-filter-variant"
-            ><span> {{ $t('proxy.remove_fail_proxy') }}</span></v-btn
+            ><span> {{ t('proxy.remove_fail_proxy') }}</span></v-btn
           >
         </div>
       </div>
@@ -137,13 +137,13 @@
       <v-data-table :items="items" :headers="headers" class="mt-2"  :search="search">
         <template v-slot:[`item.status`]="{ item }">
           <v-chip v-if="item.status === 0" class="mx-2" color="grey">
-            {{ $t('proxy.not_check') }}
+            {{ t('proxy.not_check') }}
           </v-chip>
           <v-chip v-if="item.status === 1" class="mx-2" color="secondary">
-            {{ $t('proxy.pass') }}
+            {{ t('proxy.pass') }}
           </v-chip>
           <v-chip v-if="item.status === 2" class="mx-2" color="pink">
-            {{ $t('proxy.failure') }}
+            {{ t('proxy.failure') }}
           </v-chip>
         </template>
         

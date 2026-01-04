@@ -7,6 +7,8 @@ export type HttpClientOptions = {
 //import { AuthInterceptor } from '@/modules/lib/authInterceptor';
 import {Token} from "@/modules/token"
 import {TOKENNAME} from '@/config/usersetting';
+import { User } from '@/modules/user';
+
 // export type RemoteResp = {
 //   status: boolean,
 //   msg: string,
@@ -17,7 +19,7 @@ export class HttpClient {
     private baseUrl: string;
     constructor() {
       //AuthInterceptor()
-      this.baseUrl = import.meta.env.VITE_REMOTEADD;
+      this.baseUrl = import.meta.env.VITE_LOGIN_URL+"/apis";
       this.setheaderToken()
       // const tokenModel=new Token()
       // const tokenval=tokenModel.getValue("social-market-token")
@@ -44,6 +46,25 @@ export class HttpClient {
           headers: this._headers,
         }
        );
+       
+      // Handle 403 Forbidden - Token expired
+      if (res.status === 403) {
+        console.warn('Received 403 Forbidden - Token expired, signing out user');
+        
+        // Sign out user (this will also navigate to login page)
+        try {
+          const userModel = new User();
+          await userModel.removeToken();
+        } catch (error) {
+          console.error('Error during signout:', error);
+        }
+        
+        // Clear Authorization header
+        delete this._headers['Authorization'];
+        
+        // Throw error to prevent further processing
+        throw new Error('Authentication failed: Token expired. Please login again.');
+      }
        
       if (!res.ok) throw new Error(res.statusText);
   
@@ -75,7 +96,7 @@ export class HttpClient {
   
     public async get(endpoint:string, options = {}): Promise<any> {
       // const body = new URLSearchParams(params).toString();  
-      console.log(this._headers)
+      //console.log(this._headers)
       return this._fetchJSON(endpoint, {
         ...options,
         method: "GET",
@@ -147,6 +168,42 @@ export class HttpClient {
         },
         // headers: this._headers,
       });
+    }
+
+    // post json data and return stream response
+    public async postStream(endpoint:string, data, options = {}): Promise<Response> {
+      const res = await fetch(this.baseUrl + endpoint, {
+        ...options,
+        body: JSON.stringify(data),
+        method: "POST",
+        headers: {
+          ...this._headers,
+          'Accept': 'text/event-stream',
+          'Content-Type': 'application/json'
+        },
+      });
+      
+      // Handle 403 Forbidden - Token expired
+      if (res.status === 403) {
+        console.warn('Received 403 Forbidden - Token expired, signing out user');
+        
+        // Sign out user (this will also navigate to login page)
+        try {
+          const userModel = new User();
+          await userModel.removeToken();
+        } catch (error) {
+          console.error('Error during signout:', error);
+        }
+        
+        // Clear Authorization header
+        delete this._headers['Authorization'];
+        
+        // Throw error to prevent further processing
+        throw new Error('Authentication failed: Token expired. Please login again.');
+      }
+      
+      if (!res.ok) throw new Error(res.statusText);
+      return res;
     }
   }
   

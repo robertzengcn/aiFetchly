@@ -1,6 +1,6 @@
 import { ChildProcessAdapterFactory } from './ChildProcessAdapterFactory';
 import { BasePlatformAdapter } from './BasePlatformAdapter';
-import { PlatformConfig } from '@/interfaces/IPlatformConfig';
+import { PlatformConfig } from '@/modules/interface/IPlatformConfig';
 
 /**
  * Example child process scraper that demonstrates how to use adapter classes

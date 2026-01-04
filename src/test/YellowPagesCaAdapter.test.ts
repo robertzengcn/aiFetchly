@@ -1,5 +1,5 @@
 import { YellowPagesCaAdapter } from '@/modules/platforms/YellowPagesCaAdapter';
-import { PlatformConfig, PlatformFeature } from '@/interfaces/IPlatformConfig';
+import { PlatformConfig, PlatformFeature } from '@/modules/interface/IPlatformConfig';
 // @ts-ignore - Jest globals are available in test environment
 declare const expect: any;
 declare const describe: any;

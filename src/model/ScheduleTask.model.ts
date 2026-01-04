@@ -3,6 +3,7 @@ import { Repository } from "typeorm";
 import { ScheduleTaskEntity, TaskType, ScheduleStatus, TriggerType, DependencyCondition } from "@/entity/ScheduleTask.entity";
 import { ScheduleCreateRequest, ScheduleUpdateRequest } from "@/entityTypes/schedule-type";
 import { SortBy } from "@/entityTypes/commonType";
+import { CronJob } from "cron";
 
 export class ScheduleTaskModel extends BaseDb {
     private repository: Repository<ScheduleTaskEntity>;
@@ -10,6 +11,26 @@ export class ScheduleTaskModel extends BaseDb {
     constructor(filepath: string) {
         super(filepath);
         this.repository = this.sqliteDb.connection.getRepository(ScheduleTaskEntity);
+    }
+
+    /**
+     * Calculate next run time from cron expression
+     * @param cronExpression The cron expression
+     * @returns The next run time or null if calculation fails
+     */
+    private calculateNextRunTime(cronExpression: string): Date | null {
+        if (!cronExpression || cronExpression.trim() === '') {
+            return null;
+        }
+
+        try {
+            const cronJob = new CronJob(cronExpression, () => {}, null, false);
+            const nextDate = cronJob.nextDate();
+            return nextDate.toJSDate();
+        } catch (error) {
+            console.error('Failed to calculate next run time:', error);
+            return null;
+        }
     }
 
     /**
@@ -33,6 +54,14 @@ export class ScheduleTaskModel extends BaseDb {
         scheduleEntity.execution_count = 0;
         scheduleEntity.failure_count = 0;
         scheduleEntity.last_modified = new Date();
+
+        // Calculate next_run_time if trigger_type is CRON and cron_expression is not empty
+        if (scheduleEntity.trigger_type === TriggerType.CRON && scheduleEntity.cron_expression && scheduleEntity.cron_expression.trim() !== '') {
+            const nextRunTime = this.calculateNextRunTime(scheduleEntity.cron_expression);
+            if (nextRunTime) {
+                scheduleEntity.next_run_time = nextRunTime;
+            }
+        }
 
         const savedSchedule = await this.repository.save(scheduleEntity);
         return savedSchedule.id;
@@ -59,6 +88,33 @@ export class ScheduleTaskModel extends BaseDb {
         if (scheduleData.status !== undefined) updateData.status = scheduleData.status;
         
         updateData.last_modified = new Date();
+
+        // Calculate next_run_time if trigger_type is CRON and cron_expression is not empty
+        // Recalculate if trigger_type or cron_expression is being updated
+        const triggerTypeChanged = scheduleData.trigger_type !== undefined;
+        const cronExpressionChanged = scheduleData.cron_expression !== undefined;
+
+        if (triggerTypeChanged || cronExpressionChanged) {
+            // Get the current schedule to check the final trigger_type and cron_expression
+            const currentSchedule = await this.getScheduleById(id);
+            if (currentSchedule) {
+                const finalTriggerType = scheduleData.trigger_type !== undefined ? scheduleData.trigger_type : currentSchedule.trigger_type;
+                const finalCronExpression = scheduleData.cron_expression !== undefined ? scheduleData.cron_expression : currentSchedule.cron_expression;
+
+                if (finalTriggerType === TriggerType.CRON && finalCronExpression && finalCronExpression.trim() !== '') {
+                    const nextRunTime = this.calculateNextRunTime(finalCronExpression);
+                    if (nextRunTime) {
+                        updateData.next_run_time = nextRunTime;
+                    } else {
+                        // If calculation fails, set to null
+                        updateData.next_run_time = null;
+                    }
+                } else {
+                    // If trigger type is not CRON or cron_expression is empty, set next_run_time to null
+                    updateData.next_run_time = null;
+                }
+            }
+        }
 
         await this.repository.update({ id }, updateData);
     }

@@ -8,7 +8,7 @@ import { PlatformRegistry } from "@/modules/PlatformRegistry";
 import { YellowPagesResultModel } from "@/model/YellowPagesResult.model";
 import { YellowPagesInitModule } from "@/modules/YellowPagesInitModule";
 import { YellowPagesHealthCheck } from "@/modules/YellowPagesHealthCheck";
-import { ITaskManager, YellowPagesTaskData, TaskStatus } from "@/interfaces/ITaskManager";
+import { ITaskManager, YellowPagesTaskData, TaskStatus } from "@/modules/interface/ITaskManager";
 
 /**
  * Yellow Pages Orchestrator - Main coordination layer

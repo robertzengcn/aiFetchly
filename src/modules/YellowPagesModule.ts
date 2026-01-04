@@ -1,5 +1,5 @@
 import { BaseModule } from "@/modules/baseModule";
-import { ITaskManager, YellowPagesTaskData, TaskStatus, TaskProgress, TaskFilters, TaskSummary, YellowPagesTask, YellowPagesResult } from "@/interfaces/ITaskManager";
+import { ITaskManager, YellowPagesTaskData, TaskStatus, TaskProgress, TaskFilters, TaskSummary, YellowPagesTask, YellowPagesResult } from "@/modules/interface/ITaskManager";
 import { YellowPagesTaskModel, YellowPagesTaskStatus } from "@/model/YellowPagesTask.model";
 import { YellowPagesResultModel } from "@/model/YellowPagesResult.model";
 import { YellowPagesProcessManager } from "@/modules/YellowPagesProcessManager";

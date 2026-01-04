@@ -96,6 +96,10 @@ class User extends VuexModule implements IUserState {
     removeToken()
     this.SET_TOKEN('')
     this.SET_ROLES([])
+    this.SET_NAME('')
+    this.SET_EMAIL('')
+    this.SET_AVATAR('')
+    this.SET_INTRODUCTION('')
   }
 
   @Action({rawError: true})

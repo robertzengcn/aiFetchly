@@ -5,7 +5,7 @@
 
 import { PlatformAdapterFactory } from '@/modules/PlatformAdapterFactory';
 // import { YellComAdapter } from '@/modules/platforms/YellComAdapter';
-import { PlatformConfig } from '@/interfaces/IPlatformConfig';
+import { PlatformConfig } from '@/modules/interface/IPlatformConfig';
 
 export class YellComAdapterTest {
     private factory: PlatformAdapterFactory;

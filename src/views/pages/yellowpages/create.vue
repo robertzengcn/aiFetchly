@@ -676,7 +676,7 @@ import {
   getYellowPagesTaskDetail,
   updateYellowPagesTask
 } from '@/views/api/yellowpages'
-import { PlatformSummary } from '@/interfaces/IPlatformConfig'
+import { PlatformSummary } from '@/modules/interface/IPlatformConfig'
 import AccountSelectedTable from '@/views/pages/socialaccount/widgets/AccountSelectedTable.vue'
 import { SocialAccountListData } from '@/entityTypes/socialaccount-type'
 import ProxyTableselected from '@/views/pages/proxy/widgets/ProxySelectedTable.vue'

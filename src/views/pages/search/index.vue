@@ -3,6 +3,15 @@
     <v-form ref="form" @submit.prevent="onSubmit">
       <h3>{{ isEditMode ? t('search.edit_task') : t('search.use_hint') }}</h3>
       <v-textarea class="mt-3" v-model="keywords" :label="t('search.input_keywords_hint')"></v-textarea>
+      <v-btn 
+        color="primary" 
+        class="mt-2 mb-3" 
+        @click="onGenerateKeywords" 
+        :loading="generatingKeywords"
+        :disabled="!keywords || keywords.trim().length === 0"
+      >
+        {{ t('search.generate_related_keywords') }}
+      </v-btn>
       <v-select v-model="enginer" :items="searchplatform" :label="t('search.search_enginer_name')" required
         :readonly="loading" :rules="[rules.required]" class="mt-3" item-title="name" item-value="key"></v-select>
 
@@ -11,7 +20,7 @@
 
       <v-text-field v-model="concurrent_quantity" :label="t('search.concurrent_quantity')" clearable
         class="mt-3"></v-text-field>
-      <v-combobox v-model="proxyValue" :items="proxyValue" label="Select proxy" item-title="host" multiple return-object
+      <v-combobox v-model="proxyValue" :items="proxyValue" :label="t('search.select_proxy')" item-title="host" multiple return-object
         chips clearable></v-combobox>
       <v-btn color="primary" @click="showProxytable">{{ t('search.choose_proxy') }}</v-btn>
 
@@ -108,12 +117,12 @@ type SearchOption = {
   name: string;
   index: number;
 };
-import { ref, onMounted } from "vue";
+import { ref, onMounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
 //import router from '@/views/router';
 import { SearhEnginer } from "@/config/searchSetting"
 import { ToArray, CapitalizeFirstLetter } from "@/views/utils/function"
-import { submitScraper, receiveSearchevent, getSearchTaskDetails, updateSearchTask, createSearchTaskOnly } from "@/views/api/search"
+import { submitScraper, receiveSearchevent, getSearchTaskDetails, updateSearchTask, createSearchTaskOnly, generateRelatedKeywords } from "@/views/api/search"
 import { getSocialaccountinfo } from "@/views/api/socialaccount"
 import { Usersearchdata } from "@/entityTypes/searchControlType"
 import { convertNumberToBoolean } from "@/views/utils/function"
@@ -147,6 +156,8 @@ const rules = {
 };
 const useLocalBrowser = ref(false)
 const enginer = ref<string>();
+const yandexTipShown = ref(false); // Track if tip has been shown to avoid repeated alerts
+const googleAccountTipShown = ref(false); // Track if Google account tip has been shown
 const keywords = ref();
 const searchplatform = ref<Array<SearchOption>>([]);
 const showinbrwoser = ref(0);
@@ -155,6 +166,7 @@ const concurrent_quantity = ref(1);
 const proxyValue = ref<Array<ProxyEntity>>([]);
 const proxytableshow = ref(false);
 const accounts = ref<Array<SocialAccountListData>>([])
+const generatingKeywords = ref(false);
 const initialize = () => {
   //searchplatform.value = ToArray(SearhEnginer);
   const seArr: string[] = ToArray(SearhEnginer);
@@ -277,6 +289,68 @@ const setAlert = (
     alert.value = false;
   }, 5000);
 };
+
+// Watch for Yandex selection and show tip if local browser is not used
+watch([enginer, useLocalBrowser], ([newEngine, newUseLocalBrowser], [oldEngine, oldUseLocalBrowser]) => {
+  const isYandex = newEngine && newEngine.toLowerCase() === 'yandex';
+  const wasYandex = oldEngine && oldEngine.toLowerCase() === 'yandex';
+  
+  // Show tip when:
+  // 1. User selects Yandex and local browser is not enabled
+  // 2. User disables local browser while Yandex is selected
+  // Only show once per session unless user switches away and back
+  if (isYandex && !newUseLocalBrowser) {
+    // Reset tip flag if user switched away from Yandex
+    if (!wasYandex) {
+      yandexTipShown.value = false;
+    }
+    
+    // Show tip if not already shown for this Yandex selection
+    if (!yandexTipShown.value) {
+      setTimeout(() => {
+        setAlert(t('search.yandex_local_browser_tip'), t('search.use_local_browser'), 'info');
+        yandexTipShown.value = true;
+      }, 500);
+    }
+  } else if (isYandex && newUseLocalBrowser) {
+    // Reset flag when local browser is enabled
+    yandexTipShown.value = false;
+  } else if (!isYandex) {
+    // Reset flag when switching away from Yandex
+    yandexTipShown.value = false;
+  }
+}, { immediate: false });
+
+// Watch for Google selection and show tip if account is not used
+watch([enginer, useAccount], ([newEngine, newUseAccount], [oldEngine, oldUseAccount]) => {
+  const isGoogle = newEngine && newEngine.toLowerCase() === 'google';
+  const wasGoogle = oldEngine && oldEngine.toLowerCase() === 'google';
+  
+  // Show tip when:
+  // 1. User selects Google and account is not enabled
+  // 2. User disables account while Google is selected
+  // Only show once per session unless user switches away and back
+  if (isGoogle && !newUseAccount) {
+    // Reset tip flag if user switched away from Google
+    if (!wasGoogle) {
+      googleAccountTipShown.value = false;
+    }
+    
+    // Show tip if not already shown for this Google selection
+    if (!googleAccountTipShown.value) {
+      setTimeout(() => {
+        setAlert(t('search.google_account_tip'), t('search.use_search_enginer_account'), 'info');
+        googleAccountTipShown.value = true;
+      }, 500);
+    }
+  } else if (isGoogle && newUseAccount) {
+    // Reset flag when account is enabled
+    googleAccountTipShown.value = false;
+  } else if (!isGoogle) {
+    // Reset flag when switching away from Google
+    googleAccountTipShown.value = false;
+  }
+}, { immediate: false });
 
 onMounted(async () => {
   initialize();
@@ -522,6 +596,62 @@ async function onSaveOnly() {
     setAlert(translatedMessage, 'Error', 'error');
   } finally {
     loading.value = false;
+  }
+}
+
+/**
+ * Generate related keywords using AI
+ */
+async function onGenerateKeywords() {
+  if (!keywords.value || keywords.value.trim().length === 0) {
+    setAlert(t("search.keywords_empty"), "Error", "error");
+    return;
+  }
+
+  try {
+    generatingKeywords.value = true;
+    
+    // Get current keywords from textarea
+    const currentKeywords = keywords.value
+      .split('\n')
+      .map(k => k.trim())
+      .filter(k => k.length > 0);
+
+    if (currentKeywords.length === 0) {
+      setAlert(t("search.keywords_empty"), "Error", "error");
+      return;
+    }
+
+    // Call the API to generate related keywords
+    const generatedKeywords = await generateRelatedKeywords(currentKeywords, 15, 'seo');
+
+    if (generatedKeywords && generatedKeywords.length > 0) {
+      // Combine original keywords with generated ones, remove duplicates
+      const allKeywords = [...currentKeywords, ...generatedKeywords];
+      const uniqueKeywords = Array.from(new Set(allKeywords));
+      
+      // Update the textarea with all keywords
+      keywords.value = uniqueKeywords.join('\n');
+      
+      setAlert(
+        t('search.keywords_generated_successfully', { count: generatedKeywords.length }),
+        t('common.success') || 'Success',
+        'success'
+      );
+    } else {
+      setAlert(
+        t('search.no_keywords_generated'),
+        t('common.warning') || 'Warning',
+        'warning'
+      );
+    }
+  } catch (error) {
+    console.error('Error generating keywords:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Failed to generate keywords';
+    const translatedMessage = errorMessage.startsWith('search.') ? t(errorMessage) : errorMessage;
+    setAlert(translatedMessage, 'Error', 'error');
+  } finally {
+    generatingKeywords.value = false;
   }
 }
 </script>

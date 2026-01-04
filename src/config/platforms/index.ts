@@ -1,4 +1,4 @@
-import { PlatformConfig } from '@/interfaces/IPlatformConfig';
+import { PlatformConfig } from '@/modules/interface/IPlatformConfig';
 
 // import { Platform_192_com } from './192-com';
 import { Platform_yell_com } from './yell-com';

@@ -17,7 +17,7 @@ import { TaskExecutorService } from "@/modules/TaskExecutorService";
 import { ScheduleTaskModule } from "@/modules/ScheduleTaskModule";
 import { BackgroundScheduler } from "@/modules/BackgroundScheduler";
 import { ScheduleManager } from "@/modules/ScheduleManager";
-import { YellowPagesTaskData, TaskStatus } from "@/interfaces/ITaskManager";
+import { YellowPagesTaskData, TaskStatus } from "@/modules/interface/ITaskManager";
 import { TaskType, ScheduleStatus, TriggerType, DependencyCondition } from "@/entity/ScheduleTask.entity";
 
 interface TestResult {

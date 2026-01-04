@@ -16,4 +16,4 @@ export { PlatformAdapterFactory } from './PlatformAdapterFactory';
 
 // Export types
 export type { BasePlatformAdapter } from '@/modules/BasePlatformAdapter';
-export type { PlatformConfig } from '@/interfaces/IPlatformConfig';
+export type { PlatformConfig } from '@/modules/interface/IPlatformConfig';

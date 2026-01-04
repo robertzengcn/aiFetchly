@@ -133,7 +133,7 @@
             @click="$emit('view-details', item)"
             :title="t('home.view_details')"
           />
-          <v-btn
+          <!-- <v-btn
             v-if="item.website"
             icon="mdi-open-in-new"
             size="small"
@@ -141,7 +141,7 @@
             color="blue"
             @click="openWebsite(item.website)"
             :title="t('home.open_website')"
-          />
+          /> -->
           <v-btn
             v-if="item.email"
             icon="mdi-email-outline"
@@ -193,7 +193,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { YellowPagesResult } from '@/interfaces/ITaskManager'
+import { YellowPagesResult } from '@/modules/interface/ITaskManager'
 
 // Props
 interface Props {
