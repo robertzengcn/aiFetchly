@@ -1,5 +1,6 @@
 export const USERSDBPATH='user_dbpath'
 export const TOKENNAME='user_social-market-token'
+export const REFRESHTOKEN='user_refresh_token'
 export const USERSERVICE='user_service'
 export const USERLOGPATH='user_log'
 export const USEREMAIL='user_email'
