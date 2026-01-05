@@ -117,6 +117,7 @@
     "lodash": "^4.17.21",
     "mammoth": "^1.11.0",
     "node-fetch": "^3.3.2",
+    "node-machine-id": "^1.1.12",
     "nodemailer": "^6.9.16",
     "nprogress": "^0.2.0",
     "openai": "^4.87.3",
