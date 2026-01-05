@@ -8,12 +8,11 @@ import { registerCommunicationIpcHandlers } from "./main-process/communication/"
 import * as path from 'path';
 import { Token } from "@/modules/token"
 import { MenuManager } from "@/main-process/menu/MenuManager";
-import { USERSDBPATH } from '@/config/usersetting';
+import { USERSDBPATH, TOKENNAME, REFRESHTOKEN } from '@/config/usersetting';
 import { SqliteDb } from "@/config/SqliteDb"
 import { logger, log } from '@/modules/Logger';
 import fs from 'fs';
 import ProtocolRegistry from 'protocol-registry'
-import { TOKENNAME } from '@/config/usersetting';
 //import { RemoteSource } from '@/modules/remotesource'
 import { UserController } from '@/controller/UserController';
 import { NATIVATECOMMAND } from '@/config/channellist'
@@ -590,10 +589,18 @@ async function handleDeepLink(url: string) {
     const parsedUrl = new URL(url);
     // console.log(parsedUrl)
     const token = parsedUrl.searchParams.get('token'); // Example: Extract a token from the URL
+    const refreshToken = parsedUrl.searchParams.get('refreshToken') || parsedUrl.searchParams.get('refresh_token'); // Extract refresh token from the URL
     if (token) {
       //console.log(`Token received: ${token}`);
       const tokenService = new Token();
       tokenService.setValue(TOKENNAME, token);
+      
+      // Save refresh token if provided
+      if (refreshToken) {
+        tokenService.setValue(REFRESHTOKEN, refreshToken);
+        log.info('Refresh token saved successfully');
+      }
+      
       // const remoteser = new RemoteSource()
       // const userInfo = await remoteser.GetUserInfo()
       // console.log('userInfo:', userInfo)
