@@ -8,7 +8,9 @@ import { registerCommunicationIpcHandlers } from "./main-process/communication/"
 import * as path from 'path';
 import { Token } from "@/modules/token"
 import { MenuManager } from "@/main-process/menu/MenuManager";
-import { USERSDBPATH, TOKENNAME, REFRESHTOKEN } from '@/config/usersetting';
+import { USERSDBPATH, TOKENNAME, REFRESHTOKEN, TOKENEXPIRY, REFRESHTOKENEXPIRY } from '@/config/usersetting';
+import { DeviceFingerprintService } from '@/modules/deviceFingerprint';
+import { DeviceApi } from '@/api/deviceApi';
 import { SqliteDb } from "@/config/SqliteDb"
 import { logger, log } from '@/modules/Logger';
 import fs from 'fs';
@@ -570,8 +572,25 @@ function makeSingleInstance() {
       // console.log("second-instance call")
       // console.log('protocolScheme:', protocolScheme)
      // argv = argv.map(arg => typeof arg === 'string' ? arg.toLowerCase() : arg);
-      const url = argv.find(arg => arg.startsWith(`${protocolScheme}://`));
-      if (url) {
+      const urlIndex = argv.findIndex(arg => arg.startsWith(`${protocolScheme}://`));
+      if (urlIndex !== -1) {
+        // Reconstruct URL if it was split by shell at '&' character
+        // When shell splits at '&', the parts after become separate argv elements
+        let url = argv[urlIndex];
+        // Check if URL looks incomplete (missing query params that might have been split)
+        // Reconstruct by joining subsequent argv elements that look like URL fragments
+        for (let i = urlIndex + 1; i < argv.length; i++) {
+          const nextArg = argv[i];
+          // If next arg looks like a URL parameter (contains '=' and no path separators),
+          // it's likely a continuation of the URL that was split at '&'
+          if (nextArg.includes('=') && !nextArg.includes('/') && !nextArg.startsWith('-')) {
+            url += '&' + nextArg;
+          } else {
+            // Stop if we hit something that doesn't look like a URL fragment
+            break;
+          }
+        }
+        
         console.log('app opened with url on window')
         //console.log(`App opened with URL on window: ${url}`);
         handleDeepLink(url)
@@ -584,58 +603,195 @@ function makeSingleInstance() {
 
 }
 
+/**
+ * Validate deep link URL origin to prevent malicious token injection
+ */
+function isValidDeepLinkOrigin(parsedUrl: URL): boolean {
+  // Check if the URL protocol matches our app's protocol scheme
+  if (!parsedUrl.protocol.includes(protocolScheme)) {
+    log.error('Invalid deep link protocol:', parsedUrl.protocol);
+    return false;
+  }
+
+  // Additional validation: ensure URL has the expected structure
+  if (!parsedUrl.hostname) {
+    log.error('Invalid deep link hostname:', parsedUrl.hostname);
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * Clear all authentication tokens from storage
+ */
+function clearTokens(): void {
+  try {
+    const tokenService = new Token();
+    tokenService.setValue(TOKENNAME, '');
+    tokenService.setValue(REFRESHTOKEN, '');
+    tokenService.setValue(TOKENEXPIRY, '');
+    tokenService.setValue(REFRESHTOKENEXPIRY, '');
+    log.info('All tokens cleared successfully');
+  } catch (error) {
+    log.error('Failed to clear tokens:', error);
+  }
+}
+
 async function handleDeepLink(url: string) {
   try {
     const parsedUrl = new URL(url);
-    // console.log(parsedUrl)
-    const token = parsedUrl.searchParams.get('token'); // Example: Extract a token from the URL
-    const refreshToken = parsedUrl.searchParams.get('refreshToken') || parsedUrl.searchParams.get('refresh_token'); // Extract refresh token from the URL
-    if (token) {
-      //console.log(`Token received: ${token}`);
-      const tokenService = new Token();
+
+    // Validate deep link origin to prevent malicious token injection
+    if (!isValidDeepLinkOrigin(parsedUrl)) {
+      log.error('Invalid deep link origin:', url);
+      dialog.showErrorBox('Security Error',
+        'Invalid deep link origin. This link may be malicious.');
+      return;
+    }
+
+    // Extract token parameters
+    // Use searchParams if available, otherwise parse manually (for custom protocols)
+    let token: string | null = null;
+    let refreshToken: string | null = null;
+    let expiresIn: string | null = null;
+    let refreshExpiresIn: string | null = null;
+
+    if (parsedUrl.searchParams) {
+      // Standard URL parsing
+      token = parsedUrl.searchParams.get('token');
+      refreshToken = parsedUrl.searchParams.get('refreshToken') || parsedUrl.searchParams.get('refresh_token');
+      expiresIn = parsedUrl.searchParams.get('expiresIn') || parsedUrl.searchParams.get('expires_in');
+      refreshExpiresIn = parsedUrl.searchParams.get('refreshExpiresIn') || parsedUrl.searchParams.get('refresh_expires_in');
+    }
+
+    // Fallback: Manual parsing if searchParams didn't work (common with custom protocols)
+    // Also trigger fallback if token exists but refreshToken is missing AND url ends with token (suggesting truncation)
+    const urlEndsWithTokenValue = token && url.endsWith(token);
+    if (!token || (!refreshToken && (url.includes('refresh_token') || urlEndsWithTokenValue))) {
+      const queryString = url.includes('?') ? url.split('?')[1] : '';
+      const params = new URLSearchParams(queryString);
+      token = token || params.get('token');
+      refreshToken = refreshToken || params.get('refreshToken') || params.get('refresh_token');
+      expiresIn = expiresIn || params.get('expiresIn') || params.get('expires_in');
+      refreshExpiresIn = refreshExpiresIn || params.get('refreshExpiresIn') || params.get('refresh_expires_in');
+    }
+
+    // Debug logging
+    log.info('Extracted tokens from deep link:', {
+      hasToken: !!token,
+      hasRefreshToken: !!refreshToken,
+      tokenLength: token?.length || 0,
+      refreshTokenLength: refreshToken?.length || 0
+    });
+
+    if (!token) {
+      log.error('No token found in deep link');
+      return;
+    }
+
+    // Store tokens with error handling
+    const tokenService = new Token();
+    try {
       tokenService.setValue(TOKENNAME, token);
-      
+      log.info('Access token saved successfully');
+
+      // Calculate and store token expiry time
+      if (expiresIn) {
+        const expiryTime = Date.now() + (parseInt(expiresIn) * 1000);
+        tokenService.setValue(TOKENEXPIRY, expiryTime.toString());
+        log.info('Token expiry time saved:', new Date(expiryTime).toISOString());
+      }
+
       // Save refresh token if provided
       if (refreshToken) {
         tokenService.setValue(REFRESHTOKEN, refreshToken);
         log.info('Refresh token saved successfully');
-      }
-      
-      // const remoteser = new RemoteSource()
-      // const userInfo = await remoteser.GetUserInfo()
-      // console.log('userInfo:', userInfo)
-      const userController = new UserController()
-      try {
-        const userInfo = await userController.updateUserInfo();
-        if (userInfo) {
-          //login success
 
-          if (win && !win.isDestroyed()) {
-            await win.webContents.send(NATIVATECOMMAND, { path: 'Dashboard' } as NativateDatatype);
-          } else {
-            console.error('Window has been destroyed, cannot send navigation command');
-            //log.error('Window has been destroyed, cannot send navigation command');
-          }
-        } else {
-          log.error('Failed to get user info from remote source');
-          dialog.showErrorBox('User Info Error',
-            `Failed to get user info from remote source.`);
+        // Calculate and store refresh token expiry time
+        if (refreshExpiresIn) {
+          const refreshExpiryTime = Date.now() + (parseInt(refreshExpiresIn) * 1000);
+          tokenService.setValue(REFRESHTOKENEXPIRY, refreshExpiryTime.toString());
+          log.info('Refresh token expiry time saved:', new Date(refreshExpiryTime).toISOString());
         }
-      } catch (error) {
-        log.error('Error updating user info:', error);
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        dialog.showErrorBox('User Info Update Error',
-          `Failed to update user information: ${errorMessage}`);
+      } else {
+        log.warn('No refresh token found in deep link URL');
       }
-
-    } else {
-      console.error('No token found');
+    } catch (storageError) {
+      log.error('Failed to store tokens:', storageError);
+      const errorMessage = storageError instanceof Error ? storageError.message : String(storageError);
+      dialog.showErrorBox('Authentication Error',
+        `Failed to store authentication tokens: ${errorMessage}`);
+      return;
     }
 
-    // Perform other actions based on the URL
+    // Fetch user information
+    const userController = new UserController();
+    try {
+      const userInfo = await userController.updateUserInfo();
+      if (userInfo) {
+        // Login successful - Register device with backend (non-blocking)
+        try {
+          const deviceFingerprintService = new DeviceFingerprintService();
+          const deviceApi = new DeviceApi();
+
+          const deviceIdHash = deviceFingerprintService.getDeviceIdHash();
+          const deviceName = deviceFingerprintService.getDeviceName();
+
+          // Store deviceIdHash for future use
+          deviceFingerprintService.storeDeviceIdHash(deviceIdHash);
+
+          // Register device with backend
+          if (refreshToken) {
+            await deviceApi.registerDevice(deviceName, deviceIdHash, refreshToken);
+            log.info('Device registered successfully:', deviceIdHash);
+          } else {
+            // Register without refresh token (backend will generate one)
+            await deviceApi.registerDevice(deviceName, deviceIdHash);
+            log.info('Device registered successfully (without refresh token):', deviceIdHash);
+          }
+        } catch (deviceError) {
+          // Log error but don't block login flow
+          log.error('Device registration failed (non-blocking):', deviceError);
+          const errorMessage = deviceError instanceof Error ? deviceError.message : String(deviceError);
+          console.error('Device registration error:', errorMessage);
+        }
+
+        // Navigate to dashboard
+        if (win && !win.isDestroyed()) {
+          win.webContents.send(NATIVATECOMMAND, { path: 'Dashboard' } as NativateDatatype);
+        } else {
+          console.error('Window has been destroyed, cannot send navigation command');
+          log.error('Window has been destroyed, cannot send navigation command');
+        }
+      } else {
+        log.error('Failed to get user info from remote source');
+        dialog.showErrorBox('User Info Error',
+          'Failed to get user info from remote source.');
+
+        // Clear tokens on authentication failure
+        clearTokens();
+      }
+    } catch (userError) {
+      log.error('Error updating user info:', userError);
+      const errorMessage = userError instanceof Error ? userError.message : String(userError);
+      dialog.showErrorBox('User Info Update Error',
+        `Failed to update user information: ${errorMessage}`);
+
+      // Clear tokens on authentication failure
+      clearTokens();
+    }
 
   } catch (error) {
-    console.error('Failed to handle deep link:', error);
+    log.error('Failed to handle deep link:', error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error('Deep link handling error:', errorMessage);
+
+    // Show error dialog to user
+    if (app.isReady()) {
+      dialog.showErrorBox('Deep Link Error',
+        `Failed to process authentication link: ${errorMessage}`);
+    }
   }
 }
 
