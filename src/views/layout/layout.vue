@@ -1,9 +1,11 @@
 <template>
-    <v-layout :class="{
+    <v-layout
+:class="{
         isMini: navState.isMini,
         isMobile: mainStore.isMobile,
     }">
-        <v-navigation-drawer class="my-4 layout_navigation" :rail="navState.rail" expand-on-hover rail-width="77"
+        <v-navigation-drawer
+class="my-4 layout_navigation" :rail="navState.rail" expand-on-hover rail-width="77"
             @update:rail="navigationRail" :permanent="permanent" v-model="navState.menuVisible" style="position: fixed">
             <v-list class="py-4 mx-2 logo" nav>
                 <v-list-item :prepend-avatar="logo" class="mx-1" @click="gotodashborad()">
@@ -16,7 +18,8 @@
             <v-list nav class="mx-2">
                 <v-list-subheader>{{ t('route.dashboard') }}</v-list-subheader>
                 <template v-for="(item, key) in navState.routes" :key="key">
-                    <v-list-item v-if="item.meta?.visible && !item.children" :prepend-icon="(item.meta?.icon as any)"
+                    <v-list-item
+v-if="item.meta?.visible && !item.children" :prepend-icon="(item.meta?.icon as any)"
                         :title="getTranslatedTitle(item.meta?.title as string)" :to="{ name: item.name }" class="mx-1"
                         active-class="nav_active"></v-list-item>
 
@@ -25,7 +28,8 @@
                             <v-list-item v-bind="props" :prepend-icon="item.meta.icon" :title="getTranslatedTitle(item.meta.title as string)" />
                         </template>
                         <template v-for="(row, i) in item.children">
-                            <v-list-item v-if="(row.meta?.visible as any)" :title="getTranslatedTitle(row.meta?.title as string)"
+                            <v-list-item
+v-if="(row.meta?.visible as any)" :title="getTranslatedTitle(row.meta?.title as string)"
                                 :prepend-icon="navState.isMini ? (row.meta?.icon as any) : ''" :key="i"
                                 :to="{ name: row.name }" />
                         </template>
@@ -34,7 +38,8 @@
                     <v-list-subheader v-if="item.name === 'Miscellaneous'">Other</v-list-subheader>
                 </template>
                 <v-list-item prepend-icon="mdi-text-box" class="mx-1">
-                    <v-list-item-title><a target="_blank" href="https://vuetifyjs.com/"
+                    <v-list-item-title><a
+target="_blank" href="https://vuetifyjs.com/"
                             class="link">Document</a></v-list-item-title>
                 </v-list-item>
                 <!-- <v-list-item prepend-icon="mdi-github" class="mx-1">
@@ -59,7 +64,8 @@
                 <div v-if="mainStore.isMobile" class="head_logo ml-4 mr-1">
                     <img :src="logo" height="40" />
                 </div>
-                <v-btn v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
+                <v-btn
+v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
                     @click="navState.menuVisible = !navState.menuVisible">
                     <v-icon size="small"></v-icon>
                 </v-btn>
@@ -70,7 +76,8 @@
                         prepend-inner-icon="mdi-magnify" single-line hide-details clearable></v-text-field> -->
                 </div>
                 <div class="tool_btns">
-                    <v-btn @click="mainStore.onTheme" variant="text" :icon="mainStore.theme === 'light' ? 'mdi-weather-sunny' : 'mdi-weather-night'
+                    <v-btn
+@click="mainStore.onTheme" variant="text" :icon="mainStore.theme === 'light' ? 'mdi-weather-sunny' : 'mdi-weather-night'
         " />
                     <v-btn variant="text" icon="mdi-bell-outline">
                         <v-badge content="2" color="error">
@@ -84,7 +91,7 @@
                         <!-- <v-avatar size="x-small" class="avatar mr-2">
                             <v-img :src="wxtx" alt="{{userName}}"></v-img>
                         </v-avatar> -->
-                        <span v-if="!mainStore.isMobile">{{userName}}</span>
+                        <span v-if="!mainStore.isMobile">{{ userName }}</span>
                         <v-menu activator="parent">
                             <v-list nav class="h_a_menu">
                                 <v-menu :location="location">
@@ -125,7 +132,7 @@
           <!-- Multiple Messages Display -->
           <div class="messages-container">
             <div
-              v-for="(msg, index) in messages"
+              v-for="msg in messages"
               :key="msg.id"
               class="message-item"
               :class="msg.type"
@@ -189,7 +196,7 @@ import { getAppName } from '@/views/api/app'
 import { updateLanguagePreference, getLanguagePreference } from '@/views/api/language'
 import { initializeLanguageDetection } from '@/views/utils/browserLanguageDetection'
 import { initializeLanguageMigration } from '@/views/utils/languageMigration'
-import { initializeLanguageSynchronization } from '@/views/utils/languageSynchronization'
+import { initializeLanguageSynchronization, syncLanguageChange } from '@/views/utils/languageSynchronization'
 
 
 // import {ref, watchEffect} from "vue";
@@ -248,16 +255,12 @@ const switchLanguage = async (lang: string) => {
     try {
         // Update UI immediately for better user experience
         locale.value = lang
-        setLanguage(lang)
         
-        // Persist to system settings in the background
-        const success = await updateLanguagePreference(lang)
+        // Sync language change using event-driven synchronization
+        await syncLanguageChange(lang)
         
-        if (success) {
-            showSuccessMessage(t('layout.language_updated_successfully') || 'Language updated successfully')
-        } else {
-            showWarningMessage(t('layout.language_update_failed') || 'Language update failed, but UI has been updated')
-        }
+        // Show success message
+        showSuccessMessage(t('layout.language_updated_successfully') || 'Language updated successfully')
     } catch (error) {
         console.error('Error switching language:', error)
         showErrorMessage(t('layout.language_switch_error') || 'Error switching language')
@@ -386,8 +389,8 @@ onMounted(async () => {
         await switchLanguage(selectedLanguage)
     })
     
-    // Initialize language synchronization
-    initializeLanguageSynchronization()
+    // Initialize language synchronization (performs initial sync only)
+    await initializeLanguageSynchronization()
     
     // Add keyboard shortcut listener
     window.addEventListener('keydown', handleKeyboardShortcut)

@@ -202,6 +202,31 @@ function initialize() {
     })
 
     if (win) {
+      // Check if USERSDBPATH is empty, create temp db path if needed
+      const tokenService = new Token();
+      let userdataPath = tokenService.getValue(USERSDBPATH);
+      
+      if (!userdataPath || userdataPath.length === 0) {
+        // Create temporary database path
+        const tempDbPath = path.join(app.getPath('userData'), 'temp_db');
+        try {
+          // Ensure the directory exists
+          if (!fs.existsSync(tempDbPath)) {
+            fs.mkdirSync(tempDbPath, { recursive: true });
+            log.info(`Created temporary database directory at: ${tempDbPath}`);
+          }
+          // Set the temporary path
+          tokenService.setValue(USERSDBPATH, tempDbPath);
+          userdataPath = tempDbPath;
+          log.info(`Set temporary USERSDBPATH to: ${tempDbPath}`);
+        } catch (err) {
+          log.error(`Failed to create temporary database path: ${err}`);
+          const errorMessage = err instanceof Error ? err.message : String(err);
+          dialog.showErrorBox('Configuration Error',
+            `Failed to create temporary database directory: ${errorMessage}`);
+        }
+      }
+      
       registerCommunicationIpcHandlers(win);
     }
 
@@ -572,7 +597,7 @@ function makeSingleInstance() {
       // console.log("second-instance call")
       // console.log('protocolScheme:', protocolScheme)
      // argv = argv.map(arg => typeof arg === 'string' ? arg.toLowerCase() : arg);
-      const urlIndex = argv.findIndex(arg => arg.startsWith(`${protocolScheme}://`));
+      const urlIndex = argv.findIndex(arg => typeof arg === 'string' && arg.toLowerCase().startsWith(`${protocolScheme}://`));
       if (urlIndex !== -1) {
         // Reconstruct URL if it was split by shell at '&' character
         // When shell splits at '&', the parts after become separate argv elements
@@ -607,8 +632,9 @@ function makeSingleInstance() {
  * Validate deep link URL origin to prevent malicious token injection
  */
 function isValidDeepLinkOrigin(parsedUrl: URL): boolean {
-  // Check if the URL protocol matches our app's protocol scheme
-  if (!parsedUrl.protocol.includes(protocolScheme)) {
+  // Check if the URL protocol matches our app's protocol scheme (case-insensitive)
+  const urlProtocol = parsedUrl.protocol.toLowerCase();
+  if (!urlProtocol.includes(protocolScheme)) {
     log.error('Invalid deep link protocol:', parsedUrl.protocol);
     return false;
   }
