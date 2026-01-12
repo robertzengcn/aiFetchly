@@ -11,7 +11,7 @@ export class User {
         const token = new Token();
         token.setValue(TOKENNAME, "");
         token.setValue(USERSDBPATH, "");
-        token.setValue(USERSDBPATH, "");
+        // token.setValue(USERSDBPATH, "");
         token.setValue(USERLOGPATH, "");
         token.setValue(USEREMAIL, "");
         token.setValue(USERNAME, "");
