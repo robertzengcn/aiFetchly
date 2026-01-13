@@ -26,8 +26,8 @@ export interface SchedulerStatus {
 export class ScheduleManager {
     private static instance: ScheduleManager;
     private cronJobs: Map<number, CronJob> = new Map();
-    private isInitialized: boolean = false;
-    private isRunning: boolean = false;
+    private isInitialized= false;
+    private isRunning= false;
     private checkInterval: NodeJS.Timeout | null = null;
     private scheduleTaskModule: ScheduleTaskModuleInterface;
     private scheduleExecutionLogModule: ScheduleExecutionLogInterface;

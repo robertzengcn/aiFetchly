@@ -33,7 +33,7 @@ export class Taskrundb {
   //get task id by task run number
   public getTaskidbytaskrunNum(taskrunNum: string, callback?: (id: number, taskid: number) => void | undefined | null) {
     const stmt = this.db.prepare(`SELECT id,task_id FROM ` + this.taskrunTable + ` WHERE taskrun_num = ?`);
-    // let taskid: number = 0;
+    // let taskid= : number = 0;;
     const taskrun = stmt.get(taskrunNum) as { id: number, task_id: number }
     // if (err) {
     //   throw new Error(err.message);
