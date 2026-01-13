@@ -1,6 +1,6 @@
 'use strict';
 import { assert } from 'console';
-import {RemoteSource,Linkdata} from '../../src/modules/remotesource'
+import {RemoteSource,Linkdata} from '@/modules/remotesource'
 const expect = require('expect.js');
 // mocha test test/modules --grep save-link-to-remote
 describe('Module Remote', function(){

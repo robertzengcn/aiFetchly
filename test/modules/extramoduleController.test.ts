@@ -1,7 +1,7 @@
 'use strict';
 import { describe, it, beforeEach } from 'mocha';
 import { expect } from 'chai';
-import { ExtraModuleController } from '../../src/controller/extramoduleController';
+import { ExtraModuleController } from '@/controller/extramoduleController';
 
 describe('ExtraModuleController', () => {
   let extramoduleController: ExtraModuleController;

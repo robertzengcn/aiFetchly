@@ -1,7 +1,7 @@
 'use strict';
 import { describe, it, beforeEach } from 'mocha';
 import { expect } from 'chai';
-import { SearchController } from '../../src/controller/SearchController';
+import { SearchController } from '@/controller/SearchController';
 
 describe('SearchController', () => {
   let searchController: SearchController;
