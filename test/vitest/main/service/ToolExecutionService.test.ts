@@ -1,17 +1,26 @@
 'use strict';
-import { describe, test, expect, beforeEach, vi } from 'vitest';
+import { describe, test, expect, vi } from 'vitest';
 import { ToolExecutionService } from '@/service/ToolExecutionService';
 
 describe('ToolExecutionService', () => {
-  let toolExecutionService: ToolExecutionService;
+  describe('static methods', () => {
+    test('should have formatSearchResultsForLLM method', () => {
+      expect(ToolExecutionService.formatSearchResultsForLLM).toBeDefined();
+      expect(typeof ToolExecutionService.formatSearchResultsForLLM).toBe('function');
+    });
 
-  beforeEach(() => {
-    toolExecutionService = new ToolExecutionService();
-  });
+    test('should format empty search results', () => {
+      const result = ToolExecutionService.formatSearchResultsForLLM([]);
+      expect(result).toBe('No search results found.');
+    });
 
-  describe('basic functionality', () => {
-    test('should be instantiated', () => {
-      expect(toolExecutionService).toBeInstanceOf(ToolExecutionService);
+    test('should format search results', () => {
+      const results = [
+        { link: 'https://example.com', title: 'Example', snippet: 'Test snippet' },
+      ];
+      const result = ToolExecutionService.formatSearchResultsForLLM(results);
+      expect(result).toContain('Example');
+      expect(result).toContain('https://example.com');
     });
   });
 });

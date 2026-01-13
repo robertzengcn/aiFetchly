@@ -1,12 +1,12 @@
 'use strict';
 import { describe, test, expect, beforeEach, vi } from 'vitest';
-import { StreamEventProcessor } from '@/service/StreamEventProcessor';
+import { StreamEventProcessor, StreamState } from '@/service/StreamEventProcessor';
 import type { IpcMainEvent } from 'electron';
 
 describe('StreamEventProcessor', () => {
   let streamEventProcessor: StreamEventProcessor;
   let mockEvent: IpcMainEvent;
-  let mockState: any;
+  let mockState: StreamState;
 
   beforeEach(() => {
     // Create mock IpcMainEvent
@@ -16,11 +16,18 @@ describe('StreamEventProcessor', () => {
       },
     } as unknown as IpcMainEvent;
 
-    // Create mock StreamState
+    // Create mock StreamState with required properties
     mockState = {
-      isActive: false,
-      currentChunk: 0,
-      totalChunks: 0,
+      assistantMessageId: 'test-message-id',
+      fullContent: '',
+      streamConversationId: 'test-conversation-id',
+      hasStartedConversation: false,
+      pendingToolCalls: new Set(),
+      deferredCompletionChunk: null,
+      messageSaved: false,
+      chatModule: {} as any,
+      aiChatApi: {} as any,
+      currentPlan: null,
     };
 
     streamEventProcessor = new StreamEventProcessor(mockEvent, mockState);
