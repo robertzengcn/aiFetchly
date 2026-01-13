@@ -47,8 +47,8 @@ export class ConfigurationServiceImpl implements ConfigurationService {
     private cache: Map<string, { data: EmbeddingConfig; timestamp: number; ttl: number }> = new Map();
     private readonly DEFAULT_TTL = 3600000; // 1 hour in milliseconds
     private readonly MAX_CACHE_SIZE = 100; // Maximum number of cache entries
-    private cacheHits: number = 0;
-    private cacheMisses: number = 0;
+    private cacheHits = 0;
+    private cacheMisses = 0;
 
     /**
      * Creates a new ConfigurationServiceImpl instance

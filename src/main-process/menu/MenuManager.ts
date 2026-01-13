@@ -8,7 +8,7 @@ import * as fs from 'fs';
  * Provides application menu with session recording toggle and management options
  */
 export class MenuManager {
-    private isRecordingEnabled: boolean = false;
+    private isRecordingEnabled= false;
     private sessionsDirectory: string;
 
     constructor() {

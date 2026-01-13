@@ -14,7 +14,7 @@ import { app } from 'electron';
  */
 
 // Global recording state
-let isRecordingEnabled: boolean = false;
+let isRecordingEnabled= false;
 
 // Sessions directory path
 const sessionsDirectory = path.join(app.getPath('userData'), 'sessions');

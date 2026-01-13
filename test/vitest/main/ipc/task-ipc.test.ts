@@ -71,14 +71,22 @@ describe('Task IPC Handlers', () => {
     });
 
     test('should propagate errors', async () => {
-      // Mock controller to throw error
-      const TaskControllerMock = await vi.importMock<typeof import('@/controller/taskController')>('@/controller/taskController');
-      if (TaskControllerMock && TaskControllerMock.TaskController) {
-        const mockFn = TaskControllerMock.TaskController as unknown as ReturnType<typeof vi.fn>;
-        mockFn.mockImplementationOnce(() => ({
-          createTask: vi.fn().mockRejectedValue(new Error('Creation failed')),
-        }));
-      }
+      // Mock controller to throw error - re-register handler with error-throwing controller
+      const MockedTaskController = vi.mocked(TaskController);
+      MockedTaskController.mockImplementationOnce(() => ({
+        createTask: vi.fn().mockRejectedValue(new Error('Creation failed')),
+        updateTask: vi.fn(),
+        deleteTask: vi.fn(),
+        getTaskList: vi.fn(),
+        getTaskDetail: vi.fn(),
+        runTask: vi.fn(),
+        cancelTask: vi.fn(),
+        getTaskResults: vi.fn(),
+      }) as unknown as TaskController);
+
+      // Re-register handlers to use the new mock
+      mockIpcMain.clearHandlers();
+      registerTaskIpcHandlers(mockWindow as unknown as Electron.BrowserWindow);
 
       const taskData = { name: 'Test Task' };
       await expect(mockIpcMain.callHandler('task:create', taskData)).rejects.toThrow('Creation failed');

@@ -57,27 +57,27 @@ export class BackgroundScheduler extends BaseDb {
     private scheduleTaskModel: ScheduleTaskModuleInterface;
     private scheduleExecutionLogModel: ScheduleExecutionLogModel;
     private taskExecutorService: TaskExecutorService;
-    
-    private isInitialized: boolean = false;
-    private isRunning: boolean = false;
+
+    private isInitialized = false;
+    private isRunning = false;
     private executionQueue: ExecutionQueueItem[] = [];
     private runningExecutions: Set<number> = new Set();
-    private maxConcurrentExecutions: number = 5;
-    private maxRetries: number = 3;
-    private retryDelayMs: number = 60000; // 1 minute
-    
+    private maxConcurrentExecutions = 5;
+    private maxRetries = 3;
+    private retryDelayMs = 60000; // 1 minute
+
     // Timers and intervals
     private cronCheckInterval: NodeJS.Timeout | null = null;
     private dependencyCheckInterval: NodeJS.Timeout | null = null;
     private cleanupInterval: NodeJS.Timeout | null = null;
     private queueProcessInterval: NodeJS.Timeout | null = null;
-    
+
     // Statistics
     private lastCheckTime: Date = new Date();
     private lastExecutionTime: Date | null = null;
-    private totalExecutions: number = 0;
-    private successfulExecutions: number = 0;
-    private failedExecutions: number = 0;
+    private totalExecutions = 0;
+    private successfulExecutions = 0;
+    private failedExecutions = 0;
 
     constructor(filepath: string) {
         super(filepath);
