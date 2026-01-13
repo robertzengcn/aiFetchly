@@ -1,7 +1,7 @@
 'use strict';
 import { describe, it, beforeEach } from 'mocha';
 import { expect } from 'chai';
-import { EmailextractionController } from '../../src/controller/emailextractionController';
+import { EmailextractionController } from '@/controller/emailextractionController';
 
 describe('EmailextractionController', () => {
   let emailExtractionController: EmailextractionController;

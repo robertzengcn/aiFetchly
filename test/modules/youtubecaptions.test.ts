@@ -1,6 +1,6 @@
 'use strict';
-// import {authorize} from '../../src/modules/google_auth';
-// import {insertCapptions} from '../../src/modules/youtube_captions';
+// import {authorize} from '@/modules/google_auth';
+// import {insertCapptions} from '@/modules/youtube_captions';
 const appRoot = require('app-root-path');
 import * as path from "path";
 const fs = require('fs');
