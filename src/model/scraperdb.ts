@@ -1,5 +1,5 @@
 // import { Database } from 'sqlite3';
-const Database = require('better-sqlite3');
+import Database from 'better-sqlite3';
 //const Database = require('better-sqlite3');
 // import DatabaseConstructor,{Database}from 'better-sqlite3';
 import * as fs from 'fs';
