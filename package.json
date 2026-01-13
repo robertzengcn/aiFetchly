@@ -35,7 +35,7 @@
     "publish": "electron-forge publish",
     "task": "ts-node src/runcli.ts -a task -t",
     "runtask": "ts-node src/utilityCode.ts -a runtask -t 69:73a5795d-ad47-4bf5-a2da-75d733df30cf",
-    "test": "env TS_NODE_COMPILER_OPTIONS='{\"module\": \"commonjs\" }' mocha -r ts-node/register 'test/**/*.ts'",
+    "test": "env TS_NODE_COMPILER_OPTIONS='{\"module\": \"es2020\" }' mocha -r ts-node/register -r tsconfig-paths/register 'test/**/*.ts'",
     "testdownload": "env TS_NODE_COMPILER_OPTIONS='{\"module\": \"commonjs\" }' mocha -r ts-node/register 'test/modules/bilibili.test.ts' --grep download-single-video",
     "testgetalllinks": "mocha test test/modules --grep video-url-list",
     "testgetlinks": "mocha test test/modules --grep get video play link",
