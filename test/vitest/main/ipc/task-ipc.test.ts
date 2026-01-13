@@ -72,10 +72,13 @@ describe('Task IPC Handlers', () => {
 
     test('should propagate errors', async () => {
       // Mock controller to throw error
-      const TaskControllerMock = await vi.importMock('@/controller/taskController');
-      TaskControllerMock.TaskController.mockImplementationOnce(() => ({
-        createTask: vi.fn().mockRejectedValue(new Error('Creation failed')),
-      }));
+      const TaskControllerMock = await vi.importMock<typeof import('@/controller/taskController')>('@/controller/taskController');
+      if (TaskControllerMock && TaskControllerMock.TaskController) {
+        const mockFn = TaskControllerMock.TaskController as unknown as ReturnType<typeof vi.fn>;
+        mockFn.mockImplementationOnce(() => ({
+          createTask: vi.fn().mockRejectedValue(new Error('Creation failed')),
+        }));
+      }
 
       const taskData = { name: 'Test Task' };
       await expect(mockIpcMain.callHandler('task:create', taskData)).rejects.toThrow('Creation failed');
@@ -137,7 +140,7 @@ describe('Task IPC Handlers', () => {
 
     test('should handle task detail request', async () => {
       const params = { id: 1 };
-      const result = await mockIpcMain.callHandler('task:detail', params);
+      const result = await mockIpcMain.callHandler('task:detail', params) as { task: { id: number; name: string; status: string } };
       
       expect(result).to.have.property('task');
       expect(result.task.id).toBe(1);
