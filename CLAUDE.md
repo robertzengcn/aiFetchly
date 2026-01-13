@@ -115,9 +115,43 @@ src/
 - Secure token storage using Electron's safeStorage
 
 ### Testing Strategy
-- Unit tests with Mocha for backend logic
-- Vitest for frontend components and utilities
-- Integration tests for scraping functionality
+
+#### Test Organization
+All test files are located in the `test/` directory at the project root:
+
+```
+test/
+├── modules/              # Mocha tests for module functionality
+│   ├── *.test.ts        # Module unit tests (controllers, services, modules)
+├── vitest/              # Vitest tests for different processes
+│   ├── main/            # Main process unit tests (IPC handlers, main process logic)
+│   ├── utilitycode/     # Utility code tests (utility functions, helpers)
+│   └── taskCode/        # Task code tests (task execution logic)
+├── rag/                 # RAG-specific tests
+│   ├── *.test.ts        # RAG module tests
+│   └── integration/     # RAG integration tests
+└── output/              # Test output directory
+```
+
+#### Test Frameworks
+- **Mocha**: Used for module tests (CommonJS style) - `test/modules/*.test.ts`
+- **Vitest**: Used for main process and utility code tests - `test/vitest/*/*.test.ts`
+- All test files use `.test.ts` extension
+
+#### Test Placement Guidelines
+- **Controller tests**: `test/modules/` (mirrors `src/controller/`)
+- **Service tests**: `test/modules/` (mirrors `src/service/`)
+- **Module tests**: `test/modules/` (mirrors `src/modules/`)
+- **Main process tests**: `test/vitest/main/` (mirrors `src/main-process/`)
+- **IPC handler tests**: `test/vitest/main/`
+- **Utility function tests**: `test/vitest/utilitycode/`
+- **Task code tests**: `test/vitest/taskCode/`
+
+#### Running Tests
+- Run all Mocha tests: `yarn test`
+- Run specific test: `yarn test <test-file-path>`
+- Run main process tests: `yarn testmain`
+- Run utility code tests: `yarn vitest-puppeteer`
 - Use DEBUG flags for detailed logging: `DEBUG='module:*' yarn test`
 
 ## Database Schema
