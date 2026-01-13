@@ -105,7 +105,7 @@ export class SocialAccountController {
         }
         // const cookies = this.accountCookiesModule.getAccountCookies(accinfo.data.id)
         //let partition_path = "persist:path/" + Date.now() + '-' + Math.random().toString(36).slice(2, 9)
-        let partition_path = this.accountCookiesModule.genPartitionPath()
+        const partition_path = this.accountCookiesModule.genPartitionPath()
 
         if (!cookies) {
             //     if (cookies.partition_path) {
@@ -160,7 +160,7 @@ export class SocialAccountController {
                     if (cookie.domain && cookie.domain.charAt(0) === '.') {
                         url = cookie.domain.slice(1);
                     }
-                    let cookieDetails: CookiesParse = {
+                    const cookieDetails: CookiesParse = {
                         url: `http${cookie.secure ? 's' : ''}://${url}${cookie.path}`,
                         name: cookie.name,
                         value: cookie.value,

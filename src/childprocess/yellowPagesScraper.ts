@@ -23,6 +23,9 @@ import { BasePlatformAdapter } from '@/modules/BasePlatformAdapter';
 import { ProcessMessage } from '@/entityTypes/processMessage-type';
 import { StartTaskMessage, ProgressMessage, CompletedMessage, ErrorMessage } from '@/modules/interface/BackgroundProcessMessages';
 import { SessionRecordingManager } from '@/modules/SessionRecordingManager';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
 //import { MessageType } from '@/interfaces/IPCMessageProtocol';
 
 interface ScrapingProgress {
@@ -168,11 +171,11 @@ export class YellowPagesScraperProcess {
     private platformInfo: PlatformInfo;
     private browser: Browser | null = null;
     private page: Page | null = null;
-    private isRunning: boolean = false;
-    private isPaused: boolean = false;
+    private isRunning = false;
+    private isPaused = false;
     private adapter: BasePlatformAdapter | null = null;
     private sessionManager: SessionRecordingManager;
-    private isInNewTab: boolean = false;
+    private isInNewTab = false;
     private searchPageUrl: string | null = null;
 
     // IPC integration
@@ -705,7 +708,7 @@ export class YellowPagesScraperProcess {
         maxPages: number,
         delayBetweenRequests: number,
         totalResults: ScrapingResult[],
-        useCustomExtraction: boolean = false
+        useCustomExtraction = false
     ): Promise<void> {
         // Input the keyword once for this keyword
         await this.navigateToSearchPage(keyword, location, 1);
@@ -2866,7 +2869,7 @@ export class YellowPagesScraperProcess {
         if (!phone || phone.trim() === '') return false;
 
         // Remove common phone number formatting
-        const cleanPhone = phone.replace(/[\s\-\(\)\+\.]/g, '');
+        const cleanPhone = phone.replace(/[\s\-()+.]/g, '');
 
         // Check if it contains mostly digits and has reasonable length
         const hasDigits = /\d/.test(cleanPhone);
@@ -3432,7 +3435,7 @@ export class YellowPagesScraperProcess {
 
                 let visibleText = '';
                 let node;
-                while (node = walker.nextNode()) {
+                while ((node = walker.nextNode())) {
                     visibleText += node.textContent + ' ';
                 }
 
@@ -4150,7 +4153,7 @@ export class YellowPagesScraperProcess {
      * @param maxWaitTime Maximum time to wait in milliseconds (default: 30 seconds)
      * @returns true if Cloudflare challenge appears to be resolved, false otherwise
      */
-    private async waitForCloudflareChallenge(maxWaitTime: number = 30000): Promise<boolean> {
+    private async waitForCloudflareChallenge(maxWaitTime = 30000): Promise<boolean> {
         if (!this.page) return false;
 
         console.log(`⏳ Waiting for Cloudflare challenge to complete (max: ${maxWaitTime}ms)...`);
@@ -4191,7 +4194,7 @@ export class YellowPagesScraperProcess {
      * @param maxRetries Maximum number of retry attempts
      * @returns true if Cloudflare protection was handled successfully, false otherwise
      */
-    private async handleCloudflareWithRetry(maxRetries: number = 3): Promise<boolean> {
+    private async handleCloudflareWithRetry(maxRetries = 3): Promise<boolean> {
         if (!this.page) return false;
 
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -4244,12 +4247,10 @@ export class YellowPagesScraperProcess {
 
         try {
             // Create ~/tmp/ directory if it doesn't exist
-            const fs = require('fs').promises;
-            const path = require('path');
-            const os = require('os');
+            const fsPromises = fs.promises;
 
             const tmpDir = path.join(os.homedir(), 'tmp');
-            await fs.mkdir(tmpDir, { recursive: true });
+            await fsPromises.mkdir(tmpDir, { recursive: true });
             // Also save the current page URL to a separate file for debugging
             // const urlFilename = `debug_${platform}_task${taskId}_page${pageNumber}_${reason}_${timestamp}.url.txt`;
             // const urlFilePath = path.join(tmpDir, urlFilename);
@@ -4281,7 +4282,7 @@ Location: ${this.taskData.location}
 ${htmlContent}`;
 
             // Save HTML content to file
-            await fs.writeFile(filePath, debugHtml, 'utf8');
+            await fsPromises.writeFile(filePath, debugHtml, 'utf8');
 
             console.log(`💾 Saved debug HTML to: ${filePath}`);
             console.log(`🔍 Debug info - Platform: ${platform}, Task: ${taskId}, Page: ${pageNumber}, URL: ${currentUrl}`);
