@@ -30,6 +30,21 @@
     "paths": {
       "@/*": [
         "./src/*"
+      ],
+      "electron": [
+        "./test/mocks/electron.ts"
+      ],
+      "electron-log": [
+        "./test/mocks/electron-log.ts"
+      ],
+      "electron-log/main": [
+        "./test/mocks/electron-log.ts"
+      ],
+      "electron-log/node": [
+        "./test/mocks/electron-log.ts"
+      ],
+      "electron-store": [
+        "./test/mocks/electron-store.ts"
       ]
     },
     "lib": [

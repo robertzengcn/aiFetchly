@@ -117,7 +117,10 @@ export class UserController {
     //     return jwtuser;
     // }
     public getLoginPageUrl(): string {
-        const loginUrl = import.meta.env.VITE_LOGIN_URL as string;
+        // Use environment variable in Node.js, import.meta.env in Vite
+        const loginUrl = process.env.VITE_LOGIN_URL ||
+                        (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_LOGIN_URL) ||
+                        'http://localhost:3000';
         const appName = app.getName() || "";
         const finalapp = appName.replace(/-/g, '');
         
