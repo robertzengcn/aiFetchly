@@ -61,7 +61,7 @@ export class ProxyController {
     //convert proxy entity to url
 
     // Helper method to check HTTP proxy using CONNECT method
-    private async checkHttpProxy(proxyHost: string, proxyPort: string, username?: string, password?: string, testUrl: string = 'https://httpbin.org/ip', timeout: number = 5000): Promise<boolean> {
+    private async checkHttpProxy(proxyHost: string, proxyPort: string, username?: string, password?: string, testUrl = 'https://httpbin.org/ip', timeout = 5000): Promise<boolean> {
         return new Promise((resolve) => {
             const options: any = {
                 host: proxyHost,
@@ -101,7 +101,7 @@ export class ProxyController {
     }
 
     // Helper method to check SOCKS proxy
-    private async checkSocksProxy(proxyHost: string, proxyPort: string, username?: string, password?: string, testUrl: string = 'https://httpbin.org/ip', timeout: number = 5000): Promise<boolean> {
+    private async checkSocksProxy(proxyHost: string, proxyPort: string, username?: string, password?: string, testUrl = 'https://httpbin.org/ip', timeout = 5000): Promise<boolean> {
         return new Promise((resolve) => {
             const options: any = {
                 host: proxyHost,

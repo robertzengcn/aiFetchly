@@ -34,7 +34,8 @@ export class TranslateController {
     //     }
     // }
     async getTranslateConfig(toolName: string): Promise<TraditionalTranslateCongfig | void> {
-
+        // TODO: Implement this method
+        throw new Error('Method not implemented');
     }
     async getSystemLLMConfig(groupName:string,modelKey:string, urlKey:string, apikeykey:string): Promise<LlmCongfig | void> {
         //get deepseek config
