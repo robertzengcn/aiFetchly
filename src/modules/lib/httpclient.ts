@@ -22,7 +22,15 @@ export class HttpClient {
     private _refreshInProgress = false;
     constructor() {
       //AuthInterceptor()
-      this.baseUrl = import.meta.env.VITE_LOGIN_URL+"/apis";
+      // Use environment variable in Node.js, import.meta.env in Vite
+      let loginUrl = process.env.VITE_LOGIN_URL || 'http://localhost:3000';
+
+      // Try to use import.meta.env if available (Vite environment)
+      if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_LOGIN_URL) {
+        loginUrl = import.meta.env.VITE_LOGIN_URL;
+      }
+
+      this.baseUrl = loginUrl + "/apis";
       this._tokenRefreshService = new TokenRefreshService();
       this.setheaderToken()
       // const tokenModel=new Token()

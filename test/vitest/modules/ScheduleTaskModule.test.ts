@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { ScheduleTaskModule } from '@/modules/ScheduleTaskModule';
-import { ScheduleCreateRequest, TaskType, TriggerType, DependencyCondition } from '@/entityTypes/schedule-type';
+import { ScheduleCreateRequest, TaskType, TriggerType } from '@/entityTypes/schedule-type';
 import { ScheduleStatus } from '@/entity/ScheduleTask.entity';
 
 describe('ScheduleTaskModule', () => {

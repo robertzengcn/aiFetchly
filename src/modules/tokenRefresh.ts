@@ -44,7 +44,15 @@ export class TokenRefreshService {
     private _isRefreshing = false;
 
     constructor() {
-        this._baseUrl = import.meta.env.VITE_LOGIN_URL + "/apis";
+        // Use environment variable in Node.js, import.meta.env in Vite
+        let loginUrl = process.env.VITE_LOGIN_URL || 'http://localhost:3000';
+
+        // Try to use import.meta.env if available (Vite environment)
+        if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_LOGIN_URL) {
+            loginUrl = import.meta.env.VITE_LOGIN_URL;
+        }
+
+        this._baseUrl = loginUrl + "/apis";
         this._tokenService = new Token();
         this._userService = new User();
     }
