@@ -1,4 +1,4 @@
-import { Menu, app, shell } from 'electron';
+import { Menu, app, shell, BrowserWindow } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 
@@ -151,7 +151,6 @@ export class MenuManager {
     showDevConsole(): void {
         try {
             // Get the focused window or the first window
-            const { BrowserWindow } = require('electron');
             const focusedWindow = BrowserWindow.getFocusedWindow();
             const mainWindow = focusedWindow || BrowserWindow.getAllWindows()[0];
             
