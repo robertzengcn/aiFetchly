@@ -12,10 +12,10 @@ type dataResponse = {
 }
 export default function AsyncMsg() {
     console.log("AsyncMsg");
-    ipcMain.on('socialtask:start', async (event, data) => {
+    ipcMain.on('socialtask:start', async (event, data: unknown) => {
         console.log("get social task data")
 
-        const qdata = JSON.parse(data);
+        const qdata = JSON.parse(data as string);
         if (!("id" in qdata)) {
             throw new Error("id not found");
         }
@@ -36,21 +36,21 @@ export default function AsyncMsg() {
                 status: false,
                 code: 20240322143237,
                 msg: "start social task failed"
-            }
-            event.sender.send('socialtask:start', JSON.stringify(sendRes))
+            };
+            (event as { sender: { send: (channel: string, message: string) => void } }).sender.send('socialtask:start', JSON.stringify(sendRes));
         } else {
             const successRes: dataResponse = {
                 status: true,
                 code: 0,
                 msg: result.taskrun_num
-            }
-            event.sender.send('socialtask:start', JSON.stringify(successRes))
+            };
+            (event as { sender: { send: (channel: string, message: string) => void } }).sender.send('socialtask:start', JSON.stringify(successRes));
         }
         //run task
         if (result) {
             socialtaskcon.runsocialtask(result, function (res) {
 
-                event.sender.send('socialtask:log:' + qdata.runNum, JSON.stringify(res))
+                (event as { sender: { send: (channel: string, message: string) => void } }).sender.send('socialtask:log:' + qdata.runNum, JSON.stringify(res))
             })
         }
     })

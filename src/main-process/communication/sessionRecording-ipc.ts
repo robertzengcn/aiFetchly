@@ -26,15 +26,16 @@ export function registerSessionRecordingIpcHandlers(): void {
     console.log('Registering session recording IPC handlers...');
 
     // Toggle session recording on/off
-    ipcMain.handle('session-recording:toggle', async (event, enabled: boolean) => {
+    ipcMain.handle('session-recording:toggle', async (event, enabled: unknown) => {
         try {
-            isRecordingEnabled = enabled;
-            console.log(`Session recording ${enabled ? 'enabled' : 'disabled'} via IPC`);
+            isRecordingEnabled = enabled as boolean;
+            const enabledBool = enabled as boolean;
+            console.log(`Session recording ${enabledBool ? 'enabled' : 'disabled'} via IPC`);
             
             // Save preference to config file
-            await saveRecordingPreference(enabled);
+            await saveRecordingPreference(enabledBool);
             
-            return { success: true, enabled };
+            return { success: true, enabled: enabledBool };
         } catch (error) {
             console.error('Failed to toggle session recording:', error);
             return { success: false, error: error instanceof Error ? error.message : String(error) };

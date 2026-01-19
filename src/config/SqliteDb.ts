@@ -92,11 +92,11 @@ function getSqliteVecExtensionPath(): string | null {
         
         // 1a. Try app.getAppPath() (works in both dev and packaged)
         try {
-            if (typeof process !== 'undefined' && process.type === 'browser' && app && typeof app.getAppPath === 'function') {
-                const appPath = app.getAppPath();
+            if (typeof process !== 'undefined' && (process as NodeJS.Process & { type: string }).type === 'browser' && app && typeof (app as any).getAppPath === 'function') {
+                const appPath = (app as any).getAppPath();
                 // In development, extension is in .vite/build
                 // In production, extension is in app.asar or app.asar.unpacked
-                if (app.isPackaged) {
+                if ((app as any).isPackaged) {
                     // Try app.asar.unpacked first (where native modules are unpacked)
                     const unpackedPath = appPath.replace(/app\.asar$/, 'app.asar.unpacked');
                     buildExtensionPaths.push(path.join(unpackedPath, extensionName));
@@ -132,9 +132,10 @@ function getSqliteVecExtensionPath(): string | null {
         }
         
         // 1c. Try process.resourcesPath (packaged apps)
-        if (process.resourcesPath) {
-            buildExtensionPaths.push(path.join(process.resourcesPath, 'app.asar.unpacked', extensionName));
-            buildExtensionPaths.push(path.join(process.resourcesPath, extensionName));
+        const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+        if (resourcesPath) {
+            buildExtensionPaths.push(path.join(resourcesPath, 'app.asar.unpacked', extensionName));
+            buildExtensionPaths.push(path.join(resourcesPath, extensionName));
         }
         
         // Check build extension paths first (most reliable)
@@ -176,21 +177,22 @@ function getSqliteVecExtensionPath(): string | null {
         
         // 3a. Try app.getAppPath() (works in both dev and packaged, but only after app is ready)
         try {
-            if (typeof process !== 'undefined' && process.type === 'browser' && app && typeof app.getAppPath === 'function') {
-                const appPath = app.getAppPath();
+            if (typeof process !== 'undefined' && (process as NodeJS.Process & { type: string }).type === 'browser' && app && typeof (app as any).getAppPath === 'function') {
+                const appPath = (app as any).getAppPath();
                 possibleBasePaths.push(appPath);
                 
                 // In packaged apps, node_modules might be unpacked from ASAR
-                if (app.isPackaged) {
+                if ((app as any).isPackaged) {
                     // Try app.asar.unpacked (where unpacked native modules go)
                     const unpackedPath = appPath.replace(/app\.asar$/, 'app.asar.unpacked');
                     if (unpackedPath !== appPath) {
                         possibleBasePaths.push(unpackedPath);
                     }
                     // Also try resourcesPath
-                    if (process.resourcesPath) {
-                        possibleBasePaths.push(process.resourcesPath);
-                        possibleBasePaths.push(path.join(process.resourcesPath, 'app.asar.unpacked'));
+                    const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+                    if (resourcesPath) {
+                        possibleBasePaths.push(resourcesPath);
+                        possibleBasePaths.push(path.join(resourcesPath, 'app.asar.unpacked'));
                     }
                 }
             }
@@ -199,10 +201,11 @@ function getSqliteVecExtensionPath(): string | null {
         }
         
         // 3b. Try process.resourcesPath (packaged apps)
-        if (process.resourcesPath) {
-            possibleBasePaths.push(process.resourcesPath);
+        const resourcesPath2 = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+        if (resourcesPath2) {
+            possibleBasePaths.push(resourcesPath2);
             // In packaged apps, node_modules might be in app.asar.unpacked
-            possibleBasePaths.push(path.join(process.resourcesPath, 'app.asar.unpacked'));
+            possibleBasePaths.push(path.join(resourcesPath2, 'app.asar.unpacked'));
         }
         
         // 3c. Try __dirname (development - goes up from build directory to project root)

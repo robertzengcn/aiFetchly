@@ -9,8 +9,8 @@ import {ProxyModule} from "@/modules/ProxyModule"
 import {PROXYLIST,PROXYDETAIL,PROXYSAVE,PROXYCHECK,PROXYIMPORT,PROXYDELETE} from "@/config/channellist"
 export function registeProxyIpcHandlers() {
 
-  ipcMain.on(CHECKALLPROXY, async (event, data) => {
-    const qdata = JSON.parse(data) as { timeout?: number };
+  ipcMain.on(CHECKALLPROXY, async (event, data: unknown) => {
+    const qdata = JSON.parse(data as string) as { timeout?: number };
     const proxyCon = new ProxyController()
     await proxyCon.checkAllproxy(function (num, total) {
       const process = Math.round(num / total * 100)
@@ -22,8 +22,8 @@ export function registeProxyIpcHandlers() {
           // total: total,
           process: process
         }
-      }
-      event.sender.send(CHECKALLPROXYMESSAGE, JSON.stringify(messageData))
+      };
+      (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(CHECKALLPROXYMESSAGE, JSON.stringify(messageData))
     }, function () {
       const finmessageData: CommonMessage<NumProcessdata> = {
         status: true,
@@ -33,13 +33,13 @@ export function registeProxyIpcHandlers() {
           // total: total,
           process: 100
         }
-      }
-      event.sender.send(CHECKALLPROXYMESSAGE, JSON.stringify(finmessageData))
+      };
+      (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(CHECKALLPROXYMESSAGE, JSON.stringify(finmessageData))
     }, qdata.timeout)
   })
 
-  ipcMain.handle(PROXYDETAIL, async (event, data) => {
-    const qdata = JSON.parse(data);
+  ipcMain.handle(PROXYDETAIL, async (event, data: unknown) => {
+    const qdata = JSON.parse(data as string);
     if (!("id" in qdata)) {
       return {
         status: false,
@@ -67,7 +67,7 @@ export function registeProxyIpcHandlers() {
     return resp
   })
   ipcMain.handle(PROXYSAVE, async (event, data) => {
-    const qdata = JSON.parse(data);
+    const qdata = JSON.parse(data as string);
     const proxyModule:IProxyApi = new ProxyModule()
     const pres = await proxyModule.saveProxy(qdata).then(function (res) {
       return res;
@@ -89,7 +89,7 @@ export function registeProxyIpcHandlers() {
   })
   //check proxy
   ipcMain.handle(PROXYCHECK, async (event, data) => {
-    const qdata = JSON.parse(data) as ProxyParseItem;
+    const qdata = JSON.parse(data as string) as ProxyParseItem;
 
     const proxyCon = new ProxyController()
     const res = await proxyCon.checkProxy(qdata, qdata.timeout).catch(function (err) {
@@ -99,7 +99,7 @@ export function registeProxyIpcHandlers() {
   })
   //import proxy
   ipcMain.handle(PROXYIMPORT, async (event, data) => {
-    const qdata = JSON.parse(data) as Array<ProxyParseItem>;
+    const qdata = JSON.parse(data as string) as Array<ProxyParseItem>;
     const proxyModel:IProxyApi = new ProxyModule()
     const res = await proxyModel.importProxy(qdata).catch(function (err) {
       return { status: false, msg: err.message, data: false };
@@ -108,7 +108,7 @@ export function registeProxyIpcHandlers() {
   })
   //get proxy list
   ipcMain.handle(PROXYLIST, async (event, data) => {
-    const qdata = JSON.parse(data);
+    const qdata = JSON.parse(data as string);
     if (!("page" in qdata)) {
       qdata.page = 0;
     }
@@ -138,7 +138,7 @@ export function registeProxyIpcHandlers() {
     return res
   })
   ipcMain.handle(PROXYDELETE, async (event, data) => {
-    const qdata = JSON.parse(data);
+    const qdata = JSON.parse(data as string);
     if (!("id" in qdata)) {
       return {
         status: false,
@@ -177,8 +177,8 @@ export function registeProxyIpcHandlers() {
         status: true,
         msg: "success",
         
-      }
-      event.sender.send(REMOVEFAILUREPROXY_MESSAGE, JSON.stringify(messageData))
+      };
+      (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(REMOVEFAILUREPROXY_MESSAGE, JSON.stringify(messageData))
     })
   })
 }

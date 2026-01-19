@@ -22,12 +22,17 @@ export class Logger {
 
   private initialize(): void {
     // Configure electron-log
-    log.initialize();
+    // Note: initialize() may not be available in all versions
+    if (typeof (log as unknown as { initialize?: () => void }).initialize === 'function') {
+      (log as unknown as { initialize: () => void }).initialize();
+    }
 
     // Configure electron-log with date-based folder structure
     // Logs will be organized as: userData/logs/YYYY-MM-DD/main.log
     // This prevents the main.log file from becoming too large
-    log.transports.file.level = 'debug';
+    if ((log as unknown as { transports?: { file?: { level?: string } } }).transports?.file) {
+      (log as unknown as { transports: { file: { level: string } } }).transports.file.level = 'debug';
+    }
 
     // Create date-based log directory structure
     const today = new Date();
@@ -53,8 +58,10 @@ export class Logger {
     }
 
     // Configure file transport with date-based path
-    log.transports.file.fileName = 'main.log'; // Only the filename, not the full path
-    log.transports.file.resolvePathFn = () => {
+    const logTransports = (log as unknown as { transports?: { file?: { fileName?: string; resolvePathFn?: () => string; maxSize?: number } } }).transports;
+    if (logTransports?.file) {
+      logTransports.file.fileName = 'main.log'; // Only the filename, not the full path
+      logTransports.file.resolvePathFn = () => {
       // Get current date for dynamic path resolution
       const now = new Date();
       const year = now.getFullYear();
@@ -73,12 +80,16 @@ export class Logger {
         }
       }
       
-      return path.join(currentDailyLogDir, 'main.log');
-    };
-    log.transports.file.maxSize = 1000000; // 1MB max file size
+        return path.join(currentDailyLogDir, 'main.log');
+      };
+      logTransports.file.maxSize = 1000000; // 1MB max file size
+    }
 
     // Enable console transport as well to ensure all logs appear in both places
-    log.transports.console.level = 'debug';
+    const logTransportsWithConsole = logTransports as { file?: { fileName?: string; resolvePathFn?: () => string; maxSize?: number }; console?: { level?: string } };
+    if (logTransportsWithConsole?.console) {
+      logTransportsWithConsole.console.level = 'debug';
+    }
 
     // Override console methods to also log to file
     this.setupConsoleOverrides();

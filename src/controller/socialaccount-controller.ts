@@ -1,5 +1,6 @@
 //import { SocialAccount } from "@/modules/socialaccount";
-import { BrowserWindow, session } from 'electron'
+import { BrowserWindow } from 'electron';
+const session = require('electron').session;
 import { AccountCookiesEntity } from "@/entity/AccountCookies.entity";
 import { AccountCookiesModule } from "@/modules/accountCookiesModule"
 //import { ProxyController } from "./proxy-controller";
@@ -195,21 +196,19 @@ export class SocialAccountController {
                 }
             }
         }
-        const win = new BrowserWindow({
+        const win: any = new BrowserWindow({
             autoHideMenuBar: true, webPreferences: {
                 session: ses
             }
-        })
-        win.setTitle(winTitle)
-        win.setMenu(null)
+        });
+        win.setTitle(winTitle);
+        win.setMenu(null);
         // showNotification("test title","test message")
 
         const socialTypeUrl = accinfo.data.social_type_id ? this.getSocialPlatformUrl(accinfo.data.social_type_id) : null
         console.log(socialTypeUrl)
         if (socialTypeUrl) {
-            await win.loadURL(socialTypeUrl, {
-                 userAgent: 'Chrome'
-                }).catch((error) => {
+            await win.loadURL(socialTypeUrl).catch((error: Error) => {
                 const ignoreMsg = ["Message 0 rejected by interface blink.mojom.WidgetHost", "ERR_FAILED (-2)"]
 
                 if (!ignoreMsg.some(msg => error.message.includes(msg))) {
@@ -241,9 +240,9 @@ export class SocialAccountController {
         })
 
         // winsession.cookies.remove()
-        win.on('close', async () => { //   <---- Catch close event
-            if (win && win.webContents && win.webContents.session) {
-                const winsession = win.webContents.session
+        (win as BrowserWindow).on('close', async () => { //   <---- Catch close event
+            if (win && (win as any).webContents && (win as any).webContents.session) {
+                const winsession = (win as any).webContents.session
                 const cookiescontent = await winsession.cookies.get({ url: socialTypeUrl })
                 console.log("get cookies:")
                 console.log(cookiescontent)

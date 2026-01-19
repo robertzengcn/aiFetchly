@@ -20,12 +20,15 @@ export class User {
         try {
             const allWindows = BrowserWindow.getAllWindows();
             if (allWindows.length > 0) {
-                const mainWindow = allWindows[0];
-                if (mainWindow && !mainWindow.isDestroyed()) {
-                    console.log("Sending navigation command to renderer");
-                    mainWindow.webContents.send(NATIVATECOMMAND, {
-                        path: 'login'
-                    } as NativateDatatype);
+                const mainWindow = allWindows[0] as BrowserWindow;
+                if (mainWindow) {
+                    const bw = mainWindow as BrowserWindow;
+                    if (bw && !(bw as any).isDestroyed?.() && (bw as any).webContents) {
+                        console.log("Sending navigation command to renderer");
+                        (bw as any).webContents.send(NATIVATECOMMAND, {
+                            path: 'login'
+                        } as NativateDatatype);
+                    }
                 }
             }
         } catch (ipcError) {

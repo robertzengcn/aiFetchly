@@ -1,12 +1,15 @@
 import { ipcMain, BrowserWindow } from 'electron'
+// IpcMainInvokeEvent type - use unknown for event parameter
+type IpcMainInvokeEvent = unknown;
 import { TaskController } from '@/controller/taskController'
+import { TaskCreateRequest, TaskUpdateRequest, TaskListResponse, TaskDetailResponse } from '@/entityTypes/task-type'
 
 export function registerTaskIpcHandlers(mainWindow: BrowserWindow) {
   // Create task
-  ipcMain.handle('task:create', async (event, taskData) => {
+  ipcMain.handle('task:create', async (event: IpcMainInvokeEvent, taskData: unknown) => {
     try {
       const taskController = new TaskController()
-      const taskId = await taskController.createTask(taskData)
+      const taskId = await taskController.createTask(taskData as TaskCreateRequest)
       return taskId
     } catch (error) {
       console.error('Failed to create task:', error)
@@ -15,10 +18,10 @@ export function registerTaskIpcHandlers(mainWindow: BrowserWindow) {
   })
 
   // Update task
-  ipcMain.handle('task:update', async (event, taskData) => {
+  ipcMain.handle('task:update', async (event: IpcMainInvokeEvent, taskData: unknown) => {
     try {
       const taskController = new TaskController()
-      const success = await taskController.updateTask(taskData)
+      const success = await taskController.updateTask(taskData as TaskUpdateRequest)
       return success
     } catch (error) {
       console.error('Failed to update task:', error)
@@ -27,8 +30,9 @@ export function registerTaskIpcHandlers(mainWindow: BrowserWindow) {
   })
 
   // Delete task
-  ipcMain.handle('task:delete', async (event, { id }) => {
+  ipcMain.handle('task:delete', async (event: IpcMainInvokeEvent, args: unknown) => {
     try {
+      const { id } = args as { id: number }
       const taskController = new TaskController()
       const success = await taskController.deleteTask(id)
       return success
@@ -39,8 +43,9 @@ export function registerTaskIpcHandlers(mainWindow: BrowserWindow) {
   })
 
   // Get task list
-  ipcMain.handle('task:list', async (event, { page, size, search }) => {
+  ipcMain.handle('task:list', async (event: IpcMainInvokeEvent, args: unknown) => {
     try {
+      const { page, size, search } = args as { page: number; size: number; search?: string }
       const taskController = new TaskController()
       const result = await taskController.getTaskList(page, size, search)
       return result
@@ -51,8 +56,9 @@ export function registerTaskIpcHandlers(mainWindow: BrowserWindow) {
   })
 
   // Get task detail
-  ipcMain.handle('task:detail', async (event, { id }) => {
+  ipcMain.handle('task:detail', async (event: IpcMainInvokeEvent, args: unknown) => {
     try {
+      const { id } = args as { id: number }
       const taskController = new TaskController()
       const task = await taskController.getTaskDetail(id)
       return task
@@ -63,8 +69,9 @@ export function registerTaskIpcHandlers(mainWindow: BrowserWindow) {
   })
 
   // Run task
-  ipcMain.handle('task:run', async (event, { id }) => {
+  ipcMain.handle('task:run', async (event: IpcMainInvokeEvent, args: unknown) => {
     try {
+      const { id } = args as { id: number }
       const taskController = new TaskController()
       const success = await taskController.runTask(id)
       return success
@@ -75,8 +82,9 @@ export function registerTaskIpcHandlers(mainWindow: BrowserWindow) {
   })
 
   // Cancel task
-  ipcMain.handle('task:cancel', async (event, { id }) => {
+  ipcMain.handle('task:cancel', async (event: IpcMainInvokeEvent, args: unknown) => {
     try {
+      const { id } = args as { id: number }
       const taskController = new TaskController()
       const success = await taskController.cancelTask(id)
       return success
@@ -87,8 +95,9 @@ export function registerTaskIpcHandlers(mainWindow: BrowserWindow) {
   })
 
   // Get task results
-  ipcMain.handle('task:results', async (event, { id, page, size }) => {
+  ipcMain.handle('task:results', async (event: IpcMainInvokeEvent, args: unknown) => {
     try {
+      const { id, page, size } = args as { id: number; page: number; size: number }
       const taskController = new TaskController()
       const results = await taskController.getTaskResults(id, page, size)
       return results

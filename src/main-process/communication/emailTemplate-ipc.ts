@@ -20,9 +20,9 @@ import {
 export function registerEmailTemplateIpcHandlers() {
     
     // List email templates with pagination and sorting
-    ipcMain.handle(EMAILTEMPLATE_LIST, async (event, data) => {
+    ipcMain.handle(EMAILTEMPLATE_LIST, async (event, data: unknown) => {
         try {
-            const qdata = JSON.parse(data) as ItemSearchparam;
+            const qdata = JSON.parse(data as string) as ItemSearchparam;
             if (!Object.prototype.hasOwnProperty.call(qdata, "page")) {
                 qdata.page = 0;
             }
@@ -55,7 +55,7 @@ export function registerEmailTemplateIpcHandlers() {
     // Get email template by ID
     ipcMain.handle(EMAILTEMPLATE_DETAIL, async (event, data) => {
         try {
-            const { id } = JSON.parse(data);
+            const { id } = JSON.parse(data as string);
             if (!id) {
                 const resp: CommonResponse<null> = {
                     status: false,
@@ -96,7 +96,7 @@ export function registerEmailTemplateIpcHandlers() {
     // Create new email template
     ipcMain.handle(EMAILTEMPLATE_CREATE, async (event, data) => {
         try {
-            const templateData = JSON.parse(data) as EmailTemplateEntity;
+            const templateData = JSON.parse(data as string) as EmailTemplateEntity;
             
             if (!templateData.title || !templateData.content ) {
                 const resp: CommonResponse<null> = {
@@ -130,7 +130,7 @@ export function registerEmailTemplateIpcHandlers() {
     // Update email template
     ipcMain.handle(EMAILTEMPLATE_UPDATE, async (event, data) => {
         try {
-            const { id, ...templateData } = JSON.parse(data) as EmailTemplateEntity & { id: number };
+            const { id, ...templateData } = JSON.parse(data as string) as EmailTemplateEntity & { id: number };
             
             if (!id) {
                 const resp: CommonResponse<null> = {
@@ -168,7 +168,7 @@ export function registerEmailTemplateIpcHandlers() {
     // Delete email template
     ipcMain.handle(EMAILTEMPLATE_DELETE, async (event, data) => {
         try {
-            const { id } = JSON.parse(data);
+            const { id } = JSON.parse(data as string);
             if (!id) {
                 const resp: CommonResponse<null> = {
                     status: false,
@@ -197,7 +197,7 @@ export function registerEmailTemplateIpcHandlers() {
     // Get email templates by buckemail task ID
     ipcMain.handle(EMAILTEMPLATE_BY_TASK, async (event, data) => {
         try {
-            const { buckemailTaskId } = JSON.parse(data);
+            const { buckemailTaskId } = JSON.parse(data as string);
             if (!buckemailTaskId) {
                 const resp: CommonResponse<null> = {
                     status: false,

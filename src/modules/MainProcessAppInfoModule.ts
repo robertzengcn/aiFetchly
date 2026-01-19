@@ -18,7 +18,7 @@ export class MainProcessAppInfoModule {
         const packageData = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
         return {
           name: packageData.name || app.getName() || 'social-marketing',
-          version: packageData.version || app.getVersion() || '1.0.0',
+          version: packageData.version || '1.0.0',
           description: packageData.description || 'A software for social marketing',
           author: packageData.author || 'Robert Zeng'
         };
@@ -30,7 +30,7 @@ export class MainProcessAppInfoModule {
     // Fallback to Electron app info
     return {
       name: app.getName() || 'social-marketing',
-      version: app.getVersion() || '1.0.0',
+      version: '1.0.0',
       description: 'A software for social marketing',
       author: 'Robert Zeng'
     };

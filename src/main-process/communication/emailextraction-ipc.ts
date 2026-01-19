@@ -22,7 +22,7 @@ export function registerEmailextractionIpcHandlers() {
     ipcMain.on(EMAILEXTRACTIONAPI, async (event, arg) => {
         let extraType: EmailExtractionTypes = EmailExtractionTypes.ManualInputUrl;
         //receive user submit form
-        const qdata = JSON.parse(arg) as EmailscFormdata;
+        const qdata = JSON.parse(arg as string) as EmailscFormdata;
         if (!Object.prototype.hasOwnProperty.call(qdata, "extratype")) {
             qdata.extratype = "ManualInputUrl";
         }
@@ -37,8 +37,8 @@ export function registerEmailextractionIpcHandlers() {
                         title: "emailscrape.failed",
                         content: "emailscrape.url_empty"
                     }
-                }
-                event.sender.send(EMAILEXTRACTIONMESSAGE, JSON.stringify(comMsgs))
+                };
+                (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(EMAILEXTRACTIONMESSAGE, JSON.stringify(comMsgs))
                 return
             }
             //valid item in urls
@@ -55,8 +55,8 @@ export function registerEmailextractionIpcHandlers() {
                         title: "emailscrape.failed",
                         content: "emailscrape.url_invalid"
                     }
-                }
-                event.sender.send(EMAILEXTRACTIONMESSAGE, JSON.stringify(comMsgs))
+                };
+                (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(EMAILEXTRACTIONMESSAGE, JSON.stringify(comMsgs))
                 return
             }
 
@@ -71,8 +71,8 @@ export function registerEmailextractionIpcHandlers() {
                         title: "emailscrape.failed",
                         content: "emailscrape.searchTaskId_empty"
                     }
-                }
-                event.sender.send(EMAILEXTRACTIONMESSAGE, JSON.stringify(comMsgs))
+                };
+                (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(EMAILEXTRACTIONMESSAGE, JSON.stringify(comMsgs))
                 return
             }
             //const searchModel = new SearchModule();
@@ -88,8 +88,8 @@ export function registerEmailextractionIpcHandlers() {
                         title: "emailscrape.failed",
                         content: "emailscrape.searchResult_empty"
                     }
-                }
-                event.sender.send(EMAILEXTRACTIONMESSAGE, JSON.stringify(comMsgs))
+                };
+                (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(EMAILEXTRACTIONMESSAGE, JSON.stringify(comMsgs))
                 return
             }
             //get result url from search task
@@ -112,8 +112,8 @@ export function registerEmailextractionIpcHandlers() {
                     title: "emailscrape.failed",
                     content: "emailscrape.action_error"
                 }
-            }
-            event.sender.send(EMAILEXTRACTIONMESSAGE, JSON.stringify(comMsgs))
+            };
+            (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(EMAILEXTRACTIONMESSAGE, JSON.stringify(comMsgs))
             return
 
         }
@@ -154,13 +154,13 @@ export function registerEmailextractionIpcHandlers() {
                 title: "",
                 content: ""
             }
-        }
-        event.sender.send(EMAILEXTRACTIONMESSAGE, JSON.stringify(comMsgs))
+        };
+        (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(EMAILEXTRACTIONMESSAGE, JSON.stringify(comMsgs))
 
     });
 
-    ipcMain.handle(LISTEMAILSEARCHTASK, async (event, data) => {
-        const qdata = JSON.parse(data) as ItemSearchparam;  
+    ipcMain.handle(LISTEMAILSEARCHTASK, async (event, data: unknown) => {
+        const qdata = JSON.parse(data as string) as ItemSearchparam;  
         if (!Object.prototype.hasOwnProperty.call(qdata, "page")) {
             qdata.page = 0;
           }
@@ -181,8 +181,8 @@ export function registerEmailextractionIpcHandlers() {
         }
         return resp
     })
-    ipcMain.handle(EMAILSEARCHTASKRESULT, async (event, arg) => {
-        const qdata = JSON.parse(arg) as EmailsearchtaskResultquery;
+    ipcMain.handle(EMAILSEARCHTASKRESULT, async (event, arg: unknown) => {
+        const qdata = JSON.parse(arg as string) as EmailsearchtaskResultquery;
         if (!Object.prototype.hasOwnProperty.call(qdata, "taskId")) {
             const comMsgs: CommonResponse<EmailResultDisplay> = {
                 status: false,
@@ -224,9 +224,9 @@ export function registerEmailextractionIpcHandlers() {
         return resp
     });
 
-    ipcMain.handle(EMAILSEARCHTASK_ERROR_LOG_DOWNLOAD, async (event, data) => {
+    ipcMain.handle(EMAILSEARCHTASK_ERROR_LOG_DOWNLOAD, async (event, data: unknown) => {
         try {
-            const qdata = JSON.parse(data) as CommonIdrequestType<number>
+            const qdata = JSON.parse(data as string) as CommonIdrequestType<number>
             if (!("id" in qdata)) {
                 throw new Error("id not found");
             }
@@ -250,9 +250,9 @@ export function registerEmailextractionIpcHandlers() {
     });
 
     // Get single email search task for editing
-    ipcMain.handle(GETEMAILSEARCHTASK, async (event, data) => {
+    ipcMain.handle(GETEMAILSEARCHTASK, async (event, data: unknown) => {
         try {
-            const qdata = JSON.parse(data) as CommonIdrequestType<number>
+            const qdata = JSON.parse(data as string) as CommonIdrequestType<number>
             if (!("id" in qdata)) {
                 throw new Error("Task ID not found");
             }
@@ -276,9 +276,9 @@ export function registerEmailextractionIpcHandlers() {
     });
 
     // Update email search task
-    ipcMain.handle(UPDATEEMAILSEARCHTASK, async (event, data) => {
+    ipcMain.handle(UPDATEEMAILSEARCHTASK, async (event, data: unknown) => {
         try {
-            const qdata = JSON.parse(data) as { id: number, data: EmailscFormdata }
+            const qdata = JSON.parse(data as string) as { id: number, data: EmailscFormdata }
             if (!qdata.id) {
                 throw new Error("Task ID not found");
             }
@@ -344,9 +344,9 @@ export function registerEmailextractionIpcHandlers() {
     });
 
     // Delete email search task
-    ipcMain.handle(DELETEEMAILSEARCHTASK, async (event, data) => {
+    ipcMain.handle(DELETEEMAILSEARCHTASK, async (event, data: unknown) => {
         try {
-            const qdata = JSON.parse(data) as CommonIdrequestType<number>
+            const qdata = JSON.parse(data as string) as CommonIdrequestType<number>
             if (!("id" in qdata)) {
                 throw new Error("Task ID not found");
             }
@@ -384,7 +384,7 @@ export function registerEmailextractionIpcHandlers() {
 
     // Export email extraction results
     ipcMain.handle(EMAILEXTRACTION_RESULT_EXPORT, async (event, data): Promise<CommonMessage<string | null>> => {
-        const qdata = JSON.parse(data) as { taskId: number; format?: 'json' | 'csv' };
+        const qdata = JSON.parse(data as string) as { taskId: number; format?: 'json' | 'csv' };
         
         if (!qdata.taskId || qdata.taskId <= 0) {
             const resp: CommonMessage<null> = {

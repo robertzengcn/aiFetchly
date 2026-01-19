@@ -66,7 +66,13 @@ export class Scraperdb {
         if(this.isDevelopment){
             sqlFilePath = path.join(__dirname, '../../dist/sql/scraperdb/');
         }else{
-            sqlFilePath = path.join(process.resourcesPath, 'dist/sql/scraperdb/');
+            // process.resourcesPath is available in packaged Electron apps
+            const resourcesPath = (process as unknown as { resourcesPath?: string }).resourcesPath;
+            if (resourcesPath) {
+                sqlFilePath = path.join(resourcesPath, 'dist/sql/scraperdb/');
+            } else {
+                sqlFilePath = path.join(__dirname, '../../dist/sql/scraperdb/');
+            }
         }
         console.log(sqlFilePath)
         fs.readdir(sqlFilePath, (err, files) => {

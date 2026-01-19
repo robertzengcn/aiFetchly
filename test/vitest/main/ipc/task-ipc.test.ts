@@ -3,6 +3,7 @@ import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 import { registerTaskIpcHandlers } from '@/main-process/communication/task-ipc';
 import { MockBrowserWindow, mockIpcMain, setupElectronMocks, resetElectronMocks } from '../../../utils/electron-mocks';
 import { TaskController } from '@/controller/taskController';
+import type { BrowserWindow } from 'electron';
 
 // Mock TaskController
 vi.mock('@/controller/taskController', () => {
@@ -42,7 +43,7 @@ describe('Task IPC Handlers', () => {
   beforeEach(() => {
     setupElectronMocks();
     mockWindow = new MockBrowserWindow();
-    registerTaskIpcHandlers(mockWindow as unknown as Electron.BrowserWindow);
+    registerTaskIpcHandlers(mockWindow as unknown as BrowserWindow);
   });
 
   afterEach(() => {
@@ -86,7 +87,7 @@ describe('Task IPC Handlers', () => {
 
       // Re-register handlers to use the new mock
       mockIpcMain.clearHandlers();
-      registerTaskIpcHandlers(mockWindow as unknown as Electron.BrowserWindow);
+      registerTaskIpcHandlers(mockWindow as unknown as BrowserWindow);
 
       const taskData = { name: 'Test Task' };
       await expect(mockIpcMain.callHandler('task:create', taskData)).rejects.toThrow('Creation failed');

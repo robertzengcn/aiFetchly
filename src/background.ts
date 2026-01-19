@@ -1,7 +1,11 @@
 'use strict'
 import 'reflect-metadata';
 // import {ipcMain as ipc} from 'electron-better-ipc';
-import { app, BrowserWindow, dialog, autoUpdater, Menu, session } from 'electron'
+import { app, BrowserWindow, Menu, dialog } from 'electron';
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const autoUpdater = require('electron').autoUpdater;
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const session = require('electron').session;
 // import { createProtocol } from 'vue-cli-plugin-electron-builder/lib'
 import installExtension, { VUEJS3_DEVTOOLS } from 'electron-devtools-installer'
 import { registerCommunicationIpcHandlers } from "./main-process/communication/";
@@ -36,7 +40,7 @@ declare const MAIN_WINDOW_VITE_NAME: string;
 const appName = app.getName();
 const protocolScheme = appName.replace(/-/g, '').toLowerCase(); // Remove hyphens for protocol and convert to lowercase
 // const protocolScheme = appName.replace(/-/g, ''); // Remove hyphens for protocol
-app.userAgentFallback = app.userAgentFallback.replace('Electron/' + process.versions.electron, '');
+(app as any).userAgentFallback = (app as any).userAgentFallback.replace('Electron/' + process.versions.electron, '');
 // Initialize logger (handles all logging configuration)
 const logDir = logger.getLogDir();
 
@@ -49,7 +53,7 @@ process.on('uncaughtException', (error) => {
   log.error('Uncaught Exception:', error);
 
   // Show error dialog if possible
-  if (app.isReady()) {
+  if ((app as any).isReady()) {
     dialog.showErrorBox('Application Error',
       `An unexpected error occurred: ${error.message}\n\nDetails have been logged.`);
   }
@@ -67,9 +71,9 @@ function initialize() {
   //   { scheme: appName, privileges: { secure: true, 
   //     standard: true } }
   // ])
-  if (app.isPackaged) {
-    if (!app.isDefaultProtocolClient(protocolScheme)) {
-      const registres = app.setAsDefaultProtocolClient(protocolScheme);
+  if ((app as any).isPackaged) {
+    if (!(app as any).isDefaultProtocolClient(protocolScheme)) {
+      const registres = (app as any).setAsDefaultProtocolClient(protocolScheme);
       //console.log('registres:', registres)
     }
 
@@ -96,8 +100,8 @@ function initialize() {
       path.join(__dirname, '../.vite/renderer/main_window/index.html'),
       path.join(__dirname, '../renderer/main_window/index.html'),
       path.join(__dirname, './index.html'),
-      path.join(process.resourcesPath, 'app.asar', '.vite', 'renderer', 'main_window', 'index.html'),
-      path.join(process.resourcesPath, '.vite', 'renderer', 'main_window', 'index.html')
+      path.join((process as NodeJS.Process & { resourcesPath: string }).resourcesPath, 'app.asar', '.vite', 'renderer', 'main_window', 'index.html'),
+      path.join((process as NodeJS.Process & { resourcesPath: string }).resourcesPath, '.vite', 'renderer', 'main_window', 'index.html')
     ];
 
     //console.log('Trying alternative paths for HTML file...');
@@ -113,12 +117,12 @@ function initialize() {
 
       try {
         // Check if window is still valid before attempting to load
-        if (win && !win.isDestroyed()) {
+        if (win && !(win as any).isDestroyed()) {
           if (fs.existsSync(altPath)) {
             //console.log('Alternative path exists, attempting to load...');
             // log.info('Alternative path exists, attempting to load:', altPath);
 
-            await win.loadFile(altPath);
+            await (win as any).loadFile(altPath);
             console.log('Successfully loaded HTML file from alternative path:', altPath);
             // log.info('Successfully loaded HTML file from alternative path:', altPath);
             loaded = true;
@@ -163,7 +167,7 @@ function initialize() {
         'Application Error',
         'Could not load the application interface. This may be due to a corrupted installation.\n\nPlease try:\n1. Reinstalling the application\n2. Running as administrator\n3. Checking antivirus software\n\nError details have been logged.'
       );
-      app.quit();
+      (app as any).quit();
     }
   }
 
@@ -174,9 +178,9 @@ function initialize() {
     }
 
     // Check if window already exists and is not destroyed
-    if (win && !win.isDestroyed()) {
+    if (win && !(win as any).isDestroyed()) {
       console.log('Window already exists and is valid, focusing...');
-      win.focus();
+      (win as any).focus();
       return;
     }
 
@@ -231,13 +235,13 @@ function initialize() {
     }
 
     // Add event listener for window destruction
-    win.on('closed', () => {
+    (win as any).on('closed', () => {
       console.log('Window closed event triggered');
       win = null;
     });
     // In this example, only windows with the `about:blank` url will be created.
     // All other urls will be blocked.
-    win.webContents.setWindowOpenHandler(({ url }) => {
+    (win as any).webContents.setWindowOpenHandler(({ url }) => {
       // console.log(url)
       //if (url === '_blank') {
 
@@ -274,9 +278,9 @@ function initialize() {
     if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
       // Load the url of the dev server if in development mode
       try {
-        if (win && !win.isDestroyed()) {
-          await win.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL as string)
-          if (!process.env.IS_TEST) win.webContents.openDevTools()
+        if (win && !(win as any).isDestroyed()) {
+          await (win as any).loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL as string)
+          if (!process.env.IS_TEST) (win as any).webContents.openDevTools()
         }
       } catch (error) {
 
@@ -286,7 +290,7 @@ function initialize() {
       //check update
       const server = import.meta.env.UPDATESERVER as string;
       if (server) {
-        const url = `${server}/update/${process.platform}/${app.getVersion()}`
+        const url = `${server}/update/${process.platform}/${(app as any).getVersion()}`
         autoUpdater.setFeedURL({ url })
         autoUpdater.checkForUpdates()
       }
@@ -316,8 +320,8 @@ function initialize() {
 
         try {
           // Check if window is still valid before attempting to load
-          if (win && !win.isDestroyed()) {
-            await win.loadFile(htmlPath);
+          if (win && !(win as any).isDestroyed()) {
+            await (win as any).loadFile(htmlPath);
             console.log('Successfully loaded HTML file from:', htmlPath);
             //log.info('Successfully loaded HTML file from:', htmlPath);
           } else {
@@ -327,7 +331,7 @@ function initialize() {
               'Application Error',
               'The application window was destroyed before it could load. Please restart the application.'
             );
-            app.quit();
+            (app as any).quit();
             return;
           }
         } catch (error) {
@@ -344,7 +348,7 @@ function initialize() {
               'Application Error',
               'The application window was destroyed during loading. Please restart the application.'
             );
-            app.quit();
+            (app as any).quit();
             return;
           }
 
@@ -362,16 +366,16 @@ function initialize() {
   }
 
   // Quit when all windows are closed.
-  app.on('window-all-closed', () => {
+  ;(app as any).on('window-all-closed', () => {
     // On macOS it is common for applications and their menu bar
     // to stay active until the user quits explicitly with Cmd + Q
     if (process.platform !== 'darwin') {
-      app.quit()
+      (app as any).quit()
     }
-  })
+  });
 
   // Handle application shutdown
-  app.on('before-quit', async () => {
+  ;(app as any).on('before-quit', async () => {
     try {
       const tokenService = new Token()
       const userdataPath = tokenService.getValue(USERSDBPATH)
@@ -386,15 +390,15 @@ function initialize() {
 
     // Stop log cleanup interval
     logger.stopLogCleanup();
-  })
+  });
 
-  app.on('activate', () => {
+  ;(app as any).on('activate', () => {
     // On macOS it's common to re-create a window in the app when the
     // dock icon is clicked and there are no other windows open.
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
-  })
+  });
 
-  app.on('open-url', (event, url) => {
+  ;(app as any).on('open-url', (event, url) => {
 
     console.log("open url call")
     event.preventDefault();
@@ -418,7 +422,7 @@ function initialize() {
   // This method will be called when Electron has finished
   // initialization and is ready to create browser windows.
   // Some APIs can only be used after this event occurs.
-  app.whenReady().then(async () => {
+  ;(app as any).whenReady().then(async () => {
     // Configure Content Security Policy (must be called after app is ready)
     configureContentSecurityPolicy()
 
@@ -508,12 +512,12 @@ function initialize() {
     if (process.platform === 'win32') {
       process.on('message', (data) => {
         if (data === 'graceful-exit') {
-          app.quit()
+          (app as any).quit()
         }
       })
     } else {
       process.on('SIGTERM', () => {
-        app.quit()
+        (app as any).quit()
       })
     }
   }
@@ -579,19 +583,19 @@ function configureContentSecurityPolicy() {
 
 function makeSingleInstance() {
 
-  if (process.mas) return
+  if ((process as NodeJS.Process & { mas: boolean }).mas) return
 
-  const gotThelock = app.requestSingleInstanceLock()
+  const gotThelock = (app as any).requestSingleInstanceLock()
   if (!gotThelock) {
-    app.quit()
+    (app as any).quit()
   } else {
 
     // console.log('gotThelock:', gotThelock)
 
-    app.on('second-instance', (event, argv, workingDirectory) => {
+    (app as any).on('second-instance', (event, argv, workingDirectory) => {
       if (win) {
-        if (win.isMinimized()) win.restore()
-        win.focus()
+        if ((win as any).isMinimized()) (win as any).restore()
+        (win as any).focus()
       }
 
       // console.log("second-instance call")
@@ -784,8 +788,8 @@ async function handleDeepLink(url: string) {
         }
 
         // Navigate to dashboard
-        if (win && !win.isDestroyed()) {
-          win.webContents.send(NATIVATECOMMAND, { path: 'Dashboard' } as NativateDatatype);
+        if (win && !(win as any).isDestroyed()) {
+          (win as any).webContents.send(NATIVATECOMMAND, { path: 'Dashboard' } as NativateDatatype);
         } else {
           console.error('Window has been destroyed, cannot send navigation command');
           log.error('Window has been destroyed, cannot send navigation command');
@@ -814,7 +818,7 @@ async function handleDeepLink(url: string) {
     console.error('Deep link handling error:', errorMessage);
 
     // Show error dialog to user
-    if (app.isReady()) {
+    if ((app as any).isReady()) {
       dialog.showErrorBox('Deep Link Error',
         `Failed to process authentication link: ${errorMessage}`);
     }
