@@ -384,13 +384,14 @@ export class YellowPagesScraperProcess {
         this.isPaused = true;
 
         // Send pause confirmation to parent process
-        if (process.parentPort) {
+        const parentPortLocal = (process as unknown as { parentPort?: { postMessage: (message: unknown) => void } }).parentPort;
+        if (parentPortLocal) {
             const pauseMessage = {
                 type: 'TASK_PAUSED',
                 taskId: this.taskData.taskId,
                 content: 'Task has been paused successfully'
             };
-            process.parentPort.postMessage(pauseMessage);
+            parentPortLocal.postMessage(pauseMessage);
         }
 
         // Create a promise that resolves when resume is called
@@ -409,13 +410,14 @@ export class YellowPagesScraperProcess {
         this.isPaused = false;
 
         // Send resume confirmation to parent process
-        if (process.parentPort) {
+        const parentPortLocal2 = (process as unknown as { parentPort?: { postMessage: (message: unknown) => void } }).parentPort;
+        if (parentPortLocal2) {
             const resumeMessage = {
                 type: 'TASK_RESUMED',
                 taskId: this.taskData.taskId,
                 content: 'Task has been resumed successfully'
             };
-            process.parentPort.postMessage(resumeMessage);
+            parentPortLocal2.postMessage(resumeMessage);
         }
 
         // Resolve the pause promise
@@ -3645,8 +3647,9 @@ export class YellowPagesScraperProcess {
                 };
 
                 // Send message to parent process
-                if (process.parentPort) {
-                    process.parentPort.postMessage(robotVerificationMessage);
+                const parentPortLocal3 = (process as unknown as { parentPort?: { postMessage: (message: unknown) => void } }).parentPort;
+                if (parentPortLocal3) {
+                    parentPortLocal3.postMessage(robotVerificationMessage);
                 }
 
                 // Pause the scraping process
@@ -3712,8 +3715,9 @@ export class YellowPagesScraperProcess {
                 };
 
                 // Send message to parent process via IPC
-                if (process.parentPort) {
-                    process.parentPort.postMessage(cloudflareMessage);
+                const parentPortLocal4 = (process as unknown as { parentPort?: { postMessage: (message: unknown) => void } }).parentPort;
+                if (parentPortLocal4) {
+                    parentPortLocal4.postMessage(cloudflareMessage);
                     console.log('✅ Cloudflare detection message sent to parent process');
                 } else {
                     console.warn('⚠️ Cannot send Cloudflare message: process.parentPort not available');
@@ -3761,8 +3765,9 @@ export class YellowPagesScraperProcess {
                             }
                         };
 
-                        if (process.parentPort) {
-                            process.parentPort.postMessage(pauseNotificationMessage);
+                        const parentPortLocal5 = (process as unknown as { parentPort?: { postMessage: (message: unknown) => void } }).parentPort;
+                        if (parentPortLocal5) {
+                            parentPortLocal5.postMessage(pauseNotificationMessage);
                             console.log('✅ Cloudflare pause notification sent to parent process');
                         }
 
@@ -4299,7 +4304,9 @@ console.log('🚀 YellowPagesScraperProcess loaded');
 let globalScraper: YellowPagesScraperProcess | null = null;
 
 // Handle process messages
-process.parentPort.on('message', async (e) => {
+const parentPort = (process as unknown as { parentPort?: { on: (event: string, handler: (e: { data: string }) => void) => void; postMessage: (message: unknown) => void } }).parentPort;
+if (parentPort) {
+  parentPort.on('message', async (e: { data: string }) => {
     console.log(e);
     const message = JSON.parse(e.data);
     console.log('📨 Received message:', message.type);
@@ -4323,7 +4330,9 @@ process.parentPort.on('message', async (e) => {
                 content: `Failed to initialize scraper: ${error instanceof Error ? error.message : String(error)}`,
                 error: error instanceof Error ? error.message : String(error)
             };
-            process.parentPort?.postMessage(errorMessage);
+            if (parentPort) {
+                parentPort.postMessage(errorMessage);
+            }
             return;
         }
         // Set up callbacks for IPC communication
@@ -4334,7 +4343,9 @@ process.parentPort.on('message', async (e) => {
                 content: `Scraping progress: Page ${progress.currentPage}/${progress.totalPages} (${progress.percentage.toFixed(1)}%) - ${progress.resultsCount} results found`,
                 progress
             };
-            process.parentPort?.postMessage(progressMessage);
+            if (parentPort) {
+                parentPort.postMessage(progressMessage);
+            }
         });
 
         scraper.onComplete((results) => {
@@ -4344,7 +4355,9 @@ process.parentPort.on('message', async (e) => {
                 content: `Scraping completed successfully. Found ${results.length} business results.`,
                 results
             };
-            process.parentPort?.postMessage(completedMessage);
+            if (parentPort) {
+                parentPort.postMessage(completedMessage);
+            }
         });
 
         scraper.onError((error) => {
@@ -4354,7 +4367,9 @@ process.parentPort.on('message', async (e) => {
                 content: `Scraping failed with error: ${error.message}`,
                 error: error.message
             };
-            process.parentPort?.postMessage(errorMessage);
+            if (parentPort) {
+                parentPort.postMessage(errorMessage);
+            }
         });
 
         try {
@@ -4367,7 +4382,9 @@ process.parentPort.on('message', async (e) => {
                 content: `Failed to start scraping: ${error instanceof Error ? error.message : String(error)}`,
                 error: error instanceof Error ? error.message : String(error)
             };
-            process.parentPort?.postMessage(errorMessage);
+            if (parentPort) {
+                parentPort.postMessage(errorMessage);
+            }
         }
     } else if (message.type === 'PAUSE') {
         console.log('⏸️ Received pause command');
@@ -4394,7 +4411,8 @@ process.parentPort.on('message', async (e) => {
     } else {
         console.log('⚠️ Unknown message type:', message.type);
     }
-});
+  });
+}
 
 // Handle process termination
 process.on('SIGTERM', async () => {

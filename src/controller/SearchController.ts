@@ -832,7 +832,7 @@ export class SearchController {
 
             return {
                 success: true,
-                pid,
+                pid: pid ?? undefined,
                 message: `Process ${pid} killed successfully for task ${taskId}`
             };
         } catch (error) {

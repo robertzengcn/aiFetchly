@@ -39,12 +39,12 @@ export function registerLanguagePreferenceIpcHandlers() {
     /**
      * Update language preference
      */
-    ipcMain.handle(LANGUAGE_PREFERENCE_UPDATE, async (event, jsonData: string) => {
+    ipcMain.handle(LANGUAGE_PREFERENCE_UPDATE, async (event, jsonData: unknown) => {
         try {
             // Parse JSON data from frontend
             let parsedData: { language: string };
             try {
-                parsedData = JSON.parse(jsonData);
+                parsedData = JSON.parse(jsonData as string);
             } catch (parseError) {
                 const result: CommonMessage<boolean> = {
                     status: false,

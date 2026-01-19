@@ -139,7 +139,7 @@ export class SocialTask {
         return socialTaskrun
     }
 
-    public async runsocialtask(entity: SocialTaskRunEntity,callback:Function|undefined|null) {
+    public async runsocialtask(entity: SocialTaskRunEntity,callback:((...args: unknown[]) => unknown)|undefined|null) {
         const childPath = path.join(__dirname, 'taskCode.js')
         if (!fs.existsSync(childPath)) {
             throw new Error("child js path not exist for the path " + childPath);
@@ -155,7 +155,7 @@ export class SocialTask {
         // child.postMessage({ message: 'hello' }, [port1])
         child.on("spawn", () => {
             
-            child.postMessage({ message: 'hello' }, [port1])
+            child.postMessage(JSON.stringify({ message: 'hello' }), [port1])
         })
         child.stdout?.on('data', (data) => {
             console.log(`Received data chunk ${data}`)

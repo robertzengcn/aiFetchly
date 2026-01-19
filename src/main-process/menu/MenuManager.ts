@@ -1,4 +1,5 @@
-import { Menu, app, shell, BrowserWindow } from 'electron';
+import { app, BrowserWindow, Menu, shell } from 'electron';
+import type { MenuItemConstructorOptions } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 
@@ -22,8 +23,8 @@ export class MenuManager {
     /**
      * Create the main application menu
      */
-    createMenu(): Menu {
-        const template: Electron.MenuItemConstructorOptions[] = [
+    createMenu(): ReturnType<typeof Menu.buildFromTemplate> {
+        const template: MenuItemConstructorOptions[] = [
             {
                 label: 'File',
                 submenu: [
@@ -31,7 +32,7 @@ export class MenuManager {
                         label: 'Quit',
                         accelerator: process.platform === 'darwin' ? 'Cmd+Q' : 'Ctrl+Q',
                         click: () => {
-                            app.quit();
+                            (app as any).quit();
                         }
                     }
                 ]
@@ -151,14 +152,17 @@ export class MenuManager {
     showDevConsole(): void {
         try {
             // Get the focused window or the first window
-            const focusedWindow = BrowserWindow.getFocusedWindow();
-            const mainWindow = focusedWindow || BrowserWindow.getAllWindows()[0];
+            const allWindows = BrowserWindow.getAllWindows();
+            const mainWindow = allWindows.length > 0 ? (allWindows[0] as BrowserWindow) : null;
             
             if (mainWindow) {
-                if (mainWindow.webContents.isDevToolsOpened()) {
-                    mainWindow.webContents.closeDevTools();
-                } else {
-                    mainWindow.webContents.openDevTools();
+                const bw = mainWindow as BrowserWindow;
+                if (bw && !(bw as any).isDestroyed?.() && (bw as any).webContents) {
+                    if ((bw as any).webContents.isDevToolsOpened()) {
+                        (bw as any).webContents.closeDevTools();
+                    } else {
+                        (bw as any).webContents.openDevTools();
+                    }
                 }
                 console.log('Toggled developer console');
             } else {

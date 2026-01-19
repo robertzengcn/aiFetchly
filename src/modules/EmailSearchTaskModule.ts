@@ -160,10 +160,11 @@ export class EmailSearchTaskModule extends BaseModule{
                 this.updateTaskStatus(taskId,TaskStatus.Complete)
             }
         })
-        child.on('message', (message) => {
+        child.on('message', (message: unknown) => {
+            const msg = message as { data: string };
             console.log("get message from child")
-            console.log('Message from child:', JSON.parse(message));
-            const childdata=JSON.parse(message) as ProcessMessage<EmailResult>
+            console.log('Message from child:', JSON.parse(msg.data));
+            const childdata=JSON.parse(msg.data) as ProcessMessage<EmailResult>
             if(childdata.action=="saveres"){
                 if(childdata.data){
                 //save result

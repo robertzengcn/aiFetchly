@@ -23,7 +23,10 @@ import { ResultParseItemType } from "@/entityTypes/scrapeType"
 // import { VideoPublishService } from "./service/VideoPublishService";
 
 
-process.parentPort.on('message', async (e) => {
+// process.parentPort is available in Worker Threads
+const parentPort = (process as unknown as { parentPort?: { on: (event: string, handler: (e: { data: string }) => void) => void; postMessage: (message: string) => void } }).parentPort;
+if (parentPort) {
+  parentPort.on('message', async (e) => {
     //console.log(e.data)
     const pme = JSON.parse(e.data) as ProcessMessage<any>
     switch (pme.action) {
@@ -47,7 +50,7 @@ process.parentPort.on('message', async (e) => {
                     action:"savesearchresult",
                     data:result
                 }
-                process.parentPort.postMessage(JSON.stringify(message))
+                parentPort.postMessage(JSON.stringify(message))
             })
             //console.log(port)
             //process.parentPort.postMessage(JSON.stringify(message))
@@ -71,7 +74,7 @@ process.parentPort.on('message', async (e) => {
                     action: "EmailSendSuccess",
                     data: senddata
                 }
-                process.parentPort.postMessage(JSON.stringify(message))
+                parentPort.postMessage(JSON.stringify(message))
             }, (receiver, info, title, content) => {
                 const senddata: EmailSendResult = {
                     receiver: receiver,
@@ -84,16 +87,17 @@ process.parentPort.on('message', async (e) => {
                     action: "EmailSendFailure",
                     data: senddata
                 }
-                process.parentPort.postMessage(JSON.stringify(message))
+                parentPort.postMessage(JSON.stringify(message))
             }).then(() => {
                 const message: ProcessMessage<null> = {
                     action: "sendEmailEnd",
 
                 }
-                process.parentPort.postMessage(JSON.stringify(message))
+                parentPort.postMessage(JSON.stringify(message))
             })
 
         }
+        break;
         case "searchEmail": {
 
             const userEmaildata = pme.data as EmailsControldata;
@@ -109,11 +113,14 @@ process.parentPort.on('message', async (e) => {
                     data: res
                 }
 
-                process.parentPort.postMessage(JSON.stringify(message))
+                parentPort.postMessage(JSON.stringify(message))
             })
             break;
         }
-        // case 'downloadVideo': {
+    }
+  })
+}
+// case 'downloadVideo': {
         //     // const pme=JSON.parse(e.data) as ProcessMessage<processVideoDownloadParam> 
         //     const param = pme.data as processVideoDownloadParam
         //     if (!param.platform) {
@@ -168,11 +175,6 @@ process.parentPort.on('message', async (e) => {
             //     break;
             // }
 
-
-    }
-
-
-})
 // async function downloadVideo(param: processVideoDownloadParam) {
 //     if (!param.platform) {
 //         console.error("platform is empty")
@@ -220,7 +222,7 @@ process.parentPort.on('message', async (e) => {
 //                             categories: param.categories
 //                         }
 //                     }
-//                     process.parentPort.postMessage(JSON.stringify(message))
+//                     parentPort.postMessage(JSON.stringify(message))
 //          }).catch((error) => { })
 //     } else {
 //         //download by single video or playlist
@@ -249,7 +251,7 @@ process.parentPort.on('message', async (e) => {
 //                         }
 //                     }
 
-//                     process.parentPort.postMessage(JSON.stringify(message))
+//                     parentPort.postMessage(JSON.stringify(message))
 //                     // process.exit(1);
 //                 }, (msg) => {
 //                     //stdout call
@@ -268,7 +270,7 @@ process.parentPort.on('message', async (e) => {
 //                             categories: param.categories
 //                         }
 //                     }
-//                     process.parentPort.postMessage(JSON.stringify(message))
+//                     parentPort.postMessage(JSON.stringify(message))
 //                     // process.exit(0);
 //                 }).catch((error) => {
 //                     if (error instanceof Error) {
@@ -280,7 +282,7 @@ process.parentPort.on('message', async (e) => {
 //                                 log: error.message
 //                             }
 //                         }
-//                         process.parentPort.postMessage(JSON.stringify(message))
+//                         parentPort.postMessage(JSON.stringify(message))
 //                         // process.exit(1);
 //                     }
 //                 })
@@ -298,7 +300,7 @@ process.parentPort.on('message', async (e) => {
 //                         }
 //                     }
 
-//                     process.parentPort.postMessage(JSON.stringify(message))
+//                     parentPort.postMessage(JSON.stringify(message))
 //                 }, (msg) => {
 //                     //stdout call
 //                 }, (param: VideodoanloadSuccessCall) => {
@@ -316,7 +318,7 @@ process.parentPort.on('message', async (e) => {
 //                             categories: param.categories
 //                         }
 //                     }
-//                     process.parentPort.postMessage(JSON.stringify(message))
+//                     parentPort.postMessage(JSON.stringify(message))
 
 //                 }, (error) => {
 //                     //end call
@@ -328,7 +330,7 @@ process.parentPort.on('message', async (e) => {
 //                                 msg: error
 //                             }
 //                         }
-//                         process.parentPort.postMessage(JSON.stringify(message))
+//                         parentPort.postMessage(JSON.stringify(message))
 
 //                         //process.exit(1);
 //                     } else {
@@ -345,7 +347,7 @@ process.parentPort.on('message', async (e) => {
 //                                 msg: error.message
 //                             }
 //                         }
-//                         process.parentPort.postMessage(JSON.stringify(message))
+//                         parentPort.postMessage(JSON.stringify(message))
 
 //                     }
 //                 })
@@ -404,7 +406,7 @@ process.parentPort.on('message', async (e) => {
 //                     }
 //                 }
 
-//                 process.parentPort.postMessage(JSON.stringify(message))
+//                 parentPort.postMessage(JSON.stringify(message))
 //             },
 //             stroutCall: (message: string) => {
 
@@ -424,7 +426,7 @@ process.parentPort.on('message', async (e) => {
 //                     }
 //                 }
 
-//                 process.parentPort.postMessage(JSON.stringify(message))
+//                 parentPort.postMessage(JSON.stringify(message))
 //             }
 //         }
 //         await captionTool.extractCaption(data).catch((error) => {
@@ -439,7 +441,7 @@ process.parentPort.on('message', async (e) => {
 //                     }
 //                 }
 
-//                 process.parentPort.postMessage(JSON.stringify(message))
+//                 parentPort.postMessage(JSON.stringify(message))
 //             }
 //         })
 

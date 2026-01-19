@@ -16,9 +16,9 @@ import { EmailMarketingSendLogEntity} from "@/model/emailMarketingSendLogdb"
  */
 export function registerBuckEmailIpcHandlers() {
     
-    ipcMain.on(BUCKEMAILSEND, async (event, data) => {
+    ipcMain.on(BUCKEMAILSEND, async (event, data: unknown) => {
         const buckemailCon = new BuckemailController()
-        const qdata = JSON.parse(data) as EmailMarketingsubdata;
+        const qdata = JSON.parse(data as string) as EmailMarketingsubdata;
         switch (qdata.sourceType) {
             case 1: {
                 if (!qdata.emailtaskentityId) {
@@ -30,8 +30,8 @@ export function registerBuckEmailIpcHandlers() {
                             title: "buckemailsend.email_souce_empty",
                             content: "buckemailsend.check_email_souce"
                         }
-                    }
-                    event.sender.send(BUCKEMAILSENDMESSAGE, JSON.stringify(comMsgs))
+                    };
+                    (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(BUCKEMAILSENDMESSAGE, JSON.stringify(comMsgs))
                     return
                 }
                 //get email address in search result
@@ -47,8 +47,8 @@ export function registerBuckEmailIpcHandlers() {
                             title: "buckemailsend.receiver_email_list_empty",
                             content: "buckemailsend.receiver_email_list_empty"
                         }
-                    }
-                    event.sender.send(BUCKEMAILSENDMESSAGE, JSON.stringify(comMsgs))
+                    };
+                    (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(BUCKEMAILSENDMESSAGE, JSON.stringify(comMsgs))
                     return
                 }
                 const bucketEmailData: Buckemailstruct = {
@@ -70,15 +70,15 @@ export function registerBuckEmailIpcHandlers() {
                         title: "buckemailsend.start_send_email",
                         content: taskid.toString()
                     }
-                }
-                event.sender.send(BUCKEMAILSENDMESSAGE, JSON.stringify(comMsgs))
+                };
+                (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(BUCKEMAILSENDMESSAGE, JSON.stringify(comMsgs))
             }
                 break;
         }
     })
     //get buck email task lis´
     ipcMain.handle(BUCKEMAILTASKLIST, async (event, data) => {
-        const qdata = JSON.parse(data) as ItemSearchparam;
+        const qdata = JSON.parse(data as string) as ItemSearchparam;
         if (!Object.prototype.hasOwnProperty.call(qdata, "page")) {
             qdata.page = 0;
         }
@@ -99,7 +99,7 @@ export function registerBuckEmailIpcHandlers() {
     })
     //get buck email task log
     ipcMain.handle(BUCKEMAILTASKSENDLOG, async (event, data) => {
-        const qdata = JSON.parse(data) as BuckEmailTasklogQueryType;
+        const qdata = JSON.parse(data as string) as BuckEmailTasklogQueryType;
         if (!Object.prototype.hasOwnProperty.call(qdata, "TaskId")) {
             const resp: CommonResponse<null> = {
                 status: false,

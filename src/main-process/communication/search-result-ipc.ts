@@ -1,4 +1,6 @@
-import { ipcMain, IpcMainInvokeEvent } from 'electron';
+import { ipcMain } from 'electron';
+// IpcMainInvokeEvent type - use unknown for event parameter
+type IpcMainInvokeEvent = unknown;
 import { ANALYZE_WEBSITE, ANALYZE_WEBSITE_PROGRESS } from '@/config/channellist';
 import { WebsiteAnalysisService } from '@/service/WebsiteAnalysisService';
 import { CommonMessage } from '@/entityTypes/commonType';
@@ -26,13 +28,13 @@ export function registerSearchResultIpcHandlers(): void {
      * Handle batch website analysis request
      * Uses queue system to process multiple URLs concurrently
      */
-    ipcMain.handle(ANALYZE_WEBSITE, async (event: IpcMainInvokeEvent, data: string | AnalyzeWebsiteBatchRequest): Promise<CommonMessage<{
+    ipcMain.handle(ANALYZE_WEBSITE, async (event: IpcMainInvokeEvent, data: unknown): Promise<CommonMessage<{
         batchId: string;
         total: number;
     } | null>> => {
         try {
             // Parse data if it's a string
-            const requestData: AnalyzeWebsiteBatchRequest = typeof data === 'string' ? JSON.parse(data) : data;
+            const requestData: AnalyzeWebsiteBatchRequest = typeof data === 'string' ? JSON.parse(data) : (data as AnalyzeWebsiteBatchRequest);
             
             // Validate input
             if (!requestData.items || !Array.isArray(requestData.items) || requestData.items.length === 0) {
@@ -68,7 +70,7 @@ export function registerSearchResultIpcHandlers(): void {
             let batchId: string | null = null;
             const progressCallback = (progress: QueueProgress) => {
                 if (batchId) {
-                    event.sender.send(ANALYZE_WEBSITE_PROGRESS, JSON.stringify({
+                    (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(ANALYZE_WEBSITE_PROGRESS, JSON.stringify({
                         batchId: batchId,
                         ...progress
                     }));

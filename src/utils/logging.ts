@@ -16,7 +16,9 @@ export function createLogger(moduleName: string) {
   const moduleLogPath = path.join(logDir, `${moduleName}.log`);
   
   // Create a simple scoped logger that uses the main log transports
-  const logger = log.scope(moduleName);
+  const logger = (log as unknown as { scope?: (name: string) => typeof log }).scope 
+    ? (log as unknown as { scope: (name: string) => typeof log }).scope(moduleName)
+    : log;
   
   // Note: Scoped loggers inherit transport configuration from main log instance
   // The main log is already configured in background.ts to save to the logs directory

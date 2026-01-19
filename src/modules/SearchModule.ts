@@ -344,10 +344,11 @@ export class SearchModule extends BaseModule {
                 console.log('Child process exited successfully');
             }
         })
-        child.on('message', (message) => {
+        child.on('message', (message: unknown) => {
+            const msg = message as { data: string };
             console.log("get message from child")
-            console.log('Message from child:', JSON.parse(message));
-            const childdata=JSON.parse(message)
+            console.log('Message from child:', JSON.parse(msg.data));
+            const childdata=JSON.parse(msg.data)
             if(childdata.action=="savesearchresult"){
                 //save result
                 this.saveSearchResult(childdata.data,taskId)

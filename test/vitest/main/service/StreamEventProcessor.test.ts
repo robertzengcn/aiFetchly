@@ -1,7 +1,12 @@
 'use strict';
 import { describe, test, expect, beforeEach, vi } from 'vitest';
 import { StreamEventProcessor, StreamState } from '@/service/StreamEventProcessor';
-import type { IpcMainEvent } from 'electron';
+// IpcMainEvent type definition
+type IpcMainEvent = {
+    sender: {
+        send: (channel: string, ...args: unknown[]) => void;
+    };
+};
 
 describe('StreamEventProcessor', () => {
   let streamEventProcessor: StreamEventProcessor;

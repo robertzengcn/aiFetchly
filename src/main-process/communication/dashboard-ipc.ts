@@ -25,10 +25,10 @@ export function registerDashboardIpcHandlers(): void {
   console.log("Dashboard IPC handlers registered");
 
   // Dashboard Summary Statistics
-  ipcMain.handle(DASHBOARD_SUMMARY, async (event, data): Promise<DashboardSummaryResponse> => {
+  ipcMain.handle(DASHBOARD_SUMMARY, async (event, data: unknown): Promise<DashboardSummaryResponse> => {
     try {
       const controller = new DashboardController();
-      const request: DashboardSummaryRequest = typeof data === 'string' ? JSON.parse(data) : data;
+      const request: DashboardSummaryRequest = typeof data === 'string' ? JSON.parse(data) : (data as DashboardSummaryRequest);
 
       // Validate request
       if (!request.startDate || !request.endDate) {
@@ -83,7 +83,7 @@ export function registerDashboardIpcHandlers(): void {
   ipcMain.handle(DASHBOARD_TRENDS, async (event, data): Promise<DashboardTrendsResponse> => {
     try {
       const controller = new DashboardController();
-      const request: DashboardTrendsRequest = typeof data === 'string' ? JSON.parse(data) : data;
+      const request: DashboardTrendsRequest = typeof data === 'string' ? JSON.parse(data) : (data as DashboardTrendsRequest);
 
       // Validate request
       if (!request.startDate || !request.endDate) {
@@ -138,7 +138,7 @@ export function registerDashboardIpcHandlers(): void {
   ipcMain.handle(DASHBOARD_SEARCH_ENGINES, async (event, data): Promise<DashboardSearchEnginesResponse> => {
     try {
       const controller = new DashboardController();
-      const request: DashboardSearchEnginesRequest = typeof data === 'string' ? JSON.parse(data) : data;
+      const request: DashboardSearchEnginesRequest = typeof data === 'string' ? JSON.parse(data) : (data as DashboardSearchEnginesRequest);
 
       // Validate request
       if (!request.startDate || !request.endDate) {
@@ -193,7 +193,7 @@ export function registerDashboardIpcHandlers(): void {
   ipcMain.handle(DASHBOARD_EMAIL_STATUS, async (event, data): Promise<DashboardEmailStatusResponse> => {
     try {
       const controller = new DashboardController();
-      const request: DashboardEmailStatusRequest = typeof data === 'string' ? JSON.parse(data) : data;
+      const request: DashboardEmailStatusRequest = typeof data === 'string' ? JSON.parse(data) : (data as DashboardEmailStatusRequest);
 
       // Validate request
       if (!request.startDate || !request.endDate) {

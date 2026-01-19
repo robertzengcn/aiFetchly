@@ -260,11 +260,12 @@ export class BuckEmailTaskModule extends BaseModule {
             }
 
         })
-        child.on('message', (message) => {
+        child.on('message', (message: unknown) => {
+            const msg = message as { data: string };
             console.log("get message from child")
-            console.log('Message from child:', JSON.parse(message));
-            // const childdata=JSON.parse(message) as ProcessMessage<EmailResult>
-            const childdata = JSON.parse(message) as ProcessMessage<EmailSendResult>
+            console.log('Message from child:', JSON.parse(msg.data));
+            // const childdata=JSON.parse(message.data) as ProcessMessage<EmailResult>
+            const childdata = JSON.parse(msg.data) as ProcessMessage<EmailSendResult>
             switch (childdata.action) {
                 case 'EmailSendSuccess': {
                     // const emailMarketLog: EmailMarketingSendLogEntity = {
@@ -274,13 +275,17 @@ export class BuckEmailTaskModule extends BaseModule {
                     //     title: message.data.title,
                     //     content: message.data.content,
                     // }
+                    if (!childdata.data) {
+                        console.error('EmailSendSuccess: childdata.data is undefined');
+                        break;
+                    }
                     const emailMarketLog = new EmailMarketingSendLogEntity()
                     emailMarketLog.task_id = taskId
                     emailMarketLog.status = SendStatus.Success
-                    emailMarketLog.receiver = message.data.receiver
-                    emailMarketLog.title = message.data.title
-                    emailMarketLog.content = message.data.content
-                    emailMarketLog.log = message.data.info ? message.data.info : ""
+                    emailMarketLog.receiver = childdata.data.receiver
+                    emailMarketLog.title = childdata.data.title
+                    emailMarketLog.content = childdata.data.content
+                    emailMarketLog.log = childdata.data.info ? childdata.data.info : ""
                     //update send log
                     this.emailMarketingSendlogModule.createItem(emailMarketLog)
                 }
@@ -294,13 +299,17 @@ export class BuckEmailTaskModule extends BaseModule {
                     //     content: message.data.content,
                     //     log: message.data.info
                     // }
+                    if (!childdata.data) {
+                        console.error('EmailSendFailure: childdata.data is undefined');
+                        break;
+                    }
                     const emailMarketLog = new EmailMarketingSendLogEntity()
                     emailMarketLog.task_id = taskId
                     emailMarketLog.status = SendStatus.Failure
-                    emailMarketLog.receiver = message.data.receiver
-                    emailMarketLog.title = message.data.title
-                    emailMarketLog.content = message.data.content
-                    emailMarketLog.log = message.data.info ? message.data.info : ""
+                    emailMarketLog.receiver = childdata.data.receiver
+                    emailMarketLog.title = childdata.data.title
+                    emailMarketLog.content = childdata.data.content
+                    emailMarketLog.log = childdata.data.info ? childdata.data.info : ""
                     //update send log
                     this.emailMarketingSendlogModule.createItem(emailMarketLog)
                 }

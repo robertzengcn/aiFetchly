@@ -1,4 +1,9 @@
-import { IpcMainEvent } from 'electron';
+// IpcMainEvent type is available but may not be exported in type definitions
+type IpcMainEvent = {
+    sender: {
+        send: (channel: string, ...args: unknown[]) => void;
+    };
+};
 import { StreamEvent, StreamEventType } from '@/api/aiChatApi';
 import {
     ChatStreamChunk,
