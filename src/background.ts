@@ -206,32 +206,35 @@ function initialize() {
     })
 
     if (win) {
+      console.log("Window exist, prepare to register communication ipc handlers")
       // Check if USERSDBPATH is empty, create temp db path if needed
       const tokenService = new Token();
-      let userdataPath = tokenService.getValue(USERSDBPATH);
+      const userdataPath = tokenService.getValue(USERSDBPATH);
       
-      if (!userdataPath || userdataPath.length === 0) {
-        // Create temporary database path
-        const tempDbPath = path.join(app.getPath('userData'), 'temp_db');
-        try {
-          // Ensure the directory exists
-          if (!fs.existsSync(tempDbPath)) {
-            fs.mkdirSync(tempDbPath, { recursive: true });
-            log.info(`Created temporary database directory at: ${tempDbPath}`);
-          }
-          // Set the temporary path
-          tokenService.setValue(USERSDBPATH, tempDbPath);
-          userdataPath = tempDbPath;
-          log.info(`Set temporary USERSDBPATH to: ${tempDbPath}`);
-        } catch (err) {
-          log.error(`Failed to create temporary database path: ${err}`);
-          const errorMessage = err instanceof Error ? err.message : String(err);
-          dialog.showErrorBox('Configuration Error',
-            `Failed to create temporary database directory: ${errorMessage}`);
-        }
-      }
-      
-      registerCommunicationIpcHandlers(win);
+      // if (!userdataPath || userdataPath.length === 0) {
+      //   // Create temporary database path
+      //   const tempDbPath = path.join(app.getPath('userData'), 'temp_db');
+      //   try {
+      //     // Ensure the directory exists
+      //     if (!fs.existsSync(tempDbPath)) {
+      //       fs.mkdirSync(tempDbPath, { recursive: true });
+      //       log.info(`Created temporary database directory at: ${tempDbPath}`);
+      //     }
+      //     // Set the temporary path
+      //     tokenService.setValue(USERSDBPATH, tempDbPath);
+      //     userdataPath = tempDbPath;
+      //     log.info(`Set temporary USERSDBPATH to: ${tempDbPath}`);
+      //   } catch (err) {
+      //     log.error(`Failed to create temporary database path: ${err}`);
+      //     const errorMessage = err instanceof Error ? err.message : String(err);
+      //     dialog.showErrorBox('Configuration Error',
+      //       `Failed to create temporary database directory: ${errorMessage}`);
+      //   }
+      // }
+      //if (userdataPath){//register communication ipc handlers
+        registerCommunicationIpcHandlers(win);
+      //}
+     
     }
 
     // Add event listener for window destruction
@@ -366,7 +369,7 @@ function initialize() {
   }
 
   // Quit when all windows are closed.
-  ;(app as any).on('window-all-closed', () => {
+  (app as any).on('window-all-closed', () => {
     // On macOS it is common for applications and their menu bar
     // to stay active until the user quits explicitly with Cmd + Q
     if (process.platform !== 'darwin') {
@@ -375,7 +378,7 @@ function initialize() {
   });
 
   // Handle application shutdown
-  ;(app as any).on('before-quit', async () => {
+  (app as any).on('before-quit', async () => {
     try {
       const tokenService = new Token()
       const userdataPath = tokenService.getValue(USERSDBPATH)
@@ -392,13 +395,13 @@ function initialize() {
     logger.stopLogCleanup();
   });
 
-  ;(app as any).on('activate', () => {
+  (app as any).on('activate', () => {
     // On macOS it's common to re-create a window in the app when the
     // dock icon is clicked and there are no other windows open.
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   });
 
-  ;(app as any).on('open-url', (event, url) => {
+  (app as any).on('open-url', (event, url) => {
 
     console.log("open url call")
     event.preventDefault();
@@ -422,7 +425,7 @@ function initialize() {
   // This method will be called when Electron has finished
   // initialization and is ready to create browser windows.
   // Some APIs can only be used after this event occurs.
-  ;(app as any).whenReady().then(async () => {
+  (app as any).whenReady().then(async () => {
     // Configure Content Security Policy (must be called after app is ready)
     configureContentSecurityPolicy()
 
@@ -594,8 +597,8 @@ function makeSingleInstance() {
 
     (app as any).on('second-instance', (event, argv, workingDirectory) => {
       if (win) {
-        if ((win as any).isMinimized()) (win as any).restore()
-        (win as any).focus()
+        if ((win as any).isMinimized()) (win as any).restore();
+        (win as any).focus();
       }
 
       // console.log("second-instance call")

@@ -120,14 +120,14 @@ const chartOptions = computed(() => ({
   chart: {
     height: 400,
     toolbar: {
-      show: true,
+      show: false,
       tools: {
         download: true,
-        zoom: true,
-        zoomin: true,
-        zoomout: true,
-        pan: true,
-        reset: true
+        // zoom: true,
+        // zoomin: true,
+        // zoomout: true,
+        // pan: true,
+        // reset: true
       }
     },
     animations: {
