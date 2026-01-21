@@ -209,28 +209,28 @@ function initialize() {
       console.log("Window exist, prepare to register communication ipc handlers")
       // Check if USERSDBPATH is empty, create temp db path if needed
       const tokenService = new Token();
-      const userdataPath = tokenService.getValue(USERSDBPATH);
+      let userdataPath = tokenService.getValue(USERSDBPATH);
       
-      // if (!userdataPath || userdataPath.length === 0) {
-      //   // Create temporary database path
-      //   const tempDbPath = path.join(app.getPath('userData'), 'temp_db');
-      //   try {
-      //     // Ensure the directory exists
-      //     if (!fs.existsSync(tempDbPath)) {
-      //       fs.mkdirSync(tempDbPath, { recursive: true });
-      //       log.info(`Created temporary database directory at: ${tempDbPath}`);
-      //     }
-      //     // Set the temporary path
-      //     tokenService.setValue(USERSDBPATH, tempDbPath);
-      //     userdataPath = tempDbPath;
-      //     log.info(`Set temporary USERSDBPATH to: ${tempDbPath}`);
-      //   } catch (err) {
-      //     log.error(`Failed to create temporary database path: ${err}`);
-      //     const errorMessage = err instanceof Error ? err.message : String(err);
-      //     dialog.showErrorBox('Configuration Error',
-      //       `Failed to create temporary database directory: ${errorMessage}`);
-      //   }
-      // }
+      if (!userdataPath || userdataPath.length === 0) {
+        // Create temporary database path
+        const tempDbPath = path.join(app.getPath('userData'), 'temp_db');
+        try {
+          // Ensure the directory exists
+          if (!fs.existsSync(tempDbPath)) {
+            fs.mkdirSync(tempDbPath, { recursive: true });
+            log.info(`Created temporary database directory at: ${tempDbPath}`);
+          }
+          // Set the temporary path
+          tokenService.setValue(USERSDBPATH, tempDbPath);
+          userdataPath = tempDbPath;
+          log.info(`Set temporary USERSDBPATH to: ${tempDbPath}`);
+        } catch (err) {
+          log.error(`Failed to create temporary database path: ${err}`);
+          const errorMessage = err instanceof Error ? err.message : String(err);
+          dialog.showErrorBox('Configuration Error',
+            `Failed to create temporary database directory: ${errorMessage}`);
+        }
+      }
       //if (userdataPath){//register communication ipc handlers
         registerCommunicationIpcHandlers(win);
       //}
@@ -788,6 +788,57 @@ async function handleDeepLink(url: string) {
           log.error('Device registration failed (non-blocking):', deviceError);
           const errorMessage = deviceError instanceof Error ? deviceError.message : String(deviceError);
           console.error('Device registration error:', errorMessage);
+        }
+
+        // After successful login, USERSDBPATH may have changed
+        // Reset database singletons to use the new path
+        try {
+          const tokenService = new Token();
+          const newDbPath = tokenService.getValue(USERSDBPATH);
+          if (newDbPath && newDbPath.length > 0) {
+            // Reset ScheduleManager first (before destroying DB connection)
+            // This allows it to stop cleanly without trying to use a destroyed connection
+            await ScheduleManager.resetInstance();
+            log.info('ScheduleManager reset to new path after login');
+            
+            // Reset SqliteDb instance to use new path
+            const newDbInstance = await SqliteDb.resetInstance(newDbPath);
+            log.info('SqliteDb reset to new path after login:', newDbPath);
+            
+            // Ensure the new connection is initialized with retry logic for database locks
+            if (!newDbInstance.connection.isInitialized) {
+              let retries = 3;
+              let lastError: unknown = null;
+              while (retries > 0) {
+                try {
+                  await newDbInstance.connection.initialize();
+                  log.info('New SqliteDb connection initialized');
+                  break;
+                } catch (initError) {
+                  lastError = initError;
+                  retries--;
+                  if (retries > 0) {
+                    const errorMessage = initError instanceof Error ? initError.message : String(initError);
+                    if (errorMessage.includes('locked') || errorMessage.includes('database is locked')) {
+                      log.warn(`Database locked during initialization, retrying... (${retries} retries left)`);
+                      // Wait a bit longer before retrying
+                      await new Promise(resolve => setTimeout(resolve, 200));
+                    } else {
+                      // Not a lock error, don't retry
+                      throw initError;
+                    }
+                  }
+                }
+              }
+              if (retries === 0 && lastError) {
+                log.error('Failed to initialize new SqliteDb connection after retries:', lastError);
+                // Don't throw - allow login to continue, connection will be initialized on first use
+              }
+            }
+          }
+        } catch (dbResetError) {
+          // Log but don't block login flow
+          log.error('Failed to reset database singletons after login (non-blocking):', dbResetError);
         }
 
         // Navigate to dashboard

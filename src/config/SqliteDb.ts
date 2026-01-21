@@ -255,7 +255,9 @@ function getSqliteVecExtensionPath(): string | null {
 
 export class SqliteDb {
     public connection: DataSource;
-    private static instance: SqliteDb;
+    private static instance: SqliteDb | null = null;
+    private static currentDbPath: string | null = null;
+
     private constructor(filepath:string) {
         if(filepath.length>0){
         this.connection =new DataSource({
@@ -359,15 +361,82 @@ export class SqliteDb {
         //     console.error('Failed to load sqlite-vec extension:', error);
         //     throw new Error('Failed to load sqlite-vec extension');
         // }
+    } else {
+        // Connection not initialized when filepath is empty
+        // This will cause errors if instance is used
     }
 
     }
     public static getInstance(filepath:string): SqliteDb {
-
-        if (!SqliteDb.instance) {
+        // Validate filepath - don't create/reset with invalid paths
+        if (!filepath || filepath.length === 0) {
+            // If we have a valid instance, return it instead of creating invalid one
+            if (SqliteDb.instance && SqliteDb.instance.connection) {
+                console.warn('getInstance called with empty path, returning existing instance');
+                return SqliteDb.instance;
+            }
+            throw new Error('Cannot create SqliteDb instance with empty filepath');
+        }
+        
+        // Check if path has changed - if so, reset the instance
+        if (SqliteDb.instance && SqliteDb.currentDbPath !== filepath) {
+            console.log(`SqliteDb path changed from ${SqliteDb.currentDbPath} to ${filepath}, resetting instance...`);
+            // Destroy old connection asynchronously (fire and forget)
+            // The old instance will be replaced immediately with a new one
+            const oldInstance = SqliteDb.instance;
+            if (oldInstance.connection?.isInitialized) {
+                oldInstance.connection.destroy().catch((error) => {
+                    console.error('Failed to destroy old SqliteDb connection during path change:', error);
+                });
+            }
+            // Create new instance immediately with new path
             SqliteDb.instance = new SqliteDb(filepath);
+            SqliteDb.currentDbPath = filepath;
+        } else if (!SqliteDb.instance) {
+            SqliteDb.instance = new SqliteDb(filepath);
+            SqliteDb.currentDbPath = filepath;
             // await SqliteDb.instance.checkConnection();
         }
+
+        return SqliteDb.instance;
+    }
+
+    /**
+     * Reset the singleton when the database path changes.
+     * Ensures new connections use the latest USERSDBPATH.
+     */
+    public static async resetInstance(filepath: string): Promise<SqliteDb> {
+        // Validate filepath
+        if (!filepath || filepath.length === 0) {
+            throw new Error('Cannot reset SqliteDb instance with empty filepath');
+        }
+        
+        // Check if we're actually changing paths
+        const newDbFile = path.join(filepath, 'scraper.db');
+        const oldDbFile = SqliteDb.instance && SqliteDb.currentDbPath 
+            ? path.join(SqliteDb.currentDbPath, 'scraper.db')
+            : null;
+        
+        // If connecting to the same database file, we need to ensure old connection is fully closed
+        const isSameDatabaseFile = oldDbFile && newDbFile === oldDbFile;
+        
+        if (SqliteDb.instance && SqliteDb.instance.connection?.isInitialized) {
+            try {
+                await SqliteDb.instance.connection.destroy();
+                
+                // If connecting to the same database file, add a small delay to ensure file locks are released
+                if (isSameDatabaseFile) {
+                    // Wait a bit for SQLite to release file locks
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+            } catch (error) {
+                console.error('Failed to destroy existing SqliteDb connection:', error);
+            }
+        }
+
+        SqliteDb.instance = new SqliteDb(filepath);
+        SqliteDb.currentDbPath = filepath;
+        
         return SqliteDb.instance;
     }
 
