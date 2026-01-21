@@ -7,6 +7,9 @@ import { ExecutionStatus, TriggerType as LogTriggerType } from "@/entity/Schedul
 import { TaskExecutorService } from "./TaskExecutorService";
 import { ScheduleTaskModuleInterface } from "@/modules/interface/ScheduleTaskModuleInterface";
 import { ScheduleTaskModule } from "@/modules/ScheduleTaskModule";
+import { Token } from "@/modules/token";
+import { USERSDBPATH } from "@/config/usersetting";
+import { SqliteDb } from "@/config/SqliteDb";
 
 export interface SchedulerStatus {
     isRunning: boolean;
@@ -57,6 +60,7 @@ export class BackgroundScheduler extends BaseDb {
     private scheduleTaskModel: ScheduleTaskModuleInterface;
     private scheduleExecutionLogModel: ScheduleExecutionLogModel;
     private taskExecutorService: TaskExecutorService;
+    private currentDbPath: string;
 
     private isInitialized = false;
     private isRunning = false;
@@ -81,6 +85,7 @@ export class BackgroundScheduler extends BaseDb {
 
     constructor(filepath: string) {
         super(filepath);
+        this.currentDbPath = filepath;
         this.scheduleManager = ScheduleManager.getInstance();
         this.scheduleTaskModel = new ScheduleTaskModule();
         this.scheduleExecutionLogModel = new ScheduleExecutionLogModel(filepath);
@@ -91,6 +96,7 @@ export class BackgroundScheduler extends BaseDb {
      * Initialize the background scheduler
      */
     async initialize(): Promise<void> {
+        await this.refreshDatabaseForUserPath();
         if (this.isInitialized) {
             return;
         }
@@ -109,6 +115,76 @@ export class BackgroundScheduler extends BaseDb {
         } catch (error) {
             console.error('Failed to initialize BackgroundScheduler:', error);
             throw error;
+        }
+    }
+
+    /**
+     * Reinitialize database-backed dependencies when USERSDBPATH changes.
+     * Should be called after login/deep link when the user DB path updates.
+     */
+    async refreshDatabaseForUserPath(): Promise<void> {
+        const tokenService = new Token();
+        const latestPath = tokenService.getValue(USERSDBPATH);
+
+        if (!latestPath) {
+            throw new Error('Database path not found for BackgroundScheduler');
+        }
+
+        if (latestPath === this.currentDbPath) {
+            return;
+        }
+
+        const wasRunning = this.isRunning;
+        if (this.isRunning) {
+            await this.stop();
+        }
+
+        // Reset ScheduleManager first (before destroying DB connection)
+        // This allows it to stop cleanly without trying to use a destroyed connection
+        this.scheduleManager = await ScheduleManager.resetInstance();
+        
+        // Reset SqliteDb instance to use new path
+        const newDbInstance = await SqliteDb.resetInstance(latestPath);
+        this.sqliteDb = newDbInstance;
+        
+        // Ensure the new connection is initialized with retry logic for database locks
+        if (!newDbInstance.connection.isInitialized) {
+            let retries = 3;
+            let lastError: unknown = null;
+            while (retries > 0) {
+                try {
+                    await newDbInstance.connection.initialize();
+                    break;
+                } catch (initError) {
+                    lastError = initError;
+                    retries--;
+                    if (retries > 0) {
+                        const errorMessage = initError instanceof Error ? initError.message : String(initError);
+                        if (errorMessage.includes('locked') || errorMessage.includes('database is locked')) {
+                            console.warn(`Database locked during initialization, retrying... (${retries} retries left)`);
+                            // Wait a bit longer before retrying
+                            await new Promise(resolve => setTimeout(resolve, 200));
+                        } else {
+                            // Not a lock error, don't retry
+                            throw initError;
+                        }
+                    }
+                }
+            }
+            if (retries === 0 && lastError) {
+                console.error('Failed to initialize new SqliteDb connection after retries:', lastError);
+                // Don't throw - allow operation to continue, connection will be initialized on first use
+            }
+        }
+        
+        this.scheduleExecutionLogModel = new ScheduleExecutionLogModel(latestPath);
+        this.scheduleTaskModel = new ScheduleTaskModule();
+        this.taskExecutorService = new TaskExecutorService();
+        this.currentDbPath = latestPath;
+        this.isInitialized = false;
+
+        if (wasRunning) {
+            await this.start();
         }
     }
 
