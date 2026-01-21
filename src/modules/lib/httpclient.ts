@@ -21,13 +21,23 @@ export class HttpClient {
     private _tokenRefreshService: TokenRefreshService;
     private _refreshInProgress = false;
     constructor() {
-      //AuthInterceptor()
-      // Use environment variable in Node.js, import.meta.env in Vite
-      let loginUrl = process.env.VITE_LOGIN_URL || 'http://localhost:3000';
+      // Use process.env for environment variables in Electron main process
+      // NOTE: Removed import.meta.env check - Vite statically replaces import.meta.env.VITE_*
+      // at build time which causes Invalid URL errors in the main process.
+      // process.env is loaded correctly via Vite's loadEnv() in vite.main.config.mjs
+      let loginUrl: string | undefined = process.env.VITE_LOGIN_URL;
 
-      // Try to use import.meta.env if available (Vite environment)
-      if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_LOGIN_URL) {
-        loginUrl = import.meta.env.VITE_LOGIN_URL;
+      // Validate and ensure we have a valid URL
+      if (!loginUrl || loginUrl.trim() === '') {
+        loginUrl = 'http://localhost:3000';
+      }
+
+      // Validate URL format
+      try {
+        new URL(loginUrl);
+      } catch (error) {
+        console.warn(`Invalid VITE_LOGIN_URL: ${loginUrl}, falling back to default`);
+        loginUrl = 'http://localhost:3000';
       }
 
       this.baseUrl = loginUrl + "/apis";
