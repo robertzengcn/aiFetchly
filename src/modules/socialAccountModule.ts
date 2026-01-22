@@ -5,6 +5,7 @@ import { BaseModule } from "@/modules/baseModule";
 import { SocialAccountResponse, SocialAccountDetailResponse, SocialAccountDetailData, SavesocialaccountResp } from "@/entityTypes/socialaccount-type";
 import { AccountCookiesModule } from "@/modules/accountCookiesModule";
 import { ProxyModule } from "./ProxyModule";
+import { SocialPlatformList } from "@/config/generate";
 
 export class SocialAccountModule extends BaseModule {
     private socialAccountModel: SocialAccountModel;
@@ -34,9 +35,13 @@ export class SocialAccountModule extends BaseModule {
                     const cookies = await this.accountCookiesModule.getAccountCookies(account.id);
                     const hasCookies = !!(cookies && cookies.cookies && JSON.parse(cookies.cookies).length > 0);
                     
+                    // Map social_type_id to platform name
+                    const platform = SocialPlatformList.find(item => item.id === account.social_type_id);
+                    const socialType = platform ? platform.name : '';
+                    
                     return {
                         id: account.id,
-                        // social_type: account.social_type,
+                        social_type: socialType,
                         social_type_id: account.social_type_id,
                         user: account.user,
                         pass: account.pass,

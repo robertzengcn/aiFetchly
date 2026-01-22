@@ -607,6 +607,10 @@ export default {
     language:{
         zh:"中文",
         en:"英文",
+        es:"西班牙语",
+        fr:"法语",
+        de:"德语",
+        ja:"日语",
     },
     account:{
         accountId:"账户ID",

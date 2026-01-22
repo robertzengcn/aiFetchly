@@ -615,8 +615,12 @@ export default {
         select_category:"select category",
     },
     language:{
-        zh:"Chinese",
-        en:"English",
+        zh:"Chinois",
+        en:"Anglais",
+        es:"Espagnol",
+        fr:"Français",
+        de:"Allemand",
+        ja:"Japonais",
     },
 
     account:{

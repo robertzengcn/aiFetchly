@@ -261,11 +261,16 @@ export class BuckEmailTaskModule extends BaseModule {
 
         })
         child.on('message', (message: unknown) => {
-            const msg = message as { data: string };
-            console.log("get message from child")
-            console.log('Message from child:', JSON.parse(msg.data));
-            // const childdata=JSON.parse(message.data) as ProcessMessage<EmailResult>
-            const childdata = JSON.parse(msg.data) as ProcessMessage<EmailSendResult>
+            try {
+                const msg = message as { data?: string };
+                if (!msg || !msg.data || typeof msg.data !== 'string') {
+                    console.error('Invalid message from child process:', message);
+                    return;
+                }
+                console.log("get message from child")
+                // const childdata=JSON.parse(message.data) as ProcessMessage<EmailResult>
+                const childdata = JSON.parse(msg.data) as ProcessMessage<EmailSendResult>;
+                console.log('Message from child:', childdata);
             switch (childdata.action) {
                 case 'EmailSendSuccess': {
                     // const emailMarketLog: EmailMarketingSendLogEntity = {
@@ -318,6 +323,12 @@ export class BuckEmailTaskModule extends BaseModule {
                     this.updateTaskStatus(taskId, TaskStatus.Complete)
                 }
                     break;
+            }
+            } catch (error) {
+                console.error('Failed to parse message from child process:', error);
+                if (error instanceof Error) {
+                    console.error('Error details:', error.message);
+                }
             }
         });
         return taskId
