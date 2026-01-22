@@ -84,6 +84,18 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
                             <v-icon size="small"></v-icon>
                         </v-badge>
                     </v-btn>
+                    <v-menu :location="location">
+                        <template v-slot:activator="{ props }">
+                            <v-btn variant="text" icon="mdi-translate" v-bind="props">
+                                <v-icon size="small"></v-icon>
+                            </v-btn>
+                        </template>
+                        <v-list>
+                            <v-list-item v-for="(item, index) in languages" :key="index" @click="switchLanguage(item.key)">
+                                <v-list-item-title>{{ item.title }}</v-list-item-title>
+                            </v-list-item>
+                        </v-list>
+                    </v-menu>
                     <v-btn variant="text" icon="mdi-chat" @click="toggleChatPanel">
                         <v-icon size="small"></v-icon>
                     </v-btn>
@@ -94,18 +106,6 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
                         <span v-if="!mainStore.isMobile">{{ userName }}</span>
                         <v-menu activator="parent">
                             <v-list nav class="h_a_menu">
-                                <v-menu :location="location">
-                                    <template v-slot:activator="{ props }">
-                                        <v-list-item title="Language" prepend-icon="mdi-translate" v-bind="props" />
-                                    </template>
-                                        <v-list>
-                                            <v-list-item v-for="(item, index) in languages" :key="index">
-                                                <v-list-item-title @click="switchLanguage(item.key)">{{ item.title }}</v-list-item-title>
-
-                                            </v-list-item>
-                                        </v-list>
-                                    
-                                </v-menu>
                                 <v-list-item :title="t('layout.system_setting')" prepend-icon="mdi-cog" @click="gotoSystemsetting" />
                                 <v-list-item :title="t('layout.login_out')" prepend-icon="mdi-login" @click="Usersignout" />
                             </v-list>
@@ -241,8 +241,12 @@ type languageType = {
 }
 
 const languages: Array<languageType> = [
-    { title: "English",key:"en" },
-    { title: "中文",key:"zh"},
+    { title: "English", key: "en" },
+    { title: "中文", key: "zh" },
+    { title: "Español", key: "es" },
+    { title: "Français", key: "fr" },
+    { title: "Deutsch", key: "de" },
+    { title: "日本語", key: "ja" },
 ]
 // const currentLanguage = languages.find((x) => x.key === locale.value)?.key ?? "en";
 // const selectedOption = ref(currentLanguage);

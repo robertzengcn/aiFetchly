@@ -161,17 +161,28 @@ export class EmailSearchTaskModule extends BaseModule{
             }
         })
         child.on('message', (message: unknown) => {
-            const msg = message as { data: string };
-            console.log("get message from child")
-            console.log('Message from child:', JSON.parse(msg.data));
-            const childdata=JSON.parse(msg.data) as ProcessMessage<EmailResult>
-            if(childdata.action=="saveres"){
-                if(childdata.data){
-                //save result
-                this.saveSearchResult(taskId,childdata.data)
-                
+            try {
+                const msg = message as { data?: string };
+                if (!msg || !msg.data || typeof msg.data !== 'string') {
+                    console.error('Invalid message from child process:', message);
+                    return;
                 }
-                //child.kill()
+                console.log("get message from child")
+                const childdata = JSON.parse(msg.data) as ProcessMessage<EmailResult>;
+                console.log('Message from child:', childdata);
+                if(childdata.action=="saveres"){
+                    if(childdata.data){
+                    //save result
+                    this.saveSearchResult(taskId,childdata.data)
+                    
+                    }
+                    //child.kill()
+                }
+            } catch (error) {
+                console.error('Failed to parse message from child process:', error);
+                if (error instanceof Error) {
+                    console.error('Error details:', error.message);
+                }
             }
         });
     }

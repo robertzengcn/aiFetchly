@@ -246,7 +246,7 @@ export class SearchModule extends BaseModule {
         }
        }
     }
-    let localBrowserexcutepath:string=""
+    let localBrowserexcutepath=""
     if(data.localBrowser&&data.localBrowser.length>0){
         const external_system_group=await this.systemSettingGroupModule.getGroupItembyName(external_system)
         if(external_system_group){
@@ -345,15 +345,26 @@ export class SearchModule extends BaseModule {
             }
         })
         child.on('message', (message: unknown) => {
-            const msg = message as { data: string };
-            console.log("get message from child")
-            console.log('Message from child:', JSON.parse(msg.data));
-            const childdata=JSON.parse(msg.data)
-            if(childdata.action=="savesearchresult"){
-                //save result
-                this.saveSearchResult(childdata.data,taskId)
-                this.updateTaskStatus(taskId,SearchTaskStatus.Complete)
-                child.kill()
+            try {
+                const msg = message as { data?: string };
+                if (!msg || !msg.data || typeof msg.data !== 'string') {
+                    console.error('Invalid message from child process:', message);
+                    return;
+                }
+                console.log("get message from child")
+                const childdata = JSON.parse(msg.data);
+                console.log('Message from child:', childdata);
+                if(childdata.action=="savesearchresult"){
+                    //save result
+                    this.saveSearchResult(childdata.data,taskId)
+                    this.updateTaskStatus(taskId,SearchTaskStatus.Complete)
+                    child.kill()
+                }
+            } catch (error) {
+                console.error('Failed to parse message from child process:', error);
+                if (error instanceof Error) {
+                    console.error('Error details:', error.message);
+                }
             }
         });
     }
@@ -547,7 +558,7 @@ export class SearchModule extends BaseModule {
         // If search is provided, get all tasks first, then filter and paginate
         // Otherwise, use normal pagination
         let tasklist;
-        let allTasks: Array<SearchtaskItem> = [];
+        const allTasks: Array<SearchtaskItem> = [];
         
         if (search && search.trim().length > 0) {
             // Get all tasks for filtering
