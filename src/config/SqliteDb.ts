@@ -48,6 +48,7 @@ import { RAGChunkEntity } from "@/entity/RAGChunk.entity";
 import { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
 import { VectorEntity, VectorMetadataEntity } from "@/entity/Vector.entity";
 import { MCPToolEntity } from "@/entity/MCPTool.entity";
+import { TaskEntity } from "@/entity/Task.entity";
 // import sqlite3 from "sqlite3";
 import Database from "better-sqlite3";
 import { app } from 'electron';
@@ -320,6 +321,7 @@ export class SqliteDb {
                 VectorEntity,
                 VectorMetadataEntity,
                 MCPToolEntity,
+                TaskEntity,
             ],
             synchronize: true, 
             migrations: [],
