@@ -4,7 +4,6 @@ import { expect } from 'chai';
 import { TaskController } from '@/controller/taskController';
 import { MockTaskModel } from '../utils/model-mocks';
 import { taskFixtures } from '../utils/fixtures';
-import sinon from 'sinon';
 
 describe('TaskController', () => {
   let taskController: TaskController;
@@ -12,13 +11,8 @@ describe('TaskController', () => {
 
   beforeEach(() => {
     mockTaskModel = new MockTaskModel();
-    // Mock the TaskModel in TaskController
-    // Note: This requires TaskController to accept a TaskModel in constructor or use dependency injection
-    // For now, we'll test with the assumption that TaskModel can be mocked
-    taskController = new TaskController();
-    
-    // In a real scenario, you would inject the mock model
-    // For this test, we assume TaskController can be instantiated and tested
+    // Inject the mock model into TaskController
+    taskController = new TaskController(mockTaskModel as unknown);
   });
 
   describe('createTask', () => {

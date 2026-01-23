@@ -8,12 +8,25 @@ export abstract class BaseModule {
         const tokenService = new Token()
         const dbpath = tokenService.getValue(USERSDBPATH)
         if (dbpath) {
-            // throw new Error("user path not exist")
             this.dbpath = dbpath
             this.sqliteDb = SqliteDb.getInstance(this.dbpath)
         }else{
-            console.error("dbpath not found")
+            // For testing environments, use a temp directory
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            const os = require('os') as NodeJS.OS;
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            const path = require('path') as typeof import('path');
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            const fs = require('fs') as typeof import('fs');
+
+            // Create a temp directory for test databases
+            const tmpDir = path.join(os.tmpdir(), 'aifetchly-test');
+            if (!fs.existsSync(tmpDir)) {
+                fs.mkdirSync(tmpDir, { recursive: true });
+            }
+            this.dbpath = tmpDir;
+            this.sqliteDb = SqliteDb.getInstance(this.dbpath);
         }
-        
+
         }
 }

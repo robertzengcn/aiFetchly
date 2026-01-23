@@ -192,18 +192,50 @@ export class BingScraper extends SearchScrape {
     async load_start_page(): Promise<boolean | void> {
         const startUrl = 'https://www.bing.com';//ncr means no country redirect
 
-
         this.logger.info('Using startUrl: ' + startUrl);
 
-        this.last_response = await this.page.goto(startUrl, {
-            waitUntil: "networkidle2",
-            timeout: 60000
-        });
+        try {
+            this.last_response = await this.page.goto(startUrl, {
+                waitUntil: "networkidle2",
+                timeout: this.STANDARD_TIMEOUT
+            });
+        } catch (error) {
+            // Check if page is actually ready despite timeout error
+            // This handles cases where networkidle2 never completes due to continuous background requests
+            // but the page is actually loaded and functional
+            if (error instanceof TimeoutError) {
+                try {
+                    const pageReadyState = await this.page.evaluate(() => document.readyState);
+                    const searchBoxElement = await this.page.$('textarea[name="q"]');
+                    const searchBoxExists = searchBoxElement !== null;
+                    
+                    // If page is actually ready and functional, continue despite the timeout
+                    if (pageReadyState === 'complete' && searchBoxExists) {
+                        this.logger.warn('Navigation timeout occurred but page appears to be loaded and functional');
+                    } else {
+                        throw error;
+                    }
+                } catch (checkError) {
+                    // If we can't verify page state, rethrow the original error
+                    throw error;
+                }
+            } else {
+                throw error;
+            }
+        }
         
         // Wait for page to be fully loaded
-        await this.page.waitForFunction(() => {
-            return document.readyState === 'complete';
-        }, { timeout: this.STANDARD_TIMEOUT });
+        try {
+            await this.page.waitForFunction(() => {
+                return document.readyState === 'complete';
+            }, { timeout: this.STANDARD_TIMEOUT });
+        } catch (waitError) {
+            // If readyState is already complete, continue anyway
+            const currentReadyState = await this.page.evaluate(() => document.readyState);
+            if (currentReadyState !== 'complete') {
+                throw waitError;
+            }
+        }
 
         // Check for and click cookie consent button if present
         try {
@@ -277,29 +309,66 @@ export class BingScraper extends SearchScrape {
     }
     //click next page
     async next_page(): Promise<boolean | void> {
-        const next_page_link = await this.page.$('.sb_pagN');
-        if (!next_page_link) {
-            //return false;
-            const targetElement = await this.page.$('[aria-label="Next page"]')
-            if (targetElement) {
-                await targetElement.scrollIntoView();
-                targetElement.click();
-                return true
-            } else {
-                const targetElements = await this.page.$('[title="Next page"]');
-                if (targetElements) {
-                    await targetElements.scrollIntoView();
-                    await targetElements.click();
-                    return true;
+        this.logger.info('Attempting to navigate to next page');
+        
+        // Scroll to bottom of page first to ensure pagination controls are loaded
+        await this.page.evaluate(() => {
+            window.scrollTo(0, document.body.scrollHeight);
+        });
+        
+        // Wait a bit for any lazy-loaded content to appear
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+        // List of possible selectors for the next page button
+        const nextPageSelectors = [
+            '.sb_pagN',
+            '[aria-label="Next page"]',
+            '[title="Next page"]',
+            '.pgn_next',
+            'a[aria-label="Next page"]',
+            'button[aria-label="Next page"]',
+            '.b_pag a[href*="page"]:last-child',
+            '#b_content .b_pag a:last-child'
+        ];
+        
+        // Try each selector until we find a valid next page button
+        for (const selector of nextPageSelectors) {
+            try {
+                const nextPageElement = await this.page.$(selector);
+                if (nextPageElement) {
+                    // Check if the element is visible and enabled
+                    const elementInfo = await this.page.evaluate((el) => {
+                        const htmlEl = el as HTMLElement;
+                        const rect = htmlEl.getBoundingClientRect();
+                        const style = window.getComputedStyle(htmlEl);
+                        return {
+                            isVisible: rect.width > 0 && rect.height > 0 && 
+                                      style.display !== 'none' && 
+                                      style.visibility !== 'hidden' &&
+                                      style.opacity !== '0',
+                            isEnabled: !htmlEl.hasAttribute('disabled') && 
+                                      !htmlEl.classList.contains('disabled') &&
+                                      htmlEl.offsetParent !== null,
+                            hasHref: htmlEl.tagName === 'A' ? (htmlEl as HTMLAnchorElement).href !== '' : true
+                        };
+                    }, nextPageElement);
+                    
+                    if (elementInfo.isVisible && elementInfo.isEnabled && elementInfo.hasHref) {
+                        this.logger.info(`Found next page button with selector: ${selector}`);
+                        await nextPageElement.scrollIntoView();
+                        await new Promise(resolve => setTimeout(resolve, 200));
+                        await nextPageElement.click();
+                        return true;
+                    }
                 }
+            } catch (error) {
+                // Continue to next selector if current one fails
+                this.logger.debug(`Selector ${selector} not found or not clickable, trying next`);
+                continue;
             }
-
-        } else {
-            await next_page_link.click();
-            return true;
         }
-
-
+        
+        this.logger.warn('Next page button not found with any of the known selectors');
         return false;
     }
 

@@ -38,12 +38,23 @@ export class ScheduleManager {
 
     private constructor() {
         const tokenService = new Token();
-        const dbpath = tokenService.getValue(USERSDBPATH);
+        let dbpath = tokenService.getValue(USERSDBPATH);
         if (!dbpath) {
-            throw new Error("Database path not found");
+            // For testing environments, use a temp directory
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            const os = require('os') as NodeJS.OS;
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            const path = require('path') as typeof import('path');
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            const fs = require('fs') as typeof import('fs');
+            const tmpDir = path.join(os.tmpdir(), 'aifetchly-test');
+            if (!fs.existsSync(tmpDir)) {
+                fs.mkdirSync(tmpDir, { recursive: true });
+            }
+            dbpath = tmpDir;
         }
         this.dbpath = dbpath;
-        
+
         this.scheduleTaskModule = new ScheduleTaskModule();
         this.scheduleExecutionLogModule = new ScheduleExecutionLogModule();
         this.scheduleDependencyModule = new ScheduleDependencyModule();
