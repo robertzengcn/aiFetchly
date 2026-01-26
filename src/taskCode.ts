@@ -51,6 +51,20 @@ if (parentPort) {
                     data:result
                 }
                 parentPort.postMessage(JSON.stringify(message))
+            }).then(() => {
+                // Send completion message after all results are sent
+                const completeMessage:ProcessMessage<null>={
+                    action:"searchcomplete",
+                    data:null
+                }
+                parentPort.postMessage(JSON.stringify(completeMessage))
+            }).catch((error) => {
+                // Send error message if search fails
+                const errorMessage:ProcessMessage<{error: string}>={
+                    action:"searcherror",
+                    data:{error: error instanceof Error ? error.message : String(error)}
+                }
+                parentPort.postMessage(JSON.stringify(errorMessage))
             })
             //console.log(port)
             //process.parentPort.postMessage(JSON.stringify(message))

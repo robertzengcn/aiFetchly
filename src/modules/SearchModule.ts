@@ -346,18 +346,72 @@ export class SearchModule extends BaseModule {
         })
         child.on('message', (message: unknown) => {
             try {
-                const msg = message as { data?: string };
-                if (!msg || !msg.data || typeof msg.data !== 'string') {
-                    console.error('Invalid message from child process:', message);
+                let childdata: { action?: string; data?: unknown };
+                
+                // Electron utility process messages can come in different formats:
+                // 1. As a string directly: "JSON string"
+                // 2. As an object with data property: { data: "JSON string" }
+                // 3. As a parsed object directly: { action: "...", data: ... }
+                
+                let parsedMessage: unknown = message;
+                
+                // First, handle if message is a string (JSON stringified)
+                if (typeof message === 'string') {
+                    try {
+                        parsedMessage = JSON.parse(message);
+                    } catch (parseError) {
+                        console.error('Invalid message from child process (failed to parse string):', message);
+                        return;
+                    }
+                }
+                
+                // Now handle the parsed message
+                const msg = parsedMessage as { data?: string | unknown; action?: string };
+                
+                if (msg && typeof msg === 'object' && msg !== null) {
+                    // Check if it's already a parsed object with action property (direct format)
+                    if ('action' in msg && typeof msg.action === 'string') {
+                        childdata = msg as { action: string; data: unknown };
+                    } 
+                    // Check if it's wrapped format with data as string (Electron utility process format)
+                    else if ('data' in msg && typeof msg.data === 'string' && !('action' in msg)) {
+                        try {
+                            childdata = JSON.parse(msg.data);
+                        } catch (parseError) {
+                            console.error('Invalid message from child process (failed to parse data):', message);
+                            return;
+                        }
+                    } else {
+                        console.error('Invalid message from child process:', JSON.stringify(message));
+                        return;
+                    }
+                } else {
+                    console.error('Invalid message from child process (not an object):', message);
                     return;
                 }
+                
                 console.log("get message from child")
-                const childdata = JSON.parse(msg.data);
                 console.log('Message from child:', childdata);
                 if(childdata.action=="savesearchresult"){
-                    //save result
-                    this.saveSearchResult(childdata.data,taskId)
+                    //save individual result immediately
+                    // Handle both single result and array (for backward compatibility)
+                    const resultData = Array.isArray(childdata.data) 
+                        ? childdata.data as ResultParseItemType[]
+                        : [childdata.data as ResultParseItemType];
+                    // Save result immediately without waiting for completion
+                    this.saveSearchResult(resultData, taskId).catch(err => {
+                        console.error(`Failed to save search result for task ${taskId}:`, err);
+                    });
+                } else if(childdata.action=="searchcomplete"){
+                    // All results have been sent, mark task as complete
                     this.updateTaskStatus(taskId,SearchTaskStatus.Complete)
+                    child.kill()
+                } else if(childdata.action=="searcherror"){
+                    // Handle search error
+                    const errorData = childdata.data as {error?: string} | null;
+                    const errorMessage = errorData?.error || "Unknown error occurred during search";
+                    console.error(`Search error for task ${taskId}:`, errorMessage);
+                    this.updateTaskStatus(taskId,SearchTaskStatus.Error)
                     child.kill()
                 }
             } catch (error) {

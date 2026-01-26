@@ -83,9 +83,13 @@ export class UserSearch {
             cookies:data.cookies
             //useLocalbrowserdata:data.useLocalbrowserdata
         }
-       const results = await scraper.searchdata(searchDataParam)
+       // Pass callback directly to scraper for immediate result sending
+       const results = await scraper.searchdata(searchDataParam, callback)
         //console.log(results)
+        // Note: If callback is provided, results are sent immediately via callback
+        // The results array may be empty or contain only results that weren't sent via callback
         if(callback){
+            // Results are already sent via callback, but we still process any remaining results
             for(const result of results){
             callback(result)
             }

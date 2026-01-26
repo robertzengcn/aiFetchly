@@ -2,6 +2,7 @@
 import { describe, it, beforeEach } from 'mocha';
 import { expect } from 'chai';
 import { TaskController } from '@/controller/taskController';
+import { TaskModel } from '@/model/Task.model';
 import { MockTaskModel } from '../utils/model-mocks';
 import { taskFixtures } from '../utils/fixtures';
 
@@ -12,7 +13,9 @@ describe('TaskController', () => {
   beforeEach(() => {
     mockTaskModel = new MockTaskModel();
     // Inject the mock model into TaskController
-    taskController = new TaskController(mockTaskModel as unknown);
+    // Use double cast through unknown since MockTaskModel and TaskModel don't overlap structurally
+    // but MockTaskModel implements the same interface methods that TaskController uses
+    taskController = new TaskController(mockTaskModel as unknown as TaskModel);
   });
 
   describe('createTask', () => {

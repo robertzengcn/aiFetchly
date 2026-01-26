@@ -172,7 +172,8 @@ export type ClusterFunctionparam = {
   data: ClusterSearchData,
   worker: {
     id: number
-  }
+  },
+  resultCallback?: (result: ResultParseItemType) => void;
 }
 export type metadataObj = {
   http_headers?: object,
