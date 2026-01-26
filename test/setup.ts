@@ -24,7 +24,7 @@ process.env.NODE_ENV = 'test';
 
 // Initialize database for tests
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const os = require('os') as NodeJS.OS;
+const os = require('os') as typeof import('os');
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const path = require('path') as typeof import('path');
 // eslint-disable-next-line @typescript-eslint/no-var-requires

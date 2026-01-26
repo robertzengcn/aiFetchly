@@ -243,19 +243,50 @@ const handleFileUpload = async () => {
   reader.onload = () => {
     console.log(reader.result);
     const csv = Papa.parse(reader.result, { header: true });
-    // console.log(csv.data);
-    //loop through the csv data
-    // const data = csv.data;
-    //  const result:Array<ProxyParseItem> = [];
+    
+    // Check if CSV has wrong format (single column with colon-separated values)
+    const hasColonSeparatedFormat = csv.meta?.fields?.length === 1 && 
+                                    csv.meta.fields[0] === 'host:port:protocols:user:pass' &&
+                                    csv.data.length > 0 &&
+                                    csv.data[0] &&
+                                    typeof csv.data[0]['host:port:protocols:user:pass'] === 'string';
+    
     for (let i = 0; i < csv.data.length; i++) {
       const row = csv.data[i];
-      if (row.host.length > 0 && row.port.length > 0) {
+      let host: string | undefined;
+      let port: string | undefined;
+      let protocol: string | undefined;
+      let user: string | undefined;
+      let pass: string | undefined;
+      
+      if (hasColonSeparatedFormat) {
+        // Parse colon-separated format: "host:port:protocol:user:pass"
+        const colonSeparatedValue = row['host:port:protocols:user:pass'];
+        if (colonSeparatedValue && typeof colonSeparatedValue === 'string') {
+          const parts = colonSeparatedValue.split(':');
+          host = parts[0]?.trim();
+          port = parts[1]?.trim();
+          protocol = parts[2]?.trim() || '';
+          user = parts[3]?.trim() || '';
+          pass = parts[4]?.trim() || '';
+        }
+      } else {
+        // Use standard CSV format with separate columns
+        host = row.host;
+        port = row.port;
+        protocol = row.protocols;
+        user = row.user;
+        pass = row.pass;
+      }
+      
+      // Validate and add item if host and port are present
+      if (host && port && host.length > 0 && port.length > 0) {
         const item: ProxyParseItem = {
-          host: row.host,
-          port: row.port,
-          protocol: row.protocols,
-          user: row.user,
-          pass: row.pass,
+          host: host,
+          port: port,
+          protocol: protocol || '',
+          user: user || '',
+          pass: pass || '',
           status: 0,
         };
 

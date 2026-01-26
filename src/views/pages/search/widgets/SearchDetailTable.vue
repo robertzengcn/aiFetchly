@@ -2,24 +2,26 @@
     <div class="search_bar mt-4 d-flex jsb mb-4">
         <div class="d-flex jsb search_tool">
             <div class="search_wrap mr-4">
-                <v-text-field rounded class="elevation-0" density="compact" variant="solo" :label="t('common.search') || 'Search'"
+                <v-text-field
+rounded class="elevation-0" density="compact" variant="solo" :label="t('common.search') || 'Search'"
                     append-inner-icon="mdi-magnify" single-line hide-details v-model="search"
                     @keyup.enter="handleSearch" @click:append-inner="handleSearch"></v-text-field>
             </div>
             <!-- <v-btn class="btn mr-2" variant="flat" prepend-icon="mdi-filter-variant"><span> {{t('common.more')}}</span></v-btn> -->
             <v-btn class="btn mr-2" variant="flat" color="info" prepend-icon="mdi-robot" @click="handleAiAnalyze" :disabled="selectedCount === 0" :loading="analyzing">
-                <span>{{t('websiteAnalysis.analyze_button') || 'AI Analyze'}} {{ selectedCount > 0 ? `(${selectedCount})` : '' }}</span>
+                <span>{{ t('websiteAnalysis.analyze_button') || 'AI Analyze' }} {{ selectedCount > 0 ? `(${selectedCount})` : '' }}</span>
             </v-btn>
             <v-btn class="btn mr-2" variant="flat" color="success" prepend-icon="mdi-email-search" @click="handleScrapeEmail" :disabled="selectedCount === 0">
                 <span>{{ buttonText }}</span>
             </v-btn>
             <v-btn class="btn" variant="flat" color="primary" prepend-icon="mdi-download" @click="handleExport" :loading="exporting">
-                <span>{{t('common.export')}}</span>
+                <span>{{ t('common.export') }}</span>
             </v-btn>
         </div>     
     </div>
     <div class="table-scroll-container">
-        <v-data-table-server v-model:items-per-page="itemsPerPage" v-model="selectedItems" 
+        <v-data-table-server
+v-model:items-per-page="itemsPerPage" v-model="selectedItems" 
             :search="search" :headers="headers" :items-length="totalItems" :items="serverItems" 
             :loading="loading" :item-value="getItemValue" show-select @update:options="loadItems" class="custom-data-table mt5">
             <template v-slot:[`item.link`]="{ item }">
@@ -87,9 +89,9 @@
     
     <!-- Website Analysis Dialog -->
     <WebsiteAnalysisDialog
-        :showDialog="showAnalysisDialog"
+        :show-dialog="showAnalysisDialog"
         :loading="analyzing"
-        :itemCount="selectedResultsForAnalysis.length"
+        :item-count="selectedResultsForAnalysis.length"
         :progress="analysisProgress"
         @dialogclose="closeAnalysisDialog"
         @analyze="handleAnalyzeConfirm"
@@ -188,7 +190,7 @@ type Fetchparam = {
 const FakeAPI = {
 
     async fetch(fetchparam: Fetchparam): Promise<SearchResult<SearchResEntityDisplay>> {
-        console.log(fetchparam)
+        // console.log(fetchparam)
         const fpage=(fetchparam.page-1)*fetchparam.itemsPerPage
         const param:SearchResultFetchparam={
             page: fpage,
@@ -402,7 +404,7 @@ watch(search, () => {
     }, 500); // 500ms debounce
 });
 
-function loadItems({ page, itemsPerPage, sortBy }, isAutoRefresh: boolean = false) {
+function loadItems({ page, itemsPerPage, sortBy }, isAutoRefresh = false) {
     // Skip auto-refresh if page is not visible or currently analyzing
     if (isAutoRefresh && (!isPageVisible.value || analyzing.value)) {
         return;
@@ -534,7 +536,7 @@ function handleScrapeEmail() {
 /**
  * Truncate link to a maximum length with ellipsis
  */
-function truncateLink(link: string, maxLength: number = 50): string {
+function truncateLink(link: string, maxLength = 50): string {
     if (!link) return '';
     if (link.length <= maxLength) return link;
     return link.substring(0, maxLength) + '...';

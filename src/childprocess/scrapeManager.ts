@@ -469,7 +469,7 @@ export class ScrapeManager {
   /*
    * get data from search engine
    */
-  async searchdata(param: SearchDataParam): Promise<Array<ResultParseItemType>> {
+  async searchdata(param: SearchDataParam, resultCallback?: (result: ResultParseItemType) => void): Promise<Array<ResultParseItemType>> {
     await this.start(param);
 
     const results: Array<ResultParseItemType> = [];
@@ -496,7 +496,6 @@ export class ScrapeManager {
         page: this.page,
       }
       const obj = engineFactory.getSearchEngine(param.engine.toLowerCase(), scop)
-      const boundMethod = obj.run.bind(obj);
       let cookiesArray:Array<CookiesType>=[]
       if (param.cookies && param.cookies.length > 0) {
         const randomIndex = Math.floor(Math.random() * param.cookies.length);
@@ -515,10 +514,15 @@ export class ScrapeManager {
       //   cludata.cookies=param.cookies
       // }
 
+      // Create a wrapper method that includes the callback
+      const boundMethodWithCallback = async (data: { page: Page, data: ClusterSearchData, worker: { id: number } }) => {
+        return await obj.run({ ...data, resultCallback });
+      };
+
       // Wrap the execute call in a try-catch to handle Puppeteer errors
       const wrappedExecute = async () => {
         try {
-          const content = await this.cluster.execute(cludata, boundMethod);
+          const content = await this.cluster.execute(cludata, boundMethodWithCallback);
           // await page.evaluateOnNewDocument(() => {
           //   Object.defineProperty(navigator, 'plugins', {
           //     get: () => [1, 2, 3, 4, 5],

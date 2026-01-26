@@ -36,6 +36,7 @@ export class SearchScrape implements searchEngineImpl {
     proxyServer?:ProxyServer|null
     debug_log_path?:string;
     search_engine_name:string;
+    resultCallback?: (result: ResultParseItemType) => void; // Callback to send results immediately
     constructor(options: ScrapeOptions) {
         if (options.page) {
             this.page = options.page;
@@ -85,11 +86,14 @@ export class SearchScrape implements searchEngineImpl {
         //this.results = [];
     }
 
-    async run(data: { page: Page, data: ClusterSearchData, worker }): Promise<RunResult> {
+    async run(data: { page: Page, data: ClusterSearchData, worker, resultCallback?: (result: ResultParseItemType) => void }): Promise<RunResult> {
 
         // debug('worker=%o', worker, this.config.keywords);
 
-
+        // Store callback for immediate result sending
+        if (data.resultCallback) {
+            this.resultCallback = data.resultCallback;
+        }
 
         if (data.page) {
             this.page = data.page;
@@ -466,7 +470,12 @@ export class SearchScrape implements searchEngineImpl {
                         if(parsed.results){
                             resultParseItem.results=parsed.results;
                         }
-                        this.results.push(resultParseItem);
+                        // Send result immediately via callback if available, otherwise accumulate
+                        if (this.resultCallback) {
+                            this.resultCallback(resultParseItem);
+                        } else {
+                            this.results.push(resultParseItem);
+                        }
                     } else {
                         // this.results[keyword][this.page_num] = await this.parse_async(html);
                         const pareseres: SearchData | void = await this.parse_async();
@@ -480,7 +489,12 @@ export class SearchScrape implements searchEngineImpl {
                                 page:this.page_num,
                                 results:pareseres.results
                             }
-                            this.results.push(resultParseItem);
+                            // Send result immediately via callback if available, otherwise accumulate
+                            if (this.resultCallback) {
+                                this.resultCallback(resultParseItem);
+                            } else {
+                                this.results.push(resultParseItem);
+                            }
                         } else {
                             this.logger.warn(`No results found for keyword "${keyword}" on page ${this.page_num}`);
                             // this.results[keyword][this.page_num].value =""
@@ -489,7 +503,12 @@ export class SearchScrape implements searchEngineImpl {
                                 page:this.page_num,
                                 results:[]
                             }
-                            this.results.push(resultParseItem);
+                            // Send result immediately via callback if available, otherwise accumulate
+                            if (this.resultCallback) {
+                                this.resultCallback(resultParseItem);
+                            } else {
+                                this.results.push(resultParseItem);
+                            }
                         }
                     }
                     // this.results[keyword][this.page_num] = parsed ? parsed : await this.parse_async(html);
