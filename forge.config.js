@@ -338,6 +338,10 @@ module.exports={
             entry: 'src/childprocess/websiteContentScraper.ts',
             config: 'vite.websiteContentScraper.config.mjs'
           },
+          {
+            entry: 'src/childprocess/googleProxyCheck.ts',
+            config: 'vite.googleProxyCheck.config.mjs'
+          },
           // {
           //   entry: 'src/buckEmail.ts',
           //   config: 'vite.buckEmail.config.mjs'

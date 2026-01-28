@@ -148,6 +148,12 @@ const headers: Array<any> = [
         key: 'host',
     },
     {
+        title: computed(_ => CapitalizeFirstLetter(t("proxy.port"))),
+        align: 'start',
+        sortable: false,
+        key: 'port',
+    },
+    {
         title: computed(_ => CapitalizeFirstLetter(t("proxy.user_name"))),
         align: 'start',
         sortable: false,

@@ -11,16 +11,12 @@
  * - Returns pass/fail result via IPC message
  */
 
-console.error('[GOOGLE_PROXY_CHECK] Child process starting, PID:', process.pid);
-
-import puppeteer from 'puppeteer';
+import puppeteer, { InterceptResolutionAction, TimeoutError } from 'puppeteer';
 import { addExtra } from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import useProxy from '@lem0-packages/puppeteer-page-proxy';
 import { ProxyParseItem } from '@/entityTypes/proxyType';
-import { proxyEntityToServer, convertProxyServertourl } from '@/modules/lib/function';
-
-console.error('[GOOGLE_PROXY_CHECK] All imports completed successfully');
+import { proxyEntityToUrl } from '@/modules/lib/function';
 
 // Set up stealth plugin
 const puppeteerExtra = addExtra(puppeteer);
@@ -53,26 +49,42 @@ async function checkGooglePass(proxy: ProxyParseItem, timeout = 15000): Promise<
         
         const page = await browser.newPage();
         
-        // Configure proxy
-        const proxyServer = proxyEntityToServer(proxy);
-        const proxyUrl = convertProxyServertourl(proxyServer);
+        // Configure proxy - use proxyEntityToUrl directly for correct format (http://user:pass@host:port)
+        const proxyUrl = proxyEntityToUrl(proxy);
         
         // Set up request interception for proxy
         await page.setRequestInterception(true);
         page.on('request', async (interceptedRequest) => {
+            // Check if request is already handled
+            if (interceptedRequest.interceptResolutionState().action === InterceptResolutionAction.AlreadyHandled) {
+                return;
+            }
+            
             try {
                 await useProxy(interceptedRequest, proxyUrl);
+                // Check again after useProxy - it might have handled the request
+                if (interceptedRequest.interceptResolutionState().action === InterceptResolutionAction.AlreadyHandled) {
+                    return;
+                }
                 interceptedRequest.continue();
             } catch (error) {
-                interceptedRequest.abort();
+                // Only abort if not already handled
+                if (interceptedRequest.interceptResolutionState().action !== InterceptResolutionAction.AlreadyHandled) {
+                    interceptedRequest.abort();
+                }
             }
         });
         
         // Navigate to Google
-        await page.goto('https://www.google.com/ncr', {
-            waitUntil: 'networkidle2',
-            timeout
-        });
+        try {
+            await page.goto('https://www.google.com/ncr', {
+                waitUntil: 'networkidle2',
+                timeout
+            });
+        } catch (navigationError) {
+            // Handle timeout and network errors gracefully - these indicate proxy failure
+            return false;
+        }
         
         // Wait a bit for page to fully load
         await new Promise(resolve => setTimeout(resolve, 2000));
@@ -99,7 +111,7 @@ async function checkGooglePass(proxy: ProxyParseItem, timeout = 15000): Promise<
         // Pass if: no blocking detected, no reCAPTCHA, has search input, and valid title
         return !isBlocked && !hasRecaptcha && hasSearchInput && hasValidTitle;
     } catch (error) {
-        console.error('Google check error:', error);
+        // Handle all errors gracefully - return false to mark proxy as failing Google check
         return false;
     } finally {
         if (browser) {
@@ -113,14 +125,12 @@ async function checkGooglePass(proxy: ProxyParseItem, timeout = 15000): Promise<
 }
 
 // Get parentPort from Electron utilityProcess (following codebase pattern)
-console.error('[GOOGLE_PROXY_CHECK] Checking parentPort availability');
 const parentPort = (process as unknown as {
     parentPort?: {
         on: (event: string, handler: (e: { data: string }) => void) => void;
         postMessage: (message: unknown) => void;
     }
 }).parentPort;
-console.error('[GOOGLE_PROXY_CHECK] parentPort available:', !!parentPort);
 
 // Listen for messages from parent process
 if (parentPort) {
@@ -146,15 +156,20 @@ if (parentPort) {
                 console.log(`✅ Google check completed: ${result ? 'PASS' : 'FAIL'}`);
             }
         } catch (error) {
-            console.error('Error in Google proxy check:', error);
-            if (parentPort) {
-                parentPort.postMessage(JSON.stringify({
-                    type: 'CHECK_GOOGLE_PASS_RESULT',
-                    requestId: requestId,
-                    success: false,
-                    passed: false,
-                    error: error instanceof Error ? error.message : 'Unknown error'
-                }));
+            console.error('Error in Google proxy check message handler:', error);
+            // Always send a response, even on error
+            try {
+                if (parentPort) {
+                    parentPort.postMessage(JSON.stringify({
+                        type: 'CHECK_GOOGLE_PASS_RESULT',
+                        requestId: requestId,
+                        success: false,
+                        passed: false,
+                        error: error instanceof Error ? error.message : 'Unknown error'
+                    }));
+                }
+            } catch (postError) {
+                console.error('Failed to send error response:', postError);
             }
         }
     });
