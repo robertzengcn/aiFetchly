@@ -62,10 +62,10 @@ export async function importProxydata(data: Array<ProxyParseItem>): Promise<bool
 
     return resp;
 }
-//check all proxy
-export async function checkAllproxy(): Promise<void> {
-    console.log("checkAllproxy")
-    await windowSend(CHECKALLPROXY,{});
+//check all proxy or selected proxies
+export async function checkAllproxy(proxyIds?: number[]): Promise<void> {
+    console.log("checkAllproxy", proxyIds)
+    await windowSend(CHECKALLPROXY, { proxyIds: proxyIds || [] });
 }
 export function receiveProxycheckMsg(cb:(data:string)=>void){
     windowReceive(CHECKALLPROXYMESSAGE,cb)
