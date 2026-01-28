@@ -1,5 +1,5 @@
 // import * as path from "path"
-// import * as fs from "fs"
+import * as fs from "fs"
 import Papa from 'papaparse';
 import fetch from 'node-fetch';
 // import { fetch as undicifetch,Agent } from "undici";
@@ -213,8 +213,29 @@ export class ProxyController {
      */
     public async checkGooglePass(proxyEntity: ProxyParseItem, timeout = 15000): Promise<boolean> {
         return new Promise((resolve, reject) => {
-            // Resolve child process path
-            const childPath = path.join(__dirname, '../childprocess/googleProxyCheck.js');
+            // Resolve child process path with fallback options (similar to WebsiteAnalysisService)
+            let childPath = path.join(__dirname, '../childprocess/googleProxyCheck.js');
+            
+            // Try multiple path locations
+            if (!fs.existsSync(childPath)) {
+                // Try relative path from controller directory
+                const altPath1 = path.join(__dirname, './childprocess/googleProxyCheck.js');
+                if (fs.existsSync(altPath1)) {
+                    childPath = altPath1;
+                } else {
+                    // Try dist directory from project root
+                    const altPath2 = path.join(process.cwd(), 'dist/childprocess/googleProxyCheck.js');
+                    if (fs.existsSync(altPath2)) {
+                        childPath = altPath2;
+                    } else {
+                        const errorMsg = `Google proxy check child process not found. Tried: ${childPath}, ${altPath1}, ${altPath2}. Please rebuild the application.`;
+                        console.error(errorMsg);
+                        reject(new Error(errorMsg));
+                        return;
+                    }
+                }
+            }
+            
             const requestId = `google-check-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
             
             const child = utilityProcess.fork(childPath, [], {
@@ -247,8 +268,43 @@ export class ProxyController {
             // Handle messages from child process
             const messageHandler = (message: unknown) => {
                 try {
-                    const msg = message as { data: string };
-                    const response = JSON.parse(msg.data);
+                    // Electron utility process messages can come in different formats
+                    let messageData: string;
+                    
+                    if (typeof message === 'string') {
+                        // Message is a string directly
+                        messageData = message;
+                    } else if (message && typeof message === 'object' && 'data' in message) {
+                        // Message has data property
+                        const msg = message as { data: unknown };
+                        if (typeof msg.data === 'string') {
+                            messageData = msg.data;
+                        } else {
+                            console.error('Invalid message data type from child process:', message);
+                            clearTimeout(timeoutId);
+                            child.removeListener('message', messageHandler);
+                            try {
+                                child.kill();
+                            } catch (killError) {
+                                console.error('Error killing child process:', killError);
+                            }
+                            reject(new Error('Invalid message format from child process'));
+                            return;
+                        }
+                    } else {
+                        console.error('Invalid message format from child process:', message);
+                        clearTimeout(timeoutId);
+                        child.removeListener('message', messageHandler);
+                        try {
+                            child.kill();
+                        } catch (killError) {
+                            console.error('Error killing child process:', killError);
+                        }
+                        reject(new Error('Invalid message format from child process'));
+                        return;
+                    }
+                    
+                    const response = JSON.parse(messageData);
                     if (response.type === 'CHECK_GOOGLE_PASS_RESULT' && response.requestId === requestId) {
                         clearTimeout(timeoutId);
                         child.removeListener('message', messageHandler);
