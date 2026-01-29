@@ -11,7 +11,7 @@ import debug from 'debug';
 import clone from "lodash/clone"
 import times from "lodash/times"
 import map from "lodash/map";
-//import UserAgent from "user-agents";
+import UserAgent from "user-agents";
 // import randomUseragent from "random-useragent";
 // import { addExtra } from "puppeteer-extra";
 // import puppeteer from 'puppeteer-extra';
