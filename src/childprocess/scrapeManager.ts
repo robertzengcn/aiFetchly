@@ -1,4 +1,4 @@
-import { SMconfig, SMstruct, SearchDataParam, ScrapeOptions, ClusterSearchData, MetadataType, ResultParseType, ResultParseItemType } from "@/entityTypes/scrapeType"
+import { SMconfig, SMstruct, SearchDataParam, ScrapeOptions, ClusterSearchData, MetadataType, ResultParseType, ResultParseItemType, RunResult } from "@/entityTypes/scrapeType"
 import defaults from "lodash/defaults"
 import { Page, Browser } from 'puppeteer';
 import { createLogger, format, transports } from "winston"
@@ -13,7 +13,6 @@ import times from "lodash/times"
 import map from "lodash/map";
 //import UserAgent from "user-agents";
 // import randomUseragent from "random-useragent";
-import UserAgent from 'user-agents';
 // import { addExtra } from "puppeteer-extra";
 // import puppeteer from 'puppeteer-extra';
 import { CustomConcurrency } from "@/modules/concurrency-implementation"
@@ -469,7 +468,7 @@ export class ScrapeManager {
   /*
    * get data from search engine
    */
-  async searchdata(param: SearchDataParam, resultCallback?: (result: ResultParseItemType) => void): Promise<Array<ResultParseItemType>> {
+  async searchdata(param: SearchDataParam, resultCallback?: (result: ResultParseItemType) => void, cookiesCallback?: (accountId: number, cookies: Array<CookiesType>) => void): Promise<Array<ResultParseItemType>> {
     await this.start(param);
 
     const results: Array<ResultParseItemType> = [];
@@ -497,13 +496,19 @@ export class ScrapeManager {
       }
       const obj = engineFactory.getSearchEngine(param.engine.toLowerCase(), scop)
       let cookiesArray:Array<CookiesType>=[]
+      let selectedAccountId: number | undefined;
       if (param.cookies && param.cookies.length > 0) {
         const randomIndex = Math.floor(Math.random() * param.cookies.length);
         cookiesArray = param.cookies[randomIndex];
+        // Get the corresponding account ID if available
+        if (param.accounts && param.accounts.length > randomIndex) {
+          selectedAccountId = param.accounts[randomIndex];
+        }
       }
       const cludata: ClusterSearchData = {
         keywords: chunks[c],
-        cookies:cookiesArray
+        cookies:cookiesArray,
+        accountId: selectedAccountId
       }
       console.log("cludata=%O",cludata)
       if (this.proxiesArr && this.proxiesArr.length > 0) {
@@ -590,6 +595,13 @@ export class ScrapeManager {
         //Object.assign(results, promiseReturn.results);
         Object.assign(metadata, promiseReturn.metadata);
         num_requests += promiseReturn.num_requests;
+        
+        // Handle updated cookies if available
+        const runResult = promiseReturn.results as RunResult;
+        if (runResult.updatedCookies && runResult.accountId && cookiesCallback) {
+          console.log(`Sending updated cookies for account ${runResult.accountId}`);
+          cookiesCallback(runResult.accountId, runResult.updatedCookies);
+        }
       }
     } catch (error) {
       this.logger.error('Error during search execution:', error);

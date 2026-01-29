@@ -166,6 +166,7 @@ export interface ClusterSearchData {
   keywords: string[];
   proxyServer?: ProxyServer | null;
   cookies?: Array<CookiesType>;
+  accountId?: number;  // Track which account's cookies are being used
 }
 export type ClusterFunctionparam = {
   page: Page,
@@ -184,6 +185,8 @@ export type RunResult = {
   results: object,
   metadata: metadataObj,
   num_requests: number,
+  updatedCookies?: Array<CookiesType>;  // Updated cookies after scraping
+  accountId?: number;  // Account ID for cookie update
 }
 export type MetadataType = {
   elapsed_time?: string,
@@ -205,6 +208,12 @@ export type ResultParseItemType = {
   keyword: string,
   page: number,
   results?: Array<SearchResult>
+}
+
+export type SearchResultWithCookies = {
+  results: Array<ResultParseItemType>;
+  updatedCookies?: Array<CookiesType>;
+  accountId?: number;
 }
 
 export type SearchResult = {

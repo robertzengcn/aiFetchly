@@ -19,8 +19,15 @@ import { CommonMessage } from "@/entityTypes/commonType"
 import { Usersearchdata } from "@/entityTypes/searchControlType"
 import { UserSearch } from "@/childprocess/userSearch"
 import { ResultParseItemType } from "@/entityTypes/scrapeType"
+import { CookiesType } from "@/entityTypes/cookiesType"
 // import { VideoPublishParam } from "./entityTypes/videoPublishType";
 // import { VideoPublishService } from "./service/VideoPublishService";
+
+// Type for cookies update message
+type CookiesUpdateData = {
+    accountId: number;
+    cookies: Array<CookiesType>;
+}
 
 
 // process.parentPort is available in Worker Threads
@@ -51,6 +58,17 @@ if (parentPort) {
                     data:result
                 }
                 parentPort.postMessage(JSON.stringify(message))
+            }, function(accountId, cookies) {
+                // Send updated cookies back to main process
+                console.log(`Sending updated cookies for account ${accountId} to main process`)
+                const cookiesMessage: ProcessMessage<CookiesUpdateData> = {
+                    action: "updateaccountcookies",
+                    data: {
+                        accountId: accountId,
+                        cookies: cookies
+                    }
+                }
+                parentPort.postMessage(JSON.stringify(cookiesMessage))
             }).then(() => {
                 // Send completion message after all results are sent
                 const completeMessage:ProcessMessage<null>={
