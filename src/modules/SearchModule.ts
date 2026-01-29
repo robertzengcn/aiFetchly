@@ -413,6 +413,15 @@ export class SearchModule extends BaseModule {
                     console.error(`Search error for task ${taskId}:`, errorMessage);
                     this.updateTaskStatus(taskId,SearchTaskStatus.Error)
                     child.kill()
+                } else if(childdata.action=="updateaccountcookies"){
+                    // Handle cookies update from child process
+                    const cookiesData = childdata.data as {accountId: number; cookies: Array<CookiesType>} | null;
+                    if (cookiesData && cookiesData.accountId && cookiesData.cookies) {
+                        console.log(`Updating cookies for account ${cookiesData.accountId}`);
+                        this.updateAccountCookies(cookiesData.accountId, cookiesData.cookies).catch(err => {
+                            console.error(`Failed to update cookies for account ${cookiesData.accountId}:`, err);
+                        });
+                    }
                 }
             } catch (error) {
                 console.error('Failed to parse message from child process:', error);
@@ -984,6 +993,39 @@ export class SearchModule extends BaseModule {
             status: taskEntity.status,
             record_time: taskEntity.record_time
         };
+    }
+
+    /**
+     * Update account cookies in the database
+     * @param accountId The account ID to update cookies for
+     * @param cookies The updated cookies array
+     */
+    public async updateAccountCookies(accountId: number, cookies: Array<CookiesType>): Promise<void> {
+        try {
+            // Get existing cookies entity for this account
+            const existingCookies = await this.accountCookiesModule.getAccountCookies(accountId);
+            
+            if (existingCookies) {
+                // Update existing cookies
+                existingCookies.cookies = JSON.stringify(cookies);
+                existingCookies.record_time = getRecorddatetime();
+                await this.accountCookiesModule.saveAccountCookies(existingCookies);
+                console.log(`Successfully updated cookies for account ${accountId}`);
+            } else {
+                // Create new cookies entry if it doesn't exist
+                const { AccountCookiesEntity } = await import('@/entity/AccountCookies.entity');
+                const newCookies = new AccountCookiesEntity();
+                newCookies.account_id = accountId;
+                newCookies.cookies = JSON.stringify(cookies);
+                newCookies.record_time = getRecorddatetime();
+                newCookies.partition_path = this.accountCookiesModule.genPartitionPath();
+                await this.accountCookiesModule.saveAccountCookies(newCookies);
+                console.log(`Successfully created new cookies entry for account ${accountId}`);
+            }
+        } catch (error) {
+            console.error(`Failed to update cookies for account ${accountId}:`, error);
+            throw error;
+        }
     }
 
 
