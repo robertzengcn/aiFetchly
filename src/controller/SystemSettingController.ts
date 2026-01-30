@@ -1,5 +1,5 @@
 // import {SystemSettingGroup} from '@/model/SystemSettingGroup.model'; 
-import { SystemSettingGroupDisplay,SetttingUpdate,SystemSettingDisplay } from '@/entityTypes/systemsettingType';
+import { SystemSettingGroupDisplay, SystemSettingDisplay } from '@/entityTypes/systemsettingType';
 
 import { SystemSettingGroupModule } from "@/modules/SystemSettingGroupModule"
 import { SystemSettingModule } from "@/modules/SystemSettingModule"
@@ -91,7 +91,7 @@ export class SystemSettingController {
     public async updateLanguagePreference(language: string): Promise<boolean> {
         try {
             // Validate language code
-            const validLanguages = ['en', 'zh'];
+            const validLanguages = ['en', 'zh', 'es', 'fr', 'de', 'ja'];
             if (!validLanguages.includes(language)) {
                 console.error('Invalid language code:', language);
                 return false;

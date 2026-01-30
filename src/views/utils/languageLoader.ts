@@ -49,7 +49,7 @@ export async function loadLanguagePreference(): Promise<LanguageLoadResult> {
     try {
         // Third try: Browser language
         const browserLanguage = navigator.language.toLowerCase()
-        const supportedLanguages = ['en', 'zh']
+        const supportedLanguages = ['en', 'zh', 'es', 'fr', 'de', 'ja']
         
         for (const lang of supportedLanguages) {
             if (browserLanguage.indexOf(lang) > -1) {
@@ -109,7 +109,7 @@ export async function loadLanguagePreferenceWithCallbacks(
  * @returns boolean
  */
 export function isLanguageSupported(language: string): boolean {
-    const supportedLanguages = ['en', 'zh']
+    const supportedLanguages = ['en', 'zh', 'es', 'fr', 'de', 'ja']
     return supportedLanguages.includes(language)
 }
 
@@ -119,7 +119,7 @@ export function isLanguageSupported(language: string): boolean {
  * @returns string - The best available language code
  */
 export function getBestAvailableLanguage(preferences: string[]): string {
-    const supportedLanguages = ['en', 'zh']
+    const supportedLanguages = ['en', 'zh', 'es', 'fr', 'de', 'ja']
     
     for (const preference of preferences) {
         if (supportedLanguages.includes(preference)) {
@@ -133,7 +133,7 @@ export function getBestAvailableLanguage(preferences: string[]): string {
 /**
  * Language loading constants
  */
-export const SUPPORTED_LANGUAGES = ['en', 'zh'] as const
+export const SUPPORTED_LANGUAGES = ['en', 'zh', 'es', 'fr', 'de', 'ja'] as const
 export const DEFAULT_LANGUAGE = 'en'
 export const LANGUAGE_SOURCES = {
     SYSTEM_SETTINGS: 'system_settings',

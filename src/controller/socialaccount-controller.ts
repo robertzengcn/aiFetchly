@@ -1,6 +1,5 @@
 //import { SocialAccount } from "@/modules/socialaccount";
-import { BrowserWindow } from 'electron';
-const session = require('electron').session;
+import { BrowserWindow, session } from 'electron';
 import { AccountCookiesEntity } from "@/entity/AccountCookies.entity";
 import { AccountCookiesModule } from "@/modules/accountCookiesModule"
 //import { ProxyController } from "./proxy-controller";
@@ -237,10 +236,10 @@ export class SocialAccountController {
             //   };
             //   await dialog.showMessageBox(win,options) 
             // win.webContents.executeJavaScript('alert("Hello, world!")');
-        })
+        });
 
         // winsession.cookies.remove()
-        (win as BrowserWindow).on('close', async () => { //   <---- Catch close event
+        win.on('close', async () => { //   <---- Catch close event
             if (win && (win as any).webContents && (win as any).webContents.session) {
                 const winsession = (win as any).webContents.session
                 const cookiescontent = await winsession.cookies.get({ url: socialTypeUrl })
