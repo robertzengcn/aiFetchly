@@ -656,6 +656,8 @@ export default {
         generate_related_keywords:"Generar palabras clave relacionadas (IA)",
         keywords_generated_successfully:"Se generaron {count} palabras clave relacionadas correctamente",
         no_keywords_generated:"No se generaron palabras clave",
+        enable_ai_recovery:"Habilitar recuperación IA",
+        enable_ai_recovery_hint:"Cuando está habilitado, la IA ayudará a recuperarse de errores de scraping analizando la estructura de la página y sugiriendo acciones alternativas",
     },
     searchtask:{
         id:"ID de tarea",

@@ -30,6 +30,8 @@ import {WriteLog,getChromeExcutepath,getFirefoxExcutepath,getRecorddatetime} fro
 import { USERLOGPATH, USEREMAIL } from '@/config/usersetting';
 import { v4 as uuidv4 } from 'uuid';
 import { SocialAccountModule } from './socialAccountModule';
+import { AIRecoveryHandler } from './AIRecoveryHandler';
+import { AIRecoveryRequest, AIRecoveryResponse, ProcessMessage } from '@/entityTypes/processMessage-type';
 
 export type TaskDetailsForEdit = {
     id: number;
@@ -44,6 +46,7 @@ export type TaskDetailsForEdit = {
     accounts: Array<number>;
     status: SearchTaskStatus;
     record_time: string;
+    enableAIRecovery?: boolean;
 }
 
 export type SearchTaskUpdateData = {
@@ -55,6 +58,7 @@ export type SearchTaskUpdateData = {
     localBrowser?: string;
     proxys?: Array<{host: string, port: number, user?: string, pass?: string}>;
     accounts?: number[];
+    enableAIRecovery?: boolean;
 }
 
 export class SearchModule extends BaseModule {
@@ -67,6 +71,7 @@ export class SearchModule extends BaseModule {
     private accountCookiesModule: AccountCookiesModule
     private systemSettingGroupModule: SystemSettingGroupModule
     private socialAccountModule: SocialAccountModule
+    private aiRecoveryHandler: AIRecoveryHandler
     constructor() {
         // const tokenService = new Token()
         // const dbpath = tokenService.getValue(USERSDBPATH)
@@ -83,6 +88,13 @@ export class SearchModule extends BaseModule {
         this.accountCookiesModule = new AccountCookiesModule()
         this.systemSettingGroupModule = new SystemSettingGroupModule()
         this.socialAccountModule = new SocialAccountModule()
+        // Initialize AI recovery handler with default config
+        // TODO: Load config from system settings or task configuration
+        this.aiRecoveryHandler = new AIRecoveryHandler({
+            model: 'gpt-4o-mini',
+            rateLimitWindow: 60000,
+            rateLimitMax: 10
+        })
     }
 
     /**
@@ -422,6 +434,36 @@ export class SearchModule extends BaseModule {
                             console.error(`Failed to update cookies for account ${cookiesData.accountId}:`, err);
                         });
                     }
+                } else if(childdata.action=="requestAIRecovery"){
+                    // Handle AI recovery request from child process
+                    const request = childdata.data as AIRecoveryRequest;
+                    console.log(`Received AI recovery request: ${request.requestId} for operation: ${request.operation}`);
+                    
+                    // Process recovery request asynchronously
+                    this.aiRecoveryHandler.handleRecoveryRequest(request)
+                        .then((response: AIRecoveryResponse) => {
+                            const message: ProcessMessage<AIRecoveryResponse> = {
+                                action: 'aiRecoveryResponse',
+                                data: response
+                            };
+                            child.postMessage(JSON.stringify(message));
+                        })
+                        .catch((error) => {
+                            console.error('Error processing AI recovery request:', error);
+                            const errorResponse: AIRecoveryResponse = {
+                                requestId: request.requestId,
+                                success: false,
+                                actions: [],
+                                confidence: 0,
+                                reasoning: 'Error processing recovery request',
+                                error: error instanceof Error ? error.message : String(error)
+                            };
+                            const message: ProcessMessage<AIRecoveryResponse> = {
+                                action: 'aiRecoveryResponse',
+                                data: errorResponse
+                            };
+                            child.postMessage(JSON.stringify(message));
+                        });
                 }
             } catch (error) {
                 console.error('Failed to parse message from child process:', error);

@@ -20,6 +20,8 @@ import { Usersearchdata } from "@/entityTypes/searchControlType"
 import { UserSearch } from "@/childprocess/userSearch"
 import { ResultParseItemType } from "@/entityTypes/scrapeType"
 import { CookiesType } from "@/entityTypes/cookiesType"
+import { AIRecoveryResponse } from "@/entityTypes/processMessage-type"
+import { handleAIRecoveryResponse } from "@/childprocess/utils/AIRecoveryBridge"
 // import { VideoPublishParam } from "./entityTypes/videoPublishType";
 // import { VideoPublishService } from "./service/VideoPublishService";
 
@@ -147,6 +149,11 @@ if (parentPort) {
 
                 parentPort.postMessage(JSON.stringify(message))
             })
+            break;
+        }
+        case "aiRecoveryResponse": {
+            const response = pme.data as AIRecoveryResponse;
+            handleAIRecoveryResponse(response);
             break;
         }
     }

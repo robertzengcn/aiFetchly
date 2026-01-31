@@ -656,6 +656,8 @@ export default {
         generate_related_keywords:"Verwandte Schlüsselwörter generieren (KI)",
         keywords_generated_successfully:"{count} verwandte Schlüsselwörter erfolgreich generiert",
         no_keywords_generated:"Es wurden keine Schlüsselwörter generiert",
+        enable_ai_recovery:"KI-Wiederherstellung aktivieren",
+        enable_ai_recovery_hint:"Wenn aktiviert, hilft die KI bei der Wiederherstellung nach Scraping-Fehlern durch Analyse der Seitenstruktur und Vorschlag alternativer Aktionen",
     },
     searchtask:{
         id:"Aufgaben-ID",

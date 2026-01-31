@@ -671,6 +671,8 @@ export default {
         generate_related_keywords:"Generate Related Keywords (AI)",
         keywords_generated_successfully:"Successfully generated {count} related keywords",
         no_keywords_generated:"No keywords were generated",
+        enable_ai_recovery:"Enable AI Recovery",
+        enable_ai_recovery_hint:"When enabled, AI will help recover from scraping errors by analyzing page structure and suggesting alternative actions",
     },
     searchtask:{
         id:"Task Id",

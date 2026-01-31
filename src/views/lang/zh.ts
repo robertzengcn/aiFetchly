@@ -661,6 +661,8 @@ export default {
         generate_related_keywords:"使用AI生成相关关键词",
         keywords_generated_successfully:"成功生成 {count} 个相关关键词",
         no_keywords_generated:"未生成关键词",
+        enable_ai_recovery:"启用AI恢复",
+        enable_ai_recovery_hint:"启用后，当抓取遇到错误时，AI将通过分析页面结构并建议替代操作来帮助恢复",
     },
     searchtask:{
         id:"任务ID",
