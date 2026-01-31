@@ -656,6 +656,8 @@ export default {
         generate_related_keywords:"関連キーワードを生成（AI）",
         keywords_generated_successfully:"{count}件の関連キーワードの生成に成功しました",
         no_keywords_generated:"キーワードが生成されませんでした",
+        enable_ai_recovery:"AI回復を有効化",
+        enable_ai_recovery_hint:"有効にすると、スクレイピングエラー発生時にAIがページ構造を分析し、代替アクションを提案して回復を支援します",
     },
     searchtask:{
         id:"タスクID",

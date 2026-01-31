@@ -22,6 +22,7 @@ export type Usersearchdata = {
     accounts?:Array<number>
     // maxConcurrent: number,
     cookies?: Array<Array<CookiesType>>
+    enableAIRecovery?: boolean  // Enable AI-assisted recovery when scraper encounters errors
   }
   export interface UsersearchdataParam  extends Usersearchdata{
     proxyIds?:Array<number>,

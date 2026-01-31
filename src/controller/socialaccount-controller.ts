@@ -1,5 +1,7 @@
 //import { SocialAccount } from "@/modules/socialaccount";
-import { BrowserWindow, session } from 'electron';
+import { BrowserWindow } from 'electron';
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const session = require('electron').session;
 import { AccountCookiesEntity } from "@/entity/AccountCookies.entity";
 import { AccountCookiesModule } from "@/modules/accountCookiesModule"
 //import { ProxyController } from "./proxy-controller";

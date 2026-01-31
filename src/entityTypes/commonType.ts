@@ -95,7 +95,7 @@ export type Header = {
     sortable: boolean;
     key: string;
     width?: string;
-    value?: unknown;
+    value?: string;
 };
 export type VslotHeader = {
     step: number;
