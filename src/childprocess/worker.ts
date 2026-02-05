@@ -1,6 +1,6 @@
 /**
- * Type definitions for Worker Process
- * Extends NodeJS.Process to include parentPort for IPC communication
+ * Worker Process utilities for IPC communication
+ * Provides types and utilities for child processes that communicate with the main process
  */
 
 export interface ParentPort {
@@ -20,5 +20,16 @@ export interface WorkerProcess extends NodeJS.Process {
  * Type guard to check if a process is a WorkerProcess with parentPort
  */
 export function isWorkerProcess(proc: NodeJS.Process): proc is WorkerProcess {
-    return 'parentPort' in proc && proc.parentPort !== undefined;
+    return 'parentPort' in proc && (proc as WorkerProcess).parentPort !== undefined;
+}
+
+/**
+ * Get the parent port from the current process if available
+ * @returns ParentPort or null if not in a worker process
+ */
+export function getParentPort(): ParentPort | null {
+    if (isWorkerProcess(process)) {
+        return process.parentPort ?? null;
+    }
+    return null;
 }

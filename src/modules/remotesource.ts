@@ -9,7 +9,8 @@ import { Token } from "@/modules/token"
 import {User} from "@/modules/user"
 import {TOKENNAME} from '@/config/usersetting';
 // const url = require("url");
-// const FormData = require('form-data');
+import FormData from 'form-data';
+import * as dotenv from 'dotenv';
 type sosetting = {
   sotype: string;
   socialuser: string;
@@ -52,12 +53,25 @@ type keywordItem = {
   Created: string,
   UsedTime: number,
 }
+// User subscription plan type
+export type UserPlan = {
+  planName: string,
+  planId?: string,
+  status: string,
+  startDate?: string,
+  endDate?: string,
+  price?: number,
+  currency?: string,
+  billingPeriod?: string,
+}
+
 export type jwtUser = {
   // account_id:number
   name: string,
   email: string,
   id: number,
   roles: Array<string>,
+  plans?: Array<UserPlan>,
 }
 type jwtTokenUser = {
   AccountId: number,
@@ -118,7 +132,7 @@ export class RemoteSource {
    * @returns {object} config
    * */
   readConfig(): object {
-    const result = require("dotenv").config();
+    const result = dotenv.config();
     if (result.error) {
       throw result.error;
     }
@@ -171,9 +185,8 @@ export class RemoteSource {
    * save link to remote servive
    */
   async saveLinkremote(link: Linkdata): Promise<number> {
-    const FormData = require('form-data');
     // debug(link)
-    let data = new FormData();
+    const data = new FormData();
     data.append('title', link.title);
     if (link.content) {
       data.append('content', link.content);
@@ -263,7 +276,6 @@ export class RemoteSource {
     return taskInfo;
   }
   async Updateprocesstime(scropeId: number) {
-    const FormData = require('form-data');
     const data = new FormData();
     data.append('id', scropeId);
 

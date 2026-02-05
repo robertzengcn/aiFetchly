@@ -26,6 +26,7 @@ import { NativateDatatype } from '@/entityTypes/commonType'
 import { ScheduleManager } from '@/modules/ScheduleManager';
 import { runafterbootup } from "@/modules/bootuprun"
 import { YellowPagesController } from './controller/YellowPagesController';
+import { initializeWebSocketConnection, cleanupWebSocketConnection } from '@/main-process/communication/websocket-ipc';
 // import { RAGIpcHandlers } from '@/main-process/ragIpcHandlers';
 // import { createProtocol } from 'electron';
 const isDevelopment = process.env.NODE_ENV !== 'production'
@@ -391,6 +392,14 @@ function initialize() {
       log.error('Failed to shutdown ScheduleManager:', error);
     }
 
+    // Cleanup WebSocket connection
+    try {
+      cleanupWebSocketConnection();
+      log.info('WebSocket connection cleanup completed');
+    } catch (error) {
+      log.error('Failed to cleanup WebSocket connection:', error);
+    }
+
     // Stop log cleanup interval
     logger.stopLogCleanup();
   });
@@ -494,6 +503,17 @@ function initialize() {
         log.info('Yellow Pages orphaned process check completed:', orphanedCheckResult);
       } catch (error) {
         log.error('Failed to check for orphaned Yellow Pages processes:', error);
+      }
+
+      // Initialize WebSocket connection to marketing server
+      // This enables real-time notifications and updates
+      if (win) {
+        try {
+          await initializeWebSocketConnection(win);
+          log.info('WebSocket connection to marketing server initialized');
+        } catch (error) {
+          log.error('Failed to initialize WebSocket connection:', error);
+        }
       }
     }
 
@@ -839,6 +859,16 @@ async function handleDeepLink(url: string) {
         } catch (dbResetError) {
           // Log but don't block login flow
           log.error('Failed to reset database singletons after login (non-blocking):', dbResetError);
+        }
+
+        // Initialize WebSocket connection after successful login
+        if (win && !(win as any).isDestroyed()) {
+          try {
+            await initializeWebSocketConnection(win);
+            log.info('WebSocket connection initialized after login');
+          } catch (wsError) {
+            log.error('Failed to initialize WebSocket after login (non-blocking):', wsError);
+          }
         }
 
         // Navigate to dashboard
