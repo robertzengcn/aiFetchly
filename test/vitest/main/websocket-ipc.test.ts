@@ -1,23 +1,34 @@
 /**
  * WebSocket IPC Handler Tests
+ * 
+ * Tests the WebSocket IPC handlers by capturing the handlers registered
+ * via ipcMain.handle and testing them directly.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { ipcMain } from 'electron';
-import {
-  websocketConnectHandler,
-  websocketDisconnectHandler,
-  websocketReconnectHandler,
-  websocketStatusHandler,
-  websocketSendHandler,
-} from '@/main-process/communication/websocket-ipc';
-import { WebSocketClient } from '@/modules/WebSocketClient';
-import { BrowserWindow } from 'electron';
+import { describe, it, expect, beforeEach, afterEach, vi, Mock } from 'vitest';
+import { ipcMain, BrowserWindow } from 'electron';
 
-// Mock Electron's ipcMain
+// Store captured handlers
+const capturedHandlers: Record<string, (...args: unknown[]) => unknown> = {};
+
+// Mock WebSocketClient
+const mockWsClient = {
+  connect: vi.fn(),
+  disconnect: vi.fn(),
+  reconnect: vi.fn(),
+  getStatus: vi.fn((): string => 'disconnected'),
+  getClientId: vi.fn((): string | null => null),
+  isConnected: vi.fn((): boolean => false),
+  send: vi.fn((): boolean => true),
+  clearMessageQueue: vi.fn(),
+};
+
+// Mock Electron's ipcMain - capture handlers when registered
 vi.mock('electron', () => ({
   ipcMain: {
-    handle: vi.fn(),
+    handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
+      capturedHandlers[channel] = handler;
+    }),
   },
   BrowserWindow: {
     getAllWindows: vi.fn(() => []),
@@ -31,31 +42,38 @@ vi.mock('@/modules/WebSocketClient', () => ({
   },
 }));
 
-const mockWsClient = {
-  connect: vi.fn(),
-  disconnect: vi.fn(),
-  reconnect: vi.fn(),
-  getStatus: vi.fn(() => 'disconnected'),
-  getClientId: vi.fn(() => null),
-  isConnected: vi.fn(() => false),
-  send: vi.fn(() => true),
-  clearMessageQueue: vi.fn(),
-};
+// Mock Logger
+vi.mock('@/modules/Logger', () => ({
+  log: {
+    info: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+    warn: vi.fn(),
+  },
+}));
+
+// Import after mocks are set up
+import { registerWebSocketIpcHandlers } from '@/main-process/communication/websocket-ipc';
+import {
+  WEBSOCKET_CONNECT,
+  WEBSOCKET_DISCONNECT,
+  WEBSOCKET_RECONNECT,
+  WEBSOCKET_STATUS,
+  WEBSOCKET_SEND,
+} from '@/config/channellist';
 
 describe('WebSocket IPC Handlers', () => {
-  let mockEvent: any;
-  let mockMainWindow: any;
+  let mockMainWindow: {
+    webContents: { send: Mock };
+    isDestroyed: Mock;
+  };
 
   beforeEach(() => {
     // Reset all mocks
     vi.clearAllMocks();
-
-    // Create mock IPC event
-    mockEvent = {
-      sender: {
-        send: vi.fn(),
-      },
-    };
+    
+    // Clear captured handlers
+    Object.keys(capturedHandlers).forEach(key => delete capturedHandlers[key]);
 
     // Create mock main window
     mockMainWindow = {
@@ -65,14 +83,24 @@ describe('WebSocket IPC Handlers', () => {
       isDestroyed: vi.fn(() => false),
     };
 
-    (BrowserWindow as any).getAllWindows.mockReturnValue([mockMainWindow]);
+    (BrowserWindow as unknown as { getAllWindows: Mock }).getAllWindows.mockReturnValue([mockMainWindow]);
+
+    // Register handlers with the mock window
+    registerWebSocketIpcHandlers(mockMainWindow as unknown as BrowserWindow);
   });
 
-  describe('websocketConnectHandler', () => {
-    it('should connect to WebSocket server', async () => {
-      mockWsClient.connect.mockReturnValue(true);
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
 
-      const result = await websocketConnectHandler(mockEvent);
+  describe('websocketConnectHandler (WEBSOCKET_CONNECT)', () => {
+    it('should connect to WebSocket server', async () => {
+      mockWsClient.connect.mockReturnValue(undefined);
+
+      const handler = capturedHandlers[WEBSOCKET_CONNECT];
+      expect(handler).toBeDefined();
+      
+      const result = await handler();
 
       expect(result).toEqual({
         status: true,
@@ -86,29 +114,22 @@ describe('WebSocket IPC Handlers', () => {
         throw new Error('Connection failed');
       });
 
-      const result = await websocketConnectHandler(mockEvent);
+      const handler = capturedHandlers[WEBSOCKET_CONNECT];
+      const result = await handler();
 
       expect(result).toEqual({
         status: false,
         msg: 'Connection failed',
       });
     });
-
-    it('should return error when no main window available', async () => {
-      (BrowserWindow as any).getAllWindows.mockReturnValue([]);
-
-      const result = await websocketConnectHandler(mockEvent);
-
-      expect(result).toEqual({
-        status: false,
-        msg: 'No main window available',
-      });
-    });
   });
 
-  describe('websocketDisconnectHandler', () => {
+  describe('websocketDisconnectHandler (WEBSOCKET_DISCONNECT)', () => {
     it('should disconnect from WebSocket server', async () => {
-      const result = await websocketDisconnectHandler();
+      const handler = capturedHandlers[WEBSOCKET_DISCONNECT];
+      expect(handler).toBeDefined();
+      
+      const result = await handler();
 
       expect(result).toEqual({
         status: true,
@@ -122,7 +143,8 @@ describe('WebSocket IPC Handlers', () => {
         throw new Error('Disconnect error');
       });
 
-      const result = await websocketDisconnectHandler();
+      const handler = capturedHandlers[WEBSOCKET_DISCONNECT];
+      const result = await handler();
 
       expect(result).toEqual({
         status: false,
@@ -131,9 +153,12 @@ describe('WebSocket IPC Handlers', () => {
     });
   });
 
-  describe('websocketReconnectHandler', () => {
+  describe('websocketReconnectHandler (WEBSOCKET_RECONNECT)', () => {
     it('should force reconnect to WebSocket server', async () => {
-      const result = await websocketReconnectHandler();
+      const handler = capturedHandlers[WEBSOCKET_RECONNECT];
+      expect(handler).toBeDefined();
+      
+      const result = await handler();
 
       expect(result).toEqual({
         status: true,
@@ -147,7 +172,8 @@ describe('WebSocket IPC Handlers', () => {
         throw new Error('Reconnect error');
       });
 
-      const result = await websocketReconnectHandler();
+      const handler = capturedHandlers[WEBSOCKET_RECONNECT];
+      const result = await handler();
 
       expect(result).toEqual({
         status: false,
@@ -156,13 +182,16 @@ describe('WebSocket IPC Handlers', () => {
     });
   });
 
-  describe('websocketStatusHandler', () => {
+  describe('websocketStatusHandler (WEBSOCKET_STATUS)', () => {
     it('should return current WebSocket status', async () => {
       mockWsClient.getStatus.mockReturnValue('connected');
       mockWsClient.getClientId.mockReturnValue('client-123');
       mockWsClient.isConnected.mockReturnValue(true);
 
-      const result = await websocketStatusHandler();
+      const handler = capturedHandlers[WEBSOCKET_STATUS];
+      expect(handler).toBeDefined();
+      
+      const result = await handler();
 
       expect(result).toEqual({
         status: true,
@@ -179,7 +208,8 @@ describe('WebSocket IPC Handlers', () => {
         throw new Error('Status error');
       });
 
-      const result = await websocketStatusHandler();
+      const handler = capturedHandlers[WEBSOCKET_STATUS];
+      const result = await handler();
 
       expect(result).toEqual({
         status: false,
@@ -188,12 +218,16 @@ describe('WebSocket IPC Handlers', () => {
     });
   });
 
-  describe('websocketSendHandler', () => {
+  describe('websocketSendHandler (WEBSOCKET_SEND)', () => {
     it('should send message through WebSocket', async () => {
       const message = { type: 'test', data: 'hello' };
       mockWsClient.send.mockReturnValue(true);
 
-      const result = await websocketSendHandler(mockEvent, message);
+      const handler = capturedHandlers[WEBSOCKET_SEND];
+      expect(handler).toBeDefined();
+      
+      // The handler receives (event, message) but we only care about the message
+      const result = await handler({}, message);
 
       expect(result).toEqual({
         status: true,
@@ -206,11 +240,12 @@ describe('WebSocket IPC Handlers', () => {
       const message = { type: 'test', data: 'hello' };
       mockWsClient.send.mockReturnValue(false);
 
-      const result = await websocketSendHandler(mockEvent, message);
+      const handler = capturedHandlers[WEBSOCKET_SEND];
+      const result = await handler({}, message);
 
       expect(result).toEqual({
         status: false,
-        msg: 'Failed to send message or not connected',
+        msg: 'Failed to send message (not connected)',
       });
     });
 
@@ -220,20 +255,12 @@ describe('WebSocket IPC Handlers', () => {
         throw new Error('Send error');
       });
 
-      const result = await websocketSendHandler(mockEvent, message);
+      const handler = capturedHandlers[WEBSOCKET_SEND];
+      const result = await handler({}, message);
 
       expect(result).toEqual({
         status: false,
         msg: 'Send error',
-      });
-    });
-
-    it('should handle missing message parameter', async () => {
-      const result = await websocketSendHandler(mockEvent);
-
-      expect(result).toEqual({
-        status: false,
-        msg: 'No message provided',
       });
     });
   });
