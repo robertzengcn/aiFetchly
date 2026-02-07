@@ -218,3 +218,9 @@ Current branch (`sqlite-vec-merge`) is integrating sqlite-vec for vector similar
 - SQLite3 native module may require rebuilding after Node.js updates
 - Puppeteer browser instances should be properly managed to avoid memory leaks
 - IPC calls must handle both success and error cases
+
+## Active Technologies
+- TypeScript 5.x (001-ai-contact-extraction)
+
+## Recent Changes
+- 001-ai-contact-extraction: Added TypeScript 5.x

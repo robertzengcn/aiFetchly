@@ -11,6 +11,9 @@ rounded class="elevation-0" density="compact" variant="solo" :label="t('common.s
             <v-btn class="btn mr-2" variant="flat" color="info" prepend-icon="mdi-robot" @click="handleAiAnalyze" :disabled="selectedCount === 0" :loading="analyzing">
                 <span>{{ t('websiteAnalysis.analyze_button') || 'AI Analyze' }} {{ selectedCount > 0 ? `(${selectedCount})` : '' }}</span>
             </v-btn>
+            <v-btn class="btn mr-2" variant="flat" color="purple" prepend-icon="mdi-card-account-mail" @click="handleContactExtraction" :disabled="selectedCount === 0" :loading="extracting">
+                <span>Get Contact Info {{ selectedCount > 0 ? `(${selectedCount})` : '' }}</span>
+            </v-btn>
             <v-btn class="btn mr-2" variant="flat" color="success" prepend-icon="mdi-email-search" @click="handleScrapeEmail" :disabled="selectedCount === 0">
                 <span>{{ buttonText }}</span>
             </v-btn>
@@ -73,15 +76,89 @@ v-model:items-per-page="itemsPerPage" v-model="selectedItems"
             </template>
             <template v-slot:[`item.ai_analysis_status`]="{ item }">
                 <div class="ai-status-cell">
-                    <v-chip 
-                        v-if="item.ai_analysis_status" 
-                        size="small" 
+                    <v-chip
+                        v-if="item.ai_analysis_status"
+                        size="small"
                         :color="getStatusColor(item.ai_analysis_status)"
                         variant="flat"
                     >
                         {{ getStatusText(item.ai_analysis_status) }}
                     </v-chip>
                     <span v-else class="text-grey">-</span>
+                </div>
+            </template>
+            <template v-slot:[`item.extraction_status`]="{ item }">
+                <div class="extraction-status-cell">
+                    <v-chip
+                        v-if="getContactExtractionStatus(item.id)"
+                        size="small"
+                        :color="getExtractionStatusColor(getContactExtractionStatus(item.id))"
+                        variant="flat"
+                    >
+                        {{ getExtractionStatusText(getContactExtractionStatus(item.id)) }}
+                    </v-chip>
+                    <span v-else class="text-grey">-</span>
+                </div>
+            </template>
+            <template v-slot:[`item.contact_email`]="{ item }">
+                <div class="contact-email-cell">
+                    <div v-if="getContactInfo(item.id)?.email" class="d-flex align-center">
+                        <v-tooltip location="top" :text="getContactInfo(item.id).email">
+                            <template v-slot:activator="{ props }">
+                                <span v-bind="props" class="text-truncate" style="max-width: 180px;">
+                                    {{ getContactInfo(item.id).email }}
+                                </span>
+                            </template>
+                        </v-tooltip>
+                        <v-btn
+                            icon
+                            size="x-small"
+                            variant="text"
+                            density="compact"
+                            @click="copyToClipboard(getContactInfo(item.id).email)"
+                            class="ml-1"
+                        >
+                            <v-icon size="small">mdi-content-copy</v-icon>
+                        </v-btn>
+                    </div>
+                    <span v-else class="text-grey">-</span>
+                </div>
+            </template>
+            <template v-slot:[`item.contact_phone`]="{ item }">
+                <div class="contact-phone-cell">
+                    <div v-if="getContactInfo(item.id)?.phone" class="d-flex align-center">
+                        <span class="text-truncate" style="max-width: 130px;">
+                            {{ getContactInfo(item.id).phone }}
+                        </span>
+                        <v-btn
+                            icon
+                            size="x-small"
+                            variant="text"
+                            density="compact"
+                            @click="copyToClipboard(getContactInfo(item.id).phone)"
+                            class="ml-1"
+                        >
+                            <v-icon size="small">mdi-content-copy</v-icon>
+                        </v-btn>
+                    </div>
+                    <span v-else class="text-grey">-</span>
+                </div>
+            </template>
+            <template v-slot:[`item.contact_address`]="{ item }">
+                <div class="contact-address-cell">
+                    <v-tooltip location="top" :text="getContactInfo(item.id)?.address || ''">
+                        <template v-slot:activator="{ props }">
+                            <span
+                                v-if="getContactInfo(item.id)?.address"
+                                v-bind="props"
+                                class="text-truncate d-inline-block"
+                                style="max-width: 180px;"
+                            >
+                                {{ truncateAddress(getContactInfo(item.id).address) }}
+                            </span>
+                            <span v-else class="text-grey">-</span>
+                        </template>
+                    </v-tooltip>
                 </div>
             </template>
         </v-data-table-server>
@@ -101,6 +178,7 @@ v-model:items-per-page="itemsPerPage" v-model="selectedItems"
 <script setup lang="ts">
 import {useI18n} from "vue-i18n";
 import { gettaskresult, exportSearchResults, analyzeWebsiteBatch, receiveAnalyzeWebsiteProgress, type AnalyzeWebsiteProgressData } from '@/views/api/search'
+import { contactExtractionApi } from '@/views/api/contactExtraction'
 import { ref,computed,onMounted,onUnmounted,watch } from 'vue'
 import { SearchResult } from '@/views/api/types'
 import {SearchResEntityDisplay} from "@/entityTypes/scrapeType"
@@ -164,12 +242,58 @@ function handleVisibilityChange(): void {
     }
 }
 
+// Progress listener cleanup function
+let cleanupProgressListener: (() => void) | null = null;
+
 onMounted(() => {
   initialize();
   // Start auto-refresh
   startAutoRefresh();
   // Add page visibility listener
   document.addEventListener('visibilitychange', handleVisibilityChange);
+
+  // Set up contact extraction progress listener
+  cleanupProgressListener = contactExtractionApi.onContactExtractionProgress((progress) => {
+      console.log('Contact extraction progress:', progress);
+
+      // Update contact info map with progress data
+      if (progress.status === 'completed' && progress.data) {
+          const info = {
+              resultId: progress.resultId,
+              email: progress.data.emails?.[0] || null,
+              phone: progress.data.phones?.[0] || null,
+              address: progress.data.address || null,
+              socialLinks: progress.data.socialLinks || null,
+              extractionStatus: progress.status,
+              extractionError: null
+          };
+          contactInfoMap.value.set(progress.resultId, info);
+      } else if (progress.status === 'failed') {
+          const existing = contactInfoMap.value.get(progress.resultId) || {};
+          contactInfoMap.value.set(progress.resultId, {
+              ...existing,
+              resultId: progress.resultId,
+              extractionStatus: progress.status,
+              extractionError: progress.error
+          });
+      } else {
+          const existing = contactInfoMap.value.get(progress.resultId) || {};
+          contactInfoMap.value.set(progress.resultId, {
+              ...existing,
+              resultId: progress.resultId,
+              extractionStatus: progress.status
+          });
+      }
+
+      // Reload data to show updated status
+      if (taskid && !loading.value) {
+          loadItems({
+              page: currentPage.value,
+              itemsPerPage: itemsPerPage.value,
+              sortBy: ''
+          }, true);
+      }
+  });
 });
 
 onUnmounted(() => {
@@ -177,6 +301,12 @@ onUnmounted(() => {
     stopAutoRefresh();
     // Remove page visibility listener
     document.removeEventListener('visibilitychange', handleVisibilityChange);
+
+    // Clean up contact extraction progress listener
+    if (cleanupProgressListener) {
+        cleanupProgressListener();
+        cleanupProgressListener = null;
+    }
 });
 // const campaignId = i18n.t("campaignId");
 type Fetchparam = {
@@ -265,6 +395,38 @@ headers.value = [
         width: '150px',
         minWidth: '120px',
     },
+    {
+        title: 'Contact Extraction',
+        align: 'start',
+        sortable: false,
+        key: 'extraction_status',
+        width: '150px',
+        minWidth: '120px',
+    },
+    {
+        title: 'Email',
+        align: 'start',
+        sortable: false,
+        key: 'contact_email',
+        width: '200px',
+        minWidth: '150px',
+    },
+    {
+        title: 'Phone',
+        align: 'start',
+        sortable: false,
+        key: 'contact_phone',
+        width: '150px',
+        minWidth: '120px',
+    },
+    {
+        title: 'Address',
+        align: 'start',
+        sortable: false,
+        key: 'contact_address',
+        width: '200px',
+        minWidth: '150px',
+    },
 ];
 const itemsPerPage = ref(10);
 const serverItems = ref<Array<SearchResEntityDisplay>>([]);
@@ -275,10 +437,14 @@ const totalItems = ref(0);
 const search = ref('');
 const exporting = ref(false);
 const analyzing = ref(false);
+const extracting = ref(false);
 const showAnalysisDialog = ref(false);
 const selectedResultsForAnalysis = ref<SearchResEntityDisplay[]>([]);
 const currentPage = ref(1);
 const analysisProgress = ref({ current: 0, total: 0 });
+
+// Contact extraction state
+const contactInfoMap = ref<Map<number, any>>(new Map());
 
 // Auto-refresh functionality
 const autoRefreshEnabled = ref(true); // Enable by default
@@ -465,21 +631,226 @@ async function handleExport() {
     if (!taskid) {
         return;
     }
-    console.log(taskid)
+
     exporting.value = true;
     try {
-        // Export as CSV by default (can be extended to support format selection)
+        // Export as CSV including contact info
         const filePath = await exportSearchResults(taskid, 'csv');
+
+        // If we have contact info, export it separately
+        if (contactInfoMap.value.size > 0) {
+            await exportContactInfoToCSV();
+        }
+
         if (filePath) {
-            // Show success message (you might want to use a toast/snackbar component)
             console.log(`Export successful: ${filePath}`);
         }
     } catch (error) {
         console.error('Export failed:', error);
-        // Show error message (you might want to use a toast/snackbar component)
         alert(error instanceof Error ? error.message : 'Export failed');
     } finally {
         exporting.value = false;
+    }
+}
+
+/**
+ * Export contact info to CSV
+ */
+async function exportContactInfoToCSV() {
+    try {
+        // Get all contact info
+        const contactInfoData: any[] = [];
+
+        // Map server items with their contact info
+        serverItems.value.forEach(item => {
+            const contactInfo = contactInfoMap.value.get(item.id);
+            if (contactInfo && contactInfo.extractionStatus === 'completed') {
+                contactInfoData.push({
+                    'ID': item.id,
+                    'Title': item.title || '',
+                    'URL': item.link || '',
+                    'Email': contactInfo.email || '',
+                    'Phone': contactInfo.phone || '',
+                    'Address': contactInfo.address || '',
+                    'Social Links': contactInfo.socialLinks ? contactInfo.socialLinks.join('; ') : '',
+                    'Extraction Date': contactInfo.extractionDate || '',
+                    'Status': contactInfo.extractionStatus || ''
+                });
+            }
+        });
+
+        if (contactInfoData.length === 0) {
+            console.log('No completed contact info to export');
+            return;
+        }
+
+        // Convert to CSV
+        const headers = Object.keys(contactInfoData[0]);
+        const csvContent = [
+            headers.join(','),
+            ...contactInfoData.map(row =>
+                headers.map(header => {
+                    const value = row[header];
+                    // Escape values containing commas or quotes
+                    if (typeof value === 'string' && (value.includes(',') || value.includes('"'))) {
+                        return `"${value.replace(/"/g, '""')}"`;
+                    }
+                    return value || '';
+                }).join(',')
+            )
+        ].join('\n');
+
+        // Create blob and download
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement('a');
+        const url = URL.createObjectURL(blob);
+
+        link.setAttribute('href', url);
+        link.setAttribute('download', `contact_info_${taskid}_${new Date().toISOString().slice(0, 10)}.csv`);
+        link.style.visibility = 'hidden';
+
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+
+        console.log(`Exported ${contactInfoData.length} contact info records`);
+    } catch (error) {
+        console.error('Failed to export contact info:', error);
+        throw error;
+    }
+}
+
+/**
+ * Handle contact extraction button click
+ */
+async function handleContactExtraction() {
+    if (selectedItems.value.length === 0) {
+        alert('Please select at least one item to extract contact info');
+        return;
+    }
+
+    extracting.value = true;
+
+    try {
+        // Get actual selected items
+        const selectedItemValues = new Set(selectedItems.value);
+        const actualSelectedItems = serverItems.value.filter(item => {
+            const itemValue = getItemValue(item);
+            return selectedItemValues.has(itemValue);
+        });
+
+        const resultIds = actualSelectedItems.map(item => item.id);
+
+        console.log('Starting contact extraction for result IDs:', resultIds);
+
+        // Start extraction
+        const response = await contactExtractionApi.startContactExtraction(resultIds);
+
+        if (response.success) {
+            console.log('Contact extraction started:', response.batchId);
+
+            // Load contact info for selected items
+            await loadContactInfo(resultIds);
+        } else {
+            console.error('Failed to start contact extraction:', response.message);
+            alert(`Failed to start extraction: ${response.message}`);
+        }
+    } catch (error) {
+        console.error('Error starting contact extraction:', error);
+        alert(`Error: ${error}`);
+    } finally {
+        extracting.value = false;
+    }
+}
+
+/**
+ * Load contact info for specific result IDs
+ */
+async function loadContactInfo(resultIds: number[]) {
+    try {
+        const response = await contactExtractionApi.getContactInfo(resultIds);
+
+        if (response.success && response.data) {
+            // Update contact info map
+            response.data.forEach(info => {
+                contactInfoMap.value.set(info.resultId, info);
+            });
+
+            console.log('Loaded contact info for', response.data.length, 'items');
+        }
+    } catch (error) {
+        console.error('Error loading contact info:', error);
+    }
+}
+
+/**
+ * Get contact extraction status for an item
+ */
+function getContactExtractionStatus(resultId: number): string | undefined {
+    return contactInfoMap.value.get(resultId)?.extractionStatus;
+}
+
+/**
+ * Get contact info for an item
+ */
+function getContactInfo(resultId: number): any {
+    return contactInfoMap.value.get(resultId);
+}
+
+/**
+ * Get color for extraction status
+ */
+function getExtractionStatusColor(status: string): string {
+    switch (status) {
+        case 'completed':
+            return 'success';
+        case 'analyzing':
+            return 'info';
+        case 'failed':
+            return 'error';
+        case 'pending':
+            return 'warning';
+        default:
+            return 'grey';
+    }
+}
+
+/**
+ * Get display text for extraction status
+ */
+function getExtractionStatusText(status: string): string {
+    switch (status) {
+        case 'completed':
+            return 'Completed';
+        case 'analyzing':
+            return 'Analyzing';
+        case 'failed':
+            return 'Failed';
+        case 'pending':
+            return 'Pending';
+        default:
+            return status;
+    }
+}
+
+/**
+ * Truncate address for display
+ */
+function truncateAddress(address: string, maxLength = 30): string {
+    if (!address) return '';
+    if (address.length <= maxLength) return address;
+    return address.substring(0, maxLength) + '...';
+}
+
+/**
+ * Copy text to clipboard
+ */
+async function copyToClipboard(text: string): Promise<void> {
+    try {
+        await navigator.clipboard.writeText(text);
+        console.log('Copied to clipboard:', text);
+    } catch (error) {
+        console.error('Failed to copy:', error);
     }
 }
 

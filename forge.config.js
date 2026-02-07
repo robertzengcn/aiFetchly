@@ -342,6 +342,10 @@ module.exports={
             entry: 'src/childprocess/googleProxyCheck.ts',
             config: 'vite.googleProxyCheck.config.mjs'
           },
+          {
+            entry: 'src/modules/contact-extraction/ContactExtractionWorker.ts',
+            config: 'vite.contactExtractionWorker.config.mjs'
+          },
           // {
           //   entry: 'src/buckEmail.ts',
           //   config: 'vite.buckEmail.config.mjs'
