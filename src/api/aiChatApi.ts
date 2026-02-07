@@ -674,6 +674,122 @@ export class AiChatApi {
             reader.releaseLock();
         }
     }
+
+    /**
+     * Extract contact information from web page content using AI
+     *
+     * Analyzes web page content to extract structured contact information including
+     * email addresses, phone numbers, physical addresses, and social media links.
+     *
+     * @param request - Contact extraction request containing page content and URL
+     * @returns Promise resolving to extracted contact information
+     * @throws {Error} When network request fails
+     *
+     * @example
+     * ```typescript
+     * const response = await api.extractContactInfo({
+     *   pageContent: '<html>...contact page content...</html>',
+     *   url: 'https://example.com/contact',
+     *   entityName: 'Example Company'
+     * });
+     * if (response.status && response.data) {
+     *   console.log('Emails:', response.data.emails);
+     *   console.log('Phones:', response.data.phones);
+     *   console.log('Address:', response.data.address);
+     * }
+     * ```
+     */
+    async extractContactInfo(
+        pageContent: string,
+        url: string,
+        entityName?: string
+    ): Promise<CommonApiresp<{
+        emails: string[];
+        phones: string[];
+        address?: string;
+        socialLinks?: string[];
+        confidence?: number;
+    }>> {
+        // Prepare the prompt for AI
+        const systemPrompt = `You are a contact information extraction assistant. Extract structured contact data from the provided web page content.
+Return ONLY a JSON object with these fields:
+- emails: array of email address strings (all found emails)
+- phones: array of phone number strings (all found phones)
+- address: string or null (physical address if found)
+- socialLinks: array of social media URL strings or null (Twitter, LinkedIn, Facebook, etc.)
+- confidence: number between 0 and 1 indicating extraction confidence
+
+If information is not found, return null for that field. Extract all emails and phones if multiple exist.
+Return valid JSON only, no additional text.`;
+
+        const userMessage = `Extract contact information from this web page.
+
+Page URL: ${url}
+${entityName ? `Entity Name: ${entityName}` : ''}
+
+Page Content:
+${pageContent.substring(0, 15000)}
+
+Please extract all contact information (emails, phones, addresses, social media links) and return as JSON.`;
+
+        // Use the streamMessage API with a single completion
+        return new Promise((resolve, reject) => {
+            const events: any[] = [];
+
+            this.streamMessage(
+                {
+                    message: userMessage,
+                    systemPrompt: systemPrompt,
+                    useRAG: false
+                },
+                (event) => {
+                    events.push(event);
+
+                    // Look for the done event
+                    if (event.event === 'done') {
+                        try {
+                            // Extract content from token events
+                            const content = events
+                                .filter(e => e.event === 'token')
+                                .map(e => (e.data?.content as string) || '')
+                                .join('');
+
+                            // Try to parse as JSON
+                            const jsonMatch = content.match(/\{[\s\S]*\}/);
+                            if (jsonMatch) {
+                                const extracted = JSON.parse(jsonMatch[0]);
+
+                                // Validate and structure the response
+                                const result = {
+                                    emails: Array.isArray(extracted.emails) ? extracted.emails : [],
+                                    phones: Array.isArray(extracted.phones) ? extracted.phones : [],
+                                    address: extracted.address || null,
+                                    socialLinks: Array.isArray(extracted.socialLinks) ? extracted.socialLinks : null,
+                                    confidence: typeof extracted.confidence === 'number' ? extracted.confidence : 0.8
+                                };
+
+                                resolve({
+                                    status: true,
+                                    code: 200,
+                                    msg: 'Success',
+                                    data: result
+                                });
+                            } else {
+                                reject(new Error('No valid JSON found in AI response'));
+                            }
+                        } catch (error) {
+                            reject(new Error(`Failed to parse AI response: ${String(error)}`));
+                        }
+                    }
+
+                    // Check for errors
+                    if (event.event === 'error') {
+                        reject(new Error(String(event.data?.content) || 'Unknown AI error'));
+                    }
+                }
+            ).catch(reject);
+        });
+    }
 }
 
 
