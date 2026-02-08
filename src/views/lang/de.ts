@@ -666,9 +666,15 @@ export default {
         id:"ID",
         link:"Link",
         title:"Titel",
+        snippet:"Auszug",
         record_time:"Erfassungszeit",
         keyword:"Schlüsselwort",
         status:"Status",
+    },
+    searchresultdetail:{
+        title:"Suchergebnisdetails",
+        basic_info:"Grundlegende Informationen",
+        columns:"Spalten",
     },
     proxy: {
         add_proxy: "Proxy hinzufügen",
@@ -752,9 +758,13 @@ export default {
     contactExtraction:{
         extract_contact_info:"Kontaktinformationen Abrufen",
         contact_extraction_status:"Kontaktextraktion",
+        extraction_status:"Extraktionsstatus",
         email:"E-Mail",
         phone:"Telefon",
         address:"Adresse",
+        contact_info:"Kontaktinformationen",
+        extraction_date:"Extraktionsdatum",
+        social_links:"Soziale Links",
         status_completed:"Abgeschlossen",
         status_analyzing:"Analyse",
         status_failed:"Fehlgeschlagen",
@@ -1189,7 +1199,10 @@ export default {
         status_completed: "Abgeschlossen",
         status_analyzing: "Analysiert",
         status_failed: "Fehlgeschlagen",
-        status_pending: "Ausstehend"
+        status_pending: "Ausstehend",
+        ai_analysis: "KI-Analyse",
+        reasoning: "Begründung",
+        client_business: "Kundengeschäft"
     }
 
 }

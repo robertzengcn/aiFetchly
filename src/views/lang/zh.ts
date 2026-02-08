@@ -671,9 +671,15 @@ export default {
         id:"ID",
         link:"链接",
         title:"标题",
+        snippet:"摘要",
         record_time:"记录时间",
         keyword:"关键词",
         status:"状态",
+    },
+    searchresultdetail:{
+        title:"搜索结果详情",
+        basic_info:"基本信息",
+        columns:"列",
     },
     proxy:{
         add_proxy:"添加代理",
@@ -760,9 +766,13 @@ export default {
     contactExtraction:{
         extract_contact_info:"获取联系信息",
         contact_extraction_status:"联系方式提取",
+        extraction_status:"提取状态",
         email:"邮箱",
         phone:"电话",
         address:"地址",
+        contact_info:"联系信息",
+        extraction_date:"提取日期",
+        social_links:"社交链接",
         status_completed:"已完成",
         status_analyzing:"分析中",
         status_failed:"失败",
@@ -1207,6 +1217,9 @@ export default {
         status_completed: "已完成",
         status_analyzing: "分析中",
         status_failed: "失败",
-        status_pending: "待处理"
+        status_pending: "待处理",
+        ai_analysis: "AI分析",
+        reasoning: "推理",
+        client_business: "客户业务"
     }
 }
