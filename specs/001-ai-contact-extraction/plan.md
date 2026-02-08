@@ -271,11 +271,11 @@ See [`quickstart.md`](./quickstart.md) for:
 **Key Files to Create**:
 - `src/entity/ContactInfo.entity.ts` - Database entity
 - `src/migrations/CreateContactInfoTable.ts` - Migration script
-- `src/modules/contact-extraction/ContactExtractionWorker.ts` - Worker process
-- `src/modules/contact-extraction/ContactDiscovery.ts` - Discovery logic
-- `src/modules/contact-extraction/ExtractionQueue.ts` - Queue management
-- `src/modules/contact-extraction/BrowserPool.ts` - Browser pool
-- `src/modules/contact-extraction/AIClient.ts` - AI service client
+- `src/childprocess/contact-extraction/ContactExtractionWorker.ts` - Worker process
+- `src/childprocess/contact-extraction/ContactDiscovery.ts` - Discovery logic
+- `src/childprocess/contact-extraction/ExtractionQueue.ts` - Queue management
+- `src/childprocess/contact-extraction/BrowserPool.ts` - Browser pool
+- `src/childprocess/contact-extraction/AIClient.ts` - AI service client
 - `src/main-process/communication/contactExtraction-ipc.ts` - IPC handlers
 - `src/views/api/contactExtraction.ts` - Frontend API layer
 - `src/model/ContactInfo.model.ts` - Data access layer

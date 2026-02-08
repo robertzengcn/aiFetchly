@@ -159,11 +159,11 @@ export function registerContactExtractionHandlers(): void {
      */
     ipcMain.handle(START_CONTACT_EXTRACTION, async (event, request: unknown) => {
         try {
-            console.log(request);
+            // console.log(request);
             // Parse JSON string if needed (frontend sends JSON.stringify)
             const parsedRequest = typeof request === 'string' ? JSON.parse(request) : request;
             const { resultIds } = parsedRequest as ContactExtractionRequest;
-            console.log(resultIds);
+            // console.log(resultIds);
             // Validate input
             if (!Array.isArray(resultIds) || resultIds.length === 0) {
                 return {
@@ -180,7 +180,7 @@ export function registerContactExtractionHandlers(): void {
                 };
             }
 
-            console.log(`Starting contact extraction for ${resultIds.length} results`);
+            // console.log(`Starting contact extraction for ${resultIds.length} results`);
 
             // Use ContactInfoModule for business logic
             const module = new ContactInfoModule();

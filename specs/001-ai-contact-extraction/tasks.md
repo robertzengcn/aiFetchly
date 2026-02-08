@@ -24,7 +24,7 @@
 
 **Purpose**: Project initialization and basic structure for contact extraction feature
 
-完成 T001 Create directory structure `src/modules/contact-extraction/` for extraction logic
+完成 T001 Create directory structure `src/childprocess/contact-extraction/` for extraction logic
 完成 T002 [P] Add TypeScript type definitions in `src/entityTypes/contactExtractionTypes.ts`
 完成 T003 [P] Add IPC channel constants to `src/config/channellist.ts`
 
@@ -43,10 +43,10 @@
 - [ ] T008 Create ContactInfoRepository in `src/model/ContactInfo.model.ts` with custom query methods
 - [ ] T009 [P] Add `extractContactInfo` method to existing `src/api/aiChatApi.ts` for AI-powered contact extraction
 - [ ] T010 [P] Add contact extraction types to `src/entityTypes/contactExtractionTypes.ts` (ContactExtractionRequest, ContactExtractionResponse)
-- [ ] T011 [P] Implement BrowserPool class in `src/modules/contact-extraction/BrowserPool.ts` with Puppeteer
-- [ ] T012 Implement ContactDiscovery with 4-stage pipeline in `src/modules/contact-extraction/ContactDiscovery.ts`
-- [ ] T013 Implement ExtractionQueue with concurrency control in `src/modules/contact-extraction/ExtractionQueue.ts`
-- [ ] T014 Create ContactExtractionWorker process in `src/modules/contact-extraction/ContactExtractionWorker.ts`
+- [ ] T011 [P] Implement BrowserPool class in `src/childprocess/contact-extraction/BrowserPool.ts` with Puppeteer
+- [ ] T012 Implement ContactDiscovery with 4-stage pipeline in `src/childprocess/contact-extraction/ContactDiscovery.ts`
+- [ ] T013 Implement ExtractionQueue with concurrency control in `src/childprocess/contact-extraction/ExtractionQueue.ts`
+- [ ] T014 Create ContactExtractionWorker process in `src/childprocess/contact-extraction/ContactExtractionWorker.ts`
 - [ ] T015 Create IPC handlers in `src/main-process/communication/contactExtraction-ipc.ts` for all 4 channels
 - [ ] T016 Register IPC handlers in main process bootstrap
 
@@ -63,9 +63,9 @@
 ### Implementation for User Story 1
 
 - [ ] T017 [US1] Implement `start-contact-extraction` IPC handler in `src/main-process/communication/contactExtraction-ipc.ts`
-- [ ] T018 [US1] Implement worker message handler for extraction requests in `src/modules/contact-extraction/ContactExtractionWorker.ts`
-- [ ] T019 [US1] Add queue processing logic with concurrency limits in `src/modules/contact-extraction/ExtractionQueue.ts`
-- [ ] T020 [US1] Implement database save logic for extracted contact info in `src/modules/contact-extraction/ExtractionQueue.ts`
+- [ ] T018 [US1] Implement worker message handler for extraction requests in `src/childprocess/contact-extraction/ContactExtractionWorker.ts`
+- [ ] T019 [US1] Add queue processing logic with concurrency limits in `src/childprocess/contact-extraction/ExtractionQueue.ts`
+- [ ] T020 [US1] Implement database save logic for extracted contact info in `src/childprocess/contact-extraction/ExtractionQueue.ts`
 - [ ] T021 [US1] Implement progress update IPC bridge (worker → main → renderer) in `src/main-process/communication/contactExtraction-ipc.ts`
 - [ ] T022 [US1] Create frontend API wrapper in `src/views/api/contactExtraction.ts` for IPC communication
 - [ ] T023 [US1] Add "Get Contact Info with AI" button to `src/views/pages/search/widgets/SearchDetailTable.vue`
@@ -89,12 +89,12 @@
 
 ### Implementation for User Story 2
 
-- [ ] T032 [P] [US2] Implement Stage 1 (Homepage Direct Scan) in `src/modules/contact-extraction/ContactDiscovery.ts`
-- [ ] T032 [P] [US2] Implement Stage 2 (Heuristic Link Scoring) in `src/modules/contact-extraction/ContactDiscovery.ts`
-- [ ] T033 [P] [US2] Implement Stage 3 (Fallback Standard Routes) in `src/modules/contact-extraction/ContactDiscovery.ts`
-- [ ] T034 [P] [US2] Implement Stage 4 (AI-Assisted Extraction) in `src/modules/contact-extraction/ContactDiscovery.ts`
-- [ ] T035 [US2] Integrate all 4 discovery stages in pipeline with fallback logic in `src/modules/contact-extraction/ContactDiscovery.ts`
-- [ ] T036 [US2] Add discovery metadata tracking (method, confidence, duration) in `src/modules/contact-extraction/ContactDiscovery.ts`
+- [ ] T032 [P] [US2] Implement Stage 1 (Homepage Direct Scan) in `src/childprocess/contact-extraction/ContactDiscovery.ts`
+- [ ] T032 [P] [US2] Implement Stage 2 (Heuristic Link Scoring) in `src/childprocess/contact-extraction/ContactDiscovery.ts`
+- [ ] T033 [P] [US2] Implement Stage 3 (Fallback Standard Routes) in `src/childprocess/contact-extraction/ContactDiscovery.ts`
+- [ ] T034 [P] [US2] Implement Stage 4 (AI-Assisted Extraction) in `src/childprocess/contact-extraction/ContactDiscovery.ts`
+- [ ] T035 [US2] Integrate all 4 discovery stages in pipeline with fallback logic in `src/childprocess/contact-extraction/ContactDiscovery.ts`
+- [ ] T036 [US2] Add discovery metadata tracking (method, confidence, duration) in `src/childprocess/contact-extraction/ContactDiscovery.ts`
 - [ ] T038 [US2] Test discovery pipeline on 10 websites with varying structures
 
 **Checkpoint**: At this point, User Stories 1 AND 2 should both work independently. Discovery pipeline should achieve 90%+ success rate across diverse website structures.
@@ -127,11 +127,11 @@
 
 **Purpose**: Improvements that affect multiple user stories
 
-- [ ] T047 [P] Implement retry logic with exponential backoff in `src/modules/contact-extraction/ExtractionQueue.ts`
-- [ ] T048 [P] Add URL validation before extraction in `src/modules/contact-extraction/ContactDiscovery.ts`
-- [ ] T049 [P] Implement bot detection handling in `src/modules/contact-extraction/ContactDiscovery.ts`
-- [ ] T050 [P] Add email validation helper in `src/modules/contact-extraction/ContactDiscovery.ts`
-- [ ] T051 [P] Add phone validation helper in `src/modules/contact-extraction/ContactDiscovery.ts`
+- [ ] T047 [P] Implement retry logic with exponential backoff in `src/childprocess/contact-extraction/ExtractionQueue.ts`
+- [ ] T048 [P] Add URL validation before extraction in `src/childprocess/contact-extraction/ContactDiscovery.ts`
+- [ ] T049 [P] Implement bot detection handling in `src/childprocess/contact-extraction/ContactDiscovery.ts`
+- [ ] T050 [P] Add email validation helper in `src/childprocess/contact-extraction/ContactDiscovery.ts`
+- [ ] T051 [P] Add phone validation helper in `src/childprocess/contact-extraction/ContactDiscovery.ts`
 - [ ] T052 Implement `get-contact-info` IPC handler for querying existing data in `src/main-process/communication/contactExtraction-ipc.ts`
 - [ ] T053 Implement `retry-contact-extraction` IPC handler in `src/main-process/communication/contactExtraction-ipc.ts`
 - [ ] T054 Add Retry button to UI for failed extractions in `src/views/pages/search/widgets/SearchDetailTable.vue`
@@ -140,8 +140,8 @@
 - [ ] T057 Add unit tests for contact extraction AI integration in `test/modules/contact-extraction/contactExtraction.test.ts`
 - [ ] T058 Add IPC handler tests in `test/vitest/main/contactExtraction-ipc.test.ts`
 - [ ] T059 [P] Create E2E test fixtures in `test/fixtures/contact-websites/`
-- [ ] T060 Performance optimization: batch database updates in `src/modules/contact-extraction/ExtractionQueue.ts`
-- [ ] T061 Add comprehensive error logging with DEBUG flags in `src/modules/contact-extraction/`
+- [ ] T060 Performance optimization: batch database updates in `src/childprocess/contact-extraction/ExtractionQueue.ts`
+- [ ] T061 Add comprehensive error logging with DEBUG flags in `src/childprocess/contact-extraction/`
 - [ ] T062 Update documentation with API key setup in `.env.example`
 - [ ] T063 Run quickstart.md validation scenarios
 
@@ -279,10 +279,10 @@ With multiple developers after Foundational phase:
 - `src/model/ContactInfo.model.ts`
 - `src/entityTypes/contactExtractionTypes.ts`
 - `src/api/aiChatApi.ts` (modify - add extractContactInfo method)
-- `src/modules/contact-extraction/ContactExtractionWorker.ts`
-- `src/modules/contact-extraction/ContactDiscovery.ts`
-- `src/modules/contact-extraction/ExtractionQueue.ts`
-- `src/modules/contact-extraction/BrowserPool.ts`
+- `src/childprocess/contact-extraction/ContactExtractionWorker.ts`
+- `src/childprocess/contact-extraction/ContactDiscovery.ts`
+- `src/childprocess/contact-extraction/ExtractionQueue.ts`
+- `src/childprocess/contact-extraction/BrowserPool.ts`
 - `src/main-process/communication/contactExtraction-ipc.ts`
 - `src/migrations/CreateContactInfoTable.ts`
 

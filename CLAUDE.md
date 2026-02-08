@@ -39,6 +39,11 @@ src/
 ├── main-process/             # IPC handlers and main process logic
 ├── controller/                # Business logic controllers
 ├── modules/                   # Core functionality modules
+├── childprocess/              # Child/worker process entry points
+│   ├── contact-extraction/   # Contact extraction worker files
+│   ├── yellowPagesScraper.ts # Yellow pages scraper worker
+│   ├── websiteContentScraper.ts # Website content scraper worker
+│   └── googleProxyCheck.ts   # Google proxy checker worker
 ├── entity/                    # Database entities (TypeORM)
 ├── entityTypes/              # TypeScript type definitions
 ├── model/                    # Data models
@@ -50,7 +55,7 @@ src/
 │   ├── store/               # Pinia state management
 │   └── utils/               # Frontend utilities
 ├── config/                   # Configuration files
-└── worker.ts                 # Worker process
+└── worker.ts                 # Legacy worker process (deprecated)
 ```
 
 ### Key Components
@@ -110,6 +115,80 @@ src/
 - Modular architecture with clear separation of concerns
 - IPC handlers should sanitize all data passed between processes
 - Database operations must use TypeORM entities
+
+### Child/Worker Process File Placement - MANDATORY RULE
+**CRITICAL: All child/worker process entry points and worker-specific code MUST be placed in the `src/childprocess/` directory.**
+
+#### Directory Structure
+
+```
+src/childprocess/
+├── contact-extraction/        # Worker-specific code for contact extraction
+│   ├── ContactExtractionWorker.ts  # Worker entry point
+│   ├── ExtractionQueue.ts          # Worker queue management
+│   ├── ContactDiscovery.ts         # Worker scraping logic
+│   └── BrowserPool.ts              # Worker browser pool
+├── yellowPagesScraper.ts      # Yellow pages scraper worker entry
+├── websiteContentScraper.ts   # Website content scraper worker entry
+└── googleProxyCheck.ts        # Google proxy checker worker entry
+```
+
+#### Rules for Child Process Files
+
+1. **Entry Points**: All child process entry points must be in `src/childprocess/`
+   - Each child process is a separate TypeScript file that spawns a worker
+   - Entry point files are registered in `forge.config.js` under the `build` section
+
+2. **Worker-Specific Code**: Code that only runs in worker processes should be in `src/childprocess/`
+   - Queue management for worker tasks
+   - Worker-specific business logic (scraping, processing, etc.)
+   - Worker initialization and message handling
+
+3. **Shared Code**: Code used by both main and worker processes should be in `src/modules/`
+   - Business logic modules that can be used in any process
+   - Data models and type definitions
+   - Utility functions
+
+4. **DO NOT** place worker files in `src/modules/`
+   - `src/modules/` is for shared business logic only
+   - Worker-specific code has no place in the modules directory
+
+#### Example
+
+```typescript
+// ✅ CORRECT - Worker entry point in src/childprocess/
+// src/childprocess/contact-extraction/ContactExtractionWorker.ts
+function initializeWorker(): void {
+    process.on('message', (message: WorkerMessage) => {
+        if (message.type === 'extract-contact') {
+            handleExtractionRequest(message);
+        }
+    });
+}
+
+// ✅ CORRECT - Worker-specific queue in src/childprocess/
+// src/childprocess/contact-extraction/ExtractionQueue.ts
+export class ContactExtractionQueue {
+    async add(job: ExtractionJob): Promise<void> {
+        this.queue.push(job);
+        this.process();
+    }
+}
+
+// ❌ WRONG - Worker code in src/modules/
+// src/modules/ContactExtractionWorker.ts  // DON'T DO THIS!
+```
+
+#### Forge Configuration
+
+When adding new worker processes, update `forge.config.js`:
+
+```javascript
+{
+  entry: 'src/childprocess/myWorker.ts',  // Always use childprocess/ directory
+  config: 'vite.myWorker.config.mjs'
+}
+```
 
 ### Database Access Architecture - MANDATORY RULE
 **CRITICAL: All database logic MUST be placed in Model and Module classes, NEVER directly in IPC handlers.**
