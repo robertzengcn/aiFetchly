@@ -14,6 +14,9 @@ export function registerLanguagePreferenceIpcHandlers() {
     ipcMain.handle(LANGUAGE_PREFERENCE_GET, async (event) => {
         try {
             const systemSettingCtrl = new SystemSettingController();
+            // Ensure database connection is initialized
+            await systemSettingCtrl.ensureConnection();
+
             const language = await systemSettingCtrl.getLanguagePreference();
             
             const result: CommonMessage<string> = {
@@ -68,6 +71,9 @@ export function registerLanguagePreferenceIpcHandlers() {
             }
 
             const systemSettingCtrl = new SystemSettingController();
+            // Ensure database connection is initialized
+            await systemSettingCtrl.ensureConnection();
+
             const success = await systemSettingCtrl.updateLanguagePreference(language);
             
             const result: CommonMessage<boolean> = {

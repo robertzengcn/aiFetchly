@@ -3,7 +3,6 @@
  * Frontend API wrapper for contact extraction IPC communication
  */
 
-import { ipcRenderer } from 'electron';
 import {
     START_CONTACT_EXTRACTION,
     CONTACT_EXTRACTION_PROGRESS,
@@ -20,7 +19,7 @@ export async function startContactExtraction(resultIds: number[]): Promise<{
     batchId?: string;
     message?: string;
 }> {
-    const result = await ipcRenderer.invoke(START_CONTACT_EXTRACTION, { resultIds }) as unknown;
+    const result = await window.api.invoke(START_CONTACT_EXTRACTION, JSON.stringify({ resultIds }));
     return result as {
         success: boolean;
         batchId?: string;
@@ -36,7 +35,7 @@ export async function getContactInfo(resultIds: number[]): Promise<{
     data?: ContactInfoDisplay[];
     message?: string;
 }> {
-    const result = await ipcRenderer.invoke(GET_CONTACT_INFO, { resultIds }) as unknown;
+    const result = await window.api.invoke(GET_CONTACT_INFO, JSON.stringify({ resultIds }));
     return result as {
         success: boolean;
         data?: ContactInfoDisplay[];
@@ -52,7 +51,7 @@ export async function retryContactExtraction(resultIds: number[]): Promise<{
     batchId?: string;
     message?: string;
 }> {
-    const result = await ipcRenderer.invoke(RETRY_CONTACT_EXTRACTION, { resultIds }) as unknown;
+    const result = await window.api.invoke(RETRY_CONTACT_EXTRACTION, JSON.stringify({ resultIds }));
     return result as {
         success: boolean;
         batchId?: string;
@@ -77,11 +76,16 @@ export function onContactExtractionProgress(
         callback(data);
     };
 
-    ipcRenderer.on(CONTACT_EXTRACTION_PROGRESS, listener);
+    // Use window.api for receiving messages (through contextBridge)
+    if (window.api && window.api.receive) {
+        window.api.receive(CONTACT_EXTRACTION_PROGRESS, listener);
+    }
 
     // Return cleanup function
     return () => {
-        ipcRenderer.removeListener(CONTACT_EXTRACTION_PROGRESS, listener);
+        if (window.api && window.api.removeListener) {
+            window.api.removeListener(CONTACT_EXTRACTION_PROGRESS, listener);
+        }
     };
 }
 

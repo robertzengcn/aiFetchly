@@ -28,6 +28,9 @@ export function registerDashboardIpcHandlers(): void {
   ipcMain.handle(DASHBOARD_SUMMARY, async (event, data: unknown): Promise<DashboardSummaryResponse> => {
     try {
       const controller = new DashboardController();
+      // Ensure database connection is initialized
+      await controller.ensureConnection();
+
       const request: DashboardSummaryRequest = typeof data === 'string' ? JSON.parse(data) : (data as DashboardSummaryRequest);
 
       // Validate request
@@ -83,6 +86,9 @@ export function registerDashboardIpcHandlers(): void {
   ipcMain.handle(DASHBOARD_TRENDS, async (event, data): Promise<DashboardTrendsResponse> => {
     try {
       const controller = new DashboardController();
+      // Ensure database connection is initialized
+      await controller.ensureConnection();
+
       const request: DashboardTrendsRequest = typeof data === 'string' ? JSON.parse(data) : (data as DashboardTrendsRequest);
 
       // Validate request
@@ -138,6 +144,9 @@ export function registerDashboardIpcHandlers(): void {
   ipcMain.handle(DASHBOARD_SEARCH_ENGINES, async (event, data): Promise<DashboardSearchEnginesResponse> => {
     try {
       const controller = new DashboardController();
+      // Ensure database connection is initialized
+      await controller.ensureConnection();
+
       const request: DashboardSearchEnginesRequest = typeof data === 'string' ? JSON.parse(data) : (data as DashboardSearchEnginesRequest);
 
       // Validate request
@@ -193,6 +202,9 @@ export function registerDashboardIpcHandlers(): void {
   ipcMain.handle(DASHBOARD_EMAIL_STATUS, async (event, data): Promise<DashboardEmailStatusResponse> => {
     try {
       const controller = new DashboardController();
+      // Ensure database connection is initialized
+      await controller.ensureConnection();
+
       const request: DashboardEmailStatusRequest = typeof data === 'string' ? JSON.parse(data) : (data as DashboardEmailStatusRequest);
 
       // Validate request

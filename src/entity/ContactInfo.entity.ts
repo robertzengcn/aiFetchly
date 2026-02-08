@@ -15,7 +15,7 @@ export class ContactInfoEntity {
     @PrimaryGeneratedColumn()
     id: number;
 
-    @Column({ name: 'result_id' })
+    @Column({ name: 'result_id', type: 'integer' })
     resultId: number; // Foreign key to SearchResult
 
     @OneToOne(() => SearchResultEntity, { onDelete: 'CASCADE' })
@@ -36,11 +36,10 @@ export class ContactInfoEntity {
 
     @Column({
         name: 'extraction_status',
-        type: 'enum',
-        enum: ['pending', 'analyzing', 'completed', 'failed'],
+        type: 'text',
         default: 'pending'
     })
-    extractionStatus: string;
+    extractionStatus: string; // 'pending' | 'analyzing' | 'completed' | 'failed'
 
     @Column({ name: 'extraction_error', nullable: true, type: 'text' })
     extractionError: string | null;

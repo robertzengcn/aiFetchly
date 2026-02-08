@@ -12,7 +12,7 @@ rounded class="elevation-0" density="compact" variant="solo" :label="t('common.s
                 <span>{{ t('websiteAnalysis.analyze_button') || 'AI Analyze' }} {{ selectedCount > 0 ? `(${selectedCount})` : '' }}</span>
             </v-btn>
             <v-btn class="btn mr-2" variant="flat" color="purple" prepend-icon="mdi-card-account-mail" @click="handleContactExtraction" :disabled="selectedCount === 0" :loading="extracting">
-                <span>Get Contact Info {{ selectedCount > 0 ? `(${selectedCount})` : '' }}</span>
+                <span>{{ t('contactExtraction.extract_contact_info') || 'Get Contact Info' }} {{ selectedCount > 0 ? `(${selectedCount})` : '' }}</span>
             </v-btn>
             <v-btn class="btn mr-2" variant="flat" color="success" prepend-icon="mdi-email-search" @click="handleScrapeEmail" :disabled="selectedCount === 0">
                 <span>{{ buttonText }}</span>
@@ -90,23 +90,23 @@ v-model:items-per-page="itemsPerPage" v-model="selectedItems"
             <template v-slot:[`item.extraction_status`]="{ item }">
                 <div class="extraction-status-cell">
                     <v-chip
-                        v-if="getContactExtractionStatus(item.id)"
+                        v-if="item.id !== undefined && getContactExtractionStatus(item.id)"
                         size="small"
-                        :color="getExtractionStatusColor(getContactExtractionStatus(item.id))"
+                        :color="getExtractionStatusColor(getContactExtractionStatus(item.id)!)"
                         variant="flat"
                     >
-                        {{ getExtractionStatusText(getContactExtractionStatus(item.id)) }}
+                        {{ getExtractionStatusText(getContactExtractionStatus(item.id)!) }}
                     </v-chip>
                     <span v-else class="text-grey">-</span>
                 </div>
             </template>
             <template v-slot:[`item.contact_email`]="{ item }">
                 <div class="contact-email-cell">
-                    <div v-if="getContactInfo(item.id)?.email" class="d-flex align-center">
-                        <v-tooltip location="top" :text="getContactInfo(item.id).email">
+                    <div v-if="item.id !== undefined && getContactInfo(item.id)?.email" class="d-flex align-center">
+                        <v-tooltip location="top" :text="getContactInfo(item.id)!.email">
                             <template v-slot:activator="{ props }">
                                 <span v-bind="props" class="text-truncate" style="max-width: 180px;">
-                                    {{ getContactInfo(item.id).email }}
+                                    {{ getContactInfo(item.id)!.email }}
                                 </span>
                             </template>
                         </v-tooltip>
@@ -115,7 +115,7 @@ v-model:items-per-page="itemsPerPage" v-model="selectedItems"
                             size="x-small"
                             variant="text"
                             density="compact"
-                            @click="copyToClipboard(getContactInfo(item.id).email)"
+                            @click="copyToClipboard(getContactInfo(item.id)!.email)"
                             class="ml-1"
                         >
                             <v-icon size="small">mdi-content-copy</v-icon>
@@ -126,16 +126,16 @@ v-model:items-per-page="itemsPerPage" v-model="selectedItems"
             </template>
             <template v-slot:[`item.contact_phone`]="{ item }">
                 <div class="contact-phone-cell">
-                    <div v-if="getContactInfo(item.id)?.phone" class="d-flex align-center">
+                    <div v-if="item.id !== undefined && getContactInfo(item.id)?.phone" class="d-flex align-center">
                         <span class="text-truncate" style="max-width: 130px;">
-                            {{ getContactInfo(item.id).phone }}
+                            {{ getContactInfo(item.id)!.phone }}
                         </span>
                         <v-btn
                             icon
                             size="x-small"
                             variant="text"
                             density="compact"
-                            @click="copyToClipboard(getContactInfo(item.id).phone)"
+                            @click="copyToClipboard(getContactInfo(item.id)!.phone)"
                             class="ml-1"
                         >
                             <v-icon size="small">mdi-content-copy</v-icon>
@@ -146,15 +146,15 @@ v-model:items-per-page="itemsPerPage" v-model="selectedItems"
             </template>
             <template v-slot:[`item.contact_address`]="{ item }">
                 <div class="contact-address-cell">
-                    <v-tooltip location="top" :text="getContactInfo(item.id)?.address || ''">
+                    <v-tooltip location="top" :text="item.id !== undefined ? (getContactInfo(item.id)?.address || '') : ''">
                         <template v-slot:activator="{ props }">
                             <span
-                                v-if="getContactInfo(item.id)?.address"
+                                v-if="item.id !== undefined && getContactInfo(item.id)?.address"
                                 v-bind="props"
                                 class="text-truncate d-inline-block"
                                 style="max-width: 180px;"
                             >
-                                {{ truncateAddress(getContactInfo(item.id).address) }}
+                                {{ truncateAddress(getContactInfo(item.id)!.address) }}
                             </span>
                             <span v-else class="text-grey">-</span>
                         </template>
@@ -396,7 +396,7 @@ headers.value = [
         minWidth: '120px',
     },
     {
-        title: 'Contact Extraction',
+        title: computed(_ => CapitalizeFirstLetter(t("contactExtraction.contact_extraction_status") || 'Contact Extraction')),
         align: 'start',
         sortable: false,
         key: 'extraction_status',
@@ -404,7 +404,7 @@ headers.value = [
         minWidth: '120px',
     },
     {
-        title: 'Email',
+        title: computed(_ => CapitalizeFirstLetter(t("contactExtraction.email") || 'Email')),
         align: 'start',
         sortable: false,
         key: 'contact_email',
@@ -412,7 +412,7 @@ headers.value = [
         minWidth: '150px',
     },
     {
-        title: 'Phone',
+        title: computed(_ => CapitalizeFirstLetter(t("contactExtraction.phone") || 'Phone')),
         align: 'start',
         sortable: false,
         key: 'contact_phone',
@@ -420,7 +420,7 @@ headers.value = [
         minWidth: '120px',
     },
     {
-        title: 'Address',
+        title: computed(_ => CapitalizeFirstLetter(t("contactExtraction.address") || 'Address')),
         align: 'start',
         sortable: false,
         key: 'contact_address',
@@ -663,6 +663,7 @@ async function exportContactInfoToCSV() {
 
         // Map server items with their contact info
         serverItems.value.forEach(item => {
+            if (item.id === undefined) return;
             const contactInfo = contactInfoMap.value.get(item.id);
             if (contactInfo && contactInfo.extractionStatus === 'completed') {
                 contactInfoData.push({
@@ -725,7 +726,7 @@ async function exportContactInfoToCSV() {
  */
 async function handleContactExtraction() {
     if (selectedItems.value.length === 0) {
-        alert('Please select at least one item to extract contact info');
+        alert(t('contactExtraction.select_items_hint') || 'Please select at least one item to extract contact info');
         return;
     }
 
@@ -739,13 +740,19 @@ async function handleContactExtraction() {
             return selectedItemValues.has(itemValue);
         });
 
-        const resultIds = actualSelectedItems.map(item => item.id);
+        const resultIds = actualSelectedItems.map(item => item.id).filter((id): id is number => id !== undefined);
+        // console.log(resultIds);
+        // Validate that we have valid result IDs
+        if (resultIds.length === 0) {
+            alert(t('contactExtraction.no_valid_items_hint') || 'Selected items do not have valid IDs. Please select different items.');
+            return;
+        }
 
         console.log('Starting contact extraction for result IDs:', resultIds);
 
         // Start extraction
         const response = await contactExtractionApi.startContactExtraction(resultIds);
-
+        console.log(response);
         if (response.success) {
             console.log('Contact extraction started:', response.batchId);
 
@@ -821,13 +828,13 @@ function getExtractionStatusColor(status: string): string {
 function getExtractionStatusText(status: string): string {
     switch (status) {
         case 'completed':
-            return 'Completed';
+            return t('contactExtraction.status_completed') || 'Completed';
         case 'analyzing':
-            return 'Analyzing';
+            return t('contactExtraction.status_analyzing') || 'Analyzing';
         case 'failed':
-            return 'Failed';
+            return t('contactExtraction.status_failed') || 'Failed';
         case 'pending':
-            return 'Pending';
+            return t('contactExtraction.status_pending') || 'Pending';
         default:
             return status;
     }
