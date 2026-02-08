@@ -16,6 +16,16 @@ export class SystemSettingController {
         this.systemSettingGroupModule = new SystemSettingGroupModule()
         this.systemSettingOptionModule = new SystemSettingOptionModule()
     }
+
+    /**
+     * Ensure database connection is initialized before use
+     */
+    public async ensureConnection(): Promise<void> {
+        // Ensure all modules have their database connections initialized
+        await this.systemSettingModule.ensureConnection();
+        await this.systemSettingGroupModule.ensureConnection();
+        await this.systemSettingOptionModule.ensureConnection();
+    }
     public async selectAllSystemSettings(): Promise<SystemSettingGroupDisplay[]> {
         const grouplist = await this.systemSettingGroupModule.listall()
         const result: SystemSettingGroupDisplay[] = [];

@@ -5,13 +5,11 @@
  * for contact extraction functionality.
  */
 
-import { ipcMain, BrowserWindow, app } from 'electron';
+import { ipcMain, BrowserWindow } from 'electron';
 import { spawn, ChildProcess } from 'child_process';
 import * as path from 'path';
 import { v4 as uuidv4 } from 'uuid';
-import { SearchResultEntity } from '@/entity/SearchResult.entity';
-import { ContactInfoEntity } from '@/entity/ContactInfo.entity';
-import { SqliteDb } from '@/config/SqliteDb';
+import { ContactInfoModule } from '@/modules/ContactInfoModule';
 import {
     START_CONTACT_EXTRACTION,
     CONTACT_EXTRACTION_PROGRESS,
@@ -38,7 +36,8 @@ let contactExtractionWorker: ChildProcess | null = null;
  */
 function spawnWorker(): ChildProcess {
     // Use compiled JS file from .vite/build directory
-    const workerPath = path.join(__dirname, '.vite/build/ContactExtractionWorker.js');
+    // __dirname already points to .vite/build, so just append the filename
+    const workerPath = path.join(__dirname, 'ContactExtractionWorker.js');
 
     console.log('Spawning contact extraction worker...');
 
@@ -72,16 +71,12 @@ function spawnWorker(): ChildProcess {
     });
 
     // Handle worker messages
-    worker.on('message', (message: WorkerMessage) => {
+    worker.on('message', async (message: WorkerMessage) => {
         if (message.type === 'worker-ready') {
             console.log('Contact extraction worker is ready');
         } else if (message.type === 'extraction-progress') {
-            // Forward progress to renderer
-            const windows = BrowserWindow.getAllWindows();
-            const mainWindow = windows[0];
-            if (mainWindow && !(mainWindow as any).isDestroyed()) {
-                (mainWindow as any).webContents.send(CONTACT_EXTRACTION_PROGRESS, message);
-            }
+            // Handle progress update from worker
+            await handleWorkerProgress(message);
         }
     });
 
@@ -98,22 +93,57 @@ function setupWorkerHandlers(): void {
 }
 
 /**
+ * Ensure worker is started (lazy initialization)
+ */
+function ensureWorkerStarted(): void {
+    if (!contactExtractionWorker || contactExtractionWorker.killed) {
+        console.log('Lazy-initializing contact extraction worker...');
+        contactExtractionWorker = spawnWorker();
+    }
+}
+
+/**
+ * Handle worker progress updates and save to database
+ */
+async function handleWorkerProgress(progress: any): Promise<void> {
+    try {
+        const { resultId, status, data, error } = progress;
+
+        // Use ContactInfoModule to save/update data in database
+        const module = new ContactInfoModule();
+
+        // Update status
+        await module.updateExtractionStatus(resultId, status, error);
+
+        // If extraction completed and we have data, save it
+        if (status === 'completed' && data) {
+            await module.saveContactExtractionResult(resultId, {
+                email: data.emails?.[0] || null,
+                phone: data.phones?.[0] || null,
+                address: data.address || null,
+                socialLinks: data.socialLinks || null,
+                extractionStatus: 'completed'
+            });
+        }
+
+        // Forward progress to renderer
+        const windows = BrowserWindow.getAllWindows();
+        const mainWindow = windows[0];
+        if (mainWindow && !(mainWindow as any).isDestroyed()) {
+            (mainWindow as any).webContents.send(CONTACT_EXTRACTION_PROGRESS, progress);
+        }
+    } catch (err) {
+        console.error('Failed to handle worker progress:', err);
+    }
+}
+
+/**
  * Fetch search results from database
+ * Uses ContactInfoModule for business logic
  */
 async function fetchSearchResults(resultIds: number[]): Promise<any[]> {
-    const userDataPath = app.getPath('userData');
-    const dataSource = SqliteDb.getInstance(userDataPath).connection;
-    const repository = dataSource.getRepository(SearchResultEntity);
-    const results = await repository
-        .createQueryBuilder('searchResult')
-        .where('searchResult.id IN (:...resultIds)', { resultIds })
-        .getMany();
-
-    return results.map(r => ({
-        id: r.id,
-        url: r.link,
-        title: r.title
-    }));
+    const module = new ContactInfoModule();
+    return await module.getSearchResults(resultIds);
 }
 
 /**
@@ -122,16 +152,18 @@ async function fetchSearchResults(resultIds: number[]): Promise<any[]> {
 export function registerContactExtractionHandlers(): void {
     console.log('Registering contact extraction IPC handlers...');
 
-    // Spawn worker process
-    contactExtractionWorker = spawnWorker();
+    // Worker will be spawned lazily when first needed (not at startup)
 
     /**
      * Handler: Start contact extraction
      */
     ipcMain.handle(START_CONTACT_EXTRACTION, async (event, request: unknown) => {
         try {
-            const { resultIds } = request as ContactExtractionRequest;
-
+            console.log(request);
+            // Parse JSON string if needed (frontend sends JSON.stringify)
+            const parsedRequest = typeof request === 'string' ? JSON.parse(request) : request;
+            const { resultIds } = parsedRequest as ContactExtractionRequest;
+            console.log(resultIds);
             // Validate input
             if (!Array.isArray(resultIds) || resultIds.length === 0) {
                 return {
@@ -150,8 +182,11 @@ export function registerContactExtractionHandlers(): void {
 
             console.log(`Starting contact extraction for ${resultIds.length} results`);
 
+            // Use ContactInfoModule for business logic
+            const module = new ContactInfoModule();
+
             // Fetch search results from database
-            const results = await fetchSearchResults(resultIds);
+            const results = await module.getSearchResults(resultIds);
 
             if (results.length === 0) {
                 return {
@@ -161,19 +196,10 @@ export function registerContactExtractionHandlers(): void {
             }
 
             // Create pending contact info records for all results
-            const userDataPath = app.getPath('userData');
-            const dataSource = SqliteDb.getInstance(userDataPath).connection;
-            const contactInfoRepo = dataSource.getRepository(ContactInfoEntity);
-            for (const resultId of resultIds) {
-                const existing = await contactInfoRepo.findOne({ where: { resultId } as any });
-                if (!existing) {
-                    const newContactInfo = contactInfoRepo.create({
-                        resultId,
-                        extractionStatus: 'pending'
-                    });
-                    await contactInfoRepo.save(newContactInfo);
-                }
-            }
+            await module.createPendingContactInfo(resultIds);
+
+            // Ensure worker is started (lazy initialization)
+            ensureWorkerStarted();
 
             // Generate batch ID
             const batchId = uuidv4();
@@ -213,27 +239,17 @@ export function registerContactExtractionHandlers(): void {
      */
     ipcMain.handle(GET_CONTACT_INFO, async (event, request: unknown) => {
         try {
-            const { resultIds } = request as ContactExtractionRequest;
+            // Parse JSON string if needed (frontend sends JSON.stringify)
+            const parsedRequest = typeof request === 'string' ? JSON.parse(request) : request;
+            const { resultIds } = parsedRequest as ContactExtractionRequest;
 
-            const userDataPath = app.getPath('userData');
-            const dataSource = SqliteDb.getInstance(userDataPath).connection;
-            const contactInfoList = await dataSource.getRepository(ContactInfoEntity)
-                .createQueryBuilder('contactInfo')
-                .where('contactInfo.resultId IN (:...resultIds)', { resultIds })
-                .getMany();
+            // Use ContactInfoModule for business logic
+            const module = new ContactInfoModule();
+            const contactInfoList = await module.getContactInfoByResultIds(resultIds);
 
             return {
                 success: true,
-                data: contactInfoList.map(ci => ({
-                    resultId: ci.resultId,
-                    email: ci.email,
-                    phone: ci.phone,
-                    address: ci.address,
-                    socialLinks: ci.socialLinks,
-                    extractionStatus: ci.extractionStatus,
-                    extractionError: ci.extractionError,
-                    extractionDate: ci.extractionDate?.toISOString()
-                }))
+                data: contactInfoList
             };
         } catch (error) {
             console.error('Error getting contact info:', error);
@@ -249,7 +265,9 @@ export function registerContactExtractionHandlers(): void {
      */
     ipcMain.handle(RETRY_CONTACT_EXTRACTION, async (event, request: unknown) => {
         try {
-            const { resultIds } = request as ContactExtractionRequest;
+            // Parse JSON string if needed (frontend sends JSON.stringify)
+            const parsedRequest = typeof request === 'string' ? JSON.parse(request) : request;
+            const { resultIds } = parsedRequest as ContactExtractionRequest;
 
             // Validate input
             if (!Array.isArray(resultIds) || resultIds.length === 0) {
@@ -261,23 +279,14 @@ export function registerContactExtractionHandlers(): void {
 
             console.log(`Retrying contact extraction for ${resultIds.length} results`);
 
-            // Delete existing contact info (reset for re-extraction)
-            const userDataPath = app.getPath('userData');
-            const dataSource = SqliteDb.getInstance(userDataPath).connection;
-            const contactInfoRepo = dataSource.getRepository(ContactInfoEntity);
-            for (const resultId of resultIds) {
-                await contactInfoRepo.delete({ resultId } as any);
+            // Use ContactInfoModule for business logic
+            const module = new ContactInfoModule();
 
-                // Create new pending record
-                const newContactInfo = contactInfoRepo.create({
-                    resultId,
-                    extractionStatus: 'pending'
-                });
-                await contactInfoRepo.save(newContactInfo);
-            }
+            // Reset contact info for retry
+            await module.resetContactInfoForRetry(resultIds);
 
             // Fetch search results
-            const results = await fetchSearchResults(resultIds);
+            const results = await module.getSearchResults(resultIds);
 
             if (results.length === 0) {
                 return {
@@ -285,6 +294,9 @@ export function registerContactExtractionHandlers(): void {
                     message: 'No search results found for given IDs'
                 };
             }
+
+            // Ensure worker is started (lazy initialization)
+            ensureWorkerStarted();
 
             // Generate batch ID
             const batchId = uuidv4();

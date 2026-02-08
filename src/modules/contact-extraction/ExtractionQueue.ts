@@ -1,12 +1,13 @@
 import { v4 as uuidv4 } from 'uuid';
 import { ExtractionJob, ExtractionProgress } from '@/entityTypes/contactExtractionTypes';
 import { discoverAndExtractContactInfo } from './ContactDiscovery';
-import { contactInfoRepository } from '@/model/ContactInfo.model';
-import { ContactInfoEntity } from '@/entity/ContactInfo.entity';
 
 /**
  * Extraction Queue with Concurrency Control
  * Manages contact extraction jobs with parallel processing and retry logic
+ *
+ * IMPORTANT: This queue runs in a worker process and does NOT directly access the database.
+ * All database operations are handled by the main process via IPC progress updates.
  */
 
 export class ContactExtractionQueue {
@@ -101,8 +102,7 @@ export class ContactExtractionQueue {
     private async processJob(job: ExtractionJob): Promise<void> {
         console.log(`Processing job for result ${job.resultId}: ${job.url}`);
 
-        // Update status to analyzing
-        await this.updateExtractionStatus(job.resultId, 'analyzing');
+        // Send status update to main process (will save to database)
         this.sendProgressUpdate({
             batchId: this.batchId || '',
             resultId: job.resultId,
@@ -124,27 +124,9 @@ export class ContactExtractionQueue {
                 this.validatePhone(phone)
             ) || [];
 
-            // If we have at least one email or phone, save it
+            // If we have at least one email or phone, send the data to main process
             if (validatedEmails.length > 0 || validatedPhones.length > 0 || result.data.address) {
-                // Save to database
-                await this.saveContactInfo(job.resultId, {
-                    email: validatedEmails[0] || null, // Primary email
-                    phone: validatedPhones[0] || null, // Primary phone
-                    address: result.data.address || null,
-                    socialLinks: result.data.socialLinks || null,
-                    extractionStatus: 'completed',
-                    extractionMetadata: {
-                        discoveredPageUrl: job.url,
-                        discoveryMethod: result.method,
-                        retryCount: job.retryCount,
-                        confidence: result.data.confidence || 0.7,
-                        extractionDuration: duration
-                    }
-                });
-
-                await this.updateExtractionStatus(job.resultId, 'completed');
-
-                // Send progress update with extracted data
+                // Send progress update with extracted data (main process will save to database)
                 this.sendProgressUpdate({
                     batchId: this.batchId || '',
                     resultId: job.resultId,
@@ -163,7 +145,6 @@ export class ContactExtractionQueue {
                 console.log(`Successfully extracted contact info for result ${job.resultId}`);
             } else {
                 // No valid data found after validation
-                await this.updateExtractionStatus(job.resultId, 'failed', 'No valid contact information found');
                 this.sendProgressUpdate({
                     batchId: this.batchId || '',
                     resultId: job.resultId,
@@ -173,40 +154,12 @@ export class ContactExtractionQueue {
             }
         } else {
             // Mark as failed
-            await this.updateExtractionStatus(job.resultId, 'failed', result.error || 'Unknown error');
             this.sendProgressUpdate({
                 batchId: this.batchId || '',
                 resultId: job.resultId,
                 status: 'failed',
                 error: result.error || 'Unknown error'
             });
-        }
-    }
-
-    /**
-     * Update extraction status in database
-     */
-    private async updateExtractionStatus(
-        resultId: number,
-        status: 'pending' | 'analyzing' | 'completed' | 'failed',
-        error?: string
-    ): Promise<void> {
-        try {
-            await contactInfoRepository.updateStatus(resultId, status, error);
-        } catch (err) {
-            console.error('Failed to update extraction status:', err);
-        }
-    }
-
-    /**
-     * Save contact info to database
-     */
-    private async saveContactInfo(resultId: number, data: Partial<ContactInfoEntity>): Promise<void> {
-        try {
-            await contactInfoRepository.saveOrUpdate(resultId, data);
-        } catch (err) {
-            console.error('Failed to save contact info:', err);
-            throw err;
         }
     }
 

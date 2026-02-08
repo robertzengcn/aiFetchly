@@ -23,6 +23,7 @@ export interface IElectronAPI {
     send: (channel: string, data: any) => void
     sendBinary: (channel: string, data: any) => void
     receive: (channel: string, func: (event, ...args) => void) => void
+    removeListener: (channel: string, func: (...args) => void) => void
     invoke: (channel: string, data?: any) => Promise<any>
   }
   
@@ -32,3 +33,9 @@ declare global {
       api: IElectronAPI
     }
   }
+
+declare namespace NodeJS {
+  export interface ProcessEnv {
+    WORKER_TYPE?: string;
+  }
+}
