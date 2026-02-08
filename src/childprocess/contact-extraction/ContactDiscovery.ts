@@ -1,7 +1,7 @@
 import { Page } from 'puppeteer';
 import { AiChatApi } from '@/api/aiChatApi';
 import { ContactInfo, ExtractionResult } from '@/entityTypes/contactExtractionTypes';
-import { browserPool } from './BrowserPool';
+import { browserManager } from '@/modules/browserManager';
 
 /**
  * Contact Discovery - 4-Stage Pipeline
@@ -199,8 +199,27 @@ export async function discoverAndExtractContactInfo(url: string): Promise<Extrac
         };
     }
 
-    const browser = await browserPool.acquire();
-    const page = await browserPool.createPage(browser);
+    // Use browserManager to launch browser with stealth mode
+    const browser = await browserManager.launchWithStealth({
+        headless: true
+    });
+    const page = await browser.newPage();
+
+    // Set user agent and viewport for stealth
+    await page.setUserAgent(browserManager.getRandomUserAgent());
+    const viewport = browserManager.getRandomViewport();
+    await page.setViewport(viewport);
+
+    // Block unnecessary resources to speed up loading
+    await page.setRequestInterception(true);
+    page.on('request', (req) => {
+        const resourceType = req.resourceType();
+        if (['image', 'stylesheet', 'font', 'media'].includes(resourceType)) {
+            req.abort();
+        } else {
+            req.continue();
+        }
+    });
 
     try {
         console.log(`ContactDiscovery: Starting extraction for ${url}`);
@@ -287,7 +306,7 @@ export async function discoverAndExtractContactInfo(url: string): Promise<Extrac
         return { success: false, error: `Discovery failed: ${error}`, method: 'failed' };
     } finally {
         await page.close();
-        browserPool.release(browser);
+        await browser.close();
     }
 }
 
