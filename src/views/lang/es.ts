@@ -666,9 +666,15 @@ export default {
         id:"ID",
         link:"Enlace",
         title:"Título",
+        snippet:"Fragmento",
         record_time:"Hora de registro",
         keyword:"Palabra clave",
         status:"Estado",
+    },
+    searchresultdetail:{
+        title:"Detalles del Resultado de Búsqueda",
+        basic_info:"Información Básica",
+        columns:"Columnas",
     },
     proxy: {
         add_proxy: "Agregar proxy",
@@ -753,9 +759,13 @@ export default {
     contactExtraction:{
         extract_contact_info:"Obtener Información de Contacto",
         contact_extraction_status:"Extracción de Contacto",
+        extraction_status:"Estado de Extracción",
         email:"Correo",
         phone:"Teléfono",
         address:"Dirección",
+        contact_info:"Información de Contacto",
+        extraction_date:"Fecha de Extracción",
+        social_links:"Enlaces Sociales",
         status_completed:"Completado",
         status_analyzing:"Analizando",
         status_failed:"Fallido",
@@ -1190,7 +1200,10 @@ export default {
         status_completed: "Completado",
         status_analyzing: "Analizando",
         status_failed: "Fallido",
-        status_pending: "Pendiente"
+        status_pending: "Pendiente",
+        ai_analysis: "Análisis de IA",
+        reasoning: "Razonamiento",
+        client_business: "Negocio del cliente"
     }
 
 }

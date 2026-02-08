@@ -681,9 +681,15 @@ export default {
         id:"id",
         link:"link",
         title:"title",
+        snippet:"snippet",
         record_time:"record Time",
         keyword:"keyword",
         status:"status",
+    },
+    searchresultdetail:{
+        title:"Search Result Details",
+        basic_info:"Basic Information",
+        columns:"Columns",
     },
     proxy:{
         add_proxy:"add proxy",
@@ -769,9 +775,13 @@ export default {
     contactExtraction:{
         extract_contact_info:"Get Contact Info",
         contact_extraction_status:"Contact Extraction",
+        extraction_status:"Extraction Status",
         email:"Email",
         phone:"Phone",
         address:"Address",
+        contact_info:"Contact Information",
+        extraction_date:"Extraction Date",
+        social_links:"Social Links",
         status_completed:"Completed",
         status_analyzing:"Analyzing",
         status_failed:"Failed",
@@ -1217,7 +1227,10 @@ export default {
         status_completed: "Completed",
         status_analyzing: "Analyzing",
         status_failed: "Failed",
-        status_pending: "Pending"
+        status_pending: "Pending",
+        ai_analysis: "AI Analysis",
+        reasoning: "Reasoning",
+        client_business: "Client Business"
     }
 
 }

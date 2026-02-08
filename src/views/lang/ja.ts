@@ -666,9 +666,15 @@ export default {
         id:"ID",
         link:"リンク",
         title:"タイトル",
+        snippet:"スニペット",
         record_time:"記録時間",
         keyword:"キーワード",
         status:"状態",
+    },
+    searchresultdetail:{
+        title:"検索結果の詳細",
+        basic_info:"基本情報",
+        columns:"列",
     },
     proxy: {
         add_proxy: "プロキシを追加",
@@ -754,9 +760,13 @@ export default {
     contactExtraction:{
         extract_contact_info:"連絡先情報を取得",
         contact_extraction_status:"連絡先抽出",
+        extraction_status:"抽出状態",
         email:"メール",
         phone:"電話",
         address:"住所",
+        contact_info:"連絡先情報",
+        extraction_date:"抽出日",
+        social_links:"ソーシャルリンク",
         status_completed:"完了",
         status_analyzing:"分析中",
         status_failed:"失敗",
@@ -1191,7 +1201,10 @@ export default {
         status_completed: "完了",
         status_analyzing: "分析中",
         status_failed: "失敗",
-        status_pending: "保留中"
+        status_pending: "保留中",
+        ai_analysis: "AI分析",
+        reasoning: "推論",
+        client_business: "クライアントビジネス"
     }
 
 }
