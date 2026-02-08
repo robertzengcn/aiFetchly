@@ -120,7 +120,7 @@ ANTHROPIC_MODEL=claude-3-haiku-20240307
 
 ### Browser Configuration
 
-Configure Puppeteer browser settings in `src/modules/contact-extraction/BrowserPool.ts`:
+Configure Puppeteer browser settings in `src/childprocess/contact-extraction/BrowserPool.ts`:
 
 ```typescript
 const browserPool = new BrowserPool({
@@ -132,7 +132,7 @@ const browserPool = new BrowserPool({
 
 ### Concurrency Configuration
 
-Adjust extraction concurrency in `src/modules/contact-extraction/ExtractionQueue.ts`:
+Adjust extraction concurrency in `src/childprocess/contact-extraction/ExtractionQueue.ts`:
 
 ```typescript
 export const extractionQueue = new ContactExtractionQueue(
@@ -366,7 +366,7 @@ contact-extraction:worker Extraction job started for result 123
 worker.kill();
 spawnContactExtractionWorker();
 
-# Increase timeout in src/modules/contact-extraction/ContactDiscovery.ts
+# Increase timeout in src/childprocess/contact-extraction/ContactDiscovery.ts
 const timeout = 60000; // 60 seconds
 ```
 
@@ -410,7 +410,7 @@ export const extractionQueue = new ContactExtractionQueue(
 
 // Enable garbage collection
 // (start with --expose-gc flag)
-node --expose-gc --loader tsx src/modules/contact-extraction/ContactExtractionWorker.ts
+node --expose-gc --loader tsx src/childprocess/contact-extraction/ContactExtractionWorker.ts
 
 // Force cleanup between jobs
 if (global.gc) {

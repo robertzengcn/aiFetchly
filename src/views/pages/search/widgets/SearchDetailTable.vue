@@ -7,6 +7,25 @@ rounded class="elevation-0" density="compact" variant="solo" :label="t('common.s
                     append-inner-icon="mdi-magnify" single-line hide-details v-model="search"
                     @keyup.enter="handleSearch" @click:append-inner="handleSearch"></v-text-field>
             </div>
+            <!-- Column Visibility Menu -->
+            <v-menu>
+                <template v-slot:activator="{ props }">
+                    <v-btn class="btn mr-2" variant="flat" prepend-icon="mdi-view-column" v-bind="props">
+                        <span>{{ t('searchresultdetail.columns') || 'Columns' }}</span>
+                    </v-btn>
+                </template>
+                <v-list class="column-visibility-menu">
+                    <v-list-item v-for="header in availableColumns" :key="header.key">
+                        <template v-slot:prepend>
+                            <v-checkbox-btn
+                                :model-value="isColumnVisible(header.key)"
+                                @update:model-value="toggleColumn(header.key)"
+                            ></v-checkbox-btn>
+                        </template>
+                        <v-list-item-title>{{ header.title }}</v-list-item-title>
+                    </v-list-item>
+                </v-list>
+            </v-menu>
             <!-- <v-btn class="btn mr-2" variant="flat" prepend-icon="mdi-filter-variant"><span> {{t('common.more')}}</span></v-btn> -->
             <v-btn class="btn mr-2" variant="flat" color="info" prepend-icon="mdi-robot" @click="handleAiAnalyze" :disabled="selectedCount === 0" :loading="analyzing">
                 <span>{{ t('websiteAnalysis.analyze_button') || 'AI Analyze' }} {{ selectedCount > 0 ? `(${selectedCount})` : '' }}</span>
@@ -20,12 +39,12 @@ rounded class="elevation-0" density="compact" variant="solo" :label="t('common.s
             <v-btn class="btn" variant="flat" color="primary" prepend-icon="mdi-download" @click="handleExport" :loading="exporting">
                 <span>{{ t('common.export') }}</span>
             </v-btn>
-        </div>     
+        </div>
     </div>
     <div class="table-scroll-container">
         <v-data-table-server
-v-model:items-per-page="itemsPerPage" v-model="selectedItems" 
-            :search="search" :headers="headers" :items-length="totalItems" :items="serverItems" 
+v-model:items-per-page="itemsPerPage" v-model="selectedItems"
+            :search="search" :headers="visibleHeaders" :items-length="totalItems" :items="serverItems"
             :loading="loading" :item-value="getItemValue" show-select @update:options="loadItems" class="custom-data-table mt5">
             <template v-slot:[`item.link`]="{ item }">
                 <div class="link-cell-container">
@@ -161,9 +180,23 @@ v-model:items-per-page="itemsPerPage" v-model="selectedItems"
                     </v-tooltip>
                 </div>
             </template>
+            <template v-slot:[`item.actions`]="{ item }">
+                <div class="actions-cell">
+                    <v-btn
+                        icon
+                        size="small"
+                        variant="text"
+                        density="compact"
+                        @click="openDetailDialog(item)"
+                        class="view-btn"
+                    >
+                        <v-icon size="small">mdi-eye</v-icon>
+                    </v-btn>
+                </div>
+            </template>
         </v-data-table-server>
     </div>
-    
+
     <!-- Website Analysis Dialog -->
     <WebsiteAnalysisDialog
         :show-dialog="showAnalysisDialog"
@@ -173,6 +206,222 @@ v-model:items-per-page="itemsPerPage" v-model="selectedItems"
         @dialogclose="closeAnalysisDialog"
         @analyze="handleAnalyzeConfirm"
     />
+
+    <!-- Search Result Detail Dialog -->
+    <v-dialog v-model="showDetailDialog" max-width="800px" persistent>
+        <v-card v-if="selectedResult">
+            <v-card-title class="d-flex align-center py-4">
+                <span class="text-h6">{{ t('searchresultdetail.title') || 'Search Result Details' }}</span>
+                <v-spacer></v-spacer>
+                <v-btn icon variant="text" @click="closeDetailDialog">
+                    <v-icon>mdi-close</v-icon>
+                </v-btn>
+            </v-card-title>
+
+            <v-card-text class="pt-4">
+                <!-- Basic Information -->
+                <v-row class="mb-4">
+                    <v-col cols="12">
+                        <div class="text-subtitle-2 font-weight-bold mb-2">
+                            {{ t('searchresultdetail.basic_info') || 'Basic Information' }}
+                        </div>
+                        <v-divider></v-divider>
+                    </v-col>
+                </v-row>
+
+                <v-row class="mb-4">
+                    <v-col cols="12" sm="6">
+                        <div class="text-caption text-grey">{{ t('searchresult.id') || 'ID' }}:</div>
+                        <div class="text-body-2">{{ selectedResult.id || '-' }}</div>
+                    </v-col>
+                    <v-col cols="12" sm="6">
+                        <div class="text-caption text-grey">{{ t('searchresult.title') || 'Title' }}:</div>
+                        <div class="text-body-2 text-truncate">{{ selectedResult.title || '-' }}</div>
+                    </v-col>
+                </v-row>
+
+                <v-row class="mb-4">
+                    <v-col cols="12">
+                        <div class="text-caption text-grey">{{ t('searchresult.link') || 'URL' }}:</div>
+                        <div class="text-body-2">
+                            <a :href="selectedResult.link" target="_blank" rel="noopener noreferrer" class="text-decoration-none">
+                                {{ selectedResult.link || '-' }}
+                            </a>
+                        </div>
+                    </v-col>
+                </v-row>
+
+                <v-row class="mb-4" v-if="selectedResult.snippet">
+                    <v-col cols="12">
+                        <div class="text-caption text-grey">{{ t('searchresult.snippet') || 'Snippet' }}:</div>
+                        <div class="text-body-2">{{ selectedResult.snippet }}</div>
+                    </v-col>
+                </v-row>
+
+                <!-- AI Analysis Information -->
+                <v-row class="mb-4">
+                    <v-col cols="12">
+                        <div class="text-subtitle-2 font-weight-bold mb-2">
+                            {{ t('websiteAnalysis.ai_analysis') || 'AI Analysis' }}
+                        </div>
+                        <v-divider></v-divider>
+                    </v-col>
+                </v-row>
+
+                <v-row class="mb-4">
+                    <v-col cols="12" sm="6">
+                        <div class="text-caption text-grey">{{ t('websiteAnalysis.customer_industry') || 'Industry' }}:</div>
+                        <div class="text-body-2">
+                            <v-chip v-if="selectedResult.ai_industry" size="small" color="primary" variant="outlined">
+                                {{ selectedResult.ai_industry }}
+                            </v-chip>
+                            <span v-else>-</span>
+                        </div>
+                    </v-col>
+                    <v-col cols="12" sm="6">
+                        <div class="text-caption text-grey">{{ t('websiteAnalysis.probability') || 'Probability' }}:</div>
+                        <div class="text-body-2">
+                            <v-chip
+                                v-if="selectedResult.ai_match_score !== null && selectedResult.ai_match_score !== undefined"
+                                size="small"
+                                :color="getMatchScoreColor(selectedResult.ai_match_score)"
+                                variant="flat"
+                            >
+                                {{ selectedResult.ai_match_score }}%
+                            </v-chip>
+                            <span v-else>-</span>
+                        </div>
+                    </v-col>
+                </v-row>
+
+                <v-row class="mb-4" v-if="selectedResult.ai_reasoning">
+                    <v-col cols="12">
+                        <div class="text-caption text-grey">{{ t('websiteAnalysis.reasoning') || 'Reasoning' }}:</div>
+                        <div class="text-body-2">{{ selectedResult.ai_reasoning }}</div>
+                    </v-col>
+                </v-row>
+
+                <v-row class="mb-4" v-if="selectedResult.ai_client_business">
+                    <v-col cols="12">
+                        <div class="text-caption text-grey">{{ t('websiteAnalysis.client_business') || 'Client Business' }}:</div>
+                        <div class="text-body-2">{{ selectedResult.ai_client_business }}</div>
+                    </v-col>
+                </v-row>
+
+                <!-- Contact Information -->
+                <v-row class="mb-4">
+                    <v-col cols="12">
+                        <div class="text-subtitle-2 font-weight-bold mb-2">
+                            {{ t('contactExtraction.contact_info') || 'Contact Information' }}
+                        </div>
+                        <v-divider></v-divider>
+                    </v-col>
+                </v-row>
+
+                <v-row class="mb-4">
+                    <v-col cols="12" sm="6">
+                        <div class="text-caption text-grey">{{ t('contactExtraction.email') || 'Email' }}:</div>
+                        <div class="text-body-2">
+                            <div v-if="selectedResult.id !== undefined && getContactInfo(selectedResult.id)?.email" class="d-flex align-center">
+                                <span>{{ getContactInfo(selectedResult.id)!.email }}</span>
+                                <v-btn
+                                    icon
+                                    size="x-small"
+                                    variant="text"
+                                    density="compact"
+                                    @click="copyToClipboard(getContactInfo(selectedResult.id)!.email)"
+                                    class="ml-1"
+                                >
+                                    <v-icon size="small">mdi-content-copy</v-icon>
+                                </v-btn>
+                            </div>
+                            <span v-else>-</span>
+                        </div>
+                    </v-col>
+                    <v-col cols="12" sm="6">
+                        <div class="text-caption text-grey">{{ t('contactExtraction.phone') || 'Phone' }}:</div>
+                        <div class="text-body-2">
+                            <div v-if="selectedResult.id !== undefined && getContactInfo(selectedResult.id)?.phone" class="d-flex align-center">
+                                <span>{{ getContactInfo(selectedResult.id)!.phone }}</span>
+                                <v-btn
+                                    icon
+                                    size="x-small"
+                                    variant="text"
+                                    density="compact"
+                                    @click="copyToClipboard(getContactInfo(selectedResult.id)!.phone)"
+                                    class="ml-1"
+                                >
+                                    <v-icon size="small">mdi-content-copy</v-icon>
+                                </v-btn>
+                            </div>
+                            <span v-else>-</span>
+                        </div>
+                    </v-col>
+                </v-row>
+
+                <v-row class="mb-4">
+                    <v-col cols="12">
+                        <div class="text-caption text-grey">{{ t('contactExtraction.address') || 'Address' }}:</div>
+                        <div class="text-body-2">
+                            {{ selectedResult.id !== undefined && getContactInfo(selectedResult.id)?.address
+                                ? getContactInfo(selectedResult.id)!.address
+                                : '-' }}
+                        </div>
+                    </v-col>
+                </v-row>
+
+                <v-row class="mb-4" v-if="selectedResult.id !== undefined && getContactInfo(selectedResult.id)?.socialLinks && getContactInfo(selectedResult.id)!.socialLinks.length > 0">
+                    <v-col cols="12">
+                        <div class="text-caption text-grey">{{ t('contactExtraction.social_links') || 'Social Links' }}:</div>
+                        <div class="text-body-2">
+                            <v-chip
+                                v-for="(link, index) in getContactInfo(selectedResult.id)!.socialLinks"
+                                :key="index"
+                                size="small"
+                                class="mr-2"
+                                :href="link"
+                                target="_blank"
+                                link
+                            >
+                                <v-icon start size="small">mdi-link-variant</v-icon>
+                                {{ link }}
+                            </v-chip>
+                        </div>
+                    </v-col>
+                </v-row>
+
+                <v-row class="mb-4">
+                    <v-col cols="12" sm="6">
+                        <div class="text-caption text-grey">{{ t('contactExtraction.extraction_status') || 'Extraction Status' }}:</div>
+                        <div class="text-body-2">
+                            <v-chip
+                                v-if="selectedResult.id !== undefined && getContactExtractionStatus(selectedResult.id)"
+                                size="small"
+                                :color="getExtractionStatusColor(getContactExtractionStatus(selectedResult.id)!)"
+                                variant="flat"
+                            >
+                                {{ getExtractionStatusText(getContactExtractionStatus(selectedResult.id)!) }}
+                            </v-chip>
+                            <span v-else>-</span>
+                        </div>
+                    </v-col>
+                    <v-col cols="12" sm="6" v-if="selectedResult.id !== undefined && getContactInfo(selectedResult.id)?.extractionDate">
+                        <div class="text-caption text-grey">{{ t('contactExtraction.extraction_date') || 'Extraction Date' }}:</div>
+                        <div class="text-body-2">
+                            {{ new Date(getContactInfo(selectedResult.id)!.extractionDate!).toLocaleString() }}
+                        </div>
+                    </v-col>
+                </v-row>
+            </v-card-text>
+
+            <v-card-actions>
+                <v-spacer></v-spacer>
+                <v-btn @click="closeDetailDialog">
+                    {{ t('common.close') || 'Close' }}
+                </v-btn>
+            </v-card-actions>
+        </v-card>
+    </v-dialog>
 </template>
 
 <script setup lang="ts">
@@ -427,6 +676,14 @@ headers.value = [
         width: '200px',
         minWidth: '150px',
     },
+    {
+        title: computed(_ => CapitalizeFirstLetter(t("common.actions") || 'Actions')),
+        align: 'center',
+        sortable: false,
+        key: 'actions',
+        width: '100px',
+        minWidth: '80px',
+    },
 ];
 const itemsPerPage = ref(10);
 const serverItems = ref<Array<SearchResEntityDisplay>>([]);
@@ -446,12 +703,53 @@ const analysisProgress = ref({ current: 0, total: 0 });
 // Contact extraction state
 const contactInfoMap = ref<Map<number, any>>(new Map());
 
+// Detail dialog state
+const showDetailDialog = ref(false);
+const selectedResult = ref<SearchResEntityDisplay | null>(null);
+
+// Column visibility state
+// Default hidden columns: ai_analysis_status, extraction_status, contact_email, contact_phone, contact_address
+const visibleColumns = ref<Set<string>>(new Set(['index', 'title', 'link', 'keyword', 'record_time', 'ai_industry', 'ai_match_score', 'actions']));
+
 // Auto-refresh functionality
 const autoRefreshEnabled = ref(true); // Enable by default
 const autoRefreshInterval = ref<NodeJS.Timeout | null>(null);
 const autoRefreshIntervalMs = ref(10000); // 10 seconds default
 const isPageVisible = ref(true);
 const lastRefreshTime = ref<Date | null>(null);
+
+/**
+ * Computed property: All available columns for visibility toggle
+ * Excludes 'index' as it's the row number and shouldn't be hidden
+ */
+const availableColumns = computed(() => {
+    return headers.value.filter(h => h.key !== 'index');
+});
+
+/**
+ * Computed property: Headers filtered by column visibility
+ */
+const visibleHeaders = computed(() => {
+    return headers.value.filter(h => visibleColumns.value.has(h.key));
+});
+
+/**
+ * Check if a column is visible
+ */
+function isColumnVisible(key: string): boolean {
+    return visibleColumns.value.has(key);
+}
+
+/**
+ * Toggle column visibility
+ */
+function toggleColumn(key: string): void {
+    if (visibleColumns.value.has(key)) {
+        visibleColumns.value.delete(key);
+    } else {
+        visibleColumns.value.add(key);
+    }
+}
 
 /**
  * Get color for match score chip based on score value
@@ -992,6 +1290,22 @@ function closeAnalysisDialog(): void {
 }
 
 /**
+ * Open detail dialog for a search result
+ */
+function openDetailDialog(item: SearchResEntityDisplay): void {
+    selectedResult.value = item;
+    showDetailDialog.value = true;
+}
+
+/**
+ * Close detail dialog
+ */
+function closeDetailDialog(): void {
+    showDetailDialog.value = false;
+    selectedResult.value = null;
+}
+
+/**
  * Save business info to system settings
  */
 async function saveBusinessInfoToSettings(businessInfo: string): Promise<void> {
@@ -1180,6 +1494,12 @@ async function handleAnalyzeConfirm(data: { businessInfo: string; saveForFuture:
 .custom-data-table {
   min-width: 100%;
   width: max-content;
+}
+
+/* Ensure table wrapper allows horizontal scroll */
+.table-scroll-container ::v-deep(.v-data-table__wrapper) {
+  overflow-x: auto;
+  overflow-y: visible;
 }
 
 .custom-data-table .v-data-table__wrapper tr {

@@ -794,7 +794,7 @@ onMounted(() => {
 Create a job queue to manage concurrent extractions:
 
 ```typescript
-// src/modules/contact-extraction/ExtractionQueue.ts
+// src/childprocess/contact-extraction/ExtractionQueue.ts
 
 interface ExtractionJob {
   resultId: number;

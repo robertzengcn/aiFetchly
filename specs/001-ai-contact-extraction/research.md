@@ -325,7 +325,7 @@ async function discoverAndExtractContactInfo(url: string): Promise<ExtractionRes
 
 ### Worker Process Architecture
 
-**File**: `src/modules/contact-extraction/ContactExtractionWorker.ts`
+**File**: `src/childprocess/contact-extraction/ContactExtractionWorker.ts`
 
 **Process Spawning**:
 ```typescript
@@ -382,7 +382,7 @@ process.send?.({
 
 ### Browser Pool Management
 
-**File**: `src/modules/contact-extraction/BrowserPool.ts`
+**File**: `src/childprocess/contact-extraction/BrowserPool.ts`
 
 ```typescript
 import puppeteer from 'puppeteer-extra';
@@ -464,7 +464,7 @@ export const browserPool = new BrowserPool({ maxInstances: 3, headless: true });
 
 ### Job Queue with Concurrency Control
 
-**File**: `src/modules/contact-extraction/ExtractionQueue.ts`
+**File**: `src/childprocess/contact-extraction/ExtractionQueue.ts`
 
 ```typescript
 interface ExtractionJob {
@@ -854,7 +854,7 @@ process.send?.({
 **Main Process IPC Handler** (`contactExtraction-ipc.ts`):
 ```typescript
 import { ipcMain, BrowserWindow } from 'electron';
-import { spawnContactExtractionWorker } from '@/modules/contact-extraction/ContactExtractionWorker';
+import { spawnContactExtractionWorker } from '@/childprocess/contact-extraction/ContactExtractionWorker';
 
 const worker = spawnContactExtractionWorker();
 
