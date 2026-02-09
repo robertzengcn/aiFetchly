@@ -135,13 +135,31 @@ async function checkStandardRoutes(_baseUrl: string): Promise<string | null> {
 }
 
 /**
- * Stage 4: AI-Assisted Extraction
- * Uses AI server to extract contact info from page content
+ * Capture screenshot as base64 for AI visual context
+ */
+async function captureScreenshot(page: Page): Promise<string | undefined> {
+    try {
+        const screenshot = await page.screenshot({
+            encoding: 'base64',
+            type: 'png',
+            fullPage: false // Only capture viewport for performance
+        });
+        return `data:image/png;base64,${screenshot}`;
+    } catch (error) {
+        console.error('Screenshot capture failed:', error);
+        return undefined;
+    }
+}
+
+/**
+ * AI-Assisted Extraction (Primary Method)
+ * Uses AI server to extract comprehensive contact info from page content
  */
 async function extractWithAI(
     page: Page,
     url: string,
-    pageTitle: string
+    pageTitle: string,
+    captureScreenshot = true
 ): Promise<ExtractionResult> {
     try {
         // Clean page content (remove scripts, styles, images)
@@ -154,9 +172,17 @@ async function extractWithAI(
         const hostname = new URL(url).hostname.replace('www.', '').split('.')[0];
         const entityName = pageTitle || hostname;
 
-        // Call AI service
+        // Capture screenshot for visual context (optional)
+        const screenshot = captureScreenshot ? await captureScreenshotForAI(page) : undefined;
+
+        // Call AI service with screenshot
         const aiChatApi = new AiChatApi();
-        const response = await aiChatApi.extractContactInfo(cleanedContent, url, entityName);
+        const response = await aiChatApi.extractContactInfo(
+            cleanedContent,
+            url,
+            entityName,
+            screenshot
+        );
 
         if (response.status && response.data) {
             const aiData = response.data;
@@ -173,21 +199,38 @@ async function extractWithAI(
                         source: 'ai_extraction',
                         confidence: aiData.confidence || 0.8
                     },
-                    method: 'stage4_ai'
+                    method: 'ai_extraction'
                 };
             }
         }
 
         return { success: false, error: 'AI extraction found no contact info', method: 'failed' };
     } catch (error) {
-        console.error('Stage 4 error:', error);
+        console.error('AI extraction error:', error);
         return { success: false, error: `AI extraction failed: ${error}`, method: 'failed' };
     }
 }
 
 /**
- * Complete 4-Stage Discovery Pipeline
- * Runs through all stages until contact info is found or all stages exhausted
+ * Helper function to capture screenshot for AI
+ */
+async function captureScreenshotForAI(page: Page): Promise<string | undefined> {
+    try {
+        const screenshot = await page.screenshot({
+            encoding: 'base64',
+            type: 'png',
+            fullPage: false
+        });
+        return `data:image/png;base64,${screenshot}`;
+    } catch (error) {
+        console.error('Screenshot capture failed:', error);
+        return undefined;
+    }
+}
+
+/**
+ * Complete AI-First Discovery Pipeline
+ * Prioritizes AI extraction for comprehensive data, falls back to regex for basic data
  */
 export async function discoverAndExtractContactInfo(url: string): Promise<ExtractionResult> {
     // Validate URL before proceeding
@@ -210,11 +253,11 @@ export async function discoverAndExtractContactInfo(url: string): Promise<Extrac
     const viewport = browserManager.getRandomViewport();
     await page.setViewport(viewport);
 
-    // Block unnecessary resources to speed up loading
+    // Block unnecessary resources to speed up loading (but allow images for screenshots)
     await page.setRequestInterception(true);
     page.on('request', (req) => {
         const resourceType = req.resourceType();
-        if (['image', 'stylesheet', 'font', 'media'].includes(resourceType)) {
+        if (['stylesheet', 'font', 'media'].includes(resourceType)) {
             req.abort();
         } else {
             req.continue();
@@ -222,7 +265,7 @@ export async function discoverAndExtractContactInfo(url: string): Promise<Extrac
     });
 
     try {
-        console.log(`ContactDiscovery: Starting extraction for ${url}`);
+        console.log(`ContactDiscovery: Starting AI-first extraction for ${url}`);
 
         // Navigate to URL with bot detection handling
         try {
@@ -245,57 +288,90 @@ export async function discoverAndExtractContactInfo(url: string): Promise<Extrac
 
         const pageTitle = await page.title();
 
-        // Stage 1: Direct scan
-        console.log('ContactDiscovery: Stage 1 - Homepage direct scan');
-        const stage1Result = await scanHomepageForContactInfo(page);
-        if (stage1Result) {
-            console.log('ContactDiscovery: Stage 1 SUCCESS');
-            return { success: true, data: stage1Result, method: 'stage1_homepage' };
-        }
+        // Stage 1: AI Extraction on Homepage (Primary - Most Comprehensive)
+        console.log('ContactDiscovery: Stage 1 - AI-assisted extraction on homepage');
+        const stage1Result = await extractWithAI(page, url, pageTitle, true);
 
-        // Stage 2: Heuristic discovery
-        console.log('ContactDiscovery: Stage 2 - Heuristic link scoring');
-        const contactPageUrl = await findContactPageHeuristic(page);
-        if (contactPageUrl && !contactPageUrl.startsWith('mailto:')) {
-            console.log(`ContactDiscovery: Stage 2 found contact page: ${contactPageUrl}`);
-            await page.goto(contactPageUrl, { waitUntil: 'networkidle0', timeout: 30000 });
-            const stage2Result = await scanHomepageForContactInfo(page);
-            if (stage2Result) {
-                console.log('ContactDiscovery: Stage 2 SUCCESS');
-                return { success: true, data: stage2Result, method: 'stage2_heuristic' };
+        if (stage1Result.success && stage1Result.data) {
+            const emails = stage1Result.data.emails ?? [];
+            const phones = stage1Result.data.phones ?? [];
+            const hasAddress = !!stage1Result.data.address;
+            const hasSocialLinks = !!stage1Result.data.socialLinks && stage1Result.data.socialLinks.length > 0;
+
+            // Only proceed to next stage if AI found NOTHING
+            if (emails.length > 0 || phones.length > 0 || hasAddress || hasSocialLinks) {
+                console.log('ContactDiscovery: Stage 1 SUCCESS - AI found comprehensive data');
+                return stage1Result;
             }
         }
 
-        // Stage 3: Fallback routes
-        console.log('ContactDiscovery: Stage 3 - Fallback standard routes');
+        // Stage 2: Heuristic Discovery + AI Extraction
+        console.log('ContactDiscovery: Stage 2 - Heuristic link scoring + AI extraction');
+        const contactPageUrl = await findContactPageHeuristic(page);
+
+        if (contactPageUrl && !contactPageUrl.startsWith('mailto:')) {
+            console.log(`ContactDiscovery: Stage 2 found contact page: ${contactPageUrl}`);
+            await page.goto(contactPageUrl, { waitUntil: 'networkidle0', timeout: 30000 });
+
+            // Use AI on the contact page (not just regex)
+            const stage2Result = await extractWithAI(page, url, pageTitle, true);
+            if (stage2Result.success && stage2Result.data) {
+                const emails = stage2Result.data.emails ?? [];
+                const phones = stage2Result.data.phones ?? [];
+                const hasAddress = !!stage2Result.data.address;
+                const hasSocialLinks = !!stage2Result.data.socialLinks && stage2Result.data.socialLinks.length > 0;
+
+                if (emails.length > 0 || phones.length > 0 || hasAddress || hasSocialLinks) {
+                    console.log('ContactDiscovery: Stage 2 SUCCESS');
+                    return stage2Result;
+                }
+            }
+        }
+
+        // Stage 3: Fallback Routes + AI Extraction
+        console.log('ContactDiscovery: Stage 3 - Fallback standard routes + AI extraction');
         const fallbackPath = await checkStandardRoutes(url);
+
         if (fallbackPath) {
             const fallbackUrl = new URL(fallbackPath, url).toString();
             console.log(`ContactDiscovery: Stage 3 trying ${fallbackUrl}`);
+
             try {
                 await page.goto(fallbackUrl, { waitUntil: 'networkidle0', timeout: 30000 });
-                const stage3Result = await scanHomepageForContactInfo(page);
-                if (stage3Result) {
-                    console.log('ContactDiscovery: Stage 3 SUCCESS');
-                    return { success: true, data: stage3Result, method: 'stage3_fallback' };
+
+                // Use AI on fallback page
+                const stage3Result = await extractWithAI(page, url, pageTitle, true);
+                if (stage3Result.success && stage3Result.data) {
+                    const emails = stage3Result.data.emails ?? [];
+                    const phones = stage3Result.data.phones ?? [];
+                    const hasAddress = !!stage3Result.data.address;
+                    const hasSocialLinks = !!stage3Result.data.socialLinks && stage3Result.data.socialLinks.length > 0;
+
+                    if (emails.length > 0 || phones.length > 0 || hasAddress || hasSocialLinks) {
+                        console.log('ContactDiscovery: Stage 3 SUCCESS');
+                        return stage3Result;
+                    }
                 }
             } catch (e) {
                 console.log('ContactDiscovery: Stage 3 route not found');
             }
         }
 
-        // Stage 4: AI extraction
-        console.log('ContactDiscovery: Stage 4 - AI-assisted extraction');
-        // Go back to original page for AI extraction
+        // Stage 4: Regex Fallback (Last Resort - Basic Data Only)
+        console.log('ContactDiscovery: Stage 4 - Regex fallback (basic data only)');
         await page.goto(url, { waitUntil: 'networkidle0', timeout: 30000 });
-        const stage4Result = await extractWithAI(page, url, pageTitle);
-        if (stage4Result.success && stage4Result.data) {
-            const emails = stage4Result.data.emails ?? [];
-            const phones = stage4Result.data.phones ?? [];
-            if (emails.length > 0 || phones.length > 0) {
-                console.log('ContactDiscovery: Stage 4 SUCCESS');
-                return stage4Result;
-            }
+        const stage4Result = await scanHomepageForContactInfo(page);
+
+        if (stage4Result) {
+            console.log('ContactDiscovery: Stage 4 SUCCESS - Basic regex extraction');
+            return {
+                success: true,
+                data: {
+                    ...stage4Result,
+                    confidence: 0.5 // Lower confidence for regex-only
+                },
+                method: 'stage4_regex_fallback'
+            };
         }
 
         console.log('ContactDiscovery: All stages failed');
