@@ -27,6 +27,7 @@ import { ScheduleManager } from '@/modules/ScheduleManager';
 import { runafterbootup } from "@/modules/bootuprun"
 import { YellowPagesController } from './controller/YellowPagesController';
 import { initializeWebSocketConnection, cleanupWebSocketConnection } from '@/main-process/communication/websocket-ipc';
+import { TokenRefreshService } from '@/modules/tokenRefresh';
 // import { RAGIpcHandlers } from '@/main-process/ragIpcHandlers';
 // import { createProtocol } from 'electron';
 const isDevelopment = process.env.NODE_ENV !== 'production'
@@ -680,6 +681,9 @@ function isValidDeepLinkOrigin(parsedUrl: URL): boolean {
  */
 function clearTokens(): void {
   try {
+    // Stop background auto-refresh before clearing tokens
+    TokenRefreshService.stopAutoRefresh();
+
     const tokenService = new Token();
     tokenService.setValue(TOKENNAME, '');
     tokenService.setValue(REFRESHTOKEN, '');
@@ -870,6 +874,9 @@ async function handleDeepLink(url: string) {
             log.error('Failed to initialize WebSocket after login (non-blocking):', wsError);
           }
         }
+
+        // Start background token auto-refresh
+        TokenRefreshService.startAutoRefresh();
 
         // Navigate to dashboard
         if (win && !(win as any).isDestroyed()) {

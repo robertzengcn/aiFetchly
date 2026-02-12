@@ -31,7 +31,7 @@ rounded class="elevation-0" density="compact" variant="solo" :label="t('common.s
                 <span>{{ t('websiteAnalysis.analyze_button') || 'AI Analyze' }} {{ selectedCount > 0 ? `(${selectedCount})` : '' }}</span>
             </v-btn>
             <v-btn class="btn mr-2" variant="flat" color="purple" prepend-icon="mdi-card-account-mail" @click="handleContactExtraction" :disabled="selectedCount === 0" :loading="extracting">
-                <span>{{ t('contactExtraction.extract_contact_info') || 'Get Contact Info' }} {{ selectedCount > 0 ? `(${selectedCount})` : '' }}</span>
+                <span>{{ t('contactExtraction.extract_contact_info') || 'AI Extract Contact Info' }} {{ selectedCount > 0 ? `(${selectedCount})` : '' }}</span>
             </v-btn>
             <v-btn class="btn mr-2" variant="flat" color="success" prepend-icon="mdi-email-search" @click="handleScrapeEmail" :disabled="selectedCount === 0">
                 <span>{{ buttonText }}</span>

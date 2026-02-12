@@ -764,7 +764,7 @@ export default {
         no_valid_urls:"未找到有效URL",
     },
     contactExtraction:{
-        extract_contact_info:"获取联系信息",
+        extract_contact_info:"AI提取联系信息",
         contact_extraction_status:"联系方式提取",
         extraction_status:"提取状态",
         email:"邮箱",

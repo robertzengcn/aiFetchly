@@ -773,7 +773,7 @@ export default {
         no_valid_urls:"No valid URLs found",
     },
     contactExtraction:{
-        extract_contact_info:"Get Contact Info",
+        extract_contact_info:"AI Extract Contact Info",
         contact_extraction_status:"Contact Extraction",
         extraction_status:"Extraction Status",
         email:"Email",
