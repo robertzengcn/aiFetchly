@@ -758,7 +758,7 @@ export default {
         no_valid_urls:"有効なURLが見つかりません",
     },
     contactExtraction:{
-        extract_contact_info:"連絡先情報を取得",
+        extract_contact_info:"AI連絡先抽出",
         contact_extraction_status:"連絡先抽出",
         extraction_status:"抽出状態",
         email:"メール",

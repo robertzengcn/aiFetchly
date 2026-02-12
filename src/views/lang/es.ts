@@ -757,7 +757,7 @@ export default {
         no_valid_urls:"No se encontraron URLs válidas",
     },
     contactExtraction:{
-        extract_contact_info:"Obtener Información de Contacto",
+        extract_contact_info:"Extracción de Contacto con IA",
         contact_extraction_status:"Extracción de Contacto",
         extraction_status:"Estado de Extracción",
         email:"Correo",

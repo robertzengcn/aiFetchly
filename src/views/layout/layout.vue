@@ -104,6 +104,7 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
                             <v-img :src="wxtx" alt="{{userName}}"></v-img>
                         </v-avatar> -->
                         <span v-if="!mainStore.isMobile">{{ userName }}</span>
+                        <v-chip v-if="!mainStore.isMobile && userPlan" size="x-small" color="primary" variant="tonal" class="ml-1">{{ userPlan }}</v-chip>
                         <v-menu activator="parent">
                             <v-list nav class="h_a_menu">
                                 <v-list-item :title="t('layout.system_setting')" prepend-icon="mdi-cog" @click="gotoSystemsetting" />
@@ -213,6 +214,7 @@ const dialogStatus=ref(false)
 const noticeMessage=ref('')
 const noticeType=ref<NoticeType>('info')
 const userName=ref('')
+const userPlan=ref('')
 const appName=ref('Social Marketing')
 const snaptimeout=ref<number>(10000)
 const messages = ref<MessageItem[]>([]);
@@ -360,6 +362,15 @@ onMounted(async () => {
     await GetloginUserInfo().then(res=>{
         console.log(res)
         userName.value=res.name
+        // Filter plans containing "aifetchly" (case-insensitive) and display them
+        if (res.plans && res.plans.length > 0) {
+            const aifetchlyPlans = res.plans.filter(
+                plan => plan.planName && plan.planName.toLowerCase().includes('aifetchly')
+            )
+            if (aifetchlyPlans.length > 0) {
+                userPlan.value = aifetchlyPlans.map(plan => plan.planName).join(', ')
+            }
+        }
     })
     
     // Load app name from backend
