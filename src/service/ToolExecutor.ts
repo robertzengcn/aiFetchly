@@ -52,7 +52,7 @@ class RateLimiterManager {
     }
 
     private static getRateLimitConfig(toolName: string): RateLimitConfig {
-        if (toolName.includes('website') || toolName.includes('analyze')) {
+        if (toolName.includes('website') || toolName.includes('analyze') || toolName === 'read_url_content') {
             return RATE_LIMIT_CONFIG.websiteAnalysis;
         } else if (toolName.includes('email') || toolName.includes('extract')) {
             return RATE_LIMIT_CONFIG.emailExtraction;
@@ -131,6 +131,9 @@ export class ToolExecutor {
 
             case 'analyze_websites':
                 return await this.executeWebsiteDirectAnalysis(toolParams);
+
+            case 'read_url_content':
+                return await this.executeReadUrlContent(toolParams);
 
             default:
                 return {
@@ -689,6 +692,52 @@ export class ToolExecutor {
                 error: r.error
             }))
         };
+    }
+
+    /**
+     * Execute read_url_content: fetch page by URL and return markdown.
+     */
+    private static async executeReadUrlContent(
+        toolParams: Record<string, unknown>
+    ): Promise<Record<string, unknown>> {
+        const url = typeof toolParams.url === 'string' ? toolParams.url.trim() : '';
+        if (!url) {
+            throw new Error('url parameter is required and must be a non-empty string');
+        }
+        try {
+            new URL(url);
+        } catch {
+            return {
+                success: false,
+                error: `Invalid URL: ${url}`
+            };
+        }
+
+        let maxLength: number | undefined;
+        if (typeof toolParams.max_length === 'number') {
+            const clamped = Math.max(1000, Math.min(200_000, toolParams.max_length));
+            maxLength = clamped;
+        }
+
+        try {
+            const { content, truncated } = await WebsiteAnalysisService.getPageContentAsMarkdown(
+                url,
+                maxLength !== undefined ? { maxLength } : undefined
+            );
+
+            return {
+                success: true,
+                content,
+                url,
+                ...(truncated && { truncated: true })
+            };
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            return {
+                success: false,
+                error: errorMessage
+            };
+        }
     }
 }
 

@@ -16,6 +16,7 @@ import {
     GET_CONTACT_INFO,
     RETRY_CONTACT_EXTRACTION
 } from '@/config/channellist';
+import { log } from '@/modules/Logger';
 
 // Type for IPC request with resultIds
 interface ContactExtractionRequest {
@@ -24,7 +25,9 @@ interface ContactExtractionRequest {
 
 // Type for worker messages
 interface WorkerMessage {
-    type: 'worker-ready' | 'extraction-progress';
+    type: 'worker-ready' | 'extraction-progress' | 'worker-log';
+    level?: 'info' | 'error' | 'warn' | 'debug';
+    args?: unknown[];
     [key: string]: unknown;
 }
 
@@ -74,6 +77,14 @@ function spawnWorker(): ChildProcess {
     worker.on('message', async (message: WorkerMessage) => {
         if (message.type === 'worker-ready') {
             console.log('Contact extraction worker is ready');
+        } else if (message.type === 'worker-log') {
+            // Forward worker logs to main process logger
+            const level = message.level ?? 'info';
+            const args = message.args ?? [];
+            const logMethod = log[level];
+            if (typeof logMethod === 'function') {
+                logMethod(...args);
+            }
         } else if (message.type === 'extraction-progress') {
             // Handle progress update from worker
             await handleWorkerProgress(message);

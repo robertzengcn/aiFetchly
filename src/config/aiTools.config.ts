@@ -219,6 +219,26 @@ const STATIC_TOOL_FUNCTIONS: ToolFunction[] = [
             },
             required: ['urls', 'client_business']
         }
+    },
+    {
+        type: "function",
+        name: 'read_url_content',
+        description: 'Fetch the full content of a web page by URL and return it as markdown. Use this to read page content after obtaining URLs from search tools (e.g. scrape_urls_from_google, scrape_urls_from_bing). Not for discovering URLs—use search tools first to get URLs, then call this to read specific pages.',
+        parameters: {
+            type: 'object',
+            properties: {
+                url: {
+                    type: 'string',
+                    description: 'The page URL to read (must be a valid HTTP/HTTPS URL).'
+                },
+                max_length: {
+                    type: 'number',
+                    description: 'Optional maximum characters of markdown to return. Use when only an overview is needed to avoid token limits.',
+                    default: 80000
+                }
+            },
+            required: ['url']
+        }
     }
 ];
 
