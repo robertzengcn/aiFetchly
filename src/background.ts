@@ -516,6 +516,11 @@ function initialize() {
           log.error('Failed to initialize WebSocket connection:', error);
         }
       }
+
+      // Start background token auto-refresh for already-logged-in user (only if not already running)
+      if (!TokenRefreshService.isAutoRefreshRunning()) {
+        TokenRefreshService.startAutoRefresh();
+      }
     }
 
 
@@ -875,8 +880,10 @@ async function handleDeepLink(url: string) {
           }
         }
 
-        // Start background token auto-refresh
-        TokenRefreshService.startAutoRefresh();
+        // Start background token auto-refresh (only if not already running)
+        if (!TokenRefreshService.isAutoRefreshRunning()) {
+          TokenRefreshService.startAutoRefresh();
+        }
 
         // Navigate to dashboard
         if (win && !(win as any).isDestroyed()) {

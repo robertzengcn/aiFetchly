@@ -113,6 +113,13 @@
         <ProxyTableselected @change="handleSelectedChanged" />
       </div>
 
+      <div v-if="isEdit && socialaccountId > 0" class="mt-4">
+        <v-label class="text-body-2 font-weight-medium mb-2 text-capitalize">{{ t('socialaccount.upload_cookies_button') }}</v-label>
+        <v-btn color="primary" variant="tonal" class="mt-2" @click="uploadCookies">
+          {{ t('socialaccount.upload_cookies_button') }}
+        </v-btn>
+      </div>
+
       <v-alert
         v-model="alert"
         border="start"
@@ -148,7 +155,11 @@ import { useI18n } from "vue-i18n";
 import {
   getSocialaccountinfo,
   saveSocialAccount,
+  requireCookiesselecttab,
+  receiveAccountLoginevent,
 } from "@/views/api/socialaccount";
+import { SOCIAL_ACCOUNT_LOGIN_MESSSAGE } from "@/config/channellist";
+import { CommonDialogMsg } from "@/entityTypes/commonType";
 import { useRoute, useRouter } from "vue-router";
 import { SocialAccountDetailData } from "@/entityTypes/socialaccount-type";
 import ProxyTableselected from "@/views/pages/proxy/widgets/ProxySelectedTable.vue";
@@ -220,6 +231,29 @@ const showProxytable = () => {
   console.log("show proxy table");
   proxytableshow.value = !proxytableshow.value;
 };
+
+function uploadCookies(): void {
+  if (socialaccountId.value <= 0) return;
+  requireCookiesselecttab({ id: socialaccountId.value });
+}
+
+function setupUploadCookiesListener(): void {
+  receiveAccountLoginevent(SOCIAL_ACCOUNT_LOGIN_MESSSAGE, (value: string) => {
+    try {
+      const json_value = JSON.parse(value) as CommonDialogMsg;
+      if (json_value.code !== socialaccountId.value) return;
+      if (json_value.data?.action === "handleCookiesfile") {
+        alertcolor.value = json_value.status ? "success" : "error";
+        alertContent.value = json_value.data.content
+          ? t(json_value.data.content)
+          : t(json_value.data.title);
+        alert.value = true;
+      }
+    } catch {
+      // ignore parse errors for other message types
+    }
+  });
+}
 
 const initialize = async () => {
   if ($route.params.id) {
@@ -360,6 +394,7 @@ onMounted(async () => {
   try {
     console.log('Component mounted, initializing...');
     await initialize();
+    setupUploadCookiesListener();
     console.log('Initialization complete');
   } catch (error) {
     console.error('Error during initialization:', error);

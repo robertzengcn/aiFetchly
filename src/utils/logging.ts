@@ -1,11 +1,11 @@
-import log from 'electron-log/main';
-import { app } from 'electron';
+import { log, logger } from '@/modules/Logger';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as os from 'os';
 
 // Create and configure a logger instance for child processes or other modules
 export function createLogger(moduleName: string) {
-  const logDir = path.join(app.getPath('userData'), 'logs');
+  const logDir = logger.getLogDir() || path.join(os.tmpdir(), 'aifetchly-logs');
   
   // Ensure log directory exists
   if (!fs.existsSync(logDir)) {
@@ -16,14 +16,14 @@ export function createLogger(moduleName: string) {
   const moduleLogPath = path.join(logDir, `${moduleName}.log`);
   
   // Create a simple scoped logger that uses the main log transports
-  const logger = (log as unknown as { scope?: (name: string) => typeof log }).scope 
+  const scopedLogger = (log as unknown as { scope?: (name: string) => typeof log }).scope
     ? (log as unknown as { scope: (name: string) => typeof log }).scope(moduleName)
     : log;
-  
+
   // Note: Scoped loggers inherit transport configuration from main log instance
   // The main log is already configured in background.ts to save to the logs directory
-  
-  return logger;
+
+  return scopedLogger;
 }
 
 // Utility function to redirect child process stdio to log files
@@ -60,7 +60,7 @@ export function redirectChildProcessOutput(childProcess: NodeJS.Process, process
 
 // Get the main log directory path
 export function getLogDir(): string {
-  return path.join(app.getPath('userData'), 'logs');
+  return logger.getLogDir() || path.join(os.tmpdir(), 'aifetchly-logs');
 }
 
 // Utility function to log all console output to a specific file

@@ -156,23 +156,26 @@ export class SocialAccountController {
             const cookiesArr: CookiesType[] = JSON.parse(cookies.cookies)
             if (cookiesArr.length > 0) {
                 for (const cookie of cookiesArr) {
-                    // console.log(cookie)
-                    //remove first dot in domain
+                    // remove first dot in domain for URL
                     let url = cookie.domain
                     if (cookie.domain && cookie.domain.charAt(0) === '.') {
                         url = cookie.domain.slice(1);
                     }
+                    const path = cookie.path ?? '/';
+                    const sameSite = cookie.sameSite === 'None'
+                        ? 'no_restriction'
+                        : (cookie.sameSite ?? 'no_restriction');
                     const cookieDetails: CookiesParse = {
-                        url: `http${cookie.secure ? 's' : ''}://${url}${cookie.path}`,
+                        url: `http${cookie.secure ? 's' : ''}://${url}${path}`,
                         name: cookie.name,
                         value: cookie.value,
                         domain: cookie.domain,
-                        path: cookie.path,
+                        path,
                         secure: cookie.secure,
-                        httpOnly: cookie.httpOnly || false,
+                        httpOnly: cookie.httpOnly ?? false,
                         expirationDate: cookie.expirationDate,
-                        sameSite: cookie.sameSite === 'None' ? 'no_restriction' : cookie.sameSite,
-                        hostOnly: cookie.hostOnly
+                        sameSite,
+                        hostOnly: cookie.hostOnly ?? false
                     };
                     //check whether cookies value start with __Host-
                     if (cookie.name.startsWith("__Host-")) {

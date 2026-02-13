@@ -14,7 +14,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { ExtraModulesModule } from "@/modules/ExtraModulesModule"
 import { ExtraModuleEntity } from "@/entity/ExtraModule.entity"
-import log from 'electron-log/main';
+import { log } from '@/modules/Logger';
 // import { s } from "vitest/dist/reporters-1evA5lom"
 export class ExtraModuleController {
     private extraModulePth: string;
