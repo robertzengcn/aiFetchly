@@ -17,6 +17,8 @@ import {
     RETRY_CONTACT_EXTRACTION
 } from '@/config/channellist';
 import { log } from '@/modules/Logger';
+import { Token } from '@/modules/token';
+import { TOKENNAME, USER_AI_ENABLED } from '@/config/usersetting';
 
 // Type for IPC request with resultIds
 interface ContactExtractionRequest {
@@ -44,11 +46,27 @@ function spawnWorker(): ChildProcess {
 
     console.log('Spawning contact extraction worker...');
 
+    // Read auth token and AI-enabled flag from main process context
+    // and pass to worker via env vars. Worker processes cannot access
+    // Electron's app API (used by ElectronStoreService/Token), so we
+    // must provide these values from the main process.
+    let workerAuthToken = '';
+    let workerAiEnabled = 'false';
+    try {
+        const tokenService = new Token();
+        workerAuthToken = tokenService.getValue(TOKENNAME) || '';
+        workerAiEnabled = tokenService.getValue(USER_AI_ENABLED) || 'false';
+    } catch (error) {
+        console.warn('Failed to read token for worker:', error);
+    }
+
     const worker = spawn('node', [workerPath], {
         stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
         env: {
             ...process.env,
-            WORKER_TYPE: 'contact-extraction'
+            WORKER_TYPE: 'contact-extraction',
+            WORKER_AUTH_TOKEN: workerAuthToken,
+            WORKER_AI_ENABLED: workerAiEnabled
         }
     });
 
