@@ -1,7 +1,6 @@
 import * as path from 'path';
 import * as os from 'os';
 import fs from 'fs';
-import type { App } from 'electron';
 
 /** True when running in a worker/child process that has process.send (e.g. contact-extraction worker). */
 const isWorker =
@@ -62,7 +61,8 @@ function createWorkerLoggerStub(
 /** Main process only: get log directory; uses Electron app when available. */
 function getLogDirectory(): string {
   try {
-    const electron = require('electron') as App;
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const electron = require('electron') as typeof import('electron');
     const app = electron?.app;
     if (app && typeof app.getPath === 'function') {
       return path.join(app.getPath('userData'), 'logs');
