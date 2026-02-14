@@ -162,11 +162,22 @@ export class SocialAccountController {
                         url = cookie.domain.slice(1);
                     }
                     const path = cookie.path ?? '/';
-                    const sameSite = cookie.sameSite === 'None'
+                    // FIX C/E: Default to 'lax' instead of 'no_restriction' when sameSite is not specified.
+                    // Netscape cookie files and some exports don't include sameSite.
+                    // 'no_restriction' (SameSite=None) requires Secure=true in modern Chromium.
+                    let sameSite: 'unspecified' | 'no_restriction' | 'lax' | 'strict' = cookie.sameSite === 'None'
                         ? 'no_restriction'
-                        : (cookie.sameSite ?? 'no_restriction');
+                        : (cookie.sameSite ?? 'lax');
+                    // FIX A/B: When sameSite is 'no_restriction' (SameSite=None),
+                    // Chromium requires Secure=true and https URL.
+                    // If the cookie isn't marked secure, downgrade to 'lax' to avoid rejection.
+                    if (sameSite === 'no_restriction' && !cookie.secure) {
+                        sameSite = 'lax';
+                    }
+                    // Ensure URL protocol matches secure flag
+                    const useHttps = cookie.secure || sameSite === 'no_restriction';
                     const cookieDetails: CookiesParse = {
-                        url: `http${cookie.secure ? 's' : ''}://${url}${path}`,
+                        url: `http${useHttps ? 's' : ''}://${url}${path}`,
                         name: cookie.name,
                         value: cookie.value,
                         domain: cookie.domain,
@@ -193,9 +204,9 @@ export class SocialAccountController {
                         console.log(cookieDetails)
                         await ses.cookies.set(cookieDetails)
                     } catch (error) {
+                        // Log the error but continue processing remaining cookies
+                        // instead of throwing and aborting the entire loop.
                         console.error(`Failed to set cookie: ${cookie.name}`, error);
-                        console.log(cookieDetails)
-                        throw error
                     }
                 }
             }
