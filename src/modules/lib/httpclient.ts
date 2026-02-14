@@ -18,8 +18,9 @@ import { TokenRefreshService } from '@/modules/tokenRefresh';
 export class HttpClient {
     private _headers: HeadersInit = {};
     private baseUrl: string;
-    private _tokenRefreshService: TokenRefreshService;
+    private _tokenRefreshService: TokenRefreshService | null = null;
     private _refreshInProgress = false;
+    private _isWorker = false;
     constructor() {
       // Use process.env for environment variables in Electron main process
       // NOTE: Removed import.meta.env check - Vite statically replaces import.meta.env.VITE_*
@@ -41,8 +42,20 @@ export class HttpClient {
       }
 
       this.baseUrl = loginUrl + "/apis";
-      this._tokenRefreshService = new TokenRefreshService();
-      this.setheaderToken()
+
+      // Worker processes don't have access to Electron APIs (app, safeStorage, etc.)
+      // so Token/ElectronStoreService cannot be instantiated. Instead, use the
+      // auth token passed via WORKER_AUTH_TOKEN env var from the main process.
+      this._isWorker = !!process.env.WORKER_TYPE;
+      if (this._isWorker) {
+        const workerToken = process.env.WORKER_AUTH_TOKEN;
+        if (workerToken && workerToken.trim().length > 0) {
+          this.setHeader('Authorization', 'Bearer ' + workerToken);
+        }
+      } else {
+        this._tokenRefreshService = new TokenRefreshService();
+        this.setheaderToken();
+      }
       // const tokenModel=new Token()
       // const tokenval=tokenModel.getValue("social-market-token")
       // if (tokenval) {
@@ -70,6 +83,11 @@ export class HttpClient {
       options: RequestInit,
       isRetry = false
     ): Promise<any> {
+      // Worker processes cannot refresh tokens (no access to Electron APIs)
+      if (this._isWorker) {
+        throw new Error('Authentication failed: Token expired. Worker cannot refresh tokens.');
+      }
+
       // Prevent infinite refresh loops
       if (isRetry) {
         // Already retried once, sign out user
@@ -95,6 +113,9 @@ export class HttpClient {
 
       try {
         // Attempt to refresh the token
+        if (!this._tokenRefreshService) {
+          throw new Error('Token refresh service not available');
+        }
         const refreshResult = await this._tokenRefreshService.refreshAccessToken();
         
         if (refreshResult.status && refreshResult.data) {
@@ -136,6 +157,11 @@ export class HttpClient {
       if (res.status === 403) {
         console.warn('Received 403 Forbidden - Attempting token refresh');
         
+        // Worker processes cannot refresh tokens or access ElectronStoreService
+        if (this._isWorker) {
+          throw new Error('Authentication failed: Token expired. Worker cannot refresh tokens.');
+        }
+
         // Check if refresh token exists
         const tokenModel = new Token();
         const refreshToken = tokenModel.getValue(REFRESHTOKEN);
@@ -279,6 +305,11 @@ export class HttpClient {
       if (res.status === 403) {
         console.warn('Received 403 Forbidden - Attempting token refresh');
         
+        // Worker processes cannot refresh tokens or access ElectronStoreService
+        if (this._isWorker) {
+          throw new Error('Authentication failed: Token expired. Worker cannot refresh tokens.');
+        }
+
         // Prevent infinite refresh loops
         if (isRetry) {
           console.warn('Token refresh failed after retry, signing out user');
@@ -307,6 +338,9 @@ export class HttpClient {
 
           try {
             // Attempt to refresh the token
+            if (!this._tokenRefreshService) {
+              throw new Error('Token refresh service not available');
+            }
             const refreshResult = await this._tokenRefreshService.refreshAccessToken();
             
             if (refreshResult.status && refreshResult.data) {

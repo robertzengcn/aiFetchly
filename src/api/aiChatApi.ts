@@ -260,9 +260,22 @@ export class AiChatApi {
      * Check if AI features are enabled for the current user.
      * Throws an error if AI is not enabled, preventing the API call.
      * 
+     * In worker processes, checks WORKER_AI_ENABLED env var instead of
+     * Token/ElectronStoreService (which require Electron APIs unavailable in workers).
+     * 
      * @throws {Error} When AI features are not enabled for the user
      */
     private ensureAIEnabled(): void {
+        // Worker processes cannot access ElectronStoreService/Token,
+        // so use env var passed from main process instead.
+        if (process.env.WORKER_TYPE) {
+            const aiEnabled = process.env.WORKER_AI_ENABLED;
+            if (aiEnabled !== 'true') {
+                throw new Error('AI features are not enabled. Please upgrade your plan to access AI features.');
+            }
+            return;
+        }
+
         const tokenService = new Token();
         const aiEnabled = tokenService.getValue(USER_AI_ENABLED);
         if (aiEnabled !== 'true') {
