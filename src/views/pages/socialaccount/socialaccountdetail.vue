@@ -113,12 +113,30 @@
         <ProxyTableselected @change="handleSelectedChanged" />
       </div>
 
-      <div v-if="isEdit && socialaccountId > 0" class="mt-4">
-        <v-label class="text-body-2 font-weight-medium mb-2 text-capitalize">{{ t('socialaccount.upload_cookies_button') }}</v-label>
-        <v-btn color="primary" variant="tonal" class="mt-2" @click="uploadCookies">
-          {{ t('socialaccount.upload_cookies_button') }}
-        </v-btn>
-      </div>
+      <v-card
+        v-if="isEdit && socialaccountId > 0"
+        class="mt-4"
+        variant="tonal"
+        color="primary"
+      >
+        <v-card-title class="text-body-2 font-weight-medium d-flex align-center">
+          <v-icon size="small" class="me-2">mdi-cookie</v-icon>
+          {{ t('socialaccount.cookies') }}
+        </v-card-title>
+        <v-card-subtitle class="text-caption pb-2">
+          {{ t('socialaccount.uploadfilemsg_title') }}
+        </v-card-subtitle>
+        <v-card-actions>
+          <v-btn
+            color="primary"
+            variant="flat"
+            prepend-icon="mdi-upload"
+            @click="uploadCookies"
+          >
+            {{ t('socialaccount.upload_cookies_button') }}
+          </v-btn>
+        </v-card-actions>
+      </v-card>
 
       <v-alert
         v-model="alert"
@@ -214,19 +232,6 @@ const rules = {
 
 
 
-// Get color for different categories
-const getCategoryColor = (category: string) => {
-  switch (category) {
-    case 'Social Media':
-      return 'blue';
-    case 'Search Engine':
-      return 'green';
-    case 'Business Directory':
-      return 'orange';
-    default:
-      return 'grey';
-  }
-};
 const showProxytable = () => {
   console.log("show proxy table");
   proxytableshow.value = !proxytableshow.value;
