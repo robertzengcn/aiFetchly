@@ -61,6 +61,7 @@ export default {
         import: "Importar",
         export: "Exportar",
         clear_filters: "Limpiar filtros",
+        columns: "Columnas",
         information: "Información",
         close: "Cerrar",
         refresh: "Actualizar",
@@ -666,9 +667,15 @@ export default {
         id:"ID",
         link:"Enlace",
         title:"Título",
+        snippet:"Fragmento",
         record_time:"Hora de registro",
         keyword:"Palabra clave",
         status:"Estado",
+    },
+    searchresultdetail:{
+        title:"Detalles del Resultado de Búsqueda",
+        basic_info:"Información Básica",
+        columns:"Columnas",
     },
     proxy: {
         add_proxy: "Agregar proxy",
@@ -749,6 +756,25 @@ export default {
         update_error:"Error al actualizar la tarea",
         load_task_error:"Error al cargar datos de la tarea",
         no_valid_urls:"No se encontraron URLs válidas",
+    },
+    contactExtraction:{
+        extract_contact_info:"Extracción de Contacto con IA",
+        contact_extraction_status:"Extracción de Contacto",
+        extraction_status:"Estado de Extracción",
+        email:"Correo",
+        phone:"Teléfono",
+        address:"Dirección",
+        contact_info:"Información de Contacto",
+        extraction_date:"Fecha de Extracción",
+        social_links:"Enlaces Sociales",
+        status_completed:"Completado",
+        status_analyzing:"Analizando",
+        status_failed:"Fallido",
+        status_pending:"Pendiente",
+        select_items_hint:"Seleccione al menos un elemento para extraer información de contacto",
+        no_valid_items_hint:"Los elementos seleccionados no tienen ID válidos. Por favor, seleccione otros elementos.",
+        extraction_started:"Extracción de contacto iniciada",
+        extraction_failed:"Error al iniciar la extracción",
     },
     emailscrape:{
         failed:"Scraping de correos fallido",
@@ -876,6 +902,7 @@ export default {
         create_account:"Crear cuenta",
         uploadfilemsg_title:"Subir archivo de cookies manualmente",
         uploadfilemsg_content:"Por favor exporte las cookies de su navegador y suba el archivo de cookies manualmente",
+        upload_cookies_button:"Subir cookies (Netscape .txt)",
         handleCookiesfileSuccess:"Archivo de cookies procesado correctamente",
         handleCookiesfileFailure:"Error al procesar archivo de cookies",
         insertCookiesFailure:"Error al insertar cookies",
@@ -1175,7 +1202,10 @@ export default {
         status_completed: "Completado",
         status_analyzing: "Analizando",
         status_failed: "Fallido",
-        status_pending: "Pendiente"
+        status_pending: "Pendiente",
+        ai_analysis: "Análisis de IA",
+        reasoning: "Razonamiento",
+        client_business: "Negocio del cliente"
     }
 
 }

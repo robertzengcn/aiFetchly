@@ -1,0 +1,421 @@
+# IPC Channel Definitions: Contact Extraction
+
+**Feature**: 001-ai-contact-extraction
+**Purpose**: Define IPC communication channels for contact extraction feature
+**Format**: YAML specification for Electron IPC handlers
+
+## Channel Naming Convention
+
+Channels follow the pattern: `FEATURE_ACTION` (kebab-case)
+- `start-contact-extraction`: Invoke handler
+- `contact-extraction-progress`: Event (one-way communication)
+- `get-contact-info`: Query handler
+- `retry-contact-extraction`: Invoke handler
+
+---
+
+## Channels
+
+### 1. start-contact-extraction
+
+**Type**: IPC Invoke Handler (renderer → main)
+**Purpose**: Initiate batch contact extraction for selected search results
+**Direction**: Renderer sends request, Main process responds
+
+#### Request
+
+```typescript
+interface StartContactExtractionRequest {
+  resultIds: number[];  // Array of search result IDs to extract
+}
+```
+
+#### Response
+
+```typescript
+interface StartContactExtractionResponse {
+  success: boolean;
+  batchId?: string;      // UUID for tracking this batch
+  message?: string;      // Success or error message
+}
+```
+
+#### Example
+
+**Renderer**:
+```typescript
+const response = await ipcRenderer.invoke('start-contact-extraction', {
+  resultIds: [1, 2, 3, 4, 5]
+});
+// Returns: { success: true, batchId: 'abc-123-def', message: 'Extraction started' }
+```
+
+#### Handler Location
+
+**File**: `src/main-process/communication/contactExtraction-ipc.ts`
+
+```typescript
+ipcMain.handle('start-contact-extraction', async (event, request) => {
+  try {
+    const { resultIds } = request;
+
+    // Validate input
+    if (!Array.isArray(resultIds) || resultIds.length === 0) {
+      return { success: false, message: 'Invalid result IDs' };
+    }
+
+    // Fetch search results from database
+    const results = await fetchSearchResults(resultIds);
+
+    // Send to worker process
+    worker.send({
+      type: 'extract-contact',
+      batchId: generateUUID(),
+      resultIds,
+      results
+    });
+
+    return { success: true, batchId, message: 'Extraction started' };
+  } catch (error) {
+    return { success: false, message: error.message };
+  }
+});
+```
+
+---
+
+### 2. contact-extraction-progress
+
+**Type**: IPC Event (worker → main → renderer)
+**Purpose**: Real-time progress updates during extraction
+**Direction**: Worker sends to main, Main forwards to renderer (one-way)
+
+#### Event Data
+
+```typescript
+interface ContactExtractionProgressEvent {
+  batchId: string;
+  resultId: number;
+  status: 'pending' | 'analyzing' | 'completed' | 'failed';
+  data?: {
+    email?: string;
+    phone?: string;
+    address?: string;
+    socialLinks?: string[];
+  };
+  error?: string;
+  method?: string;  // 'stage1_homepage', 'stage2_heuristic', etc.
+}
+```
+
+#### Example
+
+**Worker Process**:
+```typescript
+process.send?.({
+  type: 'extraction-progress',
+  batchId: 'abc-123-def',
+  resultId: 1,
+  status: 'completed',
+  data: {
+    email: 'info@example.com',
+    phone: '+1-555-1234',
+    address: '123 Main St, San Francisco, CA'
+  },
+  method: 'stage2_heuristic'
+});
+```
+
+**Main Process** (forwards to renderer):
+```typescript
+worker.on('message', (message) => {
+  if (message.type === 'extraction-progress') {
+    const mainWindow = BrowserWindow.getFocusedWindow();
+    mainWindow?.webContents.send('contact-extraction-progress', message);
+  }
+});
+```
+
+**Renderer** (listens for updates):
+```typescript
+ipcRenderer.on('contact-extraction-progress', (_event, progress) => {
+  console.log('Extraction progress:', progress);
+  // Update UI with new data
+});
+```
+
+---
+
+### 3. get-contact-info
+
+**Type**: IPC Invoke Handler (renderer → main)
+**Purpose**: Query contact information for specific search results
+**Direction**: Renderer sends request, Main process responds with data
+
+#### Request
+
+```typescript
+interface GetContactInfoRequest {
+  resultIds: number[];  // Array of search result IDs
+}
+```
+
+#### Response
+
+```typescript
+interface GetContactInfoResponse {
+  success: boolean;
+  data?: Array<{
+    resultId: number;
+    email?: string | null;
+    phone?: string | null;
+    address?: string | null;
+    socialLinks?: string[] | null;
+    extractionStatus: string;
+    extractionError?: string | null;
+    extractionDate?: string;
+  }>;
+  message?: string;
+}
+```
+
+#### Example
+
+**Renderer**:
+```typescript
+const response = await ipcRenderer.invoke('get-contact-info', {
+  resultIds: [1, 2, 3]
+});
+// Returns: {
+//   success: true,
+//   data: [
+//     { resultId: 1, email: 'info@example.com', phone: '+1-555-1234', extractionStatus: 'completed' },
+//     { resultId: 2, email: null, phone: null, extractionStatus: 'failed', extractionError: 'No contact info found' },
+//     { resultId: 3, email: null, phone: null, extractionStatus: 'pending' }
+//   ]
+// }
+```
+
+#### Handler Location
+
+**File**: `src/main-process/communication/contactExtraction-ipc.ts`
+
+```typescript
+ipcMain.handle('get-contact-info', async (event, request) => {
+  try {
+    const { resultIds } = request;
+
+    const contactInfoList = await dataSource.getRepository(ContactInfoEntity)
+      .createQueryBuilder('contactInfo')
+      .where('contactInfo.resultId IN (:...resultIds)', { resultIds })
+      .getMany();
+
+    return {
+      success: true,
+      data: contactInfoList.map(ci => ({
+        resultId: ci.resultId,
+        email: ci.email,
+        phone: ci.phone,
+        address: ci.address,
+        socialLinks: ci.socialLinks,
+        extractionStatus: ci.extractionStatus,
+        extractionError: ci.extractionError,
+        extractionDate: ci.extractionDate?.toISOString()
+      }))
+    };
+  } catch (error) {
+    return { success: false, message: error.message };
+  }
+});
+```
+
+---
+
+### 4. retry-contact-extraction
+
+**Type**: IPC Invoke Handler (renderer → main)
+**Purpose**: Retry failed extractions for specific search results
+**Direction**: Renderer sends request, Main process responds
+
+#### Request
+
+```typescript
+interface RetryContactExtractionRequest {
+  resultIds: number[];  // Array of search result IDs to retry
+}
+```
+
+#### Response
+
+```typescript
+interface RetryContactExtractionResponse {
+  success: boolean;
+  batchId?: string;
+  message?: string;
+}
+```
+
+#### Example
+
+**Renderer**:
+```typescript
+const response = await ipcRenderer.invoke('retry-contact-extraction', {
+  resultIds: [2, 5, 8]  // Previously failed items
+});
+// Returns: { success: true, batchId: 'xyz-789-uvw', message: 'Retry initiated' }
+```
+
+#### Handler Location
+
+**File**: `src/main-process/communication/contactExtraction-ipc.ts`
+
+```typescript
+ipcMain.handle('retry-contact-extraction', async (event, request) => {
+  try {
+    const { resultIds } = request;
+
+    // Delete existing contact info (reset for re-extraction)
+    await dataSource.getRepository(ContactInfoEntity)
+      .delete({ resultId: In(resultIds) });
+
+    // Fetch search results
+    const results = await fetchSearchResults(resultIds);
+
+    // Send to worker with higher priority
+    worker.send({
+      type: 'extract-contact',
+      batchId: generateUUID(),
+      resultIds,
+      results,
+      priority: 10 // Higher priority for retries
+    });
+
+    return { success: true, batchId, message: 'Retry initiated' };
+  } catch (error) {
+    return { success: false, message: error.message };
+  }
+});
+```
+
+---
+
+## Channel Constants
+
+**File**: `src/config/channellist.ts`
+
+```typescript
+// Contact Extraction Channels
+export const START_CONTACT_EXTRACTION = 'start-contact-extraction';
+export const CONTACT_EXTRACTION_PROGRESS = 'contact-extraction-progress';
+export const GET_CONTACT_INFO = 'get-contact-info';
+export const RETRY_CONTACT_EXTRACTION = 'retry-contact-extraction';
+```
+
+---
+
+## Error Handling
+
+### Common Error Responses
+
+All IPC handlers should return consistent error responses:
+
+```typescript
+interface ErrorResponse {
+  success: false;
+  message: string;
+  code?: number;      // Optional error code
+  details?: any;      // Optional error details
+}
+```
+
+### Error Codes
+
+| Code | Description |
+|------|-------------|
+| 4001 | Invalid request (missing/invalid parameters) |
+| 4002 | Search results not found |
+| 4003 | Worker process not available |
+| 4004 | Database error |
+| 4005 | Extraction already in progress |
+
+### Example Error Response
+
+```typescript
+{
+  success: false,
+  message: 'Search results not found',
+  code: 4002,
+  details: { resultIds: [999, 1000] }
+}
+```
+
+---
+
+## Security Considerations
+
+1. **Input Validation**: Always validate `resultIds` array
+2. **Authorization**: Ensure user has permission to access search results
+3. **Rate Limiting**: Limit extraction requests to prevent abuse
+4. **Sanitization**: Sanitize all data before saving to database
+5. **Error Messages**: Don't expose sensitive information in error messages
+
+---
+
+## Testing
+
+### Unit Tests (Vitest)
+
+**File**: `test/vitest/main/contactExtraction-ipc.test.ts`
+
+```typescript
+import { ipcMain } from 'electron';
+import { registerContactExtractionHandlers } from '@/main-process/communication/contactExtraction-ipc';
+import { mock } from 'vitest-mock-extended';
+
+describe('Contact Extraction IPC', () => {
+  beforeEach(() => {
+    registerContactExtractionHandlers();
+  });
+
+  it('should start extraction with valid result IDs', async () => {
+    const response = await ipcMain.handle('start-contact-extraction', {
+      resultIds: [1, 2, 3]
+    });
+    expect(response.success).toBe(true);
+    expect(response.batchId).toBeDefined();
+  });
+
+  it('should reject extraction with empty result IDs', async () => {
+    const response = await ipcMain.handle('start-contact-extraction', {
+      resultIds: []
+    });
+    expect(response.success).toBe(false);
+    expect(response.message).toContain('Invalid result IDs');
+  });
+
+  it('should return contact info for valid result IDs', async () => {
+    const response = await ipcMain.handle('get-contact-info', {
+      resultIds: [1, 2, 3]
+    });
+    expect(response.success).toBe(true);
+    expect(response.data).toHaveLength(3);
+  });
+});
+```
+
+---
+
+## Summary
+
+| Channel | Type | Purpose | Direction |
+|---------|------|---------|-----------|
+| `start-contact-extraction` | Invoke | Start batch extraction | Renderer → Main |
+| `contact-extraction-progress` | Event | Progress updates | Worker → Main → Renderer |
+| `get-contact-info` | Invoke | Query contact data | Renderer → Main → Renderer |
+| `retry-contact-extraction` | Invoke | Retry failed extractions | Renderer → Main |
+
+**Total Channels**: 4 (2 invoke handlers, 1 event, 1 retry handler)
+
+---
+
+**Status**: IPC contracts complete | **Next**: Quick Start Guide

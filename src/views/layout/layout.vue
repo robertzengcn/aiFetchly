@@ -104,6 +104,8 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
                             <v-img :src="wxtx" alt="{{userName}}"></v-img>
                         </v-avatar> -->
                         <span v-if="!mainStore.isMobile">{{ userName }}</span>
+                        <v-icon v-if="!mainStore.isMobile && isPlusPlan" icon="mdi-plus-circle" size="small" class="ml-1" color="primary" />
+                        <v-chip v-if="!mainStore.isMobile && userPlan && !isPlusPlan" size="x-small" color="primary" variant="tonal" class="ml-1">{{ userPlan }}</v-chip>
                         <v-menu activator="parent">
                             <v-list nav class="h_a_menu">
                                 <v-list-item :title="t('layout.system_setting')" prepend-icon="mdi-cog" @click="gotoSystemsetting" />
@@ -193,6 +195,7 @@ import NoticeSnackbar from '@/views/components/widgets/noticeSnackbar.vue';
 import AiChatBox from '@/views/components/aiChat/AiChatBox.vue';
 import {GetloginUserInfo} from '@/views/api/users'
 import { getAppName } from '@/views/api/app'
+import { packageAppName } from '@/config/appPackage'
 import { updateLanguagePreference, getLanguagePreference } from '@/views/api/language'
 import { initializeLanguageDetection } from '@/views/utils/browserLanguageDetection'
 import { initializeLanguageMigration } from '@/views/utils/languageMigration'
@@ -213,7 +216,10 @@ const dialogStatus=ref(false)
 const noticeMessage=ref('')
 const noticeType=ref<NoticeType>('info')
 const userName=ref('')
-const appName=ref('Social Marketing')
+const userPlan=ref('')
+const isPlusPlan=ref(false)
+// Initial value from package.json; getAppName() may overwrite with main-process formatted name
+const appName=ref(packageAppName)
 const snaptimeout=ref<number>(10000)
 const messages = ref<MessageItem[]>([]);
 // const dialogTitle=ref('')
@@ -360,6 +366,18 @@ onMounted(async () => {
     await GetloginUserInfo().then(res=>{
         console.log(res)
         userName.value=res.name
+        // Check Plus plan (aifetch-plus) for badge; show other aifetchly plan names in chip when not Plus
+        if (res.plans && res.plans.length > 0) {
+            isPlusPlan.value = res.plans.some(
+                plan => plan.planName && plan.planName.toLowerCase().includes('aifetch-plus')
+            )
+            const aifetchlyPlans = res.plans.filter(
+                plan => plan.planName && plan.planName.toLowerCase().includes('aifetchly')
+            )
+            if (aifetchlyPlans.length > 0 && !isPlusPlan.value) {
+                userPlan.value = aifetchlyPlans.map(plan => plan.planName).join(', ')
+            }
+        }
     })
     
     // Load app name from backend

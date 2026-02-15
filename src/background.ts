@@ -27,6 +27,7 @@ import { ScheduleManager } from '@/modules/ScheduleManager';
 import { runafterbootup } from "@/modules/bootuprun"
 import { YellowPagesController } from './controller/YellowPagesController';
 import { initializeWebSocketConnection, cleanupWebSocketConnection } from '@/main-process/communication/websocket-ipc';
+import { TokenRefreshService } from '@/modules/tokenRefresh';
 // import { RAGIpcHandlers } from '@/main-process/ragIpcHandlers';
 // import { createProtocol } from 'electron';
 const isDevelopment = process.env.NODE_ENV !== 'production'
@@ -515,6 +516,11 @@ function initialize() {
           log.error('Failed to initialize WebSocket connection:', error);
         }
       }
+
+      // Start background token auto-refresh for already-logged-in user (only if not already running)
+      if (!TokenRefreshService.isAutoRefreshRunning()) {
+        TokenRefreshService.startAutoRefresh();
+      }
     }
 
 
@@ -568,10 +574,10 @@ function configureContentSecurityPolicy() {
     ? [
         "default-src 'self'",
         "script-src 'self' 'unsafe-eval' 'unsafe-inline' http://localhost:* https://localhost:*",
-        "style-src 'self' 'unsafe-inline'",
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
         "img-src 'self' data: https: http:",
-        "font-src 'self' data:",
-        "connect-src 'self' http://localhost:* https://localhost:* https: http:",
+        "font-src 'self' data: https://fonts.googleapis.com https://fonts.gstatic.com",
+        "connect-src 'self' http://localhost:* https://localhost:* https: http: https://fonts.googleapis.com https://fonts.gstatic.com",
         "frame-src 'self'",
         "object-src 'none'",
         "base-uri 'self'",
@@ -581,10 +587,10 @@ function configureContentSecurityPolicy() {
     : [
         "default-src 'self'",
         "script-src 'self'",
-        "style-src 'self' 'unsafe-inline'",
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
         "img-src 'self' data: https:",
-        "font-src 'self' data:",
-        "connect-src 'self' https:",
+        "font-src 'self' data: https://fonts.googleapis.com https://fonts.gstatic.com",
+        "connect-src 'self' https: https://fonts.googleapis.com https://fonts.gstatic.com",
         "frame-src 'self'",
         "object-src 'none'",
         "base-uri 'self'",
@@ -680,6 +686,9 @@ function isValidDeepLinkOrigin(parsedUrl: URL): boolean {
  */
 function clearTokens(): void {
   try {
+    // Stop background auto-refresh before clearing tokens
+    TokenRefreshService.stopAutoRefresh();
+
     const tokenService = new Token();
     tokenService.setValue(TOKENNAME, '');
     tokenService.setValue(REFRESHTOKEN, '');
@@ -869,6 +878,11 @@ async function handleDeepLink(url: string) {
           } catch (wsError) {
             log.error('Failed to initialize WebSocket after login (non-blocking):', wsError);
           }
+        }
+
+        // Start background token auto-refresh (only if not already running)
+        if (!TokenRefreshService.isAutoRefreshRunning()) {
+          TokenRefreshService.startAutoRefresh();
         }
 
         // Navigate to dashboard

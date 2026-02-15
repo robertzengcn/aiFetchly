@@ -1,0 +1,532 @@
+# API Specification: Contact Extraction
+
+**Feature**: 001-ai-contact-extraction
+**Purpose**: Internal API specification for contact extraction module
+**Format**: OpenAPI-style specification (YAML)
+
+---
+
+## Base URL
+
+```
+internal://contact-extraction
+```
+
+Note: This is an internal Electron IPC API, not a REST API.
+
+---
+
+## Overview
+
+The Contact Extraction API provides internal endpoints for:
+- Starting batch contact extraction jobs
+- Querying extracted contact information
+- Retrying failed extractions
+- Receiving real-time progress updates
+
+All communication occurs via Electron IPC (Inter-Process Communication).
+
+---
+
+## Endpoints
+
+### 1. Start Contact Extraction
+
+Initiate batch contact extraction for selected search results.
+
+#### Endpoint
+
+```
+IPC: start-contact-extraction
+```
+
+#### Method
+
+```
+INVOKE
+```
+
+#### Request
+
+```yaml
+request:
+  type: object
+  properties:
+    resultIds:
+      type: array
+      items:
+        type: integer
+      minItems: 1
+      maxItems: 50
+      description: Array of search result IDs to extract
+  required:
+    - resultIds
+```
+
+#### Response
+
+```yaml
+response:
+  type: object
+  properties:
+    success:
+      type: boolean
+      description: true if extraction started successfully
+    batchId:
+      type: string
+      format: uuid
+      description: Batch ID for tracking progress
+    message:
+      type: string
+      description: Success or error message
+  required:
+    - success
+```
+
+#### Example
+
+**Request**:
+```json
+{
+  "resultIds": [1, 2, 3, 4, 5]
+}
+```
+
+**Success Response** (200):
+```json
+{
+  "success": true,
+  "batchId": "550e8400-e29b-41d4-a716-446655440000",
+  "message": "Extraction started for 5 results"
+}
+```
+
+**Error Response** (400):
+```json
+{
+  "success": false,
+  "message": "Invalid result IDs: must be non-empty array"
+}
+```
+
+---
+
+### 2. Get Contact Info
+
+Query contact information for specific search results.
+
+#### Endpoint
+
+```
+IPC: get-contact-info
+```
+
+#### Method
+
+```
+INVOKE
+```
+
+#### Request
+
+```yaml
+request:
+  type: object
+  properties:
+    resultIds:
+      type: array
+      items:
+        type: integer
+      minItems: 1
+      description: Array of search result IDs
+  required:
+    - resultIds
+```
+
+#### Response
+
+```yaml
+response:
+  type: object
+  properties:
+    success:
+      type: boolean
+    data:
+      type: array
+      items:
+        type: object
+        properties:
+          resultId:
+            type: integer
+          email:
+            type: string
+            nullable: true
+          phone:
+            type: string
+            nullable: true
+          address:
+            type: string
+            nullable: true
+          socialLinks:
+            type: array
+            items:
+              type: string
+            nullable: true
+          extractionStatus:
+            type: string
+            enum: [pending, analyzing, completed, failed]
+          extractionError:
+            type: string
+            nullable: true
+          extractionDate:
+            type: string
+            format: date-time
+            nullable: true
+    message:
+      type: string
+  required:
+    - success
+```
+
+#### Example
+
+**Request**:
+```json
+{
+  "resultIds": [1, 2, 3]
+}
+```
+
+**Success Response** (200):
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "resultId": 1,
+      "email": "info@example.com",
+      "phone": "+1-555-1234",
+      "address": "123 Main St, San Francisco, CA 94105",
+      "socialLinks": ["https://twitter.com/example", "https://linkedin.com/company/example"],
+      "extractionStatus": "completed",
+      "extractionDate": "2025-02-06T10:30:00Z"
+    },
+    {
+      "resultId": 2,
+      "email": null,
+      "phone": null,
+      "address": null,
+      "socialLinks": null,
+      "extractionStatus": "failed",
+      "extractionError": "No contact information found on website",
+      "extractionDate": "2025-02-06T10:31:00Z"
+    },
+    {
+      "resultId": 3,
+      "email": null,
+      "phone": null,
+      "address": null,
+      "socialLinks": null,
+      "extractionStatus": "pending",
+      "extractionDate": null
+    }
+  ]
+}
+```
+
+---
+
+### 3. Retry Contact Extraction
+
+Retry failed extractions for specific search results.
+
+#### Endpoint
+
+```
+IPC: retry-contact-extraction
+```
+
+#### Method
+
+```
+INVOKE
+```
+
+#### Request
+
+```yaml
+request:
+  type: object
+  properties:
+    resultIds:
+      type: array
+      items:
+        type: integer
+      minItems: 1
+      maxItems: 50
+      description: Array of search result IDs to retry
+  required:
+    - resultIds
+```
+
+#### Response
+
+```yaml
+response:
+  type: object
+  properties:
+    success:
+      type: boolean
+    batchId:
+      type: string
+      format: uuid
+    message:
+      type: string
+  required:
+    - success
+```
+
+#### Example
+
+**Request**:
+```json
+{
+  "resultIds": [2, 5, 8]
+}
+```
+
+**Success Response** (200):
+```json
+{
+  "success": true,
+  "batchId": "660e8400-e29b-41d4-a716-446655440001",
+  "message": "Retry initiated for 3 results"
+}
+```
+
+---
+
+### 4. Contact Extraction Progress (Event)
+
+Real-time progress updates during extraction.
+
+#### Endpoint
+
+```
+IPC: contact-extraction-progress
+```
+
+#### Method
+
+```
+EVENT (one-way)
+```
+
+#### Event Data
+
+```yaml
+event:
+  type: object
+  properties:
+    batchId:
+      type: string
+      format: uuid
+    resultId:
+      type: integer
+    status:
+      type: string
+      enum: [pending, analyzing, completed, failed]
+    data:
+      type: object
+      nullable: true
+      properties:
+        email:
+          type: string
+          nullable: true
+        phone:
+          type: string
+          nullable: true
+        address:
+          type: string
+          nullable: true
+        socialLinks:
+          type: array
+          items:
+            type: string
+          nullable: true
+    error:
+      type: string
+      nullable: true
+    method:
+      type: string
+      enum: [stage1_homepage, stage2_heuristic, stage3_fallback, stage4_ai, failed]
+      nullable: true
+  required:
+    - batchId
+    - resultId
+    - status
+```
+
+#### Example
+
+**Event Data** (Progress - Analyzing):
+```json
+{
+  "batchId": "550e8400-e29b-41d4-a716-446655440000",
+  "resultId": 1,
+  "status": "analyzing",
+  "data": null,
+  "error": null,
+  "method": null
+}
+```
+
+**Event Data** (Completed):
+```json
+{
+  "batchId": "550e8400-e29b-41d4-a716-446655440000",
+  "resultId": 1,
+  "status": "completed",
+  "data": {
+    "email": "info@example.com",
+    "phone": "+1-555-1234",
+    "address": "123 Main St, San Francisco, CA 94105",
+    "socialLinks": ["https://twitter.com/example"]
+  },
+  "error": null,
+  "method": "stage2_heuristic"
+}
+```
+
+**Event Data** (Failed):
+```json
+{
+  "batchId": "550e8400-e29b-41d4-a716-446655440000",
+  "resultId": 2,
+  "status": "failed",
+  "data": null,
+  "error": "No contact information found on website",
+  "method": "failed"
+}
+```
+
+---
+
+## Data Types
+
+### ContactInfo
+
+```yaml
+ContactInfo:
+  type: object
+  properties:
+    email:
+      type: string
+      format: email
+      nullable: true
+      description: Primary email address
+    phone:
+      type: string
+      nullable: true
+      description: Primary phone number
+    address:
+      type: string
+      nullable: true
+      description: Physical address
+    socialLinks:
+      type: array
+      items:
+        type: string
+        format: uri
+      nullable: true
+      description: Social media URLs
+```
+
+### ExtractionStatus
+
+```yaml
+ExtractionStatus:
+  type: string
+  enum: [pending, analyzing, completed, failed]
+  description: Current status of extraction
+```
+
+### ExtractionMethod
+
+```yaml
+ExtractionMethod:
+  type: string
+  enum: [stage1_homepage, stage2_heuristic, stage3_fallback, stage4_ai, failed]
+  description: Which discovery stage succeeded
+```
+
+---
+
+## Error Responses
+
+All endpoints may return error responses in this format:
+
+```yaml
+error:
+  type: object
+  properties:
+    success:
+      type: boolean
+      enum: [false]
+    message:
+      type: string
+    code:
+      type: integer
+      description: Error code
+    details:
+      type: object
+      description: Additional error details
+  required:
+    - success
+    - message
+```
+
+### Common Error Codes
+
+| Code | Description |
+|------|-------------|
+| 4001 | Invalid request (missing/invalid parameters) |
+| 4002 | Search results not found |
+| 4003 | Worker process not available |
+| 4004 | Database error |
+| 4005 | Extraction already in progress |
+| 5000 | Internal server error |
+
+---
+
+## Rate Limiting
+
+- Max 50 result IDs per request
+- Max 5 concurrent batch extractions
+- Retry requests have higher priority
+
+---
+
+## Security
+
+- All requests are internal (Electron IPC)
+- Input validation required for all parameters
+- Sanitization before database storage
+- No sensitive data in error messages
+
+---
+
+## Summary
+
+| Endpoint | Type | Purpose | Timeout |
+|----------|------|---------|---------|
+| `start-contact-extraction` | Invoke | Start batch extraction | 5000ms |
+| `get-contact-info` | Invoke | Query contact data | 3000ms |
+| `retry-contact-extraction` | Invoke | Retry failed items | 5000ms |
+| `contact-extraction-progress` | Event | Progress updates | N/A |
+
+**Total Endpoints**: 4 (3 invoke handlers, 1 event)
+
+---
+
+**Status**: API specification complete | **Version**: 1.0.0

@@ -129,12 +129,15 @@ export class RemoteSource {
   /**
    * read config from .env File
    *
-   * @returns {object} config
+   * @returns {Record<string, string>} config
    * */
-  readConfig(): object {
+  readConfig(): Record<string, string> {
     const result = dotenv.config();
     if (result.error) {
       throw result.error;
+    }
+    if (!result.parsed) {
+      throw new Error("Failed to parse .env file: result is undefined");
     }
     return result.parsed;
   }

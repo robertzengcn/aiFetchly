@@ -6,6 +6,25 @@
 rounded class="elevation-0" density="compact" variant="solo" label="Search"
                     append-inner-icon="mdi-magnify" single-line hide-details v-model="search"></v-text-field>
             </div>
+            <!-- Column Visibility Menu -->
+            <v-menu>
+                <template v-slot:activator="{ props }">
+                    <v-btn class="btn ml-3" variant="flat" prepend-icon="mdi-view-column" v-bind="props">
+                        <span>{{ t('common.columns') || 'Columns' }}</span>
+                    </v-btn>
+                </template>
+                <v-list class="column-visibility-menu">
+                    <v-list-item v-for="header in availableColumns" :key="header.key">
+                        <template v-slot:prepend>
+                            <v-checkbox-btn
+                                :model-value="isColumnVisible(header.key)"
+                                @update:model-value="toggleColumn(header.key)"
+                            ></v-checkbox-btn>
+                        </template>
+                        <v-list-item-title>{{ header.title }}</v-list-item-title>
+                    </v-list-item>
+                </v-list>
+            </v-menu>
             <!-- <v-btn class="btn" variant="flat" prepend-icon="mdi-filter-variant"><span> More</span></v-btn> -->
             <v-btn class="btn ml-3" variant="flat" prepend-icon="mdi-plus" color="#5865f2" @click="createProxy()">
                {{ t('proxy.add_proxy') }}
@@ -32,7 +51,7 @@ class="btn ml-3"
         </div>
     </div>
     <v-data-table-server
-class="mt-3" v-model:items-per-page="itemsPerPage" :search="search" :headers="headers"
+class="mt-3" v-model:items-per-page="itemsPerPage" :search="search" :headers="visibleHeaders"
         :items-length="totalItems" :items="serverItems" :loading="loading" item-value="id" 
         v-model="selected" show-select @update:options="loadItems">
         <template v-slot:[`item.actions`]="{ item }">
@@ -100,7 +119,7 @@ class="mt-3" v-model:items-per-page="itemsPerPage" :search="search" :headers="he
 
 <script setup lang="ts">
 import { getProxyList,deleteProxy,checkAllproxy,receiveProxycheckMsg,removeFailureproxy,receiveRemoveproxyMsg} from '@/views/api/proxy'
-import { ref,onMounted,computed,reactive } from 'vue'
+import { ref, onMounted, computed, reactive } from 'vue'
 import { SearchResult } from '@/views/api/types'
 import {ProxyListEntity} from "@/entityTypes/proxyType"
 // import { useRoute } from "vue-router";
@@ -192,6 +211,28 @@ const headers: Array<any> = [
     { title: computed(_ => CapitalizeFirstLetter(t("common.actions"))), key: 'actions', sortable: false },
 
 ];
+
+// Column visibility: password hidden by default for security
+const defaultVisibleKeys = ['id', 'host', 'port', 'username', 'protocol', 'statusName', 'checktime', 'googlePassName', 'actions'];
+const visibleColumns = ref<Set<string>>(new Set(defaultVisibleKeys));
+
+const availableColumns = computed(() => headers);
+const visibleHeaders = computed(() => headers.filter((h: { key: string }) => visibleColumns.value.has(h.key)));
+
+function isColumnVisible(key: string): boolean {
+    return visibleColumns.value.has(key);
+}
+
+function toggleColumn(key: string): void {
+    const next = new Set(visibleColumns.value);
+    if (next.has(key)) {
+        next.delete(key);
+    } else {
+        next.add(key);
+    }
+    visibleColumns.value = next;
+}
+
 const itemsPerPage = ref(10);
 const serverItems = ref<Array<ProxyListEntity>>();
 const loading = ref(false);

@@ -61,6 +61,7 @@ export default {
         import: "インポート",
         export: "エクスポート",
         clear_filters: "フィルターをクリア",
+        columns: "列",
         information: "情報",
         close: "閉じる",
         refresh: "更新",
@@ -666,9 +667,15 @@ export default {
         id:"ID",
         link:"リンク",
         title:"タイトル",
+        snippet:"スニペット",
         record_time:"記録時間",
         keyword:"キーワード",
         status:"状態",
+    },
+    searchresultdetail:{
+        title:"検索結果の詳細",
+        basic_info:"基本情報",
+        columns:"列",
     },
     proxy: {
         add_proxy: "プロキシを追加",
@@ -750,6 +757,25 @@ export default {
         update_error:"タスクの更新に失敗しました",
         load_task_error:"タスクデータの読み込みに失敗しました",
         no_valid_urls:"有効なURLが見つかりません",
+    },
+    contactExtraction:{
+        extract_contact_info:"AI連絡先抽出",
+        contact_extraction_status:"連絡先抽出",
+        extraction_status:"抽出状態",
+        email:"メール",
+        phone:"電話",
+        address:"住所",
+        contact_info:"連絡先情報",
+        extraction_date:"抽出日",
+        social_links:"ソーシャルリンク",
+        status_completed:"完了",
+        status_analyzing:"分析中",
+        status_failed:"失敗",
+        status_pending:"保留中",
+        select_items_hint:"連絡先情報を抽出するには少なくとも1つのアイテムを選択してください",
+        no_valid_items_hint:"選択されたアイテムに有効なIDがありません。別のアイテムを選択してください。",
+        extraction_started:"連絡先抽出が開始されました",
+        extraction_failed:"抽出の開始に失敗しました",
     },
     emailscrape:{
         failed:"メールスクレイピング失敗",
@@ -877,6 +903,7 @@ export default {
         create_account:"アカウントを作成",
         uploadfilemsg_title:"Cookieファイルを手動アップロード",
         uploadfilemsg_content:"ブラウザからCookieをエクスポートし、Cookieファイルを手動でアップロードしてください",
+        upload_cookies_button:"Cookieをアップロード (Netscape .txt)",
         handleCookiesfileSuccess:"Cookieファイル処理成功",
         handleCookiesfileFailure:"Cookieファイル処理失敗",
         insertCookiesFailure:"Cookie挿入失敗",
@@ -1176,7 +1203,10 @@ export default {
         status_completed: "完了",
         status_analyzing: "分析中",
         status_failed: "失敗",
-        status_pending: "保留中"
+        status_pending: "保留中",
+        ai_analysis: "AI分析",
+        reasoning: "推論",
+        client_business: "クライアントビジネス"
     }
 
 }

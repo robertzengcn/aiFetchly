@@ -1,15 +1,91 @@
-import log from 'electron-log/main';
 import * as path from 'path';
-import { app } from 'electron';
+import * as os from 'os';
 import fs from 'fs';
 
+/** True when running in a worker/child process that has process.send (e.g. contact-extraction worker). */
+const isWorker =
+  typeof process !== 'undefined' &&
+  !!process.env?.WORKER_TYPE &&
+  typeof process.send === 'function';
+
+/**
+ * Worker-only: log proxy that forwards to main process via process.send.
+ * Worker code must not use Electron or electron-log; main process handles actual logging.
+ */
+function createWorkerLogProxy(): {
+  info: (...args: unknown[]) => void;
+  error: (...args: unknown[]) => void;
+  warn: (...args: unknown[]) => void;
+  debug: (...args: unknown[]) => void;
+} {
+  const send = (level: string, ...args: unknown[]) => {
+    try {
+      if (typeof process.send === 'function') {
+        process.send({ type: 'worker-log', level, args });
+      }
+    } catch (_) {
+      // ignore send errors (e.g. channel closed)
+    }
+  };
+  return {
+    info: (...args: unknown[]) => send('info', ...args),
+    error: (...args: unknown[]) => send('error', ...args),
+    warn: (...args: unknown[]) => send('warn', ...args),
+    debug: (...args: unknown[]) => send('debug', ...args),
+  };
+}
+
+/**
+ * Worker-only: stub logger so code that uses logger.getLogDir() etc. does not break.
+ */
+function createWorkerLoggerStub(
+  workerLog: ReturnType<typeof createWorkerLogProxy>
+): {
+  getLogDir: () => string;
+  getLogger: () => ReturnType<typeof createWorkerLogProxy>;
+  scheduleLogCleanup: () => void;
+  stopLogCleanup: () => void;
+} {
+  return {
+    getLogDir: () => '',
+    getLogger: () => workerLog,
+    scheduleLogCleanup: () => {
+      // Worker process stub - no-op
+    },
+    stopLogCleanup: () => {
+      // Worker process stub - no-op
+    },
+  };
+}
+
+/** Main process only: get log directory; uses Electron app when available. */
+function getLogDirectory(): string {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const electron = require('electron') as typeof import('electron');
+    const app = electron?.app;
+    if (app && typeof app.getPath === 'function') {
+      return path.join(app.getPath('userData'), 'logs');
+    }
+  } catch {
+    // electron not available (e.g. worker process)
+  }
+  return path.join(os.tmpdir(), 'aifetchly-logs');
+}
+
+/**
+ * Main process only: Logger that uses electron-log and Electron app.
+ * Do not instantiate in worker; use createWorkerLoggerStub there.
+ */
 export class Logger {
   private static instance: Logger;
   private cleanupInterval: NodeJS.Timeout | null = null;
   private logDir: string;
+  private electronLog: { info: (...args: unknown[]) => void; error: (...args: unknown[]) => void; warn: (...args: unknown[]) => void; debug: (...args: unknown[]) => void };
 
   private constructor() {
-    this.logDir = path.join(app.getPath('userData'), 'logs');
+    this.electronLog = require('electron-log/main');
+    this.logDir = getLogDirectory();
     this.initialize();
   }
 
@@ -21,29 +97,22 @@ export class Logger {
   }
 
   private initialize(): void {
-    // Configure electron-log
-    // Note: initialize() may not be available in all versions
+    const log = this.electronLog;
     if (typeof (log as unknown as { initialize?: () => void }).initialize === 'function') {
       (log as unknown as { initialize: () => void }).initialize();
     }
 
-    // Configure electron-log with date-based folder structure
-    // Logs will be organized as: userData/logs/YYYY-MM-DD/main.log
-    // This prevents the main.log file from becoming too large
     if ((log as unknown as { transports?: { file?: { level?: string } } }).transports?.file) {
       (log as unknown as { transports: { file: { level: string } } }).transports.file.level = 'debug';
     }
 
-    // Create date-based log directory structure
     const today = new Date();
     const year = today.getFullYear();
     const month = String(today.getMonth() + 1).padStart(2, '0');
     const day = String(today.getDate()).padStart(2, '0');
     const dateFolder = `${year}-${month}-${day}`;
-
     const dailyLogDir = path.join(this.logDir, dateFolder);
 
-    // Create log directories if they don't exist
     try {
       if (!fs.existsSync(this.logDir)) {
         fs.mkdirSync(this.logDir, { recursive: true });
@@ -57,79 +126,73 @@ export class Logger {
       console.error('Failed to create log directory:', err);
     }
 
-    // Configure file transport with date-based path
-    const logTransports = (log as unknown as { transports?: { file?: { fileName?: string; resolvePathFn?: () => string; maxSize?: number } } }).transports;
+    const logTransports = (log as unknown as {
+      transports?: {
+        file?: {
+          fileName?: string;
+          resolvePathFn?: () => string;
+          maxSize?: number;
+        };
+      };
+    }).transports;
     if (logTransports?.file) {
-      logTransports.file.fileName = 'main.log'; // Only the filename, not the full path
+      logTransports.file.fileName = 'main.log';
+      const currentLogDir = this.logDir;
       logTransports.file.resolvePathFn = () => {
-      // Get current date for dynamic path resolution
-      const now = new Date();
-      const year = now.getFullYear();
-      const month = String(now.getMonth() + 1).padStart(2, '0');
-      const day = String(now.getDate()).padStart(2, '0');
-      const currentDateFolder = `${year}-${month}-${day}`;
-      
-      const currentDailyLogDir = path.join(this.logDir, currentDateFolder);
-      
-      // Ensure the daily log directory exists
-      if (!fs.existsSync(currentDailyLogDir)) {
-        try {
-          fs.mkdirSync(currentDailyLogDir, { recursive: true });
-        } catch (err) {
-          console.error('Failed to create daily log directory:', err);
+        const now = new Date();
+        const y = now.getFullYear();
+        const m = String(now.getMonth() + 1).padStart(2, '0');
+        const d = String(now.getDate()).padStart(2, '0');
+        const currentDateFolder = `${y}-${m}-${d}`;
+        const currentDailyLogDir = path.join(currentLogDir, currentDateFolder);
+        if (!fs.existsSync(currentDailyLogDir)) {
+          try {
+            fs.mkdirSync(currentDailyLogDir, { recursive: true });
+          } catch (err) {
+            console.error('Failed to create daily log directory:', err);
+          }
         }
-      }
-      
         return path.join(currentDailyLogDir, 'main.log');
       };
-      logTransports.file.maxSize = 1000000; // 1MB max file size
+      logTransports.file.maxSize = 1000000;
     }
 
-    // Enable console transport as well to ensure all logs appear in both places
-    const logTransportsWithConsole = logTransports as { file?: { fileName?: string; resolvePathFn?: () => string; maxSize?: number }; console?: { level?: string } };
+    const logTransportsWithConsole = logTransports as { file?: unknown; console?: { level?: string } };
     if (logTransportsWithConsole?.console) {
       logTransportsWithConsole.console.level = 'debug';
     }
 
-    // Override console methods to also log to file
     this.setupConsoleOverrides();
-
-    // Test the console override
-    console.log('Console override test - this should appear in both terminal and log file');
-
-    // Verify log file is writable
+    log.info('Console override test - this should appear in both terminal and log file');
     this.verifyLogFile();
   }
 
   private setupConsoleOverrides(): void {
+    const log = this.electronLog;
     const originalConsole = {
       log: console.log,
       error: console.error,
       warn: console.warn,
       info: console.info,
-      debug: console.debug
+      debug: console.debug,
     };
 
     console.log = (...args: unknown[]) => {
       originalConsole.log(...args);
       log.info(...args);
     };
-
     console.error = (...args: unknown[]) => {
       originalConsole.error(...args);
       log.error(...args);
     };
-
     console.warn = (...args: unknown[]) => {
       originalConsole.warn(...args);
       log.warn(...args);
     };
-
     console.info = (...args: unknown[]) => {
       originalConsole.info(...args);
       log.info(...args);
     };
-
     console.debug = (...args: unknown[]) => {
       originalConsole.debug(...args);
       log.debug(...args);
@@ -141,32 +204,26 @@ export class Logger {
       const logFilePath = path.join(this.logDir, 'main.log');
       console.log(`Log file path: ${logFilePath}`);
       console.log(`Log file exists: ${fs.existsSync(logFilePath)}`);
-      
-      // Test write to ensure the file is writable
-      log.info('Testing log file write capability...');
+      this.electronLog.info('Testing log file write capability...');
       console.log('Log file write test completed');
     } catch (err) {
       console.error('Error checking log file:', err);
     }
   }
 
-  // Function to clean up old log directories (keep only last 30 days)
   private cleanupOldLogs(): void {
     try {
       if (!fs.existsSync(this.logDir)) return;
-
       const entries = fs.readdirSync(this.logDir, { withFileTypes: true });
       const directories = entries
-        .filter(entry => entry.isDirectory())
-        .map(entry => entry.name)
-        .filter(name => /^\d{4}-\d{2}-\d{2}$/.test(name)) // Match YYYY-MM-DD format
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => entry.name)
+        .filter((name) => /^\d{4}-\d{2}-\d{2}$/.test(name))
         .sort()
-        .reverse(); // Most recent first
-
-      // Keep only the last 30 days
+        .reverse();
       if (directories.length > 30) {
         const toDelete = directories.slice(30);
-        toDelete.forEach(dir => {
+        toDelete.forEach((dir) => {
           const dirPath = path.join(this.logDir, dir);
           try {
             fs.rmSync(dirPath, { recursive: true, force: true });
@@ -181,20 +238,11 @@ export class Logger {
     }
   }
 
-  // Schedule log cleanup to run periodically (every 24 hours)
   public scheduleLogCleanup(): void {
-    // Run cleanup immediately after a short delay (non-blocking)
-    setTimeout(() => {
-      this.cleanupOldLogs();
-    }, 5000); // 5 seconds delay
-
-    // Schedule periodic cleanup every 24 hours
-    this.cleanupInterval = setInterval(() => {
-      this.cleanupOldLogs();
-    }, 24 * 60 * 60 * 1000); // 24 hours in milliseconds
+    setTimeout(() => this.cleanupOldLogs(), 5000);
+    this.cleanupInterval = setInterval(() => this.cleanupOldLogs(), 24 * 60 * 60 * 1000);
   }
 
-  // Clean up interval when app is about to quit
   public stopLogCleanup(): void {
     if (this.cleanupInterval) {
       clearInterval(this.cleanupInterval);
@@ -202,17 +250,36 @@ export class Logger {
     }
   }
 
-  // Get the log directory path
   public getLogDir(): string {
     return this.logDir;
   }
 
-  // Get the logger instance for direct use
-  public getLogger() {
-    return log;
+  public getLogger(): typeof this.electronLog {
+    return this.electronLog;
   }
 }
 
-// Export singleton instance
-export const logger = Logger.getInstance();
-export { log };
+// Export singleton or worker stub; main process never runs getInstance() when isWorker
+let log: {
+  info: (...args: unknown[]) => void;
+  error: (...args: unknown[]) => void;
+  warn: (...args: unknown[]) => void;
+  debug: (...args: unknown[]) => void;
+};
+let logger: {
+  getLogDir: () => string;
+  getLogger: () => typeof log;
+  scheduleLogCleanup: () => void;
+  stopLogCleanup: () => void;
+};
+
+if (isWorker) {
+  const workerLog = createWorkerLogProxy();
+  log = workerLog;
+  logger = createWorkerLoggerStub(workerLog);
+} else {
+  log = require('electron-log/main');
+  logger = Logger.getInstance();
+}
+
+export { log, logger };

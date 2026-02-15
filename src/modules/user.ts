@@ -1,17 +1,22 @@
 import { Token } from "@/modules/token"
 import { RemoteSource } from "@/modules/remotesource"
-import { USERSDBPATH, TOKENNAME, USERLOGPATH, USEREMAIL, USERNAME } from '@/config/usersetting';
+import { USERSDBPATH, TOKENNAME, USERLOGPATH, USEREMAIL, USERNAME, REFRESHTOKEN, TOKENEXPIRY, REFRESHTOKENEXPIRY } from '@/config/usersetting';
 import { BrowserWindow } from 'electron';
 import { NATIVATECOMMAND } from '@/config/channellist';
 import type { NativateDatatype } from '@/entityTypes/commonType';
+import { TokenRefreshService } from '@/modules/tokenRefresh';
 
 export class User {
     public removeToken() {
+        // Stop background auto-refresh before clearing tokens
+        TokenRefreshService.stopAutoRefresh();
         // Clear all user tokens and data
         const token = new Token();
         token.setValue(TOKENNAME, "");
+        token.setValue(REFRESHTOKEN, "");
+        token.setValue(TOKENEXPIRY, "");
+        token.setValue(REFRESHTOKENEXPIRY, "");
         token.setValue(USERSDBPATH, "");
-        // token.setValue(USERSDBPATH, "");
         token.setValue(USERLOGPATH, "");
         token.setValue(USEREMAIL, "");
         token.setValue(USERNAME, "");

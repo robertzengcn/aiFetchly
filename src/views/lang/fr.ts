@@ -61,6 +61,7 @@ export default {
         import: "Importer",
         export: "Exporter",
         clear_filters: "Effacer les filtres",
+        columns: "Colonnes",
         information: "Informations",
         close: "Fermer",
         refresh: "Rafraîchir",
@@ -683,9 +684,15 @@ export default {
         id:"id",
         link:"link",
         title:"title",
+        snippet:"extrait",
         record_time:"record Time",
         keyword:"keyword",
         status:"status",
+    },
+    searchresultdetail:{
+        title:"Détails du résultat de recherche",
+        basic_info:"Informations de base",
+        columns:"Colonnes",
     },
     proxy: {
         add_proxy: "Ajouter un proxy",
@@ -766,6 +773,25 @@ export default {
         update_error:"Failed to update task",
         load_task_error:"Failed to load task data",
         no_valid_urls:"No valid URLs found",
+    },
+    contactExtraction:{
+        extract_contact_info:"Extraction de Contact par IA",
+        contact_extraction_status:"Extraction de Contact",
+        extraction_status:"État d'extraction",
+        email:"E-mail",
+        phone:"Téléphone",
+        address:"Adresse",
+        contact_info:"Coordonnées",
+        extraction_date:"Date d'extraction",
+        social_links:"Liens sociaux",
+        status_completed:"Terminé",
+        status_analyzing:"Analyse",
+        status_failed:"Échec",
+        status_pending:"En attente",
+        select_items_hint:"Veuillez sélectionner au moins un élément pour extraire les informations de contact",
+        no_valid_items_hint:"Les éléments sélectionnés n'ont pas d'ID valides. Veuillez sélectionner d'autres éléments.",
+        extraction_started:"Extraction de contact commencée",
+        extraction_failed:"Échec du démarrage de l'extraction",
     },
     emailscrape:{
         failed:"Email scrape failed",
@@ -893,6 +919,7 @@ export default {
         create_account:"create account",
         uploadfilemsg_title:"Manual upload cookies file",
         uploadfilemsg_content:"Please export cookies from your browser and upload cookies file manually",
+        upload_cookies_button:"Importer les cookies (Netscape .txt)",
         handleCookiesfileSuccess:"handle cookies file success",
         handleCookiesfileFailure:"handle cookies file failure",
         insertCookiesFailure:"insert cookies failure",
@@ -1203,7 +1230,10 @@ export default {
         status_completed: "Completed",
         status_analyzing: "Analyzing",
         status_failed: "Failed",
-        status_pending: "Pending"
+        status_pending: "Pending",
+        ai_analysis: "AI Analysis",
+        reasoning: "Reasoning",
+        client_business: "Client Business"
     }
 
 }

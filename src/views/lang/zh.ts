@@ -52,6 +52,7 @@ export default {
         import:"导入",
         export:"导出",
         clear_filters:"清除筛选",
+        columns:"列",
         information:"信息",
         close:"关闭",
         refresh:"刷新",
@@ -671,9 +672,15 @@ export default {
         id:"ID",
         link:"链接",
         title:"标题",
+        snippet:"摘要",
         record_time:"记录时间",
         keyword:"关键词",
         status:"状态",
+    },
+    searchresultdetail:{
+        title:"搜索结果详情",
+        basic_info:"基本信息",
+        columns:"列",
     },
     proxy:{
         add_proxy:"添加代理",
@@ -756,6 +763,25 @@ export default {
         update_error:"更新任务失败",
         load_task_error:"加载任务数据失败",
         no_valid_urls:"未找到有效URL",
+    },
+    contactExtraction:{
+        extract_contact_info:"AI提取联系信息",
+        contact_extraction_status:"联系方式提取",
+        extraction_status:"提取状态",
+        email:"邮箱",
+        phone:"电话",
+        address:"地址",
+        contact_info:"联系信息",
+        extraction_date:"提取日期",
+        social_links:"社交链接",
+        status_completed:"已完成",
+        status_analyzing:"分析中",
+        status_failed:"失败",
+        status_pending:"待处理",
+        select_items_hint:"请至少选择一项以提取联系信息",
+        no_valid_items_hint:"所选项目没有有效的ID。请选择其他项目。",
+        extraction_started:"联系方式提取已开始",
+        extraction_failed:"启动提取失败",
     },
     emailscrape:{
         failed:"邮件抓取失败",
@@ -883,6 +909,7 @@ export default {
         create_account:"创建账户",
         uploadfilemsg_title:"手动上传cookies文件",
         uploadfilemsg_content:"请从浏览器导出cookies并手动上传cookies文件",
+        upload_cookies_button:"上传 cookies (Netscape .txt)",
         handleCookiesfileSuccess:"处理cookies文件成功",
         handleCookiesfileFailure:"处理cookies文件失败",
         insertCookiesFailure:"插入cookies失败",
@@ -1192,6 +1219,9 @@ export default {
         status_completed: "已完成",
         status_analyzing: "分析中",
         status_failed: "失败",
-        status_pending: "待处理"
+        status_pending: "待处理",
+        ai_analysis: "AI分析",
+        reasoning: "推理",
+        client_business: "客户业务"
     }
 }

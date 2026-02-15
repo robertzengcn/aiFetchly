@@ -119,6 +119,7 @@ globs: **/*.{js,jsx,ts,tsx,html,css,scss,mjs,cjs}
 Use singletons sparingly. If used, implement carefully to avoid unexpected side effects.
 - **Recommended Approaches:**
 - **Inter-Process Communication (IPC):** Use `ipcRenderer` and `ipcMain` for communication between the main and renderer processes.  Sanitize all data passed via IPC.
+- **AI feature IPC handlers:** When the frontend requests an AI function (e.g. AI chat, keyword generation, AI tools), **check AI enable first** in the IPC method. Use `Token` and `USER_AI_ENABLED`; if not enabled, return an error response immediately and do not call AI APIs or process the request.
 - **Native Modules:** Consider using native modules for performance-critical tasks or access to platform-specific APIs.
 - **Remote Module:** Avoid using the remote module, as it can introduce security vulnerabilities and performance issues. Use IPC instead.
 - **Anti-patterns:**
