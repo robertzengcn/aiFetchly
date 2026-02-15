@@ -84,7 +84,20 @@ export class Logger {
   private electronLog: { info: (...args: unknown[]) => void; error: (...args: unknown[]) => void; warn: (...args: unknown[]) => void; debug: (...args: unknown[]) => void };
 
   private constructor() {
-    this.electronLog = require('electron-log/main');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const electronLogModule = require('electron-log/main');
+    // Ensure electron-log has the required methods, fall back to console if not
+    if (electronLogModule && typeof electronLogModule.info === 'function') {
+      this.electronLog = electronLogModule;
+    } else {
+      // Fallback to console if electron-log is not available
+      this.electronLog = {
+        info: console.log.bind(console),
+        error: console.error.bind(console),
+        warn: console.warn.bind(console),
+        debug: console.debug.bind(console),
+      };
+    }
     this.logDir = getLogDirectory();
     this.initialize();
   }
@@ -97,13 +110,13 @@ export class Logger {
   }
 
   private initialize(): void {
-    const log = this.electronLog;
-    if (typeof (log as unknown as { initialize?: () => void }).initialize === 'function') {
-      (log as unknown as { initialize: () => void }).initialize();
+    const elog = this.electronLog;
+    if (typeof (elog as unknown as { initialize?: () => void }).initialize === 'function') {
+      (elog as unknown as { initialize: () => void }).initialize();
     }
 
-    if ((log as unknown as { transports?: { file?: { level?: string } } }).transports?.file) {
-      (log as unknown as { transports: { file: { level: string } } }).transports.file.level = 'debug';
+    if ((elog as unknown as { transports?: { file?: { level?: string } } }).transports?.file) {
+      (elog as unknown as { transports: { file: { level: string } } }).transports.file.level = 'debug';
     }
 
     const today = new Date();
@@ -120,13 +133,13 @@ export class Logger {
       if (!fs.existsSync(dailyLogDir)) {
         fs.mkdirSync(dailyLogDir, { recursive: true });
       }
-      log.info(`Log directory created/verified at: ${this.logDir}`);
-      log.info(`Daily log directory created/verified at: ${dailyLogDir}`);
+      elog.info(`Log directory created/verified at: ${this.logDir}`);
+      elog.info(`Daily log directory created/verified at: ${dailyLogDir}`);
     } catch (err) {
       console.error('Failed to create log directory:', err);
     }
 
-    const logTransports = (log as unknown as {
+    const logTransports = (elog as unknown as {
       transports?: {
         file?: {
           fileName?: string;
@@ -163,12 +176,12 @@ export class Logger {
     }
 
     this.setupConsoleOverrides();
-    log.info('Console override test - this should appear in both terminal and log file');
+    elog.info('Console override test - this should appear in both terminal and log file');
     this.verifyLogFile();
   }
 
   private setupConsoleOverrides(): void {
-    const log = this.electronLog;
+    const elog = this.electronLog;
     const originalConsole = {
       log: console.log,
       error: console.error,
@@ -179,23 +192,23 @@ export class Logger {
 
     console.log = (...args: unknown[]) => {
       originalConsole.log(...args);
-      log.info(...args);
+      elog.info(...args);
     };
     console.error = (...args: unknown[]) => {
       originalConsole.error(...args);
-      log.error(...args);
+      elog.error(...args);
     };
     console.warn = (...args: unknown[]) => {
       originalConsole.warn(...args);
-      log.warn(...args);
+      elog.warn(...args);
     };
     console.info = (...args: unknown[]) => {
       originalConsole.info(...args);
-      log.info(...args);
+      elog.info(...args);
     };
     console.debug = (...args: unknown[]) => {
       originalConsole.debug(...args);
-      log.debug(...args);
+      elog.debug(...args);
     };
   }
 
@@ -278,7 +291,20 @@ if (isWorker) {
   log = workerLog;
   logger = createWorkerLoggerStub(workerLog);
 } else {
-  log = require('electron-log/main');
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const electronLogModule = require('electron-log/main');
+  // Ensure electron-log has the required methods, fall back to console if not
+  if (electronLogModule && typeof electronLogModule.info === 'function') {
+    log = electronLogModule;
+  } else {
+    // Fallback to console if electron-log is not available
+    log = {
+      info: console.log.bind(console),
+      error: console.error.bind(console),
+      warn: console.warn.bind(console),
+      debug: console.debug.bind(console),
+    };
+  }
   logger = Logger.getInstance();
 }
 
