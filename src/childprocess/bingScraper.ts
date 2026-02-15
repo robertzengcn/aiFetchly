@@ -7,6 +7,53 @@ import { TimeoutError, InterceptResolutionAction } from 'puppeteer';
 import useProxy from "@lem0-packages/puppeteer-page-proxy"
 import { convertProxyServertourl } from "@/modules/lib/function"
 
+const BING_REDIRECT_HOST = 'www.bing.com';
+
+/**
+ * Try to resolve the final URL from a Bing redirect URL (e.g. /ck/a?...&u=...).
+ * Bing often encodes the destination in the `u` query param (base64). Returns null if not a bing redirect or parsing fails.
+ */
+function resolveBingRedirectUrl(bingUrl: string): string | null {
+    try {
+        const parsed = new URL(bingUrl);
+        if (!parsed.hostname?.toLowerCase().includes('bing.com')) {
+            return null;
+        }
+        const uParam = parsed.searchParams.get('u');
+        if (!uParam) {
+            return null;
+        }
+        // Try base64 decode (Bing often encodes the destination URL)
+        try {
+            // Common format: "a1" + base64(realUrl) — decode the part after the 2-char prefix
+            if (uParam.length > 2) {
+                const afterPrefix = uParam.slice(2);
+                const decodedFromPrefix = Buffer.from(afterPrefix, 'base64').toString('utf-8');
+                if (decodedFromPrefix.startsWith('http://') || decodedFromPrefix.startsWith('https://')) {
+                    return decodedFromPrefix;
+                }
+            }
+            // Alternative: whole param is base64(realUrl)
+            const decoded = Buffer.from(uParam, 'base64').toString('utf-8');
+            if (decoded.startsWith('http://') || decoded.startsWith('https://')) {
+                return decoded;
+            }
+        } catch {
+            // not valid base64, ignore
+        }
+        // u might be the raw URL (percent-encoded)
+        if (uParam.startsWith('http%3A') || uParam.startsWith('https%3A')) {
+            return decodeURIComponent(uParam);
+        }
+        if (uParam.startsWith('http://') || uParam.startsWith('https://')) {
+            return uParam;
+        }
+        return null;
+    } catch {
+        return null;
+    }
+}
+
 
 // export type googlePlaces = {
 //     heading: string;
@@ -90,12 +137,16 @@ export class BingScraper extends SearchScrape {
             }
             ))
         for (const seval of searchRes) {
-            if (seval.link?.includes('www.bing.com')) {
-                // const response = await fetch(link, { method: 'GET' });
-                // if(response.status==200){
-                //     link=response.url
-                // }
+            if (seval.link?.includes(BING_REDIRECT_HOST)) {
+                // Prefer resolving from URL params (no extra page load)
+                const resolvedFromUrl = resolveBingRedirectUrl(seval.link);
+                if (resolvedFromUrl) {
+                    seval.link = resolvedFromUrl;
+                    result.results.push(seval);
+                    continue;
+                }
 
+                // Fallback: follow redirect by navigating
                 const browser = await this.page.browser();
                 try {
                     const newPage = await browser.newPage();

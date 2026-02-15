@@ -61,6 +61,7 @@ export default {
         import: "Importieren",
         export: "Exportieren",
         clear_filters: "Filter löschen",
+        columns: "Spalten",
         information: "Information",
         close: "Schließen",
         refresh: "Aktualisieren",
@@ -666,9 +667,15 @@ export default {
         id:"ID",
         link:"Link",
         title:"Titel",
+        snippet:"Auszug",
         record_time:"Erfassungszeit",
         keyword:"Schlüsselwort",
         status:"Status",
+    },
+    searchresultdetail:{
+        title:"Suchergebnisdetails",
+        basic_info:"Grundlegende Informationen",
+        columns:"Spalten",
     },
     proxy: {
         add_proxy: "Proxy hinzufügen",
@@ -748,6 +755,25 @@ export default {
         update_error:"Aufgabe konnte nicht aktualisiert werden",
         load_task_error:"Aufgabendaten konnten nicht geladen werden",
         no_valid_urls:"Keine gültigen URLs gefunden",
+    },
+    contactExtraction:{
+        extract_contact_info:"KI-Kontaktextraktion",
+        contact_extraction_status:"Kontaktextraktion",
+        extraction_status:"Extraktionsstatus",
+        email:"E-Mail",
+        phone:"Telefon",
+        address:"Adresse",
+        contact_info:"Kontaktinformationen",
+        extraction_date:"Extraktionsdatum",
+        social_links:"Soziale Links",
+        status_completed:"Abgeschlossen",
+        status_analyzing:"Analyse",
+        status_failed:"Fehlgeschlagen",
+        status_pending:"Ausstehend",
+        select_items_hint:"Bitte wählen Sie mindestens ein Element aus, um Kontaktinformationen zu extrahieren",
+        no_valid_items_hint:"Die ausgewählten Elemente haben keine gültigen IDs. Bitte wählen Sie andere Elemente aus.",
+        extraction_started:"Kontaktextraktion gestartet",
+        extraction_failed:"Fehler beim Starten der Extraktion",
     },
     emailscrape:{
         failed:"E-Mail-Scraping fehlgeschlagen",
@@ -875,6 +901,7 @@ export default {
         create_account:"Konto erstellen",
         uploadfilemsg_title:"Cookie-Datei manuell hochladen",
         uploadfilemsg_content:"Bitte exportieren Sie die Cookies aus Ihrem Browser und laden Sie die Cookie-Datei manuell hoch",
+        upload_cookies_button:"Cookies hochladen (Netscape .txt)",
         handleCookiesfileSuccess:"Cookie-Datei erfolgreich verarbeitet",
         handleCookiesfileFailure:"Cookie-Datei-Verarbeitung fehlgeschlagen",
         insertCookiesFailure:"Cookie-Einfügung fehlgeschlagen",
@@ -1174,7 +1201,10 @@ export default {
         status_completed: "Abgeschlossen",
         status_analyzing: "Analysiert",
         status_failed: "Fehlgeschlagen",
-        status_pending: "Ausstehend"
+        status_pending: "Ausstehend",
+        ai_analysis: "KI-Analyse",
+        reasoning: "Begründung",
+        client_business: "Kundengeschäft"
     }
 
 }

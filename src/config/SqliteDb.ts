@@ -49,6 +49,7 @@ import { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
 import { VectorEntity, VectorMetadataEntity } from "@/entity/Vector.entity";
 import { MCPToolEntity } from "@/entity/MCPTool.entity";
 import { TaskEntity } from "@/entity/Task.entity";
+import { ContactInfoEntity } from "@/entity/ContactInfo.entity";
 // import sqlite3 from "sqlite3";
 import Database from "better-sqlite3";
 import { app } from 'electron';
@@ -322,6 +323,7 @@ export class SqliteDb {
                 VectorMetadataEntity,
                 MCPToolEntity,
                 TaskEntity,
+                ContactInfoEntity,
             ],
             synchronize: true, 
             migrations: [],
@@ -456,4 +458,17 @@ export class SqliteDb {
     
 
 
+}
+
+/**
+ * Get the DataSource instance for direct database access
+ * This helper function provides access to the TypeORM DataSource for use in
+ * IPC handlers, models, and other modules that need direct repository access.
+ *
+ * @param filepath - Path to the database directory
+ * @returns The TypeORM DataSource instance
+ */
+export function getDataSource(filepath: string): DataSource {
+    const sqliteDb = SqliteDb.getInstance(filepath);
+    return sqliteDb.connection;
 }

@@ -28,6 +28,17 @@ export class DashboardController {
     this.yellowPagesResultModule = new YellowPagesResultModule();
     this.emailMarketingSendLogModule = new EmailMarketingSendLogModule();
   }
+
+  /**
+   * Ensure database connection is initialized before use
+   */
+  async ensureConnection(): Promise<void> {
+    // Ensure all modules have their database connections initialized
+    await this.searchResultModule.ensureConnection();
+    await this.emailSearchTaskModule.ensureConnection();
+    await this.yellowPagesResultModule.ensureConnection();
+    await this.emailMarketingSendLogModule.ensureConnection();
+  }
   /**
    * Get summary statistics for all metrics
    */

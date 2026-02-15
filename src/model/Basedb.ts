@@ -24,6 +24,16 @@ export abstract class BaseDb {
         //this.db = scraperModel.getdb();
        this.sqliteDb = SqliteDb.getInstance(filepath)
     }
+
+    /**
+     * Ensure database connection is initialized before use
+     * This should be called before any database operation
+     */
+    public async ensureConnection(): Promise<void> {
+        if (!this.sqliteDb.connection.isInitialized) {
+            await this.sqliteDb.connection.initialize();
+        }
+    }
     
 
     

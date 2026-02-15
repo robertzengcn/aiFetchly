@@ -261,3 +261,9 @@ export const WEBSOCKET_DISCONNECT = 'websocket:disconnect'
 export const WEBSOCKET_RECONNECT = 'websocket:reconnect'
 export const WEBSOCKET_STATUS = 'websocket:status'
 export const WEBSOCKET_SEND = 'websocket:send'
+
+// Contact Extraction Channels
+export const START_CONTACT_EXTRACTION = 'start-contact-extraction'
+export const CONTACT_EXTRACTION_PROGRESS = 'contact-extraction-progress'
+export const GET_CONTACT_INFO = 'get-contact-info'
+export const RETRY_CONTACT_EXTRACTION = 'retry-contact-extraction'

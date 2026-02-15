@@ -60,6 +60,7 @@ export default {
         import:"Import",
         export:"Export",
         clear_filters:"Clear Filters",
+        columns:"Columns",
         information:"Information",
         close:"Close",
         refresh:"Refresh",
@@ -681,9 +682,15 @@ export default {
         id:"id",
         link:"link",
         title:"title",
+        snippet:"snippet",
         record_time:"record Time",
         keyword:"keyword",
         status:"status",
+    },
+    searchresultdetail:{
+        title:"Search Result Details",
+        basic_info:"Basic Information",
+        columns:"Columns",
     },
     proxy:{
         add_proxy:"add proxy",
@@ -765,6 +772,25 @@ export default {
         update_error:"Failed to update task",
         load_task_error:"Failed to load task data",
         no_valid_urls:"No valid URLs found",
+    },
+    contactExtraction:{
+        extract_contact_info:"AI Extract Contact Info",
+        contact_extraction_status:"Contact Extraction",
+        extraction_status:"Extraction Status",
+        email:"Email",
+        phone:"Phone",
+        address:"Address",
+        contact_info:"Contact Information",
+        extraction_date:"Extraction Date",
+        social_links:"Social Links",
+        status_completed:"Completed",
+        status_analyzing:"Analyzing",
+        status_failed:"Failed",
+        status_pending:"Pending",
+        select_items_hint:"Please select at least one item to extract contact info",
+        no_valid_items_hint:"Selected items do not have valid IDs. Please select different items.",
+        extraction_started:"Contact extraction started",
+        extraction_failed:"Failed to start extraction",
     },
     emailscrape:{
         failed:"Email scrape failed",
@@ -892,6 +918,7 @@ export default {
         create_account:"create account",
         uploadfilemsg_title:"Manual upload cookies file",
         uploadfilemsg_content:"Please export cookies from your browser and upload cookies file manually",
+        upload_cookies_button:"Upload cookies (Netscape .txt)",
         handleCookiesfileSuccess:"handle cookies file success",
         handleCookiesfileFailure:"handle cookies file failure",
         insertCookiesFailure:"insert cookies failure",
@@ -1202,7 +1229,10 @@ export default {
         status_completed: "Completed",
         status_analyzing: "Analyzing",
         status_failed: "Failed",
-        status_pending: "Pending"
+        status_pending: "Pending",
+        ai_analysis: "AI Analysis",
+        reasoning: "Reasoning",
+        client_business: "Client Business"
     }
 
 }
