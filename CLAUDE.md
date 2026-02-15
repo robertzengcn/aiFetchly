@@ -73,6 +73,7 @@ src/
 - Main process handlers in `src/main-process/communication/`
 - Frontend API layer in `src/views/api/`
 - Uses contextBridge for secure renderer-main communication
+- **AI feature requests:** When handling any AI function request from the frontend (e.g. keyword generation, chat, tools), **check AI enable first** in the IPC handler before doing work. Use `Token` and `USER_AI_ENABLED` from `@/config/usersetting`; if not enabled, return `{ status: false, msg: '...', data: null }` immediately.
 
 #### Social Platform Integration
 - Platform-specific scrapers in `src/modules/`
@@ -115,6 +116,12 @@ src/
 - Modular architecture with clear separation of concerns
 - IPC handlers should sanitize all data passed between processes
 - Database operations must use TypeORM entities
+
+### AI Feature IPC Handlers - MANDATORY RULE
+**When adding or modifying IPC handlers that serve AI functions (e.g. AI chat, keyword generation, AI tools):**
+- **Check AI enable first** at the start of the handler, before parsing request data or calling AI APIs.
+- Use `Token` and `USER_AI_ENABLED` (from `@/config/usersetting`). If the value is not enabled (e.g. not `'true'`), return immediately with `status: false` and a clear message; do not proceed with the request.
+- This ensures gated AI features respect the user's plan and avoids unnecessary work when AI is disabled.
 
 ### Child/Worker Process File Placement - MANDATORY RULE
 **CRITICAL: All child/worker process entry points and worker-specific code MUST be placed in the `src/childprocess/` directory.**
