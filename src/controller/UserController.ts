@@ -38,26 +38,22 @@ export class UserController {
     // private pass: string;
     
     /**
-     * Check if a plan is a Pro plan (enables AI features)
-     * Pro plans include: professional, pro, premium, enterprise
+     * Check if a plan is a Plus plan (enables AI features)
+     * Plus plans have planName containing "aifetch-plus" (e.g. aifetch-plus-monthly)
      */
-    private isProPlan(plan: UserPlan): boolean {
+    private isPlusPlan(plan: UserPlan): boolean {
         if (!plan || !plan.planName) return false
         const planNameLower = plan.planName.toLowerCase()
-        // Check for pro plan keywords
-        return planNameLower.includes('pro') || 
-               planNameLower.includes('professional') || 
-               planNameLower.includes('premium') || 
-               planNameLower.includes('enterprise')
+        return planNameLower.includes('aifetch-plus')
     }
 
     /**
-     * Check if user has any active Pro plan
+     * Check if user has any active Plus plan
      */
-    private hasActivePro(plans: Array<UserPlan>): boolean {
+    private hasActivePlusPlan(plans: Array<UserPlan>): boolean {
         if (!plans || plans.length === 0) return false
-        return plans.some(plan => 
-            plan.status === 'active' && this.isProPlan(plan)
+        return plans.some(plan =>
+            plan.status === 'active' && this.isPlusPlan(plan)
         )
     }
 
@@ -309,11 +305,11 @@ export class UserController {
                                 tokenService.setValue(USERPLANS, JSON.stringify(res.plans))
                                 log.info('Saved user plans:', res.plans)
 
-                                // Check if user has Pro plan and enable AI features
+                                // Check if user has Plus plan and enable AI features
                                 const userController = new UserController()
-                                const hasProPlan = userController.hasActivePro(res.plans)
-                                tokenService.setValue(USER_AI_ENABLED, hasProPlan ? 'true' : 'false')
-                                log.info('AI features enabled:', hasProPlan)
+                                const hasPlusPlan = userController.hasActivePlusPlan(res.plans)
+                                tokenService.setValue(USER_AI_ENABLED, hasPlusPlan ? 'true' : 'false')
+                                log.info('AI features enabled:', hasPlusPlan)
                             } else {
                                 // Set default Community plan if no plans returned
                                 const defaultPlans = [{ planName: 'Community', status: 'active' }]

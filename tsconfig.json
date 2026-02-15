@@ -2,7 +2,7 @@
   "compilerOptions": {
     "outDir": "./dist",
     "strictPropertyInitialization": false,
-    "noImplicitAny":false,
+    "noImplicitAny": false,
     "noImplicitThis": false,
     "target": "es6",
     "module": "esnext",
@@ -17,7 +17,7 @@
     "forceConsistentCasingInFileNames": true,
     "useDefineForClassFields": true,
     "sourceMap": true,
-    "isolatedModules":true,
+    "isolatedModules": true,
     "emitDecoratorMetadata": true,
     "baseUrl": ".",
     "types": [
@@ -51,8 +51,9 @@
       "esnext",
       "dom",
       "dom.iterable",
-      "scripthost"   
-    ]
+      "scripthost"
+    ],
+    "resolveJsonModule": true
   },
   "include": [
     "forge.config.js",

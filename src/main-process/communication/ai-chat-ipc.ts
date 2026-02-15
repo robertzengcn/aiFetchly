@@ -24,6 +24,8 @@ import {
 // import { Token } from '@/modules/token';
 // import { USERID } from '@/config/usersetting';
 import { v4 as uuidv4 } from 'uuid';
+import { Token } from '@/modules/token';
+import { USER_AI_ENABLED } from '@/config/usersetting';
 
 /**
  * Generate a unique conversation ID in format: user_id:uuid
@@ -271,6 +273,20 @@ export function registerAiChatIpcHandlers(): void {
     // Stream chat message
     ipcMain.on(AI_CHAT_STREAM, async (event, data): Promise<void> => {
         try {
+            // Check AI enable first
+            const tokenService = new Token();
+            const aiEnabled = tokenService.getValue(USER_AI_ENABLED);
+            if (!aiEnabled || aiEnabled === 'false' || aiEnabled === '0') {
+                const errorChunk: ChatStreamChunk = {
+                    content: '',
+                    isComplete: true,
+                    eventType: StreamEventType.ERROR,
+                    errorMessage: 'AI is not enabled'
+                };
+                (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(errorChunk));
+                return;
+            }
+
             const requestData = JSON.parse(data as string) as {
                 message: string;
                 conversationId?: string;
@@ -532,6 +548,17 @@ export function registerAiChatIpcHandlers(): void {
     // Generate keywords using AI
     ipcMain.handle(AI_KEYWORDS_GENERATE, async (event, data: unknown): Promise<CommonMessage<string[] | null>> => {
         try {
+            // Check AI enable first
+            const tokenService = new Token();
+            const aiEnabled = tokenService.getValue(USER_AI_ENABLED);
+            if (aiEnabled !== 'true') {
+                return {
+                    status: false,
+                    msg: 'AI features are not enabled. Please upgrade your plan to access AI features.',
+                    data: null
+                };
+            }
+
             const requestData = data ? JSON.parse(data as string) : {};
             const seedKeywords: string[] = requestData.keywords || [];
             const numKeywords: number = requestData.num_keywords || 15;
