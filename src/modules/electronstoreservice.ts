@@ -12,6 +12,7 @@ export class ElectronStoreService {
         const appName = app.getName();
         const serviceName = `${appName}_${service}`;
         this.store = new Store({name: serviceName});
+        console.log('Store Path:', this.store.path);
     }
     public setValue(key, value:string){
         this.store.set(key,value);
