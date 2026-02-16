@@ -563,6 +563,7 @@ Current branch (`sqlite-vec-merge`) is integrating sqlite-vec for vector similar
 
 ## Active Technologies
 - TypeScript 5.x (001-ai-contact-extraction)
+- SQLite with TypeORM (local), Remote AI server (HTTP/SSE) (001-ai-email-template)
 
 ## Recent Changes
 - 001-ai-contact-extraction: Added TypeScript 5.x
