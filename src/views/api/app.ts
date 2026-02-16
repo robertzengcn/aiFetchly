@@ -1,6 +1,6 @@
 import { windowInvoke } from '@/views/utils/apirequest'
 import { GET_APP_INFO } from "@/config/channellist"
-import { AppInfo } from '@/modules/AppInfoModule'
+import type { AppInfo } from '@/entityTypes/appInfo-type'
 
 
 export async function getAppInfo(): Promise<AppInfo> {

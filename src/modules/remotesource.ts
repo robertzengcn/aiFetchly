@@ -10,6 +10,7 @@ import {User} from "@/modules/user"
 import {TOKENNAME} from '@/config/usersetting';
 // const url = require("url");
 import FormData from 'form-data';
+import type FormDataLib from 'form-data';
 import * as dotenv from 'dotenv';
 type sosetting = {
   sotype: string;
@@ -203,7 +204,7 @@ export class RemoteSource {
     // debug(this.REMOTEPASSWORD)
     const linkId = this._httpClient.post(
       "/api/savesolink",
-      data
+      data as FormDataLib
     )
       .then(function (res) {
         // debug(res);
@@ -284,7 +285,7 @@ export class RemoteSource {
 
     await this._httpClient.post(
       "/api/updatescrapeprotime",
-      data,
+      data as FormDataLib,
     ).then(function (res) {
       // debug(res);
       // console.log(res)

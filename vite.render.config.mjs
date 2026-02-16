@@ -48,6 +48,9 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      // Prevent dep-scan from failing on Node built-ins pulled in by shared modules
+      crypto: path.resolve(__dirname, "./src/shims/crypto.empty.ts"),
+      fs: path.resolve(__dirname, "./src/shims/fs.empty.ts"),
     },
   },
   // Prevent Vite from trying to optimize electron-store and other main-process-only modules

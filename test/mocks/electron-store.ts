@@ -6,6 +6,9 @@
 class MockElectronStore {
   private store: Record<string, unknown> = {};
 
+  /** Mock path for compatibility with electron-store API (required by Store type) */
+  readonly path: string = '';
+
   constructor(options?: unknown) {
     // Mock constructor - eslint-disable-next-line @typescript-eslint/no-unused-vars
     options; // Intentionally unused

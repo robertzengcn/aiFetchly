@@ -5,7 +5,8 @@ export type HttpClientOptions = {
 //     headers?: HeadersInit;
 // }
 //import { AuthInterceptor } from '@/modules/lib/authInterceptor';
-import {Token} from "@/modules/token"
+import type FormDataLib from 'form-data';
+import { Token } from "@/modules/token"
 import {TOKENNAME, REFRESHTOKEN} from '@/config/usersetting';
 import { User } from '@/modules/user';
 import { TokenRefreshService } from '@/modules/tokenRefresh';
@@ -222,7 +223,7 @@ export class HttpClient {
       });
     }
   
-    public async post(endpoint:string, formData:FormData, options = {}): Promise<any>{
+    public async post(endpoint:string, formData: FormData | FormDataLib, options = {}): Promise<any>{
         // const body=new URLSearchParams(formData)
         // const body=formData
         // var requestOptions = {
@@ -238,7 +239,7 @@ export class HttpClient {
         return this._fetchJSON(endpoint, {
         ...options,
         // headers: this._headers,
-        body: formData,
+        body: formData as BodyInit,
         method: "POST"
       });
     }

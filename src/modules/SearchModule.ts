@@ -32,34 +32,9 @@ import { v4 as uuidv4 } from 'uuid';
 import { SocialAccountModule } from './socialAccountModule';
 import { AIRecoveryHandler } from './AIRecoveryHandler';
 import { AIRecoveryRequest, AIRecoveryResponse, ProcessMessage } from '@/entityTypes/processMessage-type';
+import type { TaskDetailsForEdit, SearchTaskUpdateData, SearchTaskStatusValue } from '@/entityTypes/searchControlType';
 
-export type TaskDetailsForEdit = {
-    id: number;
-    engine: number;
-    engineName?: string;
-    keywords: Array<string>;
-    num_pages: number;
-    concurrency: number;
-    notShowBrowser: boolean;
-    localBrowser: string;
-    proxys: Array<{host: string, port: number, user: string, pass: string}>;
-    accounts: Array<number>;
-    status: SearchTaskStatus;
-    record_time: string;
-    enableAIRecovery?: boolean;
-}
-
-export type SearchTaskUpdateData = {
-    engine?: string;
-    keywords?: string[];
-    num_pages?: number;
-    concurrency?: number;
-    notShowBrowser?: boolean;
-    localBrowser?: string;
-    proxys?: Array<{host: string, port: number, user?: string, pass?: string}>;
-    accounts?: number[];
-    enableAIRecovery?: boolean;
-}
+export type { TaskDetailsForEdit, SearchTaskUpdateData };
 
 export class SearchModule extends BaseModule {
     // private dbpath: string
@@ -1032,7 +1007,7 @@ export class SearchModule extends BaseModule {
                 pass: item.pass
             })),
             accounts: accounts.map(item => item.account_id),
-            status: taskEntity.status,
+            status: taskEntity.status as SearchTaskStatusValue,
             record_time: taskEntity.record_time
         };
     }

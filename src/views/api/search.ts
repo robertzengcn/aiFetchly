@@ -6,7 +6,7 @@ import { windowInvoke,windowReceive,windowSend } from '@/views/utils/apirequest'
 import {LISTSESARCHRESUT,TASKSEARCHRESULTLIST,SAVESEARCHERRORLOG,RETRYSEARCHTASK,GET_SEARCH_TASK_DETAILS,UPDATE_SEARCH_TASK,SEARCH_TASK_UPDATE_EVENT,CREATE_SEARCH_TASK_ONLY,EXPORT_SEARCH_RESULTS,KILL_SEARCH_PROCESS,AI_KEYWORDS_GENERATE,ANALYZE_WEBSITE,ANALYZE_WEBSITE_PROGRESS} from "@/config/channellist";
 import {SearchResEntityDisplay} from "@/entityTypes/scrapeType"
 import {ItemSearchparam} from "@/entityTypes/commonType"
-import {TaskDetailsForEdit, SearchTaskUpdateData} from "@/modules/SearchModule"
+import type { TaskDetailsForEdit, SearchTaskUpdateData } from "@/entityTypes/searchControlType"
 //import {CommonDialogMsg} from "@/entityTypes/commonType";
 // import { ipcMain} from 'electron'
 
@@ -142,8 +142,8 @@ export async function killSearchProcess(pid?: number, taskId?: number): Promise<
  */
 export async function generateRelatedKeywords(
     keywords: string[],
-    numKeywords: number = 15,
-    keywordType: string = 'seo'
+    numKeywords = 15,
+    keywordType = 'seo'
 ): Promise<string[]> {
     const resp = await windowInvoke(AI_KEYWORDS_GENERATE, {
         keywords,
