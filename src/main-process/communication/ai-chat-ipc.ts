@@ -24,6 +24,8 @@ import {
 // import { Token } from '@/modules/token';
 // import { USERID } from '@/config/usersetting';
 import { v4 as uuidv4 } from 'uuid';
+import { Token } from '@/modules/token';
+import { USER_AI_ENABLED } from '@/config/usersetting';
 
 /**
  * Generate a unique conversation ID in format: user_id:uuid
@@ -141,9 +143,9 @@ export function registerAiChatIpcHandlers(): void {
     console.log("AI Chat IPC handlers registered");
 
     // Send chat message (non-streaming)
-    ipcMain.handle(AI_CHAT_MESSAGE, async (event, data): Promise<CommonMessage<ChatMessage | null>> => {
+    ipcMain.handle(AI_CHAT_MESSAGE, async (event, data: unknown): Promise<CommonMessage<ChatMessage | null>> => {
         try {
-            const requestData = JSON.parse(data) as {
+            const requestData = JSON.parse(data as string) as {
                 message: string;
                 conversationId?: string;
                 model?: string;
@@ -271,7 +273,21 @@ export function registerAiChatIpcHandlers(): void {
     // Stream chat message
     ipcMain.on(AI_CHAT_STREAM, async (event, data): Promise<void> => {
         try {
-            const requestData = JSON.parse(data) as {
+            // Check AI enable first
+            const tokenService = new Token();
+            const aiEnabled = tokenService.getValue(USER_AI_ENABLED);
+            if (!aiEnabled || aiEnabled === 'false' || aiEnabled === '0') {
+                const errorChunk: ChatStreamChunk = {
+                    content: '',
+                    isComplete: true,
+                    eventType: StreamEventType.ERROR,
+                    errorMessage: 'AI is not enabled'
+                };
+                (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(errorChunk));
+                return;
+            }
+
+            const requestData = JSON.parse(data as string) as {
                 message: string;
                 conversationId?: string;
                 model?: string;
@@ -366,7 +382,7 @@ export function registerAiChatIpcHandlers(): void {
             };
 
             // Create stream event processor
-            const processor = new StreamEventProcessor(event, streamState);
+            const processor = new StreamEventProcessor(event as { sender: { send: (channel: string, ...args: unknown[]) => void } }, streamState);
 
             // Common handler for processing a single stream event and forwarding to UI
             const processStreamEvent = (streamEvent: StreamEvent): void => {
@@ -399,14 +415,14 @@ export function registerAiChatIpcHandlers(): void {
                 eventType: StreamEventType.ERROR,
                 errorMessage: error instanceof Error ? error.message : 'Unknown error occurred'
             };
-            event.sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(errorChunk));
+            (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(errorChunk));
         }
     });
 
     // Get chat history
-    ipcMain.handle(AI_CHAT_HISTORY, async (event, data): Promise<CommonMessage<ChatHistoryResponse | null>> => {
+    ipcMain.handle(AI_CHAT_HISTORY, async (event, data: unknown): Promise<CommonMessage<ChatHistoryResponse | null>> => {
         try {
-            const requestData = data ? JSON.parse(data) : {};
+            const requestData = data ? JSON.parse(data as string) : {};
             const requestConversationId = requestData.conversationId;
 
             if (!requestConversationId) {
@@ -463,9 +479,9 @@ export function registerAiChatIpcHandlers(): void {
     });
 
     // Clear chat history
-    ipcMain.handle(AI_CHAT_CLEAR, async (event, data): Promise<CommonMessage<void>> => {
+    ipcMain.handle(AI_CHAT_CLEAR, async (event, data: unknown): Promise<CommonMessage<void>> => {
         try {
-            const requestData = data ? JSON.parse(data) : {};
+            const requestData = data ? JSON.parse(data as string) : {};
             const conversationId = requestData.conversationId;
 
             const chatModule = new AIChatModule();
@@ -495,7 +511,7 @@ export function registerAiChatIpcHandlers(): void {
 
     // Get all conversations with metadata
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    ipcMain.handle(AI_CHAT_CONVERSATIONS, async (event, data): Promise<CommonMessage<Array<{
+    ipcMain.handle(AI_CHAT_CONVERSATIONS, async (event, data: unknown): Promise<CommonMessage<Array<{
         conversationId: string;
         lastMessage: string;
         lastMessageTimestamp: Date;
@@ -530,9 +546,20 @@ export function registerAiChatIpcHandlers(): void {
     });
 
     // Generate keywords using AI
-    ipcMain.handle(AI_KEYWORDS_GENERATE, async (event, data): Promise<CommonMessage<string[] | null>> => {
+    ipcMain.handle(AI_KEYWORDS_GENERATE, async (event, data: unknown): Promise<CommonMessage<string[] | null>> => {
         try {
-            const requestData = data ? JSON.parse(data) : {};
+            // Check AI enable first
+            const tokenService = new Token();
+            const aiEnabled = tokenService.getValue(USER_AI_ENABLED);
+            if (aiEnabled !== 'true') {
+                return {
+                    status: false,
+                    msg: 'AI features are not enabled. Please upgrade your plan to access AI features.',
+                    data: null
+                };
+            }
+
+            const requestData = data ? JSON.parse(data as string) : {};
             const seedKeywords: string[] = requestData.keywords || [];
             const numKeywords: number = requestData.num_keywords || 15;
             const keywordType: string = requestData.keyword_type || 'seo';

@@ -271,7 +271,7 @@ export class EmailCluster {
 
   async searchdata(param: EmailDatascraper) {
     await this.start(param);
-    const pageLength = Math.min(this.config.page_length, MAX_CRAWL_PAGE_LENGTH)
+    const pageLength = Math.min(this.config.page_length ?? MAX_CRAWL_PAGE_LENGTH, MAX_CRAWL_PAGE_LENGTH)
     await this.cluster.task(crawlSite)
     param.urls.forEach((value) => {
       const domain = getDomain(value)

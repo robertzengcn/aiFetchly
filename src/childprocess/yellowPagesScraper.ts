@@ -23,6 +23,9 @@ import { BasePlatformAdapter } from '@/modules/BasePlatformAdapter';
 import { ProcessMessage } from '@/entityTypes/processMessage-type';
 import { StartTaskMessage, ProgressMessage, CompletedMessage, ErrorMessage } from '@/modules/interface/BackgroundProcessMessages';
 import { SessionRecordingManager } from '@/modules/SessionRecordingManager';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
 //import { MessageType } from '@/interfaces/IPCMessageProtocol';
 
 interface ScrapingProgress {
@@ -168,11 +171,11 @@ export class YellowPagesScraperProcess {
     private platformInfo: PlatformInfo;
     private browser: Browser | null = null;
     private page: Page | null = null;
-    private isRunning: boolean = false;
-    private isPaused: boolean = false;
+    private isRunning = false;
+    private isPaused = false;
     private adapter: BasePlatformAdapter | null = null;
     private sessionManager: SessionRecordingManager;
-    private isInNewTab: boolean = false;
+    private isInNewTab = false;
     private searchPageUrl: string | null = null;
 
     // IPC integration
@@ -381,13 +384,14 @@ export class YellowPagesScraperProcess {
         this.isPaused = true;
 
         // Send pause confirmation to parent process
-        if (process.parentPort) {
+        const parentPortLocal = (process as unknown as { parentPort?: { postMessage: (message: unknown) => void } }).parentPort;
+        if (parentPortLocal) {
             const pauseMessage = {
                 type: 'TASK_PAUSED',
                 taskId: this.taskData.taskId,
                 content: 'Task has been paused successfully'
             };
-            process.parentPort.postMessage(pauseMessage);
+            parentPortLocal.postMessage(pauseMessage);
         }
 
         // Create a promise that resolves when resume is called
@@ -406,13 +410,14 @@ export class YellowPagesScraperProcess {
         this.isPaused = false;
 
         // Send resume confirmation to parent process
-        if (process.parentPort) {
+        const parentPortLocal2 = (process as unknown as { parentPort?: { postMessage: (message: unknown) => void } }).parentPort;
+        if (parentPortLocal2) {
             const resumeMessage = {
                 type: 'TASK_RESUMED',
                 taskId: this.taskData.taskId,
                 content: 'Task has been resumed successfully'
             };
-            process.parentPort.postMessage(resumeMessage);
+            parentPortLocal2.postMessage(resumeMessage);
         }
 
         // Resolve the pause promise
@@ -705,7 +710,7 @@ export class YellowPagesScraperProcess {
         maxPages: number,
         delayBetweenRequests: number,
         totalResults: ScrapingResult[],
-        useCustomExtraction: boolean = false
+        useCustomExtraction = false
     ): Promise<void> {
         // Input the keyword once for this keyword
         await this.navigateToSearchPage(keyword, location, 1);
@@ -2866,7 +2871,7 @@ export class YellowPagesScraperProcess {
         if (!phone || phone.trim() === '') return false;
 
         // Remove common phone number formatting
-        const cleanPhone = phone.replace(/[\s\-\(\)\+\.]/g, '');
+        const cleanPhone = phone.replace(/[\s\-()+.]/g, '');
 
         // Check if it contains mostly digits and has reasonable length
         const hasDigits = /\d/.test(cleanPhone);
@@ -3432,7 +3437,7 @@ export class YellowPagesScraperProcess {
 
                 let visibleText = '';
                 let node;
-                while (node = walker.nextNode()) {
+                while ((node = walker.nextNode())) {
                     visibleText += node.textContent + ' ';
                 }
 
@@ -3642,8 +3647,9 @@ export class YellowPagesScraperProcess {
                 };
 
                 // Send message to parent process
-                if (process.parentPort) {
-                    process.parentPort.postMessage(robotVerificationMessage);
+                const parentPortLocal3 = (process as unknown as { parentPort?: { postMessage: (message: unknown) => void } }).parentPort;
+                if (parentPortLocal3) {
+                    parentPortLocal3.postMessage(robotVerificationMessage);
                 }
 
                 // Pause the scraping process
@@ -3709,8 +3715,9 @@ export class YellowPagesScraperProcess {
                 };
 
                 // Send message to parent process via IPC
-                if (process.parentPort) {
-                    process.parentPort.postMessage(cloudflareMessage);
+                const parentPortLocal4 = (process as unknown as { parentPort?: { postMessage: (message: unknown) => void } }).parentPort;
+                if (parentPortLocal4) {
+                    parentPortLocal4.postMessage(cloudflareMessage);
                     console.log('✅ Cloudflare detection message sent to parent process');
                 } else {
                     console.warn('⚠️ Cannot send Cloudflare message: process.parentPort not available');
@@ -3758,8 +3765,9 @@ export class YellowPagesScraperProcess {
                             }
                         };
 
-                        if (process.parentPort) {
-                            process.parentPort.postMessage(pauseNotificationMessage);
+                        const parentPortLocal5 = (process as unknown as { parentPort?: { postMessage: (message: unknown) => void } }).parentPort;
+                        if (parentPortLocal5) {
+                            parentPortLocal5.postMessage(pauseNotificationMessage);
                             console.log('✅ Cloudflare pause notification sent to parent process');
                         }
 
@@ -4150,7 +4158,7 @@ export class YellowPagesScraperProcess {
      * @param maxWaitTime Maximum time to wait in milliseconds (default: 30 seconds)
      * @returns true if Cloudflare challenge appears to be resolved, false otherwise
      */
-    private async waitForCloudflareChallenge(maxWaitTime: number = 30000): Promise<boolean> {
+    private async waitForCloudflareChallenge(maxWaitTime = 30000): Promise<boolean> {
         if (!this.page) return false;
 
         console.log(`⏳ Waiting for Cloudflare challenge to complete (max: ${maxWaitTime}ms)...`);
@@ -4191,7 +4199,7 @@ export class YellowPagesScraperProcess {
      * @param maxRetries Maximum number of retry attempts
      * @returns true if Cloudflare protection was handled successfully, false otherwise
      */
-    private async handleCloudflareWithRetry(maxRetries: number = 3): Promise<boolean> {
+    private async handleCloudflareWithRetry(maxRetries = 3): Promise<boolean> {
         if (!this.page) return false;
 
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -4244,12 +4252,10 @@ export class YellowPagesScraperProcess {
 
         try {
             // Create ~/tmp/ directory if it doesn't exist
-            const fs = require('fs').promises;
-            const path = require('path');
-            const os = require('os');
+            const fsPromises = fs.promises;
 
             const tmpDir = path.join(os.homedir(), 'tmp');
-            await fs.mkdir(tmpDir, { recursive: true });
+            await fsPromises.mkdir(tmpDir, { recursive: true });
             // Also save the current page URL to a separate file for debugging
             // const urlFilename = `debug_${platform}_task${taskId}_page${pageNumber}_${reason}_${timestamp}.url.txt`;
             // const urlFilePath = path.join(tmpDir, urlFilename);
@@ -4281,7 +4287,7 @@ Location: ${this.taskData.location}
 ${htmlContent}`;
 
             // Save HTML content to file
-            await fs.writeFile(filePath, debugHtml, 'utf8');
+            await fsPromises.writeFile(filePath, debugHtml, 'utf8');
 
             console.log(`💾 Saved debug HTML to: ${filePath}`);
             console.log(`🔍 Debug info - Platform: ${platform}, Task: ${taskId}, Page: ${pageNumber}, URL: ${currentUrl}`);
@@ -4298,7 +4304,9 @@ console.log('🚀 YellowPagesScraperProcess loaded');
 let globalScraper: YellowPagesScraperProcess | null = null;
 
 // Handle process messages
-process.parentPort.on('message', async (e) => {
+const parentPort = (process as unknown as { parentPort?: { on: (event: string, handler: (e: { data: string }) => void) => void; postMessage: (message: unknown) => void } }).parentPort;
+if (parentPort) {
+  parentPort.on('message', async (e: { data: string }) => {
     console.log(e);
     const message = JSON.parse(e.data);
     console.log('📨 Received message:', message.type);
@@ -4322,7 +4330,9 @@ process.parentPort.on('message', async (e) => {
                 content: `Failed to initialize scraper: ${error instanceof Error ? error.message : String(error)}`,
                 error: error instanceof Error ? error.message : String(error)
             };
-            process.parentPort?.postMessage(errorMessage);
+            if (parentPort) {
+                parentPort.postMessage(errorMessage);
+            }
             return;
         }
         // Set up callbacks for IPC communication
@@ -4333,7 +4343,9 @@ process.parentPort.on('message', async (e) => {
                 content: `Scraping progress: Page ${progress.currentPage}/${progress.totalPages} (${progress.percentage.toFixed(1)}%) - ${progress.resultsCount} results found`,
                 progress
             };
-            process.parentPort?.postMessage(progressMessage);
+            if (parentPort) {
+                parentPort.postMessage(progressMessage);
+            }
         });
 
         scraper.onComplete((results) => {
@@ -4343,7 +4355,9 @@ process.parentPort.on('message', async (e) => {
                 content: `Scraping completed successfully. Found ${results.length} business results.`,
                 results
             };
-            process.parentPort?.postMessage(completedMessage);
+            if (parentPort) {
+                parentPort.postMessage(completedMessage);
+            }
         });
 
         scraper.onError((error) => {
@@ -4353,7 +4367,9 @@ process.parentPort.on('message', async (e) => {
                 content: `Scraping failed with error: ${error.message}`,
                 error: error.message
             };
-            process.parentPort?.postMessage(errorMessage);
+            if (parentPort) {
+                parentPort.postMessage(errorMessage);
+            }
         });
 
         try {
@@ -4366,7 +4382,9 @@ process.parentPort.on('message', async (e) => {
                 content: `Failed to start scraping: ${error instanceof Error ? error.message : String(error)}`,
                 error: error instanceof Error ? error.message : String(error)
             };
-            process.parentPort?.postMessage(errorMessage);
+            if (parentPort) {
+                parentPort.postMessage(errorMessage);
+            }
         }
     } else if (message.type === 'PAUSE') {
         console.log('⏸️ Received pause command');
@@ -4393,7 +4411,8 @@ process.parentPort.on('message', async (e) => {
     } else {
         console.log('⚠️ Unknown message type:', message.type);
     }
-});
+  });
+}
 
 // Handle process termination
 process.on('SIGTERM', async () => {

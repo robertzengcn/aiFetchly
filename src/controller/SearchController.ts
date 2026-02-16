@@ -10,6 +10,8 @@ import {Usersearchdata,SearchtaskEntityNum } from "@/entityTypes/searchControlTy
 //import { utilityProcess, MessageChannelMain} from "electron";
 import * as path from 'path';
 import * as fs from 'fs';
+import { exec } from 'child_process';
+import * as process from 'process';
 import {SearchModule} from "@/modules/SearchModule"
 import { Token } from "@/modules/token"
 // import {USERSDBPATH} from '@/config/usersetting';
@@ -696,8 +698,7 @@ export class SearchController {
             if (!taskId) {
                 // Try to kill process directly using system kill command
                 try {
-                    const { exec } = require('child_process');
-                    const isWindows = require('process').platform === 'win32';
+                    const isWindows = process.platform === 'win32';
                     exec(isWindows ? `taskkill /PID ${pid} /F` : `kill -9 ${pid}`, (error: unknown) => {
                         if (error) {
                             console.error(`Failed to kill process ${pid}:`, error);
@@ -727,8 +728,7 @@ export class SearchController {
                     console.error(`Error killing process ${pid}:`, error);
                     // Try system kill as fallback
                     try {
-                        const { exec } = require('child_process');
-                        const isWindows = require('process').platform === 'win32';
+                        const isWindows = process.platform === 'win32';
                         exec(isWindows ? `taskkill /PID ${pid} /F` : `kill -9 ${pid}`);
                     } catch (killError) {
                         console.error(`Failed to kill process ${pid} using system command:`, killError);
@@ -737,8 +737,7 @@ export class SearchController {
             } else {
                 // Process not in map, try system kill
                 try {
-                    const { exec } = require('child_process');
-                    const isWindows = require('process').platform === 'win32';
+                    const isWindows = process.platform === 'win32';
                     exec(isWindows ? `taskkill /PID ${pid} /F` : `kill -9 ${pid}`);
                 } catch (error) {
                     console.error(`Failed to kill process ${pid}:`, error);
@@ -811,8 +810,7 @@ export class SearchController {
                 // Try system kill as fallback
                 if (pid) {
                     try {
-                        const { exec } = require('child_process');
-                        const isWindows = require('process').platform === 'win32';
+                        const isWindows = process.platform === 'win32';
                         exec(isWindows ? `taskkill /PID ${pid} /F` : `kill -9 ${pid}`);
                     } catch (killError) {
                         console.error(`Failed to kill process ${pid} using system command:`, killError);
@@ -834,7 +832,7 @@ export class SearchController {
 
             return {
                 success: true,
-                pid,
+                pid: pid ?? undefined,
                 message: `Process ${pid} killed successfully for task ${taskId}`
             };
         } catch (error) {

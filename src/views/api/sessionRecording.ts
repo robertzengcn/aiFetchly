@@ -61,7 +61,7 @@ export interface ClearResult {
  */
 export async function toggleSessionRecording(enabled: boolean): Promise<SessionRecordingStatus> {
   try {
-    const result = await ipcRenderer.invoke('session-recording:toggle', enabled);
+    const result = (await ipcRenderer.invoke('session-recording:toggle', enabled) as unknown) as SessionRecordingStatus;
     return result;
   } catch (error) {
     console.error('Failed to toggle session recording:', error);
@@ -78,7 +78,7 @@ export async function toggleSessionRecording(enabled: boolean): Promise<SessionR
  */
 export async function getSessionRecordingStatus(): Promise<SessionRecordingStatus> {
   try {
-    const result = await ipcRenderer.invoke('session-recording:get-status');
+    const result = (await ipcRenderer.invoke('session-recording:get-status') as unknown) as SessionRecordingStatus;
     return result;
   } catch (error) {
     console.error('Failed to get session recording status:', error);
@@ -95,7 +95,7 @@ export async function getSessionRecordingStatus(): Promise<SessionRecordingStatu
  */
 export async function getRecordedSessions(): Promise<{ success: boolean; sessions: SessionInfo[]; error?: string }> {
   try {
-    const result = await ipcRenderer.invoke('session-recording:get-sessions');
+    const result = (await ipcRenderer.invoke('session-recording:get-sessions') as unknown) as { success: boolean; sessions: SessionInfo[]; error?: string };
     return result;
   } catch (error) {
     console.error('Failed to get recorded sessions:', error);
@@ -112,7 +112,7 @@ export async function getRecordedSessions(): Promise<{ success: boolean; session
  */
 export async function exportSessions(options: ExportOptions): Promise<ExportResult> {
   try {
-    const result = await ipcRenderer.invoke('session-recording:export', options);
+    const result = (await ipcRenderer.invoke('session-recording:export', options) as unknown) as ExportResult;
     return result;
   } catch (error) {
     console.error('Failed to export sessions:', error);
@@ -131,7 +131,7 @@ export async function exportSessions(options: ExportOptions): Promise<ExportResu
  */
 export async function clearOldSessions(options: ClearOptions = {}): Promise<ClearResult> {
   try {
-    const result = await ipcRenderer.invoke('session-recording:clear', options);
+    const result = (await ipcRenderer.invoke('session-recording:clear', options) as unknown) as ClearResult;
     return result;
   } catch (error) {
     console.error('Failed to clear old sessions:', error);
@@ -150,7 +150,7 @@ export async function clearOldSessions(options: ClearOptions = {}): Promise<Clea
  */
 export async function getSessionsDirectory(): Promise<{ success: boolean; directory: string; error?: string }> {
   try {
-    const result = await ipcRenderer.invoke('session-recording:get-directory');
+    const result = (await ipcRenderer.invoke('session-recording:get-directory') as unknown) as { success: boolean; directory: string; error?: string };
     return result;
   } catch (error) {
     console.error('Failed to get sessions directory:', error);

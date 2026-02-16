@@ -1,6 +1,8 @@
 "use strict";
 import { HttpClient } from "@/modules/lib/httpclient";
 import { CommonApiresp, ChatApiResponse } from "@/entityTypes/commonType";
+import { Token } from "@/modules/token";
+import { USER_AI_ENABLED } from "@/config/usersetting";
 
 /**
  * Chat request interface
@@ -187,6 +189,27 @@ export interface BatchKeywordGenerationResponse {
 }
 
 /**
+ * Contact extraction request interface
+ */
+export interface ContactExtractionRequest {
+    page_content: string;
+    url: string;
+    entity_name?: string;
+    screenshot?: string;
+}
+
+/**
+ * Contact extraction response interface
+ */
+export interface ContactExtractionResponse {
+    emails: string[];
+    phones: string[];
+    address?: string;
+    socialLinks?: string[];
+    confidence?: number;
+}
+
+/**
  * Website analysis request interface
  */
 export interface WebsiteAnalysisRequest {
@@ -234,6 +257,33 @@ export class AiChatApi {
     }
 
     /**
+     * Check if AI features are enabled for the current user.
+     * Throws an error if AI is not enabled, preventing the API call.
+     * 
+     * In worker processes, checks WORKER_AI_ENABLED env var instead of
+     * Token/ElectronStoreService (which require Electron APIs unavailable in workers).
+     * 
+     * @throws {Error} When AI features are not enabled for the user
+     */
+    private ensureAIEnabled(): void {
+        // Worker processes cannot access ElectronStoreService/Token,
+        // so use env var passed from main process instead.
+        if (process.env.WORKER_TYPE) {
+            const aiEnabled = process.env.WORKER_AI_ENABLED;
+            if (aiEnabled !== 'true') {
+                throw new Error('AI features are not enabled. Please upgrade your plan to access AI features.');
+            }
+            return;
+        }
+
+        const tokenService = new Token();
+        const aiEnabled = tokenService.getValue(USER_AI_ENABLED);
+        if (aiEnabled !== 'true') {
+            throw new Error('AI features are not enabled. Please upgrade your plan to access AI features.');
+        }
+    }
+
+    /**
      * Send a chat message to the remote AI service
      * 
      * @param request - Chat request containing message and optional parameters
@@ -249,6 +299,7 @@ export class AiChatApi {
      * ```
      */
     async sendMessage(request: ChatRequest): Promise<CommonApiresp<ChatApiResponse>> {
+        this.ensureAIEnabled();
         const data: ChatApiRequestData = {
             message: request.message,
             conversation_id: request.conversationId,
@@ -293,6 +344,7 @@ export class AiChatApi {
         request: ChatRequest,
         onEvent: (event: StreamEvent) => void
     ): Promise<void> {
+        this.ensureAIEnabled();
         const data: ChatApiRequestData = {
             message: request.message,
             conversation_id: request.conversationId,
@@ -447,6 +499,7 @@ export class AiChatApi {
      * ```
      */
     async getAvailableModels(): Promise<CommonApiresp<AvailableChatModelsResponse>> {
+        this.ensureAIEnabled();
         return this._httpClient.get('/api/ai/chat/models');
     }
 
@@ -506,6 +559,7 @@ export class AiChatApi {
     async batchGenerateKeywords(
         requests: BatchKeywordGenerationRequestItem[]
     ): Promise<CommonApiresp<BatchKeywordGenerationResponse>> {
+        this.ensureAIEnabled();
         return this._httpClient.postJson('/api/ai/keywords/generate/batch', requests);
     }
 
@@ -536,6 +590,7 @@ export class AiChatApi {
     async analyzeWebsite(
         request: WebsiteAnalysisRequest
     ): Promise<CommonApiresp<WebsiteAnalysisResponse>> {
+        this.ensureAIEnabled();
         const data: WebsiteAnalysisRequest = {
             website_content: request.website_content,
             client_business: request.client_business
@@ -567,6 +622,7 @@ export class AiChatApi {
         clientTools?: ToolFunction[],
         threadId?: string
     ): Promise<void> {
+        this.ensureAIEnabled();
         const data: ContinueRequestData = {
             conversation_id: conversationId,
             tool_results: toolResults
@@ -673,6 +729,71 @@ export class AiChatApi {
         } finally {
             reader.releaseLock();
         }
+    }
+
+    /**
+     * Extract contact information from web page content using AI
+     *
+     * Sends page content, URL, entity name, and screenshot to the remote AI server
+     * which handles the prompt and extraction logic server-side.
+     *
+     * @param pageContent - Text content of the web page
+     * @param url - URL of the web page
+     * @param entityName - Optional name of the entity/company
+     * @param screenshot - Optional base64-encoded screenshot of the page for visual context.
+     *   Accepts either a raw base64-encoded string (auto-wrapped as PNG data URI)
+     *   or a full data URI (e.g., 'data:image/png;base64,...').
+     * @returns Promise resolving to extracted contact information
+     * @throws {Error} When network request fails
+     *
+     * @example
+     * ```typescript
+     * // With raw base64 string (auto-wrapped as data:image/png;base64,...)
+     * const response = await api.extractContactInfo(
+     *   'Company Name\nEmail: info@example.com\nPhone: 555-1234',
+     *   'https://example.com/contact',
+     *   'Example Company',
+     *   'iVBORw0KGgo...'
+     * );
+     *
+     * // With full data URI
+     * const response2 = await api.extractContactInfo(
+     *   'Company Name\nEmail: info@example.com\nPhone: 555-1234',
+     *   'https://example.com/contact',
+     *   'Example Company',
+     *   'data:image/png;base64,iVBORw0KGgo...'
+     * );
+     * if (response.status && response.data) {
+     *   console.log('Emails:', response.data.emails);
+     *   console.log('Phones:', response.data.phones);
+     *   console.log('Address:', response.data.address);
+     * }
+     * ```
+     */
+    async extractContactInfo(
+        pageContent: string,
+        url: string,
+        entityName?: string,
+        screenshot?: string
+    ): Promise<CommonApiresp<ContactExtractionResponse>> {
+        this.ensureAIEnabled();
+        const data: ContactExtractionRequest = {
+            page_content: pageContent,
+            url: url
+        };
+
+        if (entityName) {
+            data.entity_name = entityName;
+        }
+
+        if (screenshot) {
+            // Auto-wrap raw base64-encoded string as PNG data URI
+            data.screenshot = screenshot.startsWith('data:')
+                ? screenshot
+                : `data:image/png;base64,${screenshot}`;
+        }
+
+        return this._httpClient.postJson('/api/ai/contact/extract', data);
     }
 }
 

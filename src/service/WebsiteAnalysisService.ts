@@ -18,6 +18,7 @@ const ANALYSIS_CONFIG = {
     // Limits
     MAX_BATCH_SIZE: 100,
     MAX_URL_LENGTH: 2048,
+    READ_URL_DEFAULT_MAX_LENGTH: 80_000,
 
     // Default values
     DEFAULT_TEMPERATURE: 0.7
@@ -335,6 +336,37 @@ export class WebsiteAnalysisService {
             return null;
         }
         return childPath;
+    }
+
+    /**
+     * Fetch a web page by URL and return its content as markdown.
+     * Uses the same child process and scraping pipeline as batch analysis.
+     * @param url Page URL to read (must be valid HTTP/HTTPS)
+     * @param options Optional maxLength to truncate content for context limits
+     * @returns Content as markdown and whether it was truncated
+     */
+    static async getPageContentAsMarkdown(
+        url: string,
+        options?: { maxLength?: number }
+    ): Promise<{ content: string; truncated: boolean }> {
+        const trimmed = typeof url === 'string' ? url.trim() : '';
+        if (!trimmed) {
+            throw new Error('url is required and must be a non-empty string');
+        }
+        try {
+            new URL(trimmed);
+        } catch {
+            throw new Error(`Invalid URL: ${trimmed}`);
+        }
+
+        const markdown = await this.scrapeWebsite(trimmed);
+        const maxLength = options?.maxLength ?? ANALYSIS_CONFIG.READ_URL_DEFAULT_MAX_LENGTH;
+        const truncated = markdown.length > maxLength;
+        const content = truncated
+            ? markdown.slice(0, maxLength) + '\n\n[Content truncated due to length limit.]'
+            : markdown;
+
+        return { content, truncated };
     }
 
     /**

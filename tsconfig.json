@@ -2,7 +2,7 @@
   "compilerOptions": {
     "outDir": "./dist",
     "strictPropertyInitialization": false,
-    "noImplicitAny":false,
+    "noImplicitAny": false,
     "noImplicitThis": false,
     "target": "es6",
     "module": "esnext",
@@ -17,7 +17,7 @@
     "forceConsistentCasingInFileNames": true,
     "useDefineForClassFields": true,
     "sourceMap": true,
-    "isolatedModules":true,
+    "isolatedModules": true,
     "emitDecoratorMetadata": true,
     "baseUrl": ".",
     "types": [
@@ -30,14 +30,30 @@
     "paths": {
       "@/*": [
         "./src/*"
+      ],
+      "electron": [
+        "./test/mocks/electron.ts"
+      ],
+      "electron-log": [
+        "./test/mocks/electron-log.ts"
+      ],
+      "electron-log/main": [
+        "./test/mocks/electron-log.ts"
+      ],
+      "electron-log/node": [
+        "./test/mocks/electron-log.ts"
+      ],
+      "electron-store": [
+        "./test/mocks/electron-store.ts"
       ]
     },
     "lib": [
       "esnext",
       "dom",
       "dom.iterable",
-      "scripthost"   
-    ]
+      "scripthost"
+    ],
+    "resolveJsonModule": true
   },
   "include": [
     "forge.config.js",

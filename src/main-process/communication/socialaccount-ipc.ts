@@ -1,4 +1,4 @@
-import { ipcMain, dialog, BrowserWindow } from 'electron'
+import { ipcMain, BrowserWindow, dialog } from 'electron'
 import { SOCIALPLATFORM_LIST, SOCIALACCOUNTlIST, SOCIALACCOUNTDETAIL, SOCIALACCOUNTSAVE, SOCIALACCOUNTDELETE, SOCIAL_ACCOUNT_LOGIN, SOCIAL_ACCOUNT_LOGIN_MESSSAGE, SOCIAL_ACCOUNT_LOGIN_UPLOADCOOKIES,SOCIAL_ACCOUNT_CLEAN_COOKIES,SOCIAL_ACCOUNT_SHOW_PLATFORMPAGE } from "@/config/channellist"
 import { SocialAccount } from '@/modules/socialaccount'
 import { SocialPlatform } from "@/modules/social_platform"
@@ -13,7 +13,7 @@ import { SocialPlatformList } from '@/config/generate'
 export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
 
   ipcMain.handle(SOCIALACCOUNTlIST, async (event, data) => {
-    const qdata = JSON.parse(data);
+    const qdata = JSON.parse(data as string);
 
     if (!("page" in qdata)) {
       qdata.page = 10;
@@ -66,7 +66,7 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
     return res
   })
   ipcMain.handle(SOCIALACCOUNTDETAIL, async (event, data) => {
-    const qdata = JSON.parse(data);
+    const qdata = JSON.parse(data as string);
     if (!("id" in qdata)) {
       //throw new Error("id not found");
       return {
@@ -97,7 +97,7 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
   })
   //list social platform
   ipcMain.handle(SOCIALPLATFORM_LIST, async (event, data) => {
-    const qdata = JSON.parse(data);
+    const qdata = JSON.parse(data as string);
 
     if (!("page" in qdata)) {
       qdata.page = 10;
@@ -127,7 +127,7 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
   })
   //login social account
   ipcMain.on(SOCIAL_ACCOUNT_LOGIN, async (event, data) => {
-    const qdata = JSON.parse(data) as RequireCookiesMsgbox;
+    const qdata = JSON.parse(data as string) as RequireCookiesMsgbox;
     if (!("id" in qdata)) {
       throw new Error("id not found");
     }
@@ -155,8 +155,8 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
             title: "",
             content: accinfo.msg
           }
-        }
-        event.sender.send(SOCIAL_ACCOUNT_LOGIN_MESSSAGE, JSON.stringify(comMsgs))
+        };
+        (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(SOCIAL_ACCOUNT_LOGIN_MESSSAGE, JSON.stringify(comMsgs))
       return
       }
       // event.sender.send('socialaccount:login:msg', JSON.stringify({ msg: "test", status: false }))
@@ -169,8 +169,8 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
             title: "socialaccount.uploadfilemsg_title",
             content: "socialaccount.uploadfilemsg_content"
           }
-        }
-        event.sender.send(SOCIAL_ACCOUNT_LOGIN_MESSSAGE, JSON.stringify(comMsgs))
+        };
+        (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(SOCIAL_ACCOUNT_LOGIN_MESSSAGE, JSON.stringify(comMsgs))
       },()=>{//ask user to manual login
         const comMsgs: CommonDialogMsg = {
           status: false,
@@ -180,8 +180,8 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
             title: "socialaccount.manuallogin_title",
             content: "socialaccount.manuallogin_content"
           }
-        }
-        event.sender.send(SOCIAL_ACCOUNT_LOGIN_MESSSAGE, JSON.stringify(comMsgs))
+        };
+        (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(SOCIAL_ACCOUNT_LOGIN_MESSSAGE, JSON.stringify(comMsgs))
       },()=>{
         const comMsgs: CommonDialogMsg = {
           status: true,
@@ -191,8 +191,8 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
             title: "socialaccount.update_cookies_success",
             content: ""
           }
-        }
-        event.sender.send(SOCIAL_ACCOUNT_LOGIN_MESSSAGE, JSON.stringify(comMsgs))
+        };
+        (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(SOCIAL_ACCOUNT_LOGIN_MESSSAGE, JSON.stringify(comMsgs))
       }).catch(function (err) {
         if (err instanceof Error) {
           //console log error line
@@ -203,8 +203,8 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
             code: 202412171245163,
             msg: err.message,
            
-          }
-          event.sender.send(SOCIAL_ACCOUNT_LOGIN_MESSSAGE, JSON.stringify(comMsgs))
+          };
+          (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(SOCIAL_ACCOUNT_LOGIN_MESSSAGE, JSON.stringify(comMsgs))
         }
       })
 
@@ -216,13 +216,13 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
           code: 202412141226150,
           msg: error.message,
        
-        }
-        event.sender.send(SOCIAL_ACCOUNT_LOGIN_MESSSAGE, JSON.stringify(comMsgs))
+        };
+        (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(SOCIAL_ACCOUNT_LOGIN_MESSSAGE, JSON.stringify(comMsgs))
       }
     }
   })
   ipcMain.on(SOCIAL_ACCOUNT_SHOW_PLATFORMPAGE, async (event, data) => {
-    const qdata = JSON.parse(data) as RequireCookiesParam;
+    const qdata = JSON.parse(data as string) as RequireCookiesParam;
     if (!("id" in qdata)) {
       throw new Error("id not found");
     }
@@ -237,8 +237,8 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
             title: "socialaccount.update_cookies_success",
             content: ""
           }
-        }
-        event.sender.send(SOCIAL_ACCOUNT_LOGIN_MESSSAGE, JSON.stringify(comMsgs))
+        };
+        (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(SOCIAL_ACCOUNT_LOGIN_MESSSAGE, JSON.stringify(comMsgs))
       })
     } catch (error) {
       if (error instanceof Error) {
@@ -252,15 +252,15 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
             title: "",
             content: error.message
           }
-        }
-        event.sender.send(SOCIAL_ACCOUNT_LOGIN_MESSSAGE, JSON.stringify(comMsgs))
+        };
+        (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(SOCIAL_ACCOUNT_LOGIN_MESSSAGE, JSON.stringify(comMsgs))
       }
     }
 
   })
   ipcMain.handle(SOCIALACCOUNTSAVE, async (event, data) => {
     //save social account
-    const qdata = JSON.parse(data) as SocialAccountDetailData;
+    const qdata = JSON.parse(data as string) as SocialAccountDetailData;
     const socialaccount = new SocialAccountController()
     const res = await socialaccount.saveSocialAccount(qdata).catch(function (err) {
       console.log(err);
@@ -280,7 +280,7 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
   })
   //delete social account
   ipcMain.handle(SOCIALACCOUNTDELETE, async (event, data) => {
-    const qdata = JSON.parse(data);
+    const qdata = JSON.parse(data as string);
     if (!("id" in qdata)) {
       //throw new Error("id not found");
       return {
@@ -309,14 +309,14 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
     return res
   })
   ipcMain.on(SOCIAL_ACCOUNT_LOGIN_UPLOADCOOKIES, async (event, data) => {
-    const qdata = JSON.parse(data) as RequireCookiesParam
+    const qdata = JSON.parse(data as string) as RequireCookiesParam
     if (!("id" in qdata)) {
       //throw new Error("id not found");
       const cmsg={
         status: false,
         msg: "id not found",
       } as CommonDialogMsg;
-      event.sender.send(SOCIAL_ACCOUNT_LOGIN_MESSSAGE, JSON.stringify(cmsg))
+      (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(SOCIAL_ACCOUNT_LOGIN_MESSSAGE, JSON.stringify(cmsg))
     }
     const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
       properties: ['openFile'],
@@ -324,7 +324,7 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
     })
     if (canceled) {
       const cmsg={ status: false, msg: "canceled" } as CommonDialogMsg
-      event.sender.send(SOCIAL_ACCOUNT_LOGIN_MESSSAGE, JSON.stringify(cmsg))
+      (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(SOCIAL_ACCOUNT_LOGIN_MESSSAGE, JSON.stringify(cmsg))
     } else {
       if (filePaths) {
         console.log(filePaths[0])
@@ -332,7 +332,7 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
           if (e) {
             if (e instanceof Error) {
               const cmsg={ status: false, msg: e.message } as CommonDialogMsg
-              event.sender.send(SOCIAL_ACCOUNT_LOGIN_MESSSAGE, JSON.stringify(cmsg))
+              (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(SOCIAL_ACCOUNT_LOGIN_MESSSAGE, JSON.stringify(cmsg))
             }
           } else {
             const sac=new SocialAccountController()
@@ -346,8 +346,8 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
                   title: "socialaccount.handleCookiesfileSuccess",
                   content: ""
                 }
-              }
-              event.sender.send(SOCIAL_ACCOUNT_LOGIN_MESSSAGE, JSON.stringify(comMsgs))
+              };
+              (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(SOCIAL_ACCOUNT_LOGIN_MESSSAGE, JSON.stringify(comMsgs))
             } else {
               const comMsgs: CommonDialogMsg = {
                 status: false,
@@ -357,8 +357,8 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
                   title: "socialaccount.handleCookiesfileFailure",
                   content: "socialaccount.insertCookiesFailure"
                 }
-              }
-              event.sender.send(SOCIAL_ACCOUNT_LOGIN_MESSSAGE, JSON.stringify(comMsgs))
+              };
+              (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(SOCIAL_ACCOUNT_LOGIN_MESSSAGE, JSON.stringify(comMsgs))
             }
 
           }
@@ -371,7 +371,7 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
   })
   //remove cookies
   ipcMain.on(SOCIAL_ACCOUNT_CLEAN_COOKIES, async (event, data) => {
-    const qdata = JSON.parse(data) as RequireCookiesParam
+    const qdata = JSON.parse(data as string) as RequireCookiesParam
     if (!("id" in qdata)) {
       //throw new Error("id not found");
       return {
@@ -389,7 +389,7 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
         title: "",
         content: ""
       }
-    }
-    event.sender.send(SOCIAL_ACCOUNT_LOGIN_MESSSAGE, JSON.stringify(comMsgs))
+    };
+    (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(SOCIAL_ACCOUNT_LOGIN_MESSSAGE, JSON.stringify(comMsgs))
   })
 }

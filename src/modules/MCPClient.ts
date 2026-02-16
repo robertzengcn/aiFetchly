@@ -1,5 +1,6 @@
 import { spawn, ChildProcess } from "child_process";
 import type { EventEmitter } from "events";
+import type { WebSocket as WSWebSocket } from "ws";
 
 // WebSocket import - use dynamic import for optional dependency
 let WebSocket: typeof import("ws") | null = null;
@@ -31,9 +32,9 @@ export interface MCPToolInfo {
  */
 export class MCPClient {
     private config: MCPClientConfig;
-    private connection: ChildProcess | InstanceType<typeof WebSocket.WebSocket> | EventSource | null = null;
-    private connected: boolean = false;
-    private requestId: number = 0;
+    private connection: ChildProcess | WSWebSocket | EventSource | null = null;
+    private connected = false;
+    private requestId = 0;
     private pendingRequests: Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }> = new Map();
 
     constructor(config: MCPClientConfig) {

@@ -604,7 +604,7 @@ export class YellowPagesProcessManager extends BaseModule {
         });
 
         // Handle process exit - this ensures task status is properly updated in the database
-        childProcess.on('exit', (code: number) => {
+        childProcess.on('exit', (code: number | null, signal: string | null) => {
             console.log(`Process exited for task ${taskId}: code=${code}`);
             
             // Get process info for logging

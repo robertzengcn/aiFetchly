@@ -121,7 +121,7 @@ const chartOptions = computed(() => ({
     height: 400,
     stacked: true,
     toolbar: {
-      show: true
+      show: false
     },
     animations: {
       enabled: true,

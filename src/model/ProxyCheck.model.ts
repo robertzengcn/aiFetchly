@@ -8,6 +8,11 @@ export enum proxyCheckStatus {
     Failure = 2,
 }
 
+export enum googlePassStatus {
+    Pass = 1,
+    Fail = 2,
+}
+
 export class ProxyCheckModel extends BaseDb {
     private repository: Repository<ProxyCheckEntity>;
 
@@ -52,5 +57,23 @@ export class ProxyCheckModel extends BaseDb {
     async deleteProxyCheck(proxyId: number): Promise<number> {
         const result = await this.repository.delete({ proxy_id: proxyId });
         return result.affected || 0;
+    }
+
+    async updateGooglePassStatus(proxyId: number, status: googlePassStatus | null): Promise<void> {
+        // Check if proxy exists
+        const existingProxy = await this.getProxyCheck(proxyId);
+        
+        if (!existingProxy) {
+            // Create new record
+            const newProxy = new ProxyCheckEntity();
+            newProxy.proxy_id = proxyId;
+            newProxy.google_pass = status;
+            newProxy.check_time = new Date().toISOString();
+            await this.repository.save(newProxy);
+        } else {
+            // Update existing record
+            existingProxy.google_pass = status;
+            await this.repository.save(existingProxy);
+        }
     }
 } 

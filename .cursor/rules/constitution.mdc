@@ -55,6 +55,7 @@ This constitution establishes the fundamental principles, values, and guidelines
   - API responses must have proper TypeScript interfaces
   - Error handling for AI operations must be comprehensive
   - Rate limiting and retry logic must be implemented
+  - **AI enable check in IPC:** When handling AI function requests from the frontend, check AI enable first in the IPC handler (using `Token` and `USER_AI_ENABLED`). If not enabled, return an error immediately; do not proceed with the request.
 
 - **File Organization**
   - Follow the directory structure in [electron-rules.mdc](mdc:.cursor/rules/electron-rules.mdc)

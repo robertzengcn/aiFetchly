@@ -65,7 +65,7 @@ export class RAGModule extends BaseModule {
     private chunkingService: ChunkingService;
     private ragChunkModule: RAGChunkModule;
     private ragSearchModule: RagSearchModule;
-    private isInitialized: boolean = false;
+    private isInitialized= false;
     private systemSettingModule: SystemSettingModule;
     private stats: RAGStats = {
         totalQueries: 0,

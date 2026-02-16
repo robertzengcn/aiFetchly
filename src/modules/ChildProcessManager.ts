@@ -77,7 +77,7 @@ interface ProcessInfo {
 export class ChildProcessManager extends BaseModule {
     private processes: Map<string, ProcessInfo> = new Map();
     private messageHandlers: Map<MessageType, ((message: IPCMessage) => Promise<void>)[]> = new Map();
-    private isInitialized: boolean = false;
+    private isInitialized= false;
 
     constructor() {
         super();

@@ -60,6 +60,7 @@ export default {
         import:"Import",
         export:"Export",
         clear_filters:"Clear Filters",
+        columns:"Columns",
         information:"Information",
         close:"Close",
         refresh:"Refresh",
@@ -616,6 +617,10 @@ export default {
     language:{
         zh:"Chinese",
         en:"English",
+        es:"Spanish",
+        fr:"French",
+        de:"German",
+        ja:"Japanese",
     },
 
     account:{
@@ -667,6 +672,8 @@ export default {
         generate_related_keywords:"Generate Related Keywords (AI)",
         keywords_generated_successfully:"Successfully generated {count} related keywords",
         no_keywords_generated:"No keywords were generated",
+        enable_ai_recovery:"Enable AI Recovery",
+        enable_ai_recovery_hint:"When enabled, AI will help recover from scraping errors by analyzing page structure and suggesting alternative actions",
     },
     searchtask:{
         id:"Task Id",
@@ -675,9 +682,15 @@ export default {
         id:"id",
         link:"link",
         title:"title",
+        snippet:"snippet",
         record_time:"record Time",
         keyword:"keyword",
         status:"status",
+    },
+    searchresultdetail:{
+        title:"Search Result Details",
+        basic_info:"Basic Information",
+        columns:"Columns",
     },
     proxy:{
         add_proxy:"add proxy",
@@ -703,6 +716,7 @@ export default {
         // check_proxy:"Check proxy",
         import_proxy:"Import proxy",
         no_proxy_to_import:"The available proxy number is less than one, no proxy to import",
+        no_proxy_selected:"Please select at least one proxy to check",
         import_proxy_success:"Import Proxy Success",
         import_proxy_fail:"Import Proxy Fail",
         check_settings:"Check Settings",
@@ -712,6 +726,10 @@ export default {
         // check_proxy:"Check Proxy",
         save_to_my_proxy:"Save to My Proxy",
         remove_fail_proxy:"Remove fail Proxy",
+        google_pass:"Google Pass",
+        google_pass_pass:"Pass",
+        google_pass_fail:"Fail",
+        google_pass_not_checked:"Not Checked",
         search:"Search",
         // host:"Host",
         // port:"Port",
@@ -754,6 +772,25 @@ export default {
         update_error:"Failed to update task",
         load_task_error:"Failed to load task data",
         no_valid_urls:"No valid URLs found",
+    },
+    contactExtraction:{
+        extract_contact_info:"AI Extract Contact Info",
+        contact_extraction_status:"Contact Extraction",
+        extraction_status:"Extraction Status",
+        email:"Email",
+        phone:"Phone",
+        address:"Address",
+        contact_info:"Contact Information",
+        extraction_date:"Extraction Date",
+        social_links:"Social Links",
+        status_completed:"Completed",
+        status_analyzing:"Analyzing",
+        status_failed:"Failed",
+        status_pending:"Pending",
+        select_items_hint:"Please select at least one item to extract contact info",
+        no_valid_items_hint:"Selected items do not have valid IDs. Please select different items.",
+        extraction_started:"Contact extraction started",
+        extraction_failed:"Failed to start extraction",
     },
     emailscrape:{
         failed:"Email scrape failed",
@@ -881,6 +918,7 @@ export default {
         create_account:"create account",
         uploadfilemsg_title:"Manual upload cookies file",
         uploadfilemsg_content:"Please export cookies from your browser and upload cookies file manually",
+        upload_cookies_button:"Upload cookies (Netscape .txt)",
         handleCookiesfileSuccess:"handle cookies file success",
         handleCookiesfileFailure:"handle cookies file failure",
         insertCookiesFailure:"insert cookies failure",
@@ -1191,7 +1229,10 @@ export default {
         status_completed: "Completed",
         status_analyzing: "Analyzing",
         status_failed: "Failed",
-        status_pending: "Pending"
+        status_pending: "Pending",
+        ai_analysis: "AI Analysis",
+        reasoning: "Reasoning",
+        client_business: "Client Business"
     }
 
 }

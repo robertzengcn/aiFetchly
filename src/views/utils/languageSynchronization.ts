@@ -23,13 +23,12 @@ export interface SyncState {
 
 /**
  * Language synchronization manager
+ * Uses event-driven synchronization instead of timer-based polling
  */
 export class LanguageSynchronizer {
-    private syncInterval: number | null = null
     private syncState: SyncState
     private eventListeners: ((event: SyncEvent) => void)[] = []
-    private readonly SYNC_INTERVAL = 5000 // 5 seconds
-    private readonly CONFLICT_THRESHOLD = 10000 // 10 seconds
+    private isInitialized = false
 
     constructor() {
         this.syncState = {
@@ -41,33 +40,20 @@ export class LanguageSynchronizer {
     }
 
     /**
-     * Start automatic synchronization
+     * Initialize synchronization (performs initial sync only)
      */
-    startSync(): void {
-        if (this.syncInterval) {
-            return // Already running
+    async initialize(): Promise<void> {
+        if (this.isInitialized) {
+            return // Already initialized
         }
 
-        console.log('Starting language synchronization...')
+        console.log('Initializing language synchronization...')
         
-        // Initial sync
-        this.performSync()
+        // Perform initial sync
+        await this.performSync()
         
-        // Set up interval
-        this.syncInterval = window.setInterval(() => {
-            this.performSync()
-        }, this.SYNC_INTERVAL)
-    }
-
-    /**
-     * Stop automatic synchronization
-     */
-    stopSync(): void {
-        if (this.syncInterval) {
-            clearInterval(this.syncInterval)
-            this.syncInterval = null
-            console.log('Language synchronization stopped')
-        }
+        this.isInitialized = true
+        console.log('Language synchronization initialized')
     }
 
     /**
@@ -102,14 +88,15 @@ export class LanguageSynchronizer {
 
     /**
      * Perform synchronization check
+     * Called on-demand when language changes occur
      */
-    private async performSync(): Promise<void> {
+    async performSync(): Promise<void> {
         try {
             const currentSystemLanguage = await getLanguagePreference()
             const currentCookieLanguage = getLanguage()
             
-            // Check for conflicts
-            if (this.syncState.lastKnownValue !== currentSystemLanguage) {
+            // Check for conflicts (system language changed externally)
+            if (this.syncState.lastKnownValue !== currentSystemLanguage && this.isInitialized) {
                 await this.handleConflict(currentSystemLanguage, currentCookieLanguage)
                 return
             }
@@ -126,6 +113,28 @@ export class LanguageSynchronizer {
             
         } catch (error) {
             console.error('Sync error:', error)
+        }
+    }
+
+    /**
+     * Sync when user changes language locally
+     * Call this method when the user changes language in the UI
+     */
+    async syncOnLanguageChange(newLanguage: string): Promise<void> {
+        try {
+            console.log(`Syncing language change to: ${newLanguage}`)
+            
+            // Update local cookie immediately
+            setLanguage(newLanguage)
+            
+            // Sync to remote system settings
+            await this.syncLocalToRemote(newLanguage)
+            
+            // Update state
+            this.syncState.lastKnownValue = newLanguage
+            this.syncState.lastSyncTime = Date.now()
+        } catch (error) {
+            console.error('Error syncing language change:', error)
         }
     }
 
@@ -240,10 +249,10 @@ export class LanguageSynchronizer {
     }
 
     /**
-     * Check if synchronization is active
+     * Check if synchronization is initialized
      */
-    isActive(): boolean {
-        return this.syncInterval !== null
+    hasInitialized(): boolean {
+        return this.isInitialized
     }
 }
 
@@ -261,13 +270,14 @@ export function getLanguageSynchronizer(): LanguageSynchronizer {
 }
 
 /**
- * Initialize language synchronization
+ * Initialize language synchronization (performs initial sync only)
+ * This should be called once when the app starts
  */
-export function initializeLanguageSynchronization(): void {
+export async function initializeLanguageSynchronization(): Promise<void> {
     const synchronizer = getLanguageSynchronizer()
     
-    if (!synchronizer.isActive()) {
-        synchronizer.startSync()
+    if (!synchronizer.hasInitialized()) {
+        await synchronizer.initialize()
         
         // Add event listeners for debugging and user feedback
         synchronizer.addEventListener((event) => {
@@ -290,11 +300,12 @@ export function initializeLanguageSynchronization(): void {
 }
 
 /**
- * Stop language synchronization
+ * Sync language when user changes it in the UI
+ * Call this method whenever the user changes the language
  */
-export function stopLanguageSynchronization(): void {
+export async function syncLanguageChange(newLanguage: string): Promise<void> {
     const synchronizer = getLanguageSynchronizer()
-    synchronizer.stopSync()
+    await synchronizer.syncOnLanguageChange(newLanguage)
 }
 
 /**

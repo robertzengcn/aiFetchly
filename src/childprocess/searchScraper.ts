@@ -9,6 +9,7 @@ import {ProxyServer} from "@/entityTypes/proxyType"
 import {convertProxyServertourl} from '@/modules/lib/function'
 import * as path from 'path';
 import * as fs from 'fs';
+import {CookiesType} from "@/entityTypes/cookiesType"
 
 // const logger = debug('SearchScrape');
 
@@ -36,6 +37,9 @@ export class SearchScrape implements searchEngineImpl {
     proxyServer?:ProxyServer|null
     debug_log_path?:string;
     search_engine_name:string;
+    resultCallback?: (result: ResultParseItemType) => void; // Callback to send results immediately
+    accountId?: number; // Track which account's cookies are being used
+    hasCookies = false; // Track if cookies were passed for this session
     constructor(options: ScrapeOptions) {
         if (options.page) {
             this.page = options.page;
@@ -85,11 +89,14 @@ export class SearchScrape implements searchEngineImpl {
         //this.results = [];
     }
 
-    async run(data: { page: Page, data: ClusterSearchData, worker }): Promise<RunResult> {
+    async run(data: { page: Page, data: ClusterSearchData, worker, resultCallback?: (result: ResultParseItemType) => void }): Promise<RunResult> {
 
         // debug('worker=%o', worker, this.config.keywords);
 
-
+        // Store callback for immediate result sending
+        if (data.resultCallback) {
+            this.resultCallback = data.resultCallback;
+        }
 
         if (data.page) {
             this.page = data.page;
@@ -110,6 +117,11 @@ export class SearchScrape implements searchEngineImpl {
         //set cookies if data.data.cookies is not empty
         if (data.data.cookies && data.data.cookies.length > 0) {
             //console.log("data.data.cookies=%O",data.data.cookies)
+            this.hasCookies = true;
+            // Track the account ID for later cookie update
+            if (data.data.accountId) {
+                this.accountId = data.data.accountId;
+            }
             const browserContext = this.page.browser().defaultBrowserContext();
             const pageContext = this.page;
             
@@ -197,10 +209,40 @@ export class SearchScrape implements searchEngineImpl {
             await this.scraping_loop();
         }
 
+        // Capture updated cookies from the browser if cookies were initially set
+        let updatedCookies: Array<CookiesType> | undefined;
+        if (this.hasCookies && this.page) {
+            try {
+                const browserCookies = await this.page.cookies();
+                if (browserCookies && browserCookies.length > 0) {
+                    updatedCookies = browserCookies.map(cookie => ({
+                        domain: cookie.domain,
+                        flag: true,
+                        path: cookie.path,
+                        secure: cookie.secure,
+                        expirationDate: cookie.expires ?? 0,
+                        hostOnly: false,
+                        httpOnly: cookie.httpOnly,
+                        session: cookie.session,
+                        name: cookie.name,
+                        value: cookie.value,
+                        sameSite: cookie.sameSite === 'None' ? 'None' as const : 
+                                  cookie.sameSite === 'Lax' ? 'lax' as const :
+                                  cookie.sameSite === 'Strict' ? 'strict' as const : 'unspecified' as const
+                    }));
+                    console.log(`Captured ${updatedCookies.length} updated cookies for account ${this.accountId}`);
+                }
+            } catch (error) {
+                console.error('Failed to capture updated cookies:', error);
+            }
+        }
+
         return {
             results: this.results,
             metadata: this.metadata,
             num_requests: this.num_requests,
+            updatedCookies: updatedCookies,
+            accountId: this.accountId,
         }
     }
 
@@ -466,7 +508,12 @@ export class SearchScrape implements searchEngineImpl {
                         if(parsed.results){
                             resultParseItem.results=parsed.results;
                         }
-                        this.results.push(resultParseItem);
+                        // Send result immediately via callback if available, otherwise accumulate
+                        if (this.resultCallback) {
+                            this.resultCallback(resultParseItem);
+                        } else {
+                            this.results.push(resultParseItem);
+                        }
                     } else {
                         // this.results[keyword][this.page_num] = await this.parse_async(html);
                         const pareseres: SearchData | void = await this.parse_async();
@@ -480,7 +527,12 @@ export class SearchScrape implements searchEngineImpl {
                                 page:this.page_num,
                                 results:pareseres.results
                             }
-                            this.results.push(resultParseItem);
+                            // Send result immediately via callback if available, otherwise accumulate
+                            if (this.resultCallback) {
+                                this.resultCallback(resultParseItem);
+                            } else {
+                                this.results.push(resultParseItem);
+                            }
                         } else {
                             this.logger.warn(`No results found for keyword "${keyword}" on page ${this.page_num}`);
                             // this.results[keyword][this.page_num].value =""
@@ -489,7 +541,12 @@ export class SearchScrape implements searchEngineImpl {
                                 page:this.page_num,
                                 results:[]
                             }
-                            this.results.push(resultParseItem);
+                            // Send result immediately via callback if available, otherwise accumulate
+                            if (this.resultCallback) {
+                                this.resultCallback(resultParseItem);
+                            } else {
+                                this.results.push(resultParseItem);
+                            }
                         }
                     }
                     // this.results[keyword][this.page_num] = parsed ? parsed : await this.parse_async(html);
