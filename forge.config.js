@@ -163,8 +163,6 @@ module.exports={
         ],
         // Post-installation script to copy uninstaller
         postInstallScript: './installer-scripts/copy-uninstaller.js',
-        // Ensure uninstaller is accessible
-        setupExe: 'aiFetchlySetup.exe',
         // Create uninstaller registry entry
         uninstallDisplayName: 'aiFetchly',
         uninstallString: '%LOCALAPPDATA%\\aiFetchly\\uninstall.exe'
@@ -340,6 +338,14 @@ module.exports={
             entry: 'src/childprocess/websiteContentScraper.ts',
             config: 'vite.websiteContentScraper.config.mjs'
           },
+          {
+            entry: 'src/childprocess/googleProxyCheck.ts',
+            config: 'vite.googleProxyCheck.config.mjs'
+          },
+          {
+            entry: 'src/childprocess/contact-extraction/ContactExtractionWorker.ts',
+            config: 'vite.contactExtractionWorker.config.mjs'
+          },
           // {
           //   entry: 'src/buckEmail.ts',
           //   config: 'vite.buckEmail.config.mjs'
@@ -375,6 +381,36 @@ module.exports={
     },
     prePackage: async () => {
       const projectRoot = normalize(__dirname);
+      
+      // Fix _interopNamespaceDefault function to handle undefined property descriptors
+      // This fixes the "Cannot read properties of undefined (reading 'get')" error
+      const viteBuildDir = join(projectRoot, '.vite', 'build');
+      const fs = require('fs');
+      const path = require('path');
+      
+      try {
+        const files = fs.readdirSync(viteBuildDir);
+        for (const file of files) {
+          if (file.startsWith('background') && file.endsWith('.js')) {
+            const filePath = path.join(viteBuildDir, file);
+            let content = fs.readFileSync(filePath, 'utf-8');
+            
+            // Fix: d.get ? d : -> d && d.get ? d : (handles undefined property descriptors)
+            const originalContent = content;
+            content = content.replace(
+              /Object\.defineProperty\((\w),(\w),(\w)\.get\?(\w):/g,
+              'Object.defineProperty($1,$2,$3&&$3.get?$4:'
+            );
+            
+            if (content !== originalContent) {
+              fs.writeFileSync(filePath, content);
+              console.log('✅ Fixed _interopNamespaceDefault in:', file);
+            }
+          }
+        }
+      } catch (err) {
+        console.error('Failed to fix interop namespace:', err);
+      }
       const getExternalNestedDependencies = async (
         nodeModuleNames,
         includeNestedDeps = true

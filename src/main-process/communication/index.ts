@@ -23,6 +23,8 @@ import {registerAiChatIpcHandlers} from "@/main-process/communication/ai-chat-ip
 import {registerDashboardIpcHandlers} from "@/main-process/communication/dashboard-ipc";
 import {registerMCPToolIpcHandlers} from "@/main-process/communication/mcp-tool-ipc";
 import {registerSearchResultIpcHandlers} from "@/main-process/communication/search-result-ipc";
+import {registerWebSocketIpcHandlers} from "@/main-process/communication/websocket-ipc";
+import {registerContactExtractionHandlers} from "@/main-process/communication/contactExtraction-ipc";
 export function registerCommunicationIpcHandlers(win: BrowserWindow) {
     try{
     SyncMsg(win)
@@ -46,6 +48,8 @@ export function registerCommunicationIpcHandlers(win: BrowserWindow) {
     registerDashboardIpcHandlers()
     registerMCPToolIpcHandlers()
     registerSearchResultIpcHandlers()
+    registerWebSocketIpcHandlers(win)
+    registerContactExtractionHandlers()
     AsyncMsg()
     }catch(e){
         console.log("registerCommunicationIpcHandlers error:")

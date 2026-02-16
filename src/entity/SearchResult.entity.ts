@@ -1,5 +1,6 @@
-import { Entity, Column, PrimaryGeneratedColumn } from "typeorm";
+import { Entity, Column, PrimaryGeneratedColumn, OneToOne } from "typeorm";
 import AuditableEntity from "@/entity/Auditable.entity";
+import { ContactInfoEntity } from "./ContactInfo.entity";
 
 @Entity("search_result")
 export class SearchResultEntity extends AuditableEntity {
@@ -44,4 +45,11 @@ export class SearchResultEntity extends AuditableEntity {
     
     @Column("text", { nullable: true, default: null })
     ai_analysis_status: string; // 'pending', 'analyzing', 'completed', 'failed'
+
+    @OneToOne(() => ContactInfoEntity, contactInfo => contactInfo.searchResult, {
+        nullable: true,
+        eager: false, // Load on demand to avoid unnecessary queries
+        cascade: false // Don't cascade operations (handled manually)
+    })
+    contactInfo: ContactInfoEntity | null;
 }

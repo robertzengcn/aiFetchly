@@ -1,19 +1,24 @@
 'use strict'
 import 'reflect-metadata';
 // import {ipcMain as ipc} from 'electron-better-ipc';
-import { app, BrowserWindow, dialog, autoUpdater, Menu, session } from 'electron'
+import { app, BrowserWindow, Menu, dialog } from 'electron';
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const autoUpdater = require('electron').autoUpdater;
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const session = require('electron').session;
 // import { createProtocol } from 'vue-cli-plugin-electron-builder/lib'
 import installExtension, { VUEJS3_DEVTOOLS } from 'electron-devtools-installer'
 import { registerCommunicationIpcHandlers } from "./main-process/communication/";
 import * as path from 'path';
 import { Token } from "@/modules/token"
 import { MenuManager } from "@/main-process/menu/MenuManager";
-import { USERSDBPATH } from '@/config/usersetting';
+import { USERSDBPATH, TOKENNAME, REFRESHTOKEN, TOKENEXPIRY, REFRESHTOKENEXPIRY } from '@/config/usersetting';
+import { DeviceFingerprintService } from '@/modules/deviceFingerprint';
+import { DeviceApi } from '@/api/deviceApi';
 import { SqliteDb } from "@/config/SqliteDb"
 import { logger, log } from '@/modules/Logger';
 import fs from 'fs';
 import ProtocolRegistry from 'protocol-registry'
-import { TOKENNAME } from '@/config/usersetting';
 //import { RemoteSource } from '@/modules/remotesource'
 import { UserController } from '@/controller/UserController';
 import { NATIVATECOMMAND } from '@/config/channellist'
@@ -21,6 +26,8 @@ import { NativateDatatype } from '@/entityTypes/commonType'
 import { ScheduleManager } from '@/modules/ScheduleManager';
 import { runafterbootup } from "@/modules/bootuprun"
 import { YellowPagesController } from './controller/YellowPagesController';
+import { initializeWebSocketConnection, cleanupWebSocketConnection } from '@/main-process/communication/websocket-ipc';
+import { TokenRefreshService } from '@/modules/tokenRefresh';
 // import { RAGIpcHandlers } from '@/main-process/ragIpcHandlers';
 // import { createProtocol } from 'electron';
 const isDevelopment = process.env.NODE_ENV !== 'production'
@@ -35,7 +42,7 @@ declare const MAIN_WINDOW_VITE_NAME: string;
 const appName = app.getName();
 const protocolScheme = appName.replace(/-/g, '').toLowerCase(); // Remove hyphens for protocol and convert to lowercase
 // const protocolScheme = appName.replace(/-/g, ''); // Remove hyphens for protocol
-app.userAgentFallback = app.userAgentFallback.replace('Electron/' + process.versions.electron, '');
+(app as any).userAgentFallback = (app as any).userAgentFallback.replace('Electron/' + process.versions.electron, '');
 // Initialize logger (handles all logging configuration)
 const logDir = logger.getLogDir();
 
@@ -48,7 +55,7 @@ process.on('uncaughtException', (error) => {
   log.error('Uncaught Exception:', error);
 
   // Show error dialog if possible
-  if (app.isReady()) {
+  if ((app as any).isReady()) {
     dialog.showErrorBox('Application Error',
       `An unexpected error occurred: ${error.message}\n\nDetails have been logged.`);
   }
@@ -66,9 +73,9 @@ function initialize() {
   //   { scheme: appName, privileges: { secure: true, 
   //     standard: true } }
   // ])
-  if (app.isPackaged) {
-    if (!app.isDefaultProtocolClient(protocolScheme)) {
-      const registres = app.setAsDefaultProtocolClient(protocolScheme);
+  if ((app as any).isPackaged) {
+    if (!(app as any).isDefaultProtocolClient(protocolScheme)) {
+      const registres = (app as any).setAsDefaultProtocolClient(protocolScheme);
       //console.log('registres:', registres)
     }
 
@@ -95,8 +102,8 @@ function initialize() {
       path.join(__dirname, '../.vite/renderer/main_window/index.html'),
       path.join(__dirname, '../renderer/main_window/index.html'),
       path.join(__dirname, './index.html'),
-      path.join(process.resourcesPath, 'app.asar', '.vite', 'renderer', 'main_window', 'index.html'),
-      path.join(process.resourcesPath, '.vite', 'renderer', 'main_window', 'index.html')
+      path.join((process as NodeJS.Process & { resourcesPath: string }).resourcesPath, 'app.asar', '.vite', 'renderer', 'main_window', 'index.html'),
+      path.join((process as NodeJS.Process & { resourcesPath: string }).resourcesPath, '.vite', 'renderer', 'main_window', 'index.html')
     ];
 
     //console.log('Trying alternative paths for HTML file...');
@@ -112,12 +119,12 @@ function initialize() {
 
       try {
         // Check if window is still valid before attempting to load
-        if (win && !win.isDestroyed()) {
+        if (win && !(win as any).isDestroyed()) {
           if (fs.existsSync(altPath)) {
             //console.log('Alternative path exists, attempting to load...');
             // log.info('Alternative path exists, attempting to load:', altPath);
 
-            await win.loadFile(altPath);
+            await (win as any).loadFile(altPath);
             console.log('Successfully loaded HTML file from alternative path:', altPath);
             // log.info('Successfully loaded HTML file from alternative path:', altPath);
             loaded = true;
@@ -162,7 +169,7 @@ function initialize() {
         'Application Error',
         'Could not load the application interface. This may be due to a corrupted installation.\n\nPlease try:\n1. Reinstalling the application\n2. Running as administrator\n3. Checking antivirus software\n\nError details have been logged.'
       );
-      app.quit();
+      (app as any).quit();
     }
   }
 
@@ -173,9 +180,9 @@ function initialize() {
     }
 
     // Check if window already exists and is not destroyed
-    if (win && !win.isDestroyed()) {
+    if (win && !(win as any).isDestroyed()) {
       console.log('Window already exists and is valid, focusing...');
-      win.focus();
+      (win as any).focus();
       return;
     }
 
@@ -201,17 +208,45 @@ function initialize() {
     })
 
     if (win) {
-      registerCommunicationIpcHandlers(win);
+      console.log("Window exist, prepare to register communication ipc handlers")
+      // Check if USERSDBPATH is empty, create temp db path if needed
+      const tokenService = new Token();
+      let userdataPath = tokenService.getValue(USERSDBPATH);
+      
+      if (!userdataPath || userdataPath.length === 0) {
+        // Create temporary database path
+        const tempDbPath = path.join(app.getPath('userData'), 'temp_db');
+        try {
+          // Ensure the directory exists
+          if (!fs.existsSync(tempDbPath)) {
+            fs.mkdirSync(tempDbPath, { recursive: true });
+            log.info(`Created temporary database directory at: ${tempDbPath}`);
+          }
+          // Set the temporary path
+          tokenService.setValue(USERSDBPATH, tempDbPath);
+          userdataPath = tempDbPath;
+          log.info(`Set temporary USERSDBPATH to: ${tempDbPath}`);
+        } catch (err) {
+          log.error(`Failed to create temporary database path: ${err}`);
+          const errorMessage = err instanceof Error ? err.message : String(err);
+          dialog.showErrorBox('Configuration Error',
+            `Failed to create temporary database directory: ${errorMessage}`);
+        }
+      }
+      //if (userdataPath){//register communication ipc handlers
+        registerCommunicationIpcHandlers(win);
+      //}
+     
     }
 
     // Add event listener for window destruction
-    win.on('closed', () => {
+    (win as any).on('closed', () => {
       console.log('Window closed event triggered');
       win = null;
     });
     // In this example, only windows with the `about:blank` url will be created.
     // All other urls will be blocked.
-    win.webContents.setWindowOpenHandler(({ url }) => {
+    (win as any).webContents.setWindowOpenHandler(({ url }) => {
       // console.log(url)
       //if (url === '_blank') {
 
@@ -248,9 +283,9 @@ function initialize() {
     if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
       // Load the url of the dev server if in development mode
       try {
-        if (win && !win.isDestroyed()) {
-          await win.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL as string)
-          if (!process.env.IS_TEST) win.webContents.openDevTools()
+        if (win && !(win as any).isDestroyed()) {
+          await (win as any).loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL as string)
+          if (!process.env.IS_TEST) (win as any).webContents.openDevTools()
         }
       } catch (error) {
 
@@ -260,7 +295,7 @@ function initialize() {
       //check update
       const server = import.meta.env.UPDATESERVER as string;
       if (server) {
-        const url = `${server}/update/${process.platform}/${app.getVersion()}`
+        const url = `${server}/update/${process.platform}/${(app as any).getVersion()}`
         autoUpdater.setFeedURL({ url })
         autoUpdater.checkForUpdates()
       }
@@ -290,8 +325,8 @@ function initialize() {
 
         try {
           // Check if window is still valid before attempting to load
-          if (win && !win.isDestroyed()) {
-            await win.loadFile(htmlPath);
+          if (win && !(win as any).isDestroyed()) {
+            await (win as any).loadFile(htmlPath);
             console.log('Successfully loaded HTML file from:', htmlPath);
             //log.info('Successfully loaded HTML file from:', htmlPath);
           } else {
@@ -301,7 +336,7 @@ function initialize() {
               'Application Error',
               'The application window was destroyed before it could load. Please restart the application.'
             );
-            app.quit();
+            (app as any).quit();
             return;
           }
         } catch (error) {
@@ -318,7 +353,7 @@ function initialize() {
               'Application Error',
               'The application window was destroyed during loading. Please restart the application.'
             );
-            app.quit();
+            (app as any).quit();
             return;
           }
 
@@ -336,16 +371,16 @@ function initialize() {
   }
 
   // Quit when all windows are closed.
-  app.on('window-all-closed', () => {
+  (app as any).on('window-all-closed', () => {
     // On macOS it is common for applications and their menu bar
     // to stay active until the user quits explicitly with Cmd + Q
     if (process.platform !== 'darwin') {
-      app.quit()
+      (app as any).quit()
     }
-  })
+  });
 
   // Handle application shutdown
-  app.on('before-quit', async () => {
+  (app as any).on('before-quit', async () => {
     try {
       const tokenService = new Token()
       const userdataPath = tokenService.getValue(USERSDBPATH)
@@ -358,17 +393,25 @@ function initialize() {
       log.error('Failed to shutdown ScheduleManager:', error);
     }
 
+    // Cleanup WebSocket connection
+    try {
+      cleanupWebSocketConnection();
+      log.info('WebSocket connection cleanup completed');
+    } catch (error) {
+      log.error('Failed to cleanup WebSocket connection:', error);
+    }
+
     // Stop log cleanup interval
     logger.stopLogCleanup();
-  })
+  });
 
-  app.on('activate', () => {
+  (app as any).on('activate', () => {
     // On macOS it's common to re-create a window in the app when the
     // dock icon is clicked and there are no other windows open.
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
-  })
+  });
 
-  app.on('open-url', (event, url) => {
+  (app as any).on('open-url', (event, url) => {
 
     console.log("open url call")
     event.preventDefault();
@@ -392,7 +435,7 @@ function initialize() {
   // This method will be called when Electron has finished
   // initialization and is ready to create browser windows.
   // Some APIs can only be used after this event occurs.
-  app.whenReady().then(async () => {
+  (app as any).whenReady().then(async () => {
     // Configure Content Security Policy (must be called after app is ready)
     configureContentSecurityPolicy()
 
@@ -462,6 +505,22 @@ function initialize() {
       } catch (error) {
         log.error('Failed to check for orphaned Yellow Pages processes:', error);
       }
+
+      // Initialize WebSocket connection to marketing server
+      // This enables real-time notifications and updates
+      if (win) {
+        try {
+          await initializeWebSocketConnection(win);
+          log.info('WebSocket connection to marketing server initialized');
+        } catch (error) {
+          log.error('Failed to initialize WebSocket connection:', error);
+        }
+      }
+
+      // Start background token auto-refresh for already-logged-in user (only if not already running)
+      if (!TokenRefreshService.isAutoRefreshRunning()) {
+        TokenRefreshService.startAutoRefresh();
+      }
     }
 
 
@@ -482,12 +541,12 @@ function initialize() {
     if (process.platform === 'win32') {
       process.on('message', (data) => {
         if (data === 'graceful-exit') {
-          app.quit()
+          (app as any).quit()
         }
       })
     } else {
       process.on('SIGTERM', () => {
-        app.quit()
+        (app as any).quit()
       })
     }
   }
@@ -515,10 +574,10 @@ function configureContentSecurityPolicy() {
     ? [
         "default-src 'self'",
         "script-src 'self' 'unsafe-eval' 'unsafe-inline' http://localhost:* https://localhost:*",
-        "style-src 'self' 'unsafe-inline'",
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
         "img-src 'self' data: https: http:",
-        "font-src 'self' data:",
-        "connect-src 'self' http://localhost:* https://localhost:* https: http:",
+        "font-src 'self' data: https://fonts.googleapis.com https://fonts.gstatic.com",
+        "connect-src 'self' http://localhost:* https://localhost:* https: http: https://fonts.googleapis.com https://fonts.gstatic.com",
         "frame-src 'self'",
         "object-src 'none'",
         "base-uri 'self'",
@@ -528,10 +587,10 @@ function configureContentSecurityPolicy() {
     : [
         "default-src 'self'",
         "script-src 'self'",
-        "style-src 'self' 'unsafe-inline'",
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
         "img-src 'self' data: https:",
-        "font-src 'self' data:",
-        "connect-src 'self' https:",
+        "font-src 'self' data: https://fonts.googleapis.com https://fonts.gstatic.com",
+        "connect-src 'self' https: https://fonts.googleapis.com https://fonts.gstatic.com",
         "frame-src 'self'",
         "object-src 'none'",
         "base-uri 'self'",
@@ -553,26 +612,43 @@ function configureContentSecurityPolicy() {
 
 function makeSingleInstance() {
 
-  if (process.mas) return
+  if ((process as NodeJS.Process & { mas: boolean }).mas) return
 
-  const gotThelock = app.requestSingleInstanceLock()
+  const gotThelock = (app as any).requestSingleInstanceLock()
   if (!gotThelock) {
-    app.quit()
+    (app as any).quit()
   } else {
 
     // console.log('gotThelock:', gotThelock)
 
-    app.on('second-instance', (event, argv, workingDirectory) => {
+    (app as any).on('second-instance', (event, argv, workingDirectory) => {
       if (win) {
-        if (win.isMinimized()) win.restore()
-        win.focus()
+        if ((win as any).isMinimized()) (win as any).restore();
+        (win as any).focus();
       }
 
       // console.log("second-instance call")
       // console.log('protocolScheme:', protocolScheme)
      // argv = argv.map(arg => typeof arg === 'string' ? arg.toLowerCase() : arg);
-      const url = argv.find(arg => arg.startsWith(`${protocolScheme}://`));
-      if (url) {
+      const urlIndex = argv.findIndex(arg => typeof arg === 'string' && arg.toLowerCase().startsWith(`${protocolScheme}://`));
+      if (urlIndex !== -1) {
+        // Reconstruct URL if it was split by shell at '&' character
+        // When shell splits at '&', the parts after become separate argv elements
+        let url = argv[urlIndex];
+        // Check if URL looks incomplete (missing query params that might have been split)
+        // Reconstruct by joining subsequent argv elements that look like URL fragments
+        for (let i = urlIndex + 1; i < argv.length; i++) {
+          const nextArg = argv[i];
+          // If next arg looks like a URL parameter (contains '=' and no path separators),
+          // it's likely a continuation of the URL that was split at '&'
+          if (nextArg.includes('=') && !nextArg.includes('/') && !nextArg.startsWith('-')) {
+            url += '&' + nextArg;
+          } else {
+            // Stop if we hit something that doesn't look like a URL fragment
+            break;
+          }
+        }
+        
         console.log('app opened with url on window')
         //console.log(`App opened with URL on window: ${url}`);
         handleDeepLink(url)
@@ -585,50 +661,265 @@ function makeSingleInstance() {
 
 }
 
+/**
+ * Validate deep link URL origin to prevent malicious token injection
+ */
+function isValidDeepLinkOrigin(parsedUrl: URL): boolean {
+  // Check if the URL protocol matches our app's protocol scheme (case-insensitive)
+  const urlProtocol = parsedUrl.protocol.toLowerCase();
+  if (!urlProtocol.includes(protocolScheme)) {
+    log.error('Invalid deep link protocol:', parsedUrl.protocol);
+    return false;
+  }
+
+  // Additional validation: ensure URL has the expected structure
+  if (!parsedUrl.hostname) {
+    log.error('Invalid deep link hostname:', parsedUrl.hostname);
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * Clear all authentication tokens from storage
+ */
+function clearTokens(): void {
+  try {
+    // Stop background auto-refresh before clearing tokens
+    TokenRefreshService.stopAutoRefresh();
+
+    const tokenService = new Token();
+    tokenService.setValue(TOKENNAME, '');
+    tokenService.setValue(REFRESHTOKEN, '');
+    tokenService.setValue(TOKENEXPIRY, '');
+    tokenService.setValue(REFRESHTOKENEXPIRY, '');
+    log.info('All tokens cleared successfully');
+  } catch (error) {
+    log.error('Failed to clear tokens:', error);
+  }
+}
+
 async function handleDeepLink(url: string) {
   try {
     const parsedUrl = new URL(url);
-    // console.log(parsedUrl)
-    const token = parsedUrl.searchParams.get('token'); // Example: Extract a token from the URL
-    if (token) {
-      //console.log(`Token received: ${token}`);
-      const tokenService = new Token();
-      tokenService.setValue(TOKENNAME, token);
-      // const remoteser = new RemoteSource()
-      // const userInfo = await remoteser.GetUserInfo()
-      // console.log('userInfo:', userInfo)
-      const userController = new UserController()
-      try {
-        const userInfo = await userController.updateUserInfo();
-        if (userInfo) {
-          //login success
 
-          if (win && !win.isDestroyed()) {
-            await win.webContents.send(NATIVATECOMMAND, { path: 'Dashboard' } as NativateDatatype);
-          } else {
-            console.error('Window has been destroyed, cannot send navigation command');
-            //log.error('Window has been destroyed, cannot send navigation command');
-          }
-        } else {
-          log.error('Failed to get user info from remote source');
-          dialog.showErrorBox('User Info Error',
-            `Failed to get user info from remote source.`);
-        }
-      } catch (error) {
-        log.error('Error updating user info:', error);
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        dialog.showErrorBox('User Info Update Error',
-          `Failed to update user information: ${errorMessage}`);
-      }
-
-    } else {
-      console.error('No token found');
+    // Validate deep link origin to prevent malicious token injection
+    if (!isValidDeepLinkOrigin(parsedUrl)) {
+      log.error('Invalid deep link origin:', url);
+      dialog.showErrorBox('Security Error',
+        'Invalid deep link origin. This link may be malicious.');
+      return;
     }
 
-    // Perform other actions based on the URL
+    // Extract token parameters
+    // Use searchParams if available, otherwise parse manually (for custom protocols)
+    let token: string | null = null;
+    let refreshToken: string | null = null;
+    let expiresIn: string | null = null;
+    let refreshExpiresIn: string | null = null;
+
+    if (parsedUrl.searchParams) {
+      // Standard URL parsing
+      token = parsedUrl.searchParams.get('token');
+      refreshToken = parsedUrl.searchParams.get('refreshToken') || parsedUrl.searchParams.get('refresh_token');
+      expiresIn = parsedUrl.searchParams.get('expiresIn') || parsedUrl.searchParams.get('expires_in');
+      refreshExpiresIn = parsedUrl.searchParams.get('refreshExpiresIn') || parsedUrl.searchParams.get('refresh_expires_in');
+    }
+
+    // Fallback: Manual parsing if searchParams didn't work (common with custom protocols)
+    // Also trigger fallback if token exists but refreshToken is missing AND url ends with token (suggesting truncation)
+    const urlEndsWithTokenValue = token && url.endsWith(token);
+    if (!token || (!refreshToken && (url.includes('refresh_token') || urlEndsWithTokenValue))) {
+      const queryString = url.includes('?') ? url.split('?')[1] : '';
+      const params = new URLSearchParams(queryString);
+      token = token || params.get('token');
+      refreshToken = refreshToken || params.get('refreshToken') || params.get('refresh_token');
+      expiresIn = expiresIn || params.get('expiresIn') || params.get('expires_in');
+      refreshExpiresIn = refreshExpiresIn || params.get('refreshExpiresIn') || params.get('refresh_expires_in');
+    }
+
+    // Debug logging
+    log.info('Extracted tokens from deep link:', {
+      hasToken: !!token,
+      hasRefreshToken: !!refreshToken,
+      tokenLength: token?.length || 0,
+      refreshTokenLength: refreshToken?.length || 0
+    });
+
+    if (!token) {
+      log.error('No token found in deep link');
+      return;
+    }
+
+    // Store tokens with error handling
+    const tokenService = new Token();
+    try {
+      tokenService.setValue(TOKENNAME, token);
+      log.info('Access token saved successfully');
+
+      // Calculate and store token expiry time
+      if (expiresIn) {
+        const expiryTime = Date.now() + (parseInt(expiresIn) * 1000);
+        tokenService.setValue(TOKENEXPIRY, expiryTime.toString());
+        log.info('Token expiry time saved:', new Date(expiryTime).toISOString());
+      }
+
+      // Save refresh token if provided
+      if (refreshToken) {
+        tokenService.setValue(REFRESHTOKEN, refreshToken);
+        log.info('Refresh token saved successfully');
+
+        // Calculate and store refresh token expiry time
+        if (refreshExpiresIn) {
+          const refreshExpiryTime = Date.now() + (parseInt(refreshExpiresIn) * 1000);
+          tokenService.setValue(REFRESHTOKENEXPIRY, refreshExpiryTime.toString());
+          log.info('Refresh token expiry time saved:', new Date(refreshExpiryTime).toISOString());
+        }
+      } else {
+        log.warn('No refresh token found in deep link URL');
+      }
+    } catch (storageError) {
+      log.error('Failed to store tokens:', storageError);
+      const errorMessage = storageError instanceof Error ? storageError.message : String(storageError);
+      dialog.showErrorBox('Authentication Error',
+        `Failed to store authentication tokens: ${errorMessage}`);
+      return;
+    }
+
+    // Fetch user information
+    const userController = new UserController();
+    try {
+      const userInfo = await userController.updateUserInfo();
+      if (userInfo) {
+        // Login successful - Register device with backend (non-blocking)
+        try {
+          const deviceFingerprintService = new DeviceFingerprintService();
+          const deviceApi = new DeviceApi();
+
+          const deviceIdHash = deviceFingerprintService.getDeviceIdHash();
+          const deviceName = deviceFingerprintService.getDeviceName();
+
+          // Store deviceIdHash for future use
+          deviceFingerprintService.storeDeviceIdHash(deviceIdHash);
+
+          // Register device with backend
+          if (refreshToken) {
+            await deviceApi.registerDevice(deviceName, deviceIdHash, refreshToken);
+            log.info('Device registered successfully:', deviceIdHash);
+          } else {
+            // Register without refresh token (backend will generate one)
+            await deviceApi.registerDevice(deviceName, deviceIdHash);
+            log.info('Device registered successfully (without refresh token):', deviceIdHash);
+          }
+        } catch (deviceError) {
+          // Log error but don't block login flow
+          log.error('Device registration failed (non-blocking):', deviceError);
+          const errorMessage = deviceError instanceof Error ? deviceError.message : String(deviceError);
+          console.error('Device registration error:', errorMessage);
+        }
+
+        // After successful login, USERSDBPATH may have changed
+        // Reset database singletons to use the new path
+        try {
+          const tokenService = new Token();
+          const newDbPath = tokenService.getValue(USERSDBPATH);
+          if (newDbPath && newDbPath.length > 0) {
+            // Reset ScheduleManager first (before destroying DB connection)
+            // This allows it to stop cleanly without trying to use a destroyed connection
+            await ScheduleManager.resetInstance();
+            log.info('ScheduleManager reset to new path after login');
+            
+            // Reset SqliteDb instance to use new path
+            const newDbInstance = await SqliteDb.resetInstance(newDbPath);
+            log.info('SqliteDb reset to new path after login:', newDbPath);
+            
+            // Ensure the new connection is initialized with retry logic for database locks
+            if (!newDbInstance.connection.isInitialized) {
+              let retries = 3;
+              let lastError: unknown = null;
+              while (retries > 0) {
+                try {
+                  await newDbInstance.connection.initialize();
+                  log.info('New SqliteDb connection initialized');
+                  break;
+                } catch (initError) {
+                  lastError = initError;
+                  retries--;
+                  if (retries > 0) {
+                    const errorMessage = initError instanceof Error ? initError.message : String(initError);
+                    if (errorMessage.includes('locked') || errorMessage.includes('database is locked')) {
+                      log.warn(`Database locked during initialization, retrying... (${retries} retries left)`);
+                      // Wait a bit longer before retrying
+                      await new Promise(resolve => setTimeout(resolve, 200));
+                    } else {
+                      // Not a lock error, don't retry
+                      throw initError;
+                    }
+                  }
+                }
+              }
+              if (retries === 0 && lastError) {
+                log.error('Failed to initialize new SqliteDb connection after retries:', lastError);
+                // Don't throw - allow login to continue, connection will be initialized on first use
+              }
+            }
+          }
+        } catch (dbResetError) {
+          // Log but don't block login flow
+          log.error('Failed to reset database singletons after login (non-blocking):', dbResetError);
+        }
+
+        // Initialize WebSocket connection after successful login
+        if (win && !(win as any).isDestroyed()) {
+          try {
+            await initializeWebSocketConnection(win);
+            log.info('WebSocket connection initialized after login');
+          } catch (wsError) {
+            log.error('Failed to initialize WebSocket after login (non-blocking):', wsError);
+          }
+        }
+
+        // Start background token auto-refresh (only if not already running)
+        if (!TokenRefreshService.isAutoRefreshRunning()) {
+          TokenRefreshService.startAutoRefresh();
+        }
+
+        // Navigate to dashboard
+        if (win && !(win as any).isDestroyed()) {
+          (win as any).webContents.send(NATIVATECOMMAND, { path: 'Dashboard' } as NativateDatatype);
+        } else {
+          console.error('Window has been destroyed, cannot send navigation command');
+          log.error('Window has been destroyed, cannot send navigation command');
+        }
+      } else {
+        log.error('Failed to get user info from remote source');
+        dialog.showErrorBox('User Info Error',
+          'Failed to get user info from remote source.');
+
+        // Clear tokens on authentication failure
+        clearTokens();
+      }
+    } catch (userError) {
+      log.error('Error updating user info:', userError);
+      const errorMessage = userError instanceof Error ? userError.message : String(userError);
+      dialog.showErrorBox('User Info Update Error',
+        `Failed to update user information: ${errorMessage}`);
+
+      // Clear tokens on authentication failure
+      clearTokens();
+    }
 
   } catch (error) {
-    console.error('Failed to handle deep link:', error);
+    log.error('Failed to handle deep link:', error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error('Deep link handling error:', errorMessage);
+
+    // Show error dialog to user
+    if ((app as any).isReady()) {
+      dialog.showErrorBox('Deep Link Error',
+        `Failed to process authentication link: ${errorMessage}`);
+    }
   }
 }
 

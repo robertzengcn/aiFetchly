@@ -6,8 +6,9 @@ export type HttpClientOptions = {
 // }
 //import { AuthInterceptor } from '@/modules/lib/authInterceptor';
 import {Token} from "@/modules/token"
-import {TOKENNAME} from '@/config/usersetting';
+import {TOKENNAME, REFRESHTOKEN} from '@/config/usersetting';
 import { User } from '@/modules/user';
+import { TokenRefreshService } from '@/modules/tokenRefresh';
 
 // export type RemoteResp = {
 //   status: boolean,
@@ -17,10 +18,44 @@ import { User } from '@/modules/user';
 export class HttpClient {
     private _headers: HeadersInit = {};
     private baseUrl: string;
+    private _tokenRefreshService: TokenRefreshService | null = null;
+    private _refreshInProgress = false;
+    private _isWorker = false;
     constructor() {
-      //AuthInterceptor()
-      this.baseUrl = import.meta.env.VITE_LOGIN_URL+"/apis";
-      this.setheaderToken()
+      // Use process.env for environment variables in Electron main process
+      // NOTE: Removed import.meta.env check - Vite statically replaces import.meta.env.VITE_*
+      // at build time which causes Invalid URL errors in the main process.
+      // process.env is loaded correctly via Vite's loadEnv() in vite.main.config.mjs
+      let loginUrl: string | undefined = process.env.VITE_LOGIN_URL;
+
+      // Validate and ensure we have a valid URL
+      if (!loginUrl || loginUrl.trim() === '') {
+        loginUrl = 'http://localhost:3000';
+      }
+
+      // Validate URL format
+      try {
+        new URL(loginUrl);
+      } catch (error) {
+        console.warn(`Invalid VITE_LOGIN_URL: ${loginUrl}, falling back to default`);
+        loginUrl = 'http://localhost:3000';
+      }
+
+      this.baseUrl = loginUrl + "/apis";
+
+      // Worker processes don't have access to Electron APIs (app, safeStorage, etc.)
+      // so Token/ElectronStoreService cannot be instantiated. Instead, use the
+      // auth token passed via WORKER_AUTH_TOKEN env var from the main process.
+      this._isWorker = !!process.env.WORKER_TYPE;
+      if (this._isWorker) {
+        const workerToken = process.env.WORKER_AUTH_TOKEN;
+        if (workerToken && workerToken.trim().length > 0) {
+          this.setHeader('Authorization', 'Bearer ' + workerToken);
+        }
+      } else {
+        this._tokenRefreshService = new TokenRefreshService();
+        this.setheaderToken();
+      }
       // const tokenModel=new Token()
       // const tokenval=tokenModel.getValue("social-market-token")
       // if (tokenval) {
@@ -38,8 +73,79 @@ export class HttpClient {
         this.setHeader('Authorization', 'Bearer ' + tokenval)
       }
     }
+
+    /**
+     * Refresh token and retry the original request
+     * Prevents infinite loops by checking if refresh is already in progress
+     */
+    private async _refreshTokenAndRetry(
+      endpoint: string,
+      options: RequestInit,
+      isRetry = false
+    ): Promise<any> {
+      // Worker processes cannot refresh tokens (no access to Electron APIs)
+      if (this._isWorker) {
+        throw new Error('Authentication failed: Token expired. Worker cannot refresh tokens.');
+      }
+
+      // Prevent infinite refresh loops
+      if (isRetry) {
+        // Already retried once, sign out user
+        console.warn('Token refresh failed after retry, signing out user');
+        try {
+          const userModel = new User();
+          await userModel.removeToken();
+        } catch (error) {
+          console.error('Error during signout:', error);
+        }
+        delete this._headers['Authorization'];
+        throw new Error('Authentication failed: Token expired. Please login again.');
+      }
+
+      // Check if refresh is already in progress
+      if (this._refreshInProgress) {
+        // Wait a bit and retry the original request
+        await new Promise(resolve => setTimeout(resolve, 500));
+        return this._fetchJSON(endpoint, options);
+      }
+
+      this._refreshInProgress = true;
+
+      try {
+        // Attempt to refresh the token
+        if (!this._tokenRefreshService) {
+          throw new Error('Token refresh service not available');
+        }
+        const refreshResult = await this._tokenRefreshService.refreshAccessToken();
+        
+        if (refreshResult.status && refreshResult.data) {
+          // Update access token in headers
+          this.setHeader('Authorization', 'Bearer ' + refreshResult.data.accessToken);
+          
+          // Retry the original request with new token
+          return this._fetchJSON(endpoint, options);
+        } else {
+          throw new Error('Token refresh failed');
+        }
+      } catch (error) {
+        console.error('Token refresh error:', error);
+        
+        // Sign out user on refresh failure
+        try {
+          const userModel = new User();
+          await userModel.removeToken();
+        } catch (signoutError) {
+          console.error('Error during signout:', signoutError);
+        }
+        
+        delete this._headers['Authorization'];
+        throw new Error('Authentication failed: Token expired. Please login again.');
+      } finally {
+        this._refreshInProgress = false;
+      }
+    }
   
-    public async _fetchJSON(endpoint:string, options:RequestInit): Promise<any> {
+    public async _fetchJSON(endpoint:string, options:RequestInit, isRetry = false): Promise<any> {
       // await this.setheaderToken()
       const res = await fetch(this.baseUrl+endpoint,
         {...options,
@@ -49,21 +155,33 @@ export class HttpClient {
        
       // Handle 403 Forbidden - Token expired
       if (res.status === 403) {
-        console.warn('Received 403 Forbidden - Token expired, signing out user');
+        console.warn('Received 403 Forbidden - Attempting token refresh');
         
-        // Sign out user (this will also navigate to login page)
-        try {
-          const userModel = new User();
-          await userModel.removeToken();
-        } catch (error) {
-          console.error('Error during signout:', error);
+        // Worker processes cannot refresh tokens or access ElectronStoreService
+        if (this._isWorker) {
+          throw new Error('Authentication failed: Token expired. Worker cannot refresh tokens.');
         }
+
+        // Check if refresh token exists
+        const tokenModel = new Token();
+        const refreshToken = tokenModel.getValue(REFRESHTOKEN);
         
-        // Clear Authorization header
-        delete this._headers['Authorization'];
-        
-        // Throw error to prevent further processing
-        throw new Error('Authentication failed: Token expired. Please login again.');
+        if (refreshToken && refreshToken.trim().length > 0) {
+          // Try to refresh token and retry request
+          return this._refreshTokenAndRetry(endpoint, options, isRetry);
+        } else {
+          // No refresh token available, sign out user
+          console.warn('No refresh token available, signing out user');
+          try {
+            const userModel = new User();
+            await userModel.removeToken();
+          } catch (error) {
+            console.error('Error during signout:', error);
+          }
+          
+          delete this._headers['Authorization'];
+          throw new Error('Authentication failed: Token expired. Please login again.');
+        }
       }
        
       if (!res.ok) throw new Error(res.statusText);
@@ -171,7 +289,7 @@ export class HttpClient {
     }
 
     // post json data and return stream response
-    public async postStream(endpoint:string, data, options = {}): Promise<Response> {
+    public async postStream(endpoint:string, data, options = {}, isRetry = false): Promise<Response> {
       const res = await fetch(this.baseUrl + endpoint, {
         ...options,
         body: JSON.stringify(data),
@@ -185,21 +303,84 @@ export class HttpClient {
       
       // Handle 403 Forbidden - Token expired
       if (res.status === 403) {
-        console.warn('Received 403 Forbidden - Token expired, signing out user');
+        console.warn('Received 403 Forbidden - Attempting token refresh');
         
-        // Sign out user (this will also navigate to login page)
-        try {
-          const userModel = new User();
-          await userModel.removeToken();
-        } catch (error) {
-          console.error('Error during signout:', error);
+        // Worker processes cannot refresh tokens or access ElectronStoreService
+        if (this._isWorker) {
+          throw new Error('Authentication failed: Token expired. Worker cannot refresh tokens.');
         }
+
+        // Prevent infinite refresh loops
+        if (isRetry) {
+          console.warn('Token refresh failed after retry, signing out user');
+          try {
+            const userModel = new User();
+            await userModel.removeToken();
+          } catch (error) {
+            console.error('Error during signout:', error);
+          }
+          delete this._headers['Authorization'];
+          throw new Error('Authentication failed: Token expired. Please login again.');
+        }
+
+        // Check if refresh token exists
+        const tokenModel = new Token();
+        const refreshToken = tokenModel.getValue(REFRESHTOKEN);
         
-        // Clear Authorization header
-        delete this._headers['Authorization'];
-        
-        // Throw error to prevent further processing
-        throw new Error('Authentication failed: Token expired. Please login again.');
+        if (refreshToken && refreshToken.trim().length > 0) {
+          // Check if refresh is already in progress
+          if (this._refreshInProgress) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+            return this.postStream(endpoint, data, options, true);
+          }
+
+          this._refreshInProgress = true;
+
+          try {
+            // Attempt to refresh the token
+            if (!this._tokenRefreshService) {
+              throw new Error('Token refresh service not available');
+            }
+            const refreshResult = await this._tokenRefreshService.refreshAccessToken();
+            
+            if (refreshResult.status && refreshResult.data) {
+              // Update access token in headers
+              this.setHeader('Authorization', 'Bearer ' + refreshResult.data.accessToken);
+              
+              // Retry the original request with new token
+              return this.postStream(endpoint, data, options, true);
+            } else {
+              throw new Error('Token refresh failed');
+            }
+          } catch (error) {
+            console.error('Token refresh error:', error);
+            
+            // Sign out user on refresh failure
+            try {
+              const userModel = new User();
+              await userModel.removeToken();
+            } catch (signoutError) {
+              console.error('Error during signout:', signoutError);
+            }
+            
+            delete this._headers['Authorization'];
+            throw new Error('Authentication failed: Token expired. Please login again.');
+          } finally {
+            this._refreshInProgress = false;
+          }
+        } else {
+          // No refresh token available, sign out user
+          console.warn('No refresh token available, signing out user');
+          try {
+            const userModel = new User();
+            await userModel.removeToken();
+          } catch (error) {
+            console.error('Error during signout:', error);
+          }
+          
+          delete this._headers['Authorization'];
+          throw new Error('Authentication failed: Token expired. Please login again.');
+        }
       }
       
       if (!res.ok) throw new Error(res.statusText);

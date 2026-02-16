@@ -92,7 +92,7 @@ export class ProxyApi implements IProxyApi {
   }
   //save proxy
   public async saveProxy(entity: ProxyEntity): Promise<SaveProxyResp> {
-    let data = new FormData();
+    const data = new FormData();
     if (entity.id) {
       data.append("Id", entity.id.toString());
     }

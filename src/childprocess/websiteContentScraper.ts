@@ -112,8 +112,9 @@ async function cleanupBrowser(): Promise<void> {
 }
 
 // Handle process messages from parent
-if (process.parentPort) {
-    process.parentPort.on('message', async (e: { data: string }) => {
+const parentPort = (process as unknown as { parentPort?: { on: (event: string, handler: (e: { data: string }) => void) => void; postMessage: (message: string) => void } }).parentPort;
+if (parentPort) {
+    parentPort.on('message', async (e: { data: string }) => {
         try {
             const message: ScrapeWebsiteMessage = JSON.parse(e.data);
             
@@ -129,7 +130,9 @@ if (process.parentPort) {
                         markdown
                     };
                     
-                    process.parentPort?.postMessage(response);
+                    if (parentPort) {
+                        parentPort.postMessage(JSON.stringify(response));
+                    }
                 } catch (error) {
                     const errorMessage = error instanceof Error ? error.message : String(error);
                     console.error('Scraping error:', errorMessage);
@@ -140,7 +143,9 @@ if (process.parentPort) {
                         error: errorMessage
                     };
                     
-                    process.parentPort?.postMessage(response);
+                    if (parentPort) {
+                        parentPort.postMessage(JSON.stringify(response));
+                    }
                 }
             } else {
                 console.warn('⚠️ Unknown message type:', message);
@@ -152,7 +157,9 @@ if (process.parentPort) {
                 requestId: 'unknown',
                 error: error instanceof Error ? error.message : String(error)
             };
-            process.parentPort?.postMessage(errorResponse);
+            if (parentPort) {
+                (parentPort as any).postMessage(JSON.stringify(errorResponse));
+            }
         }
     });
 }

@@ -1,9 +1,11 @@
 <template>
-    <v-layout :class="{
+    <v-layout
+:class="{
         isMini: navState.isMini,
         isMobile: mainStore.isMobile,
     }">
-        <v-navigation-drawer class="my-4 layout_navigation" :rail="navState.rail" expand-on-hover rail-width="77"
+        <v-navigation-drawer
+class="my-4 layout_navigation" :rail="navState.rail" expand-on-hover rail-width="77"
             @update:rail="navigationRail" :permanent="permanent" v-model="navState.menuVisible" style="position: fixed">
             <v-list class="py-4 mx-2 logo" nav>
                 <v-list-item :prepend-avatar="logo" class="mx-1" @click="gotodashborad()">
@@ -16,7 +18,8 @@
             <v-list nav class="mx-2">
                 <v-list-subheader>{{ t('route.dashboard') }}</v-list-subheader>
                 <template v-for="(item, key) in navState.routes" :key="key">
-                    <v-list-item v-if="item.meta?.visible && !item.children" :prepend-icon="(item.meta?.icon as any)"
+                    <v-list-item
+v-if="item.meta?.visible && !item.children" :prepend-icon="(item.meta?.icon as any)"
                         :title="getTranslatedTitle(item.meta?.title as string)" :to="{ name: item.name }" class="mx-1"
                         active-class="nav_active"></v-list-item>
 
@@ -25,7 +28,8 @@
                             <v-list-item v-bind="props" :prepend-icon="item.meta.icon" :title="getTranslatedTitle(item.meta.title as string)" />
                         </template>
                         <template v-for="(row, i) in item.children">
-                            <v-list-item v-if="(row.meta?.visible as any)" :title="getTranslatedTitle(row.meta?.title as string)"
+                            <v-list-item
+v-if="(row.meta?.visible as any)" :title="getTranslatedTitle(row.meta?.title as string)"
                                 :prepend-icon="navState.isMini ? (row.meta?.icon as any) : ''" :key="i"
                                 :to="{ name: row.name }" />
                         </template>
@@ -34,7 +38,8 @@
                     <v-list-subheader v-if="item.name === 'Miscellaneous'">Other</v-list-subheader>
                 </template>
                 <v-list-item prepend-icon="mdi-text-box" class="mx-1">
-                    <v-list-item-title><a target="_blank" href="https://vuetifyjs.com/"
+                    <v-list-item-title><a
+target="_blank" href="https://vuetifyjs.com/"
                             class="link">Document</a></v-list-item-title>
                 </v-list-item>
                 <!-- <v-list-item prepend-icon="mdi-github" class="mx-1">
@@ -59,7 +64,8 @@
                 <div v-if="mainStore.isMobile" class="head_logo ml-4 mr-1">
                     <img :src="logo" height="40" />
                 </div>
-                <v-btn v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
+                <v-btn
+v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
                     @click="navState.menuVisible = !navState.menuVisible">
                     <v-icon size="small"></v-icon>
                 </v-btn>
@@ -70,13 +76,26 @@
                         prepend-inner-icon="mdi-magnify" single-line hide-details clearable></v-text-field> -->
                 </div>
                 <div class="tool_btns">
-                    <v-btn @click="mainStore.onTheme" variant="text" :icon="mainStore.theme === 'light' ? 'mdi-weather-sunny' : 'mdi-weather-night'
+                    <v-btn
+@click="mainStore.onTheme" variant="text" :icon="mainStore.theme === 'light' ? 'mdi-weather-sunny' : 'mdi-weather-night'
         " />
                     <v-btn variant="text" icon="mdi-bell-outline">
                         <v-badge content="2" color="error">
                             <v-icon size="small"></v-icon>
                         </v-badge>
                     </v-btn>
+                    <v-menu :location="location">
+                        <template v-slot:activator="{ props }">
+                            <v-btn variant="text" icon="mdi-translate" v-bind="props">
+                                <v-icon size="small"></v-icon>
+                            </v-btn>
+                        </template>
+                        <v-list>
+                            <v-list-item v-for="(item, index) in languages" :key="index" @click="switchLanguage(item.key)">
+                                <v-list-item-title>{{ item.title }}</v-list-item-title>
+                            </v-list-item>
+                        </v-list>
+                    </v-menu>
                     <v-btn variant="text" icon="mdi-chat" @click="toggleChatPanel">
                         <v-icon size="small"></v-icon>
                     </v-btn>
@@ -84,21 +103,11 @@
                         <!-- <v-avatar size="x-small" class="avatar mr-2">
                             <v-img :src="wxtx" alt="{{userName}}"></v-img>
                         </v-avatar> -->
-                        <span v-if="!mainStore.isMobile">{{userName}}</span>
+                        <span v-if="!mainStore.isMobile">{{ userName }}</span>
+                        <v-icon v-if="!mainStore.isMobile && isPlusPlan" icon="mdi-plus-circle" size="small" class="ml-1" color="primary" />
+                        <v-chip v-if="!mainStore.isMobile && userPlan && !isPlusPlan" size="x-small" color="primary" variant="tonal" class="ml-1">{{ userPlan }}</v-chip>
                         <v-menu activator="parent">
                             <v-list nav class="h_a_menu">
-                                <v-menu :location="location">
-                                    <template v-slot:activator="{ props }">
-                                        <v-list-item title="Language" prepend-icon="mdi-translate" v-bind="props" />
-                                    </template>
-                                        <v-list>
-                                            <v-list-item v-for="(item, index) in languages" :key="index">
-                                                <v-list-item-title @click="switchLanguage(item.key)">{{ item.title }}</v-list-item-title>
-
-                                            </v-list-item>
-                                        </v-list>
-                                    
-                                </v-menu>
                                 <v-list-item :title="t('layout.system_setting')" prepend-icon="mdi-cog" @click="gotoSystemsetting" />
                                 <v-list-item :title="t('layout.login_out')" prepend-icon="mdi-login" @click="Usersignout" />
                             </v-list>
@@ -125,7 +134,7 @@
           <!-- Multiple Messages Display -->
           <div class="messages-container">
             <div
-              v-for="(msg, index) in messages"
+              v-for="msg in messages"
               :key="msg.id"
               class="message-item"
               :class="msg.type"
@@ -186,10 +195,11 @@ import NoticeSnackbar from '@/views/components/widgets/noticeSnackbar.vue';
 import AiChatBox from '@/views/components/aiChat/AiChatBox.vue';
 import {GetloginUserInfo} from '@/views/api/users'
 import { getAppName } from '@/views/api/app'
+import { packageAppName } from '@/config/appPackage'
 import { updateLanguagePreference, getLanguagePreference } from '@/views/api/language'
 import { initializeLanguageDetection } from '@/views/utils/browserLanguageDetection'
 import { initializeLanguageMigration } from '@/views/utils/languageMigration'
-import { initializeLanguageSynchronization } from '@/views/utils/languageSynchronization'
+import { initializeLanguageSynchronization, syncLanguageChange } from '@/views/utils/languageSynchronization'
 
 
 // import {ref, watchEffect} from "vue";
@@ -206,7 +216,10 @@ const dialogStatus=ref(false)
 const noticeMessage=ref('')
 const noticeType=ref<NoticeType>('info')
 const userName=ref('')
-const appName=ref('Social Marketing')
+const userPlan=ref('')
+const isPlusPlan=ref(false)
+// Initial value from package.json; getAppName() may overwrite with main-process formatted name
+const appName=ref(packageAppName)
 const snaptimeout=ref<number>(10000)
 const messages = ref<MessageItem[]>([]);
 // const dialogTitle=ref('')
@@ -234,8 +247,12 @@ type languageType = {
 }
 
 const languages: Array<languageType> = [
-    { title: "English",key:"en" },
-    { title: "中文",key:"zh"},
+    { title: "English", key: "en" },
+    { title: "中文", key: "zh" },
+    { title: "Español", key: "es" },
+    { title: "Français", key: "fr" },
+    { title: "Deutsch", key: "de" },
+    { title: "日本語", key: "ja" },
 ]
 // const currentLanguage = languages.find((x) => x.key === locale.value)?.key ?? "en";
 // const selectedOption = ref(currentLanguage);
@@ -248,16 +265,12 @@ const switchLanguage = async (lang: string) => {
     try {
         // Update UI immediately for better user experience
         locale.value = lang
-        setLanguage(lang)
         
-        // Persist to system settings in the background
-        const success = await updateLanguagePreference(lang)
+        // Sync language change using event-driven synchronization
+        await syncLanguageChange(lang)
         
-        if (success) {
-            showSuccessMessage(t('layout.language_updated_successfully') || 'Language updated successfully')
-        } else {
-            showWarningMessage(t('layout.language_update_failed') || 'Language update failed, but UI has been updated')
-        }
+        // Show success message
+        showSuccessMessage(t('layout.language_updated_successfully') || 'Language updated successfully')
     } catch (error) {
         console.error('Error switching language:', error)
         showErrorMessage(t('layout.language_switch_error') || 'Error switching language')
@@ -353,6 +366,18 @@ onMounted(async () => {
     await GetloginUserInfo().then(res=>{
         console.log(res)
         userName.value=res.name
+        // Check Plus plan (aifetch-plus) for badge; show other aifetchly plan names in chip when not Plus
+        if (res.plans && res.plans.length > 0) {
+            isPlusPlan.value = res.plans.some(
+                plan => plan.planName && plan.planName.toLowerCase().includes('aifetch-plus')
+            )
+            const aifetchlyPlans = res.plans.filter(
+                plan => plan.planName && plan.planName.toLowerCase().includes('aifetchly')
+            )
+            if (aifetchlyPlans.length > 0 && !isPlusPlan.value) {
+                userPlan.value = aifetchlyPlans.map(plan => plan.planName).join(', ')
+            }
+        }
     })
     
     // Load app name from backend
@@ -386,8 +411,8 @@ onMounted(async () => {
         await switchLanguage(selectedLanguage)
     })
     
-    // Initialize language synchronization
-    initializeLanguageSynchronization()
+    // Initialize language synchronization (performs initial sync only)
+    await initializeLanguageSynchronization()
     
     // Add keyboard shortcut listener
     window.addEventListener('keydown', handleKeyboardShortcut)

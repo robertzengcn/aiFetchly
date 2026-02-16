@@ -30,6 +30,8 @@ import {WriteLog,getChromeExcutepath,getFirefoxExcutepath,getRecorddatetime} fro
 import { USERLOGPATH, USEREMAIL } from '@/config/usersetting';
 import { v4 as uuidv4 } from 'uuid';
 import { SocialAccountModule } from './socialAccountModule';
+import { AIRecoveryHandler } from './AIRecoveryHandler';
+import { AIRecoveryRequest, AIRecoveryResponse, ProcessMessage } from '@/entityTypes/processMessage-type';
 
 export type TaskDetailsForEdit = {
     id: number;
@@ -44,6 +46,7 @@ export type TaskDetailsForEdit = {
     accounts: Array<number>;
     status: SearchTaskStatus;
     record_time: string;
+    enableAIRecovery?: boolean;
 }
 
 export type SearchTaskUpdateData = {
@@ -55,6 +58,7 @@ export type SearchTaskUpdateData = {
     localBrowser?: string;
     proxys?: Array<{host: string, port: number, user?: string, pass?: string}>;
     accounts?: number[];
+    enableAIRecovery?: boolean;
 }
 
 export class SearchModule extends BaseModule {
@@ -67,6 +71,7 @@ export class SearchModule extends BaseModule {
     private accountCookiesModule: AccountCookiesModule
     private systemSettingGroupModule: SystemSettingGroupModule
     private socialAccountModule: SocialAccountModule
+    private aiRecoveryHandler: AIRecoveryHandler
     constructor() {
         // const tokenService = new Token()
         // const dbpath = tokenService.getValue(USERSDBPATH)
@@ -83,6 +88,13 @@ export class SearchModule extends BaseModule {
         this.accountCookiesModule = new AccountCookiesModule()
         this.systemSettingGroupModule = new SystemSettingGroupModule()
         this.socialAccountModule = new SocialAccountModule()
+        // Initialize AI recovery handler with default config
+        // TODO: Load config from system settings or task configuration
+        this.aiRecoveryHandler = new AIRecoveryHandler({
+            model: 'gpt-4o-mini',
+            rateLimitWindow: 60000,
+            rateLimitMax: 10
+        })
     }
 
     /**
@@ -246,7 +258,7 @@ export class SearchModule extends BaseModule {
         }
        }
     }
-    let localBrowserexcutepath:string=""
+    let localBrowserexcutepath=""
     if(data.localBrowser&&data.localBrowser.length>0){
         const external_system_group=await this.systemSettingGroupModule.getGroupItembyName(external_system)
         if(external_system_group){
@@ -344,15 +356,120 @@ export class SearchModule extends BaseModule {
                 console.log('Child process exited successfully');
             }
         })
-        child.on('message', (message) => {
-            console.log("get message from child")
-            console.log('Message from child:', JSON.parse(message));
-            const childdata=JSON.parse(message)
-            if(childdata.action=="savesearchresult"){
-                //save result
-                this.saveSearchResult(childdata.data,taskId)
-                this.updateTaskStatus(taskId,SearchTaskStatus.Complete)
-                child.kill()
+        child.on('message', (message: unknown) => {
+            try {
+                let childdata: { action?: string; data?: unknown };
+                
+                // Electron utility process messages can come in different formats:
+                // 1. As a string directly: "JSON string"
+                // 2. As an object with data property: { data: "JSON string" }
+                // 3. As a parsed object directly: { action: "...", data: ... }
+                
+                let parsedMessage: unknown = message;
+                
+                // First, handle if message is a string (JSON stringified)
+                if (typeof message === 'string') {
+                    try {
+                        parsedMessage = JSON.parse(message);
+                    } catch (parseError) {
+                        console.error('Invalid message from child process (failed to parse string):', message);
+                        return;
+                    }
+                }
+                
+                // Now handle the parsed message
+                const msg = parsedMessage as { data?: string | unknown; action?: string };
+                
+                if (msg && typeof msg === 'object' && msg !== null) {
+                    // Check if it's already a parsed object with action property (direct format)
+                    if ('action' in msg && typeof msg.action === 'string') {
+                        childdata = msg as { action: string; data: unknown };
+                    } 
+                    // Check if it's wrapped format with data as string (Electron utility process format)
+                    else if ('data' in msg && typeof msg.data === 'string' && !('action' in msg)) {
+                        try {
+                            childdata = JSON.parse(msg.data);
+                        } catch (parseError) {
+                            console.error('Invalid message from child process (failed to parse data):', message);
+                            return;
+                        }
+                    } else {
+                        console.error('Invalid message from child process:', JSON.stringify(message));
+                        return;
+                    }
+                } else {
+                    console.error('Invalid message from child process (not an object):', message);
+                    return;
+                }
+                
+                console.log("get message from child")
+                console.log('Message from child:', childdata);
+                if(childdata.action=="savesearchresult"){
+                    //save individual result immediately
+                    // Handle both single result and array (for backward compatibility)
+                    const resultData = Array.isArray(childdata.data) 
+                        ? childdata.data as ResultParseItemType[]
+                        : [childdata.data as ResultParseItemType];
+                    // Save result immediately without waiting for completion
+                    this.saveSearchResult(resultData, taskId).catch(err => {
+                        console.error(`Failed to save search result for task ${taskId}:`, err);
+                    });
+                } else if(childdata.action=="searchcomplete"){
+                    // All results have been sent, mark task as complete
+                    this.updateTaskStatus(taskId,SearchTaskStatus.Complete)
+                    child.kill()
+                } else if(childdata.action=="searcherror"){
+                    // Handle search error
+                    const errorData = childdata.data as {error?: string} | null;
+                    const errorMessage = errorData?.error || "Unknown error occurred during search";
+                    console.error(`Search error for task ${taskId}:`, errorMessage);
+                    this.updateTaskStatus(taskId,SearchTaskStatus.Error)
+                    child.kill()
+                } else if(childdata.action=="updateaccountcookies"){
+                    // Handle cookies update from child process
+                    const cookiesData = childdata.data as {accountId: number; cookies: Array<CookiesType>} | null;
+                    if (cookiesData && cookiesData.accountId && cookiesData.cookies) {
+                        console.log(`Updating cookies for account ${cookiesData.accountId}`);
+                        this.updateAccountCookies(cookiesData.accountId, cookiesData.cookies).catch(err => {
+                            console.error(`Failed to update cookies for account ${cookiesData.accountId}:`, err);
+                        });
+                    }
+                } else if(childdata.action=="requestAIRecovery"){
+                    // Handle AI recovery request from child process
+                    const request = childdata.data as AIRecoveryRequest;
+                    console.log(`Received AI recovery request: ${request.requestId} for operation: ${request.operation}`);
+                    
+                    // Process recovery request asynchronously
+                    this.aiRecoveryHandler.handleRecoveryRequest(request)
+                        .then((response: AIRecoveryResponse) => {
+                            const message: ProcessMessage<AIRecoveryResponse> = {
+                                action: 'aiRecoveryResponse',
+                                data: response
+                            };
+                            child.postMessage(JSON.stringify(message));
+                        })
+                        .catch((error) => {
+                            console.error('Error processing AI recovery request:', error);
+                            const errorResponse: AIRecoveryResponse = {
+                                requestId: request.requestId,
+                                success: false,
+                                actions: [],
+                                confidence: 0,
+                                reasoning: 'Error processing recovery request',
+                                error: error instanceof Error ? error.message : String(error)
+                            };
+                            const message: ProcessMessage<AIRecoveryResponse> = {
+                                action: 'aiRecoveryResponse',
+                                data: errorResponse
+                            };
+                            child.postMessage(JSON.stringify(message));
+                        });
+                }
+            } catch (error) {
+                console.error('Failed to parse message from child process:', error);
+                if (error instanceof Error) {
+                    console.error('Error details:', error.message);
+                }
             }
         });
     }
@@ -546,7 +663,7 @@ export class SearchModule extends BaseModule {
         // If search is provided, get all tasks first, then filter and paginate
         // Otherwise, use normal pagination
         let tasklist;
-        let allTasks: Array<SearchtaskItem> = [];
+        const allTasks: Array<SearchtaskItem> = [];
         
         if (search && search.trim().length > 0) {
             // Get all tasks for filtering
@@ -918,6 +1035,39 @@ export class SearchModule extends BaseModule {
             status: taskEntity.status,
             record_time: taskEntity.record_time
         };
+    }
+
+    /**
+     * Update account cookies in the database
+     * @param accountId The account ID to update cookies for
+     * @param cookies The updated cookies array
+     */
+    public async updateAccountCookies(accountId: number, cookies: Array<CookiesType>): Promise<void> {
+        try {
+            // Get existing cookies entity for this account
+            const existingCookies = await this.accountCookiesModule.getAccountCookies(accountId);
+            
+            if (existingCookies) {
+                // Update existing cookies
+                existingCookies.cookies = JSON.stringify(cookies);
+                existingCookies.record_time = getRecorddatetime();
+                await this.accountCookiesModule.saveAccountCookies(existingCookies);
+                console.log(`Successfully updated cookies for account ${accountId}`);
+            } else {
+                // Create new cookies entry if it doesn't exist
+                const { AccountCookiesEntity } = await import('@/entity/AccountCookies.entity');
+                const newCookies = new AccountCookiesEntity();
+                newCookies.account_id = accountId;
+                newCookies.cookies = JSON.stringify(cookies);
+                newCookies.record_time = getRecorddatetime();
+                newCookies.partition_path = this.accountCookiesModule.genPartitionPath();
+                await this.accountCookiesModule.saveAccountCookies(newCookies);
+                console.log(`Successfully created new cookies entry for account ${accountId}`);
+            }
+        } catch (error) {
+            console.error(`Failed to update cookies for account ${accountId}:`, error);
+            throw error;
+        }
     }
 
 

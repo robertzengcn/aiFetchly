@@ -5,8 +5,8 @@ import { IScraperEngine, YellowPagesTask, YellowPagesResult, PlatformSelectors, 
  * This mock provides predictable behavior for unit testing and development.
  */
 export class MockScraperEngine implements IScraperEngine {
-    private isRunning: boolean = false;
-    private isPaused: boolean = false;
+    private isRunning= false;
+    private isPaused= false;
     private progressCallbacks: ((progress: ScrapingProgress) => void)[] = [];
     private errorCallbacks: ((error: ScrapingError) => void)[] = [];
     private completionCallbacks: ((results: YellowPagesResult[]) => void)[] = [];

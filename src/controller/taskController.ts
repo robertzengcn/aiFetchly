@@ -5,8 +5,9 @@ import { TaskEntity } from '@/entity/Task.entity'
 export class TaskController {
   private taskModel: TaskModel
 
-  constructor() {
-    this.taskModel = new TaskModel()
+  constructor(taskModel?: TaskModel) {
+    // Allow dependency injection for testing
+    this.taskModel = taskModel || new TaskModel()
   }
 
   private convertToTaskEntityType(task: TaskEntity): TaskEntityType {
@@ -72,7 +73,7 @@ export class TaskController {
   }
 
   async getTaskResults(taskId: number, page: number, size: number): Promise<{
-    results: any[]
+    results: unknown[]
     total: number
     page: number
     size: number

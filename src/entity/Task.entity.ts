@@ -29,19 +29,19 @@ export class TaskEntity {
   @Column({ type: 'boolean', default: true })
   showBrowser: boolean
 
-  @Column({ 
-    type: 'varchar', 
-    length: 20, 
+  @Column({
+    type: 'varchar',
+    length: 20,
     default: 'pending',
     enum: ['pending', 'running', 'completed', 'failed', 'cancelled']
   })
-  status: string
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
 
   @Column({ type: 'int', default: 0 })
   results_count: number
 
   @Column({ type: 'text', nullable: true })
-  error_message: string
+  error_message?: string
 
   @CreateDateColumn()
   created_at: string
@@ -50,5 +50,5 @@ export class TaskEntity {
   updated_at: string
 
   @Column({ type: 'datetime', nullable: true })
-  completed_at: string
+  completed_at?: string
 }

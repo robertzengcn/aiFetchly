@@ -19,11 +19,23 @@ import { CommonMessage } from "@/entityTypes/commonType"
 import { Usersearchdata } from "@/entityTypes/searchControlType"
 import { UserSearch } from "@/childprocess/userSearch"
 import { ResultParseItemType } from "@/entityTypes/scrapeType"
+import { CookiesType } from "@/entityTypes/cookiesType"
+import { AIRecoveryResponse } from "@/entityTypes/processMessage-type"
+import { handleAIRecoveryResponse } from "@/childprocess/utils/AIRecoveryBridge"
 // import { VideoPublishParam } from "./entityTypes/videoPublishType";
 // import { VideoPublishService } from "./service/VideoPublishService";
 
+// Type for cookies update message
+type CookiesUpdateData = {
+    accountId: number;
+    cookies: Array<CookiesType>;
+}
 
-process.parentPort.on('message', async (e) => {
+
+// process.parentPort is available in Worker Threads
+const parentPort = (process as unknown as { parentPort?: { on: (event: string, handler: (e: { data: string }) => void) => void; postMessage: (message: string) => void } }).parentPort;
+if (parentPort) {
+  parentPort.on('message', async (e) => {
     //console.log(e.data)
     const pme = JSON.parse(e.data) as ProcessMessage<any>
     switch (pme.action) {
@@ -47,7 +59,32 @@ process.parentPort.on('message', async (e) => {
                     action:"savesearchresult",
                     data:result
                 }
-                process.parentPort.postMessage(JSON.stringify(message))
+                parentPort.postMessage(JSON.stringify(message))
+            }, function(accountId, cookies) {
+                // Send updated cookies back to main process
+                console.log(`Sending updated cookies for account ${accountId} to main process`)
+                const cookiesMessage: ProcessMessage<CookiesUpdateData> = {
+                    action: "updateaccountcookies",
+                    data: {
+                        accountId: accountId,
+                        cookies: cookies
+                    }
+                }
+                parentPort.postMessage(JSON.stringify(cookiesMessage))
+            }).then(() => {
+                // Send completion message after all results are sent
+                const completeMessage:ProcessMessage<null>={
+                    action:"searchcomplete",
+                    data:null
+                }
+                parentPort.postMessage(JSON.stringify(completeMessage))
+            }).catch((error) => {
+                // Send error message if search fails
+                const errorMessage:ProcessMessage<{error: string}>={
+                    action:"searcherror",
+                    data:{error: error instanceof Error ? error.message : String(error)}
+                }
+                parentPort.postMessage(JSON.stringify(errorMessage))
             })
             //console.log(port)
             //process.parentPort.postMessage(JSON.stringify(message))
@@ -71,7 +108,7 @@ process.parentPort.on('message', async (e) => {
                     action: "EmailSendSuccess",
                     data: senddata
                 }
-                process.parentPort.postMessage(JSON.stringify(message))
+                parentPort.postMessage(JSON.stringify(message))
             }, (receiver, info, title, content) => {
                 const senddata: EmailSendResult = {
                     receiver: receiver,
@@ -84,16 +121,17 @@ process.parentPort.on('message', async (e) => {
                     action: "EmailSendFailure",
                     data: senddata
                 }
-                process.parentPort.postMessage(JSON.stringify(message))
+                parentPort.postMessage(JSON.stringify(message))
             }).then(() => {
                 const message: ProcessMessage<null> = {
                     action: "sendEmailEnd",
 
                 }
-                process.parentPort.postMessage(JSON.stringify(message))
+                parentPort.postMessage(JSON.stringify(message))
             })
 
         }
+        break;
         case "searchEmail": {
 
             const userEmaildata = pme.data as EmailsControldata;
@@ -109,11 +147,19 @@ process.parentPort.on('message', async (e) => {
                     data: res
                 }
 
-                process.parentPort.postMessage(JSON.stringify(message))
+                parentPort.postMessage(JSON.stringify(message))
             })
             break;
         }
-        // case 'downloadVideo': {
+        case "aiRecoveryResponse": {
+            const response = pme.data as AIRecoveryResponse;
+            handleAIRecoveryResponse(response);
+            break;
+        }
+    }
+  })
+}
+// case 'downloadVideo': {
         //     // const pme=JSON.parse(e.data) as ProcessMessage<processVideoDownloadParam> 
         //     const param = pme.data as processVideoDownloadParam
         //     if (!param.platform) {
@@ -168,11 +214,6 @@ process.parentPort.on('message', async (e) => {
             //     break;
             // }
 
-
-    }
-
-
-})
 // async function downloadVideo(param: processVideoDownloadParam) {
 //     if (!param.platform) {
 //         console.error("platform is empty")
@@ -220,7 +261,7 @@ process.parentPort.on('message', async (e) => {
 //                             categories: param.categories
 //                         }
 //                     }
-//                     process.parentPort.postMessage(JSON.stringify(message))
+//                     parentPort.postMessage(JSON.stringify(message))
 //          }).catch((error) => { })
 //     } else {
 //         //download by single video or playlist
@@ -249,7 +290,7 @@ process.parentPort.on('message', async (e) => {
 //                         }
 //                     }
 
-//                     process.parentPort.postMessage(JSON.stringify(message))
+//                     parentPort.postMessage(JSON.stringify(message))
 //                     // process.exit(1);
 //                 }, (msg) => {
 //                     //stdout call
@@ -268,7 +309,7 @@ process.parentPort.on('message', async (e) => {
 //                             categories: param.categories
 //                         }
 //                     }
-//                     process.parentPort.postMessage(JSON.stringify(message))
+//                     parentPort.postMessage(JSON.stringify(message))
 //                     // process.exit(0);
 //                 }).catch((error) => {
 //                     if (error instanceof Error) {
@@ -280,7 +321,7 @@ process.parentPort.on('message', async (e) => {
 //                                 log: error.message
 //                             }
 //                         }
-//                         process.parentPort.postMessage(JSON.stringify(message))
+//                         parentPort.postMessage(JSON.stringify(message))
 //                         // process.exit(1);
 //                     }
 //                 })
@@ -298,7 +339,7 @@ process.parentPort.on('message', async (e) => {
 //                         }
 //                     }
 
-//                     process.parentPort.postMessage(JSON.stringify(message))
+//                     parentPort.postMessage(JSON.stringify(message))
 //                 }, (msg) => {
 //                     //stdout call
 //                 }, (param: VideodoanloadSuccessCall) => {
@@ -316,7 +357,7 @@ process.parentPort.on('message', async (e) => {
 //                             categories: param.categories
 //                         }
 //                     }
-//                     process.parentPort.postMessage(JSON.stringify(message))
+//                     parentPort.postMessage(JSON.stringify(message))
 
 //                 }, (error) => {
 //                     //end call
@@ -328,7 +369,7 @@ process.parentPort.on('message', async (e) => {
 //                                 msg: error
 //                             }
 //                         }
-//                         process.parentPort.postMessage(JSON.stringify(message))
+//                         parentPort.postMessage(JSON.stringify(message))
 
 //                         //process.exit(1);
 //                     } else {
@@ -345,7 +386,7 @@ process.parentPort.on('message', async (e) => {
 //                                 msg: error.message
 //                             }
 //                         }
-//                         process.parentPort.postMessage(JSON.stringify(message))
+//                         parentPort.postMessage(JSON.stringify(message))
 
 //                     }
 //                 })
@@ -404,7 +445,7 @@ process.parentPort.on('message', async (e) => {
 //                     }
 //                 }
 
-//                 process.parentPort.postMessage(JSON.stringify(message))
+//                 parentPort.postMessage(JSON.stringify(message))
 //             },
 //             stroutCall: (message: string) => {
 
@@ -424,7 +465,7 @@ process.parentPort.on('message', async (e) => {
 //                     }
 //                 }
 
-//                 process.parentPort.postMessage(JSON.stringify(message))
+//                 parentPort.postMessage(JSON.stringify(message))
 //             }
 //         }
 //         await captionTool.extractCaption(data).catch((error) => {
@@ -439,7 +480,7 @@ process.parentPort.on('message', async (e) => {
 //                     }
 //                 }
 
-//                 process.parentPort.postMessage(JSON.stringify(message))
+//                 parentPort.postMessage(JSON.stringify(message))
 //             }
 //         })
 

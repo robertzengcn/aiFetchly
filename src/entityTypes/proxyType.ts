@@ -31,6 +31,8 @@ export type ProxyListEntity={
     checktime?:string,
     status?:number
     statusName?:string
+    googlePass?:number
+    googlePassName?:string
 }
 export type ProxylistResp={
     status:boolean,

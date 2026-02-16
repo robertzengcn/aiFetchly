@@ -103,8 +103,8 @@ const IPCMessageFactory = {
 export class YellowPagesScraperProcess {
     private scraper: YellowPagesScraper | null;
     private currentTaskId: string | null = null;
-    private isRunning: boolean = false;
-    private isPaused: boolean = false;
+    private isRunning = false;
+    private isPaused = false;
     private processId: string;
 
     constructor() {

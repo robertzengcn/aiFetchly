@@ -2,34 +2,58 @@
     <div class="search_bar mt-4 d-flex jsb">
         <div class="d-flex jsb search_tool">
             <div class="search_wrap mr-4">
-                <v-text-field rounded class="elevation-0" density="compact" variant="solo" label="Search"
+                <v-text-field
+rounded class="elevation-0" density="compact" variant="solo" label="Search"
                     append-inner-icon="mdi-magnify" single-line hide-details v-model="search"></v-text-field>
             </div>
+            <!-- Column Visibility Menu -->
+            <v-menu>
+                <template v-slot:activator="{ props }">
+                    <v-btn class="btn ml-3" variant="flat" prepend-icon="mdi-view-column" v-bind="props">
+                        <span>{{ t('common.columns') || 'Columns' }}</span>
+                    </v-btn>
+                </template>
+                <v-list class="column-visibility-menu">
+                    <v-list-item v-for="header in availableColumns" :key="header.key">
+                        <template v-slot:prepend>
+                            <v-checkbox-btn
+                                :model-value="isColumnVisible(header.key)"
+                                @update:model-value="toggleColumn(header.key)"
+                            ></v-checkbox-btn>
+                        </template>
+                        <v-list-item-title>{{ header.title }}</v-list-item-title>
+                    </v-list-item>
+                </v-list>
+            </v-menu>
             <!-- <v-btn class="btn" variant="flat" prepend-icon="mdi-filter-variant"><span> More</span></v-btn> -->
             <v-btn class="btn ml-3" variant="flat" prepend-icon="mdi-plus" color="#5865f2" @click="createProxy()">
-               {{t('proxy.add_proxy')}}
+               {{ t('proxy.add_proxy') }}
             </v-btn>
-            <v-btn class="btn ml-3" 
+            <v-btn
+class="btn ml-3" 
             variant="flat" 
             prepend-icon="mdi-check" color="green" 
             :loading="checkloading"
             @click="checkProxy()">
-                {{checkButtonName}}
+                {{ checkButtonName }}
             </v-btn>
-            <v-btn class="btn ml-3" 
+            <v-btn
+class="btn ml-3" 
             variant="flat" 
             prepend-icon="mdi-delete" color="red" 
-            :loading="checkloading"
+            :loading="removeFailureLoading"
             @click="removefailure()">
-            {{t('proxy.remove_failure')}}
+            {{ t('proxy.remove_failure') }}
             </v-btn>
             
         </div>
         <div>       
         </div>
     </div>
-    <v-data-table-server class="mt-3" v-model:items-per-page="itemsPerPage" :search="search" :headers="headers"
-        :items-length="totalItems" :items="serverItems" :loading="loading" item-value="name" @update:options="loadItems">
+    <v-data-table-server
+class="mt-3" v-model:items-per-page="itemsPerPage" :search="search" :headers="visibleHeaders"
+        :items-length="totalItems" :items="serverItems" :loading="loading" item-value="id" 
+        v-model="selected" show-select @update:options="loadItems">
         <template v-slot:[`item.actions`]="{ item }">
             <v-icon
             size="small"
@@ -85,7 +109,7 @@
             icon="mdi-home"
             transition="slide-y-transition"
             >
-            {{alertext}}
+            {{ alertext }}
    </v-alert>
         </v-dialog>
     </div>
@@ -95,7 +119,7 @@
 
 <script setup lang="ts">
 import { getProxyList,deleteProxy,checkAllproxy,receiveProxycheckMsg,removeFailureproxy,receiveRemoveproxyMsg} from '@/views/api/proxy'
-import { ref,onMounted,computed,reactive } from 'vue'
+import { ref, onMounted, computed, reactive } from 'vue'
 import { SearchResult } from '@/views/api/types'
 import {ProxyListEntity} from "@/entityTypes/proxyType"
 // import { useRoute } from "vue-router";
@@ -143,6 +167,12 @@ const headers: Array<any> = [
         key: 'host',
     },
     {
+        title: computed(_ => CapitalizeFirstLetter(t("proxy.port"))),
+        align: 'start',
+        sortable: false,
+        key: 'port',
+    },
+    {
         title: computed(_ => CapitalizeFirstLetter(t("proxy.user_name"))),
         align: 'start',
         sortable: false,
@@ -172,15 +202,46 @@ const headers: Array<any> = [
         sortable: false,
         key: 'checktime',
     },
+    {
+        title: computed(_ => CapitalizeFirstLetter(t("proxy.google_pass"))),
+        align: 'start',
+        sortable: false,
+        key: 'googlePassName',
+    },
     { title: computed(_ => CapitalizeFirstLetter(t("common.actions"))), key: 'actions', sortable: false },
 
 ];
+
+// Column visibility: password hidden by default for security
+const defaultVisibleKeys = ['id', 'host', 'port', 'username', 'protocol', 'statusName', 'checktime', 'googlePassName', 'actions'];
+const visibleColumns = ref<Set<string>>(new Set(defaultVisibleKeys));
+
+const availableColumns = computed(() => headers);
+const visibleHeaders = computed(() => headers.filter((h: { key: string }) => visibleColumns.value.has(h.key)));
+
+function isColumnVisible(key: string): boolean {
+    return visibleColumns.value.has(key);
+}
+
+function toggleColumn(key: string): void {
+    const next = new Set(visibleColumns.value);
+    if (next.has(key)) {
+        next.delete(key);
+    } else {
+        next.add(key);
+    }
+    visibleColumns.value = next;
+}
+
 const itemsPerPage = ref(10);
 const serverItems = ref<Array<ProxyListEntity>>();
 const loading = ref(false);
-const checkloading=ref(false);
+const checkloading = ref(false);
+const removeFailureLoading = ref(false);
 const totalItems = ref(0);
 const search = ref('');
+// Selected proxies in the table (array of proxy IDs, since v-data-table-server returns item-value by default)
+const selected = ref<number[]>([]);
 // const $route = useRoute();
 const showDeleteModal = ref(false);
 const deleteId=ref(0);
@@ -231,10 +292,26 @@ function loadItems({ page, itemsPerPage, sortBy }) {
                 }else{
                     data[i].statusName =  CapitalizeFirstLetter(t('proxy.unkonw'))   
                 }
+                
+                // Map Google pass status to display name (fallback if not set by backend)
+                if (!data[i].googlePassName) {
+                    if (data[i].googlePass === 1) {
+                        data[i].googlePassName = CapitalizeFirstLetter(t('proxy.google_pass_pass'))
+                    } else if (data[i].googlePass === 2) {
+                        data[i].googlePassName = CapitalizeFirstLetter(t('proxy.google_pass_fail'))
+                    } else {
+                        data[i].googlePassName = CapitalizeFirstLetter(t('proxy.google_pass_not_checked'))
+                    }
+                } else {
+                    // Ensure it's capitalized (we know it exists from the if condition above)
+                    data[i].googlePassName = CapitalizeFirstLetter(data[i].googlePassName!)
+                }
             }
             serverItems.value = data
             totalItems.value = total
             loading.value = false
+            // Clear selection when data is reloaded
+            selected.value = []
         }).catch(function (error) {
             console.error(error);
         })
@@ -272,14 +349,25 @@ const createProxy=()=>{
         });
 }
 const checkProxy=()=>{
+    // Check if any proxies are selected
+    if (selected.value.length === 0) {
+        alertext.value = t('proxy.no_proxy_selected') || 'Please select at least one proxy to check';
+        showDialog.value = true;
+        return;
+    }
+    
     loading.value = true
+    checkloading.value = true
+    
+    //check selected proxies only
+    const selectedIds = selected.value;
+    console.log("selectedIds", selectedIds)
+    checkAllproxy(selectedIds)
     startAutoRefresh()
-    //check proxy available
-    checkAllproxy()
     
 }
 const removefailure=()=>{
-    loading.value = true
+    removeFailureLoading.value = true
     //remove failure proxy
     removeFailureproxy()
 }
@@ -298,12 +386,14 @@ onMounted(() => {
               if((rest.data?.process)&&(rest.data?.process==100)){
                 checkloading.value=false;
                 loading.value = false
-                //stopAutoRefresh()
+                stopAutoRefresh()
                 checkButtonName.value=t('proxy.check_proxy')
               }
              
        }else{
         loading.value = false
+        checkloading.value = false
+        stopAutoRefresh()
        }
     })
     receiveRemoveproxyMsg((res:string)=>{
@@ -312,10 +402,8 @@ onMounted(() => {
        const rest=JSON.parse(res) as CommonMessage<null>
        if(rest&&rest.status){
         loadItems({ page: 1, itemsPerPage: itemsPerPage.value, sortBy: '' })
-        loading.value = false
-       }else{
-        loading.value = false
        }
+       removeFailureLoading.value = false
     })
 }
 )

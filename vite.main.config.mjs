@@ -29,7 +29,6 @@ function emptyModulesPlugin() {
         'pg', 'pg-query-stream', 'pg-native',
         'mongodb', 'mssql', 'oracledb',
         'hdb-pool', 'redis', 'ioredis', 'sql.js',
-          // Add canvas to empty modules for fallback
     ];
 
     return {
@@ -45,6 +44,33 @@ function emptyModulesPlugin() {
                 return 'export default {}; export const Stream = {}; export const Readable = {}; export const Writable = {}; export const PassThrough = {}; export const createCanvas = () => ({}); export const loadImage = () => ({});';
             }
             return null;
+        }
+    };
+}
+
+// Fix _interopNamespaceDefault to handle undefined property descriptors
+function fixInteropNamespacePlugin() {
+    return {
+        name: 'fix-interop-namespace',
+        renderChunk(code, chunk, options) {
+            // Fix the specific pattern where Object.getOwnPropertyDescriptor result is used
+            // without checking if it's undefined
+            // This runs during chunk rendering for both dev and prod builds
+            let fixedCode = code;
+            
+            // Fix minified version: d.get?d: -> d&&d.get?d:
+            fixedCode = fixedCode.replace(
+                /(\w+)\.get\s*\?\s*\1:/g,
+                '$1&&$1.get?$1:'
+            );
+            
+            // Fix unminified version: d.get ? d : -> d && d.get ? d :
+            fixedCode = fixedCode.replace(
+                /(\w+)\.get\s+\?\s+\1\s+:/g,
+                '$1 && $1.get ? $1 :'
+            );
+            
+            return fixedCode;
         }
     };
 }
@@ -292,6 +318,7 @@ export default ({ mode }) => {
                 typescript: true,
             }),
             platformCopyPlugin(),
+            fixInteropNamespacePlugin(),
             // ejsTemplateProcessorPlugin(),
 
         ],

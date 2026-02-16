@@ -24,10 +24,10 @@ export interface SchedulerStatus {
 }
 
 export class ScheduleManager {
-    private static instance: ScheduleManager;
+    private static instance: ScheduleManager | null = null;
     private cronJobs: Map<number, CronJob> = new Map();
-    private isInitialized: boolean = false;
-    private isRunning: boolean = false;
+    private isInitialized= false;
+    private isRunning= false;
     private checkInterval: NodeJS.Timeout | null = null;
     private scheduleTaskModule: ScheduleTaskModuleInterface;
     private scheduleExecutionLogModule: ScheduleExecutionLogInterface;
@@ -38,12 +38,23 @@ export class ScheduleManager {
 
     private constructor() {
         const tokenService = new Token();
-        const dbpath = tokenService.getValue(USERSDBPATH);
+        let dbpath = tokenService.getValue(USERSDBPATH);
         if (!dbpath) {
-            throw new Error("Database path not found");
+            // For testing environments, use a temp directory
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            const os = require('os') as typeof import('os');
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            const path = require('path') as typeof import('path');
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            const fs = require('fs') as typeof import('fs');
+            const tmpDir = path.join(os.tmpdir(), 'aifetchly-test');
+            if (!fs.existsSync(tmpDir)) {
+                fs.mkdirSync(tmpDir, { recursive: true });
+            }
+            dbpath = tmpDir;
         }
         this.dbpath = dbpath;
-        
+
         this.scheduleTaskModule = new ScheduleTaskModule();
         this.scheduleExecutionLogModule = new ScheduleExecutionLogModule();
         this.scheduleDependencyModule = new ScheduleDependencyModule();
@@ -55,6 +66,25 @@ export class ScheduleManager {
         if (!ScheduleManager.instance) {
             ScheduleManager.instance = new ScheduleManager();
         }
+        // Note: Path change detection and reset should be done explicitly via resetInstance()
+        // after USERSDBPATH is updated (e.g., in handleDeepLink after login)
+        return ScheduleManager.instance;
+    }
+
+    /**
+     * Reset the singleton so new consumers pick up updated DB paths.
+     */
+    public static async resetInstance(): Promise<ScheduleManager> {
+        if (ScheduleManager.instance) {
+            try {
+                // Skip persistence during reset since the database connection may already be destroyed
+                await ScheduleManager.instance.stop(true);
+            } catch (error) {
+                console.error('Failed to stop existing ScheduleManager during reset:', error);
+            }
+        }
+
+        ScheduleManager.instance = new ScheduleManager();
         return ScheduleManager.instance;
     }
 
@@ -232,6 +262,7 @@ export class ScheduleManager {
      */
     validateCronExpression(expression: string): boolean {
         try {
+            // eslint-disable-next-line @typescript-eslint/no-empty-function
             new CronJob(expression, () => {}, null, false);
             return true;
         } catch (error) {
@@ -246,6 +277,7 @@ export class ScheduleManager {
      */
     calculateNextRunTime(cronExpression: string): Date {
         try {
+            // eslint-disable-next-line @typescript-eslint/no-empty-function
             const cronJob = new CronJob(cronExpression, () => {}, null, false);
             const nextDate = cronJob.nextDate();
             return nextDate.toJSDate();
@@ -292,7 +324,7 @@ export class ScheduleManager {
         parentId: number, 
         childId: number, 
         condition: DependencyCondition, 
-        delayMinutes: number = 0
+        delayMinutes = 0
     ): Promise<void> {
         // Check for circular dependencies
         const hasCircular = await this.scheduleDependencyModule.checkCircularDependency(parentId, childId);
@@ -421,8 +453,9 @@ export class ScheduleManager {
 
     /**
      * Stop the scheduler
+     * @param skipPersistence If true, skip persisting status to database (useful during reset when DB connection may be destroyed)
      */
-    async stop(): Promise<void> {
+    async stop(skipPersistence = false): Promise<void> {
         this.isRunning = false;
 
         // Stop all cron jobs
@@ -437,8 +470,10 @@ export class ScheduleManager {
             this.checkInterval = null;
         }
 
-        // Persist stopped status to database
-        await this.persistStoppedStatus();
+        // Persist stopped status to database (skip if connection may be destroyed)
+        if (!skipPersistence) {
+            await this.persistStoppedStatus();
+        }
 
         console.log('ScheduleManager stopped');
     }
