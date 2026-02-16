@@ -64,6 +64,7 @@
     "vitest-getyoutubeplaylisturl": "vitest --config vite.taskCode.config.mjs -t get-youtube-url-playerlist",
     "make-file-back": "vitest --config vite.utilityCode.config.mjs -t make-file-back",
     "tsc": "tsc --noEmit --watch",
+    "tsc-result": "tsc --noEmit",
     "rebuild-better-sqlite": "electron-rebuild -f -w better-sqlite3",
     "prepackage": "npm run rebuild-sqlite3",
     "rebuild-sqlite3": "electron-rebuild -f -w sqlite3",
