@@ -217,6 +217,7 @@ import {
   AI_EMAIL_TEMPLATE_GENERATE_COMPLETE,
   AI_EMAIL_TEMPLATE_ERROR,
   AI_EMAIL_TEMPLATE_STOP,
+  AI_EMAIL_TEMPLATE_VALIDATE,
 } from "@/config/channellist";
 
 // window.ipcRenderer = ipcRenderer

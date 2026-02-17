@@ -8,11 +8,28 @@
  * @module main-process/communication/ai-email-template-ipc
  */
 
-import { ipcMain, IpcMainEvent } from 'electron';
-import { Token } from '@/modules/token';
-import { USER_AI_ENABLED } from '@/config/usersetting';
-import { RagSearchModule } from '@/modules/RagSearchModule';
-import { AiChatApi } from '@/api/aiChatApi';
+import { ipcMain } from "electron";
+
+// IpcMainEvent type is not exported from electron, so we define it locally
+type IpcMainEvent = {
+  sender: {
+    send: (channel: string, ...args: unknown[]) => void;
+  };
+};
+
+// Extended IpcMain interface for methods not exposed in type definitions
+interface IpcMainExtended {
+  on: (channel: string, listener: (...args: unknown[]) => void) => void;
+  removeListener: (
+    channel: string,
+    listener: (...args: unknown[]) => void
+  ) => void;
+}
+
+import { Token } from "@/modules/token";
+import { USER_AI_ENABLED } from "@/config/usersetting";
+import { RagSearchModule } from "@/modules/RagSearchModule";
+import { AiChatApi } from "@/api/aiChatApi";
 import {
   AI_EMAIL_TEMPLATE_GENERATE_STREAM,
   AI_EMAIL_TEMPLATE_GENERATE_CHUNK,
@@ -20,18 +37,17 @@ import {
   AI_EMAIL_TEMPLATE_ERROR,
   AI_EMAIL_TEMPLATE_STOP,
   AI_EMAIL_TEMPLATE_VALIDATE,
-} from '@/config/channellist';
+} from "@/config/channellist";
 import {
   AIEmailTemplateRequest,
   AIEmailTemplateResponse,
-} from '@/entityTypes/emailmarketingType';
-import { EmailTemplateVariable } from '@/config/emailTemplateVariables';
+} from "@/entityTypes/emailmarketingType";
 import {
   validateAIRequest,
   validateAIOutputVariables,
   parseEmailTemplateFromStream,
   extractVariables,
-} from '@/views/utils/variableValidation';
+} from "@/views/utils/variableValidation";
 
 /**
  * System prompt for AI email template generation
@@ -64,7 +80,7 @@ CRITICAL RULES:
  * Register AI email template IPC handlers
  */
 export function registerAIEmailTemplateHandlers(): void {
-  console.log('AI Email Template IPC handlers registered');
+  console.log("AI Email Template IPC handlers registered");
 
   // Streaming generation handler
   ipcMain.on(AI_EMAIL_TEMPLATE_GENERATE_STREAM, async (...args: unknown[]) => {
@@ -74,11 +90,11 @@ export function registerAIEmailTemplateHandlers(): void {
       // 1. Check AI enable (MANDATORY - first check)
       const tokenService = new Token();
       const aiEnabled = tokenService.getValue(USER_AI_ENABLED);
-      if (!aiEnabled || aiEnabled === 'false' || aiEnabled === '0') {
+      if (!aiEnabled || aiEnabled === "false" || aiEnabled === "0") {
         event.sender.send(AI_EMAIL_TEMPLATE_ERROR, {
-          type: 'error',
+          type: "error",
           status: false,
-          msg: 'AI features are not enabled. Please upgrade your plan to access AI features.',
+          msg: "AI features are not enabled. Please upgrade your plan to access AI features.",
           data: null,
         });
         return;
@@ -88,9 +104,9 @@ export function registerAIEmailTemplateHandlers(): void {
       const validation = validateAIRequest(requestData);
       if (!validation.isValid) {
         event.sender.send(AI_EMAIL_TEMPLATE_ERROR, {
-          type: 'error',
+          type: "error",
           status: false,
-          msg: validation.errors?.join(', ') || 'Invalid request',
+          msg: validation.errors?.join(", ") || "Invalid request",
           data: null,
         });
         return;
@@ -115,7 +131,7 @@ export function registerAIEmailTemplateHandlers(): void {
                   result.content
                 }`;
               })
-              .join('\n\n');
+              .join("\n\n");
             enhancedPrompt = `Based on:\n${ragContext}\n\n---\n\n${requestData.prompt}`;
             console.log(
               `RAG search found ${searchResponse.results.length} relevant documents`
@@ -123,7 +139,7 @@ export function registerAIEmailTemplateHandlers(): void {
           }
         } catch (ragError) {
           console.error(
-            'RAG search failed, proceeding without RAG context:',
+            "RAG search failed, proceeding without RAG context:",
             ragError
           );
           // Continue without RAG context
@@ -139,23 +155,17 @@ Email Type: ${requestData.templateType}
 
       // 4. Stream generation
       const aiChatApi = new AiChatApi();
-      let fullContent = '';
+      let fullContent = "";
       let isStopped = false;
 
-      // Stop handler with manual cleanup tracking
-      let stopHandlerRegistered = false;
+      // Stop handler - using on with a flag for single execution
       const stopHandler = (): void => {
         isStopped = true;
-        console.log('AI email template generation stopped by user');
-        // Clean up stop handler
-        if (stopHandlerRegistered) {
-          ipcMain.removeListener(AI_EMAIL_TEMPLATE_STOP, stopHandler);
-          stopHandlerRegistered = false;
-        }
+        console.log("AI email template generation stopped by user");
       };
 
-      ipcMain.once(AI_EMAIL_TEMPLATE_STOP, stopHandler);
-      stopHandlerRegistered = true;
+      // Register stop handler for this generation
+      (ipcMain as IpcMainExtended).on(AI_EMAIL_TEMPLATE_STOP, stopHandler);
 
       try {
         await aiChatApi.streamMessage(
@@ -169,19 +179,19 @@ Email Type: ${requestData.templateType}
 
             // Handle token events (content chunks)
             if (
-              streamEvent.event === 'token' &&
-              typeof streamEvent.data.content === 'string'
+              streamEvent.event === "token" &&
+              typeof streamEvent.data.content === "string"
             ) {
               const chunk = streamEvent.data.content;
               fullContent += chunk;
               event.sender.send(AI_EMAIL_TEMPLATE_GENERATE_CHUNK, {
-                type: 'chunk',
+                type: "chunk",
                 content: chunk,
                 fullContent: fullContent,
               });
             }
             // Handle done event (completion)
-            else if (streamEvent.event === 'done') {
+            else if (streamEvent.event === "done") {
               // Parse and validate result
               const { title, content } =
                 parseEmailTemplateFromStream(fullContent);
@@ -196,56 +206,53 @@ Email Type: ${requestData.templateType}
                 variablesUsed,
                 hasInvalidVariables: !validationResult.isValid,
                 invalidVariables: validationResult.invalidVariables || [],
-                status: validationResult.isValid ? 'success' : 'partial',
+                status: validationResult.isValid ? "success" : "partial",
               };
 
               event.sender.send(AI_EMAIL_TEMPLATE_GENERATE_COMPLETE, {
-                type: 'complete',
+                type: "complete",
                 status: true,
                 data: responseData,
               });
 
               // Clean up stop handler
-              if (stopHandlerRegistered) {
-                ipcMain.removeListener(AI_EMAIL_TEMPLATE_STOP, stopHandler);
-                stopHandlerRegistered = false;
-              }
+              (ipcMain as IpcMainExtended).removeListener(
+                AI_EMAIL_TEMPLATE_STOP,
+                stopHandler
+              );
             }
             // Handle error events
-            else if (streamEvent.event === 'error') {
+            else if (streamEvent.event === "error") {
               const errorMsg =
-                typeof streamEvent.data.content === 'string'
+                typeof streamEvent.data.content === "string"
                   ? streamEvent.data.content
-                  : 'Generation failed';
+                  : "Generation failed";
               event.sender.send(AI_EMAIL_TEMPLATE_ERROR, {
-                type: 'error',
+                type: "error",
                 status: false,
                 msg: errorMsg,
                 data: null,
               });
 
               // Clean up stop handler
-              if (stopHandlerRegistered) {
-                ipcMain.removeListener(AI_EMAIL_TEMPLATE_STOP, stopHandler);
-                stopHandlerRegistered = false;
-              }
+              (ipcMain as IpcMainExtended).removeListener(
+                AI_EMAIL_TEMPLATE_STOP,
+                stopHandler
+              );
             }
           }
         );
       } catch (streamError) {
         // Clean up stop handler on stream error
-        if (stopHandlerRegistered) {
-          ipcMain.removeListener(AI_EMAIL_TEMPLATE_STOP, stopHandler);
-          stopHandlerRegistered = false;
-        }
+        (ipcMain as IpcMainExtended).removeListener(AI_EMAIL_TEMPLATE_STOP, stopHandler);
         throw streamError;
       }
     } catch (error) {
-      console.error('AI email template generation error:', error);
+      console.error("AI email template generation error:", error);
       event.sender.send(AI_EMAIL_TEMPLATE_ERROR, {
-        type: 'error',
+        type: "error",
         status: false,
-        msg: error instanceof Error ? error.message : 'Generation failed',
+        msg: error instanceof Error ? error.message : "Generation failed",
         data: null,
       });
     }
@@ -253,7 +260,7 @@ Email Type: ${requestData.templateType}
 
   // Validation handler
   ipcMain.handle(AI_EMAIL_TEMPLATE_VALIDATE, async (...args: unknown[]) => {
-    const [event, requestData] = args as [unknown, { title: string; content: string }];
+    const requestData = args[1] as { title: string; content: string };
 
     const contentValidation = validateAIOutputVariables(requestData.content);
     const titleValidation = validateAIOutputVariables(requestData.title);
@@ -272,7 +279,7 @@ Email Type: ${requestData.templateType}
         sanitizedContent: contentValidation.sanitizedContent,
         sanitizedTitle: titleValidation.sanitizedContent,
       },
-      msg: hasInvalid ? 'Invalid variables found' : 'Validation passed',
+      msg: hasInvalid ? "Invalid variables found" : "Validation passed",
     };
   });
 }
