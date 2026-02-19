@@ -133,6 +133,7 @@ v-model="EmailContentpreview" :label="t('emailmarketing.content')" readonly rows
         <v-icon class="mr-2" color="purple">mdi-robot</v-icon>
         {{ t('aiTemplateGeneration.title') || 'Generate with AI' }}
       </v-card-title>
+      <v-progress-linear v-if="isStreaming" indeterminate color="primary" class="mx-0"></v-progress-linear>
       <v-divider></v-divider>
       <v-card-text class="pt-4">
         <v-textarea
@@ -189,7 +190,8 @@ v-model="EmailContentpreview" :label="t('emailmarketing.content')" readonly rows
         <!-- Streaming Output Display -->
         <v-card v-if="isStreaming || streamedContent" class="mb-2" variant="outlined">
           <v-card-text>
-            <div v-if="isStreaming" class="text-caption text-grey mb-2">
+            <div v-if="isStreaming" class="d-flex align-center text-caption text-grey mb-2">
+              <v-progress-circular indeterminate size="20" width="2" class="mr-2"></v-progress-circular>
               {{ t('aiTemplateGeneration.generating') || 'Generating template...' }}
             </div>
             <div class="text-body-2 streamed-content">
@@ -199,7 +201,7 @@ v-model="EmailContentpreview" :label="t('emailmarketing.content')" readonly rows
         </v-card>
 
         <!-- Action Buttons -->
-        <div class="d-flex">
+        <div class="d-flex align-center gap-2">
           <v-btn
             v-if="!isStreaming"
             @click="generateTemplate"
@@ -208,13 +210,14 @@ v-model="EmailContentpreview" :label="t('emailmarketing.content')" readonly rows
           >
             {{ t('aiTemplateGeneration.generateButton') || 'Generate' }}
           </v-btn>
-          <v-btn
-            v-else
-            @click="stopGeneration"
-            color="error"
-          >
-            {{ t('aiTemplateGeneration.stopButton') || 'Stop Generating' }}
-          </v-btn>
+          <template v-else>
+            <v-btn @click="stopGeneration" color="error">
+              {{ t('aiTemplateGeneration.stopButton') || 'Stop Generating' }}
+            </v-btn>
+            <span class="text-caption text-medium-emphasis ml-2">
+              {{ t('aiTemplateGeneration.generating') || 'Generating...' }}
+            </span>
+          </template>
         </div>
       </v-card-text>
       <v-divider></v-divider>
