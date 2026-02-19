@@ -3,72 +3,72 @@ import { HttpClient } from "@/modules/lib/httpclient";
 import { CommonApiresp, ChatApiResponse } from "@/entityTypes/commonType";
 import { Token } from "@/modules/token";
 import { USER_AI_ENABLED } from "@/config/usersetting";
+import type { AIEmailTemplateRequest } from "@/entityTypes/emailmarketingType";
 
 /**
  * Chat request interface
  */
 export interface ChatRequest {
-    message: string;
-    conversationId?: string;
-    model?: string;
-    systemPrompt?: string;
-    useRAG?: boolean;
-    ragLimit?: number;
-    functions?: ToolFunction[];
+  message: string;
+  conversationId?: string;
+  model?: string;
+  systemPrompt?: string;
+  useRAG?: boolean;
+  ragLimit?: number;
+  functions?: ToolFunction[];
 }
 
 /**
- * Internal request data format for API calls
+ * Internal request data format for API calls.
+ * RAG is applied on the client; server receives the (possibly enhanced) message only.
  */
 interface ChatApiRequestData {
-    message: string;
-    conversation_id?: string;
-    model?: string;
-    system_prompt?: string;
-    use_rag?: boolean;
-    rag_limit?: number;
-    client_tools?: ToolFunction[];
+  message: string;
+  conversation_id?: string;
+  model?: string;
+  system_prompt?: string;
+  client_tools?: ToolFunction[];
 }
 
 /**
  * Tool/function definition for AI server
  */
 export interface ToolFunction {
-    type: string;
-    name: string;
-    description?: string;
-    parameters?: Record<string, unknown>;
+  type: string;
+  name: string;
+  description?: string;
+  parameters?: Record<string, unknown>;
 }
 
 /**
  * Tool execution result payload item
  */
 export interface ToolExecutionResult {
-    tool_call_id: string;
-    tool_name: string;
-    success: boolean;
-    result: Record<string, unknown>;
-    execution_time_ms: number;
+  tool_call_id: string;
+  tool_name: string;
+  success: boolean;
+  result: Record<string, unknown>;
+  execution_time_ms: number;
 }
 
 /**
  * Continue request data format for sending tool results
  */
 interface ContinueRequestData {
-    conversation_id: string;
-    tool_results: ToolExecutionResult[];
-    client_tools?: ToolFunction[];
-    thread_id?: string;
+  conversation_id: string;
+  tool_results: ToolExecutionResult[];
+  client_tools?: ToolFunction[];
+  thread_id?: string;
 }
 
 /**
  * Chat stream response interface
  */
 export interface ChatStreamResponse {
-    chunk: string;
-    isComplete: boolean;
-    messageId?: string;
-    conversationId?: string;
+  chunk: string;
+  isComplete: boolean;
+  messageId?: string;
+  conversationId?: string;
 }
 
 /**
@@ -76,106 +76,108 @@ export interface ChatStreamResponse {
  * Handles: single quotes -> double quotes, None -> null, True -> true, False -> false
  */
 function pythonDictToJson(pythonStr: string): string {
-    return pythonStr
-        // Replace None with null
-        .replace(/:\s*None\b/g, ': null')
-        .replace(/\bNone\s*,/g, 'null,')
-        // Replace True with true
-        .replace(/:\s*True\b/g, ': true')
-        .replace(/\bTrue\s*,/g, 'true,')
-        // Replace False with false
-        .replace(/:\s*False\b/g, ': false')
-        .replace(/\bFalse\s*,/g, 'false,')
-        // Replace single quotes with double quotes (simple approach)
-        // This handles the common case but may not work for all edge cases with nested quotes
-        .replace(/'/g, '"');
+  return (
+    pythonStr
+      // Replace None with null
+      .replace(/:\s*None\b/g, ": null")
+      .replace(/\bNone\s*,/g, "null,")
+      // Replace True with true
+      .replace(/:\s*True\b/g, ": true")
+      .replace(/\bTrue\s*,/g, "true,")
+      // Replace False with false
+      .replace(/:\s*False\b/g, ": false")
+      .replace(/\bFalse\s*,/g, "false,")
+      // Replace single quotes with double quotes (simple approach)
+      // This handles the common case but may not work for all edge cases with nested quotes
+      .replace(/'/g, '"')
+  );
 }
 
 /**
  * Stream event types from AI server
  */
 export enum StreamEventType {
-    TOKEN = "token",                          // Individual response tokens
-    TOOL_CALL = "tool_call",                  // Tool execution requests
-    TOOL_RESULT = "tool_result",              // Tool execution results
-    ERROR = "error",                          // Error conditions
-    DONE = "done",                            // Response completion
-    CONVERSATION_START = "conversation_start", // Session initialization
-    CONVERSATION_END = "conversation_end",    // Conversation termination
-    PONG = "pong",                            // Keep alive
-    // Plan execute agent events
-    PLAN_CREATED = "plan_created",            // Plan has been created
-    PLAN_STEP_START = "plan_step_start",      // A plan step has started
-    PLAN_STEP_COMPLETE = "plan_step_complete", // A plan step has completed
-    PLAN_EXECUTE_PAUSE = "plan_execute_pause", // Plan execution paused
-    PLAN_EXECUTE_RESUME = "plan_execute_resume" // Plan execution resumed
+  TOKEN = "token", // Individual response tokens
+  TOOL_CALL = "tool_call", // Tool execution requests
+  TOOL_RESULT = "tool_result", // Tool execution results
+  ERROR = "error", // Error conditions
+  DONE = "done", // Response completion
+  CONVERSATION_START = "conversation_start", // Session initialization
+  CONVERSATION_END = "conversation_end", // Conversation termination
+  PONG = "pong", // Keep alive
+  // Plan execute agent events
+  PLAN_CREATED = "plan_created", // Plan has been created
+  PLAN_STEP_START = "plan_step_start", // A plan step has started
+  PLAN_STEP_COMPLETE = "plan_step_complete", // A plan step has completed
+  PLAN_EXECUTE_PAUSE = "plan_execute_pause", // Plan execution paused
+  PLAN_EXECUTE_RESUME = "plan_execute_resume", // Plan execution resumed
 }
 
 /**
  * Tool call data structure (nested within data.data for tool_call events)
  */
 export interface ToolCallData {
-    name: string;
-    id: string;
-    arguments: Record<string, unknown>;
+  name: string;
+  id: string;
+  arguments: Record<string, unknown>;
 }
 
 /**
  * Stream event format from /api/ai/ask/stream
  */
 export interface StreamEvent {
-    event: StreamEventType | string;
-    data: {
-        content: Record<string, unknown> | string;
-        timestamp: string;
-        // Nested data structure for tool_call events
-        data?: ToolCallData;
-        // Legacy fields for backwards compatibility
-        // toolName?: string;
-        // toolParams?: Record<string, unknown>;
-        // errorMessage?: string;
-        // conversationId?: string;
-    };
+  event: StreamEventType | string;
+  data: {
+    content: Record<string, unknown> | string;
+    timestamp: string;
+    // Nested data structure for tool_call events
+    data?: ToolCallData;
+    // Legacy fields for backwards compatibility
+    // toolName?: string;
+    // toolParams?: Record<string, unknown>;
+    // errorMessage?: string;
+    // conversationId?: string;
+  };
 }
 
 /**
  * Available chat models response
  */
 export interface AvailableChatModelsResponse {
-    models: {
-        [key: string]: {
-            name: string;
-            description: string;
-            maxTokens: number;
-            supportsStreaming: boolean;
-        };
+  models: {
+    [key: string]: {
+      name: string;
+      description: string;
+      maxTokens: number;
+      supportsStreaming: boolean;
     };
-    default_model: string;
-    total_models: number;
+  };
+  default_model: string;
+  total_models: number;
 }
 
 /**
  * Keyword generation configuration
  */
 export interface KeywordGenerationConfig {
-    num_keywords: number;
-    keyword_type: string;
+  num_keywords: number;
+  keyword_type: string;
 }
 
 /**
  * Single batch keyword generation request item
  */
 export interface BatchKeywordGenerationRequestItem {
-    seed_keywords: string[];
-    config: KeywordGenerationConfig;
+  seed_keywords: string[];
+  config: KeywordGenerationConfig;
 }
 
 /**
  * Single keyword item with category
  */
 export interface KeywordItem {
-    category: string;
-    keyword: string;
+  category: string;
+  keyword: string;
 }
 
 /**
@@ -183,39 +185,39 @@ export interface KeywordItem {
  * Matches the actual server response structure
  */
 export interface BatchKeywordGenerationResponse {
-    keywords: KeywordItem[];
-    seed_keywords: string[];
-    total_keywords: number;
+  keywords: KeywordItem[];
+  seed_keywords: string[];
+  total_keywords: number;
 }
 
 /**
  * Contact extraction request interface
  */
 export interface ContactExtractionRequest {
-    page_content: string;
-    url: string;
-    entity_name?: string;
-    screenshot?: string;
+  page_content: string;
+  url: string;
+  entity_name?: string;
+  screenshot?: string;
 }
 
 /**
  * Contact extraction response interface
  */
 export interface ContactExtractionResponse {
-    emails: string[];
-    phones: string[];
-    address?: string;
-    socialLinks?: string[];
-    confidence?: number;
+  emails: string[];
+  phones: string[];
+  address?: string;
+  socialLinks?: string[];
+  confidence?: number;
 }
 
 /**
  * Website analysis request interface
  */
 export interface WebsiteAnalysisRequest {
-    website_content: string;
-    client_business: string;
-    temperature?: number;
+  website_content: string;
+  client_business: string;
+  temperature?: number;
 }
 
 /**
@@ -223,19 +225,19 @@ export interface WebsiteAnalysisRequest {
  * Matches the actual server response structure
  */
 export interface WebsiteAnalysisResponse {
-    industry: string;
-    match_score: number;
-    reasoning: string;
+  industry: string;
+  match_score: number;
+  reasoning: string;
 }
 
 /**
  * API client for AI Chat management
- * 
+ *
  * Handles communication with remote AI chat service to send messages,
  * receive responses, and manage conversations.
- * 
+ *
  * Follows the same pattern as RagConfigApi for consistency.
- * 
+ *
  * @example
  * ```typescript
  * const api = new AiChatApi();
@@ -246,555 +248,612 @@ export interface WebsiteAnalysisResponse {
  * ```
  */
 export class AiChatApi {
-    private _httpClient: HttpClient;
+  private _httpClient: HttpClient;
 
-    /**
-     * Creates a new AiChatApi instance
-     * Initializes the HTTP client for remote communication
-     */
-    constructor() {
-        this._httpClient = new HttpClient();
+  /**
+   * Creates a new AiChatApi instance
+   * Initializes the HTTP client for remote communication
+   */
+  constructor() {
+    this._httpClient = new HttpClient();
+  }
+
+  /**
+   * Check if AI features are enabled for the current user.
+   * Throws an error if AI is not enabled, preventing the API call.
+   *
+   * In worker processes, checks WORKER_AI_ENABLED env var instead of
+   * Token/ElectronStoreService (which require Electron APIs unavailable in workers).
+   *
+   * @throws {Error} When AI features are not enabled for the user
+   */
+  private ensureAIEnabled(): void {
+    // Worker processes cannot access ElectronStoreService/Token,
+    // so use env var passed from main process instead.
+    if (process.env.WORKER_TYPE) {
+      const aiEnabled = process.env.WORKER_AI_ENABLED;
+      if (aiEnabled !== "true") {
+        throw new Error(
+          "AI features are not enabled. Please upgrade your plan to access AI features."
+        );
+      }
+      return;
     }
 
-    /**
-     * Check if AI features are enabled for the current user.
-     * Throws an error if AI is not enabled, preventing the API call.
-     * 
-     * In worker processes, checks WORKER_AI_ENABLED env var instead of
-     * Token/ElectronStoreService (which require Electron APIs unavailable in workers).
-     * 
-     * @throws {Error} When AI features are not enabled for the user
-     */
-    private ensureAIEnabled(): void {
-        // Worker processes cannot access ElectronStoreService/Token,
-        // so use env var passed from main process instead.
-        if (process.env.WORKER_TYPE) {
-            const aiEnabled = process.env.WORKER_AI_ENABLED;
-            if (aiEnabled !== 'true') {
-                throw new Error('AI features are not enabled. Please upgrade your plan to access AI features.');
+    const tokenService = new Token();
+    const aiEnabled = tokenService.getValue(USER_AI_ENABLED);
+    if (aiEnabled !== "true") {
+      throw new Error(
+        "AI features are not enabled. Please upgrade your plan to access AI features."
+      );
+    }
+  }
+
+  /**
+   * Send a chat message to the remote AI service
+   *
+   * @param request - Chat request containing message and optional parameters
+   * @returns Promise resolving to chat response
+   * @throws {Error} When network request fails
+   *
+   * @example
+   * ```typescript
+   * const response = await api.sendMessage({
+   *   message: 'What is TypeScript?',
+   *   conversationId: 'conv-123'
+   * });
+   * ```
+   */
+  async sendMessage(
+    request: ChatRequest
+  ): Promise<CommonApiresp<ChatApiResponse>> {
+    this.ensureAIEnabled();
+    const data: ChatApiRequestData = {
+      message: request.message,
+      conversation_id: request.conversationId,
+      system_prompt: request.systemPrompt,
+    };
+
+    // Only include model if specified
+    if (request.model) {
+      data.model = request.model;
+    }
+
+    return this._httpClient.postJson("/api/ai/chat/message", data);
+  }
+
+  /**
+   * Stream a chat message to the remote AI service
+   *
+   * This endpoint returns streaming events in the format:
+   * { event: string, data: { content: {}, timestamp: string } }
+   *
+   * @param request - Chat request containing message and optional parameters
+   * @param onEvent - Callback function to handle each stream event
+   * @returns Promise resolving when stream completes
+   * @throws {Error} When network request fails
+   *
+   * @example
+   * ```typescript
+   * await api.streamMessage(
+   *   {
+   *     message: 'Explain quantum computing',
+   *     conversationId: 'conv-123'
+   *   },
+   *   (event) => {
+   *     console.log('Event:', event.event, 'Data:', event.data);
+   *   }
+   * );
+   * ```
+   */
+  async streamMessage(
+    request: ChatRequest,
+    onEvent: (event: StreamEvent) => void
+  ): Promise<void> {
+    this.ensureAIEnabled();
+    const data: ChatApiRequestData = {
+      message: request.message,
+      conversation_id: request.conversationId,
+      system_prompt: request.systemPrompt,
+      client_tools: request.functions,
+    };
+
+    // Only include model if specified
+    if (request.model) {
+      data.model = request.model;
+    }
+
+    const response = await this._httpClient.postStream(
+      "/api/ai/ask/stream",
+      data
+    );
+
+    if (!response.ok || response.status !== 200) {
+      const errorText = await response.text().catch(() => "Unknown error");
+      throw new Error(`Server returned ${response.status}: ${errorText}`);
+    }
+
+    if (!response.body) {
+      throw new Error("Response body is null");
+    }
+
+    await this._consumeStreamResponse(response, onEvent);
+  }
+
+  /**
+   * Stream AI-generated email template content (dedicated API for email template, not generic chat).
+   * Uses the same backend stream as chat but with email-template-specific system prompt and request shape.
+   *
+   * @param request - AI email template request (prompt, tone, templateType; RAG is applied on client, pass messageOverride when enhanced)
+   * @param onEvent - Callback for each stream event (token, done, error)
+   * @param options - Optional messageOverride when caller has already enhanced the prompt (e.g. with RAG context)
+   * @returns Promise that resolves when the stream ends
+   */
+  /**
+   * Stream AI-generated email template content from the dedicated email-template API.
+   * Calls POST /api/ai/email-template/stream (not the generic ask/stream).
+   */
+  async streamEmailTemplateGeneration(
+    request: AIEmailTemplateRequest,
+    onEvent: (event: StreamEvent) => void,
+    options?: { messageOverride?: string }
+  ): Promise<void> {
+    this.ensureAIEnabled();
+    const body = {
+      prompt: request.prompt,
+      tone: request.tone,
+      templateType: request.templateType,
+      messageOverride: options?.messageOverride ?? undefined,
+    };
+    const response = await this._httpClient.postStream(
+      "/api/ai/email-template/stream",
+      body
+    );
+    if (!response.ok || response.status !== 200) {
+      const errorText = await response.text().catch(() => "Unknown error");
+      throw new Error(`Server returned ${response.status}: ${errorText}`);
+    }
+    if (!response.body) {
+      throw new Error("Response body is null");
+    }
+    await this._consumeStreamResponse(response, onEvent);
+  }
+
+  /**
+   * Consume an SSE stream response and invoke onEvent for each parsed event.
+   * Shared by streamMessage and streamEmailTemplateGeneration.
+   */
+  private async _consumeStreamResponse(
+    response: Response,
+    onEvent: (event: StreamEvent) => void
+  ): Promise<void> {
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let currentEvent: Partial<StreamEvent> = {};
+
+    try {
+      let streamActive = true;
+      while (streamActive) {
+        const { done, value } = await reader.read();
+        if (done) {
+          streamActive = false;
+          continue;
+        }
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        let eventProcessedInBatch = false;
+
+        for (const line of lines) {
+          const trimmedLine = line.trim();
+          if (!trimmedLine) {
+            if (
+              !eventProcessedInBatch &&
+              currentEvent.event &&
+              currentEvent.data
+            ) {
+              const eventToProcess: StreamEvent = {
+                event: currentEvent.event,
+                data: currentEvent.data,
+              };
+              currentEvent = { event: undefined, data: undefined };
+              eventProcessedInBatch = true;
+              onEvent(eventToProcess);
             }
-            return;
+            continue;
+          }
+          if (trimmedLine.startsWith("{")) {
+            try {
+              const jsonStr = trimmedLine.includes("'")
+                ? pythonDictToJson(trimmedLine)
+                : trimmedLine;
+              const event: StreamEvent = JSON.parse(jsonStr);
+              onEvent(event);
+              continue;
+            } catch {
+              // fall through to SSE parsing
+            }
+          }
+          if (trimmedLine.startsWith("event:")) {
+            const eventType = trimmedLine.substring(6).trim();
+            currentEvent.event = eventType as StreamEventType;
+          } else if (trimmedLine.startsWith("data:")) {
+            const dataStr = trimmedLine.substring(5).trim();
+            if (
+              dataStr === "pong" ||
+              (!dataStr.startsWith("{") && !dataStr.startsWith("["))
+            ) {
+              continue;
+            }
+            try {
+              currentEvent.data = JSON.parse(dataStr);
+            } catch (error) {
+              try {
+                const jsonStr =
+                  dataStr.startsWith("{") && dataStr.includes("'")
+                    ? pythonDictToJson(dataStr)
+                    : dataStr;
+                currentEvent.data = JSON.parse(jsonStr);
+              } catch {
+                // ignore parse errors
+              }
+            }
+          }
         }
-
-        const tokenService = new Token();
-        const aiEnabled = tokenService.getValue(USER_AI_ENABLED);
-        if (aiEnabled !== 'true') {
-            throw new Error('AI features are not enabled. Please upgrade your plan to access AI features.');
-        }
-    }
-
-    /**
-     * Send a chat message to the remote AI service
-     * 
-     * @param request - Chat request containing message and optional parameters
-     * @returns Promise resolving to chat response
-     * @throws {Error} When network request fails
-     * 
-     * @example
-     * ```typescript
-     * const response = await api.sendMessage({
-     *   message: 'What is TypeScript?',
-     *   conversationId: 'conv-123'
-     * });
-     * ```
-     */
-    async sendMessage(request: ChatRequest): Promise<CommonApiresp<ChatApiResponse>> {
-        this.ensureAIEnabled();
-        const data: ChatApiRequestData = {
-            message: request.message,
-            conversation_id: request.conversationId,
-            system_prompt: request.systemPrompt,
-            use_rag: request.useRAG,
-            rag_limit: request.ragLimit
-        };
-        
-        // Only include model if specified
-        if (request.model) {
-            data.model = request.model;
-        }
-        
-        return this._httpClient.postJson('/api/ai/chat/message', data);
-    }
-
-    /**
-     * Stream a chat message to the remote AI service
-     * 
-     * This endpoint returns streaming events in the format:
-     * { event: string, data: { content: {}, timestamp: string } }
-     * 
-     * @param request - Chat request containing message and optional parameters
-     * @param onEvent - Callback function to handle each stream event
-     * @returns Promise resolving when stream completes
-     * @throws {Error} When network request fails
-     * 
-     * @example
-     * ```typescript
-     * await api.streamMessage(
-     *   {
-     *     message: 'Explain quantum computing',
-     *     conversationId: 'conv-123'
-     *   },
-     *   (event) => {
-     *     console.log('Event:', event.event, 'Data:', event.data);
-     *   }
-     * );
-     * ```
-     */
-    async streamMessage(
-        request: ChatRequest,
-        onEvent: (event: StreamEvent) => void
-    ): Promise<void> {
-        this.ensureAIEnabled();
-        const data: ChatApiRequestData = {
-            message: request.message,
-            conversation_id: request.conversationId,
-            system_prompt: request.systemPrompt,
-            use_rag: request.useRAG,
-            rag_limit: request.ragLimit,
-            client_tools: request.functions
-        };
-        
-        // Only include model if specified
-        if (request.model) {
-            data.model = request.model;
-        }
-        
-        const response = await this._httpClient.postStream('/api/ai/ask/stream', data);
-        
-        // Check if response status is 200 (OK)
-        if (!response.ok || response.status !== 200) {
-            const errorText = await response.text().catch(() => 'Unknown error');
-            throw new Error(`Server returned ${response.status}: ${errorText}`);
-        }
-        
-        if (!response.body) {
-            throw new Error('Response body is null');
-        }
-
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-        let currentEvent: Partial<StreamEvent> = {};
-
+      }
+      if (currentEvent.event && currentEvent.data) {
+        onEvent(currentEvent as StreamEvent);
+      }
+      if (buffer.trim() && buffer.trim().startsWith("{")) {
         try {
-            let streamActive = true;
-            while (streamActive) {
-                const { done, value } = await reader.read();
+          const bufferStr = buffer.trim();
+          const jsonStr = bufferStr.includes("'")
+            ? pythonDictToJson(bufferStr)
+            : bufferStr;
+          const event: StreamEvent = JSON.parse(jsonStr);
+          onEvent(event);
+        } catch {
+          // ignore
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  }
 
-                if (done) {
-                    streamActive = false;
-                    continue;
-                }
+  /**
+   * Get available chat models from remote server
+   *
+   * @returns Promise resolving to available models response
+   * @throws {Error} When network request fails
+   *
+   * @example
+   * ```typescript
+   * const models = await api.getAvailableModels();
+   * if (models.status) {
+   *   console.log('Available models:', models.data.models);
+   *   console.log('Default model:', models.data.default_model);
+   * }
+   * ```
+   */
+  async getAvailableModels(): Promise<
+    CommonApiresp<AvailableChatModelsResponse>
+  > {
+    this.ensureAIEnabled();
+    return this._httpClient.get("/api/ai/chat/models");
+  }
 
-                buffer += decoder.decode(value, { stream: true });
-                const lines = buffer.split('\n');
-                
-                // Keep the last incomplete line in the buffer
-                buffer = lines.pop() || '';
+  /**
+   * Test connection to remote AI chat service
+   *
+   * @returns Promise resolving to boolean indicating service availability
+   * @throws {Error} When network request fails
+   *
+   * @example
+   * ```typescript
+   * const isOnline = await api.testConnection();
+   * if (isOnline.status) {
+   *   console.log('AI chat service is available');
+   * }
+   * ```
+   */
+  async testConnection(): Promise<CommonApiresp<boolean>> {
+    return this._httpClient.get("/api/ai/chat/healthcheck");
+  }
 
-                // Track if we've already processed an event in this batch to prevent duplicates
-                let eventProcessedInBatch = false;
+  /**
+   * Batch generate keywords from seed keywords
+   *
+   * Sends multiple keyword generation requests in a single batch to the remote server.
+   * Each request item contains seed keywords and configuration for keyword generation.
+   *
+   * @param requests - Array of keyword generation requests
+   * @returns Promise resolving to batch keyword generation response
+   * @throws {Error} When network request fails
+   *
+   * @example
+   * ```typescript
+   * const response = await api.batchGenerateKeywords([
+   *   {
+   *     seed_keywords: ["cloud storage"],
+   *     config: {
+   *       num_keywords: 15,
+   *       keyword_type: "seo"
+   *     }
+   *   },
+   *   {
+   *     seed_keywords: ["file sharing"],
+   *     config: {
+   *       num_keywords: 15,
+   *       keyword_type: "seo"
+   *     }
+   *   }
+   * ]);
+   * if (response.status && response.data) {
+   *   console.log('Generated keywords:', response.data.keywords);
+   *   console.log('Seed keywords:', response.data.seed_keywords);
+   *   console.log('Total keywords:', response.data.total_keywords);
+   * }
+   * ```
+   */
+  async batchGenerateKeywords(
+    requests: BatchKeywordGenerationRequestItem[]
+  ): Promise<CommonApiresp<BatchKeywordGenerationResponse>> {
+    this.ensureAIEnabled();
+    return this._httpClient.postJson(
+      "/api/ai/keywords/generate/batch",
+      requests
+    );
+  }
 
-                for (const line of lines) {
-                    const trimmedLine = line.trim();
-                    
-                    if (!trimmedLine) {
-                        // Empty line signals end of event in SSE format
-                        // Only process if we have an event and haven't already processed one in this batch
-                        if (!eventProcessedInBatch && currentEvent.event && currentEvent.data) {
-                            // Create a copy of the event to avoid reference issues
-                            const eventToProcess: StreamEvent = {
-                                event: currentEvent.event,
-                                data: currentEvent.data
-                            };
-                            // Reset immediately before calling onEvent to prevent multiple empty lines from re-processing the same event
-                            currentEvent = { event: undefined, data: undefined };
-                            eventProcessedInBatch = true;
-                            onEvent(eventToProcess);
-                        }
-                        continue;
-                    }
+  /**
+   * Analyze whether a website is a target customer
+   *
+   * Analyzes website content against client business description to determine
+   * if the website represents a potential target customer.
+   *
+   * @param request - Website analysis request containing website content, client business, and optional temperature
+   * @returns Promise resolving to website analysis response
+   * @throws {Error} When network request fails
+   *
+   * @example
+   * ```typescript
+   * const response = await api.analyzeWebsite({
+   *   website_content: "# TechInsights - Technology Blog\n\n## Mission\n...",
+   *   client_business: "We are a content marketing agency...",
+   *   temperature: 0.7
+   * });
+   * if (response.status && response.data) {
+   *   console.log('Industry:', response.data.industry);
+   *   console.log('Match score:', response.data.match_score);
+   *   console.log('Reasoning:', response.data.reasoning);
+   * }
+   * ```
+   */
+  async analyzeWebsite(
+    request: WebsiteAnalysisRequest
+  ): Promise<CommonApiresp<WebsiteAnalysisResponse>> {
+    this.ensureAIEnabled();
+    const data: WebsiteAnalysisRequest = {
+      website_content: request.website_content,
+      client_business: request.client_business,
+    };
 
-                    // Try to parse as complete JSON object first (for backwards compatibility)
-                    if (trimmedLine.startsWith('{')) {
-                        try {
-                            // Convert Python-style dict to JSON if needed
-                            const jsonStr = trimmedLine.includes("'") 
-                                ? pythonDictToJson(trimmedLine) 
-                                : trimmedLine;
-                            const event: StreamEvent = JSON.parse(jsonStr);
-                            onEvent(event);
-                            continue;
-                        } catch (error) {
-                            // Not a complete JSON object, continue to SSE parsing
-                        }
-                    }
+    // Only include temperature if specified
+    if (request.temperature !== undefined) {
+      data.temperature = request.temperature;
+    }
 
-                    // Parse SSE format: "event: type" or "data: json"
-                    if (trimmedLine.startsWith('event:')) {
-                        const eventType = trimmedLine.substring(6).trim();
-                        currentEvent.event = eventType as StreamEventType;
-                    } else if (trimmedLine.startsWith('data:')) {
-                        const dataStr = trimmedLine.substring(5).trim();
-                        
-                        // Ignore simple string data like 'pong' (keep-alive messages)
-                        if (dataStr === 'pong' || (!dataStr.startsWith('{') && !dataStr.startsWith('['))) {
-                            continue;
-                        }
-                        
-                        try {
-                            currentEvent.data = JSON.parse(dataStr);
-                        } catch (error) {
-                            console.error('Error parsing event data:', error, 'Data:', dataStr);
-                            try {
-                                const jsonStr = dataStr.startsWith('{') && dataStr.includes("'") 
-                                    ? pythonDictToJson(dataStr) 
-                                    : dataStr;
-                                currentEvent.data = JSON.parse(jsonStr);
-                            } catch (fallbackError) {
-                                console.error('Error parsing event data with fallback:', fallbackError, 'Data:', dataStr);
-                            }
-                        }
-                    }
-                }
-            }
+    return this._httpClient.postJson("/api/ai/website/analyze", data);
+  }
 
-            // Process any remaining event in progress
+  /**
+   * Send tool execution results to continue the AI response (SSE)
+   *
+   * Sends results of previously requested tool calls to the AI server and
+   * streams the assistant's continued response as SSE.
+   *
+   * @param conversationId - Conversation identifier to continue
+   * @param toolResults - Array of tool execution results
+   * @param onEvent - Callback to receive parsed SSE events
+   * @param clientTools - Optional client tool definitions to include
+   */
+  async streamContinueWithToolResults(
+    conversationId: string,
+    toolResults: ToolExecutionResult[],
+    onEvent: (event: StreamEvent) => void,
+    clientTools?: ToolFunction[],
+    threadId?: string
+  ): Promise<void> {
+    this.ensureAIEnabled();
+    const data: ContinueRequestData = {
+      conversation_id: conversationId,
+      tool_results: toolResults,
+    };
+    if (clientTools && clientTools.length > 0) {
+      data.client_tools = clientTools;
+    }
+    if (threadId) {
+      data.thread_id = threadId;
+    }
+
+    const response = await this._httpClient.postStream(
+      "/api/ai/ask/continue",
+      data
+    );
+
+    if (!response.ok || response.status !== 200) {
+      const errorText = await response.text().catch(() => "Unknown error");
+      throw new Error(`Server returned ${response.status}: ${errorText}`);
+    }
+    if (!response.body) {
+      throw new Error("Response body is null");
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let currentEvent: Partial<StreamEvent> = {};
+
+    try {
+      let streamActive = true;
+      while (streamActive) {
+        const { done, value } = await reader.read();
+        if (done) {
+          streamActive = false;
+          continue;
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          const trimmedLine = line.trim();
+          if (!trimmedLine) {
             if (currentEvent.event && currentEvent.data) {
-                onEvent(currentEvent as StreamEvent);
+              onEvent(currentEvent as StreamEvent);
+              currentEvent = {};
             }
+            continue;
+          }
 
-            // Process any remaining complete JSON in the buffer
-            if (buffer.trim() && buffer.trim().startsWith('{')) {
-                try {
-                    // Convert Python-style dict to JSON if needed
-                    const bufferStr = buffer.trim();
-                    const jsonStr = bufferStr.includes("'") 
-                        ? pythonDictToJson(bufferStr) 
-                        : bufferStr;
-                    const event: StreamEvent = JSON.parse(jsonStr);
-                    onEvent(event);
-                } catch (error) {
-                    console.error('Error parsing final stream event:', error);
-                }
+          if (trimmedLine.startsWith("{")) {
+            try {
+              const jsonStr = trimmedLine.includes("'")
+                ? pythonDictToJson(trimmedLine)
+                : trimmedLine;
+              const event: StreamEvent = JSON.parse(jsonStr);
+              onEvent(event);
+              continue;
+            } catch {
+              // fall through to SSE parsing
             }
-        } finally {
-            reader.releaseLock();
+          }
+
+          if (trimmedLine.startsWith("event:")) {
+            const eventType = trimmedLine.substring(6).trim();
+            currentEvent.event = eventType as StreamEventType;
+          } else if (trimmedLine.startsWith("data:")) {
+            const dataStr = trimmedLine.substring(5).trim();
+            if (
+              dataStr === "pong" ||
+              (!dataStr.startsWith("{") && !dataStr.startsWith("["))
+            ) {
+              continue;
+            }
+            try {
+              currentEvent.data = JSON.parse(dataStr);
+            } catch (error) {
+              console.error(
+                "Error parsing event data:",
+                error,
+                "Data:",
+                dataStr
+              );
+              try {
+                const jsonStr =
+                  dataStr.startsWith("{") && dataStr.includes("'")
+                    ? pythonDictToJson(dataStr)
+                    : dataStr;
+                currentEvent.data = JSON.parse(jsonStr);
+              } catch (err) {
+                console.error(
+                  "Error parsing event data:",
+                  err,
+                  "Data:",
+                  dataStr
+                );
+              }
+            }
+          }
         }
-    }
+      }
 
-    /**
-     * Get available chat models from remote server
-     * 
-     * @returns Promise resolving to available models response
-     * @throws {Error} When network request fails
-     * 
-     * @example
-     * ```typescript
-     * const models = await api.getAvailableModels();
-     * if (models.status) {
-     *   console.log('Available models:', models.data.models);
-     *   console.log('Default model:', models.data.default_model);
-     * }
-     * ```
-     */
-    async getAvailableModels(): Promise<CommonApiresp<AvailableChatModelsResponse>> {
-        this.ensureAIEnabled();
-        return this._httpClient.get('/api/ai/chat/models');
-    }
+      if (currentEvent.event && currentEvent.data) {
+        onEvent(currentEvent as StreamEvent);
+      }
 
-    /**
-     * Test connection to remote AI chat service
-     * 
-     * @returns Promise resolving to boolean indicating service availability
-     * @throws {Error} When network request fails
-     * 
-     * @example
-     * ```typescript
-     * const isOnline = await api.testConnection();
-     * if (isOnline.status) {
-     *   console.log('AI chat service is available');
-     * }
-     * ```
-     */
-    async testConnection(): Promise<CommonApiresp<boolean>> {
-        return this._httpClient.get('/api/ai/chat/healthcheck');
-    }
-
-    /**
-     * Batch generate keywords from seed keywords
-     * 
-     * Sends multiple keyword generation requests in a single batch to the remote server.
-     * Each request item contains seed keywords and configuration for keyword generation.
-     * 
-     * @param requests - Array of keyword generation requests
-     * @returns Promise resolving to batch keyword generation response
-     * @throws {Error} When network request fails
-     * 
-     * @example
-     * ```typescript
-     * const response = await api.batchGenerateKeywords([
-     *   {
-     *     seed_keywords: ["cloud storage"],
-     *     config: {
-     *       num_keywords: 15,
-     *       keyword_type: "seo"
-     *     }
-     *   },
-     *   {
-     *     seed_keywords: ["file sharing"],
-     *     config: {
-     *       num_keywords: 15,
-     *       keyword_type: "seo"
-     *     }
-     *   }
-     * ]);
-     * if (response.status && response.data) {
-     *   console.log('Generated keywords:', response.data.keywords);
-     *   console.log('Seed keywords:', response.data.seed_keywords);
-     *   console.log('Total keywords:', response.data.total_keywords);
-     * }
-     * ```
-     */
-    async batchGenerateKeywords(
-        requests: BatchKeywordGenerationRequestItem[]
-    ): Promise<CommonApiresp<BatchKeywordGenerationResponse>> {
-        this.ensureAIEnabled();
-        return this._httpClient.postJson('/api/ai/keywords/generate/batch', requests);
-    }
-
-    /**
-     * Analyze whether a website is a target customer
-     * 
-     * Analyzes website content against client business description to determine
-     * if the website represents a potential target customer.
-     * 
-     * @param request - Website analysis request containing website content, client business, and optional temperature
-     * @returns Promise resolving to website analysis response
-     * @throws {Error} When network request fails
-     * 
-     * @example
-     * ```typescript
-     * const response = await api.analyzeWebsite({
-     *   website_content: "# TechInsights - Technology Blog\n\n## Mission\n...",
-     *   client_business: "We are a content marketing agency...",
-     *   temperature: 0.7
-     * });
-     * if (response.status && response.data) {
-     *   console.log('Industry:', response.data.industry);
-     *   console.log('Match score:', response.data.match_score);
-     *   console.log('Reasoning:', response.data.reasoning);
-     * }
-     * ```
-     */
-    async analyzeWebsite(
-        request: WebsiteAnalysisRequest
-    ): Promise<CommonApiresp<WebsiteAnalysisResponse>> {
-        this.ensureAIEnabled();
-        const data: WebsiteAnalysisRequest = {
-            website_content: request.website_content,
-            client_business: request.client_business
-        };
-        
-        // Only include temperature if specified
-        if (request.temperature !== undefined) {
-            data.temperature = request.temperature;
-        }
-        
-        return this._httpClient.postJson('/api/ai/website/analyze', data);
-    }
-
-    /**
-     * Send tool execution results to continue the AI response (SSE)
-     * 
-     * Sends results of previously requested tool calls to the AI server and
-     * streams the assistant's continued response as SSE.
-     * 
-     * @param conversationId - Conversation identifier to continue
-     * @param toolResults - Array of tool execution results
-     * @param onEvent - Callback to receive parsed SSE events
-     * @param clientTools - Optional client tool definitions to include
-     */
-    async streamContinueWithToolResults(
-        conversationId: string,
-        toolResults: ToolExecutionResult[],
-        onEvent: (event: StreamEvent) => void,
-        clientTools?: ToolFunction[],
-        threadId?: string
-    ): Promise<void> {
-        this.ensureAIEnabled();
-        const data: ContinueRequestData = {
-            conversation_id: conversationId,
-            tool_results: toolResults
-        };
-        if (clientTools && clientTools.length > 0) {
-            data.client_tools = clientTools;
-        }
-        if (threadId) {
-            data.thread_id = threadId;
-        }
-
-        const response = await this._httpClient.postStream('/api/ai/ask/continue', data);
-
-        if (!response.ok || response.status !== 200) {
-            const errorText = await response.text().catch(() => 'Unknown error');
-            throw new Error(`Server returned ${response.status}: ${errorText}`);
-        }
-        if (!response.body) {
-            throw new Error('Response body is null');
-        }
-
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-        let currentEvent: Partial<StreamEvent> = {};
-
+      if (buffer.trim() && buffer.trim().startsWith("{")) {
         try {
-            let streamActive = true;
-            while (streamActive) {
-                const { done, value } = await reader.read();
-                if (done) {
-                    streamActive = false;
-                    continue;
-                }
-
-                buffer += decoder.decode(value, { stream: true });
-                const lines = buffer.split('\n');
-                buffer = lines.pop() || '';
-
-                for (const line of lines) {
-                    const trimmedLine = line.trim();
-                    if (!trimmedLine) {
-                        if (currentEvent.event && currentEvent.data) {
-                            onEvent(currentEvent as StreamEvent);
-                            currentEvent = {};
-                        }
-                        continue;
-                    }
-
-                    if (trimmedLine.startsWith('{')) {
-                        try {
-                            const jsonStr = trimmedLine.includes("'")
-                                ? pythonDictToJson(trimmedLine)
-                                : trimmedLine;
-                            const event: StreamEvent = JSON.parse(jsonStr);
-                            onEvent(event);
-                            continue;
-                        } catch {
-                            // fall through to SSE parsing
-                        }
-                    }
-
-                    if (trimmedLine.startsWith('event:')) {
-                        const eventType = trimmedLine.substring(6).trim();
-                        currentEvent.event = eventType as StreamEventType;
-                    } else if (trimmedLine.startsWith('data:')) {
-                        const dataStr = trimmedLine.substring(5).trim();
-                        if (dataStr === 'pong' || (!dataStr.startsWith('{') && !dataStr.startsWith('['))) {
-                            continue;
-                        }
-                        try {
-                            currentEvent.data = JSON.parse(dataStr);
-                        } catch (error) {
-                            console.error('Error parsing event data:', error, 'Data:', dataStr);
-                            try {
-                                const jsonStr = dataStr.startsWith('{') && dataStr.includes("'")
-                                    ? pythonDictToJson(dataStr)
-                                    : dataStr;
-                                currentEvent.data = JSON.parse(jsonStr);
-                            } catch (err) {
-                                console.error('Error parsing event data:', err, 'Data:', dataStr);
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (currentEvent.event && currentEvent.data) {
-                onEvent(currentEvent as StreamEvent);
-            }
-
-            if (buffer.trim() && buffer.trim().startsWith('{')) {
-                try {
-                    const bufferStr = buffer.trim();
-                    const jsonStr = bufferStr.includes("'")
-                        ? pythonDictToJson(bufferStr)
-                        : bufferStr;
-                    const event: StreamEvent = JSON.parse(jsonStr);
-                    onEvent(event);
-                } catch (error) {
-                    console.error('Error parsing final stream event:', error);
-                }
-            }
-        } finally {
-            reader.releaseLock();
+          const bufferStr = buffer.trim();
+          const jsonStr = bufferStr.includes("'")
+            ? pythonDictToJson(bufferStr)
+            : bufferStr;
+          const event: StreamEvent = JSON.parse(jsonStr);
+          onEvent(event);
+        } catch (error) {
+          console.error("Error parsing final stream event:", error);
         }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  }
+
+  /**
+   * Extract contact information from web page content using AI
+   *
+   * Sends page content, URL, entity name, and screenshot to the remote AI server
+   * which handles the prompt and extraction logic server-side.
+   *
+   * @param pageContent - Text content of the web page
+   * @param url - URL of the web page
+   * @param entityName - Optional name of the entity/company
+   * @param screenshot - Optional base64-encoded screenshot of the page for visual context.
+   *   Accepts either a raw base64-encoded string (auto-wrapped as PNG data URI)
+   *   or a full data URI (e.g., 'data:image/png;base64,...').
+   * @returns Promise resolving to extracted contact information
+   * @throws {Error} When network request fails
+   *
+   * @example
+   * ```typescript
+   * // With raw base64 string (auto-wrapped as data:image/png;base64,...)
+   * const response = await api.extractContactInfo(
+   *   'Company Name\nEmail: info@example.com\nPhone: 555-1234',
+   *   'https://example.com/contact',
+   *   'Example Company',
+   *   'iVBORw0KGgo...'
+   * );
+   *
+   * // With full data URI
+   * const response2 = await api.extractContactInfo(
+   *   'Company Name\nEmail: info@example.com\nPhone: 555-1234',
+   *   'https://example.com/contact',
+   *   'Example Company',
+   *   'data:image/png;base64,iVBORw0KGgo...'
+   * );
+   * if (response.status && response.data) {
+   *   console.log('Emails:', response.data.emails);
+   *   console.log('Phones:', response.data.phones);
+   *   console.log('Address:', response.data.address);
+   * }
+   * ```
+   */
+  async extractContactInfo(
+    pageContent: string,
+    url: string,
+    entityName?: string,
+    screenshot?: string
+  ): Promise<CommonApiresp<ContactExtractionResponse>> {
+    this.ensureAIEnabled();
+    const data: ContactExtractionRequest = {
+      page_content: pageContent,
+      url: url,
+    };
+
+    if (entityName) {
+      data.entity_name = entityName;
     }
 
-    /**
-     * Extract contact information from web page content using AI
-     *
-     * Sends page content, URL, entity name, and screenshot to the remote AI server
-     * which handles the prompt and extraction logic server-side.
-     *
-     * @param pageContent - Text content of the web page
-     * @param url - URL of the web page
-     * @param entityName - Optional name of the entity/company
-     * @param screenshot - Optional base64-encoded screenshot of the page for visual context.
-     *   Accepts either a raw base64-encoded string (auto-wrapped as PNG data URI)
-     *   or a full data URI (e.g., 'data:image/png;base64,...').
-     * @returns Promise resolving to extracted contact information
-     * @throws {Error} When network request fails
-     *
-     * @example
-     * ```typescript
-     * // With raw base64 string (auto-wrapped as data:image/png;base64,...)
-     * const response = await api.extractContactInfo(
-     *   'Company Name\nEmail: info@example.com\nPhone: 555-1234',
-     *   'https://example.com/contact',
-     *   'Example Company',
-     *   'iVBORw0KGgo...'
-     * );
-     *
-     * // With full data URI
-     * const response2 = await api.extractContactInfo(
-     *   'Company Name\nEmail: info@example.com\nPhone: 555-1234',
-     *   'https://example.com/contact',
-     *   'Example Company',
-     *   'data:image/png;base64,iVBORw0KGgo...'
-     * );
-     * if (response.status && response.data) {
-     *   console.log('Emails:', response.data.emails);
-     *   console.log('Phones:', response.data.phones);
-     *   console.log('Address:', response.data.address);
-     * }
-     * ```
-     */
-    async extractContactInfo(
-        pageContent: string,
-        url: string,
-        entityName?: string,
-        screenshot?: string
-    ): Promise<CommonApiresp<ContactExtractionResponse>> {
-        this.ensureAIEnabled();
-        const data: ContactExtractionRequest = {
-            page_content: pageContent,
-            url: url
-        };
-
-        if (entityName) {
-            data.entity_name = entityName;
-        }
-
-        if (screenshot) {
-            // Auto-wrap raw base64-encoded string as PNG data URI
-            data.screenshot = screenshot.startsWith('data:')
-                ? screenshot
-                : `data:image/png;base64,${screenshot}`;
-        }
-
-        return this._httpClient.postJson('/api/ai/contact/extract', data);
+    if (screenshot) {
+      // Auto-wrap raw base64-encoded string as PNG data URI
+      data.screenshot = screenshot.startsWith("data:")
+        ? screenshot
+        : `data:image/png;base64,${screenshot}`;
     }
+
+    return this._httpClient.postJson("/api/ai/contact/extract", data);
+  }
 }
-
-
