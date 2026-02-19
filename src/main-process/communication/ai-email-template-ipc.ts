@@ -50,34 +50,8 @@ import {
 } from "@/views/utils/variableValidation";
 
 /**
- * System prompt for AI email template generation
- */
-const EMAIL_TEMPLATE_SYSTEM_PROMPT = `
-You are an expert email marketing copywriter. Generate professional email templates based on user descriptions.
-
-CRITICAL RULES:
-1. Use ONLY these template variables (exactly as shown):
-   - {$send_time} - Current timestamp
-   - {$sender} - Sender email/name
-   - {$receiver_email} - Recipient email address
-   - {$receiver_name} - Recipient's first name for personalization
-   - {$url} - Source URL or landing page
-   - {$description} - Contextual description
-   - {$company_name} - Recipient's company name
-   - {$campaign_name} - Campaign reference name
-
-2. NEVER invent new variable names like {$first_name} or {$date}
-3. Output format:
-   Subject: [email subject line]
-
-   [email body content]
-
-4. Keep emails concise (150-300 words)
-5. Use professional formatting (short paragraphs, clear CTAs)
-`;
-
-/**
- * Register AI email template IPC handlers
+ * Register AI email template IPC handlers.
+ * Uses AiChatApi.streamEmailTemplateGeneration (dedicated email API in aiChatApi.ts), not generic chat.
  */
 export function registerAIEmailTemplateHandlers(): void {
   console.log("AI Email Template IPC handlers registered");
@@ -146,14 +120,7 @@ export function registerAIEmailTemplateHandlers(): void {
         }
       }
 
-      // Build system prompt with tone and type
-      const systemPrompt = `${EMAIL_TEMPLATE_SYSTEM_PROMPT}
-
-Tone: ${requestData.tone}
-Email Type: ${requestData.templateType}
-`;
-
-      // 4. Stream generation
+      // 4. Stream generation via dedicated email-template API (not generic chat)
       const aiChatApi = new AiChatApi();
       let fullContent = "";
       let isStopped = false;
@@ -168,12 +135,8 @@ Email Type: ${requestData.templateType}
       (ipcMain as IpcMainExtended).on(AI_EMAIL_TEMPLATE_STOP, stopHandler);
 
       try {
-        await aiChatApi.streamMessage(
-          {
-            message: enhancedPrompt,
-            systemPrompt,
-            useRAG: requestData.useRAG || false,
-          },
+        await aiChatApi.streamEmailTemplateGeneration(
+          requestData,
           (streamEvent) => {
             if (isStopped) return;
 
@@ -240,11 +203,17 @@ Email Type: ${requestData.templateType}
                 stopHandler
               );
             }
-          }
+          },
+          enhancedPrompt !== requestData.prompt
+            ? { messageOverride: enhancedPrompt }
+            : undefined
         );
       } catch (streamError) {
         // Clean up stop handler on stream error
-        (ipcMain as IpcMainExtended).removeListener(AI_EMAIL_TEMPLATE_STOP, stopHandler);
+        (ipcMain as IpcMainExtended).removeListener(
+          AI_EMAIL_TEMPLATE_STOP,
+          stopHandler
+        );
         throw streamError;
       }
     } catch (error) {

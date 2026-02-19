@@ -47,101 +47,10 @@ ref="textarea" v-model="tplcontent" :label="t('emailmarketing.content')"
             {{ t('emailmarketing.insert_description') }}
           </v-btn>
 
-          <!-- AI Email Template Generation Button -->
-          <v-btn @click="aiPanelOpen = !aiPanelOpen" color="purple-darken-3" class="mb-2 ml-2 mt-4" rounded="lg" size="small" prepend-icon="mdi-robot">
+          <!-- AI Email Template Generation Button - opens popup -->
+          <v-btn @click="aiDialogOpen = true" color="purple-darken-3" class="mb-2 ml-2 mt-4" rounded="lg" size="small" prepend-icon="mdi-robot">
             {{ t('aiTemplateGeneration.title') || 'Generate with AI' }}
           </v-btn>
-
-          <!-- AI Generation Expansion Panel -->
-          <v-expansion-panels v-model="aiPanelOpen" class="ml-2 mt-2">
-            <v-expansion-panel title="AI Template Generation">
-              <v-expansion-panel-text>
-                <v-textarea
-                  v-model="prompt"
-                  :label="t('aiTemplateGeneration.promptLabel') || 'Email Description'"
-                  :placeholder="t('aiTemplateGeneration.promptPlaceholder') || 'Describe what email you want to create...'"
-                  rows="3"
-                  counter="500"
-                  :readonly="isStreaming"
-                  class="mb-2"
-                ></v-textarea>
-
-                <v-select
-                  v-model="tone"
-                  :label="t('aiTemplateGeneration.tone') || 'Tone'"
-                  :items="[
-                    { title: 'Formal', value: 'formal' },
-                    { title: 'Casual', value: 'casual' },
-                    { title: 'Friendly', value: 'friendly' },
-                    { title: 'Professional', value: 'professional' }
-                  ]"
-                  :readonly="isStreaming"
-                  class="mb-2"
-                ></v-select>
-
-                <v-select
-                  v-model="templateType"
-                  :label="t('aiTemplateGeneration.templateType') || 'Email Type'"
-                  :items="[
-                    { title: 'Cold Outreach', value: 'cold_outreach' },
-                    { title: 'Follow Up', value: 'follow_up' },
-                    { title: 'Newsletter', value: 'newsletter' },
-                    { title: 'Promotion', value: 'promotion' },
-                    { title: 'Custom', value: 'custom' }
-                  ]"
-                  :readonly="isStreaming"
-                  class="mb-2"
-                ></v-select>
-
-                <!-- Advanced Options -->
-                <v-expansion-panels class="mb-2">
-                  <v-expansion-panel title="Advanced Options">
-                    <v-expansion-panel-text>
-                      <v-checkbox
-                        v-model="useRAG"
-                        :label="t('aiTemplateGeneration.useKnowledgeBase') || 'Use knowledge base for context'"
-                        :disabled="isStreaming"
-                        density="compact"
-                      ></v-checkbox>
-                    </v-expansion-panel-text>
-                  </v-expansion-panel>
-                </v-expansion-panels>
-
-                <!-- Streaming Output Display -->
-                <v-card v-if="isStreaming || streamedContent" class="mb-2" variant="outlined">
-                  <v-card-text>
-                    <div v-if="isStreaming" class="text-caption text-grey mb-2">
-                      {{ t('aiTemplateGeneration.generating') || 'Generating template...' }}
-                    </div>
-                    <div class="text-body-2 streamed-content">
-                      {{ streamedContent }}
-                    </div>
-                  </v-card-text>
-                </v-card>
-
-                <!-- Action Buttons -->
-                <div class="d-flex">
-                  <v-btn
-                    v-if="!isStreaming"
-                    @click="generateTemplate"
-                    color="primary"
-                    :disabled="!prompt || prompt.trim().length < 10"
-                    block
-                  >
-                    {{ t('aiTemplateGeneration.generateButton') || 'Generate' }}
-                  </v-btn>
-                  <v-btn
-                    v-else
-                    @click="stopGeneration"
-                    color="error"
-                    block
-                  >
-                    {{ t('aiTemplateGeneration.stopButton') || 'Stop Generating' }}
-                  </v-btn>
-                </div>
-              </v-expansion-panel-text>
-            </v-expansion-panel>
-          </v-expansion-panels>
 
         </v-col>
       </v-row>
@@ -217,6 +126,107 @@ v-model="EmailContentpreview" :label="t('emailmarketing.content')" readonly rows
     </v-card>
   </v-dialog>
 
+  <!-- AI Template Generation Popup Dialog -->
+  <v-dialog v-model="aiDialogOpen" max-width="560" persistent>
+    <v-card>
+      <v-card-title class="d-flex align-center">
+        <v-icon class="mr-2" color="purple">mdi-robot</v-icon>
+        {{ t('aiTemplateGeneration.title') || 'Generate with AI' }}
+      </v-card-title>
+      <v-divider></v-divider>
+      <v-card-text class="pt-4">
+        <v-textarea
+          v-model="prompt"
+          :label="t('aiTemplateGeneration.promptLabel') || 'Email Description'"
+          :placeholder="t('aiTemplateGeneration.promptPlaceholder') || 'Describe what email you want to create...'"
+          rows="3"
+          counter="500"
+          :readonly="isStreaming"
+          class="mb-2"
+        ></v-textarea>
+
+        <v-select
+          v-model="tone"
+          :label="t('aiTemplateGeneration.tone') || 'Tone'"
+          :items="[
+            { title: 'Formal', value: 'formal' },
+            { title: 'Casual', value: 'casual' },
+            { title: 'Friendly', value: 'friendly' },
+            { title: 'Professional', value: 'professional' }
+          ]"
+          :readonly="isStreaming"
+          class="mb-2"
+        ></v-select>
+
+        <v-select
+          v-model="templateType"
+          :label="t('aiTemplateGeneration.templateType') || 'Email Type'"
+          :items="[
+            { title: 'Cold Outreach', value: 'cold_outreach' },
+            { title: 'Follow Up', value: 'follow_up' },
+            { title: 'Newsletter', value: 'newsletter' },
+            { title: 'Promotion', value: 'promotion' },
+            { title: 'Custom', value: 'custom' }
+          ]"
+          :readonly="isStreaming"
+          class="mb-2"
+        ></v-select>
+
+        <!-- Advanced Options -->
+        <v-expansion-panels class="mb-2">
+          <v-expansion-panel title="Advanced Options">
+            <v-expansion-panel-text>
+              <v-checkbox
+                v-model="useRAG"
+                :label="t('aiTemplateGeneration.useKnowledgeBase') || 'Use knowledge base for context'"
+                :disabled="isStreaming"
+                density="compact"
+              ></v-checkbox>
+            </v-expansion-panel-text>
+          </v-expansion-panel>
+        </v-expansion-panels>
+
+        <!-- Streaming Output Display -->
+        <v-card v-if="isStreaming || streamedContent" class="mb-2" variant="outlined">
+          <v-card-text>
+            <div v-if="isStreaming" class="text-caption text-grey mb-2">
+              {{ t('aiTemplateGeneration.generating') || 'Generating template...' }}
+            </div>
+            <div class="text-body-2 streamed-content">
+              {{ streamedContent }}
+            </div>
+          </v-card-text>
+        </v-card>
+
+        <!-- Action Buttons -->
+        <div class="d-flex">
+          <v-btn
+            v-if="!isStreaming"
+            @click="generateTemplate"
+            color="primary"
+            :disabled="!prompt || prompt.trim().length < 10"
+          >
+            {{ t('aiTemplateGeneration.generateButton') || 'Generate' }}
+          </v-btn>
+          <v-btn
+            v-else
+            @click="stopGeneration"
+            color="error"
+          >
+            {{ t('aiTemplateGeneration.stopButton') || 'Stop Generating' }}
+          </v-btn>
+        </div>
+      </v-card-text>
+      <v-divider></v-divider>
+      <v-card-actions>
+        <v-spacer></v-spacer>
+        <v-btn @click="aiDialogOpen = false" :disabled="isStreaming">
+          {{ t('common.close') || 'Close' }}
+        </v-btn>
+      </v-card-actions>
+    </v-card>
+  </v-dialog>
+
   <!-- Regenerate Confirmation Dialog -->
   <v-dialog v-model="showRegenerateConfirm" max-width="500">
     <v-card>
@@ -243,15 +253,9 @@ v-model="EmailContentpreview" :label="t('emailmarketing.content')" readonly rows
 import { ref, onMounted, watch,onBeforeUnmount } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
-import { getEmailtemplatebyid, updateEmailtemplate, generateAIEmailTemplate } from "@/views/api/emailmarketing"
+import { getEmailtemplatebyid, updateEmailtemplate, generateAIEmailTemplate, stopAIEmailTemplateGeneration } from "@/views/api/emailmarketing"
 import { EmailTemplateRespdata, EmailTemplatePreviewdata, AIEmailTemplateRequest } from "@/entityTypes/emailmarketingType"
 import { convertVariableInTemplate } from "@/views/utils/emailFun"
-import {
-  AI_EMAIL_TEMPLATE_GENERATE_CHUNK,
-  AI_EMAIL_TEMPLATE_GENERATE_COMPLETE,
-  AI_EMAIL_TEMPLATE_ERROR,
-  AI_EMAIL_TEMPLATE_STOP
-} from "@/config/channellist"
 // import { VueEditor } from "vue2-editor";
 const { t } = useI18n({ inheritLocale: true });
 const templateId = ref<number>(0);
@@ -285,8 +289,8 @@ const EmailContentpreview = ref<string>("");
 const Sourcevar= ref<string>("");
 let lastFocusedElement: HTMLTextAreaElement | HTMLInputElement | null = null;
 
-// AI Email Template Generation State
-const aiPanelOpen = ref<boolean>(false);
+// AI Email Template Generation State (popup dialog)
+const aiDialogOpen = ref<boolean>(false);
 const prompt = ref<string>("");
 const tone = ref<string>("professional");
 const templateType = ref<string>("cold_outreach");
@@ -505,7 +509,6 @@ async function generateTemplate() {
 
   isStreaming.value = true;
   streamedContent.value = "";
-  aiPanelOpen.value = true; // Ensure panel is open during generation
 
   const requestData: AIEmailTemplateRequest = {
     prompt: prompt.value,
@@ -515,17 +518,45 @@ async function generateTemplate() {
   };
 
   try {
-    const result = await generateAIEmailTemplate(
-      requestData,
-      (chunkData) => {
-        // Handle streaming chunks
+    const result = await generateAIEmailTemplate(requestData, {
+      onChunk: (chunkData) => {
         if (chunkData.content) {
           streamedContent.value = chunkData.fullContent || "";
         }
-      }
-    );
+      },
+      onComplete: (response) => {
+        isStreaming.value = false;
+        if (response.status && response.data) {
+          const { title, content, hasInvalidVariables, invalidVariables } = response.data;
+          tplTitle.value = title || "";
+          tplcontent.value = content || "";
+          if (hasInvalidVariables && invalidVariables && invalidVariables.length > 0) {
+            alert.value = true;
+            alertcolor.value = "warning";
+            alertContent.value =
+              t("aiTemplateGeneration.invalidVariables") + " " + invalidVariables.join(", ");
+          } else {
+            alert.value = true;
+            alertcolor.value = "success";
+            alertContent.value = "Template generated successfully!";
+          }
+          setTimeout(() => {
+            aiDialogOpen.value = false;
+          }, 1000);
+        }
+      },
+      onError: (error) => {
+        isStreaming.value = false;
+        alert.value = true;
+        alertcolor.value = "error";
+        if (error.msg && error.msg.includes("AI features are not enabled")) {
+          alertContent.value = t("aiTemplateGeneration.error.aiDisabled") || error.msg;
+        } else {
+          alertContent.value = error.msg || "Generation failed";
+        }
+      },
+    });
 
-    // Generation complete - result is handled by event listeners
     console.log("AI generation complete:", result);
   } catch (error) {
     console.error("AI generation error:", error);
@@ -537,9 +568,7 @@ async function generateTemplate() {
 }
 
 function stopGeneration() {
-  if (window.api) {
-    window.api.send(AI_EMAIL_TEMPLATE_STOP, {});
-  }
+  stopAIEmailTemplateGeneration();
   isStreaming.value = false;
 }
 
@@ -553,79 +582,11 @@ function cancelRegenerate() {
   showRegenerateConfirm.value = false;
 }
 
-// Handle streaming chunk event
-function handleChunk(_event: unknown, chunkData: { type: string; content: string; fullContent: string }): void {
-  if (chunkData.type === "chunk") {
-    streamedContent.value = chunkData.fullContent || "";
-  }
-}
-
-// Handle generation complete event
-function handleComplete(_event: unknown, response: { type: string; status: boolean; data: any }): void {
-  isStreaming.value = false;
-
-  if (response.status && response.data) {
-    const { title, content, hasInvalidVariables, invalidVariables } = response.data;
-
-    // Populate the form fields
-    tplTitle.value = title || "";
-    tplcontent.value = content || "";
-
-    // Show warning if invalid variables were found
-    if (hasInvalidVariables && invalidVariables && invalidVariables.length > 0) {
-      alert.value = true;
-      alertcolor.value = "warning";
-      alertContent.value =
-        t("aiTemplateGeneration.invalidVariables") +
-        " " +
-        invalidVariables.join(", ");
-    } else {
-      // Show success message
-      alert.value = true;
-      alertcolor.value = "success";
-      alertContent.value = "Template generated successfully!";
-    }
-
-    // Collapse panel after successful generation
-    setTimeout(() => {
-      aiPanelOpen.value = false;
-    }, 1000);
-  }
-}
-
-// Handle generation error event
-function handleError(_event: unknown, error: { type: string; status: boolean; msg: string }): void {
-  isStreaming.value = false;
-  alert.value = true;
-  alertcolor.value = "error";
-
-  // Check if this is an AI disabled error
-  if (error.msg && error.msg.includes("AI features are not enabled")) {
-    alertContent.value = t("aiTemplateGeneration.error.aiDisabled") || error.msg;
-  } else {
-    alertContent.value = error.msg || "Generation failed";
-  }
-}
-
 onMounted(() => {
   initialize();
-  document.addEventListener('focusin', handleFocus);
-
-  // Register AI email template event listeners
-  if (window.api) {
-    window.api.receive(AI_EMAIL_TEMPLATE_GENERATE_CHUNK, handleChunk);
-    window.api.receive(AI_EMAIL_TEMPLATE_GENERATE_COMPLETE, handleComplete);
-    window.api.receive(AI_EMAIL_TEMPLATE_ERROR, handleError);
-  }
+  document.addEventListener("focusin", handleFocus);
 });
 onBeforeUnmount(() => {
-  document.removeEventListener('focusin', handleFocus);
-
-  // Clean up AI email template event listeners
-  if (window.api) {
-    window.api.removeListener(AI_EMAIL_TEMPLATE_GENERATE_CHUNK, handleChunk);
-    window.api.removeListener(AI_EMAIL_TEMPLATE_GENERATE_COMPLETE, handleComplete);
-    window.api.removeListener(AI_EMAIL_TEMPLATE_ERROR, handleError);
-  }
+  document.removeEventListener("focusin", handleFocus);
 });
 </script>
