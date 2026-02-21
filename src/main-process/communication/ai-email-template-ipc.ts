@@ -49,6 +49,25 @@ import {
   extractVariables,
 } from "@/views/utils/variableValidation";
 
+/** Strip trailing OpenAI-style sentinel JSON (e.g. {"choices":[{"delta":{},"finish_reason":"STOP"}]}) from stream content. */
+function stripTrailingSentinelJson(content: string): string {
+  const trimmed = content.trimEnd();
+  const lastBrace = trimmed.lastIndexOf("{");
+  if (lastBrace === -1) return content;
+  const candidate = trimmed.slice(lastBrace);
+  try {
+    const parsed = JSON.parse(candidate) as {
+      choices?: Array<{ finish_reason?: string }>;
+    };
+    if (parsed.choices?.[0]?.finish_reason != null) {
+      return trimmed.slice(0, lastBrace).trimEnd();
+    }
+  } catch {
+    // not valid JSON or not sentinel
+  }
+  return content;
+}
+
 /**
  * Register AI email template IPC handlers.
  * Uses AiChatApi.streamEmailTemplateGeneration (dedicated email API in aiChatApi.ts), not generic chat.
@@ -59,11 +78,47 @@ export function registerAIEmailTemplateHandlers(): void {
   // Streaming generation handler
   ipcMain.on(AI_EMAIL_TEMPLATE_GENERATE_STREAM, async (...args: unknown[]) => {
     const [event, requestData] = args as [IpcMainEvent, AIEmailTemplateRequest];
-
+    // #region agent log
+    fetch("http://127.0.0.1:7244/ingest/610c95fc-086a-4479-b1bf-7defc981a30f", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        location: "ai-email-template-ipc.ts:handler:entry",
+        message: "IPC handler invoked",
+        data: {
+          hasRequestData: !!requestData,
+          promptLen: requestData?.prompt?.length,
+        },
+        timestamp: Date.now(),
+        hypothesisId: "C,D",
+      }),
+    }).catch(() => {});
+    // #endregion
+    //console.log("AI Email Template Request Data:", requestData);
     try {
       // 1. Check AI enable (MANDATORY - first check)
       const tokenService = new Token();
       const aiEnabled = tokenService.getValue(USER_AI_ENABLED);
+      // #region agent log
+      fetch(
+        "http://127.0.0.1:7244/ingest/610c95fc-086a-4479-b1bf-7defc981a30f",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            location: "ai-email-template-ipc.ts:afterAiCheck",
+            message: "AI check",
+            data: {
+              aiEnabled: String(aiEnabled),
+              willReturnEarly:
+                !aiEnabled || aiEnabled === "false" || aiEnabled === "0",
+            },
+            timestamp: Date.now(),
+            hypothesisId: "E",
+          }),
+        }
+      ).catch(() => {});
+      // #endregion
       if (!aiEnabled || aiEnabled === "false" || aiEnabled === "0") {
         event.sender.send(AI_EMAIL_TEMPLATE_ERROR, {
           type: "error",
@@ -76,6 +131,22 @@ export function registerAIEmailTemplateHandlers(): void {
 
       // 2. Validate request
       const validation = validateAIRequest(requestData);
+      // #region agent log
+      fetch(
+        "http://127.0.0.1:7244/ingest/610c95fc-086a-4479-b1bf-7defc981a30f",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            location: "ai-email-template-ipc.ts:afterValidation",
+            message: "validation result",
+            data: { isValid: validation.isValid, errors: validation.errors },
+            timestamp: Date.now(),
+            hypothesisId: "E",
+          }),
+        }
+      ).catch(() => {});
+      // #endregion
       if (!validation.isValid) {
         event.sender.send(AI_EMAIL_TEMPLATE_ERROR, {
           type: "error",
@@ -145,7 +216,48 @@ export function registerAIEmailTemplateHandlers(): void {
               streamEvent.event === "token" &&
               typeof streamEvent.data.content === "string"
             ) {
-              const chunk = streamEvent.data.content;
+              const raw = streamEvent.data.content;
+              let chunk = raw;
+              // Extract text from OpenAI-style chunk when content is JSON (e.g. {"choices":[{"delta":{"content":"..."}}]})
+              if (raw.trim().startsWith("{")) {
+                try {
+                  const parsed = JSON.parse(raw) as Record<string, unknown> & {
+                    choices?: Array<{
+                      delta?: { content?: string; text?: string };
+                      finish_reason?: string;
+                    }>;
+                    content?: string;
+                  };
+                  const firstChoice = parsed.choices?.[0];
+                  const deltaContent =
+                    typeof firstChoice?.delta?.content === "string"
+                      ? firstChoice.delta.content
+                      : undefined;
+                  const deltaText =
+                    typeof firstChoice?.delta?.text === "string"
+                      ? firstChoice.delta.text
+                      : undefined;
+                  const topLevelContent =
+                    typeof parsed.content === "string"
+                      ? parsed.content
+                      : undefined;
+                  const isFinishSentinel = !!firstChoice?.finish_reason;
+
+                  if (typeof deltaContent === "string") {
+                    chunk = deltaContent;
+                  } else if (deltaText !== undefined) {
+                    chunk = deltaText;
+                  } else if (topLevelContent !== undefined) {
+                    chunk = topLevelContent;
+                  } else if (isFinishSentinel) {
+                    // Do not append sentinel JSON (e.g. {"choices":[{"delta":{},"finish_reason":"STOP"}]})
+                    chunk = "";
+                  }
+                  // else: keep chunk = raw so we don't drop content from unexpected shapes
+                } catch {
+                  // use raw as chunk
+                }
+              }
               fullContent += chunk;
               event.sender.send(AI_EMAIL_TEMPLATE_GENERATE_CHUNK, {
                 type: "chunk",
@@ -155,9 +267,10 @@ export function registerAIEmailTemplateHandlers(): void {
             }
             // Handle done event (completion)
             else if (streamEvent.event === "done") {
-              // Parse and validate result
+              // Strip any trailing sentinel JSON then parse
+              const contentToParse = stripTrailingSentinelJson(fullContent);
               const { title, content } =
-                parseEmailTemplateFromStream(fullContent);
+                parseEmailTemplateFromStream(contentToParse);
               const validationResult = validateAIOutputVariables(content);
               const variablesUsed = extractVariables(
                 validationResult.sanitizedContent || content

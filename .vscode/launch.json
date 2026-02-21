@@ -1,5 +1,5 @@
 {
-    "configurations": [
+    "configurations": [     
       {
         "type": "node",
         "request": "launch",
@@ -13,6 +13,13 @@
 
         ],
         "cwd": "${workspaceFolder}",
+        "outFiles": [
+          "${workspaceFolder}/.vite/build/**/*.js"
+        ],
+        "resolveSourceMapLocations": [
+          "${workspaceFolder}/.vite/**"
+        ],
+        "sourceMaps": true,
         "console": "integratedTerminal"
       },
       {

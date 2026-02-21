@@ -1002,6 +1002,9 @@ async function handleSendMessage() {
     await streamChatMessage(
       userMessageContent,
       (chunk: ChatStreamChunk) => {
+        // #region agent log
+        fetch('http://127.0.0.1:7244/ingest/610c95fc-086a-4479-b1bf-7defc981a30f',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e47592'},body:JSON.stringify({sessionId:'e47592',location:'AiChatBox.vue:onChunk',message:'onChunk callback invoked',data:{eventType:chunk.eventType,contentLen:chunk.content?.length,convId:chunk.conversationId,msgCount:messages.value.length},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
+        // #endregion
         // Validate that this chunk belongs to the current active conversation
         // Ignore chunks from old conversations that are still streaming
         if (!isValidStreamChunk(chunk, activeStreamConversationId.value)) {

@@ -267,6 +267,24 @@ contextBridge.exposeInMainWorld("api", {
       AI_EMAIL_TEMPLATE_STOP,
     ];
     console.log("send", channel, data);
+    // #region agent log
+    if (channel === AI_EMAIL_TEMPLATE_GENERATE_STREAM) {
+      fetch(
+        "http://127.0.0.1:7244/ingest/610c95fc-086a-4479-b1bf-7defc981a30f",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            location: "preload.ts:send",
+            message: "send AI stream",
+            data: { channel, inWhitelist: validChannels.includes(channel) },
+            timestamp: Date.now(),
+            hypothesisId: "C",
+          }),
+        }
+      ).catch(() => {});
+    }
+    // #endregion
     if (validChannels.includes(channel)) {
       console.log("send2", channel, data);
       ipcRenderer.send(channel, data);
@@ -325,6 +343,39 @@ contextBridge.exposeInMainWorld("api", {
     const regex = "/^socialtask:log:/";
 
     if (validChannels.includes(channel) || channel.test(regex)) {
+      // #region agent log
+      if (
+        channel === AI_CHAT_STREAM_CHUNK ||
+        channel === AI_CHAT_STREAM_COMPLETE
+      ) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const lc = (ipcRenderer as any).listenerCount
+          ? (ipcRenderer as any).listenerCount(channel)
+          : -1;
+        fetch(
+          "http://127.0.0.1:7244/ingest/610c95fc-086a-4479-b1bf-7defc981a30f",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Debug-Session-Id": "e47592",
+            },
+            body: JSON.stringify({
+              sessionId: "e47592",
+              location: "preload.ts:receive",
+              message: "Adding IPC listener",
+              data: {
+                channel,
+                existingListenerCount: lc,
+                afterCount: lc + 1,
+              },
+              timestamp: Date.now(),
+              hypothesisId: "A",
+            }),
+          }
+        ).catch(() => {});
+      }
+      // #endregion
       // Deliberately strip event as it includes `sender`
       ipcRenderer.on(channel, (event, ...args) => func(...args));
     }
@@ -375,6 +426,20 @@ contextBridge.exposeInMainWorld("api", {
 
     if (validChannels.includes(channel) || channel.test(regex)) {
       ipcRenderer.removeListener(channel, func);
+    }
+  },
+  removeAllListeners: (channel) => {
+    const validChannels = [
+      AI_CHAT_STREAM_CHUNK,
+      AI_CHAT_STREAM_COMPLETE,
+      ANALYZE_WEBSITE_PROGRESS,
+      AI_EMAIL_TEMPLATE_GENERATE_CHUNK,
+      AI_EMAIL_TEMPLATE_GENERATE_COMPLETE,
+      AI_EMAIL_TEMPLATE_ERROR,
+      CONTACT_EXTRACTION_PROGRESS,
+    ];
+    if (validChannels.includes(channel)) {
+      ipcRenderer.removeAllListeners(channel);
     }
   },
   invoke: (channel, data) => {
