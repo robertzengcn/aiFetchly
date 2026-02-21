@@ -1312,4 +1312,9 @@ export default {
     reasoning: "Reasoning",
     client_business: "Client Business",
   },
+  yellowPages: {
+    ai_support: "AI Support",
+    ai_support_hint:
+      "Use AI to assist scraping when selectors fail to extract data",
+  },
 };

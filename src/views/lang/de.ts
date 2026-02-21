@@ -1306,4 +1306,9 @@ export default {
     reasoning: "Begründung",
     client_business: "Kundengeschäft",
   },
+  yellowPages: {
+    ai_support: "KI-Unterstützung",
+    ai_support_hint:
+      "KI verwenden, um beim Scraping zu helfen, wenn Selektoren keine Daten extrahieren können",
+  },
 };
