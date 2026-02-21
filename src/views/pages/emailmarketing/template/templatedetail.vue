@@ -497,6 +497,9 @@ function insertVariable(variable: string) {
 
 // AI Email Template Generation Functions
 async function generateTemplate() {
+  // #region agent log
+  fetch('http://127.0.0.1:7244/ingest/610c95fc-086a-4479-b1bf-7defc981a30f',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'templatedetail.vue:generateTemplate:entry',message:'generateTemplate called',data:{promptLen:prompt.value?.length??0,hasWindowApi:typeof window !== 'undefined' && !!(window as unknown as { api?: unknown }).api},timestamp:Date.now(),hypothesisId:'A,B'})}).catch(()=>{});
+  // #endregion
   // Check if we already have generated content
   if (streamedContent.value && !showRegenerateConfirm.value) {
     showRegenerateConfirm.value = true;
@@ -523,7 +526,10 @@ async function generateTemplate() {
   try {
     const result = await generateAIEmailTemplate(requestData, {
       onChunk: (chunkData) => {
-        if (chunkData.content) {
+        // Update from fullContent whenever present so streaming shows progress even when content delta is empty
+        if (chunkData.fullContent !== undefined && chunkData.fullContent !== null) {
+          streamedContent.value = chunkData.fullContent;
+        } else if (chunkData.content) {
           streamedContent.value = chunkData.fullContent || "";
         }
       },

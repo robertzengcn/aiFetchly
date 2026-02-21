@@ -7,7 +7,10 @@ import fs from 'fs';
 // import { viteStaticCopy } from 'vite-plugin-static-copy'
 import ClosePlugin from './vite-plugin-close'
 import checker from 'vite-plugin-checker'
-import sourcemaps from 'rollup-plugin-sourcemaps';
+// rollup-plugin-sourcemaps removed: it conflicts with Vite's built-in source map
+// handling and causes empty `sources` arrays in generated .map files,
+// which breaks debugger breakpoint resolution.
+// import sourcemaps from 'rollup-plugin-sourcemaps';
 // import { compile } from "ejs";
 // import {ViteEjsPlugin} from "vite-plugin-ejs";
 // import commonjs from '@rollup/plugin-commonjs';
@@ -53,24 +56,20 @@ function fixInteropNamespacePlugin() {
     return {
         name: 'fix-interop-namespace',
         renderChunk(code, chunk, options) {
-            // Fix the specific pattern where Object.getOwnPropertyDescriptor result is used
-            // without checking if it's undefined
-            // This runs during chunk rendering for both dev and prod builds
             let fixedCode = code;
             
-            // Fix minified version: d.get?d: -> d&&d.get?d:
             fixedCode = fixedCode.replace(
                 /(\w+)\.get\s*\?\s*\1:/g,
                 '$1&&$1.get?$1:'
             );
             
-            // Fix unminified version: d.get ? d : -> d && d.get ? d :
             fixedCode = fixedCode.replace(
                 /(\w+)\.get\s+\?\s+\1\s+:/g,
                 '$1 && $1.get ? $1 :'
             );
             
-            return fixedCode;
+            if (fixedCode === code) return null;
+            return { code: fixedCode, map: null };
         }
     };
 }
@@ -311,7 +310,6 @@ export default ({ mode }) => {
             alias(),
             // ViteEjsPlugin(),
             emptyModulesPlugin(),
-            sourcemaps(),
             ClosePlugin(),
             checker({
                 // e.g. use TypeScript check
