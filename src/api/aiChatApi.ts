@@ -212,6 +212,29 @@ export interface ContactExtractionResponse {
 }
 
 /**
+ * Scrape assist request - sent to AI server for step guidance
+ */
+export interface ScrapeAssistRequest {
+  page_content: string;
+  page_url: string;
+  screenshot?: string;
+  step_context: string;
+  error_info: string;
+  platform_name: string;
+  selectors_tried: Record<string, string>;
+}
+
+/**
+ * Scrape assist response - AI guidance for failed scraping steps
+ */
+export interface ScrapeAssistResponse {
+  suggestedSelectors: Record<string, string>;
+  suggestedActions: string[];
+  shouldSkip: boolean;
+  explanation: string;
+}
+
+/**
  * Website analysis request interface
  */
 export interface WebsiteAnalysisRequest {
@@ -855,5 +878,38 @@ export class AiChatApi {
     }
 
     return this._httpClient.postJson("/api/ai/contact/extract", data);
+  }
+
+  /**
+   * Request AI-powered scraping guidance when a scraping step fails.
+   * The AI server analyzes the page and suggests alternative selectors or actions.
+   */
+  async scrapeAssist(params: {
+    pageContent: string;
+    pageUrl: string;
+    screenshot?: string;
+    stepContext: string;
+    errorInfo: string;
+    platformName: string;
+    selectorsTried: Record<string, string>;
+  }): Promise<CommonApiresp<ScrapeAssistResponse>> {
+    this.ensureAIEnabled();
+
+    const data: ScrapeAssistRequest = {
+      page_content: params.pageContent,
+      page_url: params.pageUrl,
+      step_context: params.stepContext,
+      error_info: params.errorInfo,
+      platform_name: params.platformName,
+      selectors_tried: params.selectorsTried,
+    };
+
+    if (params.screenshot) {
+      data.screenshot = params.screenshot.startsWith("data:")
+        ? params.screenshot
+        : `data:image/png;base64,${params.screenshot}`;
+    }
+
+    return this._httpClient.postJson("/api/ai/scrape/assist", data);
   }
 }

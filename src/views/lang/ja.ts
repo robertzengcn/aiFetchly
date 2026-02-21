@@ -1282,4 +1282,9 @@ export default {
     reasoning: "推論",
     client_business: "クライアントビジネス",
   },
+  yellowPages: {
+    ai_support: "AIサポート",
+    ai_support_hint:
+      "セレクターがデータを抽出できない場合にAIを使用してスクレイピングを支援",
+  },
 };

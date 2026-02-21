@@ -1316,4 +1316,9 @@ export default {
     reasoning: "Razonamiento",
     client_business: "Negocio del cliente",
   },
+  yellowPages: {
+    ai_support: "Soporte IA",
+    ai_support_hint:
+      "Usar IA para asistir en el raspado cuando los selectores no pueden extraer datos",
+  },
 };

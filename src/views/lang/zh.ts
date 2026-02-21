@@ -1269,4 +1269,8 @@ export default {
     reasoning: "推理",
     client_business: "客户业务",
   },
+  yellowPages: {
+    ai_support: "AI 辅助",
+    ai_support_hint: "当选择器无法提取数据时，使用 AI 辅助抓取",
+  },
 };

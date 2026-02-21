@@ -168,6 +168,22 @@
                     persistent-hint
                   />
                 </v-col>
+                <v-col cols="12" md="6">
+                  <v-switch
+                    v-model="taskForm.aiSupportEnabled"
+                    :label="$t('yellowPages.ai_support')"
+                    color="deep-purple"
+                    :hint="$t('yellowPages.ai_support_hint')"
+                    persistent-hint
+                  >
+                    <template v-slot:label>
+                      <div class="d-flex align-center">
+                        <v-icon size="small" class="mr-1">mdi-robot</v-icon>
+                        {{ $t('yellowPages.ai_support') }}
+                      </div>
+                    </template>
+                  </v-switch>
+                </v-col>
               </v-row>
 
               <!-- Account Selection -->
@@ -210,8 +226,8 @@
               <v-row v-if="useAccount === true || selectedPlatform?.authentication?.requiresCookies">
                 <v-col cols="12">
                   <AccountSelectedTable
-                    :accountSource="taskForm.platform"
-                    :preSelectedAccounts="selectedAccounts"
+                    :account-source="taskForm.platform"
+                    :pre-selected-accounts="selectedAccounts"
                     @change="handleAccountChange"
                   />
                 </v-col>
@@ -715,6 +731,7 @@ const taskForm = reactive({
   concurrency: 2,
   delay_between_requests: 2000,
   headless: true,
+  aiSupportEnabled: false,
   account_id: undefined as number | undefined,
   proxy_config: undefined as any,
   scheduled_at: undefined as Date | undefined
@@ -1308,7 +1325,7 @@ const calculateNextRunTime = async () => {
   try {
     // Simple next run time calculation for common patterns
     const now = new Date()
-    let nextRun = new Date(now)
+    const nextRun = new Date(now)
     
     const parts = cronExpression.value.split(' ')
     const [minute, hour, day, month, weekday] = parts
