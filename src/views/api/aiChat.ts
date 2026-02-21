@@ -118,55 +118,11 @@ export async function streamChatMessage(
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     let fullContent = "";
-    const streamId = `stream-${Date.now()}`;
-
-    // #region agent log
-    fetch("http://127.0.0.1:7244/ingest/610c95fc-086a-4479-b1bf-7defc981a30f", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Debug-Session-Id": "e47592",
-      },
-      body: JSON.stringify({
-        sessionId: "e47592",
-        location: "aiChat.ts:streamChatMessage",
-        message: "streamChatMessage called - registering NEW listeners",
-        data: { streamId, conversationId },
-        timestamp: Date.now(),
-        hypothesisId: "A",
-      }),
-    }).catch(() => {});
-    // #endregion
 
     // Set up chunk listener
     const chunkHandler = (chunkData: string) => {
       try {
         const chunk: ChatStreamChunk = JSON.parse(chunkData);
-        // #region agent log
-        fetch(
-          "http://127.0.0.1:7244/ingest/610c95fc-086a-4479-b1bf-7defc981a30f",
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-Debug-Session-Id": "e47592",
-            },
-            body: JSON.stringify({
-              sessionId: "e47592",
-              location: "aiChat.ts:chunkHandler",
-              message: "chunk received by listener",
-              data: {
-                streamId,
-                eventType: chunk.eventType,
-                contentLen: chunk.content?.length,
-                convId: chunk.conversationId,
-              },
-              timestamp: Date.now(),
-              hypothesisId: "A",
-            }),
-          }
-        ).catch(() => {});
-        // #endregion
         if (onChunk) {
           onChunk(chunk);
         }
@@ -183,31 +139,6 @@ export async function streamChatMessage(
       try {
         console.log("completeData", completeData);
         const chunk: ChatStreamChunk = JSON.parse(completeData);
-
-        // #region agent log
-        fetch(
-          "http://127.0.0.1:7244/ingest/610c95fc-086a-4479-b1bf-7defc981a30f",
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-Debug-Session-Id": "e47592",
-            },
-            body: JSON.stringify({
-              sessionId: "e47592",
-              location: "aiChat.ts:completeHandler",
-              message: "complete received by listener",
-              data: {
-                streamId,
-                eventType: chunk.eventType,
-                convId: chunk.conversationId,
-              },
-              timestamp: Date.now(),
-              hypothesisId: "A",
-            }),
-          }
-        ).catch(() => {});
-        // #endregion
 
         // Check if this is an error completion
         if (chunk.eventType === "error" && chunk.errorMessage) {

@@ -1002,9 +1002,6 @@ async function handleSendMessage() {
     await streamChatMessage(
       userMessageContent,
       (chunk: ChatStreamChunk) => {
-        // #region agent log
-        fetch('http://127.0.0.1:7244/ingest/610c95fc-086a-4479-b1bf-7defc981a30f',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e47592'},body:JSON.stringify({sessionId:'e47592',location:'AiChatBox.vue:onChunk',message:'onChunk callback invoked',data:{eventType:chunk.eventType,contentLen:chunk.content?.length,convId:chunk.conversationId,msgCount:messages.value.length},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
-        // #endregion
         // Validate that this chunk belongs to the current active conversation
         // Ignore chunks from old conversations that are still streaming
         if (!isValidStreamChunk(chunk, activeStreamConversationId.value)) {
@@ -1028,7 +1025,12 @@ async function handleSendMessage() {
             // isTyping.value = false;
 
             // Append token content and display immediately
-            assistantContent += chunk.content;
+            // Insert a newline before bold headers (e.g. "**Step 2/2**:") so they start on a new line
+            if (chunk.content.startsWith('**') && assistantContent.length > 0) {
+              assistantContent += '\n' + chunk.content;
+            } else {
+              assistantContent += chunk.content;
+            }
 
             // Explanation:
             // This block ensures that the assistant's message is updated reactively with context being streamed in.
@@ -1198,7 +1200,11 @@ async function handleSendMessage() {
             if (chunk.content) {
               isTyping.value = false;
               
-              assistantContent += chunk.content;
+              if (chunk.content.startsWith('**') && assistantContent.length > 0) {
+                assistantContent += '\n' + chunk.content;
+              } else {
+                assistantContent += chunk.content;
+              }
               
               // Find and update the assistant message
               const lastIndex = messages.value.length - 1;

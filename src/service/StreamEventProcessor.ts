@@ -570,28 +570,6 @@ export class StreamEventProcessor {
    * Handle DONE event
    */
   private handleDoneEvent(): void {
-    // #region agent log
-    fetch("http://127.0.0.1:7244/ingest/610c95fc-086a-4479-b1bf-7defc981a30f", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Debug-Session-Id": "e47592",
-      },
-      body: JSON.stringify({
-        sessionId: "e47592",
-        location: "StreamEventProcessor.ts:handleDoneEvent",
-        message: "DONE event received",
-        data: {
-          convId: this.state.streamConversationId,
-          pendingTools: this.state.pendingToolCalls.size,
-          messageSaved: this.state.messageSaved,
-          hasDeferredChunk: !!this.state.deferredCompletionChunk,
-        },
-        timestamp: Date.now(),
-        hypothesisId: "C",
-      }),
-    }).catch(() => {});
-    // #endregion
     const completeChunk: ChatStreamChunk = {
       content: "",
       isComplete: true,
@@ -847,28 +825,6 @@ export class StreamEventProcessor {
    * Handle CONVERSATION_END event
    */
   private handleConversationEndEvent(): void {
-    // #region agent log
-    fetch("http://127.0.0.1:7244/ingest/610c95fc-086a-4479-b1bf-7defc981a30f", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Debug-Session-Id": "e47592",
-      },
-      body: JSON.stringify({
-        sessionId: "e47592",
-        location: "StreamEventProcessor.ts:handleConversationEndEvent",
-        message: "CONVERSATION_END event received",
-        data: {
-          convId: this.state.streamConversationId,
-          pendingTools: this.state.pendingToolCalls.size,
-          messageSaved: this.state.messageSaved,
-          hasDeferredChunk: !!this.state.deferredCompletionChunk,
-        },
-        timestamp: Date.now(),
-        hypothesisId: "C",
-      }),
-    }).catch(() => {});
-    // #endregion
     // Clean up plan data when conversation ends
     this.cleanupPlanData();
 

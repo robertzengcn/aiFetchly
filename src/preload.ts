@@ -343,39 +343,6 @@ contextBridge.exposeInMainWorld("api", {
     const regex = "/^socialtask:log:/";
 
     if (validChannels.includes(channel) || channel.test(regex)) {
-      // #region agent log
-      if (
-        channel === AI_CHAT_STREAM_CHUNK ||
-        channel === AI_CHAT_STREAM_COMPLETE
-      ) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const lc = (ipcRenderer as any).listenerCount
-          ? (ipcRenderer as any).listenerCount(channel)
-          : -1;
-        fetch(
-          "http://127.0.0.1:7244/ingest/610c95fc-086a-4479-b1bf-7defc981a30f",
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-Debug-Session-Id": "e47592",
-            },
-            body: JSON.stringify({
-              sessionId: "e47592",
-              location: "preload.ts:receive",
-              message: "Adding IPC listener",
-              data: {
-                channel,
-                existingListenerCount: lc,
-                afterCount: lc + 1,
-              },
-              timestamp: Date.now(),
-              hypothesisId: "A",
-            }),
-          }
-        ).catch(() => {});
-      }
-      // #endregion
       // Deliberately strip event as it includes `sender`
       ipcRenderer.on(channel, (event, ...args) => func(...args));
     }
