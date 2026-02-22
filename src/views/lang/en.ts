@@ -439,6 +439,7 @@ export default {
     import: "Import",
     export: "Export",
     task_overview: "Task Overview",
+    loading_task_data: "Loading task data...",
     total_tasks: "Total Tasks",
     running: "Running",
     completed: "Completed",
