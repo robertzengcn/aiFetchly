@@ -43,9 +43,9 @@ import {
   getRecorddatetime,
   sendSystemMessage,
 } from "@/modules/lib/function";
-import { USERLOGPATH, USEREMAIL, USER_AI_ENABLED } from "@/config/usersetting";
+import { USERLOGPATH, USEREMAIL } from "@/config/usersetting";
 import { Token } from "@/modules/token";
-import { AiChatApi } from "@/api/aiChatApi";
+import { YellowPagesAiSupportHandler } from "@/modules/YellowPagesAiSupportHandler";
 import { v4 as uuidv4 } from "uuid";
 import * as path from "path";
 import * as fs from "fs";
@@ -86,6 +86,7 @@ export class YellowPagesProcessManager extends BaseModule {
   private resultModel: YellowPagesResultModel;
   private platformRegistry: PlatformRegistry;
   private accountCookiesModule: AccountCookiesModule;
+  private aiSupportHandler: YellowPagesAiSupportHandler;
 
   /**
    * Private constructor to prevent direct instantiation
@@ -97,6 +98,8 @@ export class YellowPagesProcessManager extends BaseModule {
     this.resultModel = new YellowPagesResultModel(this.dbpath);
     this.platformRegistry = new PlatformRegistry();
     this.accountCookiesModule = new AccountCookiesModule();
+    // Initialize AI support handler (will be configured per task)
+    this.aiSupportHandler = new YellowPagesAiSupportHandler();
   }
 
   /**
@@ -765,126 +768,29 @@ export class YellowPagesProcessManager extends BaseModule {
 
   /**
    * Handle AI support requests from the child process.
-   * Routes to extractContactInfo or scrapeAssist based on requestType,
-   * then sends the response back to the child process.
+   * Delegates to YellowPagesAiSupportHandler which provides:
+   * - Response caching with TTL
+   * - Rate limiting
+   * - Request timeout handling
+   * - Input validation
+   * - Structured logging
+   * - User-friendly error messages
    */
   private async handleAiSupportRequest(
     request: AiSupportRequestMessage,
     childProcess: UtilityProcess
   ): Promise<void> {
-    const { requestId, requestType, taskId } = request;
-    console.log(
-      `🤖 AI support request received: type=${requestType}, id=${requestId}`
-    );
+    // Get log file path for this task to pass to AI handler
+    const processInfo = this.activeProcesses.get(request.taskId);
+    const logFile = processInfo?.logFiles?.runtimeLog;
 
-    const sendResponse = (resp: AiSupportResponseMessage): void => {
-      childProcess.postMessage(JSON.stringify(resp));
-    };
-
-    const tokenService = new Token();
-    const aiEnabled = tokenService.getValue(USER_AI_ENABLED);
-    if (aiEnabled !== "true") {
-      sendResponse({
-        type: "AI_SUPPORT_RESPONSE",
-        taskId,
-        requestId,
-        success: false,
-        requestType,
-        errorMessage: "AI features are not enabled for this user",
-      });
-      return;
+    // Configure handler with log file for this task
+    if (logFile) {
+      this.aiSupportHandler = new YellowPagesAiSupportHandler(undefined, logFile);
     }
 
-    try {
-      const aiApi = new AiChatApi();
-
-      if (requestType === "contact_extraction") {
-        const result = await aiApi.extractContactInfo(
-          request.pageContent,
-          request.pageUrl,
-          request.businessName,
-          request.screenshot
-        );
-
-        if (result.status && result.data) {
-          sendResponse({
-            type: "AI_SUPPORT_RESPONSE",
-            taskId,
-            requestId,
-            success: true,
-            requestType,
-            data: {
-              emails: result.data.emails ?? [],
-              phones: result.data.phones ?? [],
-              address: result.data.address,
-              socialLinks: result.data.socialLinks,
-              confidence: result.data.confidence,
-            },
-          });
-        } else {
-          sendResponse({
-            type: "AI_SUPPORT_RESPONSE",
-            taskId,
-            requestId,
-            success: false,
-            requestType,
-            errorMessage: result.msg || "Contact extraction returned no data",
-          });
-        }
-      } else if (requestType === "step_guidance") {
-        const result = await aiApi.scrapeAssist({
-          pageContent: request.pageContent,
-          pageUrl: request.pageUrl,
-          screenshot: request.screenshot,
-          stepContext: request.stepContext || "",
-          errorInfo: request.errorInfo || "",
-          platformName: request.platformName || "yellowpages",
-          selectorsTried: request.selectorsTried || {},
-        });
-
-        if (result.status && result.data) {
-          sendResponse({
-            type: "AI_SUPPORT_RESPONSE",
-            taskId,
-            requestId,
-            success: true,
-            requestType,
-            data: result.data,
-          });
-        } else {
-          sendResponse({
-            type: "AI_SUPPORT_RESPONSE",
-            taskId,
-            requestId,
-            success: false,
-            requestType,
-            errorMessage: result.msg || "Scrape assist returned no data",
-          });
-        }
-      } else {
-        sendResponse({
-          type: "AI_SUPPORT_RESPONSE",
-          taskId,
-          requestId,
-          success: false,
-          requestType,
-          errorMessage: `Unknown AI support request type: ${String(
-            requestType
-          )}`,
-        });
-      }
-    } catch (error: unknown) {
-      const errorMsg = error instanceof Error ? error.message : String(error);
-      console.error(`🤖 AI support request failed: ${errorMsg}`);
-      sendResponse({
-        type: "AI_SUPPORT_RESPONSE",
-        taskId,
-        requestId,
-        success: false,
-        requestType,
-        errorMessage: errorMsg,
-      });
-    }
+    // Delegate to AI support handler
+    await this.aiSupportHandler.handleAiSupportRequest(request, childProcess);
   }
 
   /**
