@@ -270,15 +270,91 @@ export interface WebsiteAnalysisResponse {
  * }
  * ```
  */
+/**
+ * Validation configuration for AI API requests
+ */
+interface AiValidationConfig {
+  /** Maximum page content size in bytes (default: 50KB) */
+  maxPageSize: number;
+  /** Maximum error info length in characters (default: 1000) */
+  maxErrorLength: number;
+}
+
+/**
+ * Default validation configuration
+ */
+const DEFAULT_VALIDATION_CONFIG: AiValidationConfig = {
+  maxPageSize: 50 * 1024, // 50KB
+  maxErrorLength: 1000,
+};
+
 export class AiChatApi {
   private _httpClient: HttpClient;
+  private validationConfig: AiValidationConfig;
 
   /**
    * Creates a new AiChatApi instance
    * Initializes the HTTP client for remote communication
    */
-  constructor() {
+  constructor(validationConfig?: Partial<AiValidationConfig>) {
     this._httpClient = new HttpClient();
+    this.validationConfig = {
+      ...DEFAULT_VALIDATION_CONFIG,
+      ...validationConfig,
+    };
+  }
+
+  /**
+   * Validate page content size
+   * @throws {Error} When page content exceeds maximum size
+   */
+  private validatePageSize(pageContent: string): void {
+    if (pageContent.length > this.validationConfig.maxPageSize) {
+      throw new Error(
+        `Page content too large: ${pageContent.length} bytes ` +
+          `(maximum: ${this.validationConfig.maxPageSize} bytes)`
+      );
+    }
+  }
+
+  /**
+   * Validate screenshot format
+   * @throws {Error} When screenshot format is invalid
+   */
+  private validateScreenshot(screenshot: string): void {
+    if (screenshot.startsWith("data:")) {
+      // Must be a valid data URI for an image
+      if (!/^data:image\/[a-z]+;base64,/.test(screenshot)) {
+        throw new Error(
+          "Invalid screenshot format. Must be a base64-encoded image data URI."
+        );
+      }
+    }
+    // Raw base64 is accepted (will be wrapped by the caller)
+  }
+
+  /**
+   * Sanitize error info to remove sensitive information
+   * - Removes stack traces
+   * - Truncates to max length
+   * - Removes file paths
+   */
+  private sanitizeErrorInfo(errorInfo: string): string {
+    // Remove common stack trace patterns
+    let sanitized = errorInfo
+      .replace(/at\s+.*?\s+\(.*?\)/g, "") // Remove "at function (file:line)"
+      .replace(/at\s+.*?:(\d+):(\d+)/g, "") // Remove "at file:line:col"
+      .replace(/\/[^\s]+\.js:\d+:\d+/g, "") // Remove file paths
+      .replace(/Error:\s*/g, "") // Remove "Error:" prefix
+      .trim();
+
+    // Truncate if too long
+    if (sanitized.length > this.validationConfig.maxErrorLength) {
+      sanitized =
+        sanitized.substring(0, this.validationConfig.maxErrorLength) + "...";
+    }
+
+    return sanitized;
   }
 
   /**
@@ -861,6 +937,15 @@ export class AiChatApi {
     screenshot?: string
   ): Promise<CommonApiresp<ContactExtractionResponse>> {
     this.ensureAIEnabled();
+
+    // Validate page content size
+    this.validatePageSize(pageContent);
+
+    // Validate screenshot format if provided
+    if (screenshot) {
+      this.validateScreenshot(screenshot);
+    }
+
     const data: ContactExtractionRequest = {
       page_content: pageContent,
       url: url,
@@ -895,11 +980,22 @@ export class AiChatApi {
   }): Promise<CommonApiresp<ScrapeAssistResponse>> {
     this.ensureAIEnabled();
 
+    // Validate page content size
+    this.validatePageSize(params.pageContent);
+
+    // Validate screenshot format if provided
+    if (params.screenshot) {
+      this.validateScreenshot(params.screenshot);
+    }
+
+    // Sanitize error info to remove sensitive information
+    const sanitizedErrorInfo = this.sanitizeErrorInfo(params.errorInfo);
+
     const data: ScrapeAssistRequest = {
       page_content: params.pageContent,
       page_url: params.pageUrl,
       step_context: params.stepContext,
-      error_info: params.errorInfo,
+      error_info: sanitizedErrorInfo,
       platform_name: params.platformName,
       selectors_tried: params.selectorsTried,
     };

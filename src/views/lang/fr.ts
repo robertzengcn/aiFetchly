@@ -1314,5 +1314,63 @@ export default {
     ai_support: "Support IA",
     ai_support_hint:
       "Utiliser l'IA pour aider au scraping lorsque les sélecteurs ne parviennent pas à extraire les données",
+    ai_query_keywords: "Générer des mots-clés par IA",
+    ai_query_keywords_default_seed: "entreprise",
+    use_account: "Utiliser un compte",
+    account_required_for_platform: "Compte requis pour la plateforme : {name}",
+    not_set: "Non défini",
+    enabled: "Activé",
+    disabled: "Désactivé",
+    authentication: "Authentification",
+    requires_cookies: "Cookies requis",
+    account_required_for_auth: "Compte requis pour l'authentification",
+    requires_login: "Connexion requise",
+    requires_api_key: "Clé API requise",
+    requires_oauth: "OAuth requis",
+    location_required: "Emplacement requis",
+    platform_requires_location:
+      "Cette plateforme nécessite un emplacement pour la recherche",
+    list_manual_refresh: "Actualisation manuelle",
+    list_auto_refresh_enabled: "Actualisation auto activée (5 s)",
+    list_auto_refresh_paused: "Actualisation auto en pause (page non visible)",
+    list_auto_refresh_disabled: "Actualisation auto désactivée",
+    list_auto_refresh_on: "Actualisation auto ON",
+    list_auto_refresh_paused_btn: "Actualisation auto EN PAUSE",
+    list_auto_refresh_off: "Actualisation auto OFF",
+    list_last_updated: "Dernière mise à jour",
+    list_auto_refresh_interval: "Actualisation auto : {seconds} s",
+    list_search_placeholder: "Rechercher par nom de tâche ou plateforme...",
+    list_filter_search: "Recherche",
+    list_filter_status: "Statut",
+    list_filter_platform: "Plateforme",
+    list_filter_priority: "Priorité",
+    list_tasks_match_filters:
+      "{total} sur {totalUnfiltered} tâches correspondent aux filtres",
+    list_no_tasks_match_filters: "Aucune tâche ne correspond aux filtres",
+    list_adjust_search_or_clear:
+      "Essayez d'ajuster les critères ou de réinitialiser les filtres",
+    list_clear_all_filters: "Réinitialiser tous les filtres",
+    list_applying_filters: "Application des filtres...",
+    list_task_not_running: "La tâche « {name} » n'est pas en cours d'exécution",
+    list_confirm_stop_task:
+      "Voulez-vous vraiment arrêter la tâche « {name} » (PID : {pid}) ?\n\nCela mettra fin au processus et mettra à jour le statut.",
+    list_task_stopped_success:
+      "Tâche « {name} » arrêtée avec succès.\n\nLe statut a été mis à jour en « En attente » et le tableau sera actualisé.",
+    list_task_stop_failed:
+      "Échec de l'arrêt de la tâche « {name} » : {message}",
+    list_error_stopping_task:
+      "Erreur lors de l'arrêt de la tâche « {name} » : {message}",
+    list_task_pause_failed:
+      "Échec de la pause de la tâche « {name} » : {message}",
+    list_task_resumed_success: "Tâche « {name} » reprise avec succès",
+    list_task_resume_failed:
+      "Échec de la reprise de la tâche « {name} » : {message}",
+    list_task_still_running_results:
+      "La tâche est encore en cours. Les résultats seront disponibles à la fin du scraping.",
+    list_task_no_results_yet: "Cette tâche n'a pas encore de résultats.",
+    list_view_results_anyway_confirm:
+      "Voulez-vous quand même ouvrir la page des résultats ?",
+    list_unknown_error: "Erreur inconnue",
+    list_unknown_error_occurred: "Une erreur inconnue s'est produite",
   },
 };

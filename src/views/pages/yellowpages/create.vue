@@ -81,8 +81,22 @@
                     required
                     rows="3"
                     clearable
-                    
-                  />
+                  >
+                    <template v-slot:append-inner>
+                      <v-btn
+                        color="deep-purple"
+                        variant="tonal"
+                        size="small"
+                        :loading="aiKeywordsLoading"
+                        :disabled="aiKeywordsLoading"
+                        @click="handleAiQueryKeywords"
+                        class="mt-1"
+                      >
+                        <v-icon size="small" class="mr-1">mdi-robot</v-icon>
+                        {{ $t('yellowPages.ai_query_keywords') }}
+                      </v-btn>
+                    </template>
+                  </v-textarea>
                   <!-- <div class="d-flex flex-wrap mt-2">
                     <v-chip
                       v-for="keyword in taskForm.keywords"
@@ -189,14 +203,14 @@
               <!-- Account Selection -->
               <v-row>
                 <v-col cols="12" md="6">
-                  <p class="mb-2">Use account</p>
+                  <p class="mb-2">{{ $t('yellowPages.use_account') }}</p>
                   <v-btn-toggle 
                     v-model="useAccount" 
                     mandatory
                     :disabled="selectedPlatform?.authentication?.requiresCookies"
                   >
-                    <v-btn :value="false" color="primary" :disabled="selectedPlatform?.authentication?.requiresCookies">No</v-btn>
-                    <v-btn :value="true" color="success">Yes</v-btn>
+                    <v-btn :value="false" color="primary" :disabled="selectedPlatform?.authentication?.requiresCookies">{{ $t('common.no') }}</v-btn>
+                    <v-btn :value="true" color="success">{{ $t('common.yes') }}</v-btn>
                   </v-btn-toggle>
                   <div v-if="selectedPlatform?.authentication?.requiresCookies" class="mt-2">
                     <v-alert
@@ -209,7 +223,7 @@
                         <v-icon size="small">mdi-alert</v-icon>
                       </template>
                       <span class="text-caption">
-                        Account required for platform: {{ selectedPlatform.display_name }}
+                        {{ $t('yellowPages.account_required_for_platform', { name: selectedPlatform.display_name }) }}
                       </span>
                     </v-alert>
                   </div>
@@ -240,7 +254,7 @@
                     <v-card-title class="text-subtitle-1 pa-0 mb-3">
                       {{ $t('home.proxy_configuration') }}
                     </v-card-title>
-                    <v-combobox v-model="proxyValue" :items="proxyValue" label="Select proxy" item-title="host" multiple return-object chips clearable></v-combobox>
+                    <v-combobox v-model="proxyValue" :items="proxyValue" :label="$t('common.select_proxy')" item-title="host" multiple return-object chips clearable></v-combobox>
                     <v-btn color="primary" @click="showProxytable">{{ $t('search.choose_proxy') }}</v-btn>
 
                     <div v-if="proxytableshow" class="mt-3">
@@ -398,15 +412,15 @@
                             </div>
                             <div v-if="scheduleType === 'one-time'" class="d-flex justify-space-between mb-2">
                               <span class="font-weight-medium">{{ $t('home.run_at') }}:</span>
-                              <span>{{ scheduledTime ? new Date(scheduledTime).toLocaleString() : 'Not set' }}</span>
+                              <span>{{ scheduledTime ? new Date(scheduledTime).toLocaleString() : $t('yellowPages.not_set') }}</span>
                             </div>
                             <div v-if="scheduleType === 'recurring'" class="d-flex justify-space-between mb-2">
                               <span class="font-weight-medium">{{ $t('home.cron_expression') }}:</span>
-                              <span class="font-family-mono">{{ cronExpression || 'Not set' }}</span>
+                              <span class="font-family-mono">{{ cronExpression || $t('yellowPages.not_set') }}</span>
                             </div>
                             <div class="d-flex justify-space-between mb-2">
                               <span class="font-weight-medium">{{ $t('home.schedule_name') }}:</span>
-                              <span>{{ scheduleName || 'Not set' }}</span>
+                              <span>{{ scheduleName || $t('yellowPages.not_set') }}</span>
                             </div>
                             <div class="d-flex justify-space-between mb-2">
                               <span class="font-weight-medium">{{ $t('home.schedule_status') }}:</span>
@@ -441,11 +455,11 @@
             <div class="text-body-2">
               <div class="d-flex justify-space-between mb-2">
                 <span class="font-weight-medium">{{ $t('home.name') }}:</span>
-                <span>{{ taskForm.name || 'Not set' }}</span>
+                <span>{{ taskForm.name || $t('yellowPages.not_set') }}</span>
               </div>
               <div class="d-flex justify-space-between mb-2">
                 <span class="font-weight-medium">{{ $t('home.platform') }}:</span>
-                <span>{{ taskForm.platform || 'Not set' }}</span>
+                <span>{{ taskForm.platform || $t('yellowPages.not_set') }}</span>
               </div>
               <div class="d-flex justify-space-between mb-2">
                 <span class="font-weight-medium">{{ $t('home.keywords') }}:</span>
@@ -453,19 +467,19 @@
               </div>
               <div class="d-flex justify-space-between mb-2">
                 <span class="font-weight-medium">{{ $t('home.location') }}:</span>
-                <span>{{ taskForm.location || 'Not set' }}</span>
+                <span>{{ taskForm.location || $t('yellowPages.not_set') }}</span>
               </div>
               <div class="d-flex justify-space-between mb-2">
                 <span class="font-weight-medium">{{ $t('home.max_pages') }}:</span>
-                <span>{{ taskForm.max_pages || 'Not set' }}</span>
+                <span>{{ taskForm.max_pages || $t('yellowPages.not_set') }}</span>
               </div>
               <div class="d-flex justify-space-between mb-2">
                 <span class="font-weight-medium">{{ $t('home.concurrency') }}:</span>
-                <span>{{ taskForm.concurrency || 'Not set' }}</span>
+                <span>{{ taskForm.concurrency || $t('yellowPages.not_set') }}</span>
               </div>
               <div class="d-flex justify-space-between mb-2">
                 <span class="font-weight-medium">{{ $t('home.headless_mode') }}:</span>
-                <span>{{ taskForm.headless ? 'Enabled' : 'Disabled' }}</span>
+                <span>{{ taskForm.headless ? $t('yellowPages.enabled') : $t('yellowPages.disabled') }}</span>
               </div>
             </div>
           </v-card-text>
@@ -508,7 +522,7 @@
               <!-- Authentication Information -->
               <div v-if="selectedPlatform.authentication" class="mt-3 pt-3 border-top">
                 <div class="mb-2">
-                  <span class="font-weight-medium">Authentication:</span>
+                  <span class="font-weight-medium">{{ $t('yellowPages.authentication') }}:</span>
                 </div>
                 <div v-if="selectedPlatform.authentication.requiresCookies" class="mb-2">
                   <v-chip
@@ -517,10 +531,10 @@
                     class="mr-2"
                   >
                     <v-icon size="small" class="mr-1">mdi-cookie</v-icon>
-                    Requires Cookies
+                    {{ $t('yellowPages.requires_cookies') }}
                   </v-chip>
                   <span class="text-caption text-medium-emphasis">
-                    Account required for authentication
+                    {{ $t('yellowPages.account_required_for_auth') }}
                   </span>
                 </div>
                 <div v-if="selectedPlatform.authentication.requiresLogin" class="mb-2">
@@ -530,7 +544,7 @@
                     class="mr-2"
                   >
                     <v-icon size="small" class="mr-1">mdi-login</v-icon>
-                    Requires Login
+                    {{ $t('yellowPages.requires_login') }}
                   </v-chip>
                 </div>
                 <div v-if="selectedPlatform.authentication.requiresApiKey" class="mb-2">
@@ -540,7 +554,7 @@
                     class="mr-2"
                   >
                     <v-icon size="small" class="mr-1">mdi-key</v-icon>
-                    Requires API Key
+                    {{ $t('yellowPages.requires_api_key') }}
                   </v-chip>
                 </div>
                 <div v-if="selectedPlatform.authentication.requiresOAuth" class="mb-2">
@@ -550,7 +564,7 @@
                     class="mr-2"
                   >
                     <v-icon size="small" class="mr-1">mdi-oauth</v-icon>
-                    Requires OAuth
+                    {{ $t('yellowPages.requires_oauth') }}
                   </v-chip>
                 </div>
               </div>
@@ -564,10 +578,10 @@
                     class="mr-2"
                   >
                     <v-icon size="small" class="mr-1">mdi-map-marker</v-icon>
-                    Location Required
+                    {{ $t('yellowPages.location_required') }}
                   </v-chip>
                   <span class="text-caption text-medium-emphasis">
-                    This platform requires a location for search
+                    {{ $t('yellowPages.platform_requires_location') }}
                   </span>
                 </div>
               </div>
@@ -701,6 +715,7 @@ import CronExpressionBuilder from '@/views/pages/schedule/widgets/CronExpression
 import { createSchedule } from '@/views/api/schedule'
 import { TaskType, TriggerType } from '@/entity/ScheduleTask.entity'
 import SuccessNotification from '@/views/components/widgets/SuccessNotification.vue'
+import { generateRelatedKeywords } from '@/views/api/search'
 
 // Router
 const router = useRouter()
@@ -740,6 +755,7 @@ const taskForm = reactive({
 // UI state
 const creating = ref(false)
 const loading = ref(false)
+const aiKeywordsLoading = ref(false)
 const useProxy = ref(false)
 const scheduleTask = ref(false)
 const keywordsInput = ref('')
@@ -842,6 +858,31 @@ const removeKeyword = (keyword: string) => {
   keywordsInput.value = taskForm.keywords.join(', ')
 }
 
+/** Call AI to generate related keywords and fill the keywords field. Uses current keywords as seeds or a default. */
+async function handleAiQueryKeywords() {
+  aiKeywordsLoading.value = true
+  errorDialog.show = false
+  try {
+    const raw = (keywordsInput.value || '').trim()
+    const seedKeywords = raw
+      ? raw.split(/[\n,]/).map((k) => k.trim()).filter((k) => k.length > 0)
+      : [$t('yellowPages.ai_query_keywords_default_seed') || 'business']
+    if (seedKeywords.length === 0) {
+      seedKeywords.push($t('yellowPages.ai_query_keywords_default_seed') || 'business')
+    }
+    const generated = await generateRelatedKeywords(seedKeywords, 15, 'seo')
+    const newKeywords = generated && generated.length > 0 ? generated : []
+    const existing = raw ? raw.split(/[\n,]/).map((k) => k.trim()).filter(Boolean) : []
+    const combined = [...new Set([...existing, ...newKeywords])]
+    keywordsInput.value = combined.join(', ')
+  } catch (err) {
+    errorDialog.message = err instanceof Error ? err.message : String(err)
+    errorDialog.show = true
+  } finally {
+    aiKeywordsLoading.value = false
+  }
+}
+
 const validateForm = async () => {
   if (!form.value) return { valid: false, errors: [$t('common.error')] }
   
@@ -883,7 +924,7 @@ const validateForm = async () => {
       
       // Check if platform requires cookies but no account is selected
       if (selectedPlatform.value?.authentication?.requiresCookies && selectedAccounts.value.length === 0) {
-        fieldErrors.push(`Account required for platform: ${selectedPlatform.value.display_name}`)
+        fieldErrors.push($t('yellowPages.account_required_for_platform', { name: selectedPlatform.value.display_name }))
       }
       
       // Check if platform requires location but location is empty
