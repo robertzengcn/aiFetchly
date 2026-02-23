@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { AiChatApi } from "@/api/aiChatApi";
+import type { ElectronStoreService } from "@/modules/electronstoreservice";
 
 // Import the modules to be mocked
 import { HttpClient } from "@/modules/lib/httpclient";
@@ -12,18 +13,24 @@ vi.mock("@/modules/lib/httpclient", () => ({
   })),
 }));
 
-// Mock Token service
+// Mock Token service: Token has private store: ElectronStoreService and methods setValue, getValue
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({
-    store: vi.fn(),
-    setValue: vi.fn(),
-    getValue: vi.fn((key: string) => {
-      if (key === "USER_AI_ENABLED") return "true";
-      return "";
-    }),
-    deleteValue: vi.fn(),
-    clearStore: vi.fn(),
-  })),
+  Token: vi.fn().mockImplementation(() => {
+    const storeMock = {
+      setValue: vi.fn(),
+      getValue: vi.fn(),
+      deleteValue: vi.fn(),
+      clearStore: vi.fn(),
+    };
+    return {
+      store: storeMock as unknown as ElectronStoreService,
+      setValue: vi.fn(),
+      getValue: vi.fn((key: string) => {
+        if (key === "USER_AI_ENABLED") return "true";
+        return "";
+      }),
+    };
+  }),
 }));
 
 describe("AiChatApi - Validation", () => {
@@ -324,16 +331,23 @@ describe("AiChatApi - Validation", () => {
     it("should throw when AI is not enabled (main process)", async () => {
       // Mock AI as disabled
       const MockedToken = vi.mocked(Token);
-      MockedToken.mockImplementation(() => ({
-        store: vi.fn(),
+      const storeMock = {
         setValue: vi.fn(),
-        getValue: vi.fn((key: string) => {
-          if (key === "USER_AI_ENABLED") return "false";
-          return "";
-        }),
+        getValue: vi.fn(),
         deleteValue: vi.fn(),
         clearStore: vi.fn(),
-      }));
+      } as unknown as ElectronStoreService;
+      MockedToken.mockImplementation(
+        () =>
+          ({
+            store: storeMock,
+            setValue: vi.fn(),
+            getValue: vi.fn((key: string) => {
+              if (key === "USER_AI_ENABLED") return "false";
+              return "";
+            }),
+          } as unknown as Token)
+      );
 
       const disabledApi = new AiChatApi();
 

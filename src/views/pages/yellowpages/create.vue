@@ -463,7 +463,7 @@
               </div>
               <div class="d-flex justify-space-between mb-2">
                 <span class="font-weight-medium">{{ $t('home.keywords') }}:</span>
-                <span>{{ taskForm.keywords.length || 0 }} selected</span>
+                <span>{{ keywordsCount }} selected</span>
               </div>
               <div class="d-flex justify-space-between mb-2">
                 <span class="font-weight-medium">{{ $t('home.location') }}:</span>
@@ -812,6 +812,13 @@ const minDateTime = computed(() => {
 const platforms = ref<PlatformSummary[]>([])
 const selectedPlatform = computed((): PlatformSummary | undefined => {
   return platforms.value.find(p => p.name === taskForm.platform)
+})
+
+// Parsed keywords from input (comma/newline separated) for preview and validation
+const keywordsCount = computed(() => {
+  const raw = (keywordsInput.value || '').trim()
+  if (!raw) return 0
+  return raw.split(/[\n,]/).map((k) => k.trim()).filter((k) => k.length > 0).length
 })
 
 // Dialog states

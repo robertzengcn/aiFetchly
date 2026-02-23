@@ -239,6 +239,32 @@ const STATIC_TOOL_FUNCTIONS: ToolFunction[] = [
             },
             required: ['url']
         }
+    },
+    {
+        type: "function",
+        name: 'generate_keywords',
+        description: 'Generate related or expanded keywords from seed keywords using AI. Use this when the user wants keyword ideas for SEO, advertising, or content topics. Returns a list of generated keywords.',
+        parameters: {
+            type: 'object',
+            properties: {
+                seed_keywords: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description: 'One or more seed keywords or topics to expand (e.g., ["cloud storage", "file sharing"])'
+                },
+                num_keywords: {
+                    type: 'number',
+                    description: 'Maximum number of keywords to generate per seed (default: 15)',
+                    default: 15
+                },
+                keyword_type: {
+                    type: 'string',
+                    description: 'Type of keywords to generate: "seo" for search optimization, or other supported types (default: "seo")',
+                    default: 'seo'
+                }
+            },
+            required: ['seed_keywords']
+        }
     }
 ];
 
