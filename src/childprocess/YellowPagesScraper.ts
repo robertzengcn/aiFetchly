@@ -193,11 +193,11 @@ interface PauseResumePromise {
 }
 
 /**
- * Yellow Pages Scraper Process
+ * Yellow Pages Scraper
  * Handles the actual scraping logic without database operations
  * Communicates results back to parent process via IPC
  */
-export class YellowPagesScraperProcess {
+export class YellowPagesScraper {
   private taskData: TaskData;
   private platformInfo: PlatformInfo;
   private browser: Browser | null = null;
@@ -342,7 +342,7 @@ export class YellowPagesScraperProcess {
           requestType: params.requestType,
           errorMessage: "AI support request timed out",
         });
-      }, YellowPagesScraperProcess.AI_REQUEST_TIMEOUT_MS);
+      }, YellowPagesScraper.AI_REQUEST_TIMEOUT_MS);
 
       this.pendingAiRequests.set(requestId, {
         resolve,
@@ -5425,10 +5425,10 @@ ${htmlContent}`;
     }
   }
 }
-console.log("🚀 YellowPagesScraperProcess loaded");
+console.log("🚀 YellowPagesScraper loaded");
 
 // Global scraper instance for pause/resume operations
-let globalScraper: YellowPagesScraperProcess | null = null;
+let globalScraper: YellowPagesScraper | null = null;
 
 // Handle process messages
 const parentPort = (
@@ -5452,9 +5452,9 @@ if (parentPort) {
         hasAdapter: !!message.platformInfo.adapterClass,
         adapterClass: message.platformInfo.adapterClass?.className || "None",
       });
-      let scraper: YellowPagesScraperProcess;
+      let scraper: YellowPagesScraper;
       try {
-        scraper = new YellowPagesScraperProcess(
+        scraper = new YellowPagesScraper(
           message.taskData,
           message.platformInfo
         );
