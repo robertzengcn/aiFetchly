@@ -352,8 +352,8 @@ export class YellowPagesProcessManager extends BaseModule {
       );
 
       // Resolve scraper path and validate existence
-      //const childPath = path.resolve(process.cwd(), 'dist/childprocess/yellowPagesScraper.js');
-      const childPath = path.join(__dirname, "yellowPagesScraper.js");
+      //const childPath = path.resolve(process.cwd(), 'dist/childprocess/YellowPagesScraper.js');
+      const childPath = path.join(__dirname, "YellowPagesScraper.js");
       if (!fs.existsSync(childPath)) {
         throw new Error(`Child process file not found at path: ${childPath}`);
       }
@@ -786,7 +786,10 @@ export class YellowPagesProcessManager extends BaseModule {
 
     // Configure handler with log file for this task
     if (logFile) {
-      this.aiSupportHandler = new YellowPagesAiSupportHandler(undefined, logFile);
+      this.aiSupportHandler = new YellowPagesAiSupportHandler(
+        undefined,
+        logFile
+      );
     }
 
     // Delegate to AI support handler

@@ -59,11 +59,11 @@ export default ({ mode }) => {
         build: {
             rollupOptions: {
                 // input: {
-                //     yellowPagesScraper: path.resolve(__dirname, 'src/childprocess/yellowPagesScraper.ts')
+                //     YellowPagesScraper: path.resolve(__dirname, 'src/childprocess/YellowPagesScraper.ts')
                 // },
                 // output: {
                 //     dir: 'dist/childprocess',
-                //     entryFileNames: 'yellowPagesScraper.js',
+                //     entryFileNames: 'YellowPagesScraper.js',
                 //     format: 'cjs'
                 // },
                 external: [
