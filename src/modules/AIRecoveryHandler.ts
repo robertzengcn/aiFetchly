@@ -81,21 +81,16 @@ export class AIRecoveryHandler {
         logger.info(`Processing recovery request ${request.requestId} for operation: ${request.operation} on ${request.searchEngine}`);
         logger.info(`Error: ${this.sanitizeError(request.errorMessage)}`);
         logger.debug(`Attempted selectors: ${request.attemptedSelectors.join(', ')}`);
+        if (request.screenshot) {
+            logger.debug('Sending screenshot with recovery request for AI reference');
+        }
 
         try {
-            // Build the prompt for the AI
-            const prompt = this.buildRecoveryPrompt(request);
-            logger.debug(`Built prompt (${prompt.length} chars), calling AI API with model: ${this.config.model}...`);
-
-            // Call AI chat API with structured prompt
-            const response = await this.aiChatApi.sendMessage({
-                message: prompt,
-                systemPrompt: this.getSystemPrompt(request.operation),
-                model: this.config.model || 'gpt-4o-mini'
-            });
+            // Call the AI server's dedicated Puppeteer recovery API (includes screenshot when provided)
+            const response = await this.aiChatApi.sendPuppeteerRecovery(request);
 
             if (!response.status || !response.data) {
-                logger.error(`API call failed for request ${request.requestId}: ${response.msg || 'Unknown error'}`);
+                logger.error(`Recovery API call failed for request ${request.requestId}: ${response.msg || 'Unknown error'}`);
                 this.telemetry.failedRecoveries++;
                 this.trackOperationResult(request.operation, false, 0, 'api_failure');
                 return {
@@ -103,28 +98,33 @@ export class AIRecoveryHandler {
                     success: false,
                     actions: [],
                     confidence: 0,
-                    reasoning: 'AI API call failed',
+                    reasoning: 'Recovery API call failed',
                     error: response.msg || 'Unknown error'
                 };
             }
 
-            logger.debug(`Received AI response for request ${request.requestId}, parsing...`);
+            const apiData = response.data;
+            const actions = this.mapApiActionsToRecoveryActions(apiData.actions);
 
-            // Parse the AI response into recovery actions
-            const parsedResponse = this.parseAIResponse(request.requestId, response.data.message);
-
-            if (parsedResponse.success) {
-                logger.info(`Successfully parsed ${parsedResponse.actions.length} recovery actions (confidence: ${parsedResponse.confidence})`);
+            if (apiData.success) {
+                logger.info(`Recovery API returned ${actions.length} actions (confidence: ${apiData.confidence})`);
                 this.telemetry.successfulRecoveries++;
-                this.updateAverageConfidence(parsedResponse.confidence);
-                this.trackOperationResult(request.operation, true, parsedResponse.confidence, 'success');
+                this.updateAverageConfidence(apiData.confidence);
+                this.trackOperationResult(request.operation, true, apiData.confidence, 'success');
             } else {
-                logger.warn(`Failed to parse AI response: ${parsedResponse.reasoning}`);
+                logger.warn(`Recovery API reported no viable strategy: ${apiData.reasoning}`);
                 this.telemetry.failedRecoveries++;
-                this.trackOperationResult(request.operation, false, parsedResponse.confidence, 'parse_failure');
+                this.trackOperationResult(request.operation, false, apiData.confidence, 'parse_failure');
             }
 
-            return parsedResponse;
+            return {
+                requestId: apiData.request_id,
+                success: apiData.success,
+                actions,
+                confidence: Math.min(1, Math.max(0, apiData.confidence)),
+                reasoning: apiData.reasoning,
+                error: apiData.error
+            };
 
         } catch (error) {
             logger.error(`Exception processing request ${request.requestId}:`, error);
@@ -179,148 +179,26 @@ export class AIRecoveryHandler {
             .substring(0, 200); // Limit length
     }
 
-    private getSystemPrompt(operation: string): string {
-        return `You are a Puppeteer automation expert helping recover from web scraping failures.
-
-TASK: Analyze the page state and suggest Puppeteer actions to complete the "${operation}" operation.
-
-RESPONSE FORMAT: Return ONLY valid JSON in this exact format:
-{
-  "success": true,
-  "actions": [
-    {
-      "type": "waitForSelector|click|type|focus|pressKey|scroll",
-      "selector": "CSS selector",
-      "selectorType": "css",
-      "value": "text to type (for type action)",
-      "key": "Enter (for pressKey action)",
-      "timeout": 5000,
-      "reason": "Brief explanation"
-    }
-  ],
-  "confidence": 0.85,
-  "reasoning": "Overall explanation of the recovery strategy"
-}
-
-RULES:
-1. Only use safe operations: click, type, focus, waitForSelector, pressKey, scroll
-2. Prefer CSS selectors over XPath
-3. Consider aria-label, role, and data-* attributes
-4. Maximum 5 actions per recovery attempt
-5. Include waits before interactions
-6. If no reliable solution, set success: false`;
-    }
-
-    private buildRecoveryPrompt(request: AIRecoveryRequest): string {
-        let prompt = `FAILED OPERATION: ${request.operation}
-SEARCH ENGINE: ${request.searchEngine}
-CURRENT URL: ${request.currentUrl}
-PAGE TITLE: ${request.pageTitle}
-ERROR: ${this.sanitizeError(request.errorMessage)}
-ATTEMPTED SELECTORS: ${request.attemptedSelectors.join(', ')}
-
-HTML SAMPLE:
-\`\`\`html
-${request.htmlSample}
-\`\`\`
-`;
-
-        if (request.accessibilityTree) {
-            prompt += `\nACCESSIBILITY TREE (truncated):
-\`\`\`json
-${request.accessibilityTree}
-\`\`\`
-`;
-        }
-
-        if (request.keyword) {
-            prompt += `\nCURRENT KEYWORD: ${request.keyword}\n`;
-        }
-
-        prompt += `\nPlease analyze and provide recovery actions.`;
-
-        return prompt;
-    }
-
-    private parseAIResponse(requestId: string, aiMessage: string): AIRecoveryResponse {
-        try {
-            // Try multiple strategies to extract valid JSON
-            let jsonStr: string | null = null;
-
-            // Strategy 1: Try to find JSON code blocks
-            const codeBlockMatch = aiMessage.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
-            if (codeBlockMatch && codeBlockMatch[1]) {
-                jsonStr = codeBlockMatch[1];
-            }
-
-            // Strategy 2: Try to find first valid JSON object
-            if (!jsonStr) {
-                // Find the first { and matching }
-                const startIdx = aiMessage.indexOf('{');
-                if (startIdx !== -1) {
-                    let braceCount = 0;
-                    let endIdx = startIdx;
-                    for (let i = startIdx; i < aiMessage.length; i++) {
-                        if (aiMessage[i] === '{') braceCount++;
-                        if (aiMessage[i] === '}') braceCount--;
-                        if (braceCount === 0) {
-                            endIdx = i + 1;
-                            break;
-                        }
-                    }
-                    const candidate = aiMessage.substring(startIdx, endIdx);
-                    // Validate it's parseable
-                    try {
-                        JSON.parse(candidate);
-                        jsonStr = candidate;
-                    } catch {
-                        // Continue to next strategy
-                    }
-                }
-            }
-
-            // Strategy 3: Use regex as fallback (least reliable)
-            if (!jsonStr) {
-                const jsonMatch = aiMessage.match(/\{[\s\S]*\}/);
-                if (jsonMatch) {
-                    jsonStr = jsonMatch[0];
-                }
-            }
-
-            if (!jsonStr) {
-                throw new Error('No valid JSON found in AI response');
-            }
-
-            const parsed = JSON.parse(jsonStr);
-
-            // Validate response structure
-            if (typeof parsed !== 'object' || parsed === null) {
-                throw new Error('Parsed response is not an object');
-            }
-
-            return {
-                requestId,
-                success: parsed.success ?? false,
-                actions: this.validateActions(parsed.actions || []),
-                confidence: Math.min(1, Math.max(0, parsed.confidence || 0)),
-                reasoning: parsed.reasoning || 'No reasoning provided'
-            };
-
-        } catch (error) {
-            console.error('Failed to parse AI response:', error);
-            return {
-                requestId,
-                success: false,
-                actions: [],
-                confidence: 0,
-                reasoning: 'Failed to parse AI response',
-                error: error instanceof Error ? error.message : String(error)
-            };
-        }
+    /**
+     * Map API response actions (snake_case) to AIRecoveryAction (camelCase).
+     */
+    private mapApiActionsToRecoveryActions(
+        actions: Array<{ type: string; selector?: string; selector_type?: string; value?: string; key?: string; timeout?: number; reason: string }>
+    ): AIRecoveryAction[] {
+        const mapped = actions.map((a) => ({
+            type: a.type as AIRecoveryAction['type'],
+            selector: a.selector,
+            selectorType: (a.selector_type ?? 'css') as 'css' | 'xpath',
+            value: a.value,
+            key: a.key,
+            timeout: a.timeout,
+            reason: a.reason || 'No reason provided'
+        }));
+        return this.validateActions(mapped);
     }
 
     private validateActions(actions: unknown[]): AIRecoveryAction[] {
-        const validTypes = ['click', 'type', 'focus', 'waitForSelector', 'pressKey', 'scroll'];
+        const validTypes = ['click', 'type', 'focus', 'waitForSelector', 'pressKey', 'scroll', 'evaluate'];
 
         return actions
             .filter((a): a is AIRecoveryAction => {

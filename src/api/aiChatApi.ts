@@ -4,6 +4,7 @@ import { CommonApiresp, ChatApiResponse } from "@/entityTypes/commonType";
 import { Token } from "@/modules/token";
 import { USER_AI_ENABLED } from "@/config/usersetting";
 import type { AIEmailTemplateRequest } from "@/entityTypes/emailmarketingType";
+import type { AIRecoveryRequest } from "@/entityTypes/processMessage-type";
 
 /**
  * Chat request interface
@@ -49,6 +50,26 @@ export interface ToolExecutionResult {
   success: boolean;
   result: Record<string, unknown>;
   execution_time_ms: number;
+}
+
+/**
+ * Response data from POST /api/ai/puppeteer/recovery (AI recovery API).
+ */
+export interface PuppeteerRecoveryResponseData {
+  request_id: string;
+  success: boolean;
+  actions: Array<{
+    type: string;
+    selector?: string;
+    selector_type?: string;
+    value?: string;
+    key?: string;
+    timeout?: number;
+    reason: string;
+  }>;
+  confidence: number;
+  reasoning: string;
+  error?: string;
 }
 
 /**
@@ -1007,5 +1028,42 @@ export class AiChatApi {
     }
 
     return this._httpClient.postJson("/api/ai/scrape/assist", data);
+  }
+
+  /**
+   * Call the AI server's Puppeteer recovery API (POST /api/ai/puppeteer/recovery) to get suggested recovery actions.
+   * Sends page state (HTML, error, optional screenshot, etc.) and returns structured actions.
+   */
+  async sendPuppeteerRecovery(
+    request: AIRecoveryRequest
+  ): Promise<CommonApiresp<PuppeteerRecoveryResponseData>> {
+    this.ensureAIEnabled();
+
+    const data: Record<string, unknown> = {
+      request_id: request.requestId,
+      operation: request.operation,
+      search_engine: request.searchEngine,
+      current_url: request.currentUrl,
+      page_title: request.pageTitle ?? "",
+      error_message: request.errorMessage,
+      attempted_selectors: request.attemptedSelectors ?? [],
+      html_sample: request.htmlSample,
+    };
+
+    if (request.accessibilityTree) {
+      data.accessibility_tree = request.accessibilityTree;
+    }
+    if (request.keyword) {
+      data.keyword = request.keyword;
+    }
+    if (request.screenshot) {
+      data.screenshot = request.screenshot.startsWith("data:")
+        ? request.screenshot
+        : `data:image/png;base64,${request.screenshot}`;
+    }
+
+    return this._httpClient.postJson("/api/ai/puppeteer/recovery", {
+      data,
+    });
   }
 }
