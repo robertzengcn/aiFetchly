@@ -909,13 +909,176 @@ export class YellowPagesScraper {
               }
             } catch (error) {
               console.error(`Error scraping page ${pageNum}:`, error);
-              // Continue with next page
+              if (this.aiSupportEnabled && this.page) {
+                try {
+                  const aiExtract = await this.requestAiSupport({
+                    requestType: "contact_extraction",
+                    pageUrl: this.page.url(),
+                    stepContext: "custom_extraction_failed",
+                    errorInfo:
+                      error instanceof Error ? error.message : String(error),
+                  });
+                  if (aiExtract.success && aiExtract.data) {
+                    const aiResult = this.buildScrapingResultFromAiContactData(
+                      aiExtract.data
+                    );
+                    totalResults = totalResults.concat([aiResult]);
+                    this.reportProgress({
+                      currentPage: pageNum,
+                      totalPages: maxPages,
+                      resultsCount: totalResults.length,
+                      percentage: (pageNum / maxPages) * 100,
+                    });
+                    console.log(
+                      "🤖 AI contact extraction recovered result after custom extraction failure"
+                    );
+                  }
+                } catch (aiErr) {
+                  console.warn("🤖 AI contact extraction failed:", aiErr);
+                }
+              }
             }
           }
         } catch (error) {
           console.error(`❌ Error using platform-specific adapter:`, error);
+          // Try AI step_guidance when custom search fails (maps to scrape_assist)
+          if (this.aiSupportEnabled && this.page) {
+            console.log(
+              "🤖 Requesting AI step guidance for custom search failure..."
+            );
+            try {
+              const aiResult = await this.requestAiSupport({
+                requestType: "step_guidance",
+                pageUrl: this.page.url(),
+                stepContext: "custom_search_failed",
+                errorInfo: `Adapter search failed for keyword "${keyword}" location "${location}": ${
+                  error instanceof Error ? error.message : String(error)
+                }`,
+                selectorsTried: {},
+              });
+              if (
+                aiResult.success &&
+                aiResult.data?.suggestedSelectors &&
+                Object.keys(aiResult.data.suggestedSelectors).length > 0
+              ) {
+                console.log(
+                  "🤖 AI suggested selectors for search, attempting to apply..."
+                );
+                const sel = aiResult.data.suggestedSelectors;
+                try {
+                  if (sel.keywordInput) {
+                    const kwEl = await this.page.$(sel.keywordInput);
+                    if (kwEl) {
+                      await kwEl.click({ clickCount: 3 });
+                      await kwEl.type(keyword, {
+                        delay: 50 + Math.random() * 80,
+                      });
+                    }
+                  }
+                  if (sel.locationInput && location) {
+                    const locEl = await this.page.$(sel.locationInput);
+                    if (locEl) {
+                      await locEl.click({ clickCount: 3 });
+                      await locEl.type(location, {
+                        delay: 50 + Math.random() * 80,
+                      });
+                    }
+                  }
+                  if (sel.searchButton) {
+                    const btn = await this.page.$(sel.searchButton);
+                    if (btn) await btn.click();
+                  }
+                  await this.sleep(2000);
+                  // If we got here without throw, retry extraction loop for this keyword with current page
+                  for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
+                    if (!this.isRunning) break;
+                    while (this.isPaused && this.isRunning)
+                      await this.sleep(1000);
+                    try {
+                      let results: ScrapingResult[] = [];
+                      if (this.adapter && hasCustomExtraction) {
+                        const businessData =
+                          await this.adapter.extractBusinessData(this.page!);
+                        results = [
+                          this.convertBusinessDataToScrapingResult(
+                            businessData
+                          ),
+                        ];
+                      } else {
+                        results = await this.extractBusinessData();
+                      }
+                      if (results.length > 0) {
+                        totalResults = totalResults.concat(results);
+                        this.reportProgress({
+                          currentPage: pageNum,
+                          totalPages: maxPages,
+                          resultsCount: totalResults.length,
+                          percentage: (pageNum / maxPages) * 100,
+                        });
+                      }
+                      if (
+                        pageNum < maxPages &&
+                        hasCustomPagination &&
+                        this.adapter
+                      ) {
+                        await this.adapter.handlePagination(
+                          this.page!,
+                          maxPages
+                        );
+                        await this.sleep(delayBetweenRequests);
+                      }
+                    } catch (extractErr) {
+                      if (this.aiSupportEnabled && this.page) {
+                        try {
+                          const aiExtract = await this.requestAiSupport({
+                            requestType: "contact_extraction",
+                            pageUrl: this.page.url(),
+                            businessName: undefined,
+                            stepContext:
+                              "custom_extraction_failed_after_ai_search",
+                            errorInfo:
+                              extractErr instanceof Error
+                                ? extractErr.message
+                                : String(extractErr),
+                          });
+                          if (aiExtract.success && aiExtract.data) {
+                            const aiResult =
+                              this.buildScrapingResultFromAiContactData(
+                                aiExtract.data
+                              );
+                            totalResults.push(aiResult);
+                            this.reportProgress({
+                              currentPage: pageNum,
+                              totalPages: maxPages,
+                              resultsCount: totalResults.length,
+                              percentage: (pageNum / maxPages) * 100,
+                            });
+                            console.log(
+                              "🤖 AI contact extraction recovered result after custom extraction failure"
+                            );
+                          }
+                        } catch {
+                          // ignore
+                        }
+                      }
+                    }
+                  }
+                  continue; // skip fallback to generic
+                } catch (applyErr) {
+                  console.warn(
+                    "🤖 Applying AI suggested selectors failed:",
+                    applyErr
+                  );
+                }
+              }
+            } catch (aiErr) {
+              console.warn(
+                "🤖 AI step guidance for custom search failed:",
+                aiErr
+              );
+            }
+          }
           console.log(`🔄 Falling back to generic scraping logic`);
-          // Fallback to generic method
           await this.scrapeKeywordWithGenericMethod(
             keyword,
             location,
@@ -1004,15 +1167,40 @@ export class YellowPagesScraper {
         if (currentPage === 1) {
           // For first page, we're already on the search results
           if (useCustomExtraction && this.adapter) {
-            // Use adapter's custom data extraction
-            const businessData = await this.adapter.extractBusinessData(
-              this.page!
-            );
-            console.log(
-              `📊 Adapter extracted business data:`,
-              businessData.business_name
-            );
-            results = [this.convertBusinessDataToScrapingResult(businessData)];
+            try {
+              const businessData = await this.adapter.extractBusinessData(
+                this.page!
+              );
+              console.log(
+                `📊 Adapter extracted business data:`,
+                businessData.business_name
+              );
+              results = [
+                this.convertBusinessDataToScrapingResult(businessData),
+              ];
+            } catch (error) {
+              if (this.aiSupportEnabled && this.page) {
+                try {
+                  const aiExtract = await this.requestAiSupport({
+                    requestType: "contact_extraction",
+                    pageUrl: this.page.url(),
+                    stepContext: "custom_extraction_failed_generic_nav",
+                    errorInfo:
+                      error instanceof Error ? error.message : String(error),
+                  });
+                  if (aiExtract.success && aiExtract.data) {
+                    results = [
+                      this.buildScrapingResultFromAiContactData(aiExtract.data),
+                    ];
+                    console.log(
+                      "🤖 AI contact extraction recovered result (page 1, custom extraction failed)"
+                    );
+                  }
+                } catch (aiErr) {
+                  console.warn("🤖 AI contact extraction failed:", aiErr);
+                }
+              }
+            }
           } else {
             // Extract business data using generic method
             results = await this.extractBusinessData();
@@ -1035,15 +1223,40 @@ export class YellowPagesScraper {
           }
 
           if (useCustomExtraction && this.adapter) {
-            // Use adapter's custom data extraction
-            const businessData = await this.adapter.extractBusinessData(
-              this.page!
-            );
-            console.log(
-              `📊 Adapter extracted business data:`,
-              businessData.business_name
-            );
-            results = [this.convertBusinessDataToScrapingResult(businessData)];
+            try {
+              const businessData = await this.adapter.extractBusinessData(
+                this.page!
+              );
+              console.log(
+                `📊 Adapter extracted business data:`,
+                businessData.business_name
+              );
+              results = [
+                this.convertBusinessDataToScrapingResult(businessData),
+              ];
+            } catch (error) {
+              if (this.aiSupportEnabled && this.page) {
+                try {
+                  const aiExtract = await this.requestAiSupport({
+                    requestType: "contact_extraction",
+                    pageUrl: this.page.url(),
+                    stepContext: "custom_extraction_failed_generic_nav",
+                    errorInfo:
+                      error instanceof Error ? error.message : String(error),
+                  });
+                  if (aiExtract.success && aiExtract.data) {
+                    results = [
+                      this.buildScrapingResultFromAiContactData(aiExtract.data),
+                    ];
+                    console.log(
+                      "🤖 AI contact extraction recovered result (pagination, custom extraction failed)"
+                    );
+                  }
+                } catch (aiErr) {
+                  console.warn("🤖 AI contact extraction failed:", aiErr);
+                }
+              }
+            }
           } else {
             // Extract business data using generic method
             results = await this.extractBusinessData();
@@ -5264,6 +5477,33 @@ export class YellowPagesScraper {
   }
 
   /**
+   * Build a ScrapingResult from AI contact_extraction response data.
+   * Used when custom extraction fails and we fall back to AI.
+   */
+  private buildScrapingResultFromAiContactData(
+    aiData: NonNullable<AiSupportResult["data"]>,
+    businessName = "Unknown"
+  ): ScrapingResult {
+    const result: ScrapingResult = {
+      business_name: businessName,
+      email: aiData.emails?.[0] || undefined,
+      phone: aiData.phones?.[0] || undefined,
+      website: undefined,
+      address: aiData.address
+        ? {
+            street: aiData.address,
+            city: undefined,
+            state: undefined,
+            zip: undefined,
+            country: undefined,
+          }
+        : undefined,
+      social_media: aiData.socialLinks || undefined,
+    };
+    return result;
+  }
+
+  /**
    * Wait for Cloudflare challenge to complete (if possible)
    * @param maxWaitTime Maximum time to wait in milliseconds (default: 30 seconds)
    * @returns true if Cloudflare challenge appears to be resolved, false otherwise
@@ -5561,6 +5801,17 @@ if (parentPort) {
       } else {
         console.warn("Received AI_SUPPORT_RESPONSE but no active scraper");
       }
+    } else if (message.type === "EXIT") {
+      const reason = (message as { reason?: string }).reason ?? "Requested by main process";
+      console.log(`Received EXIT command, shutting down gracefully. Reason: ${reason}`);
+      if (globalScraper) {
+        try {
+          await globalScraper.stop();
+        } catch (error) {
+          console.warn("Error stopping scraper on EXIT:", error);
+        }
+      }
+      process.exit(0);
     } else {
       console.log("⚠️ Unknown message type:", message.type);
     }
