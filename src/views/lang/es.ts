@@ -827,6 +827,8 @@ export default {
     no_valid_items_hint:
       "Los elementos seleccionados no tienen ID válidos. Por favor, seleccione otros elementos.",
     extraction_started: "Extracción de contacto iniciada",
+    extraction_started_notice:
+      "Extracción de contacto iniciada para {count} elemento(s). Procesando en segundo plano. Consulte la columna Estado de extracción para el progreso.",
     extraction_failed: "Error al iniciar la extracción",
   },
   emailscrape: {

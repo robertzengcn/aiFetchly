@@ -18,6 +18,11 @@ const STATIC_TOOL_FUNCTIONS: ToolFunction[] = [
                     type: 'number',
                     description: 'Number of search results to return (default: 10)',
                     default: 10
+                },
+                show_browser: {
+                    type: 'boolean',
+                    description: 'Whether to show the browser window during scraping (default: false, headless)',
+                    default: false
                 }
             },
             required: ['query']
@@ -43,6 +48,11 @@ const STATIC_TOOL_FUNCTIONS: ToolFunction[] = [
                     type: 'string',
                     description: 'Market/region code (e.g., en-US, en-GB)',
                     default: 'en-US'
+                },
+                show_browser: {
+                    type: 'boolean',
+                    description: 'Whether to show the browser window during scraping (default: false, headless)',
+                    default: false
                 }
             },
             required: ['query']
@@ -63,6 +73,11 @@ const STATIC_TOOL_FUNCTIONS: ToolFunction[] = [
                     type: 'number',
                     description: 'Number of search results to return (default: 10)',
                     default: 10
+                },
+                show_browser: {
+                    type: 'boolean',
+                    description: 'Whether to show the browser window during scraping (default: false, headless)',
+                    default: false
                 }
             },
             required: ['query']
@@ -83,6 +98,11 @@ const STATIC_TOOL_FUNCTIONS: ToolFunction[] = [
                     type: 'number',
                     description: 'Number of search results to return (default: 10)',
                     default: 10
+                },
+                show_browser: {
+                    type: 'boolean',
+                    description: 'Whether to show the browser window during scraping (default: false, headless)',
+                    default: false
                 }
             },
             required: ['query']
@@ -164,8 +184,34 @@ const STATIC_TOOL_FUNCTIONS: ToolFunction[] = [
     },
     {
         type: "function",
+        name: 'analyze_website',
+        description: 'Analyze a single website for business relevance. Use when the user wants to understand what business or industry a website represents, or how well it matches a client business. Scrapes the URL, then uses AI to return industry, match score, and reasoning. Results are not saved to the database. For multiple URLs use analyze_websites instead.',
+        parameters: {
+            type: 'object',
+            properties: {
+                url: {
+                    type: 'string',
+                    description: 'The website URL to analyze (must be a valid HTTP/HTTPS URL).'
+                },
+                client_business: {
+                    type: 'string',
+                    description: 'Description of the client or target business to match against. The AI uses this to determine how relevant the website is to the business (match score and reasoning).'
+                },
+                temperature: {
+                    type: 'number',
+                    description: 'Temperature for AI analysis (0.0-1.0). Higher values make the analysis more creative. Default is 0.7.',
+                    default: 0.7,
+                    minimum: 0.0,
+                    maximum: 1.0
+                }
+            },
+            required: ['url', 'client_business']
+        }
+    },
+    {
+        type: "function",
         name: 'analyze_website_batch',
-        description: 'Analyze multiple websites from search results using AI to determine industry, match score, and reasoning. This tool scrapes website content and uses AI to analyze how well each website matches a given client business description. Results are saved to the database.',
+        description: 'Analyze multiple websites from search results for business relevance. Use when you have search result IDs and want to determine industry, match score, and reasoning against a client business. Scrapes each website and uses AI; results are saved to the database. For direct URLs without search results use analyze_websites or analyze_website.',
         parameters: {
             type: 'object',
             properties: {
@@ -178,7 +224,7 @@ const STATIC_TOOL_FUNCTIONS: ToolFunction[] = [
                 },
                 client_business: {
                     type: 'string',
-                    description: 'Description of the client business to match against. This is used by the AI to determine how well each website matches the business.'
+                    description: 'Description of the client business to match against. Used to determine how well each website matches the business (industry, match score, reasoning).'
                 },
                 temperature: {
                     type: 'number',
@@ -194,7 +240,7 @@ const STATIC_TOOL_FUNCTIONS: ToolFunction[] = [
     {
         type: "function",
         name: 'analyze_websites',
-        description: 'Analyze multiple websites directly from URLs using AI to determine industry, match score, and reasoning. This tool scrapes website content and uses AI to analyze how well each website matches a given client business description. Results are NOT saved to the database - use this for quick analysis without persistence.',
+        description: 'Analyze multiple websites from URLs for business relevance. Use when you have a list of URLs and want to determine industry, match score, and reasoning against a client business. Scrapes each URL and uses AI; results are NOT saved to the database. For a single URL use analyze_website for convenience.',
         parameters: {
             type: 'object',
             properties: {
@@ -207,7 +253,7 @@ const STATIC_TOOL_FUNCTIONS: ToolFunction[] = [
                 },
                 client_business: {
                     type: 'string',
-                    description: 'Description of the client business to match against. This is used by the AI to determine how well each website matches the business.'
+                    description: 'Description of the client business to match against. Used to determine how well each website matches the business (industry, match score, reasoning).'
                 },
                 temperature: {
                     type: 'number',
@@ -264,6 +310,22 @@ const STATIC_TOOL_FUNCTIONS: ToolFunction[] = [
                 }
             },
             required: ['seed_keywords']
+        }
+    },
+    {
+        type: "function",
+        name: 'extract_contact_info',
+        description: 'Extract contact information (emails, phones, address, social links) from one or more website URLs. Uses AI-assisted discovery and regex fallback. Call this when the user wants to find contact details for given website URLs.',
+        parameters: {
+            type: 'object',
+            properties: {
+                urls: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description: 'List of website URLs to extract contact information from (e.g., ["https://example.com", "https://company.com/contact"])'
+                }
+            },
+            required: ['urls']
         }
     }
 ];

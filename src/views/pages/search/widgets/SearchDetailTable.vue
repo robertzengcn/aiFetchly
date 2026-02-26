@@ -107,7 +107,15 @@ v-model:items-per-page="itemsPerPage" v-model="selectedItems"
                 </div>
             </template>
             <template v-slot:[`item.extraction_status`]="{ item }">
-                <div class="extraction-status-cell">
+                <div class="extraction-status-cell d-flex align-center">
+                    <v-progress-circular
+                        v-if="item.id !== undefined && isExtractionInProgress(item.id)"
+                        indeterminate
+                        size="18"
+                        width="2"
+                        class="mr-2 extraction-status-spinner"
+                        color="primary"
+                    />
                     <v-chip
                         v-if="item.id !== undefined && getContactExtractionStatus(item.id)"
                         size="small"
@@ -393,7 +401,15 @@ v-model:items-per-page="itemsPerPage" v-model="selectedItems"
                 <v-row class="mb-4">
                     <v-col cols="12" sm="6">
                         <div class="text-caption text-grey">{{ t('contactExtraction.extraction_status') || 'Extraction Status' }}:</div>
-                        <div class="text-body-2">
+                        <div class="text-body-2 d-flex align-center">
+                            <v-progress-circular
+                                v-if="selectedResult.id !== undefined && isExtractionInProgress(selectedResult.id)"
+                                indeterminate
+                                size="18"
+                                width="2"
+                                class="mr-2 extraction-status-spinner"
+                                color="primary"
+                            />
                             <v-chip
                                 v-if="selectedResult.id !== undefined && getContactExtractionStatus(selectedResult.id)"
                                 size="small"
@@ -422,13 +438,22 @@ v-model:items-per-page="itemsPerPage" v-model="selectedItems"
             </v-card-actions>
         </v-card>
     </v-dialog>
+
+    <!-- Contact extraction started notice -->
+    <NoticeSnackbar
+        v-model="extractionNotice.show"
+        :message="extractionNotice.message"
+        :type="extractionNotice.type"
+        :timeout="extractionNotice.timeout"
+    />
 </template>
 
 <script setup lang="ts">
 import {useI18n} from "vue-i18n";
 import { gettaskresult, exportSearchResults, analyzeWebsiteBatch, receiveAnalyzeWebsiteProgress, type AnalyzeWebsiteProgressData } from '@/views/api/search'
 import { contactExtractionApi } from '@/views/api/contactExtraction'
-import { ref,computed,onMounted,onUnmounted,watch } from 'vue'
+import NoticeSnackbar from '@/views/components/widgets/noticeSnackbar.vue'
+import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import { SearchResult } from '@/views/api/types'
 import {SearchResEntityDisplay} from "@/entityTypes/scrapeType"
 import router from '@/views/router';
@@ -703,6 +728,14 @@ const analysisProgress = ref({ current: 0, total: 0 });
 // Contact extraction state
 const contactInfoMap = ref<Map<number, any>>(new Map());
 
+// Snackbar notice when contact extraction is started (backend processing)
+const extractionNotice = reactive({
+    show: false,
+    message: '',
+    type: 'info' as 'success' | 'error' | 'warning' | 'info',
+    timeout: 6000
+});
+
 // Detail dialog state
 const showDetailDialog = ref(false);
 const selectedResult = ref<SearchResEntityDisplay | null>(null);
@@ -891,7 +924,7 @@ function loadItems({ page, itemsPerPage, sortBy }, isAutoRefresh = false) {
         search: search.value
     }
     FakeAPI.fetch(fetchitem).then(
-        ({ data, total }) => {
+        async ({ data, total }) => {
              console.log(data)
             // console.log(total)
             // Ensure each item has a unique identifier and index
@@ -902,6 +935,13 @@ function loadItems({ page, itemsPerPage, sortBy }, isAutoRefresh = false) {
         
             serverItems.value = data
             totalItems.value = total
+            // Load extraction status from DB so returning users see persisted status (pending/analyzing/completed/failed)
+            const resultIds = data
+                .map((item: SearchResEntityDisplay) => item.id)
+                .filter((id: number | undefined | null): id is number => id != null);
+            if (resultIds.length > 0) {
+                await loadContactInfo(resultIds);
+            }
             // Clear selected items when data changes (new page or search) - but not during auto-refresh
             if (!isAutoRefresh) {
                 selectedItems.value = []
@@ -1055,7 +1095,21 @@ async function handleContactExtraction() {
         if (response.success) {
             console.log('Contact extraction started:', response.batchId);
 
-            // Load contact info for selected items
+            // Optimistically show pending status so user sees backend is working on these rows
+            resultIds.forEach(id => {
+                const existing = contactInfoMap.value.get(id) || {};
+                contactInfoMap.value.set(id, { ...existing, resultId: id, extractionStatus: 'pending' });
+            });
+
+            // Show notice that extraction runs in background
+            extractionNotice.message =
+                t('contactExtraction.extraction_started_notice', { count: resultIds.length }) ||
+                `Contact extraction started for ${resultIds.length} item(s). Processing in the background. Check the Extraction Status column for progress.`;
+            extractionNotice.type = 'info';
+            extractionNotice.timeout = 6000;
+            extractionNotice.show = true;
+
+            // Load contact info for selected items (may override with actual status from server)
             await loadContactInfo(resultIds);
         } else {
             console.error('Failed to start contact extraction:', response.message);
@@ -1094,6 +1148,14 @@ async function loadContactInfo(resultIds: number[]) {
  */
 function getContactExtractionStatus(resultId: number): string | undefined {
     return contactInfoMap.value.get(resultId)?.extractionStatus;
+}
+
+/**
+ * Whether extraction is in progress (pending or analyzing) for this item - show loading icon in column
+ */
+function isExtractionInProgress(resultId: number): boolean {
+    const status = contactInfoMap.value.get(resultId)?.extractionStatus;
+    return status === 'pending' || status === 'analyzing';
 }
 
 /**

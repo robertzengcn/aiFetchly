@@ -806,6 +806,7 @@ export default {
     no_valid_items_hint:
       "選択されたアイテムに有効なIDがありません。別のアイテムを選択してください。",
     extraction_started: "連絡先抽出が開始されました",
+    extraction_started_notice: "{count} 件の連絡先抽出を開始しました。バックグラウンドで処理中です。抽出状態列で進捗を確認してください。",
     extraction_failed: "抽出の開始に失敗しました",
   },
   emailscrape: {

@@ -11,6 +11,7 @@ import { EmailExtractionTypes } from "@/config/emailextraction";
 import { WebsiteAnalysisService } from "@/service/WebsiteAnalysisService";
 import { RateLimiter, RateLimitConfig } from "./RateLimiter";
 import { AiChatApi, BatchKeywordGenerationRequestItem } from "@/api/aiChatApi";
+import { extractContactFromUrls } from "@/main-process/communication/contactExtraction-ipc";
 
 /**
  * Rate limiting configuration for tool execution
@@ -25,6 +26,11 @@ const RATE_LIMIT_CONFIG = {
     maxPerMinute: 20,
     maxConcurrent: 5,
     cooldownMs: 500,
+  },
+  contactExtraction: {
+    maxPerMinute: 10,
+    maxConcurrent: 2,
+    cooldownMs: 1000,
   },
   yellowPages: {
     maxPerMinute: 15,
@@ -59,6 +65,8 @@ class RateLimiterManager {
       toolName === "read_url_content"
     ) {
       return RATE_LIMIT_CONFIG.websiteAnalysis;
+    } else if (toolName === "extract_contact_info") {
+      return RATE_LIMIT_CONFIG.contactExtraction;
     } else if (toolName.includes("email") || toolName.includes("extract")) {
       return RATE_LIMIT_CONFIG.emailExtraction;
     } else if (
@@ -134,6 +142,9 @@ export class ToolExecutor {
       case "extract_emails_from_urls":
         return await this.executeEmailExtraction(toolParams);
 
+      case "analyze_website":
+        return await this.executeWebsiteSingleAnalysis(toolParams);
+
       case "analyze_website_batch":
         return await this.executeWebsiteBatchAnalysis(toolParams);
 
@@ -145,6 +156,9 @@ export class ToolExecutor {
 
       case "generate_keywords":
         return await this.executeGenerateKeywords(toolParams);
+
+      case "extract_contact_info":
+        return await this.executeContactExtraction(toolParams);
 
       default:
         return {
@@ -216,6 +230,10 @@ export class ToolExecutor {
     const query = typeof toolParams.query === "string" ? toolParams.query : "";
     const numResults =
       typeof toolParams.num_results === "number" ? toolParams.num_results : 10;
+    const showBrowser =
+      typeof toolParams.show_browser === "boolean"
+        ? toolParams.show_browser
+        : false;
 
     if (!query) {
       throw new Error("parameter of Query is required");
@@ -234,14 +252,14 @@ export class ToolExecutor {
     // Calculate num_pages based on num_results (assuming ~10 results per page)
     const numPages = Math.ceil(numResults / 10);
 
-    // Execute search
+    // Execute search (notShowBrowser: true when show_browser is false, i.e. headless by default)
     const taskId = await searchModule.searchByKeywordAndEngine(
       [query],
       engineName,
       {
         num_pages: numPages,
         concurrency: 1,
-        notShowBrowser: false,
+        notShowBrowser: !showBrowser,
       }
     );
 
@@ -505,13 +523,14 @@ export class ToolExecutor {
       );
     }
 
-    // Extract optional configuration parameters
+    // Extract optional configuration parameters.
+    // No time limit by default for extract_emails_from_urls - extraction can take a long time.
     const concurrency =
       typeof toolParams.concurrency === "number" ? toolParams.concurrency : 1;
     const processTimeout =
       typeof toolParams.process_timeout === "number"
         ? toolParams.process_timeout
-        : 30;
+        : 120; // 120 minutes default (no effective limit for tool use)
     const maxPageNumber =
       typeof toolParams.max_page_number === "number"
         ? toolParams.max_page_number
@@ -530,13 +549,12 @@ export class ToolExecutor {
       notShowBrowser: notShowBrowser,
     });
 
-    // Poll task status until complete or error (max 10 minutes)
+    // Poll task status until complete or error. No time limit - extraction can take a long time.
     let taskStatus: TaskStatus | null = null;
-    const maxWaitTime = 600000; // 10 minutes
     const pollInterval = 2000; // 2 seconds
-    const startTime = Date.now();
+    let isPolling = true;
 
-    while (Date.now() - startTime < maxWaitTime) {
+    while (isPolling) {
       const taskDetail = await emailSearchTaskModule.getTaskDetail(taskId);
       if (!taskDetail) {
         throw new Error(`Email extraction task ${taskId} not found`);
@@ -547,9 +565,10 @@ export class ToolExecutor {
         taskStatus === TaskStatus.Complete ||
         taskStatus === TaskStatus.Error
       ) {
-        break;
+        isPolling = false;
+      } else {
+        await new Promise((resolve) => setTimeout(resolve, pollInterval));
       }
-      await new Promise((resolve) => setTimeout(resolve, pollInterval));
     }
 
     // Check if task completed successfully
@@ -624,6 +643,75 @@ export class ToolExecutor {
         recordTime: r.recordTime,
       })),
       urlEmailMap: urlEmailMap,
+    };
+  }
+
+  /**
+   * Execute single-website analysis for business relevance (no database save).
+   */
+  private static async executeWebsiteSingleAnalysis(
+    toolParams: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    const url = typeof toolParams.url === "string" ? toolParams.url.trim() : "";
+    const clientBusiness =
+      typeof toolParams.client_business === "string"
+        ? toolParams.client_business.trim()
+        : "";
+    const temperature =
+      typeof toolParams.temperature === "number"
+        ? Math.max(0, Math.min(1, toolParams.temperature))
+        : 0.7;
+
+    if (!url) {
+      throw new Error(
+        "url parameter is required and must be a non-empty string"
+      );
+    }
+    try {
+      new URL(url);
+    } catch {
+      return {
+        success: false,
+        error: `Invalid URL: ${url}`,
+      };
+    }
+    if (!clientBusiness) {
+      throw new Error(
+        "client_business parameter is required and must be a non-empty string"
+      );
+    }
+
+    const results = await WebsiteAnalysisService.analyzeWebsitesDirectly(
+      [url],
+      clientBusiness,
+      temperature
+    );
+    const r = results[0];
+    if (!r) {
+      return {
+        success: false,
+        error: "No analysis result returned",
+      };
+    }
+
+    const summary = r.success
+      ? `Website Analysis (Business Relevance):\n\nURL: ${r.url}\nIndustry: ${
+          r.industry ?? "N/A"
+        }\nMatch Score: ${r.match_score?.toFixed(2) ?? "N/A"}\nReasoning: ${
+          r.reasoning ?? "N/A"
+        }`
+      : `Website Analysis Failed:\n\nURL: ${r.url}\nError: ${
+          r.error ?? "Unknown error"
+        }`;
+
+    return {
+      success: r.success,
+      url: r.url,
+      industry: r.industry,
+      match_score: r.match_score,
+      reasoning: r.reasoning,
+      error: r.error,
+      summary,
     };
   }
 
@@ -952,5 +1040,80 @@ export class ToolExecutor {
         error: errorMessage,
       };
     }
+  }
+
+  /**
+   * Execute extract_contact_info: extract contact info (emails, phones, address, social links) from URLs.
+   */
+  private static async executeContactExtraction(
+    toolParams: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    const urls = Array.isArray(toolParams.urls)
+      ? toolParams.urls.filter(
+          (url): url is string =>
+            typeof url === "string" && url.trim().length > 0
+        )
+      : [];
+
+    if (urls.length === 0) {
+      throw new Error(
+        "urls parameter is required and must be a non-empty array of strings"
+      );
+    }
+
+    const results = await extractContactFromUrls(urls);
+    const successful = results.filter((r) => r.success);
+    const failed = results.filter((r) => !r.success);
+
+    const formattedSummary =
+      results.length > 0
+        ? `Contact Extraction Results:\n\n` +
+          `Total URLs: ${results.length}\n` +
+          `Successful: ${successful.length}\n` +
+          `Failed: ${failed.length}\n\n` +
+          (successful.length > 0
+            ? `Extracted:\n${successful
+                .map(
+                  (r, idx) =>
+                    `${idx + 1}. ${r.url}\n` +
+                    (r.data?.emails?.length
+                      ? `   Emails: ${r.data.emails.join(", ")}\n`
+                      : "") +
+                    (r.data?.phones?.length
+                      ? `   Phones: ${r.data.phones.join(", ")}\n`
+                      : "") +
+                    (r.data?.address ? `   Address: ${r.data.address}\n` : "") +
+                    (r.data?.socialLinks?.length
+                      ? `   Social: ${r.data.socialLinks.join(", ")}`
+                      : "")
+                )
+                .join("\n")}\n\n`
+            : "") +
+          (failed.length > 0
+            ? `Failed:\n${failed
+                .map(
+                  (r, idx) =>
+                    `${idx + 1}. ${r.url}: ${r.error || "Unknown error"}`
+                )
+                .join("\n")}`
+            : "")
+        : "No URLs to process.";
+
+    return {
+      success: true,
+      totalUrls: results.length,
+      successful: successful.length,
+      failed: failed.length,
+      summary: formattedSummary,
+      results: results.map((r) => ({
+        url: r.url,
+        success: r.success,
+        emails: r.data?.emails,
+        phones: r.data?.phones,
+        address: r.data?.address,
+        socialLinks: r.data?.socialLinks,
+        error: r.error,
+      })),
+    };
   }
 }
