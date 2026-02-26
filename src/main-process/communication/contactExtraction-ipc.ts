@@ -25,13 +25,37 @@ interface ContactExtractionRequest {
     resultIds: number[];
 }
 
-// Type for worker messages
+// Type for worker messages (from worker to main)
 interface WorkerMessage {
-    type: 'worker-ready' | 'extraction-progress' | 'worker-log';
+    type: 'worker-ready' | 'extraction-progress' | 'worker-log' | 'extract-contact-url-result';
     level?: 'info' | 'error' | 'warn' | 'debug';
     args?: unknown[];
     [key: string]: unknown;
 }
+
+/** Result item for URL-only contact extraction (AI tool) */
+export interface UrlContactExtractionResult {
+    url: string;
+    success: boolean;
+    data?: {
+        emails?: string[];
+        phones?: string[];
+        address?: string | null;
+        socialLinks?: string[] | null;
+    };
+    error?: string;
+}
+
+/** Pending URL extraction requests: requestId -> resolver and collected results */
+const pendingUrlExtractions = new Map<string, {
+    resolve: (results: UrlContactExtractionResult[]) => void;
+    reject: (err: Error) => void;
+    results: UrlContactExtractionResult[];
+    total: number;
+    timeoutId: ReturnType<typeof setTimeout>;
+}>();
+
+const URL_EXTRACTION_TIMEOUT_MS = 300000; // 5 minutes total for all URLs
 
 // Worker process reference
 let contactExtractionWorker: ChildProcess | null = null;
@@ -106,6 +130,8 @@ function spawnWorker(): ChildProcess {
         } else if (message.type === 'extraction-progress') {
             // Handle progress update from worker
             await handleWorkerProgress(message);
+        } else if (message.type === 'extract-contact-url-result') {
+            handleUrlExtractionResult(message);
         }
     });
 
@@ -132,16 +158,84 @@ function ensureWorkerStarted(): void {
 }
 
 /**
+ * Handle a single URL extraction result from worker (AI tool flow)
+ */
+function handleUrlExtractionResult(message: WorkerMessage): void {
+    if (message.type !== 'extract-contact-url-result') return;
+    const requestId = message.requestId as string;
+    const url = message.url as string;
+    const success = message.success as boolean;
+    const data = message.data as UrlContactExtractionResult['data'] | undefined;
+    const error = message.error as string | undefined;
+
+    const pending = pendingUrlExtractions.get(requestId);
+    if (!pending) return;
+
+    pending.results.push({ url, success, data, error });
+    if (pending.results.length >= pending.total) {
+        clearTimeout(pending.timeoutId);
+        pendingUrlExtractions.delete(requestId);
+        pending.resolve(pending.results);
+    }
+}
+
+/**
+ * Extract contact information from URLs via the worker (no DB write).
+ * Used by the AI tool extract_contact_info. Returns when all URLs are processed or timeout.
+ */
+export async function extractContactFromUrls(urls: string[]): Promise<UrlContactExtractionResult[]> {
+    const validUrls = urls.filter((u): u is string => typeof u === 'string' && u.trim().length > 0);
+    if (validUrls.length === 0) {
+        return [];
+    }
+
+    const requestId = uuidv4();
+    return new Promise<UrlContactExtractionResult[]>((resolve, reject) => {
+        const timeoutId = setTimeout(() => {
+            if (pendingUrlExtractions.has(requestId)) {
+                pendingUrlExtractions.delete(requestId);
+                reject(new Error(`Contact extraction timed out after ${URL_EXTRACTION_TIMEOUT_MS / 60000} minutes`));
+            }
+        }, URL_EXTRACTION_TIMEOUT_MS);
+
+        pendingUrlExtractions.set(requestId, {
+            resolve,
+            reject,
+            results: [],
+            total: validUrls.length,
+            timeoutId
+        });
+
+        ensureWorkerStarted();
+        if (contactExtractionWorker?.send) {
+            contactExtractionWorker.send({
+                type: 'extract-contact-from-urls',
+                requestId,
+                urls: validUrls
+            });
+        } else {
+            clearTimeout(timeoutId);
+            pendingUrlExtractions.delete(requestId);
+            reject(new Error('Contact extraction worker is not available'));
+        }
+    });
+}
+
+/**
  * Handle worker progress updates and save to database
  */
-async function handleWorkerProgress(progress: any): Promise<void> {
-    try {
-        const { resultId, status, data, error } = progress;
+async function handleWorkerProgress(progress: WorkerMessage): Promise<void> {
+    if (progress.type !== 'extraction-progress') return;
+    const resultId = progress.resultId as number;
+    const status = progress.status as 'pending' | 'analyzing' | 'completed' | 'failed';
+    const data = progress.data as { emails?: string[]; phones?: string[]; address?: string; socialLinks?: string[] } | undefined;
+    const error = progress.error as string | undefined;
 
+    try {
         // Use ContactInfoModule to save/update data in database
         const module = new ContactInfoModule();
 
-        // Update status
+        // Update status (and extraction_error when failed)
         await module.updateExtractionStatus(resultId, status, error);
 
         // If extraction completed and we have data, save it

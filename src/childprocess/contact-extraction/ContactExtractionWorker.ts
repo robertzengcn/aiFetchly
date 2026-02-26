@@ -11,11 +11,12 @@
 
 import { ExtractionJob, ExtractionProgress } from '@/entityTypes/contactExtractionTypes';
 import { extractionQueue } from './ExtractionQueue';
+import { discoverAndExtractContactInfo } from './ContactDiscovery';
 
 /**
  * Worker message types
  */
-interface WorkerMessage {
+interface ExtractContactMessage {
     type: 'extract-contact';
     batchId: string;
     resultIds: number[];
@@ -27,6 +28,14 @@ interface WorkerMessage {
     priority?: number;
 }
 
+interface ExtractContactFromUrlsMessage {
+    type: 'extract-contact-from-urls';
+    requestId: string;
+    urls: string[];
+}
+
+type WorkerMessage = ExtractContactMessage | ExtractContactFromUrlsMessage;
+
 /**
  * Initialize the worker process
  */
@@ -37,6 +46,8 @@ function initializeWorker(): void {
     process.on('message', (message: WorkerMessage) => {
         if (message.type === 'extract-contact') {
             handleExtractionRequest(message);
+        } else if (message.type === 'extract-contact-from-urls') {
+            handleExtractContactFromUrls(message);
         }
     });
 
@@ -58,7 +69,7 @@ function initializeWorker(): void {
 /**
  * Handle extraction request from main process
  */
-function handleExtractionRequest(message: WorkerMessage): void {
+function handleExtractionRequest(message: ExtractContactMessage): void {
     const { batchId, resultIds, results, priority = 0 } = message;
 
     console.log(`ContactExtractionWorker: Received extraction request for batch ${batchId}`);
@@ -87,6 +98,67 @@ function handleExtractionRequest(message: WorkerMessage): void {
     extractionQueue.addBatch(jobs, batchId);
 
     console.log(`ContactExtractionWorker: Jobs added to queue (queue length: ${extractionQueue.getQueueLength()})`);
+}
+
+/**
+ * Result sent to main process for URL-only extraction (no DB)
+ */
+interface UrlExtractionResultMessage {
+    type: 'extract-contact-url-result';
+    requestId: string;
+    url: string;
+    success: boolean;
+    data?: {
+        emails?: string[];
+        phones?: string[];
+        address?: string | null;
+        socialLinks?: string[] | null;
+    };
+    error?: string;
+}
+
+/**
+ * Handle extract-contact-from-urls: extract contact info from URLs and send results back (no DB).
+ * Used by the AI tool extract_contact_info.
+ */
+async function handleExtractContactFromUrls(message: ExtractContactFromUrlsMessage): Promise<void> {
+    const { requestId, urls } = message;
+    const validUrls = urls.filter((u): u is string => typeof u === 'string' && u.trim().length > 0);
+
+    for (const url of validUrls) {
+        try {
+            const result = await discoverAndExtractContactInfo(url);
+            const payload: UrlExtractionResultMessage = {
+                type: 'extract-contact-url-result',
+                requestId,
+                url,
+                success: result.success,
+                ...(result.data && {
+                    data: {
+                        emails: result.data.emails,
+                        phones: result.data.phones,
+                        address: result.data.address ?? null,
+                        socialLinks: result.data.socialLinks ?? null
+                    }
+                }),
+                ...(result.error && { error: result.error })
+            };
+            if (process.send) {
+                process.send(payload);
+            }
+        } catch (err) {
+            const errorMessage = err instanceof Error ? err.message : String(err);
+            if (process.send) {
+                process.send({
+                    type: 'extract-contact-url-result',
+                    requestId,
+                    url,
+                    success: false,
+                    error: errorMessage
+                } as UrlExtractionResultMessage);
+            }
+        }
+    }
 }
 
 /**

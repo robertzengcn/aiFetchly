@@ -794,6 +794,7 @@ export default {
     select_items_hint: "请至少选择一项以提取联系信息",
     no_valid_items_hint: "所选项目没有有效的ID。请选择其他项目。",
     extraction_started: "联系方式提取已开始",
+    extraction_started_notice: "已开始对 {count} 条记录提取联系方式，正在后台处理。请在「提取状态」列查看进度。",
     extraction_failed: "启动提取失败",
   },
   emailscrape: {

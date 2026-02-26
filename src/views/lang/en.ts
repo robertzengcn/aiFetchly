@@ -823,6 +823,8 @@ export default {
     no_valid_items_hint:
       "Selected items do not have valid IDs. Please select different items.",
     extraction_started: "Contact extraction started",
+    extraction_started_notice:
+      "Contact extraction started for {count} item(s). Processing in the background. Check the Extraction Status column for progress.",
     extraction_failed: "Failed to start extraction",
   },
   emailscrape: {

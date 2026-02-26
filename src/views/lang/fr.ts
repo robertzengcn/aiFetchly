@@ -816,6 +816,8 @@ export default {
     no_valid_items_hint:
       "Les éléments sélectionnés n'ont pas d'ID valides. Veuillez sélectionner d'autres éléments.",
     extraction_started: "Extraction de contact commencée",
+    extraction_started_notice:
+      "Extraction de contact démarrée pour {count} élément(s). Traitement en arrière-plan. Consultez la colonne État d'extraction pour la progression.",
     extraction_failed: "Échec du démarrage de l'extraction",
   },
   emailscrape: {
