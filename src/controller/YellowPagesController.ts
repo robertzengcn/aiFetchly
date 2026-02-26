@@ -679,7 +679,8 @@ export class YellowPagesController {
             account_id: task.account_id,
             proxy_config: task.proxy_config ? JSON.parse(task.proxy_config) : undefined,
             delay_between_requests: task.delay_between_requests,
-            headless: task.headless !== undefined ? task.headless : true
+            headless: task.headless !== undefined ? task.headless : true,
+            aiSupportEnabled: task.ai_support_enabled ?? false
         };
     }
 
@@ -702,6 +703,7 @@ export class YellowPagesController {
         if (updates.account_id !== undefined) entityUpdates.account_id = updates.account_id;
         if (updates.proxy_config !== undefined) entityUpdates.proxy_config = updates.proxy_config ? JSON.stringify(updates.proxy_config) : null;
         if (updates.headless !== undefined) entityUpdates.headless = updates.headless;
+        if (updates.aiSupportEnabled !== undefined) entityUpdates.ai_support_enabled = updates.aiSupportEnabled;
         if (updates.scheduled_at !== undefined) entityUpdates.scheduled_at = updates.scheduled_at;
         if (updates.completed_at !== undefined) entityUpdates.completed_at = updates.completed_at;
         if (updates.error_log !== undefined) entityUpdates.error_log = updates.error_log;
