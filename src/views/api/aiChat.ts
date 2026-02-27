@@ -13,6 +13,7 @@ import {
 import {
   AI_CHAT_MESSAGE,
   AI_CHAT_STREAM,
+  AI_CHAT_STREAM_STOP,
   AI_CHAT_STREAM_CHUNK,
   AI_CHAT_STREAM_COMPLETE,
   AI_CHAT_HISTORY,
@@ -23,7 +24,7 @@ import {
 /**
  * AI Chat API response types
  */
-export interface AIChatResponse<T = any> {
+export interface AIChatResponse<T = unknown> {
   success: boolean;
   data?: T;
   message?: string;
@@ -117,6 +118,8 @@ export async function streamChatMessage(
   ragLimit?: number
 ): Promise<void> {
   return new Promise((resolve, reject) => {
+    // Accumulate full content for potential future use
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     let fullContent = "";
 
     // Set up chunk listener
@@ -175,6 +178,14 @@ export async function streamChatMessage(
     };
     windowSend(AI_CHAT_STREAM, requestData);
   });
+}
+
+/**
+ * Request the main process to abort the active AI chat stream.
+ * Call when the user clicks stop; the stream completion handler will run with a cancelled payload.
+ */
+export function stopStreamingChat(): void {
+  windowSend(AI_CHAT_STREAM_STOP, {});
 }
 
 /**
