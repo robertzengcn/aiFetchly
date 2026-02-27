@@ -242,11 +242,13 @@ export default {
     type_message_placeholder: "メッセージを入力... (Shift+Enterで改行)",
     start_conversation: "AIアシスタントとの会話を開始",
     clear_chat_confirm: "チャット履歴を削除してもよろしいですか？",
+    stop_generating: "生成を停止",
     rag_context_enabled: "RAGコンテキスト有効",
     rag_context_disabled: "RAGコンテキスト無効",
     just_now: "たった今",
     minutes_ago: "{count}分前",
     hours_ago: "{count}時間前",
+    resend_message: "メッセージを再送",
   },
   notifications: {
     cloudflare_protection_detected: "Cloudflare保護を検出",
@@ -806,7 +808,8 @@ export default {
     no_valid_items_hint:
       "選択されたアイテムに有効なIDがありません。別のアイテムを選択してください。",
     extraction_started: "連絡先抽出が開始されました",
-    extraction_started_notice: "{count} 件の連絡先抽出を開始しました。バックグラウンドで処理中です。抽出状態列で進捗を確認してください。",
+    extraction_started_notice:
+      "{count} 件の連絡先抽出を開始しました。バックグラウンドで処理中です。抽出状態列で進捗を確認してください。",
     extraction_failed: "抽出の開始に失敗しました",
   },
   emailscrape: {

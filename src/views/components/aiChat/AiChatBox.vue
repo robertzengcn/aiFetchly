@@ -301,7 +301,7 @@ class="message-bubble" :class="{
               </div>
               <div
                 class="message-header"
-                v-else-if="message.role === 'user' && (!message.messageType || message.messageType === MESSAGE_TYPE.MESSAGE) && message.content && message.content.trim()"
+                v-else-if="canResendMessage(message)"
               >
                 <v-btn
                   icon
@@ -309,10 +309,11 @@ class="message-bubble" :class="{
                   variant="text"
                   class="copy-button"
                   :disabled="isLoading"
+                  :loading="isResendingMessage && resendingMessageId === message.id"
                   @click="handleResendMessage(message)"
-                  title="Resend message"
+                  :title="t('knowledge.resend_message') || 'Resend message'"
                 >
-                  <v-icon size="small">mdi-refresh</v-icon>
+                  <v-icon v-if="!isResendingMessage || resendingMessageId !== message.id" size="small">mdi-refresh</v-icon>
                 </v-btn>
               </div>
               <!-- eslint-disable-next-line vue/no-v-html -->
@@ -531,11 +532,12 @@ class="message-bubble" :class="{
             icon
             size="small"
             color="primary"
-            :disabled="!inputMessage.trim() || isLoading"
-            :loading="isLoading"
-            @click="handleSendMessage"
+            :disabled="!inputMessage.trim() && !isLoading"
+            :loading="false"
+            @click="isLoading ? handleStopStream() : handleSendMessage()"
+            :title="isLoading ? (t('knowledge.stop_generating') || 'Stop generating') : ''"
           >
-            <v-icon>mdi-send</v-icon>
+            <v-icon>{{ isLoading ? 'mdi-stop' : 'mdi-send' }}</v-icon>
           </v-btn>
         </template>
       </v-textarea>
@@ -614,7 +616,7 @@ class="message-bubble" :class="{
 <script setup lang="ts">
 import { ref, computed, onMounted, nextTick, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { streamChatMessage, getChatHistory, clearChatHistory, getConversations, ConversationMetadata } from '@/views/api/aiChat';
+import { streamChatMessage, stopStreamingChat, getChatHistory, clearChatHistory, getConversations, ConversationMetadata } from '@/views/api/aiChat';
 import { ChatMessage, ChatStreamChunk, Plan, PlanStep, PlanStepStatus } from '@/entityTypes/commonType';
 import { MessageType } from '@/entityTypes/commonType';
 import MCPToolManager from './MCPToolManager.vue';
@@ -681,6 +683,10 @@ const copiedMessageId = ref<string | null>(null);
 const showMCPToolManager = ref(false);
 const activeStreamConversationId = ref<string | undefined>(undefined);
 
+// Resend message state
+const isResendingMessage = ref(false);
+const resendingMessageId = ref<string | null>(null);
+
 // Plan execute agent state
 const currentPlan = ref<Plan | null>(null);
 const isPlanExecuting = ref(false);
@@ -740,6 +746,18 @@ const activeStepIndex = computed(() => {
   if (!currentPlan.value) return -1;
   return currentPlan.value.steps.findIndex(s => s.status === PlanStepStatus.IN_PROGRESS);
 });
+
+/**
+ * Check if a user message can be resent
+ */
+function canResendMessage(message: ChatMessage): boolean {
+  return (
+    message.role === 'user' &&
+    (!message.messageType || message.messageType === MESSAGE_TYPE.MESSAGE) &&
+    message.content &&
+    message.content.trim()
+  );
+}
 
 /**
  * Validate if a stream chunk belongs to the active conversation
@@ -1305,11 +1323,29 @@ async function handleSendMessage() {
 }
 
 /**
+ * Stop the active AI chat stream (user clicked stop button)
+ */
+function handleStopStream(): void {
+  stopStreamingChat();
+}
+
+/**
  * Resend an existing user message
  */
 async function handleResendMessage(message: ChatMessage): Promise<void> {
   if (!message.content || !message.content.trim()) return;
-  await sendMessage(message.content);
+
+  // Set loading state for visual feedback
+  isResendingMessage.value = true;
+  resendingMessageId.value = message.id;
+
+  try {
+    await sendMessage(message.content);
+  } finally {
+    // Clear loading state regardless of success or error
+    isResendingMessage.value = false;
+    resendingMessageId.value = null;
+  }
 }
 
 /**
