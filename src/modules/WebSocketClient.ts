@@ -290,7 +290,9 @@ export class WebSocketClient {
    * Handle incoming WebSocket messages
    */
   private handleMessage(message: WSMessage): void {
-    log.debug("WebSocket message received:", message.type);
+    if (message.type !== "pong") {
+      log.debug("WebSocket message received:", message.type);
+    }
 
     switch (message.type) {
       case "connected":

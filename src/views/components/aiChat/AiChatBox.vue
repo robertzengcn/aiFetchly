@@ -299,6 +299,22 @@ class="message-bubble" :class="{
                   <v-icon size="small">{{ copiedMessageId === message.id ? 'mdi-check' : 'mdi-content-copy' }}</v-icon>
                 </v-btn>
               </div>
+              <div
+                class="message-header"
+                v-else-if="message.role === 'user' && (!message.messageType || message.messageType === MESSAGE_TYPE.MESSAGE) && message.content && message.content.trim()"
+              >
+                <v-btn
+                  icon
+                  size="x-small"
+                  variant="text"
+                  class="copy-button"
+                  :disabled="isLoading"
+                  @click="handleResendMessage(message)"
+                  title="Resend message"
+                >
+                  <v-icon size="small">mdi-refresh</v-icon>
+                </v-btn>
+              </div>
               <!-- eslint-disable-next-line vue/no-v-html -->
               <div class="message-text" v-html="formatMessage(message.content)"></div>
               <div class="message-timestamp" :title="formatFullTimestamp(message.timestamp)">
@@ -947,13 +963,11 @@ async function handleCopyMessage(content: string, messageId: string) {
 }
 
 /**
- * Send a message to the AI
+ * Core send logic shared by new messages and resend
  */
-async function handleSendMessage() {
-  if (!inputMessage.value.trim() || isLoading.value) return;
+async function sendMessage(userMessageContent: string): Promise<void> {
+  if (!userMessageContent.trim() || isLoading.value) return;
 
-  const userMessageContent = inputMessage.value.trim();
-  inputMessage.value = '';
   isLoading.value = true;
   isTyping.value = true;
   streamError.value = null;
@@ -1278,6 +1292,24 @@ async function handleSendMessage() {
       activeStreamConversationId.value = undefined;
     }
   }
+}
+
+/**
+ * Send a message to the AI from the input box
+ */
+async function handleSendMessage() {
+  const trimmed = inputMessage.value.trim();
+  if (!trimmed) return;
+  inputMessage.value = '';
+  await sendMessage(trimmed);
+}
+
+/**
+ * Resend an existing user message
+ */
+async function handleResendMessage(message: ChatMessage): Promise<void> {
+  if (!message.content || !message.content.trim()) return;
+  await sendMessage(message.content);
 }
 
 /**
@@ -1752,6 +1784,7 @@ onMounted(() => {
 }
 
 .message-wrapper.assistant:hover .message-header,
+.message-wrapper.user:hover .message-header,
 .message-header.copied {
   opacity: 1;
 }
