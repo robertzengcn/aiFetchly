@@ -450,8 +450,8 @@ export class AiChatApi {
    *
    * @param request - Chat request containing message and optional parameters
    * @param onEvent - Callback function to handle each stream event
-   * @returns Promise resolving when stream completes
-   * @throws {Error} When network request fails
+   * @param options - Optional abort signal to cancel the stream
+   * @returns Promise resolving when stream completes (rejects with AbortError when aborted)
    *
    * @example
    * ```typescript
@@ -462,13 +462,15 @@ export class AiChatApi {
    *   },
    *   (event) => {
    *     console.log('Event:', event.event, 'Data:', event.data);
-   *   }
+   *   },
+   *   { signal: abortController.signal }
    * );
    * ```
    */
   async streamMessage(
     request: ChatRequest,
-    onEvent: (event: StreamEvent) => void
+    onEvent: (event: StreamEvent) => void,
+    options?: { signal?: AbortSignal }
   ): Promise<void> {
     this.ensureAIEnabled();
     const data: ChatApiRequestData = {
@@ -483,9 +485,15 @@ export class AiChatApi {
       data.model = request.model;
     }
 
+    const fetchOptions: RequestInit = {};
+    if (options?.signal) {
+      fetchOptions.signal = options.signal;
+    }
+
     const response = await this._httpClient.postStream(
       "/api/ai/ask/stream",
-      data
+      data,
+      fetchOptions
     );
 
     if (!response.ok || response.status !== 200) {
@@ -497,7 +505,7 @@ export class AiChatApi {
       throw new Error("Response body is null");
     }
 
-    await this._consumeStreamResponse(response, onEvent);
+    await this._consumeStreamResponse(response, onEvent, options?.signal);
   }
 
   /**
@@ -542,12 +550,17 @@ export class AiChatApi {
   /**
    * Consume an SSE stream response and invoke onEvent for each parsed event.
    * Shared by streamMessage and streamEmailTemplateGeneration.
+   * When signal is aborted, reader.read() rejects with AbortError; we exit cleanly and rethrow.
    */
   private async _consumeStreamResponse(
     response: Response,
-    onEvent: (event: StreamEvent) => void
+    onEvent: (event: StreamEvent) => void,
+    signal?: AbortSignal
   ): Promise<void> {
-    const reader = response.body!.getReader();
+    if (!response.body) {
+      throw new Error("Response body is null");
+    }
+    const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
     let currentEvent: Partial<StreamEvent> = {};
@@ -555,7 +568,22 @@ export class AiChatApi {
     try {
       let streamActive = true;
       while (streamActive) {
-        const { done, value } = await reader.read();
+        let result: ReadableStreamReadResult<Uint8Array>;
+        try {
+          result = await reader.read();
+        } catch (readError: unknown) {
+          if (
+            readError instanceof Error &&
+            (readError.name === "AbortError" ||
+              (readError instanceof DOMException &&
+                readError.name === "AbortError"))
+          ) {
+            streamActive = false;
+            throw readError;
+          }
+          throw readError;
+        }
+        const { done, value } = result;
         if (done) {
           streamActive = false;
           continue;
@@ -778,13 +806,16 @@ export class AiChatApi {
    * @param toolResults - Array of tool execution results
    * @param onEvent - Callback to receive parsed SSE events
    * @param clientTools - Optional client tool definitions to include
+   * @param threadId - Optional thread ID for plan execution
+   * @param options - Optional abort signal to cancel the stream
    */
   async streamContinueWithToolResults(
     conversationId: string,
     toolResults: ToolExecutionResult[],
     onEvent: (event: StreamEvent) => void,
     clientTools?: ToolFunction[],
-    threadId?: string
+    threadId?: string,
+    options?: { signal?: AbortSignal }
   ): Promise<void> {
     this.ensureAIEnabled();
     const data: ContinueRequestData = {
@@ -798,9 +829,15 @@ export class AiChatApi {
       data.thread_id = threadId;
     }
 
+    const fetchOptions: RequestInit = {};
+    if (options?.signal) {
+      fetchOptions.signal = options.signal;
+    }
+
     const response = await this._httpClient.postStream(
       "/api/ai/ask/continue",
-      data
+      data,
+      fetchOptions
     );
 
     if (!response.ok || response.status !== 200) {
@@ -819,7 +856,21 @@ export class AiChatApi {
     try {
       let streamActive = true;
       while (streamActive) {
-        const { done, value } = await reader.read();
+        let result: ReadableStreamReadResult<Uint8Array>;
+        try {
+          result = await reader.read();
+        } catch (readError: unknown) {
+          if (
+            readError instanceof Error &&
+            (readError.name === "AbortError" ||
+              (readError instanceof DOMException &&
+                readError.name === "AbortError"))
+          ) {
+            throw readError;
+          }
+          throw readError;
+        }
+        const { done, value } = result;
         if (done) {
           streamActive = false;
           continue;
