@@ -242,11 +242,13 @@ export default {
     type_message_placeholder: "Type a message... (Shift+Enter for new line)",
     start_conversation: "Start a conversation with AI Assistant",
     clear_chat_confirm: "Are you sure you want to clear the chat history?",
+    stop_generating: "Arrêter la génération",
     rag_context_enabled: "RAG context enabled",
     rag_context_disabled: "RAG context disabled",
     just_now: "Just now",
     minutes_ago: "{count}m ago",
     hours_ago: "{count}h ago",
+    resend_message: "Renvoyer le message",
   },
   notifications: {
     cloudflare_protection_detected: "Cloudflare Protection Detected",

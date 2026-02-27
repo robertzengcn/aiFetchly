@@ -246,11 +246,13 @@ export default {
     start_conversation: "Iniciar conversación con el Asistente de IA",
     clear_chat_confirm:
       "¿Está seguro de que desea borrar el historial de chat?",
+    stop_generating: "Detener generación",
     rag_context_enabled: "Contexto RAG habilitado",
     rag_context_disabled: "Contexto RAG deshabilitado",
     just_now: "Ahora mismo",
     minutes_ago: "Hace {count}m",
     hours_ago: "Hace {count}h",
+    resend_message: "Reenviar mensaje",
   },
   notifications: {
     cloudflare_protection_detected: "Protección de Cloudflare detectada",
