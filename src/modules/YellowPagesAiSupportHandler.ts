@@ -280,6 +280,8 @@ export class YellowPagesAiSupportHandler {
       return this.handleContactExtraction(request);
     } else if (requestType === "step_guidance") {
       return this.handleStepGuidance(request);
+    } else if (requestType === "observe_execute") {
+      return this.handleObserveExecute(request);
     } else {
       return {
         type: "AI_SUPPORT_RESPONSE",
@@ -288,6 +290,84 @@ export class YellowPagesAiSupportHandler {
         success: false,
         requestType,
         errorMessage: `Unknown AI support request type: ${String(requestType)}`,
+      };
+    }
+  }
+
+  /**
+   * Handle observe-execute request: call scrapeObserve and return actions or status.
+   */
+  private async handleObserveExecute(
+    request: AiSupportRequestMessage
+  ): Promise<AiSupportResponseMessage> {
+    const {
+      requestId,
+      taskId,
+      pageContent,
+      pageUrl,
+      screenshot,
+      goal,
+      sessionId,
+      previousActionResults,
+      iteration,
+      platformName,
+      selectorsAvailable,
+    } = request;
+
+    if (!goal || goal.trim() === "") {
+      return {
+        type: "AI_SUPPORT_RESPONSE",
+        taskId,
+        requestId,
+        success: false,
+        requestType: "observe_execute",
+        errorMessage: "goal is required for observe_execute",
+      };
+    }
+
+    this.logInfo(`Processing observe-execute request: ${requestId}`);
+
+    const result = await this.aiApi.scrapeObserve({
+      sessionId: sessionId ?? undefined,
+      pageContent,
+      pageUrl,
+      screenshot,
+      goal: goal.trim(),
+      platformName: platformName ?? "yellowpages",
+      selectorsAvailable: selectorsAvailable ?? {},
+      previousActionResults: previousActionResults ?? [],
+      iteration: iteration ?? 0,
+    });
+
+    if (result.status && result.data) {
+      this.logInfo(`Observe-execute successful: ${requestId}, status=${result.data.status}`);
+      return {
+        type: "AI_SUPPORT_RESPONSE",
+        taskId,
+        requestId,
+        success: true,
+        requestType: "observe_execute",
+        data: {
+          session_id: result.data.session_id,
+          status: result.data.status,
+          actions: result.data.actions,
+          explanation: result.data.explanation,
+          confidence: result.data.confidence,
+          should_retry: result.data.should_retry,
+          max_iterations_remaining: result.data.max_iterations_remaining,
+          model_used: result.data.model_used,
+          processing_time: result.data.processing_time,
+        },
+      };
+    } else {
+      this.logWarn(`Observe-execute returned no data: ${requestId} - ${result.msg}`);
+      return {
+        type: "AI_SUPPORT_RESPONSE",
+        taskId,
+        requestId,
+        success: false,
+        requestType: "observe_execute",
+        errorMessage: result.msg ?? "Observe-execute returned no data",
       };
     }
   }
