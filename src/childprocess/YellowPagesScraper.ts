@@ -89,7 +89,7 @@ interface TaskData {
 
 interface AiSupportResult {
   success: boolean;
-  requestType: "step_guidance" | "contact_extraction";
+  requestType: "step_guidance" | "contact_extraction" | "observe_execute";
   data?: {
     emails?: string[];
     phones?: string[];
@@ -100,6 +100,23 @@ interface AiSupportResult {
     suggestedActions?: string[];
     shouldSkip?: boolean;
     explanation?: string;
+    /** observe_execute response */
+    session_id?: string;
+    status?: "actions_needed" | "goal_achieved" | "give_up";
+    actions?: Array<{
+      action_id: string;
+      type: string;
+      selector?: string;
+      selector_type?: string;
+      value?: string;
+      key?: string;
+      timeout?: number;
+      description?: string;
+    }>;
+    should_retry?: boolean;
+    max_iterations_remaining?: number;
+    model_used?: string;
+    processing_time?: number;
   };
   errorMessage?: string;
 }
@@ -261,7 +278,8 @@ export class YellowPagesScraper {
       success: message.success as boolean,
       requestType: message.requestType as
         | "step_guidance"
-        | "contact_extraction",
+        | "contact_extraction"
+        | "observe_execute",
       data: message.data as AiSupportResult["data"],
       errorMessage: message.errorMessage as string | undefined,
     };
@@ -273,12 +291,23 @@ export class YellowPagesScraper {
    * Sends a message via parentPort and waits for the response.
    */
   private async requestAiSupport(params: {
-    requestType: "step_guidance" | "contact_extraction";
+    requestType: "step_guidance" | "contact_extraction" | "observe_execute";
     pageUrl: string;
     businessName?: string;
     stepContext?: string;
     errorInfo?: string;
     selectorsTried?: Record<string, string>;
+    goal?: string;
+    sessionId?: string | null;
+    previousActionResults?: Array<{
+      action_id: string;
+      success: boolean;
+      error?: string;
+      element_found?: boolean;
+      screenshot_after?: string;
+    }>;
+    iteration?: number;
+    selectorsAvailable?: Record<string, string>;
   }): Promise<AiSupportResult> {
     if (!this.aiSupportEnabled) {
       return {
@@ -332,6 +361,11 @@ export class YellowPagesScraper {
       errorInfo: params.errorInfo,
       platformName: this.platformInfo.name,
       selectorsTried: params.selectorsTried,
+      goal: params.goal,
+      sessionId: params.sessionId,
+      previousActionResults: params.previousActionResults,
+      iteration: params.iteration,
+      selectorsAvailable: params.selectorsAvailable,
     };
 
     return new Promise<AiSupportResult>((resolve) => {
@@ -357,6 +391,223 @@ export class YellowPagesScraper {
         `🤖 Sent AI_SUPPORT_REQUEST (${params.requestType}) id=${requestId}`
       );
     });
+  }
+
+  /**
+   * Execute a single Puppeteer action and return result (for observe-execute loop).
+   */
+  private async executeAction(action: {
+    action_id: string;
+    type: string;
+    selector?: string;
+    selector_type?: string;
+    value?: string;
+    key?: string;
+    timeout?: number;
+    description?: string;
+  }): Promise<{
+    action_id: string;
+    success: boolean;
+    error?: string;
+    element_found: boolean;
+    screenshot_after?: string;
+  }> {
+    const timeout = Math.min(60000, Math.max(100, action.timeout ?? 5000));
+    const result: {
+      action_id: string;
+      success: boolean;
+      error?: string;
+      element_found: boolean;
+      screenshot_after?: string;
+    } = {
+      action_id: action.action_id,
+      success: false,
+      element_found: false,
+    };
+
+    if (!this.page) {
+      result.error = "No page available";
+      return result;
+    }
+
+    try {
+      let element: ElementHandle<Element> | null = null;
+      if (action.selector) {
+        if (action.selector_type === "xpath") {
+          const handles = await (
+            this.page as Page & {
+              $x(expr: string): Promise<ElementHandle<Element>[]>;
+            }
+          ).$x(action.selector);
+          element = handles[0] ?? null;
+        } else if (action.selector_type === "text") {
+          const handles = await (
+            this.page as Page & {
+              $x(expr: string): Promise<ElementHandle<Element>[]>;
+            }
+          ).$x(`//*[contains(text(), ${JSON.stringify(action.selector)})]`);
+          element = handles[0] ?? null;
+        } else {
+          element = await this.page.$(action.selector);
+        }
+        result.element_found = element !== null;
+      }
+
+      switch (action.type) {
+        case "click":
+          if (!element) {
+            result.error = "Element not found for click";
+            break;
+          }
+          await element.click();
+          result.success = true;
+          break;
+        case "type":
+          if (!element) {
+            result.error = "Element not found for type";
+            break;
+          }
+          await element.type(action.value ?? "", { delay: 0 });
+          result.success = true;
+          break;
+        case "waitForSelector":
+          if (!action.selector) {
+            result.error = "Selector required for waitForSelector";
+            break;
+          }
+          if (action.selector_type === "xpath") {
+            const deadline = Date.now() + timeout;
+            while (Date.now() < deadline) {
+              const handles = await (
+                this.page as Page & {
+                  $x(expr: string): Promise<ElementHandle<Element>[]>;
+                }
+              ).$x(action.selector!);
+              if (handles.length > 0) {
+                result.element_found = true;
+                result.success = true;
+                break;
+              }
+              await new Promise((r) => setTimeout(r, 200));
+            }
+            if (!result.success) {
+              result.error = "Timeout waiting for xpath selector";
+            }
+          } else {
+            await this.page.waitForSelector(action.selector, { timeout });
+            result.success = true;
+            result.element_found = true;
+          }
+          break;
+        case "scroll":
+          if (element) {
+            await element.evaluate((el) => el.scrollIntoView());
+          } else {
+            await this.page.evaluate(() =>
+              window.scrollBy(0, window.innerHeight)
+            );
+          }
+          result.success = true;
+          break;
+        case "pressKey":
+          await this.page.keyboard.press(
+            (action.key ?? "Enter") as import("puppeteer").KeyInput
+          );
+          result.success = true;
+          break;
+        case "navigate": {
+          const url = action.value ?? this.platformInfo.base_url;
+          await this.page.goto(url, { waitUntil: "domcontentloaded", timeout });
+          result.success = true;
+          break;
+        }
+        default:
+          result.error = `Unknown action type: ${action.type}`;
+      }
+
+      if (result.success && this.page) {
+        try {
+          const buf = await this.page.screenshot({ encoding: "base64" });
+          result.screenshot_after = typeof buf === "string" ? buf : undefined;
+        } catch {
+          // ignore screenshot failure
+        }
+      }
+    } catch (err) {
+      result.error = err instanceof Error ? err.message : String(err);
+    }
+    return result;
+  }
+
+  /** Max iterations for observe-execute loop (align with server). */
+  private static readonly OBSERVE_EXECUTE_MAX_ITERATIONS = 3;
+
+  /**
+   * Run observe-execute loop: capture state -> observe -> execute actions -> repeat until goal_achieved/give_up/max iterations.
+   */
+  private async observeExecuteLoop(params: {
+    goal: string;
+    pageUrl: string;
+    selectorsAvailable?: Record<string, string>;
+  }): Promise<AiSupportResult> {
+    const { goal, pageUrl, selectorsAvailable = {} } = params;
+    let sessionId: string | null = null;
+    let previousActionResults: Array<{
+      action_id: string;
+      success: boolean;
+      error?: string;
+      element_found?: boolean;
+      screenshot_after?: string;
+    }> = [];
+
+    for (
+      let iteration = 0;
+      iteration < YellowPagesScraper.OBSERVE_EXECUTE_MAX_ITERATIONS;
+      iteration++
+    ) {
+      const result = await this.requestAiSupport({
+        requestType: "observe_execute",
+        pageUrl,
+        goal,
+        sessionId,
+        previousActionResults,
+        iteration,
+        selectorsAvailable,
+      });
+
+      if (!result.success || !result.data) {
+        return result;
+      }
+
+      const status = result.data.status;
+      sessionId = result.data.session_id ?? null;
+
+      if (status === "goal_achieved" || status === "give_up") {
+        return result;
+      }
+
+      if (status !== "actions_needed" || !result.data.actions?.length) {
+        return result;
+      }
+
+      previousActionResults = [];
+      for (const act of result.data.actions) {
+        const actionResult = await this.executeAction(act);
+        previousActionResults.push({
+          action_id: actionResult.action_id,
+          success: actionResult.success,
+          error: actionResult.error,
+          element_found: actionResult.element_found,
+          screenshot_after: actionResult.screenshot_after,
+        });
+      }
+    }
+
+    return {
+      success: false,
+      requestType: "observe_execute",
+      errorMessage: "Max observe-execute iterations reached",
+    };
   }
 
   /**

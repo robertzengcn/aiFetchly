@@ -255,6 +255,53 @@ export interface ScrapeAssistResponse {
   explanation: string;
 }
 
+/** Single executable action for observe-execute (snake_case for server) */
+export interface ExecutableAction {
+  action_id: string;
+  type: string;
+  selector?: string;
+  selector_type?: string;
+  value?: string;
+  key?: string;
+  timeout?: number;
+  description?: string;
+}
+
+/** Result of executing one action (snake_case for server) */
+export interface ActionResult {
+  action_id: string;
+  success: boolean;
+  error?: string;
+  element_found?: boolean;
+  screenshot_after?: string;
+}
+
+/** Observe request body (snake_case for server) */
+export interface ObserveRequest {
+  session_id?: string | null;
+  page_content: string;
+  page_url: string;
+  screenshot?: string;
+  goal: string;
+  platform_name?: string;
+  selectors_available?: Record<string, string>;
+  previous_action_results?: ActionResult[];
+  iteration?: number;
+}
+
+/** Observe response from server */
+export interface ObserveResponse {
+  session_id: string;
+  status: "actions_needed" | "goal_achieved" | "give_up";
+  actions: ExecutableAction[];
+  explanation: string;
+  confidence: number;
+  should_retry: boolean;
+  max_iterations_remaining: number;
+  model_used?: string;
+  processing_time?: number;
+}
+
 /**
  * Website analysis request interface
  */
@@ -1079,6 +1126,56 @@ export class AiChatApi {
     }
 
     return this._httpClient.postJson("/api/ai/scrape/assist", data);
+  }
+
+  /**
+   * Observe-and-plan: get executable actions or status (goal_achieved / give_up) for the observe-execute loop.
+   */
+  async scrapeObserve(params: {
+    sessionId?: string | null;
+    pageContent: string;
+    pageUrl: string;
+    screenshot?: string;
+    goal: string;
+    platformName?: string;
+    selectorsAvailable?: Record<string, string>;
+    previousActionResults?: ActionResult[];
+    iteration?: number;
+  }): Promise<CommonApiresp<ObserveResponse>> {
+    this.ensureAIEnabled();
+    this.validatePageSize(params.pageContent);
+    if (params.screenshot) {
+      this.validateScreenshot(params.screenshot);
+    }
+    const data: ObserveRequest = {
+      page_content: params.pageContent,
+      page_url: params.pageUrl,
+      goal: params.goal,
+      platform_name: params.platformName,
+      selectors_available: params.selectorsAvailable,
+      previous_action_results: params.previousActionResults,
+      iteration: params.iteration ?? 0,
+    };
+    if (params.sessionId != null && params.sessionId !== "") {
+      data.session_id = params.sessionId;
+    }
+    if (params.screenshot) {
+      data.screenshot = params.screenshot.startsWith("data:")
+        ? params.screenshot
+        : `data:image/png;base64,${params.screenshot}`;
+    }
+    return this._httpClient.postJson("/api/ai/scrape/observe", data);
+  }
+
+  /**
+   * Mark an observe-execute session complete (clear server-side session).
+   */
+  async scrapeComplete(sessionId: string, success = true): Promise<CommonApiresp<unknown>> {
+    this.ensureAIEnabled();
+    return this._httpClient.postJson("/api/ai/scrape/complete", {
+      session_id: sessionId,
+      success,
+    });
   }
 
   /**
