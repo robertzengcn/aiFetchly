@@ -287,6 +287,10 @@ export interface ObserveRequest {
   selectors_available?: Record<string, string>;
   previous_action_results?: ActionResult[];
   iteration?: number;
+  max_iterations?: number;
+  goal_context?: string;
+  step_context?: string;
+  error_info?: string;
 }
 
 /** Observe response from server */
@@ -1141,6 +1145,10 @@ export class AiChatApi {
     selectorsAvailable?: Record<string, string>;
     previousActionResults?: ActionResult[];
     iteration?: number;
+    maxIterations?: number;
+    goalContext?: string;
+    stepContext?: string;
+    errorInfo?: string;
   }): Promise<CommonApiresp<ObserveResponse>> {
     this.ensureAIEnabled();
     this.validatePageSize(params.pageContent);
@@ -1163,6 +1171,18 @@ export class AiChatApi {
       data.screenshot = params.screenshot.startsWith("data:")
         ? params.screenshot
         : `data:image/png;base64,${params.screenshot}`;
+    }
+    if (params.maxIterations != null) {
+      data.max_iterations = params.maxIterations;
+    }
+    if (params.goalContext != null && params.goalContext !== "") {
+      data.goal_context = params.goalContext;
+    }
+    if (params.stepContext != null && params.stepContext !== "") {
+      data.step_context = params.stepContext;
+    }
+    if (params.errorInfo != null && params.errorInfo !== "") {
+      data.error_info = params.errorInfo;
     }
     return this._httpClient.postJson("/api/ai/scrape/observe", data);
   }

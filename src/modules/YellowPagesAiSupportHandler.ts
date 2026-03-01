@@ -312,6 +312,10 @@ export class YellowPagesAiSupportHandler {
       iteration,
       platformName,
       selectorsAvailable,
+      maxIterations,
+      goalContext,
+      stepContext,
+      errorInfo,
     } = request;
 
     if (!goal || goal.trim() === "") {
@@ -337,6 +341,10 @@ export class YellowPagesAiSupportHandler {
       selectorsAvailable: selectorsAvailable ?? {},
       previousActionResults: previousActionResults ?? [],
       iteration: iteration ?? 0,
+      maxIterations: maxIterations,
+      goalContext: goalContext,
+      stepContext: stepContext,
+      errorInfo: errorInfo,
     });
 
     if (result.status && result.data) {

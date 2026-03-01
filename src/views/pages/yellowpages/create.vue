@@ -716,6 +716,9 @@ import { createSchedule } from '@/views/api/schedule'
 import { TaskType, TriggerType } from '@/entity/ScheduleTask.entity'
 import SuccessNotification from '@/views/components/widgets/SuccessNotification.vue'
 import { generateRelatedKeywords } from '@/views/api/search'
+import { windowInvoke } from '@/views/utils/apirequest'
+import { QUERY_USER_INFO } from '@/config/channellist'
+import type { UserInfoType } from '@/entityTypes/userType'
 
 // Router
 const router = useRouter()
@@ -1474,9 +1477,22 @@ watch(() => taskForm.platform, (newPlatform) => {
 })
 
 // Lifecycle
-onMounted(() => {
+onMounted(async () => {
   loadPlatforms()
-  
+
+  // When creating a new task, default AI support to on if user has AI enabled
+  if (isCreateMode.value) {
+    try {
+      // windowInvoke returns result.data, i.e. the UserInfoType object directly
+      const userInfo = (await windowInvoke(QUERY_USER_INFO)) as UserInfoType | undefined
+      if (userInfo?.aiEnabled === true) {
+        taskForm.aiSupportEnabled = true
+      }
+    } catch {
+      // Ignore: leave aiSupportEnabled as false
+    }
+  }
+
   // If in edit mode or detail mode, load task details
   if ((isEditMode.value || isDetailMode.value) && taskId.value) {
     loadTaskDetails()

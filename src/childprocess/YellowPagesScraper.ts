@@ -308,6 +308,8 @@ export class YellowPagesScraper {
     }>;
     iteration?: number;
     selectorsAvailable?: Record<string, string>;
+    maxIterations?: number;
+    goalContext?: string;
   }): Promise<AiSupportResult> {
     if (!this.aiSupportEnabled) {
       return {
@@ -366,6 +368,8 @@ export class YellowPagesScraper {
       previousActionResults: params.previousActionResults,
       iteration: params.iteration,
       selectorsAvailable: params.selectorsAvailable,
+      maxIterations: params.maxIterations,
+      goalContext: params.goalContext,
     };
 
     return new Promise<AiSupportResult>((resolve) => {
@@ -521,6 +525,15 @@ export class YellowPagesScraper {
           result.success = true;
           break;
         }
+        case "wait": {
+          const seconds = Math.min(
+            60,
+            Math.max(1, parseInt(action.value ?? "5", 10) || 5)
+          );
+          await this.sleep(seconds * 1000);
+          result.success = true;
+          break;
+        }
         default:
           result.error = `Unknown action type: ${action.type}`;
       }
@@ -539,8 +552,14 @@ export class YellowPagesScraper {
     return result;
   }
 
-  /** Max iterations for observe-execute loop (align with server). */
+  /** Default max iterations for observe-execute loop (align with server). */
   private static readonly OBSERVE_EXECUTE_MAX_ITERATIONS = 3;
+
+  /** Max iterations when used for Cloudflare bypass (allow more steps). */
+  private static readonly CLOUDFLARE_BYPASS_MAX_ITERATIONS = 8;
+
+  /** Max iterations for AI error-recovery fallbacks (e.g. navigation failure). */
+  private static readonly ERROR_RECOVERY_MAX_ITERATIONS = 5;
 
   /**
    * Run observe-execute loop: capture state -> observe -> execute actions -> repeat until goal_achieved/give_up/max iterations.
@@ -549,8 +568,20 @@ export class YellowPagesScraper {
     goal: string;
     pageUrl: string;
     selectorsAvailable?: Record<string, string>;
+    maxIterations?: number;
+    goalContext?: string;
+    stepContext?: string;
+    errorInfo?: string;
   }): Promise<AiSupportResult> {
-    const { goal, pageUrl, selectorsAvailable = {} } = params;
+    const {
+      goal,
+      pageUrl,
+      selectorsAvailable = {},
+      maxIterations = YellowPagesScraper.OBSERVE_EXECUTE_MAX_ITERATIONS,
+      goalContext,
+      stepContext,
+      errorInfo,
+    } = params;
     let sessionId: string | null = null;
     let previousActionResults: Array<{
       action_id: string;
@@ -560,11 +591,7 @@ export class YellowPagesScraper {
       screenshot_after?: string;
     }> = [];
 
-    for (
-      let iteration = 0;
-      iteration < YellowPagesScraper.OBSERVE_EXECUTE_MAX_ITERATIONS;
-      iteration++
-    ) {
+    for (let iteration = 0; iteration < maxIterations; iteration++) {
       const result = await this.requestAiSupport({
         requestType: "observe_execute",
         pageUrl,
@@ -573,6 +600,10 @@ export class YellowPagesScraper {
         previousActionResults,
         iteration,
         selectorsAvailable,
+        maxIterations,
+        goalContext,
+        stepContext: iteration === 0 ? stepContext : undefined,
+        errorInfo: iteration === 0 ? errorInfo : undefined,
       });
 
       if (!result.success || !result.data) {
@@ -2234,6 +2265,60 @@ export class YellowPagesScraper {
       }
     } catch (error) {
       console.error("Error extracting business data from page:", error);
+
+      if (this.aiSupportEnabled && this.page && results.length === 0) {
+        try {
+          const errMsg =
+            error instanceof Error ? error.message : String(error);
+          console.log(
+            "🤖 Attempting AI-assisted recovery for extractBusinessData..."
+          );
+
+          const platformName = this.platformInfo.name;
+          const goal =
+            `We are scraping business listings on ${platformName}. ` +
+            `We need the search results page to be fully loaded so we can extract business data. ` +
+            `The business list selector is "${selectors.businessList}" and items are "${selectors.businessItem}". ` +
+            `Wait for the page to fully load, dismiss any popups or overlays, ` +
+            `or scroll to make the results visible. If a Cloudflare or CAPTCHA challenge is showing, solve it.`;
+
+          const result = await this.observeExecuteLoop({
+            goal,
+            pageUrl: this.page.url(),
+            maxIterations:
+              YellowPagesScraper.ERROR_RECOVERY_MAX_ITERATIONS,
+            goalContext: "error_recovery",
+            stepContext: "extract_business_data",
+            errorInfo: errMsg,
+            selectorsAvailable: {
+              businessList: selectors.businessList,
+              businessItem: selectors.businessItem,
+            },
+          });
+
+          if (result.success && result.data?.status === "goal_achieved") {
+            console.log(
+              "✅ AI recovered page state, retrying business data extraction"
+            );
+            try {
+              await this.page.waitForSelector(selectors.businessList, {
+                timeout: 10000,
+              });
+              return await this.extractBusinessData();
+            } catch (retryErr) {
+              console.warn(
+                "⚠️ Retry after AI recovery still failed:",
+                retryErr
+              );
+            }
+          }
+        } catch (aiErr) {
+          console.warn(
+            "⚠️ AI recovery for extractBusinessData also failed:",
+            aiErr
+          );
+        }
+      }
     }
 
     return results;
@@ -2638,9 +2723,9 @@ export class YellowPagesScraper {
    */
   private async navigateToNextPage(): Promise<boolean> {
     if (!this.page) return false;
+    const selectors = this.platformInfo.selectors;
 
     try {
-      const selectors = this.platformInfo.selectors;
 
       // Check if platform has pagination selectors defined
       if (
@@ -2701,6 +2786,59 @@ export class YellowPagesScraper {
       return false;
     } catch (error) {
       console.error("Error navigating to next page:", error);
+
+      if (this.aiSupportEnabled && this.page) {
+        try {
+          const errMsg =
+            error instanceof Error ? error.message : String(error);
+          console.log(
+            "🤖 Attempting AI-assisted recovery for navigateToNextPage..."
+          );
+
+          const platformName = this.platformInfo.name;
+          const nextBtnSelector =
+            selectors.pagination &&
+            typeof selectors.pagination === "object" &&
+            selectors.pagination.nextButton
+              ? selectors.pagination.nextButton
+              : "next page button";
+          const goal =
+            `We are scraping business listings on ${platformName}. ` +
+            `We need to navigate to the next page of search results. ` +
+            `The next-page button selector is "${nextBtnSelector}". ` +
+            `Find and click the pagination button, or scroll down to find it. ` +
+            `After clicking, wait for the new results page to load with selector "${selectors.businessList}".`;
+
+          const result = await this.observeExecuteLoop({
+            goal,
+            pageUrl: this.page.url(),
+            maxIterations:
+              YellowPagesScraper.ERROR_RECOVERY_MAX_ITERATIONS,
+            goalContext: "error_recovery",
+            stepContext: "navigate_to_next_page",
+            errorInfo: errMsg,
+            selectorsAvailable: {
+              businessList: selectors.businessList,
+              nextButton:
+                typeof nextBtnSelector === "string"
+                  ? nextBtnSelector
+                  : "",
+            },
+          });
+
+          if (result.success && result.data?.status === "goal_achieved") {
+            console.log("✅ AI recovered next-page navigation");
+            this.searchPageUrl = this.page.url();
+            return true;
+          }
+        } catch (aiErr) {
+          console.warn(
+            "⚠️ AI recovery for navigateToNextPage also failed:",
+            aiErr
+          );
+        }
+      }
+
       return false;
     }
   }
@@ -2809,7 +2947,64 @@ export class YellowPagesScraper {
       return enhancedResult;
     } catch (error) {
       console.error("Error navigating to detail page:", error);
-      // Return basic result if navigation fails
+
+      if (this.aiSupportEnabled && this.page) {
+        try {
+          const errMsg =
+            error instanceof Error ? error.message : String(error);
+          console.log(
+            "🤖 Attempting AI-assisted recovery for navigateToDetailPage..."
+          );
+
+          const platformName = this.platformInfo.name;
+          const businessName = basicResult.business_name ?? "unknown";
+          const detailSelector =
+            selectors.navigation?.detailLink ?? "detail link";
+          const goal =
+            `We are scraping business listings on ${platformName}. ` +
+            `We were trying to click the detail link ("${detailSelector}") for business "${businessName}" to navigate to its detail page. ` +
+            `The click or navigation failed. Try to find and click an alternative detail link for this business, ` +
+            `or scroll the element into view and click again. ` +
+            `If the detail page is already loaded, report goal_achieved.`;
+
+          const result = await this.observeExecuteLoop({
+            goal,
+            pageUrl: this.page.url(),
+            maxIterations:
+              YellowPagesScraper.ERROR_RECOVERY_MAX_ITERATIONS,
+            goalContext: "error_recovery",
+            stepContext: "navigate_to_detail_page",
+            errorInfo: errMsg,
+            selectorsAvailable: {
+              detailLink: selectors.navigation?.detailLink ?? "",
+              businessList: selectors.businessList,
+            },
+          });
+
+          if (result.success && result.data?.status === "goal_achieved") {
+            console.log(
+              "✅ AI recovered detail page navigation, extracting enhanced data"
+            );
+            await this.sleep(
+              selectors.navigation?.delayAfterNavigation || 2000
+            );
+            await this.handleCloudflareDetection();
+            const enhancedResult =
+              await this.extractEnhancedDataFromDetailPage(
+                basicResult,
+                selectors
+              );
+            await this.navigateBackToSearchResults(selectors);
+            return enhancedResult;
+          }
+        } catch (aiErr) {
+          console.warn(
+            "⚠️ AI recovery for navigateToDetailPage also failed:",
+            aiErr
+          );
+        }
+      }
+
       return basicResult;
     }
   }
@@ -3298,7 +3493,53 @@ export class YellowPagesScraper {
       }
     } catch (error) {
       console.error("❌ Error navigating back to search results:", error);
-      // Don't throw - let the process continue
+
+      if (this.aiSupportEnabled && this.page) {
+        try {
+          const errMsg =
+            error instanceof Error ? error.message : String(error);
+          console.log(
+            "🤖 Attempting AI-assisted recovery for navigateBackToSearchResults..."
+          );
+
+          const platformName = this.platformInfo.name;
+          const searchUrl = this.searchPageUrl ?? "unknown";
+          const goal =
+            `We are scraping business listings on ${platformName}. ` +
+            `We just finished extracting data from a detail page and need to navigate back to the search results list page (${searchUrl}). ` +
+            `The search results page should contain a list of businesses with selector "${selectors.businessList}". ` +
+            `Try clicking a back button, navigating to the search URL, or any other method to reach the search results page.`;
+
+          const result = await this.observeExecuteLoop({
+            goal,
+            pageUrl: this.page.url(),
+            maxIterations:
+              YellowPagesScraper.ERROR_RECOVERY_MAX_ITERATIONS,
+            goalContext: "error_recovery",
+            stepContext: "navigate_back_to_search_results",
+            errorInfo: errMsg,
+            selectorsAvailable: {
+              businessList: selectors.businessList,
+              businessItem: selectors.businessItem,
+            },
+          });
+
+          if (result.success && result.data?.status === "goal_achieved") {
+            console.log(
+              "✅ AI successfully recovered navigation back to search results"
+            );
+            if (this.page) {
+              this.searchPageUrl = this.page.url();
+            }
+          } else {
+            console.warn(
+              "⚠️ AI recovery for navigateBackToSearchResults did not achieve goal"
+            );
+          }
+        } catch (aiErr) {
+          console.warn("⚠️ AI recovery attempt also failed:", aiErr);
+        }
+      }
     }
   }
 
@@ -5561,6 +5802,45 @@ export class YellowPagesScraper {
   }
 
   /**
+   * Try to get past Cloudflare using the observe-execute AI loop (Cloudflare-specific goal and prompts).
+   * @returns true if Cloudflare no longer detected after AI actions, false otherwise
+   */
+  private async attemptAiCloudflareBypass(): Promise<boolean> {
+    if (!this.page || !this.aiSupportEnabled) return false;
+
+    const pageUrl = this.page.url();
+    const goal =
+      "Get past the Cloudflare challenge so the real page loads. Prefer waiting and a single click on the challenge/verify button if visible.";
+
+    console.log("🤖 Attempting AI Cloudflare bypass via observe-execute...");
+    const result = await this.observeExecuteLoop({
+      goal,
+      pageUrl,
+      maxIterations: YellowPagesScraper.CLOUDFLARE_BYPASS_MAX_ITERATIONS,
+      goalContext: "cloudflare",
+    });
+
+    if (!result.success || !result.data) {
+      console.log("🤖 AI Cloudflare bypass failed or returned no data");
+      return false;
+    }
+    if (result.data.status !== "goal_achieved") {
+      console.log(
+        `🤖 AI Cloudflare bypass did not achieve goal (status=${result.data.status})`
+      );
+      return false;
+    }
+
+    const stillBlocked = await this.detectCloudflareProtection();
+    if (!stillBlocked) {
+      console.log("✅ AI Cloudflare bypass succeeded – page no longer blocked");
+      return true;
+    }
+    console.log("🤖 AI reported goal_achieved but Cloudflare still detected");
+    return false;
+  }
+
+  /**
    * Attempt to handle Cloudflare protection with retry logic
    * @param maxRetries Maximum number of retry attempts
    * @returns true if Cloudflare protection was handled successfully, false otherwise
@@ -5577,6 +5857,12 @@ export class YellowPagesScraper {
 
         if (!isBlocked) {
           console.log("✅ No Cloudflare protection detected, continuing...");
+          return true;
+        }
+
+        // First try AI-powered bypass (observe-execute with Cloudflare-specific goal)
+        const aiBypassOk = await this.attemptAiCloudflareBypass();
+        if (aiBypassOk) {
           return true;
         }
 
