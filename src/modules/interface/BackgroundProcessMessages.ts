@@ -391,6 +391,10 @@ export interface AiSupportRequestMessage extends BaseBackgroundMessage {
   previousActionResults?: AiObserveActionResult[];
   iteration?: number;
   selectorsAvailable?: Record<string, string>;
+  /** override max iterations (e.g. 8 for Cloudflare) */
+  maxIterations?: number;
+  /** context hint, e.g. "cloudflare" for Cloudflare challenge pages */
+  goalContext?: string;
 }
 
 /**
