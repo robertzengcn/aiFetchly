@@ -67,8 +67,9 @@ export class ContactExtractionQueue {
 
             // Process job asynchronously
             this.processJob(job)
-                .catch(error => {
-                    console.error(`Job failed for result ${job.resultId}:`, error);
+                .catch((error: unknown) => {
+                    const errorMessage = error instanceof Error ? error.message : String(error);
+                    console.error(`Job failed for result ${job.resultId}:`, errorMessage);
 
                     // Retry logic
                     if (job.retryCount < this.maxRetries) {
@@ -79,12 +80,12 @@ export class ContactExtractionQueue {
                             this.process();
                         }, Math.pow(2, job.retryCount) * 1000); // Exponential backoff
                     } else {
-                        // Max retries reached
+                        // Max retries reached - persist failed status with actual error so DB and UI show it
                         this.sendProgressUpdate({
                             batchId: this.batchId || '',
                             resultId: job.resultId,
                             status: 'failed',
-                            error: 'Max retries exceeded'
+                            error: errorMessage
                         });
                     }
                 })

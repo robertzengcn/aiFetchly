@@ -239,6 +239,7 @@ export const SAVE_TEMP_FILE_COMPLETE = "save-temp-file:complete";
 // AI Chat Channels
 export const AI_CHAT_MESSAGE = "ai-chat:message";
 export const AI_CHAT_STREAM = "ai-chat:stream";
+export const AI_CHAT_STREAM_STOP = "ai-chat:stream-stop";
 export const AI_CHAT_STREAM_CHUNK = "ai-chat:stream-chunk";
 export const AI_CHAT_STREAM_COMPLETE = "ai-chat:stream-complete";
 export const AI_CHAT_HISTORY = "ai-chat:history";

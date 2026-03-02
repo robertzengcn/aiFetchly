@@ -383,24 +383,17 @@ export class RemoteSource {
   //   return jwtuser;
   // }
   //remove token in remote
-  public async removeRemoteToken(): Promise<void>{
-    const loginInfo = await this._httpClient.get(
-      "/api/user/signout",
-    ).then(function (res) {
-       // console.log(res);
-       
-       if (res.status == false) {
-         throw new Error(res.msg);
-       }
-       
-       //const decoded = thisobj.ValidateToken(token);
-      //  return res.data;
-       //return res.data.Token as {token:string};
-     })
-       .catch(function (error) {
-         // console.log(error);
-         throw new Error(error.message);
-       });
+  public async removeRemoteToken(): Promise<void> {
+    try {
+      const res = await this._httpClient.get("/api/user/signout");
+      if (res.status === false) {
+        console.warn("Remote signout returned failure:", res.msg);
+      }
+    } catch (error) {
+      // Backend may be unreachable (fetch failed, network error, etc.). Log and continue so local signout still completes.
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn("Could not remove remote token (backend may be unreachable):", message);
+    }
   }
 }
 

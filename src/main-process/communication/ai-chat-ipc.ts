@@ -15,6 +15,7 @@ import { StreamEventProcessor, StreamState } from '@/service/StreamEventProcesso
 import {
     AI_CHAT_MESSAGE,
     AI_CHAT_STREAM,
+    AI_CHAT_STREAM_STOP,
     AI_CHAT_STREAM_COMPLETE,
     AI_CHAT_HISTORY,
     AI_CHAT_CLEAR,
@@ -136,11 +137,21 @@ export function formatYellowPagesResultsForLLM(results: YellowPagesResult[]): st
 }
 
 
+/** AbortController for the currently active AI chat stream; cleared when stream ends or is stopped. */
+let currentStreamAbortController: AbortController | null = null;
+
 /**
  * Register AI Chat IPC handlers
  */
 export function registerAiChatIpcHandlers(): void {
     console.log("AI Chat IPC handlers registered");
+
+    // Stop active AI chat stream (renderer sends when user clicks stop)
+    ipcMain.on(AI_CHAT_STREAM_STOP, () => {
+        if (currentStreamAbortController) {
+            currentStreamAbortController.abort();
+        }
+    });
 
     // Send chat message (non-streaming)
     ipcMain.handle(AI_CHAT_MESSAGE, async (event, data: unknown): Promise<CommonMessage<ChatMessage | null>> => {
@@ -365,6 +376,9 @@ export function registerAiChatIpcHandlers(): void {
             };
 
             const assistantMessageId = `assistant-${Date.now()}`;
+
+            currentStreamAbortController = new AbortController();
+            const signal = currentStreamAbortController.signal;
             
             // Create stream state
             const streamState: StreamState = {
@@ -377,6 +391,7 @@ export function registerAiChatIpcHandlers(): void {
                 messageSaved: false,
                 chatModule,
                 aiChatApi,
+                abortSignal: signal,
                 currentPlan: null,
                 planThreadId: undefined
             };
@@ -396,16 +411,45 @@ export function registerAiChatIpcHandlers(): void {
                 }
             };
 
-            // Stream message with event handler
-            await aiChatApi.streamMessage(chatRequest, (streamEvent: StreamEvent) => {
-                processStreamEvent(streamEvent);
-            });
+            const sender = (event as { sender: { send: (channel: string, message: string) => void } }).sender;
 
-            // Note: Message saving is now handled in StreamEventProcessor completion event handlers (DONE, CONVERSATION_END)
-            // or in sendDeferredCompletionIfReady to ensure all content from streamContinueWithToolResults
-            // is included before saving
+            try {
+                // Stream message with event handler
+                await aiChatApi.streamMessage(chatRequest, (streamEvent: StreamEvent) => {
+                    processStreamEvent(streamEvent);
+                }, { signal });
+                // Note: Message saving is now handled in StreamEventProcessor completion event handlers (DONE, CONVERSATION_END)
+                // or in sendDeferredCompletionIfReady to ensure all content from streamContinueWithToolResults
+                // is included before saving
+            } catch (error) {
+                if (error instanceof Error && error.message.includes('tool name is required')) {
+                    return;
+                }
+                const isAbort = error instanceof Error && error.name === 'AbortError';
+                const isDomAbort = error instanceof DOMException && error.name === 'AbortError';
+                if (isAbort || isDomAbort) {
+                    const cancelledChunk: ChatStreamChunk = {
+                        content: '',
+                        isComplete: true,
+                        eventType: 'cancelled',
+                        conversationId
+                    };
+                    sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(cancelledChunk));
+                } else {
+                    console.error('AI Chat stream error:', error);
+                    const errorChunk: ChatStreamChunk = {
+                        content: '',
+                        isComplete: true,
+                        eventType: StreamEventType.ERROR,
+                        errorMessage: error instanceof Error ? error.message : 'Unknown error occurred'
+                    };
+                    sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(errorChunk));
+                }
+            } finally {
+                currentStreamAbortController = null;
+            }
         } catch (error) {
-            if(error instanceof Error && error.message.includes('tool name is required')){
+            if (error instanceof Error && error.message.includes('tool name is required')) {
                 return;
             }
             console.error('AI Chat stream error:', error);
@@ -416,6 +460,8 @@ export function registerAiChatIpcHandlers(): void {
                 errorMessage: error instanceof Error ? error.message : 'Unknown error occurred'
             };
             (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(errorChunk));
+        } finally {
+            currentStreamAbortController = null;
         }
     });
 

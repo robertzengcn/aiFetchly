@@ -247,11 +247,13 @@ export default {
     start_conversation: "Gespräch mit KI-Assistent starten",
     clear_chat_confirm:
       "Sind Sie sicher, dass Sie den Chat-Verlauf löschen möchten?",
+    stop_generating: "Generierung stoppen",
     rag_context_enabled: "RAG-Kontext aktiviert",
     rag_context_disabled: "RAG-Kontext deaktiviert",
     just_now: "Gerade eben",
     minutes_ago: "Vor {count}m",
     hours_ago: "Vor {count}h",
+    resend_message: "Nachricht erneut senden",
   },
   notifications: {
     cloudflare_protection_detected: "Cloudflare-Schutz erkannt",
@@ -822,6 +824,8 @@ export default {
     no_valid_items_hint:
       "Die ausgewählten Elemente haben keine gültigen IDs. Bitte wählen Sie andere Elemente aus.",
     extraction_started: "Kontaktextraktion gestartet",
+    extraction_started_notice:
+      "Kontaktextraktion für {count} Eintrag/Einträge gestartet. Verarbeitung im Hintergrund. Prüfen Sie die Spalte Extraktionsstatus für den Fortschritt.",
     extraction_failed: "Fehler beim Starten der Extraktion",
   },
   emailscrape: {

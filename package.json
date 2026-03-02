@@ -14,7 +14,7 @@
   },
   "scripts": {
     "serve": "vite preview",
-    "build": "vite build",
+    "build": "vite build --config vite.render.config.mjs",
     "lint": "vue-cli-service lint",
     "builds": "tsc --build",
     "clean": "tsc --build --clean",

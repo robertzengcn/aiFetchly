@@ -4,6 +4,7 @@ import { CommonApiresp, ChatApiResponse } from "@/entityTypes/commonType";
 import { Token } from "@/modules/token";
 import { USER_AI_ENABLED } from "@/config/usersetting";
 import type { AIEmailTemplateRequest } from "@/entityTypes/emailmarketingType";
+import type { AIRecoveryRequest } from "@/entityTypes/processMessage-type";
 
 /**
  * Chat request interface
@@ -49,6 +50,26 @@ export interface ToolExecutionResult {
   success: boolean;
   result: Record<string, unknown>;
   execution_time_ms: number;
+}
+
+/**
+ * Response data from POST /api/ai/puppeteer/recovery (AI recovery API).
+ */
+export interface PuppeteerRecoveryResponseData {
+  request_id: string;
+  success: boolean;
+  actions: Array<{
+    type: string;
+    selector?: string;
+    selector_type?: string;
+    value?: string;
+    key?: string;
+    timeout?: number;
+    reason: string;
+  }>;
+  confidence: number;
+  reasoning: string;
+  error?: string;
 }
 
 /**
@@ -232,6 +253,57 @@ export interface ScrapeAssistResponse {
   suggestedActions: string[];
   shouldSkip: boolean;
   explanation: string;
+}
+
+/** Single executable action for observe-execute (snake_case for server) */
+export interface ExecutableAction {
+  action_id: string;
+  type: string;
+  selector?: string;
+  selector_type?: string;
+  value?: string;
+  key?: string;
+  timeout?: number;
+  description?: string;
+}
+
+/** Result of executing one action (snake_case for server) */
+export interface ActionResult {
+  action_id: string;
+  success: boolean;
+  error?: string;
+  element_found?: boolean;
+  screenshot_after?: string;
+}
+
+/** Observe request body (snake_case for server) */
+export interface ObserveRequest {
+  session_id?: string | null;
+  page_content: string;
+  page_url: string;
+  screenshot?: string;
+  goal: string;
+  platform_name?: string;
+  selectors_available?: Record<string, string>;
+  previous_action_results?: ActionResult[];
+  iteration?: number;
+  max_iterations?: number;
+  goal_context?: string;
+  step_context?: string;
+  error_info?: string;
+}
+
+/** Observe response from server */
+export interface ObserveResponse {
+  session_id: string;
+  status: "actions_needed" | "goal_achieved" | "give_up";
+  actions: ExecutableAction[];
+  explanation: string;
+  confidence: number;
+  should_retry: boolean;
+  max_iterations_remaining: number;
+  model_used?: string;
+  processing_time?: number;
 }
 
 /**
@@ -429,8 +501,8 @@ export class AiChatApi {
    *
    * @param request - Chat request containing message and optional parameters
    * @param onEvent - Callback function to handle each stream event
-   * @returns Promise resolving when stream completes
-   * @throws {Error} When network request fails
+   * @param options - Optional abort signal to cancel the stream
+   * @returns Promise resolving when stream completes (rejects with AbortError when aborted)
    *
    * @example
    * ```typescript
@@ -441,13 +513,15 @@ export class AiChatApi {
    *   },
    *   (event) => {
    *     console.log('Event:', event.event, 'Data:', event.data);
-   *   }
+   *   },
+   *   { signal: abortController.signal }
    * );
    * ```
    */
   async streamMessage(
     request: ChatRequest,
-    onEvent: (event: StreamEvent) => void
+    onEvent: (event: StreamEvent) => void,
+    options?: { signal?: AbortSignal }
   ): Promise<void> {
     this.ensureAIEnabled();
     const data: ChatApiRequestData = {
@@ -462,9 +536,15 @@ export class AiChatApi {
       data.model = request.model;
     }
 
+    const fetchOptions: RequestInit = {};
+    if (options?.signal) {
+      fetchOptions.signal = options.signal;
+    }
+
     const response = await this._httpClient.postStream(
       "/api/ai/ask/stream",
-      data
+      data,
+      fetchOptions
     );
 
     if (!response.ok || response.status !== 200) {
@@ -476,7 +556,7 @@ export class AiChatApi {
       throw new Error("Response body is null");
     }
 
-    await this._consumeStreamResponse(response, onEvent);
+    await this._consumeStreamResponse(response, onEvent, options?.signal);
   }
 
   /**
@@ -521,12 +601,17 @@ export class AiChatApi {
   /**
    * Consume an SSE stream response and invoke onEvent for each parsed event.
    * Shared by streamMessage and streamEmailTemplateGeneration.
+   * When signal is aborted, reader.read() rejects with AbortError; we exit cleanly and rethrow.
    */
   private async _consumeStreamResponse(
     response: Response,
-    onEvent: (event: StreamEvent) => void
+    onEvent: (event: StreamEvent) => void,
+    signal?: AbortSignal
   ): Promise<void> {
-    const reader = response.body!.getReader();
+    if (!response.body) {
+      throw new Error("Response body is null");
+    }
+    const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
     let currentEvent: Partial<StreamEvent> = {};
@@ -534,7 +619,22 @@ export class AiChatApi {
     try {
       let streamActive = true;
       while (streamActive) {
-        const { done, value } = await reader.read();
+        let result: ReadableStreamReadResult<Uint8Array>;
+        try {
+          result = await reader.read();
+        } catch (readError: unknown) {
+          if (
+            readError instanceof Error &&
+            (readError.name === "AbortError" ||
+              (readError instanceof DOMException &&
+                readError.name === "AbortError"))
+          ) {
+            streamActive = false;
+            throw readError;
+          }
+          throw readError;
+        }
+        const { done, value } = result;
         if (done) {
           streamActive = false;
           continue;
@@ -757,13 +857,16 @@ export class AiChatApi {
    * @param toolResults - Array of tool execution results
    * @param onEvent - Callback to receive parsed SSE events
    * @param clientTools - Optional client tool definitions to include
+   * @param threadId - Optional thread ID for plan execution
+   * @param options - Optional abort signal to cancel the stream
    */
   async streamContinueWithToolResults(
     conversationId: string,
     toolResults: ToolExecutionResult[],
     onEvent: (event: StreamEvent) => void,
     clientTools?: ToolFunction[],
-    threadId?: string
+    threadId?: string,
+    options?: { signal?: AbortSignal }
   ): Promise<void> {
     this.ensureAIEnabled();
     const data: ContinueRequestData = {
@@ -777,9 +880,15 @@ export class AiChatApi {
       data.thread_id = threadId;
     }
 
+    const fetchOptions: RequestInit = {};
+    if (options?.signal) {
+      fetchOptions.signal = options.signal;
+    }
+
     const response = await this._httpClient.postStream(
       "/api/ai/ask/continue",
-      data
+      data,
+      fetchOptions
     );
 
     if (!response.ok || response.status !== 200) {
@@ -798,7 +907,21 @@ export class AiChatApi {
     try {
       let streamActive = true;
       while (streamActive) {
-        const { done, value } = await reader.read();
+        let result: ReadableStreamReadResult<Uint8Array>;
+        try {
+          result = await reader.read();
+        } catch (readError: unknown) {
+          if (
+            readError instanceof Error &&
+            (readError.name === "AbortError" ||
+              (readError instanceof DOMException &&
+                readError.name === "AbortError"))
+          ) {
+            throw readError;
+          }
+          throw readError;
+        }
+        const { done, value } = result;
         if (done) {
           streamActive = false;
           continue;
@@ -1007,5 +1130,108 @@ export class AiChatApi {
     }
 
     return this._httpClient.postJson("/api/ai/scrape/assist", data);
+  }
+
+  /**
+   * Observe-and-plan: get executable actions or status (goal_achieved / give_up) for the observe-execute loop.
+   */
+  async scrapeObserve(params: {
+    sessionId?: string | null;
+    pageContent: string;
+    pageUrl: string;
+    screenshot?: string;
+    goal: string;
+    platformName?: string;
+    selectorsAvailable?: Record<string, string>;
+    previousActionResults?: ActionResult[];
+    iteration?: number;
+    maxIterations?: number;
+    goalContext?: string;
+    stepContext?: string;
+    errorInfo?: string;
+  }): Promise<CommonApiresp<ObserveResponse>> {
+    this.ensureAIEnabled();
+    this.validatePageSize(params.pageContent);
+    if (params.screenshot) {
+      this.validateScreenshot(params.screenshot);
+    }
+    const data: ObserveRequest = {
+      page_content: params.pageContent,
+      page_url: params.pageUrl,
+      goal: params.goal,
+      platform_name: params.platformName,
+      selectors_available: params.selectorsAvailable,
+      previous_action_results: params.previousActionResults,
+      iteration: params.iteration ?? 0,
+    };
+    if (params.sessionId != null && params.sessionId !== "") {
+      data.session_id = params.sessionId;
+    }
+    if (params.screenshot) {
+      data.screenshot = params.screenshot.startsWith("data:")
+        ? params.screenshot
+        : `data:image/png;base64,${params.screenshot}`;
+    }
+    if (params.maxIterations != null) {
+      data.max_iterations = params.maxIterations;
+    }
+    if (params.goalContext != null && params.goalContext !== "") {
+      data.goal_context = params.goalContext;
+    }
+    if (params.stepContext != null && params.stepContext !== "") {
+      data.step_context = params.stepContext;
+    }
+    if (params.errorInfo != null && params.errorInfo !== "") {
+      data.error_info = params.errorInfo;
+    }
+    return this._httpClient.postJson("/api/ai/scrape/observe", data);
+  }
+
+  /**
+   * Mark an observe-execute session complete (clear server-side session).
+   */
+  async scrapeComplete(sessionId: string, success = true): Promise<CommonApiresp<unknown>> {
+    this.ensureAIEnabled();
+    return this._httpClient.postJson("/api/ai/scrape/complete", {
+      session_id: sessionId,
+      success,
+    });
+  }
+
+  /**
+   * Call the AI server's Puppeteer recovery API (POST /api/ai/puppeteer/recovery) to get suggested recovery actions.
+   * Sends page state (HTML, error, optional screenshot, etc.) and returns structured actions.
+   */
+  async sendPuppeteerRecovery(
+    request: AIRecoveryRequest
+  ): Promise<CommonApiresp<PuppeteerRecoveryResponseData>> {
+    this.ensureAIEnabled();
+
+    const data: Record<string, unknown> = {
+      request_id: request.requestId,
+      operation: request.operation,
+      search_engine: request.searchEngine,
+      current_url: request.currentUrl,
+      page_title: request.pageTitle ?? "",
+      error_message: request.errorMessage,
+      attempted_selectors: request.attemptedSelectors ?? [],
+      html_sample: request.htmlSample,
+    };
+
+    if (request.accessibilityTree) {
+      data.accessibility_tree = request.accessibilityTree;
+    }
+    if (request.keyword) {
+      data.keyword = request.keyword;
+    }
+    if (request.screenshot) {
+      data.screenshot = request.screenshot.startsWith("data:")
+        ? request.screenshot
+        : `data:image/png;base64,${request.screenshot}`;
+    }
+
+    return this._httpClient.postJson("/api/ai/puppeteer/recovery", {
+      data,
+    });
   }
 }
