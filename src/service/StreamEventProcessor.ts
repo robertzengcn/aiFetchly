@@ -75,6 +75,8 @@ export interface StreamState {
   messageSaved: boolean;
   chatModule: AIChatModule;
   aiChatApi: AiChatApi;
+  /** Optional abort signal to cancel the stream (initial and continuation requests). */
+  abortSignal?: AbortSignal;
   // Plan execute agent state
   currentPlan: Plan | null;
   planThreadId?: string;
@@ -387,7 +389,8 @@ export class StreamEventProcessor {
         aiToolResult,
         (streamEvent: StreamEvent) => this.processEvent(streamEvent),
         availableTools,
-        threadId
+        threadId,
+        { signal: this.state.abortSignal }
       );
     } catch (sendErr) {
       console.error("Failed to send tool result to AI server:", sendErr);

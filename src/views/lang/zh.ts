@@ -229,11 +229,13 @@ export default {
     type_message_placeholder: "输入消息... (Shift+Enter 换行)",
     start_conversation: "开始与 AI 助手对话",
     clear_chat_confirm: "您确定要清除聊天记录吗？",
+    stop_generating: "停止生成",
     rag_context_enabled: "知识库上下文已启用",
     rag_context_disabled: "知识库上下文已禁用",
     just_now: "刚刚",
     minutes_ago: "{count}分钟前",
     hours_ago: "{count}小时前",
+    resend_message: "重新发送消息",
   },
   notifications: {
     cloudflare_protection_detected: "检测到Cloudflare保护",
@@ -794,6 +796,8 @@ export default {
     select_items_hint: "请至少选择一项以提取联系信息",
     no_valid_items_hint: "所选项目没有有效的ID。请选择其他项目。",
     extraction_started: "联系方式提取已开始",
+    extraction_started_notice:
+      "已开始对 {count} 条记录提取联系方式，正在后台处理。请在「提取状态」列查看进度。",
     extraction_failed: "启动提取失败",
   },
   emailscrape: {

@@ -110,7 +110,7 @@ export class SearchScrape implements searchEngineImpl {
         // await this.exposeFunction()
 
         this.keywords = data.data.keywords
-        await this.page.bringToFront();
+       // await this.page.bringToFront();
         await this.page.setViewport({ width: 1920, height: 1040 });
         let do_continue: boolean | void = true;
         //console.log("data.data=%O",data.data)

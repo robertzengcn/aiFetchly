@@ -179,6 +179,7 @@ import {
   // AI Chat Channels
   AI_CHAT_MESSAGE,
   AI_CHAT_STREAM,
+  AI_CHAT_STREAM_STOP,
   AI_CHAT_STREAM_CHUNK,
   AI_CHAT_STREAM_COMPLETE,
   AI_CHAT_HISTORY,
@@ -262,6 +263,7 @@ contextBridge.exposeInMainWorld("api", {
       VIDEO_PUBLISH_RECORD_DELETE,
       SAVE_TEMP_FILE,
       AI_CHAT_STREAM,
+      AI_CHAT_STREAM_STOP,
       // AI Email Template Channels
       AI_EMAIL_TEMPLATE_GENERATE_STREAM,
       AI_EMAIL_TEMPLATE_STOP,
@@ -282,7 +284,7 @@ contextBridge.exposeInMainWorld("api", {
             hypothesisId: "C",
           }),
         }
-      ).catch(() => {});
+      ).catch(() => undefined);
     }
     // #endregion
     if (validChannels.includes(channel)) {

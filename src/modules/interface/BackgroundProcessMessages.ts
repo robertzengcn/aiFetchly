@@ -309,7 +309,36 @@ export interface ExitTaskMessage extends BaseBackgroundMessage {
   reason: string;
 }
 
-export type AiSupportRequestType = "step_guidance" | "contact_extraction";
+export type AiSupportRequestType = "step_guidance" | "contact_extraction" | "observe_execute";
+
+/**
+ * Executable action for observe-execute (from AI observe response)
+ */
+export interface AiExecutableAction {
+  action_id: string;
+  type: string;
+  selector?: string;
+  selector_type?: string;
+  value?: string;
+  key?: string;
+  timeout?: number;
+  description?: string;
+}
+
+/**
+ * Observe-execute response data (actions or status)
+ */
+export interface AiObserveExecuteResponseData {
+  session_id: string;
+  status: "actions_needed" | "goal_achieved" | "give_up";
+  actions: AiExecutableAction[];
+  explanation: string;
+  confidence: number;
+  should_retry: boolean;
+  max_iterations_remaining: number;
+  model_used?: string;
+  processing_time?: number;
+}
 
 /**
  * AI-extracted contact data returned from the server
@@ -332,6 +361,15 @@ export interface AiScrapeGuidanceData {
   explanation: string;
 }
 
+/** Result of one executed action (for observe_execute previous results) */
+export interface AiObserveActionResult {
+  action_id: string;
+  success: boolean;
+  error?: string;
+  element_found?: boolean;
+  screenshot_after?: string;
+}
+
 /**
  * Message sent from child process to request AI support
  */
@@ -347,6 +385,16 @@ export interface AiSupportRequestMessage extends BaseBackgroundMessage {
   errorInfo?: string;
   platformName?: string;
   selectorsTried?: Record<string, string>;
+  /** observe_execute: goal and loop state */
+  goal?: string;
+  sessionId?: string | null;
+  previousActionResults?: AiObserveActionResult[];
+  iteration?: number;
+  selectorsAvailable?: Record<string, string>;
+  /** override max iterations (e.g. 8 for Cloudflare) */
+  maxIterations?: number;
+  /** context hint, e.g. "cloudflare" for Cloudflare challenge pages */
+  goalContext?: string;
 }
 
 /**
@@ -357,7 +405,7 @@ export interface AiSupportResponseMessage extends BaseBackgroundMessage {
   requestId: string;
   success: boolean;
   requestType: AiSupportRequestType;
-  data?: AiExtractedContactData | AiScrapeGuidanceData;
+  data?: AiExtractedContactData | AiScrapeGuidanceData | AiObserveExecuteResponseData;
   errorMessage?: string;
 }
 
