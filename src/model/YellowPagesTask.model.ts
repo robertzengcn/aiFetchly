@@ -29,6 +29,7 @@ export type YellowPagesTaskUpdateFields = {
   delay_between_requests?: number;
   headless?: boolean;
   pid?: number;
+  ai_support_enabled?: boolean;
 };
 
 export class YellowPagesTaskModel extends BaseDb {
