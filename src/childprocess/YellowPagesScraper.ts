@@ -237,6 +237,173 @@ export class YellowPagesScraper {
   private pendingAiRequests: Map<string, PendingAiRequest> = new Map();
   private aiRequestCounter = 0;
   private static readonly AI_REQUEST_TIMEOUT_MS = 60000;
+  /** Max page content size for AI support (match YellowPagesAiSupportHandler) */
+  private static readonly MAX_PAGE_CONTENT_BYTES = 50 * 1024;
+  private static readonly TRUNCATION_SUFFIX = "\n[Content truncated]";
+
+  /**
+   * Extract a simplified page DOM via Puppeteer evaluate.
+   * Runs inside the browser context so it can properly traverse the DOM tree,
+   * remove hidden elements, strip non-essential attributes, and return only
+   * meaningful structural HTML that the AI can reason about.
+   */
+  private async getSimplifiedPageContent(): Promise<string> {
+    if (!this.page) return "";
+
+    return this.page.evaluate(() => {
+      const title = document.title || "";
+      const metaDesc =
+        document
+          .querySelector('meta[name="description"]')
+          ?.getAttribute("content") || "";
+
+      const clone = document.body.cloneNode(true) as HTMLElement;
+
+      const removeSelectors = [
+        "script",
+        "style",
+        "noscript",
+        "svg",
+        "iframe",
+        "link[rel=stylesheet]",
+        "link[rel=preload]",
+        "link[rel=preconnect]",
+        "link[rel=dns-prefetch]",
+        "[hidden]",
+        "[aria-hidden='true']",
+        ".sr-only",
+      ];
+      for (const sel of removeSelectors) {
+        try {
+          clone.querySelectorAll(sel).forEach((el) => el.remove());
+        } catch {
+          /* ignore invalid selectors */
+        }
+      }
+
+      // Remove elements with display:none (common for hidden menus/modals)
+      clone.querySelectorAll("*").forEach((el) => {
+        const style = (el as HTMLElement).getAttribute("style") || "";
+        if (/display\s*:\s*none/i.test(style)) {
+          el.remove();
+        }
+      });
+
+      // Keep only structurally useful attributes
+      const keepAttrs = new Set([
+        "id",
+        "class",
+        "name",
+        "type",
+        "placeholder",
+        "href",
+        "action",
+        "role",
+        "aria-label",
+        "for",
+        "value",
+        "title",
+        "alt",
+        "method",
+      ]);
+      clone.querySelectorAll("*").forEach((el) => {
+        const attrs = [...el.attributes];
+        for (const attr of attrs) {
+          if (!keepAttrs.has(attr.name)) {
+            el.removeAttribute(attr.name);
+          }
+        }
+      });
+
+      // Remove elements that are empty after cleanup (no text, no children with text)
+      const selfClosing = new Set([
+        "br",
+        "hr",
+        "img",
+        "input",
+        "meta",
+        "link",
+      ]);
+      const pruneEmpty = (parent: Element): void => {
+        const children = [...parent.children];
+        for (const child of children) {
+          pruneEmpty(child);
+          if (
+            !selfClosing.has(child.tagName.toLowerCase()) &&
+            !child.innerHTML.trim()
+          ) {
+            child.remove();
+          }
+        }
+      };
+      pruneEmpty(clone);
+
+      const header = `<title>${title}</title>\n<meta name="description" content="${metaDesc}">`;
+      const bodyHtml = clone.innerHTML
+        .replace(/\s{2,}/g, "\n")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+
+      return `${header}\n<body>\n${bodyHtml}\n</body>`;
+    });
+  }
+
+  /**
+   * Regex-based fallback to reduce HTML when Puppeteer evaluate is unavailable
+   * or the simplified content is still over the limit.
+   * Progressively strips more content until within maxBytes.
+   */
+  private static reducePageContentForAi(
+    html: string,
+    maxBytes: number
+  ): string {
+    if (html.length <= maxBytes) return html;
+
+    let out = html
+      .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
+      .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "")
+      .replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript>/gi, "")
+      .replace(/<svg\b[^>]*>[\s\S]*?<\/svg>/gi, "")
+      .replace(/<iframe\b[^>]*>[\s\S]*?<\/iframe>/gi, "")
+      .replace(/<!--[\s\S]*?-->/g, "");
+
+    // Remove elements with display:none (hidden menus, modals, etc.)
+    out = out.replace(
+      /<(\w+)\b[^>]*style\s*=\s*["'][^"']*display\s*:\s*none[^"']*["'][^>]*>[\s\S]*?<\/\1>/gi,
+      ""
+    );
+
+    // Remove data-* attributes (data-bind, data-menu-id, etc.)
+    out = out.replace(/\s+data-[\w-]+=["'][^"']*["']/gi, "");
+    out = out.replace(/\s+data-[\w-]+=\S+/gi, "");
+    // Remove inline event handlers
+    out = out.replace(/\s+on\w+=["'][^"']*["']/gi, "");
+    out = out.replace(/\s+on\w+=\S+/gi, "");
+    // Remove style attributes
+    out = out.replace(/\s+style=["'][^"']*["']/gi, "");
+
+    // Collapse whitespace
+    out = out.replace(/\s{2,}/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+
+    const suffix =
+      YellowPagesScraper.TRUNCATION_SUFFIX +
+      ` (original ${html.length} bytes)`;
+    const maxLen = maxBytes - suffix.length - 4;
+
+    if (out.length <= maxLen) return out;
+
+    // Truncate at a safe boundary
+    const slice = out.slice(0, maxLen);
+    const lastTagEnd = slice.lastIndexOf(">");
+    const lastSpace = slice.lastIndexOf(" ");
+    const cut =
+      lastTagEnd >= maxLen - 150
+        ? lastTagEnd + 1
+        : lastSpace >= maxLen - 80
+          ? lastSpace + 1
+          : maxLen;
+    return slice.slice(0, cut) + suffix;
+  }
 
   constructor(taskData: TaskData, platformInfo: PlatformInfo) {
     this.taskData = taskData;
@@ -287,6 +454,29 @@ export class YellowPagesScraper {
   }
 
   /**
+   * Capture simplified page HTML and screenshot for AI support.
+   * Call this at the start of a catch block so the page is still open before any cleanup.
+   * Uses getSimplifiedPageContent() for a clean, compact DOM representation.
+   */
+  private async capturePageStateForAiSupport(): Promise<{
+    pageContent: string;
+    screenshot?: string;
+  }> {
+    let pageContent = "";
+    let screenshot: string | undefined;
+    try {
+      if (this.page) {
+        pageContent = await this.getSimplifiedPageContent();
+        const buf = await this.page.screenshot({ encoding: "base64" });
+        screenshot = typeof buf === "string" ? buf : undefined;
+      }
+    } catch (err) {
+      console.warn("⚠️ Failed to capture page state for AI:", err);
+    }
+    return { pageContent, screenshot };
+  }
+
+  /**
    * Request AI support from the main process.
    * Sends a message via parentPort and waits for the response.
    */
@@ -310,6 +500,10 @@ export class YellowPagesScraper {
     selectorsAvailable?: Record<string, string>;
     maxIterations?: number;
     goalContext?: string;
+    /** Pre-captured page HTML (use when page may close before request is sent) */
+    pageContent?: string;
+    /** Pre-captured screenshot base64 (use with pageContent when page may close) */
+    screenshot?: string;
   }): Promise<AiSupportResult> {
     if (!this.aiSupportEnabled) {
       return {
@@ -332,17 +526,29 @@ export class YellowPagesScraper {
       };
     }
 
-    let pageContent = "";
-    let screenshot: string | undefined;
+    let pageContent = params.pageContent ?? "";
+    let screenshot: string | undefined = params.screenshot;
 
     try {
       if (this.page) {
-        pageContent = await this.page.content();
-        const buf = await this.page.screenshot({ encoding: "base64" });
-        screenshot = typeof buf === "string" ? buf : undefined;
+        if (pageContent === "" && params.pageContent === undefined) {
+          pageContent = await this.getSimplifiedPageContent();
+        }
+        if (screenshot === undefined && params.screenshot === undefined) {
+          const buf = await this.page.screenshot({ encoding: "base64" });
+          screenshot = typeof buf === "string" ? buf : undefined;
+        }
       }
     } catch (err) {
       console.warn("⚠️ Failed to capture page state for AI request:", err);
+    }
+
+    // Regex fallback if simplified content is still over limit
+    if (pageContent.length > YellowPagesScraper.MAX_PAGE_CONTENT_BYTES) {
+      pageContent = YellowPagesScraper.reducePageContentForAi(
+        pageContent,
+        YellowPagesScraper.MAX_PAGE_CONTENT_BYTES
+      );
     }
 
     this.aiRequestCounter++;
@@ -1229,6 +1435,7 @@ export class YellowPagesScraper {
               "🤖 Requesting AI step guidance for custom search failure..."
             );
             try {
+              const captured = await this.capturePageStateForAiSupport();
               const aiResult = await this.requestAiSupport({
                 requestType: "step_guidance",
                 pageUrl: this.page.url(),
@@ -1237,6 +1444,8 @@ export class YellowPagesScraper {
                   error instanceof Error ? error.message : String(error)
                 }`,
                 selectorsTried: {},
+                pageContent: captured.pageContent,
+                screenshot: captured.screenshot,
               });
               if (
                 aiResult.success &&
@@ -1758,6 +1967,7 @@ export class YellowPagesScraper {
           "🤖 Requesting AI step guidance for search page navigation failure..."
         );
         try {
+          const captured = await this.capturePageStateForAiSupport();
           const selectors = this.platformInfo.selectors.searchForm || {};
           const aiResult = await this.requestAiSupport({
             requestType: "step_guidance",
@@ -1767,6 +1977,8 @@ export class YellowPagesScraper {
               error instanceof Error ? error.message : String(error)
             }`,
             selectorsTried: selectors as Record<string, string>,
+            pageContent: captured.pageContent,
+            screenshot: captured.screenshot,
           });
 
           if (aiResult.success && aiResult.data) {
