@@ -219,6 +219,7 @@ export interface YellowPagesTask {
   proxy_config?: object;
   delay_between_requests: number;
   headless?: boolean;
+  aiSupportEnabled?: boolean;
 }
 
 /**

@@ -226,6 +226,10 @@ export class YellowPagesScraperProcess {
           await this.handleHealthCheck(message);
           break;
 
+        case MessageType.EXIT:
+          await this.handleExit(message);
+          break;
+
         default:
           console.warn(`Unknown message type: ${message.type}`);
       }
@@ -444,6 +448,27 @@ export class YellowPagesScraperProcess {
       console.error("Error handling health check:", error);
       this.sendErrorMessage("Health check failed", ErrorSeverity.ERROR, error);
     }
+  }
+
+  /**
+   * Handle EXIT message - graceful shutdown requested by main process
+   */
+  private async handleExit(message: { reason?: string }): Promise<void> {
+    const reason = message.reason ?? "Requested by main process";
+    console.log(
+      `Received EXIT command, shutting down gracefully. Reason: ${reason}`
+    );
+    this.isRunning = false;
+    this.isPaused = false;
+    if (this.scraper) {
+      try {
+        await this.scraper.stop();
+      } catch (error) {
+        console.warn("Error stopping scraper on EXIT:", error);
+      }
+      this.scraper = null;
+    }
+    process.exit(0);
   }
 
   /**

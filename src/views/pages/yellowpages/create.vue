@@ -1002,6 +1002,7 @@ const loadTaskDetails = async () => {
       taskForm.concurrency = data.task.concurrency || 2
       taskForm.delay_between_requests = data.task.delay_between_requests || 2000
       taskForm.headless = data.task.headless !== undefined ? data.task.headless : true
+      taskForm.aiSupportEnabled = data.task.aiSupportEnabled ?? data.task.ai_support_enabled ?? false
       taskForm.account_id = data.task.account_id || undefined
       
       // Set keywords
