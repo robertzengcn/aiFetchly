@@ -2,12 +2,42 @@ import type { UtilityProcess } from "electron";
 import { AiChatApi } from "@/api/aiChatApi";
 import { Token } from "@/modules/token";
 import { USER_AI_ENABLED } from "@/config/usersetting";
+import type { AiScrapeGuidanceData } from "@/modules/interface/BackgroundProcessMessages";
 import {
   AiSupportRequestMessage,
   AiSupportResponseMessage,
   isAiSupportRequestMessage,
 } from "@/modules/interface/BackgroundProcessMessages";
 import { WriteLog } from "@/modules/lib/function";
+
+/**
+ * Normalize step_guidance response from server (snake_case) to shape expected by child (camelCase).
+ * Accepts both formats so it works whether the API returns snake_case or camelCase.
+ */
+function normalizeStepGuidanceData(raw: Record<string, unknown>): AiScrapeGuidanceData {
+  const suggestedSelectors =
+    (raw.suggestedSelectors as Record<string, string> | undefined) ??
+    (raw["suggested_selectors"] as Record<string, string> | undefined) ??
+    {};
+  const suggestedActions =
+    (raw.suggestedActions as string[] | undefined) ??
+    (raw["suggested_actions"] as string[] | undefined) ??
+    [];
+  const shouldSkip =
+    (raw.shouldSkip as boolean | undefined) ??
+    (raw["should_skip"] as boolean | undefined) ??
+    false;
+  const explanation = (raw.explanation as string | undefined) ?? "";
+  return {
+    suggestedSelectors:
+      typeof suggestedSelectors === "object" && suggestedSelectors !== null
+        ? suggestedSelectors
+        : {},
+    suggestedActions: Array.isArray(suggestedActions) ? suggestedActions : [],
+    shouldSkip: Boolean(shouldSkip),
+    explanation: String(explanation),
+  };
+}
 
 /**
  * Cached AI response with timestamp
@@ -458,13 +488,16 @@ export class YellowPagesAiSupportHandler {
 
     if (result.status && result.data) {
       this.logInfo(`Step guidance successful: ${requestId}`);
+      const data = normalizeStepGuidanceData(
+        result.data as unknown as Record<string, unknown>
+      );
       return {
         type: "AI_SUPPORT_RESPONSE",
         taskId,
         requestId,
         success: true,
         requestType: "step_guidance",
-        data: result.data,
+        data,
       };
     } else {
       this.logWarn(`Step guidance returned no data: ${requestId} - ${result.msg}`);
