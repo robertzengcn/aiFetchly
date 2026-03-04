@@ -343,6 +343,14 @@ export interface WebsiteAnalysisResponse {
  * ```
  */
 /**
+ * Maximum total request body size in bytes for scrape/observe endpoints.
+ * Kept under typical proxy limits (e.g. nginx client_max_body_size 1m) to avoid 413.
+ */
+const MAX_SCRAPE_REQUEST_BODY_BYTES = 800 * 1024; // 800KB
+/** Extra bytes to reserve for JSON keys and other fields when estimating body size */
+const SCRAPE_BODY_OVERHEAD_BYTES = 2048;
+
+/**
  * Validation configuration for AI API requests
  */
 interface AiValidationConfig {
@@ -1069,8 +1077,26 @@ export class AiChatApi {
       this.validateScreenshot(screenshot);
     }
 
+    let content = pageContent;
+    let screen: string | undefined = screenshot;
+    let estimated =
+      content.length +
+      (screen ? screen.length : 0) +
+      SCRAPE_BODY_OVERHEAD_BYTES;
+    if (estimated > MAX_SCRAPE_REQUEST_BODY_BYTES) {
+      screen = undefined;
+      estimated = content.length + SCRAPE_BODY_OVERHEAD_BYTES;
+    }
+    if (estimated > MAX_SCRAPE_REQUEST_BODY_BYTES) {
+      const maxPage =
+        MAX_SCRAPE_REQUEST_BODY_BYTES - SCRAPE_BODY_OVERHEAD_BYTES;
+      if (maxPage > 0 && content.length > maxPage) {
+        content = content.substring(0, maxPage - 20) + "\n<!-- truncated -->";
+      }
+    }
+
     const data: ContactExtractionRequest = {
-      page_content: pageContent,
+      page_content: content,
       url: url,
     };
 
@@ -1078,11 +1104,11 @@ export class AiChatApi {
       data.entity_name = entityName;
     }
 
-    if (screenshot) {
+    if (screen) {
       // Auto-wrap raw base64-encoded string as PNG data URI
-      data.screenshot = screenshot.startsWith("data:")
-        ? screenshot
-        : `data:image/png;base64,${screenshot}`;
+      data.screenshot = screen.startsWith("data:")
+        ? screen
+        : `data:image/png;base64,${screen}`;
     }
 
     return this._httpClient.postJson("/api/ai/contact/extract", data);
@@ -1114,8 +1140,27 @@ export class AiChatApi {
     // Sanitize error info to remove sensitive information
     const sanitizedErrorInfo = this.sanitizeErrorInfo(params.errorInfo);
 
+    let pageContent = params.pageContent;
+    let screenshot: string | undefined = params.screenshot;
+    let estimated =
+      pageContent.length +
+      (screenshot ? screenshot.length : 0) +
+      SCRAPE_BODY_OVERHEAD_BYTES;
+    if (estimated > MAX_SCRAPE_REQUEST_BODY_BYTES) {
+      screenshot = undefined;
+      estimated = pageContent.length + SCRAPE_BODY_OVERHEAD_BYTES;
+    }
+    if (estimated > MAX_SCRAPE_REQUEST_BODY_BYTES) {
+      const maxPage =
+        MAX_SCRAPE_REQUEST_BODY_BYTES - SCRAPE_BODY_OVERHEAD_BYTES;
+      if (maxPage > 0 && pageContent.length > maxPage) {
+        pageContent =
+          pageContent.substring(0, maxPage - 20) + "\n<!-- truncated -->";
+      }
+    }
+
     const data: ScrapeAssistRequest = {
-      page_content: params.pageContent,
+      page_content: pageContent,
       page_url: params.pageUrl,
       step_context: params.stepContext,
       error_info: sanitizedErrorInfo,
@@ -1123,10 +1168,10 @@ export class AiChatApi {
       selectors_tried: params.selectorsTried,
     };
 
-    if (params.screenshot) {
-      data.screenshot = params.screenshot.startsWith("data:")
-        ? params.screenshot
-        : `data:image/png;base64,${params.screenshot}`;
+    if (screenshot) {
+      data.screenshot = screenshot.startsWith("data:")
+        ? screenshot
+        : `data:image/png;base64,${screenshot}`;
     }
 
     return this._httpClient.postJson("/api/ai/scrape/assist", data);
@@ -1155,8 +1200,28 @@ export class AiChatApi {
     if (params.screenshot) {
       this.validateScreenshot(params.screenshot);
     }
+
+    let pageContent = params.pageContent;
+    let screenshot: string | undefined = params.screenshot;
+    let estimated =
+      pageContent.length +
+      (screenshot ? screenshot.length : 0) +
+      SCRAPE_BODY_OVERHEAD_BYTES;
+    if (estimated > MAX_SCRAPE_REQUEST_BODY_BYTES) {
+      screenshot = undefined;
+      estimated = pageContent.length + SCRAPE_BODY_OVERHEAD_BYTES;
+    }
+    if (estimated > MAX_SCRAPE_REQUEST_BODY_BYTES) {
+      const maxPage =
+        MAX_SCRAPE_REQUEST_BODY_BYTES - SCRAPE_BODY_OVERHEAD_BYTES;
+      if (maxPage > 0 && pageContent.length > maxPage) {
+        pageContent =
+          pageContent.substring(0, maxPage - 20) + "\n<!-- truncated -->";
+      }
+    }
+
     const data: ObserveRequest = {
-      page_content: params.pageContent,
+      page_content: pageContent,
       page_url: params.pageUrl,
       goal: params.goal,
       platform_name: params.platformName,
@@ -1167,10 +1232,10 @@ export class AiChatApi {
     if (params.sessionId != null && params.sessionId !== "") {
       data.session_id = params.sessionId;
     }
-    if (params.screenshot) {
-      data.screenshot = params.screenshot.startsWith("data:")
-        ? params.screenshot
-        : `data:image/png;base64,${params.screenshot}`;
+    if (screenshot) {
+      data.screenshot = screenshot.startsWith("data:")
+        ? screenshot
+        : `data:image/png;base64,${screenshot}`;
     }
     if (params.maxIterations != null) {
       data.max_iterations = params.maxIterations;
