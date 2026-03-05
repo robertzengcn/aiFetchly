@@ -16,7 +16,7 @@
  * - Adapter methods take precedence over configuration-based selectors
  */
 
-import { Page, Browser, ElementHandle } from "puppeteer";
+import { Page, Browser, ElementHandle, Frame } from "puppeteer";
 import { BrowserManager } from "@/modules/browserManager";
 import { ChildProcessAdapterFactory } from "@/modules/ChildProcessAdapterFactory";
 import { BasePlatformAdapter } from "@/modules/BasePlatformAdapter";
@@ -249,8 +249,11 @@ export class YellowPagesScraper {
    */
   private async getSimplifiedPageContent(): Promise<string> {
     if (!this.page) return "";
-
-    return this.page.evaluate(() => {
+    const frame = this.page.mainFrame();
+    if (frame.isDetached()) {
+      return "";
+    }
+    return frame.evaluate(() => {
       const title = document.title || "";
       const metaDesc =
         document
@@ -316,14 +319,7 @@ export class YellowPagesScraper {
       });
 
       // Remove elements that are empty after cleanup (no text, no children with text)
-      const selfClosing = new Set([
-        "br",
-        "hr",
-        "img",
-        "input",
-        "meta",
-        "link",
-      ]);
+      const selfClosing = new Set(["br", "hr", "img", "input", "meta", "link"]);
       const pruneEmpty = (parent: Element): void => {
         const children = [...parent.children];
         for (const child of children) {
@@ -383,11 +379,13 @@ export class YellowPagesScraper {
     out = out.replace(/\s+style=["'][^"']*["']/gi, "");
 
     // Collapse whitespace
-    out = out.replace(/\s{2,}/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+    out = out
+      .replace(/\s{2,}/g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
 
     const suffix =
-      YellowPagesScraper.TRUNCATION_SUFFIX +
-      ` (original ${html.length} bytes)`;
+      YellowPagesScraper.TRUNCATION_SUFFIX + ` (original ${html.length} bytes)`;
     const maxLen = maxBytes - suffix.length - 4;
 
     if (out.length <= maxLen) return out;
@@ -400,8 +398,8 @@ export class YellowPagesScraper {
       lastTagEnd >= maxLen - 150
         ? lastTagEnd + 1
         : lastSpace >= maxLen - 80
-          ? lastSpace + 1
-          : maxLen;
+        ? lastSpace + 1
+        : maxLen;
     return slice.slice(0, cut) + suffix;
   }
 
@@ -454,9 +452,24 @@ export class YellowPagesScraper {
   }
 
   /**
+   * Returns true if the page is still open and the main frame is usable (not detached).
+   * Use before capturing state for AI so we don't call evaluate/screenshot on a closed page.
+   */
+  private async isPageUsableForCapture(): Promise<boolean> {
+    if (!this.page || this.page.isClosed()) return false;
+    try {
+      await this.page.evaluate(() => true);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Capture simplified page HTML and screenshot for AI support.
    * Call this at the start of a catch block so the page is still open before any cleanup.
    * Uses getSimplifiedPageContent() for a clean, compact DOM representation.
+   * Returns empty content/screenshot if page is closed or frame is detached.
    */
   private async capturePageStateForAiSupport(): Promise<{
     pageContent: string;
@@ -464,12 +477,13 @@ export class YellowPagesScraper {
   }> {
     let pageContent = "";
     let screenshot: string | undefined;
+    if (!this.page || this.page.isClosed()) {
+      return { pageContent, screenshot };
+    }
     try {
-      if (this.page) {
-        pageContent = await this.getSimplifiedPageContent();
-        const buf = await this.page.screenshot({ encoding: "base64" });
-        screenshot = typeof buf === "string" ? buf : undefined;
-      }
+      pageContent = await this.getSimplifiedPageContent();
+      const buf = await this.page.screenshot({ encoding: "base64" });
+      screenshot = typeof buf === "string" ? buf : undefined;
     } catch (err) {
       console.warn("⚠️ Failed to capture page state for AI:", err);
     }
@@ -529,18 +543,19 @@ export class YellowPagesScraper {
     let pageContent = params.pageContent ?? "";
     let screenshot: string | undefined = params.screenshot;
 
-    try {
-      if (this.page) {
+    const pageUsable = await this.isPageUsableForCapture();
+    if (pageUsable) {
+      try {
         if (pageContent === "" && params.pageContent === undefined) {
           pageContent = await this.getSimplifiedPageContent();
         }
         if (screenshot === undefined && params.screenshot === undefined) {
-          const buf = await this.page.screenshot({ encoding: "base64" });
+          const buf = await this.page!.screenshot({ encoding: "base64" });
           screenshot = typeof buf === "string" ? buf : undefined;
         }
+      } catch (err) {
+        console.warn("⚠️ Failed to capture page state for AI request:", err);
       }
-    } catch (err) {
-      console.warn("⚠️ Failed to capture page state for AI request:", err);
     }
 
     // Regex fallback if simplified content is still over limit
@@ -644,18 +659,18 @@ export class YellowPagesScraper {
       let element: ElementHandle<Element> | null = null;
       if (action.selector) {
         if (action.selector_type === "xpath") {
-          const handles = await (
-            this.page as Page & {
-              $x(expr: string): Promise<ElementHandle<Element>[]>;
-            }
-          ).$x(action.selector);
+          const frame = this.page.mainFrame() as Frame & {
+            $x(expr: string): Promise<ElementHandle<Element>[]>;
+          };
+          const handles = await frame.$x(action.selector);
           element = handles[0] ?? null;
         } else if (action.selector_type === "text") {
-          const handles = await (
-            this.page as Page & {
-              $x(expr: string): Promise<ElementHandle<Element>[]>;
-            }
-          ).$x(`//*[contains(text(), ${JSON.stringify(action.selector)})]`);
+          const frame = this.page.mainFrame() as Frame & {
+            $x(expr: string): Promise<ElementHandle<Element>[]>;
+          };
+          const handles = await frame.$x(
+            `//*[contains(text(), ${JSON.stringify(action.selector)})]`
+          );
           element = handles[0] ?? null;
         } else {
           element = await this.page.$(action.selector);
@@ -686,13 +701,12 @@ export class YellowPagesScraper {
             break;
           }
           if (action.selector_type === "xpath") {
+            const frame = this.page.mainFrame() as Frame & {
+              $x(expr: string): Promise<ElementHandle<Element>[]>;
+            };
             const deadline = Date.now() + timeout;
             while (Date.now() < deadline) {
-              const handles = await (
-                this.page as Page & {
-                  $x(expr: string): Promise<ElementHandle<Element>[]>;
-                }
-              ).$x(action.selector!);
+              const handles = await frame.$x(action.selector!);
               if (handles.length > 0) {
                 result.element_found = true;
                 result.success = true;
@@ -1883,15 +1897,16 @@ export class YellowPagesScraper {
         "keywordInput" in this.platformInfo.selectors.searchForm;
 
       if (hasSearchFormSelectors) {
-        // Use platform-defined search form selectors
+        // Use platform-defined search form selectors (main frame only to avoid detached iframe)
         console.log("Using platform-defined search form selectors");
         await this.fillSearchFormWithPlatformSelectors(keyword, location);
 
         // Submit the form using platform selector
         await this.submitSearchFormWithPlatformSelector();
 
-        // Wait for search results to load
-        await this.page.waitForSelector(
+        // Wait for search results to load in main frame
+        const mainFrame = this.page.mainFrame();
+        await mainFrame.waitForSelector(
           this.platformInfo.selectors.businessList,
           {
             timeout: 15000,
@@ -1967,11 +1982,22 @@ export class YellowPagesScraper {
           "🤖 Requesting AI step guidance for search page navigation failure..."
         );
         try {
-          const captured = await this.capturePageStateForAiSupport();
+          const pageUsable = await this.isPageUsableForCapture();
+          const captured = pageUsable
+            ? await this.capturePageStateForAiSupport()
+            : { pageContent: "", screenshot: undefined };
           const selectors = this.platformInfo.selectors.searchForm || {};
+          let pageUrl = this.platformInfo.base_url;
+          if (pageUsable && this.page && !this.page.isClosed()) {
+            try {
+              pageUrl = this.page.url();
+            } catch {
+              // use base_url if url() throws (e.g. detached)
+            }
+          }
           const aiResult = await this.requestAiSupport({
             requestType: "step_guidance",
-            pageUrl: this.page.url(),
+            pageUrl,
             stepContext: "navigate_to_search_page",
             errorInfo: `Failed to navigate/fill search page for keyword "${keyword}" location "${location}": ${
               error instanceof Error ? error.message : String(error)
@@ -2158,11 +2184,12 @@ export class YellowPagesScraper {
     if (!this.page || !this.platformInfo.selectors.searchForm) return;
 
     try {
+      const frame = this.page.mainFrame();
       const searchForm = this.platformInfo.selectors.searchForm;
 
-      // Fill keyword field if selector exists
+      // Fill keyword field if selector exists (main frame to avoid detached iframe)
       if (searchForm.keywordInput) {
-        const keywordField = await this.page.$(searchForm.keywordInput);
+        const keywordField = await frame.$(searchForm.keywordInput);
         if (keywordField) {
           console.log(
             `Filling keyword field with platform selector: ${searchForm.keywordInput}`
@@ -2195,7 +2222,7 @@ export class YellowPagesScraper {
 
       // Fill location field if selector exists
       if (searchForm.locationInput) {
-        const locationField = await this.page.$(searchForm.locationInput);
+        const locationField = await frame.$(searchForm.locationInput);
         if (locationField) {
           console.log(
             `Filling location field with platform selector: ${searchForm.locationInput}`
@@ -2239,10 +2266,11 @@ export class YellowPagesScraper {
     if (!this.page || !this.platformInfo.selectors.searchForm) return;
 
     try {
+      const frame = this.page.mainFrame();
       const searchForm = this.platformInfo.selectors.searchForm;
 
       if (searchForm.searchButton) {
-        const submitButton = await this.page.$(searchForm.searchButton);
+        const submitButton = await frame.$(searchForm.searchButton);
         if (submitButton) {
           console.log(
             `Submitting search form with platform selector: ${searchForm.searchButton}`
@@ -2693,8 +2721,7 @@ export class YellowPagesScraper {
 
       if (this.aiSupportEnabled && this.page && results.length === 0) {
         try {
-          const errMsg =
-            error instanceof Error ? error.message : String(error);
+          const errMsg = error instanceof Error ? error.message : String(error);
           console.log(
             "🤖 Attempting AI-assisted recovery for extractBusinessData..."
           );
@@ -2710,8 +2737,7 @@ export class YellowPagesScraper {
           const result = await this.observeExecuteLoop({
             goal,
             pageUrl: this.page.url(),
-            maxIterations:
-              YellowPagesScraper.ERROR_RECOVERY_MAX_ITERATIONS,
+            maxIterations: YellowPagesScraper.ERROR_RECOVERY_MAX_ITERATIONS,
             goalContext: "error_recovery",
             stepContext: "extract_business_data",
             errorInfo: errMsg,
@@ -3151,7 +3177,6 @@ export class YellowPagesScraper {
     const selectors = this.platformInfo.selectors;
 
     try {
-
       // Check if platform has pagination selectors defined
       if (
         selectors.pagination &&
@@ -3214,8 +3239,7 @@ export class YellowPagesScraper {
 
       if (this.aiSupportEnabled && this.page) {
         try {
-          const errMsg =
-            error instanceof Error ? error.message : String(error);
+          const errMsg = error instanceof Error ? error.message : String(error);
           console.log(
             "🤖 Attempting AI-assisted recovery for navigateToNextPage..."
           );
@@ -3237,17 +3261,14 @@ export class YellowPagesScraper {
           const result = await this.observeExecuteLoop({
             goal,
             pageUrl: this.page.url(),
-            maxIterations:
-              YellowPagesScraper.ERROR_RECOVERY_MAX_ITERATIONS,
+            maxIterations: YellowPagesScraper.ERROR_RECOVERY_MAX_ITERATIONS,
             goalContext: "error_recovery",
             stepContext: "navigate_to_next_page",
             errorInfo: errMsg,
             selectorsAvailable: {
               businessList: selectors.businessList,
               nextButton:
-                typeof nextBtnSelector === "string"
-                  ? nextBtnSelector
-                  : "",
+                typeof nextBtnSelector === "string" ? nextBtnSelector : "",
             },
           });
 
@@ -3375,8 +3396,7 @@ export class YellowPagesScraper {
 
       if (this.aiSupportEnabled && this.page) {
         try {
-          const errMsg =
-            error instanceof Error ? error.message : String(error);
+          const errMsg = error instanceof Error ? error.message : String(error);
           console.log(
             "🤖 Attempting AI-assisted recovery for navigateToDetailPage..."
           );
@@ -3395,8 +3415,7 @@ export class YellowPagesScraper {
           const result = await this.observeExecuteLoop({
             goal,
             pageUrl: this.page.url(),
-            maxIterations:
-              YellowPagesScraper.ERROR_RECOVERY_MAX_ITERATIONS,
+            maxIterations: YellowPagesScraper.ERROR_RECOVERY_MAX_ITERATIONS,
             goalContext: "error_recovery",
             stepContext: "navigate_to_detail_page",
             errorInfo: errMsg,
@@ -3414,11 +3433,10 @@ export class YellowPagesScraper {
               selectors.navigation?.delayAfterNavigation || 2000
             );
             await this.handleCloudflareDetection();
-            const enhancedResult =
-              await this.extractEnhancedDataFromDetailPage(
-                basicResult,
-                selectors
-              );
+            const enhancedResult = await this.extractEnhancedDataFromDetailPage(
+              basicResult,
+              selectors
+            );
             await this.navigateBackToSearchResults(selectors);
             return enhancedResult;
           }
@@ -3921,8 +3939,7 @@ export class YellowPagesScraper {
 
       if (this.aiSupportEnabled && this.page) {
         try {
-          const errMsg =
-            error instanceof Error ? error.message : String(error);
+          const errMsg = error instanceof Error ? error.message : String(error);
           console.log(
             "🤖 Attempting AI-assisted recovery for navigateBackToSearchResults..."
           );
@@ -3938,8 +3955,7 @@ export class YellowPagesScraper {
           const result = await this.observeExecuteLoop({
             goal,
             pageUrl: this.page.url(),
-            maxIterations:
-              YellowPagesScraper.ERROR_RECOVERY_MAX_ITERATIONS,
+            maxIterations: YellowPagesScraper.ERROR_RECOVERY_MAX_ITERATIONS,
             goalContext: "error_recovery",
             stepContext: "navigate_back_to_search_results",
             errorInfo: errMsg,
@@ -6551,8 +6567,11 @@ if (parentPort) {
         console.warn("Received AI_SUPPORT_RESPONSE but no active scraper");
       }
     } else if (message.type === "EXIT") {
-      const reason = (message as { reason?: string }).reason ?? "Requested by main process";
-      console.log(`Received EXIT command, shutting down gracefully. Reason: ${reason}`);
+      const reason =
+        (message as { reason?: string }).reason ?? "Requested by main process";
+      console.log(
+        `Received EXIT command, shutting down gracefully. Reason: ${reason}`
+      );
       if (globalScraper) {
         try {
           await globalScraper.stop();

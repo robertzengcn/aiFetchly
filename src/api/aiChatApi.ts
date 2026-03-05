@@ -232,6 +232,12 @@ export interface ContactExtractionResponse {
   confidence?: number;
 }
 
+/** Response from screenshot upload (POST /api/ai/scrape/screenshot/upload) */
+export interface ScreenshotUploadResponse {
+  screenshot_id: string;
+  ttl_seconds: number;
+}
+
 /**
  * Scrape assist request - sent to AI server for step guidance
  */
@@ -239,6 +245,7 @@ export interface ScrapeAssistRequest {
   page_content: string;
   page_url: string;
   screenshot?: string;
+  screenshot_id?: string;
   step_context: string;
   error_info: string;
   platform_name: string;
@@ -282,6 +289,7 @@ export interface ObserveRequest {
   page_content: string;
   page_url: string;
   screenshot?: string;
+  screenshot_id?: string;
   goal: string;
   platform_name?: string;
   selectors_available?: Record<string, string>;
@@ -1115,13 +1123,38 @@ export class AiChatApi {
   }
 
   /**
+   * Upload a screenshot for scrape assist/observe. Returns screenshot_id to pass to scrapeAssist/scrapeObserve.
+   * Use this when the screenshot is large to avoid oversized request bodies.
+   */
+  async uploadScrapeScreenshot(
+    screenshot: string,
+    ttlSeconds?: number
+  ): Promise<CommonApiresp<ScreenshotUploadResponse>> {
+    this.ensureAIEnabled();
+    if (screenshot) {
+      this.validateScreenshot(screenshot);
+    }
+    const body: { screenshot: string; ttl_seconds?: number } = {
+      screenshot: screenshot.startsWith("data:")
+        ? screenshot
+        : `data:image/png;base64,${screenshot}`,
+    };
+    if (ttlSeconds != null) {
+      body.ttl_seconds = ttlSeconds;
+    }
+    return this._httpClient.postJson("/api/ai/scrape/screenshot/upload", body);
+  }
+
+  /**
    * Request AI-powered scraping guidance when a scraping step fails.
    * The AI server analyzes the page and suggests alternative selectors or actions.
+   * Pass screenshotId when screenshot was uploaded via uploadScrapeScreenshot to avoid large body.
    */
   async scrapeAssist(params: {
     pageContent: string;
     pageUrl: string;
     screenshot?: string;
+    screenshotId?: string;
     stepContext: string;
     errorInfo: string;
     platformName: string;
@@ -1132,8 +1165,8 @@ export class AiChatApi {
     // Validate page content size
     this.validatePageSize(params.pageContent);
 
-    // Validate screenshot format if provided
-    if (params.screenshot) {
+    // Validate screenshot format if provided (and not using screenshotId)
+    if (params.screenshot && !params.screenshotId) {
       this.validateScreenshot(params.screenshot);
     }
 
@@ -1141,7 +1174,9 @@ export class AiChatApi {
     const sanitizedErrorInfo = this.sanitizeErrorInfo(params.errorInfo);
 
     let pageContent = params.pageContent;
-    let screenshot: string | undefined = params.screenshot;
+    let screenshot: string | undefined = params.screenshotId
+      ? undefined
+      : params.screenshot;
     let estimated =
       pageContent.length +
       (screenshot ? screenshot.length : 0) +
@@ -1168,7 +1203,9 @@ export class AiChatApi {
       selectors_tried: params.selectorsTried,
     };
 
-    if (screenshot) {
+    if (params.screenshotId) {
+      data.screenshot_id = params.screenshotId;
+    } else if (screenshot) {
       data.screenshot = screenshot.startsWith("data:")
         ? screenshot
         : `data:image/png;base64,${screenshot}`;
@@ -1179,12 +1216,14 @@ export class AiChatApi {
 
   /**
    * Observe-and-plan: get executable actions or status (goal_achieved / give_up) for the observe-execute loop.
+   * Pass screenshotId when screenshot was uploaded via uploadScrapeScreenshot to avoid large body.
    */
   async scrapeObserve(params: {
     sessionId?: string | null;
     pageContent: string;
     pageUrl: string;
     screenshot?: string;
+    screenshotId?: string;
     goal: string;
     platformName?: string;
     selectorsAvailable?: Record<string, string>;
@@ -1197,12 +1236,14 @@ export class AiChatApi {
   }): Promise<CommonApiresp<ObserveResponse>> {
     this.ensureAIEnabled();
     this.validatePageSize(params.pageContent);
-    if (params.screenshot) {
+    if (params.screenshot && !params.screenshotId) {
       this.validateScreenshot(params.screenshot);
     }
 
     let pageContent = params.pageContent;
-    let screenshot: string | undefined = params.screenshot;
+    let screenshot: string | undefined = params.screenshotId
+      ? undefined
+      : params.screenshot;
     let estimated =
       pageContent.length +
       (screenshot ? screenshot.length : 0) +
@@ -1232,7 +1273,9 @@ export class AiChatApi {
     if (params.sessionId != null && params.sessionId !== "") {
       data.session_id = params.sessionId;
     }
-    if (screenshot) {
+    if (params.screenshotId) {
+      data.screenshot_id = params.screenshotId;
+    } else if (screenshot) {
       data.screenshot = screenshot.startsWith("data:")
         ? screenshot
         : `data:image/png;base64,${screenshot}`;
@@ -1255,7 +1298,10 @@ export class AiChatApi {
   /**
    * Mark an observe-execute session complete (clear server-side session).
    */
-  async scrapeComplete(sessionId: string, success = true): Promise<CommonApiresp<unknown>> {
+  async scrapeComplete(
+    sessionId: string,
+    success = true
+  ): Promise<CommonApiresp<unknown>> {
     this.ensureAIEnabled();
     return this._httpClient.postJson("/api/ai/scrape/complete", {
       session_id: sessionId,
