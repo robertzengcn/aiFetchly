@@ -6,14 +6,16 @@ import type { ElectronStoreService } from "@/modules/electronstoreservice";
 import { HttpClient } from "@/modules/lib/httpclient";
 import { Token } from "@/modules/token";
 
-// Mock HttpClient
+// Mock HttpClient: use a single shared instance so tests can assert on postJson calls
+const mockPostJsonShared = vi.fn();
 vi.mock("@/modules/lib/httpclient", () => ({
   HttpClient: vi.fn().mockImplementation(() => ({
-    postJson: vi.fn(),
+    postJson: mockPostJsonShared,
   })),
 }));
 
 // Mock Token service: Token has private store: ElectronStoreService and methods setValue, getValue
+// USER_AI_ENABLED constant from @/config/usersetting is 'user_ai_enabled'
 vi.mock("@/modules/token", () => ({
   Token: vi.fn().mockImplementation(() => {
     const storeMock = {
@@ -26,7 +28,7 @@ vi.mock("@/modules/token", () => ({
       store: storeMock as unknown as ElectronStoreService,
       setValue: vi.fn(),
       getValue: vi.fn((key: string) => {
-        if (key === "USER_AI_ENABLED") return "true";
+        if (key === "user_ai_enabled") return "true";
         return "";
       }),
     };
@@ -44,11 +46,7 @@ describe("AiChatApi - Validation", () => {
       maxPageSize: 10 * 1024, // 10KB for testing
       maxErrorLength: 500,
     });
-
-    // Get mock postJson function from the mocked HttpClient
-    const MockedHttpClient = vi.mocked(HttpClient);
-    const mockInstance = new MockedHttpClient();
-    mockPostJson = mockInstance.postJson as ReturnType<typeof vi.fn>;
+    mockPostJson = mockPostJsonShared;
   });
 
   describe("extractContactInfo", () => {
@@ -280,11 +278,12 @@ describe("AiChatApi - Validation", () => {
     });
 
     it("should validate screenshot format", async () => {
+      // Use invalid data URI (text/plain instead of image/*) so validator rejects
       await expect(
         api.scrapeAssist({
           pageContent: "Test",
           pageUrl: "https://example.com",
-          screenshot: "invalid-screenshot",
+          screenshot: "data:text/plain;base64,invalid",
           stepContext: "Test step",
           errorInfo: "Test error",
           platformName: "test",
@@ -324,6 +323,186 @@ describe("AiChatApi - Validation", () => {
           selectors_tried: { phone: ".old-phone" },
         })
       );
+    });
+
+    it("should send screenshot_id and omit screenshot when screenshotId is provided", async () => {
+      mockPostJson.mockResolvedValue({
+        status: true,
+        data: {
+          suggestedSelectors: {},
+          suggestedActions: [],
+          shouldSkip: false,
+          explanation: "Test",
+        },
+      });
+
+      await api.scrapeAssist({
+        pageContent: "Test",
+        pageUrl: "https://example.com",
+        screenshotId: "uuid-from-upload",
+        stepContext: "Test step",
+        errorInfo: "Test error",
+        platformName: "test",
+        selectorsTried: {},
+      });
+
+      const payload = mockPostJson.mock.calls[0][1];
+      expect(payload.screenshot_id).toBe("uuid-from-upload");
+      expect(payload.screenshot).toBeUndefined();
+    });
+  });
+
+  describe("uploadScrapeScreenshot", () => {
+    it("should POST to upload endpoint with screenshot and optional ttl_seconds", async () => {
+      mockPostJson.mockResolvedValue({
+        status: true,
+        data: { screenshot_id: "test-uuid-123", ttl_seconds: 300 },
+      });
+
+      const result = await api.uploadScrapeScreenshot(
+        "data:image/png;base64,iVBORw0KGgo",
+        300
+      );
+
+      expect(mockPostJson).toHaveBeenCalledWith(
+        "/api/ai/scrape/screenshot/upload",
+        expect.objectContaining({
+          screenshot: "data:image/png;base64,iVBORw0KGgo",
+          ttl_seconds: 300,
+        })
+      );
+      expect(result.status).toBe(true);
+      expect(result.data?.screenshot_id).toBe("test-uuid-123");
+      expect(result.data?.ttl_seconds).toBe(300);
+    });
+
+    it("should normalize raw base64 to data URI when sending", async () => {
+      mockPostJson.mockResolvedValue({
+        status: true,
+        data: { screenshot_id: "id", ttl_seconds: 300 },
+      });
+
+      await api.uploadScrapeScreenshot("iVBORw0KGgo");
+
+      expect(mockPostJson).toHaveBeenCalledWith(
+        "/api/ai/scrape/screenshot/upload",
+        expect.objectContaining({
+          screenshot: "data:image/png;base64,iVBORw0KGgo",
+        })
+      );
+    });
+
+    it("should validate screenshot format before upload", async () => {
+      await expect(
+        api.uploadScrapeScreenshot("data:text/plain;base64,invalid")
+      ).rejects.toThrow("Invalid screenshot format");
+    });
+
+    it("should return failed status when server returns error", async () => {
+      mockPostJson.mockResolvedValue({
+        status: false,
+        msg: "Storage quota exceeded",
+        data: null,
+      });
+
+      const result = await api.uploadScrapeScreenshot(
+        "data:image/png;base64,iVBORw0KGgo"
+      );
+
+      expect(result.status).toBe(false);
+      expect(result.data).toBeNull();
+      expect(result.msg).toBe("Storage quota exceeded");
+    });
+
+    it("should return failed status when upload returns no data", async () => {
+      mockPostJson.mockResolvedValue({
+        status: true,
+        msg: "Upload successful but no data returned",
+        data: null,
+      });
+
+      const result = await api.uploadScrapeScreenshot(
+        "data:image/png;base64,iVBORw0KGgo"
+      );
+
+      expect(result.status).toBe(true);
+      expect(result.data).toBeNull();
+    });
+
+    it("should handle network errors gracefully", async () => {
+      mockPostJson.mockRejectedValue(new Error("Network connection failed"));
+
+      await expect(
+        api.uploadScrapeScreenshot("data:image/png;base64,iVBORw0KGgo")
+      ).rejects.toThrow("Network connection failed");
+    });
+
+    it("should include ttl_seconds when provided", async () => {
+      mockPostJson.mockResolvedValue({
+        status: true,
+        data: { screenshot_id: "test-id", ttl_seconds: 600 },
+      });
+
+      await api.uploadScrapeScreenshot(
+        "data:image/png;base64,iVBORw0KGgo",
+        600
+      );
+
+      expect(mockPostJson).toHaveBeenCalledWith(
+        "/api/ai/scrape/screenshot/upload",
+        expect.objectContaining({
+          ttl_seconds: 600,
+        })
+      );
+    });
+
+    it("should omit ttl_seconds when not provided", async () => {
+      mockPostJson.mockResolvedValue({
+        status: true,
+        data: { screenshot_id: "test-id", ttl_seconds: 300 },
+      });
+
+      await api.uploadScrapeScreenshot("data:image/png;base64,iVBORw0KGgo");
+
+      expect(mockPostJson).toHaveBeenCalledWith(
+        "/api/ai/scrape/screenshot/upload",
+        expect.objectContaining({
+          screenshot: "data:image/png;base64,iVBORw0KGgo",
+        })
+      );
+
+      // Verify ttl_seconds is not in the payload
+      const payload = mockPostJson.mock.calls[0][1];
+      expect(payload.ttl_seconds).toBeUndefined();
+    });
+  });
+
+  describe("scrapeObserve", () => {
+    it("should send screenshot_id and omit screenshot when screenshotId is provided", async () => {
+      mockPostJson.mockResolvedValue({
+        status: true,
+        data: {
+          session_id: "sess-1",
+          status: "actions_needed",
+          actions: [],
+          explanation: "",
+          confidence: 0.5,
+          should_retry: false,
+          max_iterations_remaining: 2,
+        },
+      });
+
+      await api.scrapeObserve({
+        pageContent: "HTML",
+        pageUrl: "https://example.com",
+        screenshotId: "uploaded-id",
+        goal: "Find search box",
+        iteration: 0,
+      });
+
+      const payload = mockPostJson.mock.calls[0][1];
+      expect(payload.screenshot_id).toBe("uploaded-id");
+      expect(payload.screenshot).toBeUndefined();
     });
   });
 
@@ -517,10 +696,10 @@ describe("AiChatApi - Page Size Validation", () => {
       const content = "x".repeat(60 * 1024); // 60KB
       expect(() => {
         (api as any).validatePageSize(content);
-      }).toThrow(expect.stringContaining("61440"));
+      }).toThrow(/61440/);
       expect(() => {
         (api as any).validatePageSize(content);
-      }).toThrow(expect.stringContaining("51200"));
+      }).toThrow(/51200/);
     });
   });
 });

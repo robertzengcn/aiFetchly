@@ -14,7 +14,9 @@ import { WriteLog } from "@/modules/lib/function";
  * Normalize step_guidance response from server (snake_case) to shape expected by child (camelCase).
  * Accepts both formats so it works whether the API returns snake_case or camelCase.
  */
-function normalizeStepGuidanceData(raw: Record<string, unknown>): AiScrapeGuidanceData {
+function normalizeStepGuidanceData(
+  raw: Record<string, unknown>
+): AiScrapeGuidanceData {
   const suggestedSelectors =
     (raw.suggestedSelectors as Record<string, string> | undefined) ??
     (raw["suggested_selectors"] as Record<string, string> | undefined) ??
@@ -131,7 +133,9 @@ export class YellowPagesAiSupportHandler {
   ): Promise<void> {
     const { requestId, requestType, taskId } = request;
 
-    this.logInfo(`AI support request received: type=${requestType}, id=${requestId}`);
+    this.logInfo(
+      `AI support request received: type=${requestType}, id=${requestId}`
+    );
 
     // Validate AI enable status first
     const aiEnabled = this.isAiEnabled();
@@ -143,7 +147,9 @@ export class YellowPagesAiSupportHandler {
           requestId,
           success: false,
           requestType,
-          errorMessage: this.getUserFacingError(AiSupportErrorCode.AI_NOT_ENABLED),
+          errorMessage: this.getUserFacingError(
+            AiSupportErrorCode.AI_NOT_ENABLED
+          ),
         },
         childProcess
       );
@@ -159,7 +165,9 @@ export class YellowPagesAiSupportHandler {
           requestId,
           success: false,
           requestType,
-          errorMessage: this.getUserFacingError(AiSupportErrorCode.INVALID_REQUEST),
+          errorMessage: this.getUserFacingError(
+            AiSupportErrorCode.INVALID_REQUEST
+          ),
         },
         childProcess
       );
@@ -176,7 +184,9 @@ export class YellowPagesAiSupportHandler {
           requestId,
           success: false,
           requestType,
-          errorMessage: this.getUserFacingError(AiSupportErrorCode.RATE_LIMITED),
+          errorMessage: this.getUserFacingError(
+            AiSupportErrorCode.RATE_LIMITED
+          ),
         },
         childProcess
       );
@@ -184,7 +194,10 @@ export class YellowPagesAiSupportHandler {
     }
 
     // Validate page content size
-    if (request.pageContent && request.pageContent.length > this.config.maxPageSize) {
+    if (
+      request.pageContent &&
+      request.pageContent.length > this.config.maxPageSize
+    ) {
       this.logWarn(
         `Page content too large: ${request.pageContent.length} bytes (max: ${this.config.maxPageSize})`
       );
@@ -195,7 +208,9 @@ export class YellowPagesAiSupportHandler {
           requestId,
           success: false,
           requestType,
-          errorMessage: this.getUserFacingError(AiSupportErrorCode.PAGE_TOO_LARGE),
+          errorMessage: this.getUserFacingError(
+            AiSupportErrorCode.PAGE_TOO_LARGE
+          ),
         },
         childProcess
       );
@@ -203,7 +218,10 @@ export class YellowPagesAiSupportHandler {
     }
 
     // Validate screenshot format if provided
-    if (request.screenshot && !this.isValidScreenshotFormat(request.screenshot)) {
+    if (
+      request.screenshot &&
+      !this.isValidScreenshotFormat(request.screenshot)
+    ) {
       this.logWarn(`Invalid screenshot format for request: ${requestId}`);
       this.sendResponse(
         {
@@ -212,7 +230,8 @@ export class YellowPagesAiSupportHandler {
           requestId,
           success: false,
           requestType,
-          errorMessage: "Invalid screenshot format. Screenshots must be base64-encoded PNG images.",
+          errorMessage:
+            "Invalid screenshot format. Screenshots must be base64-encoded PNG images.",
         },
         childProcess
       );
@@ -272,7 +291,9 @@ export class YellowPagesAiSupportHandler {
     // Create timeout promise
     const timeoutPromise = new Promise<never>((_, reject) => {
       setTimeout(() => {
-        reject(new Error(`AI request timeout after ${this.config.requestTimeout}ms`));
+        reject(
+          new Error(`AI request timeout after ${this.config.requestTimeout}ms`)
+        );
       }, this.config.requestTimeout);
     });
 
@@ -291,7 +312,9 @@ export class YellowPagesAiSupportHandler {
           requestId,
           success: false,
           requestType,
-          errorMessage: this.getUserFacingError(AiSupportErrorCode.REQUEST_TIMEOUT),
+          errorMessage: this.getUserFacingError(
+            AiSupportErrorCode.REQUEST_TIMEOUT
+          ),
         };
       }
       throw error;
@@ -361,11 +384,19 @@ export class YellowPagesAiSupportHandler {
 
     this.logInfo(`Processing observe-execute request: ${requestId}`);
 
+    // Upload screenshot if present (with 5-minute TTL for server-side caching)
+    const screenshotId = await this.uploadScreenshotIfNeeded(
+      screenshot,
+      requestId,
+      300
+    );
+
     const result = await this.aiApi.scrapeObserve({
       sessionId: sessionId ?? undefined,
       pageContent,
       pageUrl,
-      screenshot,
+      screenshot: screenshotId ? undefined : screenshot,
+      screenshotId,
       goal: goal.trim(),
       platformName: platformName ?? "yellowpages",
       selectorsAvailable: selectorsAvailable ?? {},
@@ -378,7 +409,9 @@ export class YellowPagesAiSupportHandler {
     });
 
     if (result.status && result.data) {
-      this.logInfo(`Observe-execute successful: ${requestId}, status=${result.data.status}`);
+      this.logInfo(
+        `Observe-execute successful: ${requestId}, status=${result.data.status}`
+      );
       return {
         type: "AI_SUPPORT_RESPONSE",
         taskId,
@@ -398,7 +431,9 @@ export class YellowPagesAiSupportHandler {
         },
       };
     } else {
-      this.logWarn(`Observe-execute returned no data: ${requestId} - ${result.msg}`);
+      this.logWarn(
+        `Observe-execute returned no data: ${requestId} - ${result.msg}`
+      );
       return {
         type: "AI_SUPPORT_RESPONSE",
         taskId,
@@ -416,7 +451,14 @@ export class YellowPagesAiSupportHandler {
   private async handleContactExtraction(
     request: AiSupportRequestMessage
   ): Promise<AiSupportResponseMessage> {
-    const { requestId, taskId, pageContent, pageUrl, businessName, screenshot } = request;
+    const {
+      requestId,
+      taskId,
+      pageContent,
+      pageUrl,
+      businessName,
+      screenshot,
+    } = request;
 
     this.logInfo(`Processing contact extraction request: ${requestId}`);
 
@@ -444,7 +486,9 @@ export class YellowPagesAiSupportHandler {
         },
       };
     } else {
-      this.logWarn(`Contact extraction returned no data: ${requestId} - ${result.msg}`);
+      this.logWarn(
+        `Contact extraction returned no data: ${requestId} - ${result.msg}`
+      );
       return {
         type: "AI_SUPPORT_RESPONSE",
         taskId,
@@ -457,7 +501,8 @@ export class YellowPagesAiSupportHandler {
   }
 
   /**
-   * Handle step guidance request
+   * Handle step guidance request.
+   * When screenshot is present, upload it first and pass screenshot_id to avoid oversized request body.
    */
   private async handleStepGuidance(
     request: AiSupportRequestMessage
@@ -476,10 +521,18 @@ export class YellowPagesAiSupportHandler {
 
     this.logInfo(`Processing step guidance request: ${requestId}`);
 
+    // Upload screenshot if present (with 5-minute TTL for server-side caching)
+    const screenshotId = await this.uploadScreenshotIfNeeded(
+      screenshot,
+      requestId,
+      300
+    );
+
     const result = await this.aiApi.scrapeAssist({
       pageContent,
       pageUrl,
-      screenshot,
+      screenshot: screenshotId ? undefined : screenshot,
+      screenshotId,
       stepContext: stepContext || "",
       errorInfo: errorInfo || "",
       platformName: platformName || "yellowpages",
@@ -500,7 +553,9 @@ export class YellowPagesAiSupportHandler {
         data,
       };
     } else {
-      this.logWarn(`Step guidance returned no data: ${requestId} - ${result.msg}`);
+      this.logWarn(
+        `Step guidance returned no data: ${requestId} - ${result.msg}`
+      );
       return {
         type: "AI_SUPPORT_RESPONSE",
         taskId,
@@ -561,15 +616,70 @@ export class YellowPagesAiSupportHandler {
   }
 
   /**
+   * Upload screenshot to server and return screenshot_id.
+   * Returns undefined if screenshot is empty, upload fails, or on error.
+   * Logs appropriate messages for success, failure, and errors.
+   *
+   * @param screenshot - The screenshot data (base64 or data URI)
+   * @param requestId - Request ID for logging
+   * @param ttlSeconds - Optional TTL for server-side caching (default: 300 seconds / 5 minutes)
+   * @returns screenshot_id string on success, undefined otherwise
+   */
+  private async uploadScreenshotIfNeeded(
+    screenshot: string | undefined,
+    requestId: string,
+    ttlSeconds = 300
+  ): Promise<string | undefined> {
+    if (!screenshot || screenshot.trim() === "") {
+      return undefined;
+    }
+
+    try {
+      const uploadResult = await this.aiApi.uploadScrapeScreenshot(
+        screenshot,
+        ttlSeconds
+      );
+
+      if (uploadResult.status && uploadResult.data?.screenshot_id) {
+        this.logInfo(
+          `Screenshot uploaded successfully for request ${requestId}: ${uploadResult.data.screenshot_id} (TTL: ${ttlSeconds}s)`
+        );
+        return uploadResult.data.screenshot_id;
+      } else {
+        this.logWarn(
+          `Screenshot upload failed for request ${requestId}: ${
+            uploadResult.msg || "Unknown error"
+          }, falling back to inline screenshot`
+        );
+      }
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      this.logError(
+        `Screenshot upload error for request ${requestId}: ${errorMsg}, falling back to inline screenshot`
+      );
+    }
+
+    return undefined;
+  }
+
+  /**
    * Generate cache key from request
    */
   private getCacheKey(request: AiSupportRequestMessage): string {
-    const { requestType, pageUrl, stepContext, errorInfo, platformName, selectorsTried } =
-      request;
+    const {
+      requestType,
+      pageUrl,
+      stepContext,
+      errorInfo,
+      platformName,
+      selectorsTried,
+    } = request;
 
     if (requestType === "contact_extraction") {
       // For contact extraction, cache by URL and page content hash
-      return `contact:${pageUrl}:${this.hashString(request.pageContent.substring(0, 1000))}`;
+      return `contact:${pageUrl}:${this.hashString(
+        request.pageContent.substring(0, 1000)
+      )}`;
     } else {
       // For step guidance, cache by URL, context, error, and selectors
       const selectorsJson = JSON.stringify(selectorsTried || {});
@@ -633,7 +743,9 @@ export class YellowPagesAiSupportHandler {
       case AiSupportErrorCode.REQUEST_TIMEOUT:
         return "AI request timed out. The AI server may be busy. Please try again in a moment.";
       case AiSupportErrorCode.PAGE_TOO_LARGE:
-        return `The page content is too large to process. Maximum size is ${this.config.maxPageSize / 1024}KB.`;
+        return `The page content is too large to process. Maximum size is ${
+          this.config.maxPageSize / 1024
+        }KB.`;
       case AiSupportErrorCode.RATE_LIMITED:
         return "Too many AI requests. Please wait a moment before trying again.";
       case AiSupportErrorCode.INVALID_REQUEST:
