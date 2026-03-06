@@ -250,7 +250,7 @@ export class YellowPagesScraper {
   private async getSimplifiedPageContent(): Promise<string> {
     if (!this.page) return "";
     const frame = this.page.mainFrame();
-    if (frame.isDetached()) {
+    if (frame.detached) {
       return "";
     }
     return frame.evaluate(() => {

@@ -395,7 +395,7 @@ export class YellowPagesAiSupportHandler {
       sessionId: sessionId ?? undefined,
       pageContent,
       pageUrl,
-      screenshot: screenshotId ? undefined : screenshot,
+      // Always use uploaded screenshot_id; never send inline screenshot with page HTML
       screenshotId,
       goal: goal.trim(),
       platformName: platformName ?? "yellowpages",
@@ -531,7 +531,7 @@ export class YellowPagesAiSupportHandler {
     const result = await this.aiApi.scrapeAssist({
       pageContent,
       pageUrl,
-      screenshot: screenshotId ? undefined : screenshot,
+      // Always use uploaded screenshot_id; never send inline screenshot with page HTML
       screenshotId,
       stepContext: stepContext || "",
       errorInfo: errorInfo || "",
@@ -649,13 +649,13 @@ export class YellowPagesAiSupportHandler {
         this.logWarn(
           `Screenshot upload failed for request ${requestId}: ${
             uploadResult.msg || "Unknown error"
-          }, falling back to inline screenshot`
+          }, screenshot will be omitted from AI request`
         );
       }
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
       this.logError(
-        `Screenshot upload error for request ${requestId}: ${errorMsg}, falling back to inline screenshot`
+        `Screenshot upload error for request ${requestId}: ${errorMsg}, screenshot will be omitted from AI request`
       );
     }
 
