@@ -264,13 +264,24 @@ export class BingScraper extends SearchScrape {
                     if (pageReadyState === 'complete' && searchBoxExists) {
                         this.logger.warn('Navigation timeout occurred but page appears to be loaded and functional');
                     } else {
+                        const recovery = await this.attemptAIRecovery('load_start_page', (error as Error).message, ['textarea[name="q"]']);
+                        if (recovery.success) {
+                            return this.load_start_page();
+                        }
                         throw error;
                     }
                 } catch (checkError) {
-                    // If we can't verify page state, rethrow the original error
+                    const recovery = await this.attemptAIRecovery('load_start_page', (error as Error).message, ['textarea[name="q"]']);
+                    if (recovery.success) {
+                        return this.load_start_page();
+                    }
                     throw error;
                 }
             } else {
+                const recovery = await this.attemptAIRecovery('load_start_page', (error as Error).message, []);
+                if (recovery.success) {
+                    return this.load_start_page();
+                }
                 throw error;
             }
         }
@@ -353,9 +364,19 @@ export class BingScraper extends SearchScrape {
                     await input.focus();
                     await this.page.keyboard.press("Enter");
                 } else {
-                    throw new CustomError("input keyword button not found", 202408191127280)
+                    const recovery = await this.attemptAIRecovery('search_input', 'Bing search input not found', ['textarea[name="q"]', 'input[name="q"]'], { keyword });
+                    if (recovery.success) {
+                        return this.search_keyword(keyword);
+                    }
+                    throw new CustomError("input keyword button not found", 202408191127280);
                 }
             }
+        } else {
+            const recovery = await this.attemptAIRecovery('search_input', 'Bing search input not found', ['textarea[name="q"]'], { keyword });
+            if (recovery.success) {
+                return this.search_keyword(keyword);
+            }
+            throw new CustomError("input keyword button not found", 202408191127280);
         }
     }
     //click next page

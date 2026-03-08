@@ -17,6 +17,8 @@
  */
 
 import { Page, Browser, ElementHandle, Frame } from "puppeteer";
+import { executePuppeteerAction } from "@/childprocess/utils/ObserveExecuteExecutor";
+import { runObserveExecuteLoop } from "@/childprocess/utils/ObserveExecuteLoop";
 import { BrowserManager } from "@/modules/browserManager";
 import { ChildProcessAdapterFactory } from "@/modules/ChildProcessAdapterFactory";
 import { BasePlatformAdapter } from "@/modules/BasePlatformAdapter";
@@ -620,6 +622,7 @@ export class YellowPagesScraper {
 
   /**
    * Execute a single Puppeteer action and return result (for observe-execute loop).
+   * Uses shared executor; adds Cloudflare iframe click fallback when element not found for click.
    */
   private async executeAction(action: {
     action_id: string;
@@ -637,137 +640,47 @@ export class YellowPagesScraper {
     element_found: boolean;
     screenshot_after?: string;
   }> {
-    const timeout = Math.min(60000, Math.max(100, action.timeout ?? 5000));
-    const result: {
-      action_id: string;
-      success: boolean;
-      error?: string;
-      element_found: boolean;
-      screenshot_after?: string;
-    } = {
-      action_id: action.action_id,
-      success: false,
-      element_found: false,
-    };
-
     if (!this.page) {
-      result.error = "No page available";
-      return result;
+      return { action_id: action.action_id, success: false, element_found: false, error: "No page available" };
     }
-
-    try {
-      let element: ElementHandle<Element> | null = null;
-      if (action.selector) {
-        if (action.selector_type === "xpath") {
-          const frame = this.page.mainFrame() as Frame & {
-            $x(expr: string): Promise<ElementHandle<Element>[]>;
-          };
-          const handles = await frame.$x(action.selector);
-          element = handles[0] ?? null;
-        } else if (action.selector_type === "text") {
-          const frame = this.page.mainFrame() as Frame & {
-            $x(expr: string): Promise<ElementHandle<Element>[]>;
-          };
-          const handles = await frame.$x(
-            `//*[contains(text(), ${JSON.stringify(action.selector)})]`
-          );
-          element = handles[0] ?? null;
-        } else {
-          element = await this.page.$(action.selector);
-        }
-        result.element_found = element !== null;
-      }
-
-      switch (action.type) {
-        case "click":
-          if (!element) {
-            result.error = "Element not found for click";
-            break;
-          }
-          await element.click();
-          result.success = true;
-          break;
-        case "type":
-          if (!element) {
-            result.error = "Element not found for type";
-            break;
-          }
-          await element.type(action.value ?? "", { delay: 0 });
-          result.success = true;
-          break;
-        case "waitForSelector":
-          if (!action.selector) {
-            result.error = "Selector required for waitForSelector";
-            break;
-          }
-          if (action.selector_type === "xpath") {
-            const frame = this.page.mainFrame() as Frame & {
-              $x(expr: string): Promise<ElementHandle<Element>[]>;
-            };
-            const deadline = Date.now() + timeout;
-            while (Date.now() < deadline) {
-              const handles = await frame.$x(action.selector!);
-              if (handles.length > 0) {
-                result.element_found = true;
-                result.success = true;
-                break;
-              }
-              await new Promise((r) => setTimeout(r, 200));
-            }
-            if (!result.success) {
-              result.error = "Timeout waiting for xpath selector";
-            }
-          } else {
-            await this.page.waitForSelector(action.selector, { timeout });
-            result.success = true;
-            result.element_found = true;
-          }
-          break;
-        case "scroll":
-          if (element) {
-            await element.evaluate((el) => el.scrollIntoView());
-          } else {
-            await this.page.evaluate(() =>
-              window.scrollBy(0, window.innerHeight)
-            );
-          }
-          result.success = true;
-          break;
-        case "pressKey":
-          await this.page.keyboard.press(
-            (action.key ?? "Enter") as import("puppeteer").KeyInput
-          );
-          result.success = true;
-          break;
-        case "navigate": {
-          const url = action.value ?? this.platformInfo.base_url;
-          await this.page.goto(url, { waitUntil: "domcontentloaded", timeout });
-          result.success = true;
-          break;
-        }
-        case "wait": {
-          const seconds = Math.min(
-            60,
-            Math.max(1, parseInt(action.value ?? "5", 10) || 5)
-          );
-          await this.sleep(seconds * 1000);
-          result.success = true;
-          break;
-        }
-        default:
-          result.error = `Unknown action type: ${action.type}`;
-      }
-
-      if (result.success && this.page) {
+    const result = await executePuppeteerAction(this.page, action);
+    if (result.success) return result;
+    if (action.type === "click" && !result.element_found && this.page) {
+      const triedCoordClick = await (async (): Promise<boolean> => {
         try {
-          const buf = await this.page.screenshot({ encoding: "base64" });
-          result.screenshot_after = typeof buf === "string" ? buf : undefined;
+          const frames = this.page!.frames();
+          if (frames.length < 2) return false;
+          const challengeFrame = frames.find((f) => /cloudflare|turnstile/i.test((f as { url(): string }).url()));
+          if (!challengeFrame) return false;
+          let frameEl: ElementHandle<Element> | null = null;
+          if (typeof (challengeFrame as { frameElement?(): Promise<ElementHandle<Element> | null> }).frameElement === "function") {
+            frameEl = await (challengeFrame as { frameElement(): Promise<ElementHandle<Element> | null> }).frameElement();
+          }
+          if (!frameEl) {
+            const iframe = await this.page!.$('iframe[src*="cloudflare"], iframe[src*="turnstile"]');
+            if (!iframe) return false;
+            const box = await iframe.boundingBox();
+            await iframe.dispose();
+            if (!box) return false;
+            await this.page!.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+            await this.sleep(2000);
+            await this.waitForCloudflareChallenge(10000);
+            return true;
+          }
+          const box = await frameEl.boundingBox();
+          await frameEl.dispose();
+          if (!box) return false;
+          await this.page!.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+          await this.sleep(2000);
+          await this.waitForCloudflareChallenge(10000);
+          return true;
         } catch {
-          // ignore screenshot failure
+          return false;
         }
+      })();
+      if (triedCoordClick) {
+        return { ...result, success: true, element_found: true };
       }
-    } catch (err) {
-      result.error = err instanceof Error ? err.message : String(err);
     }
     return result;
   }
@@ -783,6 +696,7 @@ export class YellowPagesScraper {
 
   /**
    * Run observe-execute loop: capture state -> observe -> execute actions -> repeat until goal_achieved/give_up/max iterations.
+   * Uses shared runObserveExecuteLoop; YellowPages requestAiSupport captures fresh pageContent/screenshot each round when not passed.
    */
   private async observeExecuteLoop(params: {
     goal: string;
@@ -793,71 +707,39 @@ export class YellowPagesScraper {
     stepContext?: string;
     errorInfo?: string;
   }): Promise<AiSupportResult> {
-    const {
-      goal,
-      pageUrl,
-      selectorsAvailable = {},
-      maxIterations = YellowPagesScraper.OBSERVE_EXECUTE_MAX_ITERATIONS,
-      goalContext,
-      stepContext,
-      errorInfo,
-    } = params;
-    let sessionId: string | null = null;
-    let previousActionResults: Array<{
-      action_id: string;
-      success: boolean;
-      error?: string;
-      element_found?: boolean;
-      screenshot_after?: string;
-    }> = [];
-
-    for (let iteration = 0; iteration < maxIterations; iteration++) {
-      const result = await this.requestAiSupport({
-        requestType: "observe_execute",
-        pageUrl,
-        goal,
-        sessionId,
-        previousActionResults,
-        iteration,
-        selectorsAvailable,
-        maxIterations,
-        goalContext,
-        stepContext: iteration === 0 ? stepContext : undefined,
-        errorInfo: iteration === 0 ? errorInfo : undefined,
-      });
-
-      if (!result.success || !result.data) {
-        return result;
+    const result = await runObserveExecuteLoop(
+      {
+        goal: params.goal,
+        pageUrl: params.pageUrl,
+        pageContent: "",
+        selectorsAvailable: params.selectorsAvailable,
+        maxIterations: params.maxIterations ?? YellowPagesScraper.OBSERVE_EXECUTE_MAX_ITERATIONS,
+        goalContext: params.goalContext,
+        stepContext: params.stepContext,
+        errorInfo: params.errorInfo,
+      },
+      {
+        requestAiSupport: async (req) => {
+          const res = await this.requestAiSupport({
+            ...req,
+            pageContent: undefined as unknown as string,
+            screenshot: undefined,
+          });
+          return {
+            success: res.success,
+            requestType: "observe_execute" as const,
+            data: res.data,
+            errorMessage: res.errorMessage,
+          };
+        },
+        executeAction: (act) => this.executeAction(act),
       }
-
-      const status = result.data.status;
-      sessionId = result.data.session_id ?? null;
-
-      if (status === "goal_achieved" || status === "give_up") {
-        return result;
-      }
-
-      if (status !== "actions_needed" || !result.data.actions?.length) {
-        return result;
-      }
-
-      previousActionResults = [];
-      for (const act of result.data.actions) {
-        const actionResult = await this.executeAction(act);
-        previousActionResults.push({
-          action_id: actionResult.action_id,
-          success: actionResult.success,
-          error: actionResult.error,
-          element_found: actionResult.element_found,
-          screenshot_after: actionResult.screenshot_after,
-        });
-      }
-    }
-
+    );
     return {
-      success: false,
+      success: result.success,
       requestType: "observe_execute",
-      errorMessage: "Max observe-execute iterations reached",
+      data: result.data,
+      errorMessage: result.errorMessage,
     };
   }
 
@@ -1450,7 +1332,7 @@ export class YellowPagesScraper {
             );
             try {
               const captured = await this.capturePageStateForAiSupport();
-              const aiResult = await this.requestAiSupport({
+              const aiResult = await this.requestAiSupport({      
                 requestType: "step_guidance",
                 pageUrl: this.page.url(),
                 stepContext: "custom_search_failed",
@@ -6347,13 +6229,13 @@ export class YellowPagesScraper {
           return true;
         }
 
-        // If challenge not resolved, try refreshing the page
+        // If challenge not resolved, try wait for some second
         if (attempt < maxRetries) {
           console.log(
             `🔄 Attempting page refresh (attempt ${attempt + 1}/${maxRetries})`
           );
-          await this.page.reload({ waitUntil: "networkidle2" });
-          await this.sleep(5000); // Wait 5 seconds after refresh
+          //await this.page.reload({ waitUntil: "networkidle2" });
+          await this.sleep(5000); // Wait 5 seconds 
         }
       } catch (error) {
         console.error(

@@ -10,6 +10,15 @@ import {convertProxyServertourl} from '@/modules/lib/function'
 import * as path from 'path';
 import * as fs from 'fs';
 import {CookiesType} from "@/entityTypes/cookiesType"
+import { isWorkerProcess } from "@/childprocess/worker"
+import type { ParentPort } from "@/childprocess/worker"
+import { requestAiSupport } from "@/childprocess/utils/AiSupportBridge"
+import { runObserveExecuteLoop } from "@/childprocess/utils/ObserveExecuteLoop"
+import type { ObserveExecuteRoundResult } from "@/childprocess/utils/ObserveExecuteLoop"
+import { executePuppeteerAction } from "@/childprocess/utils/ObserveExecuteExecutor"
+import type { AiSupportRequestMessage } from "@/modules/interface/BackgroundProcessMessages"
+import type { AiObserveExecuteResponseData } from "@/modules/interface/BackgroundProcessMessages"
+import { v4 as uuidv4 } from "uuid"
 
 // const logger = debug('SearchScrape');
 
@@ -40,6 +49,12 @@ export class SearchScrape implements searchEngineImpl {
     resultCallback?: (result: ResultParseItemType) => void; // Callback to send results immediately
     accountId?: number; // Track which account's cookies are being used
     hasCookies = false; // Track if cookies were passed for this session
+    /** Set in constructor when running in worker; used for AI observe-execute. */
+    protected parentPort: ParentPort | undefined;
+    /** Whether AI recovery (observe-execute) is enabled from config. */
+    protected aiRecoveryEnabled: boolean;
+    /** Task ID when available from context; used in AI support requests. */
+    protected taskId: number | undefined;
     constructor(options: ScrapeOptions) {
         if (options.page) {
             this.page = options.page;
@@ -86,7 +101,115 @@ export class SearchScrape implements searchEngineImpl {
                 this.config[`${this.config.platform}_settings`] = settings;
             }
         }
+        this.parentPort = isWorkerProcess(process) ? process.parentPort : undefined;
+        this.aiRecoveryEnabled = this.config.ai_recovery?.enabled !== false;
+        this.taskId = (this.context as { taskId?: number } | undefined)?.taskId;
         //this.results = [];
+    }
+
+    /**
+     * Override in subclasses to provide engine-specific selectors for AI observe-execute.
+     */
+    protected getSearchSelectorsForAi(): Record<string, string> {
+        return {};
+    }
+
+    /**
+     * Send observe-execute request to main process and return mapped result.
+     */
+    protected async requestAiSupportObserveExecute(req: {
+        requestType: "observe_execute";
+        pageUrl: string;
+        goal: string;
+        sessionId: string | null;
+        previousActionResults: import("@/modules/interface/BackgroundProcessMessages").AiObserveActionResult[];
+        iteration: number;
+        selectorsAvailable: Record<string, string>;
+        maxIterations: number;
+        goalContext?: string;
+        stepContext?: string;
+        errorInfo?: string;
+        pageContent: string;
+        screenshot?: string;
+    }): Promise<ObserveExecuteRoundResult> {
+        if (!this.parentPort) {
+            return { success: false, requestType: "observe_execute", errorMessage: "parentPort not available" };
+        }
+        const message: AiSupportRequestMessage = {
+            type: "AI_SUPPORT_REQUEST",
+            taskId: this.taskId ?? 0,
+            requestId: uuidv4(),
+            requestType: "observe_execute",
+            pageContent: req.pageContent,
+            screenshot: req.screenshot,
+            pageUrl: req.pageUrl,
+            goal: req.goal,
+            sessionId: req.sessionId,
+            previousActionResults: req.previousActionResults,
+            iteration: req.iteration,
+            selectorsAvailable: req.selectorsAvailable,
+            maxIterations: req.maxIterations,
+            goalContext: req.goalContext,
+            stepContext: req.stepContext,
+            errorInfo: req.errorInfo,
+            platformName: this.search_engine_name,
+        };
+        const response = await requestAiSupport(this.parentPort, message);
+        const data = response.data as AiObserveExecuteResponseData | undefined;
+        return {
+            success: response.success,
+            requestType: "observe_execute",
+            data,
+            errorMessage: response.errorMessage,
+        };
+    }
+
+    /**
+     * Attempt AI recovery using observe-execute loop. Call at failure points (e.g. load_start_page, search input, parse).
+     */
+    protected async attemptAIRecovery(
+        operation: string,
+        errorMessage: string,
+        attemptedSelectors: string[],
+        context?: Record<string, unknown>
+    ): Promise<{ success: boolean; error?: string }> {
+        if (!this.aiRecoveryEnabled || !this.parentPort) {
+            return { success: false, error: "AI recovery not enabled or parentPort not available" };
+        }
+        try {
+            const pageUrl = await this.page.url();
+            let pageContent = await this.page.content();
+            pageContent = pageContent.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "").replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, "").replace(/<!--[\s\S]*?-->/g, "").replace(/\s+/g, " ").trim().substring(0, 10000);
+            let screenshot: string | undefined;
+            try {
+                screenshot = (await this.page.screenshot({ type: "png", encoding: "base64", fullPage: false })) as string;
+            } catch {
+                // ignore
+            }
+            const goal = `Recover from failed step: ${operation}. Error: ${errorMessage}. Get to a state where the search can continue.`;
+            const selectorsAvailable = this.getSearchSelectorsForAi();
+            const result = await runObserveExecuteLoop(
+                {
+                    goal,
+                    pageUrl,
+                    pageContent,
+                    screenshot,
+                    selectorsAvailable,
+                    maxIterations: 3,
+                    errorInfo: errorMessage,
+                    stepContext: context ? JSON.stringify(context) : undefined,
+                },
+                {
+                    requestAiSupport: (r) => this.requestAiSupportObserveExecute(r),
+                    executeAction: (action) => executePuppeteerAction(this.page, action),
+                }
+            );
+            return { success: result.success, error: result.errorMessage };
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            this.logger?.error?.("AI recovery error: %s", msg);
+            return { success: false, error: msg };
+        }
     }
 
     async run(data: { page: Page, data: ClusterSearchData, worker, resultCallback?: (result: ResultParseItemType) => void }): Promise<RunResult> {

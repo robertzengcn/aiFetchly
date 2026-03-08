@@ -2,10 +2,6 @@
 import { SearchScrape } from "@/childprocess/searchScraper"
 import { ScrapeOptions, SearchData, SearchResult } from "@/entityTypes/scrapeType"
 import { CustomError } from "@/modules/customError"
-import { capturePageState } from "@/childprocess/utils/PageStateCapture"
-import { requestAIRecovery } from "@/childprocess/utils/AIRecoveryBridge"
-import { WorkerProcess, isWorkerProcess } from "@/childprocess/worker"
-import { executeRecoveryActions } from "@/childprocess/utils/AIRecoveryExecutor"
 // import debug from 'debug';
 // import { e } from "vitest/dist/reporters-1evA5lom";
 //import { R } from "vitest/dist/reporters-1evA5lom";
@@ -46,15 +42,17 @@ export class GoogleScraper extends SearchScrape {
         'input.searchbox',
         'input.search-field'
     ];
-    private parentPort: WorkerProcess['parentPort'] = undefined;
-    private aiRecoveryEnabled = true;
 
     constructor(options: ScrapeOptions) {
         super(options);
-        // Get parentPort from process using type guard
-        this.parentPort = isWorkerProcess(process) ? process.parentPort : undefined;
-        // Enable AI recovery based on config (default: enabled)
-        this.aiRecoveryEnabled = this.config.ai_recovery?.enabled !== false;
+    }
+
+    protected override getSearchSelectorsForAi(): Record<string, string> {
+        const r: Record<string, string> = {};
+        this.searchSelectors.forEach((sel, i) => {
+            r[`search_input_${i}`] = sel;
+        });
+        return r;
     }
     // async searchData(data: ClusterSearchData): Promise<void> {
     //     // logger("search data in google")
@@ -582,12 +580,7 @@ export class GoogleScraper extends SearchScrape {
     }
 
     /**
-     * Generic AI recovery method that can be reused across different scraping operations
-     * @param operation - The operation that failed ('search_input', 'parse_results', 'next_page', etc.)
-     * @param errorMessage - Error message describing what went wrong
-     * @param attemptedSelectors - Array of CSS selectors that were tried
-     * @param context - Optional additional context (e.g., current keyword)
-     * @returns Object with success status and optional data
+     * AI recovery via base observe-execute loop. Used at failure points (load, search, parse).
      */
     private async tryAIRecovery(
         operation: string,
@@ -595,59 +588,8 @@ export class GoogleScraper extends SearchScrape {
         attemptedSelectors: string[],
         context?: Record<string, unknown>
     ): Promise<{ success: boolean; error?: string }> {
-        if (!this.aiRecoveryEnabled || !this.parentPort) {
-            return { success: false, error: 'AI recovery not enabled or parentPort not available' };
-        }
-
         this.logger.info(`Attempting AI recovery for operation: ${operation}`);
-
-        try {
-            const pageState = await capturePageState(
-                this.page,
-                operation,
-                this.search_engine_name,
-                errorMessage,
-                attemptedSelectors,
-                { includeAccessibilityTree: true }
-            );
-
-            // Add any additional context to the page state
-            if (context) {
-                Object.assign(pageState, context);
-            }
-
-            const response = await requestAIRecovery(this.parentPort, pageState);
-
-            if (!response.success) {
-                this.logger.warn(`AI recovery not successful: ${response.reasoning}`);
-                return { success: false, error: response.reasoning };
-            }
-
-            if (response.actions.length === 0) {
-                this.logger.warn(`AI recovery returned no actions: ${response.reasoning}`);
-                return { success: false, error: 'No recovery actions suggested' };
-            }
-
-            this.logger.info(`AI suggested ${response.actions.length} recovery actions (confidence: ${response.confidence})`);
-
-            const execResult = await executeRecoveryActions(this.page, response.actions, {
-                actionDelayMin: this.config.ai_recovery?.actionDelayMin,
-                actionDelayMax: this.config.ai_recovery?.actionDelayMax
-            });
-
-            if (!execResult.success) {
-                this.logger.warn(`AI recovery actions failed at step ${execResult.failedAt}: ${execResult.error}`);
-                return { success: false, error: execResult.error };
-            }
-
-            this.logger.info(`AI recovery successful for operation: ${operation}`);
-            return { success: true };
-
-        } catch (error) {
-            const errorMsg = error instanceof Error ? error.message : String(error);
-            this.logger.error('AI recovery error:', errorMsg);
-            return { success: false, error: errorMsg };
-        }
+        return this.attemptAIRecovery(operation, errorMessage, attemptedSelectors, context);
     }
 
     /**

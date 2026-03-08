@@ -31,7 +31,8 @@ import { USERLOGPATH, USEREMAIL } from '@/config/usersetting';
 import { v4 as uuidv4 } from 'uuid';
 import { SocialAccountModule } from './socialAccountModule';
 import { AIRecoveryHandler } from './AIRecoveryHandler';
-import { AIRecoveryRequest, AIRecoveryResponse, ProcessMessage } from '@/entityTypes/processMessage-type';
+import { YellowPagesAiSupportHandler } from './YellowPagesAiSupportHandler';
+import type { AiSupportRequestMessage } from '@/modules/interface/BackgroundProcessMessages';
 import type { TaskDetailsForEdit, SearchTaskUpdateData, SearchTaskStatusValue } from '@/entityTypes/searchControlType';
 
 export type { TaskDetailsForEdit, SearchTaskUpdateData };
@@ -353,9 +354,18 @@ export class SearchModule extends BaseModule {
                 }
                 
                 // Now handle the parsed message
-                const msg = parsedMessage as { data?: string | unknown; action?: string };
+                const msg = parsedMessage as { data?: string | unknown; action?: string; type?: string };
                 
                 if (msg && typeof msg === 'object' && msg !== null) {
+                    if (msg.type === 'AI_SUPPORT_REQUEST') {
+                        const aiSupportHandler = new YellowPagesAiSupportHandler();
+                        aiSupportHandler
+                            .handleAiSupportRequest(msg as AiSupportRequestMessage, child)
+                            .catch((err) => {
+                                console.error('AI support request failed:', err);
+                            });
+                        return;
+                    }
                     // Check if it's already a parsed object with action property (direct format)
                     if ('action' in msg && typeof msg.action === 'string') {
                         childdata = msg as { action: string; data: unknown };
@@ -409,37 +419,8 @@ export class SearchModule extends BaseModule {
                             console.error(`Failed to update cookies for account ${cookiesData.accountId}:`, err);
                         });
                     }
-                } else if(childdata.action=="requestAIRecovery"){
-                    // Handle AI recovery request from child process
-                    const request = childdata.data as AIRecoveryRequest;
-                    console.log(`Received AI recovery request: ${request.requestId} for operation: ${request.operation}`);
-                    
-                    // Process recovery request asynchronously
-                    this.aiRecoveryHandler.handleRecoveryRequest(request)
-                        .then((response: AIRecoveryResponse) => {
-                            const message: ProcessMessage<AIRecoveryResponse> = {
-                                action: 'aiRecoveryResponse',
-                                data: response
-                            };
-                            child.postMessage(JSON.stringify(message));
-                        })
-                        .catch((error) => {
-                            console.error('Error processing AI recovery request:', error);
-                            const errorResponse: AIRecoveryResponse = {
-                                requestId: request.requestId,
-                                success: false,
-                                actions: [],
-                                confidence: 0,
-                                reasoning: 'Error processing recovery request',
-                                error: error instanceof Error ? error.message : String(error)
-                            };
-                            const message: ProcessMessage<AIRecoveryResponse> = {
-                                action: 'aiRecoveryResponse',
-                                data: errorResponse
-                            };
-                            child.postMessage(JSON.stringify(message));
-                        });
                 }
+                // Search flow uses AI_SUPPORT_REQUEST (observe_execute) only; requestAIRecovery branch removed.
             } catch (error) {
                 console.error('Failed to parse message from child process:', error);
                 if (error instanceof Error) {
