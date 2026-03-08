@@ -131,17 +131,19 @@ export class BaiduScraper extends SearchScrape {
 
     async load_start_page(): Promise<boolean | void> {
         const startUrl = 'https://www.baidu.com';
-
-
         this.logger.info('Using startUrl: ' + startUrl);
-
-        this.last_response = await this.page.goto(startUrl, {
-            waitUntil: "networkidle2",
-            timeout: 100000
-        });
-
-        // await this.page.waitForSelector('textarea[name="q"]', { timeout: this.STANDARD_TIMEOUT });
-
+        try {
+            this.last_response = await this.page.goto(startUrl, {
+                waitUntil: "networkidle2",
+                timeout: 100000
+            });
+        } catch (error) {
+            const recovery = await this.attemptAIRecovery('load_start_page', error instanceof Error ? error.message : String(error), []);
+            if (recovery.success) {
+                return this.load_start_page();
+            }
+            throw error;
+        }
         return true;
     }
 
@@ -193,7 +195,11 @@ export class BaiduScraper extends SearchScrape {
             await input.focus();
             await this.page.keyboard.press("Enter");
         } else {
-            throw new CustomError("input keyword button not found", 202409011049147)
+            const recovery = await this.attemptAIRecovery('search_input', 'Baidu search input not found', ['#chat-textarea', 'input[name="wd"]'], { keyword });
+            if (recovery.success) {
+                return this.search_keyword(keyword);
+            }
+            throw new CustomError("input keyword button not found", 202409011049147);
         }
         //}
     }
