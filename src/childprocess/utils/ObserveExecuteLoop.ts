@@ -66,6 +66,16 @@ export interface ObserveExecuteDeps {
   }) => Promise<ObserveExecuteRoundResult>;
   /** Execute one action and return result. */
   executeAction: (action: AiExecutableAction) => Promise<ActionResult>;
+  /**
+   * Capture the latest page state (recommended).
+   * If provided, the loop will refresh pageUrl/pageContent/screenshot before each observe request,
+   * so the LLM can verify whether previous actions achieved the goal.
+   */
+  captureState?: () => Promise<{
+    pageUrl: string;
+    pageContent: string;
+    screenshot?: string;
+  }>;
 }
 
 /**
@@ -89,11 +99,31 @@ export async function runObserveExecuteLoop(
 
   let sessionId: string | null = null;
   let previousActionResults: AiObserveActionResult[] = [];
+  let currentPageUrl = pageUrl;
+  let currentPageContent = pageContent;
+  let currentScreenshot = screenshot;
 
   for (let iteration = 0; iteration < maxIterations; iteration++) {
+    if (
+      deps.captureState &&
+      (iteration > 0 || previousActionResults.length > 0)
+    ) {
+      try {
+        const state = await deps.captureState();
+        currentPageUrl = state.pageUrl;
+        currentPageContent = state.pageContent;
+        currentScreenshot = state.screenshot;
+      } catch (err) {
+        console.warn(
+          "⚠️ Failed to capture fresh page state for observe-execute:",
+          err instanceof Error ? err.message : String(err)
+        );
+      }
+    }
+
     const result = await deps.requestAiSupport({
       requestType: "observe_execute",
-      pageUrl,
+      pageUrl: currentPageUrl,
       goal,
       sessionId,
       previousActionResults,
@@ -103,10 +133,10 @@ export async function runObserveExecuteLoop(
       goalContext,
       stepContext: iteration === 0 ? stepContext : undefined,
       errorInfo: iteration === 0 ? errorInfo : undefined,
-      pageContent,
-      screenshot,
+      pageContent: currentPageContent,
+      screenshot: currentScreenshot,
     });
-
+    console.log(`ai request result: ${JSON.stringify(result)}`);
     if (!result.success || !result.data) {
       return {
         success: result.success,
@@ -117,7 +147,7 @@ export async function runObserveExecuteLoop(
 
     const status = result.data.status;
     sessionId = result.data.session_id ?? null;
-
+    console.log(`run observer status: ${status}`);
     if (status === "goal_achieved" || status === "give_up") {
       return {
         success: true,
@@ -143,10 +173,15 @@ export async function runObserveExecuteLoop(
         error: actionResult.error,
         element_found: actionResult.element_found,
         screenshot_after: actionResult.screenshot_after,
+        url_before: actionResult.url_before,
+        url_after: actionResult.url_after,
+        title_before: actionResult.title_before,
+        title_after: actionResult.title_after,
+        selector_count_after: actionResult.selector_count_after,
       });
     }
   }
-
+  console.log(`max iterations reached`);
   return {
     success: false,
     requestType: "observe_execute",

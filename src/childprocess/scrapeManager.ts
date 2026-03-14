@@ -36,6 +36,13 @@ import { CookiesType } from "@/entityTypes/cookiesType";
 
 const logger = debug('ScrapeManager');
 const MAX_ALLOWED_BROWSERS = 10;
+
+function isUtilityProcessWorker(): boolean {
+  return Boolean(
+    (process as unknown as { parentPort?: unknown }).parentPort ??
+      (process as unknown as { env?: Record<string, string | undefined> }).env?.WORKER_TYPE
+  );
+}
 export class ScrapeManager {
   cluster: Cluster<ClusterSearchData>;
   pluggable: pluggableType;
@@ -332,7 +339,7 @@ export class ScrapeManager {
       return res;
     });
     //console.log(this.config)
-    console.log(perBrowserOptions);
+    // Avoid dumping large perBrowserOptions to stdout (very noisy in workers)
 
     // puppeteer.use(_StealthPlugin());
     // puppeteer.use(_AdblockerPlugin());
@@ -347,8 +354,13 @@ export class ScrapeManager {
 
     // const puppeteer = addExtra(vanillaPuppeteer);
     // puppeteer.use(StealthPlugin());
+    // puppeteer-cluster monitor prints `== Start:` banners which can flood logs.
+    // Disable it automatically in utility/worker processes; keep it available in main process.
+    const enableMonitor =
+      Boolean(this.config.puppeteer_cluster_config.monitor) && !isUtilityProcessWorker();
+
     this.cluster = await Cluster.launch({
-      monitor: this.config.puppeteer_cluster_config.monitor,
+      monitor: enableMonitor,
       timeout: this.config.puppeteer_cluster_config.timeout,
       concurrency: CustomConcurrency,
       maxConcurrency: this.numClusters,
@@ -495,21 +507,21 @@ export class ScrapeManager {
         page: this.page,
       }
       const obj = engineFactory.getSearchEngine(param.engine.toLowerCase(), scop)
-      let cookiesArray:Array<CookiesType>=[]
+      let cookiesArray: Array<CookiesType> = [];
       let selectedAccountId: number | undefined;
       if (param.cookies && param.cookies.length > 0) {
         const randomIndex = Math.floor(Math.random() * param.cookies.length);
         cookiesArray = param.cookies[randomIndex];
-        // Get the corresponding account ID if available
-        if (param.accounts && param.accounts.length > randomIndex) {
+        // Only set accountId when this chunk has non-empty cookies so the callback can update the DB
+        if (param.accounts && param.accounts.length > randomIndex && cookiesArray.length > 0) {
           selectedAccountId = param.accounts[randomIndex];
         }
       }
       const cludata: ClusterSearchData = {
         keywords: chunks[c],
-        cookies:cookiesArray,
-        accountId: selectedAccountId
-      }
+        cookies: cookiesArray,
+        accountId: selectedAccountId,
+      };
       console.log("cludata=%O",cludata)
       if (this.proxiesArr && this.proxiesArr.length > 0) {
         const randomIndex = Math.floor(Math.random() * this.proxiesArr.length);
@@ -598,6 +610,25 @@ export class ScrapeManager {
         
         // Handle updated cookies if available
         const runResult = promiseReturn.results as RunResult;
+        // #region agent log cookie-debug
+        fetch('http://127.0.0.1:7244/ingest/4d24544e-b441-4a64-b79f-84293905d2cc',{
+          method:'POST',
+          headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d4f741'},
+          body:JSON.stringify({
+            sessionId:'d4f741',
+            runId:'pre-fix',
+            hypothesisId:'H1',
+            location:'scrapeManager.ts:611',
+            message:'RunResult cookies payload',
+            data:{
+              hasUpdatedCookies:Boolean((runResult as any)?.updatedCookies),
+              updatedCookiesLength:Array.isArray((runResult as any)?.updatedCookies)?(runResult as any).updatedCookies.length:undefined,
+              accountId:(runResult as any)?.accountId
+            },
+            timestamp:Date.now()
+          })
+        }).catch(()=>{});
+        // #endregion agent log cookie-debug
         if (runResult.updatedCookies && runResult.accountId && cookiesCallback) {
           console.log(`Sending updated cookies for account ${runResult.accountId}`);
           cookiesCallback(runResult.accountId, runResult.updatedCookies);

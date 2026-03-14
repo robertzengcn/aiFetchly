@@ -27,6 +27,12 @@ export interface ActionResult {
   error?: string;
   element_found: boolean;
   screenshot_after?: string;
+  url_before?: string;
+  url_after?: string;
+  title_before?: string;
+  title_after?: string;
+  /** For css selector actions, count of matching elements after the action */
+  selector_count_after?: number;
 }
 
 function clampTimeout(ms: number | undefined): number {
@@ -35,6 +41,97 @@ function clampTimeout(ms: number | undefined): number {
     AI_RECOVERY_CONFIG.ACTION_MAX_TIMEOUT_MS,
     Math.max(AI_RECOVERY_CONFIG.ACTION_MIN_TIMEOUT_MS, ms)
   );
+}
+
+function normalizeTextForIncludes(s: string): string {
+  return s.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function splitSelectorList(selector: string): string[] {
+  // AI sometimes returns comma-separated selector lists. We do a simple split because
+  // our AI-generated selectors do not include commas inside attribute values.
+  return selector
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+function extractContainsText(
+  selector: string
+): { baseSelector: string; textNeedle: string } | null {
+  // Supports:
+  // - .foo:contains('Next')
+  // - .foo:contains("Next")
+  // - a:has-text='Next'
+  // - a:has-text("Next")
+  // - a:has-text('Next')
+  const containsMatch = selector.match(
+    /^(.*?)(?::contains\((['"])(.*?)\2\))(.*)$/
+  );
+  if (containsMatch) {
+    const baseSelector = `${containsMatch[1]}${containsMatch[4]}`.trim();
+    const textNeedle = containsMatch[3];
+    return {
+      baseSelector: baseSelector.length > 0 ? baseSelector : "*",
+      textNeedle,
+    };
+  }
+
+  const hasTextFuncMatch = selector.match(
+    /^(.*?)(?::has-text\((['"])(.*?)\2\))(.*)$/
+  );
+  if (hasTextFuncMatch) {
+    const baseSelector = `${hasTextFuncMatch[1]}${hasTextFuncMatch[4]}`.trim();
+    const textNeedle = hasTextFuncMatch[3];
+    return {
+      baseSelector: baseSelector.length > 0 ? baseSelector : "*",
+      textNeedle,
+    };
+  }
+
+  const hasTextEqMatch = selector.match(
+    /^(.*?)(?::has-text\s*=\s*(['"])(.*?)\2)(.*)$/
+  );
+  if (hasTextEqMatch) {
+    const baseSelector = `${hasTextEqMatch[1]}${hasTextEqMatch[4]}`.trim();
+    const textNeedle = hasTextEqMatch[3];
+    return {
+      baseSelector: baseSelector.length > 0 ? baseSelector : "*",
+      textNeedle,
+    };
+  }
+
+  return null;
+}
+
+async function findElementByCssOrTextHint(
+  frame: Frame & {
+    $x?(expr: string): Promise<ElementHandle<Element>[]>;
+    $?(sel: string): Promise<ElementHandle<Element> | null>;
+    $$(sel: string): Promise<ElementHandle<Element>[]>;
+  },
+  selector: string
+): Promise<ElementHandle<Element> | null> {
+  const maybeContains = extractContainsText(selector);
+  if (!maybeContains) {
+    return await frame.$(selector);
+  }
+
+  const candidates = await frame.$$(maybeContains.baseSelector);
+  if (!candidates.length) return null;
+
+  const needle = normalizeTextForIncludes(maybeContains.textNeedle);
+  for (const c of candidates) {
+    try {
+      const txt = await c.evaluate((el) => (el.textContent ?? "").toString());
+      if (normalizeTextForIncludes(txt).includes(needle)) return c;
+    } catch {
+      // ignore detached/other evaluation errors
+      continue;
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -89,14 +186,26 @@ export async function executePuppeteerAction(
   }
 
   try {
+    try {
+      result.url_before = await page.url();
+      result.title_before = await page.title();
+    } catch {
+      // ignore
+    }
+
     let element: ElementHandle<Element> | null = null;
     if (action.selector) {
       const frames = page.frames();
+      const selectorParts =
+        action.selector_type === "xpath" || action.selector_type === "text"
+          ? [action.selector]
+          : splitSelectorList(action.selector);
       for (let i = 0; i < frames.length; i++) {
         const frame = frames[i];
         const f = frame as Frame & {
           $x?(expr: string): Promise<ElementHandle<Element>[]>;
           $?(sel: string): Promise<ElementHandle<Element> | null>;
+          $$(sel: string): Promise<ElementHandle<Element>[]>;
         };
         try {
           if (action.selector_type === "xpath") {
@@ -112,7 +221,15 @@ export async function executePuppeteerAction(
             element = handles[0] ?? null;
           } else {
             if (typeof frame.$ !== "function") continue;
-            element = await frame.$(action.selector);
+            for (const part of selectorParts) {
+              try {
+                element = await findElementByCssOrTextHint(f, part);
+              } catch (err) {
+                // invalid selector (e.g. :contains) or other DOM error; try next selector part
+                continue;
+              }
+              if (element) break;
+            }
           }
         } catch (err) {
           logger.debug(
@@ -162,9 +279,35 @@ export async function executePuppeteerAction(
             result.error = "Timeout waiting for xpath selector";
           }
         } else {
-          await page.waitForSelector(action.selector, { timeout });
-          result.success = true;
-          result.element_found = true;
+          // Use the same robust, selector-list and :contains/:has-text aware
+          // element finder that we use for click, instead of relying directly
+          // on page.waitForSelector which cannot handle these syntaxes.
+          const frames = page.frames();
+          const selectorParts = splitSelectorList(action.selector);
+          const { found } = await waitForElementWithBackoff(async () => {
+            for (let i = 0; i < frames.length; i++) {
+              const frame = frames[i] as Frame & {
+                $x?(expr: string): Promise<ElementHandle<Element>[]>;
+                $?(sel: string): Promise<ElementHandle<Element> | null>;
+                $$(sel: string): Promise<ElementHandle<Element>[]>;
+              };
+              for (const part of selectorParts) {
+                try {
+                  const el = await findElementByCssOrTextHint(frame, part);
+                  if (el) return el;
+                } catch {
+                  // ignore and try next selector/frame
+                  continue;
+                }
+              }
+            }
+            return null;
+          }, timeout);
+          result.element_found = found;
+          result.success = found;
+          if (!found) {
+            result.error = "Timeout waiting for selector (css/text emulation)";
+          }
         }
         break;
       case "scroll":
@@ -202,6 +345,33 @@ export async function executePuppeteerAction(
 
     if (result.success && page) {
       try {
+        try {
+          result.url_after = await page.url();
+          result.title_after = await page.title();
+        } catch {
+          // ignore
+        }
+
+        if (action.selector && (action.selector_type ?? "css") === "css") {
+          const sel = splitSelectorList(action.selector)[0];
+          if (sel) {
+            try {
+              const count = await page.evaluate((s) => {
+                try {
+                  return document.querySelectorAll(s).length;
+                } catch {
+                  return -1;
+                }
+              }, sel);
+              if (typeof count === "number" && count >= 0) {
+                result.selector_count_after = count;
+              }
+            } catch {
+              // ignore
+            }
+          }
+        }
+
         const buf = await page.screenshot({ encoding: "base64" });
         result.screenshot_after = typeof buf === "string" ? buf : undefined;
       } catch {

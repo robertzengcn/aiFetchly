@@ -19,7 +19,7 @@ export const Platform_gelbeseiten_de: PlatformConfig = {
   selectors: {
     searchForm: {
       keywordInput: '#what_search',
-      locationInput: '#what_search',
+      locationInput: '#where_search',
       searchButton: 'button.search_go',
       formContainer: 'form[name="startpageForm"]',
     },

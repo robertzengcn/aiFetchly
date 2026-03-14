@@ -368,6 +368,8 @@ export class YellowPagesProcessManager extends BaseModule {
         env: {
           ...process.env,
           NODE_OPTIONS: "",
+          ELECTRON_APP_NAME: app.getName(),
+          ELECTRON_USER_DATA_PATH: app.getPath("userData"),
         },
       });
 
@@ -393,7 +395,6 @@ export class YellowPagesProcessManager extends BaseModule {
 
       // Set up stdout handler
       childProcess.stdout?.on("data", (data) => {
-        console.log(`Received stdout from task ${taskId}: ${data}`);
         // Write to runtime log file
         WriteLog(runLogfile, data.toString());
       });
@@ -406,7 +407,6 @@ export class YellowPagesProcessManager extends BaseModule {
           "Most NODE_OPTIONs are not supported in packaged apps",
         ];
         if (!ignoreStr.some((value) => data.includes(value))) {
-          console.log(`Received stderr from task ${taskId}: ${data}`);
           // Write to error log file
           WriteLog(errorLogfile, data.toString());
           // Update task error log in database

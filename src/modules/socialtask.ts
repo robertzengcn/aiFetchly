@@ -5,7 +5,7 @@ import { SocialTaskRun } from "@/modules/socialtaskrun"
 // import { Worker } from 'worker_threads';
 // const os = require("os");
 import { SocialTaskEntity, SocialTaskResponse, SocialTaskInfoResponse, SocialTaskTypeResponse, SaveSocialTaskResponse, TagResponse, SocialTaskRunEntity } from "@/entityTypes/socialtask-type"
-import { utilityProcess, MessageChannelMain} from "electron";
+import { utilityProcess, MessageChannelMain, app } from "electron";
 import * as path from 'path';
 // import { spawn } from 'node:child_process';
 import * as fs from 'fs';
@@ -148,7 +148,9 @@ export class SocialTask {
 
         const child = utilityProcess.fork(childPath, ['-a','runtask','-t',entity.taskrun_num],{stdio:"pipe",execArgv:["puppeteer-cluster:*"],env:{
             ...process.env,
-            NODE_OPTIONS: ""  
+            NODE_OPTIONS: "",
+            ELECTRON_APP_NAME: app.getName(),
+            ELECTRON_USER_DATA_PATH: app.getPath("userData"),
         }} )
         //console.log(path.join(__dirname, 'utilityCode.js'))
         
@@ -158,13 +160,11 @@ export class SocialTask {
             child.postMessage(JSON.stringify({ message: 'hello' }), [port1])
         })
         child.stdout?.on('data', (data) => {
-            console.log(`Received data chunk ${data}`)
             if(callback){
                 callback(data.toString())
             }
         })
         child.stderr?.on('data', (data) => {
-            console.log(`Received error chunk ${data}`)
             if(callback){
                 callback(data.toString())
             }
@@ -174,12 +174,11 @@ export class SocialTask {
         })
 
         port2.on("message", (e) => {
-            console.log("port receive:", e.data);
             port2.postMessage("I receive your messages:")
         })
         port2.start()
         child.on("message", (e) => {
-            console.log("接收到消息了：", e);
+            // Intentionally no console logging here to avoid spamming terminal output.
         })
 
     }

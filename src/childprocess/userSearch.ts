@@ -83,7 +83,9 @@ export class UserSearch {
         const searchDataParam: SearchDataParam = {
             keywords: keywords,
             engine: enginer,
-            cookies:data.cookies
+            cookies:data.cookies,
+            // Propagate accounts so scrapeManager/searchScraper can tag updated cookies with the right account
+            accounts: data.accounts
             //useLocalbrowserdata:data.useLocalbrowserdata
         }
        // Pass callback directly to scraper for immediate result sending

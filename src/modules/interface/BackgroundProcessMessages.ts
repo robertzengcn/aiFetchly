@@ -230,7 +230,8 @@ export interface ScrapingCaptchaDetectedMessage extends BaseBackgroundMessage {
 }
 
 /**
- * Message sent from background process when Cloudflare protection is detected
+ * Message sent from background process when Cloudflare protection is detected.
+ * Only sent after AI support bypass was attempted (if enabled) and failed; the task will then pause.
  */
 export interface ScrapingCloudflareDetectedMessage
   extends BaseBackgroundMessage {
@@ -309,7 +310,10 @@ export interface ExitTaskMessage extends BaseBackgroundMessage {
   reason: string;
 }
 
-export type AiSupportRequestType = "step_guidance" | "contact_extraction" | "observe_execute";
+export type AiSupportRequestType =
+  | "step_guidance"
+  | "contact_extraction"
+  | "observe_execute";
 
 /**
  * Executable action for observe-execute (from AI observe response)
@@ -368,6 +372,11 @@ export interface AiObserveActionResult {
   error?: string;
   element_found?: boolean;
   screenshot_after?: string;
+  url_before?: string;
+  url_after?: string;
+  title_before?: string;
+  title_after?: string;
+  selector_count_after?: number;
 }
 
 /**
@@ -405,7 +414,10 @@ export interface AiSupportResponseMessage extends BaseBackgroundMessage {
   requestId: string;
   success: boolean;
   requestType: AiSupportRequestType;
-  data?: AiExtractedContactData | AiScrapeGuidanceData | AiObserveExecuteResponseData;
+  data?:
+    | AiExtractedContactData
+    | AiScrapeGuidanceData
+    | AiObserveExecuteResponseData;
   errorMessage?: string;
 }
 
