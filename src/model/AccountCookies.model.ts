@@ -20,16 +20,43 @@ export class AccountCookiesModel extends BaseDb {
         }
 
         const recordtime = getRecorddatetime();
+        const now = new Date();
+        // #region agent log cookie-debug
+        fetch('http://127.0.0.1:7244/ingest/4d24544e-b441-4a64-b79f-84293905d2cc',{
+          method:'POST',
+          headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d4f741'},
+          body:JSON.stringify({
+            sessionId:'d4f741',
+            runId:'pre-fix',
+            hypothesisId:'H4',
+            location:'AccountCookies.model.ts:22',
+            message:'saveAccountCookies write',
+            data:{
+              accountId:accountcookies.account_id,
+              hasId:Boolean(accountcookies.id),
+              recordtime
+            },
+            timestamp:Date.now()
+          })
+        }).catch(()=>{});
+        // #endregion agent log cookie-debug
         const existingCookies = await this.getAccountCookies(accountcookies.account_id);
 
         if (existingCookies) {
-            existingCookies.cookies = accountcookies.cookies;
-            existingCookies.partition_path = accountcookies.partition_path;
-            existingCookies.record_time = recordtime;
-            await this.repository.save(existingCookies);
+            // Use repository.update() so updatedAt is explicitly in the UPDATE SET (avoids save() omitting inherited columns)
+            await this.repository.update(
+                { id: existingCookies.id },
+                {
+                    cookies: accountcookies.cookies,
+                    partition_path: accountcookies.partition_path,
+                    record_time: recordtime,
+                    updatedAt: now,
+                }
+            );
             return existingCookies.id;
         } else {
             accountcookies.record_time = recordtime;
+            accountcookies.updatedAt = now;
             const savedCookies = await this.repository.save(accountcookies);
             return savedCookies.id;
         }

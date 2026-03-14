@@ -377,6 +377,12 @@ export class YandexScraper extends SearchScrape {
     }
 
     async next_page(): Promise<boolean | void> {
+        // Scroll down page first so pagination is in view / loaded
+        await this.page.evaluate(() => {
+            window.scrollTo(0, document.body.scrollHeight);
+        });
+        await new Promise((resolve) => setTimeout(resolve, 400));
+
         const nextPageSelectors = [
             '.pager__item_kind_next',
             'a[aria-label="Next page"]',

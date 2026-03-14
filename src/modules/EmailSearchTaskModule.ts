@@ -21,7 +21,7 @@ import * as fs from 'fs';
 import { MessageChannelMain } from 'electron';
 import { Token } from '@/modules/token';
 import { USERLOGPATH, USEREMAIL } from '@/config/usersetting';
-import { utilityProcess } from 'electron';
+import { utilityProcess, app } from 'electron';
 import { ProcessMessage } from '@/entityTypes/processMessage-type';
 import { v4 as uuidv4 } from 'uuid';
 import { twocaptchagroup, twocaptcha_enabled, twocaptchatoken } from '@/config/settinggroupInit';
@@ -111,7 +111,9 @@ export class EmailSearchTaskModule extends BaseModule{
         const child = utilityProcess.fork(childPath, [],{stdio:"pipe",execArgv:["--inspect"],env:{
             ...process.env,
             NODE_OPTIONS: "",
-             TWOCAPTCHA_TOKEN: twoCaptchaTokenvalue
+            TWOCAPTCHA_TOKEN: twoCaptchaTokenvalue,
+            ELECTRON_APP_NAME: app.getName(),
+            ELECTRON_USER_DATA_PATH: app.getPath("userData"),
         }} )
         // console.log(path.join(__dirname, 'utilityCode.js'))
         let logpath=tokenService.getValue(USERLOGPATH)
@@ -132,7 +134,6 @@ export class EmailSearchTaskModule extends BaseModule{
         })
         
         child.stdout?.on('data', (data) => {
-            console.log(`Received data chunk ${data}`)
             WriteLog(runLogfile,data)
            // child.kill()
         })
@@ -144,7 +145,6 @@ export class EmailSearchTaskModule extends BaseModule{
             if(!ingoreStr.some((value)=>data.includes(value))){
                     
             // seModel.saveTaskerrorlog(taskId,data)
-            console.log(`Received error chunk ${data}`)
             WriteLog(errorLogfile,data)
             //this.emailSeachTaskModule.updateTaskStatus(taskId,EmailsearchTaskStatus.Error)
             //child.kill()

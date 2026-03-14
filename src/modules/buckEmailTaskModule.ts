@@ -16,7 +16,7 @@ import { WriteLog, getApplogspath, getRandomValues, getRecorddatetime } from "@/
 import { v4 as uuidv4 } from 'uuid';
 import * as path from 'path';
 import * as fs from 'fs';
-import { utilityProcess, MessageChannelMain } from "electron";
+import { utilityProcess, MessageChannelMain, app } from "electron";
 import { ProcessMessage } from "@/entityTypes/processMessage-type"
 import { EmailSendResult } from "@/entityTypes/emailmarketingType"
 import { SendStatus } from "@/model/emailMarketingSendLog.model"
@@ -221,7 +221,9 @@ export class BuckEmailTaskModule extends BaseModule {
             execArgv: ["puppeteer-cluster:*"],
             env: {
                 ...process.env,
-                NODE_OPTIONS: ""
+                NODE_OPTIONS: "",
+                ELECTRON_APP_NAME: app.getName(),
+                ELECTRON_USER_DATA_PATH: app.getPath("userData"),
             }
         })
 
@@ -234,7 +236,6 @@ export class BuckEmailTaskModule extends BaseModule {
         })
 
         child.stdout?.on('data', (data) => {
-            console.log(`Received data chunk ${data}`)
             WriteLog(runLogfile, data)
             // child.kill()
         })
@@ -243,7 +244,6 @@ export class BuckEmailTaskModule extends BaseModule {
             if (!ingoreStr.some((value) => data.includes(value))) {
 
                 // seModel.saveTaskerrorlog(taskId,data)
-                console.log(`Received error chunk ${data}`)
                 WriteLog(errorLogfile, data)
                 // this.emailSeachTaskModule.updateTaskStatus(taskId,EmailsearchTaskStatus.Error)
                 //child.kill()

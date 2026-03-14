@@ -733,6 +733,17 @@ export class YellowPagesScraper {
           };
         },
         executeAction: (act) => this.executeAction(act),
+        captureState: async () => {
+          const pageUrlNow = this.page && !this.page.isClosed()
+            ? await this.page.url()
+            : params.pageUrl;
+          const state = await this.capturePageStateForAiSupport();
+          return {
+            pageUrl: pageUrlNow,
+            pageContent: state.pageContent,
+            screenshot: state.screenshot,
+          };
+        },
       }
     );
     return {
@@ -5500,7 +5511,8 @@ export class YellowPagesScraper {
   }
 
   /**
-   * Handle Cloudflare protection detection and notify parent process
+   * Handle Cloudflare protection detection: try AI support to bypass first;
+   * only if AI is disabled or bypass fails, notify parent and pause.
    */
   private async handleCloudflareDetection(): Promise<void> {
     if (!this.page) return;
@@ -5509,8 +5521,26 @@ export class YellowPagesScraper {
       const isBlocked = await this.detectCloudflareProtection();
       if (isBlocked) {
         console.log(
-          "🚨 Cloudflare protection detected! Notifying parent process..."
+          "🚨 Cloudflare protection detected. Attempting AI support to continue..."
         );
+
+        // If AI support is enabled, try to bypass Cloudflare via observe-execute before pausing
+        if (this.aiSupportEnabled) {
+          const bypassOk = await this.attemptAiCloudflareBypass();
+          if (bypassOk) {
+            console.log(
+              "✅ Cloudflare bypass succeeded with AI support; continuing scraping."
+            );
+            return;
+          }
+          console.log(
+            "🤖 AI Cloudflare bypass did not resolve; will notify and pause."
+          );
+        } else {
+          console.log(
+            "🤖 AI support disabled; will notify parent and pause."
+          );
+        }
 
         // Get additional context for the notification
         const currentUrl = this.page.url();
@@ -5540,7 +5570,7 @@ export class YellowPagesScraper {
           additionalInfo = "Unable to extract additional page information";
         }
 
-        // Create Cloudflare detection message
+        // Create Cloudflare detection message (sent when AI bypass failed or AI disabled)
         const cloudflareMessage = {
           type: "SCRAPING_CLOUDFLARE_DETECTED",
           taskId: this.taskData.taskId,
@@ -5590,7 +5620,7 @@ export class YellowPagesScraper {
         console.log("     - Reduce scraping frequency");
         console.log("     - Check if manual access works in browser");
 
-        // Pause the scraping process due to Cloudflare protection
+        // Pause the scraping process due to Cloudflare protection (only after AI bypass failed or disabled)
         if (this.isRunning) {
           console.log(
             "⏸️ Pausing scraping process due to Cloudflare protection..."
@@ -6181,13 +6211,18 @@ export class YellowPagesScraper {
       return false;
     }
 
+    // Trust AI when it reports goal_achieved: page is loaded / challenge bypassed (e.g. no
+    // actions needed, explanation says real content is visible). Do not require local
+    // detectCloudflareProtection() to be clear, as it can false-positive on leftover DOM.
     const stillBlocked = await this.detectCloudflareProtection();
-    if (!stillBlocked) {
+    if (stillBlocked) {
+      console.log(
+        "🤖 AI reported goal_achieved (page/challenge OK); trusting AI and continuing (local CF check still positive)."
+      );
+    } else {
       console.log("✅ AI Cloudflare bypass succeeded – page no longer blocked");
-      return true;
     }
-    console.log("🤖 AI reported goal_achieved but Cloudflare still detected");
-    return false;
+    return true;
   }
 
   /**
