@@ -39,6 +39,11 @@ export class YellowPagesTaskEntity extends AuditableEntity {
   @Column("text", { nullable: true })
   run_log?: string;
 
+  // Which local browser executable to use for Puppeteer (e.g. "chrome").
+  // Empty/undefined means "do not force local browser executable".
+  @Column("text", { nullable: true })
+  local_browser?: string;
+
   @Column("integer", { nullable: true })
   account_id?: number; // Reference to account for cookies
 

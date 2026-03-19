@@ -31,6 +31,7 @@ export interface StartTaskMessage extends BaseBackgroundMessage {
     cookies?: any[];
     headless?: boolean;
     aiSupportEnabled?: boolean;
+    localBrowser?: string;
     userDataPath?: string;
     adapterClass?: {
       className: string;
