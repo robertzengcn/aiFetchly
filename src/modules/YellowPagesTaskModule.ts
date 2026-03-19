@@ -144,6 +144,8 @@ export class YellowPagesTaskModule extends BaseModule {
           modelUpdates.delay_between_requests = updates.delay_between_requests;
         if (updates.headless !== undefined)
           modelUpdates.headless = updates.headless;
+        if (updates.local_browser !== undefined)
+          modelUpdates.local_browser = updates.local_browser;
         if (updates.ai_support_enabled !== undefined)
           modelUpdates.ai_support_enabled = updates.ai_support_enabled;
 

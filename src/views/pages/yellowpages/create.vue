@@ -200,6 +200,32 @@
                 </v-col>
               </v-row>
 
+              <!-- Local Browser Settings -->
+              <v-row>
+                <v-col cols="12" md="6">
+                  <v-switch
+                    v-model="useLocalBrowser"
+                    :label="$t('search.use_local_browser')"
+                    color="primary"
+                    hide-details
+                  />
+                </v-col>
+              </v-row>
+
+              <v-row v-if="useLocalBrowser">
+                <v-col cols="12" md="6">
+                  <v-select
+                    v-model="localBrowser"
+                    :items="LocalBrowerList"
+                    :label="$t('search.choose_local_browser')"
+                    :rules="[v => !!v || $t('common.fill_require_field')]"
+                    required
+                    clearable
+                    :disabled="isDetailMode"
+                  />
+                </v-col>
+              </v-row>
+
               <!-- Account Selection -->
               <v-row>
                 <v-col cols="12" md="6">
@@ -719,6 +745,7 @@ import { generateRelatedKeywords } from '@/views/api/search'
 import { windowInvoke } from '@/views/utils/apirequest'
 import { QUERY_USER_INFO } from '@/config/channellist'
 import type { UserInfoType } from '@/entityTypes/userType'
+import { LocalBrowerList } from '@/config/searchSetting'
 
 // Router
 const router = useRouter()
@@ -750,6 +777,7 @@ const taskForm = reactive({
   delay_between_requests: 2000,
   headless: true,
   aiSupportEnabled: false,
+  localBrowser: '' as string,
   account_id: undefined as number | undefined,
   proxy_config: undefined as any,
   scheduled_at: undefined as Date | undefined
@@ -764,6 +792,8 @@ const scheduleTask = ref(false)
 const keywordsInput = ref('')
 const scheduledTime = ref('')
 const useAccount = ref(false)
+const useLocalBrowser = ref(false)
+const localBrowser = ref<string>(LocalBrowerList[0] ?? '')
 const selectedAccounts = ref<SocialAccountListData[]>([])
 const proxyValue = ref<Array<ProxyEntity>>([])
 const proxytableshow = ref(false)
@@ -1004,6 +1034,11 @@ const loadTaskDetails = async () => {
       taskForm.headless = data.task.headless !== undefined ? data.task.headless : true
       taskForm.aiSupportEnabled = data.task.aiSupportEnabled ?? data.task.ai_support_enabled ?? false
       taskForm.account_id = data.task.account_id || undefined
+
+      const loadedLocalBrowser = (data.task.localBrowser ?? '') as string
+      taskForm.localBrowser = loadedLocalBrowser
+      useLocalBrowser.value = !!loadedLocalBrowser
+      localBrowser.value = loadedLocalBrowser || (LocalBrowerList[0] ?? '')
       
       // Set keywords
       if (data.task.keywords && data.task.keywords.length > 0) {
@@ -1293,6 +1328,16 @@ const handleAccountChange = (newValue: SocialAccountListData[]) => {
     taskForm.account_id = undefined
   }
 }
+
+watch(useLocalBrowser, (enabled) => {
+  taskForm.localBrowser = enabled ? (localBrowser.value || '') : ''
+})
+
+watch(localBrowser, (value) => {
+  if (useLocalBrowser.value) {
+    taskForm.localBrowser = value || ''
+  }
+})
 
 const showProxytable = () => {
   proxytableshow.value = !proxytableshow.value

@@ -112,6 +112,7 @@ export interface YellowPagesTaskData {
   delay_between_requests?: number;
   headless?: boolean;
   aiSupportEnabled?: boolean;
+  localBrowser?: string;
   scheduled_at?: Date;
 }
 
@@ -220,6 +221,7 @@ export interface YellowPagesTask {
   delay_between_requests: number;
   headless?: boolean;
   aiSupportEnabled?: boolean;
+  localBrowser?: string;
 }
 
 /**

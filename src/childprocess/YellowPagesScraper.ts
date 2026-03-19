@@ -32,6 +32,7 @@ import {
   isAiSupportResponseMessage,
 } from "@/modules/interface/BackgroundProcessMessages";
 import { SessionRecordingManager } from "@/modules/SessionRecordingManager";
+import { getChromeExcutepath, getFirefoxExcutepath } from "@/modules/lib/function";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
@@ -82,6 +83,7 @@ interface TaskData {
   cookies?: unknown[];
   headless?: boolean;
   aiSupportEnabled?: boolean;
+  localBrowser?: string;
   userDataPath?: string;
   adapterClass?: {
     className: string;
@@ -1082,7 +1084,35 @@ export class YellowPagesScraper {
   private async initializeBrowser(): Promise<void> {
     try {
       // Use BrowserManager to get proper launch options with stealth mode
-      const browserManager = new BrowserManager({ enableStealth: true });
+      let localBrowserPath: string | undefined = undefined;
+      if (this.taskData.localBrowser) {
+        switch (this.taskData.localBrowser) {
+          case "chrome": {
+            localBrowserPath = getChromeExcutepath();
+            break;
+          }
+          case "firefox": {
+            localBrowserPath = getFirefoxExcutepath();
+            break;
+          }
+          default: {
+            throw new Error(
+              `Unsupported localBrowser value: ${this.taskData.localBrowser}`
+            );
+          }
+        }
+
+        if (!localBrowserPath) {
+          throw new Error(
+            `localBrowser executable path not found for: ${this.taskData.localBrowser}`
+          );
+        }
+      }
+
+      const browserManager = new BrowserManager({
+        enableStealth: true,
+        localBrowserPath,
+      });
 
       // Override headless setting if specified in task data
       const headless =
@@ -1931,14 +1961,12 @@ export class YellowPagesScraper {
         // Submit the form using platform selector
         await this.submitSearchFormWithPlatformSelector();
 
-        // Wait for search results to load in main frame
-        const mainFrame = this.page.mainFrame();
-        await mainFrame.waitForSelector(
-          this.platformInfo.selectors.businessList,
-          {
-            timeout: 15000,
-          }
-        );
+        // Ensure we reached the business list page before extracting.
+        await this.ensureBusinessListPage({
+          context: "after_submit_search_form_platform",
+          keyword,
+          location,
+        });
 
         // Capture search page URL for later reference
         this.searchPageUrl = this.page.url();
@@ -1961,13 +1989,12 @@ export class YellowPagesScraper {
           // Submit the form
           await this.submitSearchForm();
 
-          // Wait for search results to load
-          await this.page.waitForSelector(
-            this.platformInfo.selectors.businessList,
-            {
-              timeout: 15000,
-            }
-          );
+          // Ensure we reached the business list page before extracting.
+          await this.ensureBusinessListPage({
+            context: "after_submit_search_form_generic",
+            keyword,
+            location,
+          });
 
           // Capture search page URL for later reference
           this.searchPageUrl = this.page.url();
@@ -1986,6 +2013,13 @@ export class YellowPagesScraper {
             pageNum
           );
           await this.page.goto(searchUrl, { waitUntil: "networkidle2" });
+
+          // Ensure we reached the business list page before extracting.
+          await this.ensureBusinessListPage({
+            context: "after_url_based_navigation",
+            keyword,
+            location,
+          });
 
           // Capture search page URL for later reference
           this.searchPageUrl = this.page.url();
@@ -2087,6 +2121,103 @@ export class YellowPagesScraper {
       }
 
       throw error;
+    }
+  }
+
+  /**
+   * Ensure we're on the business list (search results) page.
+   * If the expected business list selector is missing, optionally use AI observe-execute
+   * to confirm whether we're already on the correct page or to take safe actions to get there.
+   */
+  private async ensureBusinessListPage(params: {
+    context: string;
+    keyword: string;
+    location: string;
+  }): Promise<void> {
+    if (!this.page || this.page.isClosed()) return;
+
+    const businessListSelector = this.platformInfo.selectors.businessList;
+    const businessItemSelector = this.platformInfo.selectors.businessItem;
+    const searchFormSelectors = this.platformInfo.selectors.searchForm;
+
+    const hasListNow = await this.page
+      .$(businessListSelector)
+      .then((el) => Boolean(el))
+      .catch(() => false);
+
+    if (hasListNow) return;
+
+    // Try a short wait first (some pages are slow after submit)
+    try {
+      await this.page.waitForSelector(businessListSelector, { timeout: 8000 });
+      return;
+    } catch {
+      // continue to AI support below
+    }
+
+    if (!this.aiSupportEnabled || !this.page) {
+      // Without AI support, surface a clear error so the caller can handle/retry.
+      throw new Error(
+        `Business list selector not found after search submit (${params.context}): ${businessListSelector}`
+      );
+    }
+
+    console.log(
+      `🤖 Business list selector missing; invoking AI observe-execute to confirm page or recover (context=${params.context})`
+    );
+
+    // Provide the expected selectors so AI can reason about whether we're on the list page,
+    // plus search form selectors so it can re-submit if the form didn't actually submit.
+    const selectorsAvailable: Record<string, string> = {
+      businessList: businessListSelector,
+      businessItem: businessItemSelector,
+    };
+    if (searchFormSelectors?.keywordInput) {
+      selectorsAvailable.keywordInput = searchFormSelectors.keywordInput;
+    }
+    if (searchFormSelectors?.locationInput) {
+      selectorsAvailable.locationInput = searchFormSelectors.locationInput;
+    }
+    if (searchFormSelectors?.searchButton) {
+      selectorsAvailable.searchButton = searchFormSelectors.searchButton;
+    }
+
+    const observe = await this.observeExecuteLoop({
+      goal: "Confirm we are on the business list (search results) page, and if not, navigate to it.",
+      pageUrl: this.page.url(),
+      selectorsAvailable,
+      goalContext: `We attempted to submit the search form for keyword="${params.keyword}" location="${params.location}", but the results list is not detected yet. The form may have FAILED to submit.
+
+If we're not on the results list page, take safe actions to reach it:
+- Wait briefly for navigation/content to load.
+- Close overlays/popups/cookie banners that may block interaction.
+- If still on the search form, re-submit safely (click the submit/search button, or focus an input and press Enter).
+- If we navigated away incorrectly, use Back / navigate to the results URL if visible.
+
+Stop once the business list selector exists.`,
+      maxIterations: 3,
+      stepContext: "ensure_business_list_page",
+      errorInfo: `Expected business list selector '${businessListSelector}' not found after search submit (${params.context}).`,
+    });
+
+    if (!observe.success) {
+      throw new Error(
+        `AI observe-execute failed to reach/confirm business list page: ${
+          observe.errorMessage || "unknown error"
+        }`
+      );
+    }
+
+    // Final verification
+    const hasListAfterAi = await this.page
+      .$(businessListSelector)
+      .then((el) => Boolean(el))
+      .catch(() => false);
+
+    if (!hasListAfterAi) {
+      throw new Error(
+        `Business list selector still not found after AI recovery: ${businessListSelector}`
+      );
     }
   }
 
