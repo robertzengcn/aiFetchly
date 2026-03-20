@@ -5776,6 +5776,22 @@ Stop once the business list selector exists.`,
     try {
       const isRobotVerification = await this.detectRobotVerification();
       if (isRobotVerification) {
+        if (this.aiSupportEnabled) {
+          console.log(
+            "🤖 Robot verification detected. Attempting AI support to pass verification..."
+          );
+          const bypassOk = await this.attemptAiRobotVerificationBypass();
+          if (bypassOk) {
+            console.log(
+              "✅ Robot verification appears resolved with AI support; continuing scraping."
+            );
+            return;
+          }
+          console.log(
+            "🤖 AI support could not resolve robot verification; falling back to pause/notify."
+          );
+        }
+
         console.log(
           "🤖 Robot verification challenge detected! Notifying parent process..."
         );
@@ -5850,6 +5866,52 @@ Stop once the business list selector exists.`,
     } catch (error) {
       console.error("Error handling robot verification detection:", error);
     }
+  }
+
+  /**
+   * Try to get past robot verification using the observe-execute AI loop.
+   * @returns true if robot verification no longer detected after AI actions, false otherwise
+   */
+  private async attemptAiRobotVerificationBypass(): Promise<boolean> {
+    if (!this.page || !this.aiSupportEnabled) return false;
+
+    const pageUrl = this.page.url();
+    const goal =
+      "Pass the robot verification challenge and return to normal searchable page state. If a slider is present, drag the slider handle left-to-right to complete verification. Otherwise use safe actions: wait for challenge render, click visible verification/send button once, then wait for page to load.";
+
+    console.log(
+      "🤖 Attempting AI robot verification bypass via observe-execute..."
+    );
+    const result = await this.observeExecuteLoop({
+      goal,
+      pageUrl,
+      maxIterations: 5,
+      goalContext: "robot_verification",
+    });
+
+    if (!result.success || !result.data) {
+      console.log("🤖 AI robot verification bypass failed or returned no data");
+      return false;
+    }
+    if (result.data.status !== "goal_achieved") {
+      console.log(
+        `🤖 AI robot verification bypass did not achieve goal (status=${result.data.status})`
+      );
+      return false;
+    }
+
+    const stillBlocked = await this.detectRobotVerification();
+    if (stillBlocked) {
+      console.log(
+        "🤖 AI reported goal_achieved but robot verification is still detected locally; treat bypass as failed."
+      );
+      return false;
+    } else {
+      console.log(
+        "✅ AI robot verification bypass succeeded – challenge no longer detected"
+      );
+    }
+    return true;
   }
 
   /**

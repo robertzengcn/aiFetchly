@@ -361,6 +361,8 @@ export interface AiExtractedContactData {
  */
 export interface AiScrapeGuidanceData {
   suggestedSelectors: Record<string, string>;
+  /** New preferred executable actions (Puppeteer-ready) */
+  actions?: AiExecutableAction[];
   suggestedActions: string[];
   shouldSkip: boolean;
   explanation: string;
