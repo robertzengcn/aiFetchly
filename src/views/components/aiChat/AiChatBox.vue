@@ -754,8 +754,7 @@ function canResendMessage(message: ChatMessage): boolean {
   return (
     message.role === 'user' &&
     (!message.messageType || message.messageType === MESSAGE_TYPE.MESSAGE) &&
-    message.content &&
-    message.content.trim()
+    Boolean(message.content?.trim())
   );
 }
 
