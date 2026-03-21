@@ -2,22 +2,13 @@ import type { UtilityProcess } from "electron";
 import { AiChatApi } from "@/api/aiChatApi";
 import { Token } from "@/modules/token";
 import { USER_AI_ENABLED } from "@/config/usersetting";
-import type {
-  AiExecutableAction,
-  AiScrapeGuidanceData,
-} from "@/modules/interface/BackgroundProcessMessages";
+import type { AiScrapeGuidanceData } from "@/modules/interface/BackgroundProcessMessages";
 import {
   AiSupportRequestMessage,
   AiSupportResponseMessage,
   isAiSupportRequestMessage,
 } from "@/modules/interface/BackgroundProcessMessages";
 import { WriteLog } from "@/modules/lib/function";
-
-function isAiExecutableAction(v: unknown): v is AiExecutableAction {
-  if (!v || typeof v !== "object") return false;
-  const obj = v as Record<string, unknown>;
-  return typeof obj.action_id === "string" && typeof obj.type === "string";
-}
 
 /**
  * Normalize step_guidance response from server (snake_case) to shape expected by child (camelCase).
@@ -30,10 +21,6 @@ function normalizeStepGuidanceData(
     (raw.suggestedSelectors as Record<string, string> | undefined) ??
     (raw["suggested_selectors"] as Record<string, string> | undefined) ??
     {};
-  const actions =
-    (raw.actions as unknown[] | undefined) ??
-    (raw["actions"] as unknown[] | undefined) ??
-    [];
   const suggestedActions =
     (raw.suggestedActions as string[] | undefined) ??
     (raw["suggested_actions"] as string[] | undefined) ??
@@ -48,7 +35,6 @@ function normalizeStepGuidanceData(
       typeof suggestedSelectors === "object" && suggestedSelectors !== null
         ? suggestedSelectors
         : {},
-    actions: Array.isArray(actions) ? actions.filter(isAiExecutableAction) : [],
     suggestedActions: Array.isArray(suggestedActions) ? suggestedActions : [],
     shouldSkip: Boolean(shouldSkip),
     explanation: String(explanation),

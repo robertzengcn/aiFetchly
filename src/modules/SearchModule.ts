@@ -23,7 +23,7 @@ import { SearchKeywordEntity } from "@/entity/SearchKeyword.entity";
 import { CookiesType } from "@/entityTypes/cookiesType"
 import { AccountCookiesModule } from "./accountCookiesModule";
 import {Usersearchdata } from "@/entityTypes/searchControlType"
-import { utilityProcess, MessageChannelMain, app } from "electron";
+import { utilityProcess, MessageChannelMain} from "electron";
 import { SystemSettingGroupModule } from '@/modules/SystemSettingGroupModule';
 import { twocaptchagroup,twocaptchatoken,twocaptcha_enabled,chrome_path,firefox_path,external_system} from '@/config/settinggroupInit'
 import {WriteLog,getChromeExcutepath,getFirefoxExcutepath,getRecorddatetime} from "@/modules/lib/function"
@@ -213,9 +213,7 @@ export class SearchModule extends BaseModule {
             debug_log_path:errorLogDir,
             //useLocalbrowserdata:taskEntity.useLocalbrowserdata?true:false,
             localBrowser:taskEntity.localBrowser?taskEntity.localBrowser:"",
-            // Pass both cookies and accounts so we can track which account's cookies are updated
-            cookies:taskEntity.cookies,
-            accounts:taskEntity.accounts
+            cookies:taskEntity.cookies
         }
 
         const childPath = path.join(__dirname, 'taskCode.js')
@@ -281,8 +279,7 @@ export class SearchModule extends BaseModule {
             NODE_OPTIONS: "",
             TWOCAPTCHA_TOKEN: twoCaptchaTokenvalue,
             LOCAL_BROWSER_EXCUTE_PATH: localBrowserexcutepath,
-            ELECTRON_APP_NAME: app.getName(),
-            ELECTRON_USER_DATA_PATH: app.getPath("userData"),
+            //USEDATADIR: userDataDir
         }} )
         child.on("spawn", async () => {
             console.log("child process satart, pid is"+child.pid)
@@ -1002,24 +999,6 @@ export class SearchModule extends BaseModule {
      * @param cookies The updated cookies array
      */
     public async updateAccountCookies(accountId: number, cookies: Array<CookiesType>): Promise<void> {
-        // #region agent log cookie-debug
-        fetch('http://127.0.0.1:7244/ingest/4d24544e-b441-4a64-b79f-84293905d2cc',{
-          method:'POST',
-          headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d4f741'},
-          body:JSON.stringify({
-            sessionId:'d4f741',
-            runId:'pre-fix',
-            hypothesisId:'H3',
-            location:'SearchModule.ts:1000',
-            message:'updateAccountCookies called',
-            data:{
-              accountId,
-              cookiesLength:Array.isArray(cookies)?cookies.length:undefined
-            },
-            timestamp:Date.now()
-          })
-        }).catch(()=>{});
-        // #endregion agent log cookie-debug
         try {
             // Get existing cookies entity for this account
             const existingCookies = await this.accountCookiesModule.getAccountCookies(accountId);

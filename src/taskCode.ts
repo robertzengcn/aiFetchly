@@ -94,34 +94,6 @@ if (parentPort) {
               parentPort.postMessage(JSON.stringify(message));
             },
             function (accountId, cookies) {
-              // #region agent log cookie-debug
-              fetch(
-                "http://127.0.0.1:7244/ingest/4d24544e-b441-4a64-b79f-84293905d2cc",
-                {
-                  method: "POST",
-                  headers: {
-                    "Content-Type": "application/json",
-                    "X-Debug-Session-Id": "d4f741",
-                  },
-                  body: JSON.stringify({
-                    sessionId: "d4f741",
-                    runId: "pre-fix",
-                    hypothesisId: "H2",
-                    location: "taskCode.ts:96",
-                    message: "cookiesCallback invoked",
-                    data: {
-                      accountId,
-                      cookiesLength: Array.isArray(cookies)
-                        ? cookies.length
-                        : undefined,
-                    },
-                    timestamp: Date.now(),
-                  }),
-                }
-              )
-                // eslint-disable-next-line @typescript-eslint/no-empty-function
-                .catch(() => {});
-              // #endregion agent log cookie-debug
               // Send updated cookies back to main process
               console.log(
                 `Sending updated cookies for account ${accountId} to main process`

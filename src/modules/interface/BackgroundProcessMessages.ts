@@ -31,7 +31,6 @@ export interface StartTaskMessage extends BaseBackgroundMessage {
     cookies?: any[];
     headless?: boolean;
     aiSupportEnabled?: boolean;
-    localBrowser?: string;
     userDataPath?: string;
     adapterClass?: {
       className: string;
@@ -231,8 +230,7 @@ export interface ScrapingCaptchaDetectedMessage extends BaseBackgroundMessage {
 }
 
 /**
- * Message sent from background process when Cloudflare protection is detected.
- * Only sent after AI support bypass was attempted (if enabled) and failed; the task will then pause.
+ * Message sent from background process when Cloudflare protection is detected
  */
 export interface ScrapingCloudflareDetectedMessage
   extends BaseBackgroundMessage {
@@ -311,10 +309,7 @@ export interface ExitTaskMessage extends BaseBackgroundMessage {
   reason: string;
 }
 
-export type AiSupportRequestType =
-  | "step_guidance"
-  | "contact_extraction"
-  | "observe_execute";
+export type AiSupportRequestType = "step_guidance" | "contact_extraction" | "observe_execute";
 
 /**
  * Executable action for observe-execute (from AI observe response)
@@ -361,8 +356,6 @@ export interface AiExtractedContactData {
  */
 export interface AiScrapeGuidanceData {
   suggestedSelectors: Record<string, string>;
-  /** New preferred executable actions (Puppeteer-ready) */
-  actions?: AiExecutableAction[];
   suggestedActions: string[];
   shouldSkip: boolean;
   explanation: string;
@@ -375,11 +368,6 @@ export interface AiObserveActionResult {
   error?: string;
   element_found?: boolean;
   screenshot_after?: string;
-  url_before?: string;
-  url_after?: string;
-  title_before?: string;
-  title_after?: string;
-  selector_count_after?: number;
 }
 
 /**
@@ -417,10 +405,7 @@ export interface AiSupportResponseMessage extends BaseBackgroundMessage {
   requestId: string;
   success: boolean;
   requestType: AiSupportRequestType;
-  data?:
-    | AiExtractedContactData
-    | AiScrapeGuidanceData
-    | AiObserveExecuteResponseData;
+  data?: AiExtractedContactData | AiScrapeGuidanceData | AiObserveExecuteResponseData;
   errorMessage?: string;
 }
 

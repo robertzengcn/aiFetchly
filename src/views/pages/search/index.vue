@@ -147,9 +147,6 @@ import ProxyTableselected from "@/views/pages/proxy/widgets/ProxySelectedTable.v
 import { ProxyEntity, ProxyListEntity } from "@/entityTypes/proxyType";
 import { LocalBrowerList } from "@/config/searchSetting"
 import { SocialAccountListData } from '@/entityTypes/socialaccount-type'
-import { windowInvoke } from '@/views/utils/apirequest'
-import { QUERY_USER_INFO } from '@/config/channellist'
-import type { UserInfoType } from '@/entityTypes/userType'
 
 const { t } = useI18n({ inheritLocale: true });
 const route = useRoute();
@@ -185,8 +182,6 @@ const proxyValue = ref<Array<ProxyEntity>>([]);
 const proxytableshow = ref(false);
 const accounts = ref<Array<SocialAccountListData>>([])
 const generatingKeywords = ref(false);
-/** When true, default enable AIRecovery to true (e.g. when loading task details with no saved value). */
-const aiEnabled = ref(false);
 const enableAIRecovery = ref(false);
 const initialize = () => {
   //searchplatform.value = ToArray(SearhEnginer);
@@ -226,7 +221,7 @@ const loadTaskDetails = async () => {
       useLocalBrowser.value = !!data.localBrowser;
       localBrowser.value = data.localBrowser || '';
       useAccount.value = data.accounts && data.accounts.length > 0;
-      enableAIRecovery.value = data.enableAIRecovery ?? (aiEnabled.value ? true : false);
+      enableAIRecovery.value = data.enableAIRecovery ?? false;
       
       // Set proxies
       if (data.proxys && data.proxys.length > 0) {
@@ -377,19 +372,8 @@ watch([enginer, useAccount], ([newEngine, newUseAccount], [oldEngine, oldUseAcco
 onMounted(async () => {
   initialize();
   receiveMsg();
-
-  // If AI is enabled, default "Enable AI recovery" to true (for new tasks and as fallback when task has no saved value)
-  try {
-    const userInfo = (await windowInvoke(QUERY_USER_INFO)) as UserInfoType | undefined;
-    if (userInfo?.aiEnabled === true) {
-      aiEnabled.value = true;
-      enableAIRecovery.value = true;
-    }
-  } catch {
-    // Ignore: leave enableAIRecovery as false
-  }
-
-  // If in edit mode, load task details (may override enableAIRecovery from saved data)
+  
+  // If in edit mode, load task details
   if (isEditMode.value && taskId.value) {
     await loadTaskDetails();
   }
