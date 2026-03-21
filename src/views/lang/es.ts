@@ -756,6 +756,7 @@ export default {
     import_proxy_fail: "Error al importar proxy",
     check_settings: "Configuración de verificación",
     check_timeout: "Tiempo de espera de verificación",
+    check_timeout_suffix: "s",
     check_timeout_hint:
       "Tiempo de espera en segundos para validar proxies (1-60)",
     clear_table: "Limpiar tabla",
@@ -781,6 +782,27 @@ export default {
       'Use "Verificar proxy" para validar los proxies cargados',
     how_to_batch_upload: "Cómo cargar proxies por lotes",
     not_check: "No verificado",
+    // Nuevas traducciones del diálogo de carga por lotes
+    batch_upload: "Carga por Lotes",
+    paste_text: "Pegar Texto",
+    paste_proxy_hint: "Pegar proxies (uno por línea)",
+    format_hint:
+      "Formatos: host:port, host:port:user:pass, protocol://host:port:user:pass",
+    parsed_proxies: "Proxies Analizados",
+    proxies_parsed: "proxies analizados",
+    import_rows_missing_fields:
+      "Se omitieron {count} fila(s): cada proxy debe incluir host, puerto y protocolo (números de fila: {rows}).",
+    import_partial_rows_missing_fields:
+      "Se cargaron {valid} proxy(s); se omitieron {count} fila(s) por falta de host, puerto o protocolo (números de fila: {rows}).",
+    no_valid_proxies: "No se encontraron proxies válidos",
+    enter_proxy_text: "Por favor ingrese texto de proxy",
+    parse_text: "Analizar Texto",
+    no_proxies_to_check: "No hay proxies para verificar",
+    check_complete: "Verificación completa",
+    no_proxies_to_import: "No hay proxies para importar",
+    import_success: "proxies importados exitosamente",
+    import_partial: "Algunos proxies fallaron al importar",
+    import_fail: "Importación fallida",
   },
   emailextraction: {
     max_page_number: "Número máximo de páginas",

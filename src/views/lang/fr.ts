@@ -747,6 +747,7 @@ export default {
     import_proxy_fail: "Échec de l’import du proxy",
     check_settings: "Paramètres de vérification",
     check_timeout: "Délai de vérification",
+    check_timeout_suffix: "s",
     check_timeout_hint: "Délai en secondes pour valider le proxy (1-60)",
     clear_table: "Vider le tableau",
     save_to_my_proxy: "Enregistrer dans Mes Proxies",
@@ -771,6 +772,27 @@ export default {
       'Utilisez "Vérifier le proxy" pour valider les proxies importés',
     how_to_batch_upload: "Comment importer des proxies en lot",
     not_check: "Non vérifié",
+    // Nouvelles traductions de la boîte de dialogue d'importation par lots
+    batch_upload: "Importation par Lot",
+    paste_text: "Coller du Texte",
+    paste_proxy_hint: "Coller les proxies (un par ligne)",
+    format_hint:
+      "Formats : host:port, host:port:user:pass, protocol://host:port:user:pass",
+    parsed_proxies: "Proxies Analysés",
+    proxies_parsed: "proxies analysés",
+    import_rows_missing_fields:
+      "{count} ligne(s) ignorée(s) : chaque proxy doit inclure l’hôte, le port et le protocole (numéros de ligne : {rows}).",
+    import_partial_rows_missing_fields:
+      "{valid} proxy/proxies chargé(s) ; {count} ligne(s) ignorée(s) — hôte, port ou protocole manquant (numéros de ligne : {rows}).",
+    no_valid_proxies: "Aucun proxy valide trouvé",
+    enter_proxy_text: "Veuillez saisir du texte de proxy",
+    parse_text: "Analyser le Texte",
+    no_proxies_to_check: "Aucun proxy à vérifier",
+    check_complete: "Vérification terminée",
+    no_proxies_to_import: "Aucun proxy à importer",
+    import_success: "proxies importés avec succès",
+    import_partial: "Certains proxies ont échoué à l'importation",
+    import_fail: "Échec de l'importation",
   },
   emailextraction: {
     max_page_number: "max page number",

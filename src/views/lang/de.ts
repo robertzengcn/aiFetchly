@@ -754,6 +754,7 @@ export default {
     import_proxy_fail: "Proxy-Import fehlgeschlagen",
     check_settings: "Prüfeinstellungen",
     check_timeout: "Prüf-Timeout",
+    check_timeout_suffix: "s",
     check_timeout_hint: "Timeout in Sekunden für Proxy-Validierung (1-60)",
     clear_table: "Tabelle leeren",
     save_to_my_proxy: "In Meine Proxys speichern",
@@ -777,6 +778,27 @@ export default {
       "Verwenden Sie „Proxy prüfen“, um die hochgeladenen Proxys zu validieren",
     how_to_batch_upload: "So importieren Sie Proxys im Batch",
     not_check: "Nicht geprüft",
+    // Neue Übersetzungen für den Batch-Upload-Dialog
+    batch_upload: "Batch-Upload",
+    paste_text: "Text Einfügen",
+    paste_proxy_hint: "Proxies einfügen (einer pro Zeile)",
+    format_hint:
+      "Formate: host:port, host:port:user:pass, protocol://host:port:user:pass",
+    parsed_proxies: "Analysierte Proxys",
+    proxies_parsed: "Proxys analysiert",
+    import_rows_missing_fields:
+      "{count} Zeile(n) übersprungen: Jeder Proxy muss Host, Port und Protokoll enthalten (Dateizeilen: {rows}).",
+    import_partial_rows_missing_fields:
+      "{valid} Proxy(s) geladen; {count} Zeile(n) übersprungen — fehlender Host, Port oder Protokoll (Dateizeilen: {rows}).",
+    no_valid_proxies: "Keine gültigen Proxys gefunden",
+    enter_proxy_text: "Bitte Proxy-Text eingeben",
+    parse_text: "Text Analysieren",
+    no_proxies_to_check: "Keine Proxys zu prüfen",
+    check_complete: "Prüfung abgeschlossen",
+    no_proxies_to_import: "Keine Proxys zu importieren",
+    import_success: "Proxys erfolgreich importiert",
+    import_partial: "Einige Proxys konnten nicht importiert werden",
+    import_fail: "Import fehlgeschlagen",
   },
   emailextraction: {
     max_page_number: "Maximale Seitenzahl",

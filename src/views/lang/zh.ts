@@ -725,6 +725,7 @@ export default {
     import_proxy_fail: "导入代理失败",
     check_settings: "检查设置",
     check_timeout: "检查超时",
+    check_timeout_suffix: "秒",
     check_timeout_hint: "代理验证超时时间（秒），范围1-60",
     clear_table: "清除表格",
     // check_proxy:"检查代理",
@@ -752,6 +753,27 @@ export default {
     check_proxies: "检查代理",
     check_proxies_hint: '使用"检查代理"验证上传的代理',
     how_to_batch_upload: "如何批量上传代理",
+    // 批量上传对话框新翻译
+    batch_upload: "批量上传",
+    paste_text: "粘贴文本",
+    paste_proxy_hint: "粘贴代理列表（每行一个）",
+    format_hint:
+      "格式：host:port, host:port:user:pass, protocol://host:port:user:pass",
+    parsed_proxies: "已解析代理",
+    proxies_parsed: "个代理已解析",
+    import_rows_missing_fields:
+      "已跳过 {count} 行：每条代理必须包含主机、端口和协议（文件行号：{rows}）。",
+    import_partial_rows_missing_fields:
+      "已加载 {valid} 条代理；已跳过 {count} 行（缺少主机、端口或协议）（文件行号：{rows}）。",
+    no_valid_proxies: "未找到有效代理",
+    enter_proxy_text: "请输入代理文本",
+    parse_text: "解析文本",
+    no_proxies_to_check: "没有要检查的代理",
+    check_complete: "检查完成",
+    no_proxies_to_import: "没有要导入的代理",
+    import_success: "个代理成功导入",
+    import_partial: "部分代理导入失败",
+    import_fail: "导入失败",
   },
   emailextraction: {
     max_page_number: "最大页数",
