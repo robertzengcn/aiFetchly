@@ -48,6 +48,7 @@ import { Token } from "@/modules/token";
 import { YellowPagesAiSupportHandler } from "@/modules/YellowPagesAiSupportHandler";
 import { v4 as uuidv4 } from "uuid";
 import * as path from "path";
+import { parseYellowPagesProxyConfigJson } from "@/utils/yellowPagesProxyLaunch";
 import * as fs from "fs";
 import { YellowPagesTaskEntity } from "@/entity/YellowPagesTask.entity";
 
@@ -207,6 +208,14 @@ export class YellowPagesProcessManager extends BaseModule {
         localBrowser: task.local_browser ?? undefined,
         userDataPath: app.getPath("userData"),
       };
+
+      const parsedProxy = parseYellowPagesProxyConfigJson(task.proxy_config);
+      if (parsedProxy) {
+        taskData.proxyConfig = parsedProxy;
+        console.log(
+          `[YellowPagesProcessManager] Task ${taskId} will use proxy ${parsedProxy.protocol}://${parsedProxy.host}:${parsedProxy.port}`
+        );
+      }
 
       // Add adapter class information if available
       if (platform.adapter_class) {

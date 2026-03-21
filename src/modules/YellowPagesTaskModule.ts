@@ -39,12 +39,9 @@ export class YellowPagesTaskModule extends BaseModule {
   async createTask(taskData: YellowPagesTaskData): Promise<number> {
     return this.withConnection(async () => {
       try {
-        // Convert proxy_config from object to string if it exists
+        // Pass proxy_config as object; YellowPagesTaskModel.saveYellowPagesTask stringifies once.
         const modelTaskData = {
           ...taskData,
-          proxy_config: taskData.proxy_config
-            ? JSON.stringify(taskData.proxy_config)
-            : undefined,
         };
 
         // Use the model's saveYellowPagesTask method

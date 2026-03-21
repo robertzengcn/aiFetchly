@@ -17,6 +17,9 @@
  */
 
 import { Page, Browser, ElementHandle, Frame } from "puppeteer";
+import type { LaunchOptions } from "puppeteer";
+import type { YellowPagesTaskProxyConfig } from "@/entityTypes/yellowPagesTaskProxyType";
+import { buildPuppeteerProxyLaunchPieces } from "@/utils/yellowPagesProxyLaunch";
 import { executePuppeteerAction } from "@/childprocess/utils/ObserveExecuteExecutor";
 import { runObserveExecuteLoop } from "@/childprocess/utils/ObserveExecuteLoop";
 import { BrowserManager } from "@/modules/browserManager";
@@ -82,7 +85,9 @@ interface TaskData {
   cookies?: unknown[];
   headless?: boolean;
   aiSupportEnabled?: boolean;
+  localBrowser?: string;
   userDataPath?: string;
+  proxyConfig?: YellowPagesTaskProxyConfig;
   adapterClass?: {
     className: string;
     modulePath: string;
@@ -1030,8 +1035,22 @@ export class YellowPagesScraper {
         `Browser will run in ${headless ? "headless" : "non-headless"} mode`
       );
 
+      const launchOptions: LaunchOptions = { headless };
+      const proxyPieces = buildPuppeteerProxyLaunchPieces(
+        this.taskData.proxyConfig
+      );
+      if (proxyPieces.args.length > 0) {
+        launchOptions.args = proxyPieces.args;
+        const cfg = this.taskData.proxyConfig;
+        if (cfg) {
+          console.log(
+            `Using proxy for scraping: ${cfg.protocol}://${cfg.host}:${cfg.port}`
+          );
+        }
+      }
+
       // Launch browser using puppeteer-extra with stealth plugin
-      this.browser = await browserManager.launchWithStealth({ headless });
+      this.browser = await browserManager.launchWithStealth(launchOptions);
 
       if (!this.browser) {
         throw new Error("Failed to create browser instance");
@@ -1039,6 +1058,11 @@ export class YellowPagesScraper {
       this.page = await this.browser.newPage();
       if (!this.page) {
         throw new Error("Failed to create page instance");
+      }
+
+      if (proxyPieces.authenticate) {
+        await this.page.authenticate(proxyPieces.authenticate);
+        console.log("Applied HTTP proxy authentication for Puppeteer page");
       }
 
       // Set up page configurations with random viewport
@@ -6338,6 +6362,7 @@ if (parentPort) {
         platform: message.taskData.platform,
         hasAdapter: !!message.platformInfo.adapterClass,
         adapterClass: message.platformInfo.adapterClass?.className || "None",
+        hasProxy: !!message.taskData.proxyConfig,
       });
       let scraper: YellowPagesScraper;
       try {

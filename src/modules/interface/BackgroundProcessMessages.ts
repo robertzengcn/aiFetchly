@@ -5,6 +5,7 @@
  */
 
 import { ScrapingProgress } from "./IPCMessage";
+import type { YellowPagesTaskProxyConfig } from "@/entityTypes/yellowPagesTaskProxyType";
 
 /**
  * Base interface for all background process messages
@@ -31,6 +32,9 @@ export interface StartTaskMessage extends BaseBackgroundMessage {
     cookies?: any[];
     headless?: boolean;
     aiSupportEnabled?: boolean;
+    localBrowser?: string;
+    /** When set, Chromium uses this proxy for all browser traffic in the scraper. */
+    proxyConfig?: YellowPagesTaskProxyConfig;
     userDataPath?: string;
     adapterClass?: {
       className: string;
@@ -309,7 +313,10 @@ export interface ExitTaskMessage extends BaseBackgroundMessage {
   reason: string;
 }
 
-export type AiSupportRequestType = "step_guidance" | "contact_extraction" | "observe_execute";
+export type AiSupportRequestType =
+  | "step_guidance"
+  | "contact_extraction"
+  | "observe_execute";
 
 /**
  * Executable action for observe-execute (from AI observe response)
@@ -405,7 +412,10 @@ export interface AiSupportResponseMessage extends BaseBackgroundMessage {
   requestId: string;
   success: boolean;
   requestType: AiSupportRequestType;
-  data?: AiExtractedContactData | AiScrapeGuidanceData | AiObserveExecuteResponseData;
+  data?:
+    | AiExtractedContactData
+    | AiScrapeGuidanceData
+    | AiObserveExecuteResponseData;
   errorMessage?: string;
 }
 

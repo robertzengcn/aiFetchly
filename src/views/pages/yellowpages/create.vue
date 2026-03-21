@@ -1017,23 +1017,42 @@ const loadTaskDetails = async () => {
         // Note: Account details will be loaded by AccountSelectedTable component
       }
       
-      // Set proxy configuration
-      if (data.proxy_config) {
-        useProxy.value = true
-        proxyValue.value = [{
-          id: 0,
-          host: data.proxy_config.host,
-          port: data.proxy_config.port.toString(),
-          user: data.proxy_config.username || '',
-          pass: data.proxy_config.password || '',
-          protocol: data.proxy_config.protocol || 'http'
-        }]
+      // Set proxy configuration (nested under task; API returns { task, status, progress })
+      const rawPc = data.task.proxy_config
+      if (rawPc) {
+        let cfg: {
+          host?: string
+          port?: number | string
+          username?: string
+          password?: string
+          protocol?: string
+        }
+        if (typeof rawPc === 'string') {
+          try {
+            cfg = JSON.parse(rawPc) as typeof cfg
+          } catch {
+            cfg = {}
+          }
+        } else {
+          cfg = rawPc as typeof cfg
+        }
+        if (cfg.host !== undefined && cfg.port !== undefined) {
+          useProxy.value = true
+          proxyValue.value = [{
+            id: 0,
+            host: cfg.host,
+            port: String(cfg.port),
+            user: cfg.username || '',
+            pass: cfg.password || '',
+            protocol: cfg.protocol || 'http'
+          }]
+        }
       }
       
       // Set scheduling if exists
-      if (data.scheduled_at) {
+      if (data.task.scheduled_at) {
         scheduleTask.value = true
-        scheduledTime.value = new Date(data.scheduled_at).toISOString().slice(0, 16)
+        scheduledTime.value = new Date(data.task.scheduled_at).toISOString().slice(0, 16)
         scheduleType.value = 'one-time'
       }
       
