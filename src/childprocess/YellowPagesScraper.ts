@@ -32,7 +32,6 @@ import {
   isAiSupportResponseMessage,
 } from "@/modules/interface/BackgroundProcessMessages";
 import { SessionRecordingManager } from "@/modules/SessionRecordingManager";
-import { getChromeExcutepath, getFirefoxExcutepath } from "@/modules/lib/function";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
@@ -83,7 +82,6 @@ interface TaskData {
   cookies?: unknown[];
   headless?: boolean;
   aiSupportEnabled?: boolean;
-  localBrowser?: string;
   userDataPath?: string;
   adapterClass?: {
     className: string;
@@ -575,28 +573,6 @@ export class YellowPagesScraper {
       this.aiRequestCounter
     }-${Date.now()}`;
 
-    // Sanitize previousActionResults to avoid oversized payloads:
-    // - Drop per-action screenshots (screenshot_after) which are not used by the backend LLM
-    // - Optionally cap the number of previous actions sent
-    let sanitizedPrevious: typeof params.previousActionResults | undefined;
-    if (
-      params.requestType === "observe_execute" &&
-      params.previousActionResults &&
-      Array.isArray(params.previousActionResults)
-    ) {
-      const MAX_PREVIOUS_ACTIONS = 5;
-      const tail = params.previousActionResults.slice(-MAX_PREVIOUS_ACTIONS);
-      sanitizedPrevious = tail.map((r) => ({
-        action_id: r.action_id,
-        success: r.success,
-        error: r.error,
-        element_found: r.element_found,
-        // Intentionally omit screenshot_after to keep request body small.
-      }));
-    } else {
-      sanitizedPrevious = params.previousActionResults;
-    }
-
     const requestMessage: AiSupportRequestMessage = {
       type: "AI_SUPPORT_REQUEST",
       taskId: this.taskData.taskId,
@@ -612,7 +588,7 @@ export class YellowPagesScraper {
       selectorsTried: params.selectorsTried,
       goal: params.goal,
       sessionId: params.sessionId,
-      previousActionResults: sanitizedPrevious,
+      previousActionResults: params.previousActionResults,
       iteration: params.iteration,
       selectorsAvailable: params.selectorsAvailable,
       maxIterations: params.maxIterations,
@@ -665,12 +641,7 @@ export class YellowPagesScraper {
     screenshot_after?: string;
   }> {
     if (!this.page) {
-      return {
-        action_id: action.action_id,
-        success: false,
-        element_found: false,
-        error: "No page available",
-      };
+      return { action_id: action.action_id, success: false, element_found: false, error: "No page available" };
     }
     const result = await executePuppeteerAction(this.page, action);
     if (result.success) return result;
@@ -679,36 +650,19 @@ export class YellowPagesScraper {
         try {
           const frames = this.page!.frames();
           if (frames.length < 2) return false;
-          const challengeFrame = frames.find((f) =>
-            /cloudflare|turnstile/i.test((f as { url(): string }).url())
-          );
+          const challengeFrame = frames.find((f) => /cloudflare|turnstile/i.test((f as { url(): string }).url()));
           if (!challengeFrame) return false;
           let frameEl: ElementHandle<Element> | null = null;
-          if (
-            typeof (
-              challengeFrame as {
-                frameElement?(): Promise<ElementHandle<Element> | null>;
-              }
-            ).frameElement === "function"
-          ) {
-            frameEl = await (
-              challengeFrame as {
-                frameElement(): Promise<ElementHandle<Element> | null>;
-              }
-            ).frameElement();
+          if (typeof (challengeFrame as { frameElement?(): Promise<ElementHandle<Element> | null> }).frameElement === "function") {
+            frameEl = await (challengeFrame as { frameElement(): Promise<ElementHandle<Element> | null> }).frameElement();
           }
           if (!frameEl) {
-            const iframe = await this.page!.$(
-              'iframe[src*="cloudflare"], iframe[src*="turnstile"]'
-            );
+            const iframe = await this.page!.$('iframe[src*="cloudflare"], iframe[src*="turnstile"]');
             if (!iframe) return false;
             const box = await iframe.boundingBox();
             await iframe.dispose();
             if (!box) return false;
-            await this.page!.mouse.click(
-              box.x + box.width / 2,
-              box.y + box.height / 2
-            );
+            await this.page!.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
             await this.sleep(2000);
             await this.waitForCloudflareChallenge(10000);
             return true;
@@ -716,10 +670,7 @@ export class YellowPagesScraper {
           const box = await frameEl.boundingBox();
           await frameEl.dispose();
           if (!box) return false;
-          await this.page!.mouse.click(
-            box.x + box.width / 2,
-            box.y + box.height / 2
-          );
+          await this.page!.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
           await this.sleep(2000);
           await this.waitForCloudflareChallenge(10000);
           return true;
@@ -762,9 +713,7 @@ export class YellowPagesScraper {
         pageUrl: params.pageUrl,
         pageContent: "",
         selectorsAvailable: params.selectorsAvailable,
-        maxIterations:
-          params.maxIterations ??
-          YellowPagesScraper.OBSERVE_EXECUTE_MAX_ITERATIONS,
+        maxIterations: params.maxIterations ?? YellowPagesScraper.OBSERVE_EXECUTE_MAX_ITERATIONS,
         goalContext: params.goalContext,
         stepContext: params.stepContext,
         errorInfo: params.errorInfo,
@@ -784,18 +733,6 @@ export class YellowPagesScraper {
           };
         },
         executeAction: (act) => this.executeAction(act),
-        captureState: async () => {
-          const pageUrlNow =
-            this.page && !this.page.isClosed()
-              ? await this.page.url()
-              : params.pageUrl;
-          const state = await this.capturePageStateForAiSupport();
-          return {
-            pageUrl: pageUrlNow,
-            pageContent: state.pageContent,
-            screenshot: state.screenshot,
-          };
-        },
       }
     );
     return {
@@ -1084,35 +1021,7 @@ export class YellowPagesScraper {
   private async initializeBrowser(): Promise<void> {
     try {
       // Use BrowserManager to get proper launch options with stealth mode
-      let localBrowserPath: string | undefined = undefined;
-      if (this.taskData.localBrowser) {
-        switch (this.taskData.localBrowser) {
-          case "chrome": {
-            localBrowserPath = getChromeExcutepath();
-            break;
-          }
-          case "firefox": {
-            localBrowserPath = getFirefoxExcutepath();
-            break;
-          }
-          default: {
-            throw new Error(
-              `Unsupported localBrowser value: ${this.taskData.localBrowser}`
-            );
-          }
-        }
-
-        if (!localBrowserPath) {
-          throw new Error(
-            `localBrowser executable path not found for: ${this.taskData.localBrowser}`
-          );
-        }
-      }
-
-      const browserManager = new BrowserManager({
-        enableStealth: true,
-        localBrowserPath,
-      });
+      const browserManager = new BrowserManager({ enableStealth: true });
 
       // Override headless setting if specified in task data
       const headless =
@@ -1423,7 +1332,7 @@ export class YellowPagesScraper {
             );
             try {
               const captured = await this.capturePageStateForAiSupport();
-              const aiResult = await this.requestAiSupport({
+              const aiResult = await this.requestAiSupport({      
                 requestType: "step_guidance",
                 pageUrl: this.page.url(),
                 stepContext: "custom_search_failed",
@@ -1464,91 +1373,7 @@ export class YellowPagesScraper {
                   }
                   if (sel.searchButton) {
                     const btn = await this.page.$(sel.searchButton);
-                    if (btn) {
-                      await btn.click();
-                    } else if (this.aiSupportEnabled && this.page) {
-                      console.warn(
-                        "⚠️ AI suggested searchButton selector not found, requesting AI support..."
-                      );
-                      try {
-                        const captured =
-                          await this.capturePageStateForAiSupport();
-                        const buttonAiResult = await this.requestAiSupport({
-                          requestType: "step_guidance",
-                          pageUrl: this.page.url(),
-                          stepContext: "ai_suggested_searchButton_not_found",
-                          errorInfo: `AI suggested searchButton selector '${sel.searchButton}' not found on page. Need alternative selector or action to submit search form.`,
-                          selectorsTried: {
-                            searchButton: sel.searchButton,
-                            keywordInput: sel.keywordInput || "",
-                            locationInput: sel.locationInput || "",
-                          },
-                          pageContent: captured.pageContent,
-                          screenshot: captured.screenshot,
-                        });
-
-                        if (buttonAiResult.success && buttonAiResult.data) {
-                          const guidance = buttonAiResult.data;
-                          if (guidance.suggestedSelectors?.searchButton) {
-                            console.log(
-                              "🤖 AI provided alternative searchButton selector"
-                            );
-                            const altBtn = await this.page.$(
-                              guidance.suggestedSelectors.searchButton
-                            );
-                            if (altBtn) {
-                              await altBtn.click();
-                              console.log(
-                                "✅ Alternative searchButton clicked"
-                              );
-                            } else {
-                              console.warn(
-                                "⚠️ Alternative searchButton selector also not found, trying observe-execute..."
-                              );
-                              // Try observe-execute as last resort
-                              const observeResult =
-                                await this.observeExecuteLoop({
-                                  goal: "Click the search/submit button to submit the search form",
-                                  pageUrl: this.page.url(),
-                                  selectorsAvailable: {
-                                    searchButton: sel.searchButton,
-                                    keywordInput: sel.keywordInput || "",
-                                    locationInput: sel.locationInput || "",
-                                  },
-                                  goalContext:
-                                    "Form is filled with keyword and location, need to submit the search",
-                                  maxIterations: 3,
-                                });
-                              if (!observeResult.success) {
-                                console.warn(
-                                  "⚠️ Observe-execute also failed to click search button"
-                                );
-                              }
-                            }
-                          } else if (guidance.actions?.length) {
-                            console.log(
-                              "🤖 AI provided suggested actions to submit search"
-                            );
-                            // Execute suggested actions
-                            for (const action of guidance.actions) {
-                              const result = await this.executeAction(action);
-                              if (!result.success) {
-                                console.warn(
-                                  `⚠️ AI suggested action failed: ${
-                                    action.description || action.type
-                                  }`
-                                );
-                              }
-                            }
-                          }
-                        }
-                      } catch (buttonAiErr) {
-                        console.warn(
-                          "🤖 AI support for searchButton not found failed:",
-                          buttonAiErr
-                        );
-                      }
-                    }
+                    if (btn) await btn.click();
                   }
                   await this.sleep(2000);
                   // If we got here without throw, retry extraction loop for this keyword with current page
@@ -1961,12 +1786,14 @@ export class YellowPagesScraper {
         // Submit the form using platform selector
         await this.submitSearchFormWithPlatformSelector();
 
-        // Ensure we reached the business list page before extracting.
-        await this.ensureBusinessListPage({
-          context: "after_submit_search_form_platform",
-          keyword,
-          location,
-        });
+        // Wait for search results to load in main frame
+        const mainFrame = this.page.mainFrame();
+        await mainFrame.waitForSelector(
+          this.platformInfo.selectors.businessList,
+          {
+            timeout: 15000,
+          }
+        );
 
         // Capture search page URL for later reference
         this.searchPageUrl = this.page.url();
@@ -1989,12 +1816,13 @@ export class YellowPagesScraper {
           // Submit the form
           await this.submitSearchForm();
 
-          // Ensure we reached the business list page before extracting.
-          await this.ensureBusinessListPage({
-            context: "after_submit_search_form_generic",
-            keyword,
-            location,
-          });
+          // Wait for search results to load
+          await this.page.waitForSelector(
+            this.platformInfo.selectors.businessList,
+            {
+              timeout: 15000,
+            }
+          );
 
           // Capture search page URL for later reference
           this.searchPageUrl = this.page.url();
@@ -2013,13 +1841,6 @@ export class YellowPagesScraper {
             pageNum
           );
           await this.page.goto(searchUrl, { waitUntil: "networkidle2" });
-
-          // Ensure we reached the business list page before extracting.
-          await this.ensureBusinessListPage({
-            context: "after_url_based_navigation",
-            keyword,
-            location,
-          });
 
           // Capture search page URL for later reference
           this.searchPageUrl = this.page.url();
@@ -2121,103 +1942,6 @@ export class YellowPagesScraper {
       }
 
       throw error;
-    }
-  }
-
-  /**
-   * Ensure we're on the business list (search results) page.
-   * If the expected business list selector is missing, optionally use AI observe-execute
-   * to confirm whether we're already on the correct page or to take safe actions to get there.
-   */
-  private async ensureBusinessListPage(params: {
-    context: string;
-    keyword: string;
-    location: string;
-  }): Promise<void> {
-    if (!this.page || this.page.isClosed()) return;
-
-    const businessListSelector = this.platformInfo.selectors.businessList;
-    const businessItemSelector = this.platformInfo.selectors.businessItem;
-    const searchFormSelectors = this.platformInfo.selectors.searchForm;
-
-    const hasListNow = await this.page
-      .$(businessListSelector)
-      .then((el) => Boolean(el))
-      .catch(() => false);
-
-    if (hasListNow) return;
-
-    // Try a short wait first (some pages are slow after submit)
-    try {
-      await this.page.waitForSelector(businessListSelector, { timeout: 8000 });
-      return;
-    } catch {
-      // continue to AI support below
-    }
-
-    if (!this.aiSupportEnabled || !this.page) {
-      // Without AI support, surface a clear error so the caller can handle/retry.
-      throw new Error(
-        `Business list selector not found after search submit (${params.context}): ${businessListSelector}`
-      );
-    }
-
-    console.log(
-      `🤖 Business list selector missing; invoking AI observe-execute to confirm page or recover (context=${params.context})`
-    );
-
-    // Provide the expected selectors so AI can reason about whether we're on the list page,
-    // plus search form selectors so it can re-submit if the form didn't actually submit.
-    const selectorsAvailable: Record<string, string> = {
-      businessList: businessListSelector,
-      businessItem: businessItemSelector,
-    };
-    if (searchFormSelectors?.keywordInput) {
-      selectorsAvailable.keywordInput = searchFormSelectors.keywordInput;
-    }
-    if (searchFormSelectors?.locationInput) {
-      selectorsAvailable.locationInput = searchFormSelectors.locationInput;
-    }
-    if (searchFormSelectors?.searchButton) {
-      selectorsAvailable.searchButton = searchFormSelectors.searchButton;
-    }
-
-    const observe = await this.observeExecuteLoop({
-      goal: "Confirm we are on the business list (search results) page, and if not, navigate to it.",
-      pageUrl: this.page.url(),
-      selectorsAvailable,
-      goalContext: `We attempted to submit the search form for keyword="${params.keyword}" location="${params.location}", but the results list is not detected yet. The form may have FAILED to submit.
-
-If we're not on the results list page, take safe actions to reach it:
-- Wait briefly for navigation/content to load.
-- Close overlays/popups/cookie banners that may block interaction.
-- If still on the search form, re-submit safely (click the submit/search button, or focus an input and press Enter).
-- If we navigated away incorrectly, use Back / navigate to the results URL if visible.
-
-Stop once the business list selector exists.`,
-      maxIterations: 3,
-      stepContext: "ensure_business_list_page",
-      errorInfo: `Expected business list selector '${businessListSelector}' not found after search submit (${params.context}).`,
-    });
-
-    if (!observe.success) {
-      throw new Error(
-        `AI observe-execute failed to reach/confirm business list page: ${
-          observe.errorMessage || "unknown error"
-        }`
-      );
-    }
-
-    // Final verification
-    const hasListAfterAi = await this.page
-      .$(businessListSelector)
-      .then((el) => Boolean(el))
-      .catch(() => false);
-
-    if (!hasListAfterAi) {
-      throw new Error(
-        `Business list selector still not found after AI recovery: ${businessListSelector}`
-      );
     }
   }
 
@@ -2450,83 +2174,6 @@ Stop once the business list selector exists.`,
           console.warn(
             `Search button not found with selector: ${searchForm.searchButton}`
           );
-
-          // Try AI support if enabled before falling back to Enter key
-          if (this.aiSupportEnabled && this.page) {
-            try {
-              console.log(
-                "🤖 Requesting AI support for search button not found..."
-              );
-              const captured = await this.capturePageStateForAiSupport();
-              const buttonAiResult = await this.requestAiSupport({
-                requestType: "step_guidance",
-                pageUrl: this.page.url(),
-                stepContext: "platform_searchButton_not_found",
-                errorInfo: `Platform searchButton selector '${searchForm.searchButton}' not found on page. Need alternative selector or action to submit search form.`,
-                selectorsTried: {
-                  searchButton: searchForm.searchButton,
-                  keywordInput: searchForm.keywordInput || "",
-                  locationInput: searchForm.locationInput || "",
-                },
-                pageContent: captured.pageContent,
-                screenshot: captured.screenshot,
-              });
-
-              if (buttonAiResult.success && buttonAiResult.data) {
-                const guidance = buttonAiResult.data;
-                if (guidance.suggestedSelectors?.searchButton) {
-                  console.log(
-                    "🤖 AI provided alternative searchButton selector"
-                  );
-                  const altBtn = await this.page.$(
-                    guidance.suggestedSelectors.searchButton
-                  );
-                  if (altBtn) {
-                    // Log action for AI training
-                    if (this.sessionManager.getRecordingStatus() && this.page) {
-                      const currentState =
-                        await this.sessionManager.capturePageState(this.page);
-                      this.sessionManager.logAction(
-                        currentState,
-                        `click('${guidance.suggestedSelectors.searchButton}')`
-                      );
-                    }
-                    await altBtn.click();
-                    console.log(
-                      "✅ Alternative searchButton clicked successfully"
-                    );
-                    return; // Success, exit early
-                  } else {
-                    console.warn(
-                      "⚠️ Alternative searchButton selector also not found"
-                    );
-                  }
-                } else if (guidance.actions?.length) {
-                  console.log(
-                    "🤖 AI provided suggested actions to submit search"
-                  );
-                  // Execute suggested actions
-                  for (const action of guidance.actions) {
-                    const result = await this.executeAction(action);
-                    if (!result.success) {
-                      console.warn(
-                        `⚠️ AI suggested action failed: ${
-                          action.description || action.type
-                        }`
-                      );
-                    }
-                  }
-                  // If any action succeeded, return
-                  return;
-                }
-              }
-            } catch (buttonAiErr) {
-              console.warn(
-                "🤖 AI support for searchButton not found failed:",
-                buttonAiErr
-              );
-            }
-          }
 
           // Log action for AI training (fallback)
           if (this.sessionManager.getRecordingStatus() && this.page) {
@@ -5776,22 +5423,6 @@ Stop once the business list selector exists.`,
     try {
       const isRobotVerification = await this.detectRobotVerification();
       if (isRobotVerification) {
-        if (this.aiSupportEnabled) {
-          console.log(
-            "🤖 Robot verification detected. Attempting AI support to pass verification..."
-          );
-          const bypassOk = await this.attemptAiRobotVerificationBypass();
-          if (bypassOk) {
-            console.log(
-              "✅ Robot verification appears resolved with AI support; continuing scraping."
-            );
-            return;
-          }
-          console.log(
-            "🤖 AI support could not resolve robot verification; falling back to pause/notify."
-          );
-        }
-
         console.log(
           "🤖 Robot verification challenge detected! Notifying parent process..."
         );
@@ -5869,54 +5500,7 @@ Stop once the business list selector exists.`,
   }
 
   /**
-   * Try to get past robot verification using the observe-execute AI loop.
-   * @returns true if robot verification no longer detected after AI actions, false otherwise
-   */
-  private async attemptAiRobotVerificationBypass(): Promise<boolean> {
-    if (!this.page || !this.aiSupportEnabled) return false;
-
-    const pageUrl = this.page.url();
-    const goal =
-      "Pass the robot verification challenge and return to normal searchable page state. If a slider is present, drag the slider handle left-to-right to complete verification. Otherwise use safe actions: wait for challenge render, click visible verification/send button once, then wait for page to load.";
-
-    console.log(
-      "🤖 Attempting AI robot verification bypass via observe-execute..."
-    );
-    const result = await this.observeExecuteLoop({
-      goal,
-      pageUrl,
-      maxIterations: 5,
-      goalContext: "robot_verification",
-    });
-
-    if (!result.success || !result.data) {
-      console.log("🤖 AI robot verification bypass failed or returned no data");
-      return false;
-    }
-    if (result.data.status !== "goal_achieved") {
-      console.log(
-        `🤖 AI robot verification bypass did not achieve goal (status=${result.data.status})`
-      );
-      return false;
-    }
-
-    const stillBlocked = await this.detectRobotVerification();
-    if (stillBlocked) {
-      console.log(
-        "🤖 AI reported goal_achieved but robot verification is still detected locally; treat bypass as failed."
-      );
-      return false;
-    } else {
-      console.log(
-        "✅ AI robot verification bypass succeeded – challenge no longer detected"
-      );
-    }
-    return true;
-  }
-
-  /**
-   * Handle Cloudflare protection detection: try AI support to bypass first;
-   * only if AI is disabled or bypass fails, notify parent and pause.
+   * Handle Cloudflare protection detection and notify parent process
    */
   private async handleCloudflareDetection(): Promise<void> {
     if (!this.page) return;
@@ -5925,24 +5509,8 @@ Stop once the business list selector exists.`,
       const isBlocked = await this.detectCloudflareProtection();
       if (isBlocked) {
         console.log(
-          "🚨 Cloudflare protection detected. Attempting AI support to continue..."
+          "🚨 Cloudflare protection detected! Notifying parent process..."
         );
-
-        // If AI support is enabled, try to bypass Cloudflare via observe-execute before pausing
-        if (this.aiSupportEnabled) {
-          const bypassOk = await this.attemptAiCloudflareBypass();
-          if (bypassOk) {
-            console.log(
-              "✅ Cloudflare bypass succeeded with AI support; continuing scraping."
-            );
-            return;
-          }
-          console.log(
-            "🤖 AI Cloudflare bypass did not resolve; will notify and pause."
-          );
-        } else {
-          console.log("🤖 AI support disabled; will notify parent and pause.");
-        }
 
         // Get additional context for the notification
         const currentUrl = this.page.url();
@@ -5972,7 +5540,7 @@ Stop once the business list selector exists.`,
           additionalInfo = "Unable to extract additional page information";
         }
 
-        // Create Cloudflare detection message (sent when AI bypass failed or AI disabled)
+        // Create Cloudflare detection message
         const cloudflareMessage = {
           type: "SCRAPING_CLOUDFLARE_DETECTED",
           taskId: this.taskData.taskId,
@@ -6022,7 +5590,7 @@ Stop once the business list selector exists.`,
         console.log("     - Reduce scraping frequency");
         console.log("     - Check if manual access works in browser");
 
-        // Pause the scraping process due to Cloudflare protection (only after AI bypass failed or disabled)
+        // Pause the scraping process due to Cloudflare protection
         if (this.isRunning) {
           console.log(
             "⏸️ Pausing scraping process due to Cloudflare protection..."
@@ -6279,133 +5847,10 @@ Stop once the business list selector exists.`,
           console.log("Submitted search form");
         }
       } else {
-        console.warn(
-          "⚠️ No submit button found with any of the common selectors"
-        );
-
-        // Try AI support if enabled before falling back to Enter key
-        if (this.aiSupportEnabled && this.page) {
-          try {
-            console.log(
-              "🤖 Requesting AI support for submit button not found..."
-            );
-            const captured = await this.capturePageStateForAiSupport();
-            const buttonAiResult = await this.requestAiSupport({
-              requestType: "step_guidance",
-              pageUrl: this.page.url(),
-              stepContext: "submit_searchForm_button_not_found",
-              errorInfo: `No submit button found using common selectors: ${submitSelectors.join(
-                ", "
-              )}. Need alternative selector or action to submit the search form.`,
-              selectorsTried: {
-                submitSelectors: submitSelectors.join(", "),
-              },
-              pageContent: captured.pageContent,
-              screenshot: captured.screenshot,
-            });
-
-            if (buttonAiResult.success && buttonAiResult.data) {
-              const guidance = buttonAiResult.data;
-              if (guidance.suggestedSelectors?.searchButton) {
-                console.log(
-                  "🤖 AI provided alternative submit button selector"
-                );
-                const altBtn = await this.page.$(
-                  guidance.suggestedSelectors.searchButton
-                );
-                if (altBtn) {
-                  await this.humanLikeClick(
-                    this.page,
-                    guidance.suggestedSelectors.searchButton
-                  );
-                  console.log(
-                    "✅ Alternative submit button clicked successfully"
-                  );
-
-                  // Wait for navigation
-                  await this.page.waitForNavigation({
-                    waitUntil: "networkidle2",
-                    timeout: 15000,
-                  });
-
-                  // Check for Cloudflare protection after form submission
-                  await this.handleCloudflareDetection();
-                  return; // Success, exit early
-                } else {
-                  console.warn(
-                    "⚠️ Alternative submit button selector also not found"
-                  );
-                }
-              } else if (guidance.actions?.length) {
-                console.log(
-                  "🤖 AI provided suggested actions to submit search"
-                );
-                // Execute suggested actions
-                for (const action of guidance.actions) {
-                  const result = await this.executeAction(action);
-                  if (!result.success) {
-                    console.warn(
-                      `⚠️ AI suggested action failed: ${
-                        action.description || action.type
-                      }`
-                    );
-                  }
-                }
-
-                // Wait for navigation
-                await this.page.waitForNavigation({
-                  waitUntil: "networkidle2",
-                  timeout: 15000,
-                });
-
-                // Check for Cloudflare protection after form submission
-                await this.handleCloudflareDetection();
-                return; // Success, exit early
-              } else if (guidance.suggestedActions?.length) {
-                // Try observe-execute as last resort
-                console.log(
-                  "🤖 AI suggested observe-execute to submit search form"
-                );
-                const observeResult = await this.observeExecuteLoop({
-                  goal: "Click the submit/search button to submit the search form",
-                  pageUrl: this.page.url(),
-                  selectorsAvailable: {
-                    commonSelectors: submitSelectors.join(", "),
-                  },
-                  goalContext:
-                    "Search form is filled with keyword and location, need to submit the form",
-                  maxIterations: 3,
-                });
-
-                if (observeResult.success) {
-                  // Wait for navigation
-                  await this.page.waitForNavigation({
-                    waitUntil: "networkidle2",
-                    timeout: 15000,
-                  });
-
-                  // Check for Cloudflare protection after form submission
-                  await this.handleCloudflareDetection();
-                  return; // Success, exit early
-                }
-
-                console.warn(
-                  "⚠️ Observe-execute also failed to submit search form"
-                );
-              }
-            }
-          } catch (buttonAiErr) {
-            console.warn(
-              "🤖 AI support for submit button not found failed:",
-              buttonAiErr
-            );
-          }
-        }
-
-        // Fallback to Enter key
+        // Try pressing Enter key with human-like timing
         await this.sleep(Math.random() * 200 + 100);
         await this.page.keyboard.press("Enter");
-        console.log("Submitted search form using Enter key (fallback)");
+        console.log("Submitted search form using Enter key");
       }
 
       // Wait for navigation
@@ -6736,18 +6181,13 @@ Stop once the business list selector exists.`,
       return false;
     }
 
-    // Trust AI when it reports goal_achieved: page is loaded / challenge bypassed (e.g. no
-    // actions needed, explanation says real content is visible). Do not require local
-    // detectCloudflareProtection() to be clear, as it can false-positive on leftover DOM.
     const stillBlocked = await this.detectCloudflareProtection();
-    if (stillBlocked) {
-      console.log(
-        "🤖 AI reported goal_achieved (page/challenge OK); trusting AI and continuing (local CF check still positive)."
-      );
-    } else {
+    if (!stillBlocked) {
       console.log("✅ AI Cloudflare bypass succeeded – page no longer blocked");
+      return true;
     }
-    return true;
+    console.log("🤖 AI reported goal_achieved but Cloudflare still detected");
+    return false;
   }
 
   /**
@@ -6795,7 +6235,7 @@ Stop once the business list selector exists.`,
             `🔄 Attempting page refresh (attempt ${attempt + 1}/${maxRetries})`
           );
           //await this.page.reload({ waitUntil: "networkidle2" });
-          await this.sleep(5000); // Wait 5 seconds
+          await this.sleep(5000); // Wait 5 seconds 
         }
       } catch (error) {
         console.error(
