@@ -56,7 +56,8 @@ export class YellowPagesTaskModel extends BaseDb {
     max_pages?: number;
     concurrency?: number;
     account_id?: number;
-    proxy_config?: string;
+    /** Stored as JSON string in DB; pass an object to stringify once, or a pre-serialized JSON string. */
+    proxy_config?: string | object;
     localBrowser?: string;
     delay_between_requests?: number;
     headless?: boolean;
@@ -72,7 +73,9 @@ export class YellowPagesTaskModel extends BaseDb {
     taskEntity.status = YellowPagesTaskStatus.Pending;
     taskEntity.account_id = taskData.account_id;
     taskEntity.proxy_config = taskData.proxy_config
-      ? JSON.stringify(taskData.proxy_config)
+      ? typeof taskData.proxy_config === "string"
+        ? taskData.proxy_config
+        : JSON.stringify(taskData.proxy_config)
       : undefined;
     taskEntity.local_browser = taskData.localBrowser
       ? String(taskData.localBrowser)

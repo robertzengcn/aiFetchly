@@ -714,11 +714,30 @@ export class YellowPagesController {
   }
 
   /**
+   * Parse proxy_config from DB: single JSON object, or legacy double-stringified JSON.
+   */
+  private parseProxyConfigFromEntity(
+    raw: string | null | undefined
+  ): YellowPagesTask["proxy_config"] {
+    if (!raw) return undefined;
+    try {
+      const first = JSON.parse(raw) as unknown;
+      if (typeof first === "string") {
+        return JSON.parse(first) as YellowPagesTask["proxy_config"];
+      }
+      return first as YellowPagesTask["proxy_config"];
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
    * Map task entity to response format
    * @param task The task entity
    * @returns Mapped task object
    */
   private mapTaskToResponse(task: any): YellowPagesTask {
+    const proxyParsed = this.parseProxyConfigFromEntity(task.proxy_config);
     return {
       id: task.id,
       name: task.name,
@@ -735,9 +754,7 @@ export class YellowPagesController {
       error_log: task.error_log,
       run_log: task.run_log,
       account_id: task.account_id,
-      proxy_config: task.proxy_config
-        ? JSON.parse(task.proxy_config)
-        : undefined,
+      proxy_config: proxyParsed as YellowPagesTask["proxy_config"],
       delay_between_requests: task.delay_between_requests,
       headless: task.headless !== undefined ? task.headless : true,
       aiSupportEnabled: task.ai_support_enabled ?? false,
