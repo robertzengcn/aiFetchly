@@ -738,6 +738,7 @@ export default {
     import_proxy_fail: "プロキシのインポートに失敗しました",
     check_settings: "チェック設定",
     check_timeout: "チェックタイムアウト",
+    check_timeout_suffix: "秒",
     check_timeout_hint: "プロキシ検証のタイムアウト（秒）（1〜60）",
     clear_table: "テーブルをクリア",
     save_to_my_proxy: "マイプロキシに保存",
@@ -761,6 +762,27 @@ export default {
       "「プロキシをチェック」でアップロードしたプロキシを検証します",
     how_to_batch_upload: "プロキシを一括アップロードする方法",
     not_check: "未チェック",
+    // バッチアップロードダイアログの新しい翻訳
+    batch_upload: "一括アップロード",
+    paste_text: "テキストを貼り付け",
+    paste_proxy_hint: "プロキシを貼り付けます（1行に1つ）",
+    format_hint:
+      "形式：host:port、host:port:user:pass、protocol://host:port:user:pass",
+    parsed_proxies: "解析済みプロキシ",
+    proxies_parsed: "個のプロキシが解析されました",
+    import_rows_missing_fields:
+      "{count} 行をスキップしました。各プロキシにはホスト・ポート・プロトコルが必要です（行番号: {rows}）。",
+    import_partial_rows_missing_fields:
+      "{valid} 件のプロキシを読み込みました。{count} 行はホスト・ポート・プロトコル不足のためスキップしました（行番号: {rows}）。",
+    no_valid_proxies: "有効なプロキシが見つかりません",
+    enter_proxy_text: "プロキシテキストを入力してください",
+    parse_text: "テキストを解析",
+    no_proxies_to_check: "チェックするプロキシがありません",
+    check_complete: "チェック完了",
+    no_proxies_to_import: "インポートするプロキシがありません",
+    import_success: "個のプロキシが正常にインポートされました",
+    import_partial: "一部のプロキシのインポートに失敗しました",
+    import_fail: "インポートに失敗しました",
   },
   emailextraction: {
     max_page_number: "最大ページ数",
