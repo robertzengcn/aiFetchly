@@ -445,8 +445,8 @@ export class VectorStoreService {
         const baseDir = path.dirname(this.indexPath);
         const fileName = `index_${modelConfig.name}_${modelConfig.name}.${this.getFileExtension()}`;
         const modelSpecificPath = path.join(baseDir, 'models', fileName);
-        
-        return require('fs').existsSync(modelSpecificPath);
+
+        return fs.existsSync(modelSpecificPath);
     }
 
     /**

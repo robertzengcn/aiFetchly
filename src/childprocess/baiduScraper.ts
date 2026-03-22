@@ -43,11 +43,11 @@ export class BaiduScraper extends SearchScrape {
         };
         const searchRes = await this.page.$$eval('#content_left .c-container', elements =>
             elements.map(el => {
-                const link = el.querySelector('.c-title a')?.getAttribute('href')
+                const link = el.querySelector('h3 a')?.getAttribute('href')
 
                 let title = el.querySelector('h3 a')?.textContent
                 if (!title) {
-                    title = el.querySelector('.tts-title')?.textContent
+                    title = el.querySelector('.tts-b-hl')?.textContent
                 }
                 // let visible_link = el.querySelector('.tptt')?.textContent
                 // if (!visible_link) {
@@ -63,7 +63,7 @@ export class BaiduScraper extends SearchScrape {
                     // title: await (window as any)._text(el, '.yuRUbf a h3'),
                     title: title,
                     //snippet: await (window as any)._text(el, '.VwiC3b span'),
-                    snippet: el.querySelector('.b_caption p')?.textContent,
+                    snippet: el.querySelector('.cos-col')?.textContent,
                     //visible_link: await (window as any)._text(el, '.yuRUbf cite'),
                     visible_link: visible_link,
 
@@ -131,23 +131,54 @@ export class BaiduScraper extends SearchScrape {
 
     async load_start_page(): Promise<boolean | void> {
         const startUrl = 'https://www.baidu.com';
-
-
         this.logger.info('Using startUrl: ' + startUrl);
-
-        this.last_response = await this.page.goto(startUrl, {
-            waitUntil: "networkidle2",
-            timeout: 60000
-        });
-
-        // await this.page.waitForSelector('textarea[name="q"]', { timeout: this.STANDARD_TIMEOUT });
-
+        try {
+            this.last_response = await this.page.goto(startUrl, {
+                waitUntil: "networkidle2",
+                timeout: 100000
+            });
+        } catch (error) {
+            const recovery = await this.attemptAIRecovery('load_start_page', error instanceof Error ? error.message : String(error), []);
+            if (recovery.success) {
+                return this.load_start_page();
+            }
+            throw error;
+        }
         return true;
     }
 
     async search_keyword(keyword: string) {
         //wait for full page loading
 
+        // First check if chat textarea exists
+        const chatTextarea = await this.page.$('#chat-textarea');
+        if (chatTextarea) {
+            // Input keyword into the chat textarea
+            await this.page.evaluate((element, value) => {
+                (element as HTMLTextAreaElement).value = value;
+            }, chatTextarea, keyword);
+            
+            // Wait a bit for the input to be processed
+            await this.page.evaluate(async () => {
+                await new Promise(function (resolve) {
+                    setTimeout(resolve, 1000)
+                });
+            });
+
+            // Check if chat submit button exists and click it
+            const chatSubmitButton = await this.page.$('#chat-submit-button');
+            if (chatSubmitButton) {
+                await chatSubmitButton.click();
+                return;
+            } else {
+                // If textarea exists but button doesn't, try pressing Enter
+                await chatTextarea.focus();
+                await this.page.keyboard.press("Enter");
+                return;
+            }
+        }
+
+        // Fallback to regular search input if chat interface not found
         const input = await this.page.$('input[name="wd"]');
         if (input) {
             // await this.set_input_value(`input[name="q"]`, keyword);
@@ -164,7 +195,11 @@ export class BaiduScraper extends SearchScrape {
             await input.focus();
             await this.page.keyboard.press("Enter");
         } else {
-            throw new CustomError("input keyword button not found", 202409011049147)
+            const recovery = await this.attemptAIRecovery('search_input', 'Baidu search input not found', ['#chat-textarea', 'input[name="wd"]'], { keyword });
+            if (recovery.success) {
+                return this.search_keyword(keyword);
+            }
+            throw new CustomError("input keyword button not found", 202409011049147);
         }
         //}
     }

@@ -16,7 +16,7 @@ export interface BrowserLanguageDetection {
  * @returns BrowserLanguageDetection
  */
 export function detectBrowserLanguage(): BrowserLanguageDetection {
-    const supportedLanguages: LanguageCode[] = ['en', 'zh'];
+    const supportedLanguages: LanguageCode[] = ['en', 'zh', 'es', 'fr', 'de', 'ja'];
     const browserLanguages = getBrowserLanguages();
     
     // Check for exact matches first

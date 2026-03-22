@@ -194,6 +194,10 @@ export class YandexScraper extends SearchScrape {
         }
 
         if (!findelement) {
+            const recovery = await this.attemptAIRecovery('parse_results', 'No search results found', alternativeSelectors);
+            if (recovery.success) {
+                return this.parse_async();
+            }
             throw new CustomError("No search results found, may be element not found in the list page", 202405301120304);
         }
 
@@ -259,7 +263,10 @@ export class YandexScraper extends SearchScrape {
                 this.logger.error(`Could not get page state: ${pageError instanceof Error ? pageError.message : String(pageError)}`);
             }
 
-            // Re-throw with more context
+            const recovery = await this.attemptAIRecovery('load_start_page', errorMessage, []);
+            if (recovery.success) {
+                return this.load_start_page();
+            }
             throw new CustomError(
                 `Failed to load Yandex start page: ${errorMessage}. URL: ${startUrl}`,
                 202405301120307
@@ -280,7 +287,19 @@ export class YandexScraper extends SearchScrape {
             }
         }
 
+        const recovery = await this.attemptAIRecovery('load_start_page', 'No search input found', this.searchSelectors);
+        if (recovery.success) {
+            return this.load_start_page();
+        }
         throw new CustomError("No search input found with any of the common selectors", 202405301120304);
+    }
+
+    protected override getSearchSelectorsForAi(): Record<string, string> {
+        const r: Record<string, string> = {};
+        this.searchSelectors.forEach((sel, i) => {
+            r[`search_input_${i}`] = sel;
+        });
+        return r;
     }
 
     async search_keyword(keyword: string) {
@@ -349,7 +368,11 @@ export class YandexScraper extends SearchScrape {
         } catch (pageError) {
             this.logger.error(`Could not get page state: ${pageError instanceof Error ? pageError.message : String(pageError)}`);
         }
-        
+
+        const recovery = await this.attemptAIRecovery('search_input', `Input keyword button not found for keyword: ${keyword}`, this.searchSelectors, { keyword });
+        if (recovery.success) {
+            return this.search_keyword(keyword);
+        }
         throw new CustomError(`Input keyword button not found for keyword: ${keyword}`, 202405301120303);
     }
 

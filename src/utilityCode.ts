@@ -32,8 +32,12 @@ import {ResultParseItemType} from "@/entityTypes/scrapeType"
 // runCommand(argv);
 const userSer=new UserSearch()
 
-process.parentPort.on('message', async (e) => {
-    const [port] = e.ports
+// process.parentPort is available in Worker Threads
+const parentPort = (process as unknown as { parentPort?: { on: (event: string, handler: (e: { data: string; ports?: MessagePort[] }) => void) => void; postMessage: (message: string) => void } }).parentPort;
+if (parentPort) {
+  parentPort.on('message', async (e) => {
+    const ports = e.ports || [];
+    const [port] = ports;
     // console.log("get parent message")
     // console.log(e)
     const pme=JSON.parse(e.data) as ProcessMessage<Usersearchdata>
@@ -55,7 +59,7 @@ process.parentPort.on('message', async (e) => {
                             action:"saveres",
                             data:result
                         }
-                        process.parentPort.postMessage(JSON.stringify(message))
+                        parentPort.postMessage(JSON.stringify(message))
                     })
                     //console.log(port)
                     //process.parentPort.postMessage(JSON.stringify(message))
@@ -65,3 +69,4 @@ process.parentPort.on('message', async (e) => {
 
     }
   })
+}

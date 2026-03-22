@@ -1,32 +1,39 @@
-import { SMconfig, SMstruct, SearchDataParam, ScrapeOptions, ClusterSearchData, MetadataType, ResultParseType, ResultParseItemType } from "@/entityTypes/scrapeType"
-import defaults from "lodash/defaults"
-import { Page, Browser } from 'puppeteer';
-import { createLogger, format, transports } from "winston"
-import winston from "winston"
+import {
+  SMconfig,
+  SMstruct,
+  SearchDataParam,
+  ScrapeOptions,
+  ClusterSearchData,
+  MetadataType,
+  ResultParseType,
+  ResultParseItemType,
+  RunResult,
+} from "@/entityTypes/scrapeType";
+import defaults from "lodash/defaults";
+import { Page, Browser } from "puppeteer";
+import { createLogger, format, transports } from "winston";
+import winston from "winston";
 const { combine, timestamp, printf } = format;
-import { Cluster } from "puppeteer-cluster"
+import { Cluster } from "puppeteer-cluster";
 import fs from "fs";
-import { read_keywords_from_file, writeResults } from "@/modules/lib/function"
-import debug from 'debug';
-import clone from "lodash/clone"
-import times from "lodash/times"
+import { read_keywords_from_file, writeResults } from "@/modules/lib/function";
+import debug from "debug";
+import clone from "lodash/clone";
+import times from "lodash/times";
 import map from "lodash/map";
-//import UserAgent from "user-agents";
+import UserAgent from "user-agents";
 // import randomUseragent from "random-useragent";
-import UserAgent from 'user-agents';
 // import { addExtra } from "puppeteer-extra";
 // import puppeteer from 'puppeteer-extra';
-import { CustomConcurrency } from "@/modules/concurrency-implementation"
-import { searchEngineFactory } from "@/modules/searchEngineFactory"
+import { CustomConcurrency } from "@/modules/concurrency-implementation";
+import { searchEngineFactory } from "@/modules/searchEngineFactory";
 // import { Keyword } from "./keyword";
-import { pluggableType } from "@/entityTypes/scrapeType"
-import { ProxyServer } from "@/entityTypes/proxyType"
+import { pluggableType } from "@/entityTypes/scrapeType";
+import { ProxyServer } from "@/entityTypes/proxyType";
 import { CookiesType } from "@/entityTypes/cookiesType";
 // import vanillaPuppeteer from 'puppeteer';
 // import {addExtra} from 'puppeteer-extra';
 // import StealthPlugin from 'puppeteer-extra-plugin-stealth';
-
-
 
 // import {ProxyServer} from "@/entityTypes/proxyType"
 // import { app } from 'electron'
@@ -35,8 +42,16 @@ import { CookiesType } from "@/entityTypes/cookiesType";
 
 // import * as vanillaPuppeteer from "puppeteer";
 
-const logger = debug('ScrapeManager');
+const logger = debug("ScrapeManager");
 const MAX_ALLOWED_BROWSERS = 10;
+
+function isUtilityProcessWorker(): boolean {
+  return Boolean(
+    (process as unknown as { parentPort?: unknown }).parentPort ??
+      (process as unknown as { env?: Record<string, string | undefined> }).env
+        ?.WORKER_TYPE
+  );
+}
 export class ScrapeManager {
   cluster: Cluster<ClusterSearchData>;
   pluggable: pluggableType;
@@ -49,7 +64,7 @@ export class ScrapeManager {
   page: Page;
   numClusters: number;
   tmppath: string;
-  proxiesArr: Array<ProxyServer | null>
+  proxiesArr: Array<ProxyServer | null>;
   debug_log_path?: string;
   // runLogin: Function;
   // taskid?: number;
@@ -71,12 +86,12 @@ export class ScrapeManager {
       // the user agent to scrape with - set based on platform
       user_agent: (() => {
         const platform = process.platform;
-        switch(platform) {
-          case 'darwin':
+        switch (platform) {
+          case "darwin":
             return "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36";
-          case 'linux':
+          case "linux":
             return "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36";
-          case 'win32':
+          case "win32":
           default:
             return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36";
         }
@@ -101,7 +116,8 @@ export class ScrapeManager {
             return `${timestamp} [${level}] ${message}`;
           })
         ),
-        transports: [new transports.Console(),
+        transports: [
+          new transports.Console(),
           //       new winston.transports.File({ filename: path.join(app.getPath("logs"),'error.log'), level: 'error' }),
           // new winston.transports.File({ filename: path.join(app.getPath("logs"),'combined.log') }),
           //       new winston.transports.File({ filename: 'error.log', level: 'error' }),
@@ -130,13 +146,13 @@ export class ScrapeManager {
         // "--hide-scrollbars",
         // "--disable-notifications",
         // '--use-gl=swiftshader',
-                // '--disable-blink-features=AutomationControlled',
-                // '--disable-features=IsolateOrigins,site-per-process',
-                // '--disable-site-isolation-trials',
-                // '--disable-web-security',
-                // '--disable-features=BlockInsecurePrivateNetworkRequests',
-                // '--disable-features=IsolateOrigins',
-                // '--disable-site-isolation-trials'
+        // '--disable-blink-features=AutomationControlled',
+        // '--disable-features=IsolateOrigins,site-per-process',
+        // '--disable-site-isolation-trials',
+        // '--disable-web-security',
+        // '--disable-features=BlockInsecurePrivateNetworkRequests',
+        // '--disable-features=IsolateOrigins',
+        // '--disable-site-isolation-trials'
       ],
       //fix google account can not login
       // ignoreDefaultArgs: [
@@ -202,9 +218,7 @@ export class ScrapeManager {
       // parse an array
       // config.sleep_range = eval(config.sleep_range);
 
-      if (
-        config.sleep_range.length !== 2
-      ) {
+      if (config.sleep_range.length !== 2) {
         throw "sleep_range is not a valid array of two integers.";
       }
     }
@@ -238,7 +252,6 @@ export class ScrapeManager {
     // if (config.taskrunId) {
     //   this.taskrunId = config.taskrunId;
     // }
-    
   }
 
   /*
@@ -273,7 +286,7 @@ export class ScrapeManager {
     //let proxies:Array<ProxyServer>;
     // if we have at least one proxy, always use CONCURRENCY_BROWSER
     // and set maxConcurrency to this.config.proxies.length + 1
-    this.config.test_evasion=false;
+    this.config.test_evasion = false;
     // else use whatever this.configuration was passed
     if (this.config.proxies && this.config.proxies.length > 0) {
       // because we use real browsers, we ran out of memory on normal laptops
@@ -299,7 +312,7 @@ export class ScrapeManager {
 
     this.logger.info(`Using ${this.numClusters} clusters.`);
 
-    console.log(this.numClusters)
+    console.log(this.numClusters);
     //avoid to waste resource
     if (param.keywords.length < this.numClusters) {
       this.numClusters = param.keywords.length;
@@ -308,32 +321,30 @@ export class ScrapeManager {
     //https://github.com/puppeteer/puppeteer/issues/2234
     // Give the per browser options
     let userAgents: string;
-    const perBrowserOptions = map(this.proxiesArr.slice(0, this.numClusters), (proxy) => {
-      
-      if (this.config.random_user_agent) {
-        const userAgent = new UserAgent({ deviceCategory: 'desktop' });
-        console.log("user agent is "+userAgent.toString());
-        userAgents = userAgent.toString();
-      } 
-      else {
-        userAgents = this.config.user_agent;
+    const perBrowserOptions = map(
+      this.proxiesArr.slice(0, this.numClusters),
+      (proxy) => {
+        if (this.config.random_user_agent) {
+          const userAgent = new UserAgent({ deviceCategory: "desktop" });
+          console.log("user agent is " + userAgent.toString());
+          userAgents = userAgent.toString();
+        } else {
+          userAgents = this.config.user_agent;
+        }
+
+        const res = {
+          headless: this.config.headless,
+          ignoreHTTPSErrors: true,
+          args: [...this.config.chrome_flags, `--user-agent=${userAgents}`],
+        };
+        // if(userAgents.length>0){
+        //   res.args.push(`--user-agent=${userAgents}`)
+        // }
+        return res;
       }
-      
-      const res={
-        headless: this.config.headless,
-        ignoreHTTPSErrors: true,
-        args: [
-          ...this.config.chrome_flags,
-           `--user-agent=${userAgents}`
-        ],
-      };
-      // if(userAgents.length>0){
-      //   res.args.push(`--user-agent=${userAgents}`)
-      // }
-      return res;
-    });
+    );
     //console.log(this.config)
-    console.log(perBrowserOptions);
+    // Avoid dumping large perBrowserOptions to stdout (very noisy in workers)
 
     // puppeteer.use(_StealthPlugin());
     // puppeteer.use(_AdblockerPlugin());
@@ -348,8 +359,14 @@ export class ScrapeManager {
 
     // const puppeteer = addExtra(vanillaPuppeteer);
     // puppeteer.use(StealthPlugin());
+    // puppeteer-cluster monitor prints `== Start:` banners which can flood logs.
+    // Disable it automatically in utility/worker processes; keep it available in main process.
+    const enableMonitor =
+      Boolean(this.config.puppeteer_cluster_config.monitor) &&
+      !isUtilityProcessWorker();
+
     this.cluster = await Cluster.launch({
-      monitor: this.config.puppeteer_cluster_config.monitor,
+      monitor: enableMonitor,
       timeout: this.config.puppeteer_cluster_config.timeout,
       concurrency: CustomConcurrency,
       maxConcurrency: this.numClusters,
@@ -363,7 +380,7 @@ export class ScrapeManager {
     // console.log(this.cluster)
     //}
     //}
-    this.cluster.on('taskerror', (err, data) => {
+    this.cluster.on("taskerror", (err, data) => {
       console.log(`Error crawling ${data}: ${err.message}`);
     });
     //}
@@ -469,7 +486,11 @@ export class ScrapeManager {
   /*
    * get data from search engine
    */
-  async searchdata(param: SearchDataParam): Promise<Array<ResultParseItemType>> {
+  async searchdata(
+    param: SearchDataParam,
+    resultCallback?: (result: ResultParseItemType) => void,
+    cookiesCallback?: (accountId: number, cookies: Array<CookiesType>) => void
+  ): Promise<Array<ResultParseItemType>> {
     await this.start(param);
 
     const results: Array<ResultParseItemType> = [];
@@ -486,7 +507,7 @@ export class ScrapeManager {
       chunks[k % this.numClusters].push(param.keywords[k]);
     }
 
-    const engineFactory = new searchEngineFactory()
+    const engineFactory = new searchEngineFactory();
     const execPromises: Array<Promise<any>> = [];
 
     for (let c = 0; c < chunks.length; c++) {
@@ -494,19 +515,31 @@ export class ScrapeManager {
         config: this.config,
         context: this.context,
         page: this.page,
-      }
-      const obj = engineFactory.getSearchEngine(param.engine.toLowerCase(), scop)
-      const boundMethod = obj.run.bind(obj);
-      let cookiesArray:Array<CookiesType>=[]
+      };
+      const obj = engineFactory.getSearchEngine(
+        param.engine.toLowerCase(),
+        scop
+      );
+      let cookiesArray: Array<CookiesType> = [];
+      let selectedAccountId: number | undefined;
       if (param.cookies && param.cookies.length > 0) {
         const randomIndex = Math.floor(Math.random() * param.cookies.length);
         cookiesArray = param.cookies[randomIndex];
+        // Only set accountId when this chunk has non-empty cookies so the callback can update the DB
+        if (
+          param.accounts &&
+          param.accounts.length > randomIndex &&
+          cookiesArray.length > 0
+        ) {
+          selectedAccountId = param.accounts[randomIndex];
+        }
       }
       const cludata: ClusterSearchData = {
         keywords: chunks[c],
-        cookies:cookiesArray
-      }
-      console.log("cludata=%O",cludata)
+        cookies: cookiesArray,
+        accountId: selectedAccountId,
+      };
+      console.log("cludata=%O", cludata);
       if (this.proxiesArr && this.proxiesArr.length > 0) {
         const randomIndex = Math.floor(Math.random() * this.proxiesArr.length);
         cludata.proxyServer = this.proxiesArr[randomIndex];
@@ -515,10 +548,22 @@ export class ScrapeManager {
       //   cludata.cookies=param.cookies
       // }
 
+      // Create a wrapper method that includes the callback
+      const boundMethodWithCallback = async (data: {
+        page: Page;
+        data: ClusterSearchData;
+        worker: { id: number };
+      }) => {
+        return await obj.run({ ...data, resultCallback });
+      };
+
       // Wrap the execute call in a try-catch to handle Puppeteer errors
       const wrappedExecute = async () => {
         try {
-          const content = await this.cluster.execute(cludata, boundMethod);
+          const content = await this.cluster.execute(
+            cludata,
+            boundMethodWithCallback
+          );
           // await page.evaluateOnNewDocument(() => {
           //   Object.defineProperty(navigator, 'plugins', {
           //     get: () => [1, 2, 3, 4, 5],
@@ -540,7 +585,7 @@ export class ScrapeManager {
           };
         } catch (error) {
           if (error instanceof Error) {
-            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+            const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
             const debugDir = this.debug_log_path || "./debug";
 
             // Create debug directory if it doesn't exist
@@ -561,10 +606,12 @@ export class ScrapeManager {
               const screenshotPath = `${debugDir}/error_${timestamp}.png`;
               await page.screenshot({
                 path: screenshotPath as `${string}.png`,
-                fullPage: true
+                fullPage: true,
               });
 
-              this.logger.error(`Puppeteer error occurred. Debug files saved to ${debugDir}/error_${timestamp}.*`);
+              this.logger.error(
+                `Puppeteer error occurred. Debug files saved to ${debugDir}/error_${timestamp}.*`
+              );
               this.logger.error(`Error details: ${error.message}`);
             }
           }
@@ -582,13 +629,26 @@ export class ScrapeManager {
       for (const promiseReturn of promiseReturns) {
         console.log(`promiseReturn: ${promiseReturn}`);
         console.log(`promiseReturn.results: ${promiseReturn.results}`);
-        results.push(promiseReturn.results.results  );
+        results.push(promiseReturn.results.results);
         //Object.assign(results, promiseReturn.results);
         Object.assign(metadata, promiseReturn.metadata);
         num_requests += promiseReturn.num_requests;
+
+        // Handle updated cookies if available
+        const runResult = promiseReturn.results as RunResult;
+        if (
+          runResult.updatedCookies &&
+          runResult.accountId &&
+          cookiesCallback
+        ) {
+          console.log(
+            `Sending updated cookies for account ${runResult.accountId}`
+          );
+          cookiesCallback(runResult.accountId, runResult.updatedCookies);
+        }
       }
     } catch (error) {
-      this.logger.error('Error during search execution:', error);
+      this.logger.error("Error during search execution:", error);
       throw error;
     } finally {
       await this.quit();
@@ -596,7 +656,9 @@ export class ScrapeManager {
 
     const timeDelta = Date.now() - startTime;
     const ms_per_request = timeDelta / num_requests;
-    this.logger.info(`Scraper took ${timeDelta}ms to perform ${num_requests} requests.`);
+    this.logger.info(
+      `Scraper took ${timeDelta}ms to perform ${num_requests} requests.`
+    );
     this.logger.info(`On average ms/request: ${ms_per_request}ms/request`);
 
     if (this.pluggable && this.pluggable.handle_results) {
@@ -666,7 +728,7 @@ export class ScrapeManager {
     }
   }
   // async downloadPlatomvideo(links: Array<Linkdata>) {
-  //   //check whether user send correct platform parameter 
+  //   //check whether user send correct platform parameter
   //   const availPlatform = ["bilibili"];
   //   if (!availPlatform.includes(this.config.platform)) {
   //     throw new Error("download video function not work at platform " + this.config.platform)
@@ -685,7 +747,6 @@ export class ScrapeManager {
   //   const videodownObser = new videodownloadObserver();
   //   this.scraper.attach(videodownObser);
   //   await this.scraper.downloadvideo(links)
-
 
   // }
 }

@@ -1,19 +1,30 @@
-import { windowInvoke, windowSend, windowReceive } from '@/views/utils/apirequest';
-import { ChatMessage, ChatHistoryResponse, ChatStreamChunk, CommonMessage } from '@/entityTypes/commonType';
+import {
+  windowInvoke,
+  windowSend,
+  windowReceive,
+  windowRemoveAllListeners,
+} from "@/views/utils/apirequest";
+import {
+  ChatMessage,
+  ChatHistoryResponse,
+  ChatStreamChunk,
+  CommonMessage,
+} from "@/entityTypes/commonType";
 import {
   AI_CHAT_MESSAGE,
   AI_CHAT_STREAM,
+  AI_CHAT_STREAM_STOP,
   AI_CHAT_STREAM_CHUNK,
   AI_CHAT_STREAM_COMPLETE,
   AI_CHAT_HISTORY,
   AI_CHAT_CLEAR,
-  AI_CHAT_CONVERSATIONS
-} from '@/config/channellist';
+  AI_CHAT_CONVERSATIONS,
+} from "@/config/channellist";
 
 /**
  * AI Chat API response types
  */
-export interface AIChatResponse<T = any> {
+export interface AIChatResponse<T = unknown> {
   success: boolean;
   data?: T;
   message?: string;
@@ -21,14 +32,14 @@ export interface AIChatResponse<T = any> {
 
 /**
  * Send a chat message to the AI (non-streaming)
- * 
+ *
  * @param message - User message to send
  * @param conversationId - Optional conversation ID for context
  * @param model - Optional specific model to use
  * @param useRAG - Optional flag to enable RAG context from knowledge base
  * @param ragLimit - Optional number of RAG chunks to include (default: 3)
  * @returns Promise resolving to AI response
- * 
+ *
  * @example
  * ```typescript
  * const response = await sendChatMessage('Hello, how are you?', undefined, undefined, true);
@@ -50,7 +61,7 @@ export async function sendChatMessage(
       conversationId,
       model,
       useRAG,
-      ragLimit
+      ragLimit,
     };
 
     const response: CommonMessage<ChatMessage> = await windowInvoke(
@@ -61,35 +72,36 @@ export async function sendChatMessage(
     return {
       success: response.status,
       data: response.data || undefined,
-      message: response.msg
+      message: response.msg,
     };
   } catch (error) {
-    console.error('Error sending chat message:', error);
+    console.error("Error sending chat message:", error);
     return {
       success: false,
-      message: error instanceof Error ? error.message : 'Unknown error occurred'
+      message:
+        error instanceof Error ? error.message : "Unknown error occurred",
     };
   }
 }
 
 /**
  * Stream a chat message to the AI with real-time updates
- * 
+ *
  * @param message - User message to send
  * @param onChunk - Callback for each chunk received
- * @param onComplete - Callback when streaming is complete
+ * @param onComplete - Callback when streaming is complete (receives conversationId)
  * @param conversationId - Optional conversation ID for context
  * @param model - Optional specific model to use
  * @param useRAG - Optional flag to enable RAG context from knowledge base
  * @param ragLimit - Optional number of RAG chunks to include (default: 3)
  * @returns Promise that resolves when stream starts
- * 
+ *
  * @example
  * ```typescript
  * await streamChatMessage(
  *   'Explain quantum computing',
  *   (chunk) => console.log('Chunk:', chunk.content),
- *   () => console.log('Stream complete'),
+ *   (conversationId) => console.log('Stream complete for:', conversationId),
  *   undefined,
  *   undefined,
  *   true
@@ -99,14 +111,16 @@ export async function sendChatMessage(
 export async function streamChatMessage(
   message: string,
   onChunk?: (chunk: ChatStreamChunk) => void,
-  onComplete?: () => void,
+  onComplete?: (conversationId?: string) => void,
   conversationId?: string,
   model?: string,
   useRAG?: boolean,
   ragLimit?: number
 ): Promise<void> {
   return new Promise((resolve, reject) => {
-    let fullContent = '';
+    // Accumulate full content for potential future use
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    let fullContent = "";
 
     // Set up chunk listener
     const chunkHandler = (chunkData: string) => {
@@ -119,32 +133,36 @@ export async function streamChatMessage(
           fullContent += chunk.content;
         }
       } catch (error) {
-        console.error('Error parsing chunk data:', error);
+        console.error("Error parsing chunk data:", error);
       }
     };
 
     // Set up completion listener
     const completeHandler = (completeData: string) => {
       try {
-        console.log('completeData', completeData);
+        console.log("completeData", completeData);
         const chunk: ChatStreamChunk = JSON.parse(completeData);
-        
+
         // Check if this is an error completion
-        if (chunk.eventType === 'error' && chunk.errorMessage) {
+        if (chunk.eventType === "error" && chunk.errorMessage) {
           reject(new Error(chunk.errorMessage));
           return;
         }
-        
+
         if (onComplete) {
-          onComplete();
+          onComplete(chunk.conversationId);
         }
-        
+
         resolve();
       } catch (error) {
-        console.error('Error parsing completion data:', error);
+        console.error("Error parsing completion data:", error);
         reject(error);
       }
     };
+
+    // Remove any stale listeners from previous streams before registering new ones
+    windowRemoveAllListeners(AI_CHAT_STREAM_CHUNK);
+    windowRemoveAllListeners(AI_CHAT_STREAM_COMPLETE);
 
     // Register event listeners
     windowReceive(AI_CHAT_STREAM_CHUNK, chunkHandler);
@@ -156,18 +174,26 @@ export async function streamChatMessage(
       conversationId,
       model,
       useRAG,
-      ragLimit
+      ragLimit,
     };
     windowSend(AI_CHAT_STREAM, requestData);
   });
 }
 
 /**
+ * Request the main process to abort the active AI chat stream.
+ * Call when the user clicks stop; the stream completion handler will run with a cancelled payload.
+ */
+export function stopStreamingChat(): void {
+  windowSend(AI_CHAT_STREAM_STOP, {});
+}
+
+/**
  * Get chat history for a conversation
- * 
+ *
  * @param conversationId - Optional conversation ID (defaults to 'default')
  * @returns Promise resolving to chat history
- * 
+ *
  * @example
  * ```typescript
  * const history = await getChatHistory();
@@ -184,35 +210,36 @@ export async function getChatHistory(
       AI_CHAT_HISTORY,
       requestData
     );
-    console.log('response', response); 
+    console.log("response", response);
     return {
       success: true,
       data: response || undefined,
-      message: ""
+      message: "",
     };
   } catch (error) {
-    console.error('Error getting chat history:', error);
+    console.error("Error getting chat history:", error);
     return {
       success: false,
-      message: error instanceof Error ? error.message : 'Unknown error occurred'
+      message:
+        error instanceof Error ? error.message : "Unknown error occurred",
     };
   }
 }
 
 /**
  * Clear chat history
- * 
+ *
  * @param conversationId - Optional conversation ID to clear (or 'all' to clear all)
  * @returns Promise resolving to success status
- * 
+ *
  * @example
  * ```typescript
  * // Clear default conversation
  * await clearChatHistory();
- * 
+ *
  * // Clear specific conversation
  * await clearChatHistory('conv-123');
- * 
+ *
  * // Clear all conversations
  * await clearChatHistory('all');
  * ```
@@ -227,16 +254,17 @@ export async function clearChatHistory(
       AI_CHAT_CLEAR,
       requestData
     );
-console.log('response', response);
+    console.log("response", response);
     return {
       success: true,
-      message: ""
+      message: "",
     };
   } catch (error) {
-    console.error('Error clearing chat history:', error);
+    console.error("Error clearing chat history:", error);
     return {
       success: false,
-      message: error instanceof Error ? error.message : 'Unknown error occurred'
+      message:
+        error instanceof Error ? error.message : "Unknown error occurred",
     };
   }
 }
@@ -254,41 +282,43 @@ export interface ConversationMetadata {
 
 /**
  * Get all conversations with metadata
- * 
+ *
  * @returns Promise resolving to list of conversations with metadata
- * 
+ *
  * @example
  * ```typescript
  * const conversations = await getConversations();
  * console.log('Total conversations:', conversations.length);
  * ```
  */
-export async function getConversations(): Promise<AIChatResponse<ConversationMetadata[]>> {
+export async function getConversations(): Promise<
+  AIChatResponse<ConversationMetadata[]>
+> {
   try {
     const response: ConversationMetadata[] = await windowInvoke(
       AI_CHAT_CONVERSATIONS,
       {}
     );
-    console.log('conversationsmeata response', response);
+    console.log("conversationsmeata response", response);
     // Convert date strings to Date objects if needed (IPC serializes Date to string)
-    const conversations = response?.map(conv => ({
-      ...conv,
-      lastMessageTimestamp: new Date(conv.lastMessageTimestamp),
-      createdAt: new Date(conv.createdAt)
-    })) || undefined;
+    const conversations =
+      response?.map((conv) => ({
+        ...conv,
+        lastMessageTimestamp: new Date(conv.lastMessageTimestamp),
+        createdAt: new Date(conv.createdAt),
+      })) || undefined;
 
     return {
       success: true,
       data: conversations,
-      message: ""
+      message: "",
     };
   } catch (error) {
-    console.error('Error getting conversations:', error);
+    console.error("Error getting conversations:", error);
     return {
       success: false,
-      message: error instanceof Error ? error.message : 'Unknown error occurred'
+      message:
+        error instanceof Error ? error.message : "Unknown error occurred",
     };
   }
 }
-
-

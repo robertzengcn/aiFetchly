@@ -1,5 +1,7 @@
-import { ipcMain } from 'electron';
-import { EMAILEXTRACTIONAPI, EMAILEXTRACTIONMESSAGE,LISTEMAILSEARCHTASK,EMAILSEARCHTASKRESULT, EMAILSEARCHTASK_ERROR_LOG_DOWNLOAD, GETEMAILSEARCHTASK, UPDATEEMAILSEARCHTASK, DELETEEMAILSEARCHTASK } from "@/config/channellist";
+import { ipcMain, dialog, app } from 'electron';
+import { EMAILEXTRACTIONAPI, EMAILEXTRACTIONMESSAGE,LISTEMAILSEARCHTASK,EMAILSEARCHTASKRESULT, EMAILSEARCHTASK_ERROR_LOG_DOWNLOAD, GETEMAILSEARCHTASK, UPDATEEMAILSEARCHTASK, DELETEEMAILSEARCHTASK, EMAILEXTRACTION_RESULT_EXPORT } from "@/config/channellist";
+import * as path from 'path';
+import * as fs from 'fs';
 import { EmailscFormdata } from '@/entityTypes/emailextraction-type'
 import { CommonDialogMsg } from "@/entityTypes/commonType";
 import { isValidUrl } from "@/views/utils/function"
@@ -20,7 +22,7 @@ export function registerEmailextractionIpcHandlers() {
     ipcMain.on(EMAILEXTRACTIONAPI, async (event, arg) => {
         let extraType: EmailExtractionTypes = EmailExtractionTypes.ManualInputUrl;
         //receive user submit form
-        const qdata = JSON.parse(arg) as EmailscFormdata;
+        const qdata = JSON.parse(arg as string) as EmailscFormdata;
         if (!Object.prototype.hasOwnProperty.call(qdata, "extratype")) {
             qdata.extratype = "ManualInputUrl";
         }
@@ -35,8 +37,8 @@ export function registerEmailextractionIpcHandlers() {
                         title: "emailscrape.failed",
                         content: "emailscrape.url_empty"
                     }
-                }
-                event.sender.send(EMAILEXTRACTIONMESSAGE, JSON.stringify(comMsgs))
+                };
+                (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(EMAILEXTRACTIONMESSAGE, JSON.stringify(comMsgs))
                 return
             }
             //valid item in urls
@@ -53,8 +55,8 @@ export function registerEmailextractionIpcHandlers() {
                         title: "emailscrape.failed",
                         content: "emailscrape.url_invalid"
                     }
-                }
-                event.sender.send(EMAILEXTRACTIONMESSAGE, JSON.stringify(comMsgs))
+                };
+                (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(EMAILEXTRACTIONMESSAGE, JSON.stringify(comMsgs))
                 return
             }
 
@@ -69,8 +71,8 @@ export function registerEmailextractionIpcHandlers() {
                         title: "emailscrape.failed",
                         content: "emailscrape.searchTaskId_empty"
                     }
-                }
-                event.sender.send(EMAILEXTRACTIONMESSAGE, JSON.stringify(comMsgs))
+                };
+                (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(EMAILEXTRACTIONMESSAGE, JSON.stringify(comMsgs))
                 return
             }
             //const searchModel = new SearchModule();
@@ -86,8 +88,8 @@ export function registerEmailextractionIpcHandlers() {
                         title: "emailscrape.failed",
                         content: "emailscrape.searchResult_empty"
                     }
-                }
-                event.sender.send(EMAILEXTRACTIONMESSAGE, JSON.stringify(comMsgs))
+                };
+                (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(EMAILEXTRACTIONMESSAGE, JSON.stringify(comMsgs))
                 return
             }
             //get result url from search task
@@ -110,8 +112,8 @@ export function registerEmailextractionIpcHandlers() {
                     title: "emailscrape.failed",
                     content: "emailscrape.action_error"
                 }
-            }
-            event.sender.send(EMAILEXTRACTIONMESSAGE, JSON.stringify(comMsgs))
+            };
+            (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(EMAILEXTRACTIONMESSAGE, JSON.stringify(comMsgs))
             return
 
         }
@@ -152,13 +154,13 @@ export function registerEmailextractionIpcHandlers() {
                 title: "",
                 content: ""
             }
-        }
-        event.sender.send(EMAILEXTRACTIONMESSAGE, JSON.stringify(comMsgs))
+        };
+        (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(EMAILEXTRACTIONMESSAGE, JSON.stringify(comMsgs))
 
     });
 
-    ipcMain.handle(LISTEMAILSEARCHTASK, async (event, data) => {
-        const qdata = JSON.parse(data) as ItemSearchparam;  
+    ipcMain.handle(LISTEMAILSEARCHTASK, async (event, data: unknown) => {
+        const qdata = JSON.parse(data as string) as ItemSearchparam;  
         if (!Object.prototype.hasOwnProperty.call(qdata, "page")) {
             qdata.page = 0;
           }
@@ -179,8 +181,8 @@ export function registerEmailextractionIpcHandlers() {
         }
         return resp
     })
-    ipcMain.handle(EMAILSEARCHTASKRESULT, async (event, arg) => {
-        const qdata = JSON.parse(arg) as EmailsearchtaskResultquery;
+    ipcMain.handle(EMAILSEARCHTASKRESULT, async (event, arg: unknown) => {
+        const qdata = JSON.parse(arg as string) as EmailsearchtaskResultquery;
         if (!Object.prototype.hasOwnProperty.call(qdata, "taskId")) {
             const comMsgs: CommonResponse<EmailResultDisplay> = {
                 status: false,
@@ -222,9 +224,9 @@ export function registerEmailextractionIpcHandlers() {
         return resp
     });
 
-    ipcMain.handle(EMAILSEARCHTASK_ERROR_LOG_DOWNLOAD, async (event, data) => {
+    ipcMain.handle(EMAILSEARCHTASK_ERROR_LOG_DOWNLOAD, async (event, data: unknown) => {
         try {
-            const qdata = JSON.parse(data) as CommonIdrequestType<number>
+            const qdata = JSON.parse(data as string) as CommonIdrequestType<number>
             if (!("id" in qdata)) {
                 throw new Error("id not found");
             }
@@ -248,9 +250,9 @@ export function registerEmailextractionIpcHandlers() {
     });
 
     // Get single email search task for editing
-    ipcMain.handle(GETEMAILSEARCHTASK, async (event, data) => {
+    ipcMain.handle(GETEMAILSEARCHTASK, async (event, data: unknown) => {
         try {
-            const qdata = JSON.parse(data) as CommonIdrequestType<number>
+            const qdata = JSON.parse(data as string) as CommonIdrequestType<number>
             if (!("id" in qdata)) {
                 throw new Error("Task ID not found");
             }
@@ -274,9 +276,9 @@ export function registerEmailextractionIpcHandlers() {
     });
 
     // Update email search task
-    ipcMain.handle(UPDATEEMAILSEARCHTASK, async (event, data) => {
+    ipcMain.handle(UPDATEEMAILSEARCHTASK, async (event, data: unknown) => {
         try {
-            const qdata = JSON.parse(data) as { id: number, data: EmailscFormdata }
+            const qdata = JSON.parse(data as string) as { id: number, data: EmailscFormdata }
             if (!qdata.id) {
                 throw new Error("Task ID not found");
             }
@@ -342,9 +344,9 @@ export function registerEmailextractionIpcHandlers() {
     });
 
     // Delete email search task
-    ipcMain.handle(DELETEEMAILSEARCHTASK, async (event, data) => {
+    ipcMain.handle(DELETEEMAILSEARCHTASK, async (event, data: unknown) => {
         try {
-            const qdata = JSON.parse(data) as CommonIdrequestType<number>
+            const qdata = JSON.parse(data as string) as CommonIdrequestType<number>
             if (!("id" in qdata)) {
                 throw new Error("Task ID not found");
             }
@@ -377,6 +379,66 @@ export function registerEmailextractionIpcHandlers() {
                 }
                 return resp
             }
+        }
+    });
+
+    // Export email extraction results
+    ipcMain.handle(EMAILEXTRACTION_RESULT_EXPORT, async (event, data): Promise<CommonMessage<string | null>> => {
+        const qdata = JSON.parse(data as string) as { taskId: number; format?: 'json' | 'csv' };
+        
+        if (!qdata.taskId || qdata.taskId <= 0) {
+            const resp: CommonMessage<null> = {
+                status: false,
+                msg: "Task ID is required",
+            };
+            return resp;
+        }
+
+        try {
+            const emailController = new EmailextractionController();
+            const format = qdata.format || 'csv';
+            const exportData = await emailController.exportEmailResults(qdata.taskId, format);
+            
+            // Show save dialog
+            const fileExtension = format === 'csv' ? 'csv' : 'json';
+            const defaultFilename = `email_results_task_${qdata.taskId}_${new Date().toISOString().split('T')[0]}.${fileExtension}`;
+            
+            const { filePath } = await dialog.showSaveDialog({
+                title: `Export Email Results as ${format.toUpperCase()}`,
+                defaultPath: path.join(app.getPath('documents'), defaultFilename),
+                filters: [
+                    { name: format === 'csv' ? 'CSV Files' : 'JSON Files', extensions: [fileExtension] },
+                    { name: 'All Files', extensions: ['*'] }
+                ]
+            });
+
+            if (filePath) {
+                if (format === 'csv') {
+                    fs.writeFileSync(filePath, exportData, 'utf-8');
+                } else {
+                    fs.writeFileSync(filePath, JSON.stringify(exportData, null, 2), 'utf-8');
+                }
+                
+                const resp: CommonMessage<string> = {
+                    status: true,
+                    msg: "Email results exported successfully",
+                    data: filePath
+                };
+                return resp;
+            } else {
+                const resp: CommonMessage<null> = {
+                    status: false,
+                    msg: "Export cancelled by user",
+                };
+                return resp;
+            }
+        } catch (error) {
+            console.error('Export email results error:', error);
+            const resp: CommonMessage<null> = {
+                status: false,
+                msg: error instanceof Error ? error.message : "Unknown error occurred",
+            };
+            return resp;
         }
     });
 }

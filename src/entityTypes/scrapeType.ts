@@ -42,9 +42,23 @@ export type SMconfig = {
   is_local?: boolean;
   throw_on_detection?: boolean;
   output_file?: string;
-  page_length?;number
-  debug_log_path?:string;
-  save_html?:boolean;
+  page_length?: number;
+  debug_log_path?: string;
+  save_html?: boolean;
+  ai_recovery?: {
+    enabled: boolean;
+    model?: string;                // AI model to use (default: 'gpt-4o-mini')
+    maxAttempts?: number;          // Max recovery attempts per operation (default: 2)
+    timeoutMs?: number;            // Timeout for AI response (default: 30000)
+    includeScreenshot?: boolean;   // Include screenshot for vision models
+    operations?: string[];         // Which operations to enable recovery for
+    rateLimitWindow?: number;      // Time window for rate limiting in ms (default: 60000)
+    rateLimitMax?: number;         // Max requests per window (default: 10)
+    recoveryDelayMs?: number;      // Delay after recovery before retry (default: 2000)
+    networkIdleTimeoutMs?: number; // Timeout for waitForNetworkIdle after recovery (default: 30000)
+    actionDelayMin?: number;       // Minimum delay between recovery actions in ms (default: 200)
+    actionDelayMax?: number;       // Maximum delay between recovery actions in ms (default: 500)
+  };
 }
 export type pluginType = {
   results: object,
@@ -166,13 +180,15 @@ export interface ClusterSearchData {
   keywords: string[];
   proxyServer?: ProxyServer | null;
   cookies?: Array<CookiesType>;
+  accountId?: number;  // Track which account's cookies are being used
 }
 export type ClusterFunctionparam = {
   page: Page,
   data: ClusterSearchData,
   worker: {
     id: number
-  }
+  },
+  resultCallback?: (result: ResultParseItemType) => void;
 }
 export type metadataObj = {
   http_headers?: object,
@@ -183,6 +199,8 @@ export type RunResult = {
   results: object,
   metadata: metadataObj,
   num_requests: number,
+  updatedCookies?: Array<CookiesType>;  // Updated cookies after scraping
+  accountId?: number;  // Account ID for cookie update
 }
 export type MetadataType = {
   elapsed_time?: string,
@@ -204,6 +222,12 @@ export type ResultParseItemType = {
   keyword: string,
   page: number,
   results?: Array<SearchResult>
+}
+
+export type SearchResultWithCookies = {
+  results: Array<ResultParseItemType>;
+  updatedCookies?: Array<CookiesType>;
+  accountId?: number;
 }
 
 export type SearchResult = {
@@ -239,10 +263,22 @@ export type SearchResEntity = {
   snippet: string|null|undefined, 
   visible_link: string|null|undefined
   record_time?: string|null|undefined
+  ai_industry?: string | null
+  ai_match_score?: number | null
+  ai_reasoning?: string | null
+  ai_client_business?: string | null
+  ai_analysis_time?: string | null
+  ai_analysis_status?: string | null // 'pending', 'analyzing', 'completed', 'failed'
 }
 export interface SearchResEntityDisplay extends SearchResEntity {
   keyword:string, 
   index?:number
+  ai_industry?: string | null
+  ai_match_score?: number | null
+  ai_reasoning?: string | null
+  ai_client_business?: string | null
+  ai_analysis_time?: string | null
+  ai_analysis_status?: string | null // 'pending', 'analyzing', 'completed', 'failed'
 }
 export type SearchResEntityRecord = {
  record:Array<SearchResEntityDisplay>

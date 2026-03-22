@@ -57,7 +57,7 @@ export interface SessionRecord {
  * Only saves sessions when results > 1 are obtained.
  */
 export class SessionRecordingManager {
-  private isRecording: boolean = false;
+  private isRecording= false;
   private currentSession: SessionRecord | null = null;
   private trainingData: TrainingDataPoint[] = [];
   private sessionsDirectory: string;

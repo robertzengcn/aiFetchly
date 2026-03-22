@@ -36,12 +36,20 @@
             <v-icon size="small" class="me-2" @click="editAccount(item)">
                 mdi-pencil
             </v-icon>
-            <v-icon size="small" @click="deleteAccount(item)">
+            <v-icon size="small" class="me-2" @click="deleteAccount(item)">
                 mdi-delete
             </v-icon>
-            <v-icon size="small" @click="loginAccount(item)">
+            <v-icon size="small" class="me-2" @click="loginAccount(item)">
                 mdi-login
             </v-icon>
+            <v-tooltip location="top">
+                <template v-slot:activator="{ props }">
+                    <v-icon v-bind="props" size="small" class="me-2" @click="uploadCookiesAccount(item)">
+                        mdi-upload
+                    </v-icon>
+                </template>
+                <span>{{ t('socialaccount.upload_cookies_button') }}</span>
+            </v-tooltip>
             <v-icon size="small" @click="clearCookies(item)">
                 mdi-close
             </v-icon>
@@ -274,6 +282,10 @@ const clearCookies = (item) => {
     clearCookiesAccountid.value = item.id;
 }
 
+const uploadCookiesAccount = (item: SocialAccountListData) => {
+    requireCookiesselecttab({ id: item.id });
+}
+
 const confirmClearCookies = () => {
     showClearCookiesModal.value = false;
     cleanCookies({ id: clearCookiesAccountid.value }).then(
@@ -309,7 +321,12 @@ const receiveLoginMsg = (channel: string) => {
                     confirmContent.value = t(json_value.data.content)
                     confirmTitle.value = t(json_value.data.title)
                 } else if (json_value.data.action == "handleCookiesfile") {
-                    setAlert(t(json_value.data.title), t(json_value.data.content), "error")
+                    const alertType = json_value.status ? "success" : "error";
+                    const content = json_value.data.content ? t(json_value.data.content) : t(json_value.data.title);
+                    setAlert(t(json_value.data.title), content, alertType);
+                    if (json_value.status) {
+                        loadItems({ page: options.page, itemsPerPage: itemsPerPage.value, sortBy: "" });
+                    }
                 } else if (json_value.data.action == "manualLoginMsg") {
                     gstatus.value = 2
                     confirmDialogctl.value = true
@@ -322,6 +339,10 @@ const receiveLoginMsg = (channel: string) => {
                 }
             }
         } else {//success
+            if (json_value.data?.action === "handleCookiesfile") {
+                const content = json_value.data.content ? t(json_value.data.content) : t(json_value.data.title);
+                setAlert(t(json_value.data.title), content, "success");
+            }
             loadItems({ page: options.page, itemsPerPage: itemsPerPage.value, sortBy: "" });
         }
     }

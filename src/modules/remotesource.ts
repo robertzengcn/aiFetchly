@@ -9,7 +9,9 @@ import { Token } from "@/modules/token"
 import {User} from "@/modules/user"
 import {TOKENNAME} from '@/config/usersetting';
 // const url = require("url");
-// const FormData = require('form-data');
+import FormData from 'form-data';
+import type FormDataLib from 'form-data';
+import * as dotenv from 'dotenv';
 type sosetting = {
   sotype: string;
   socialuser: string;
@@ -52,12 +54,25 @@ type keywordItem = {
   Created: string,
   UsedTime: number,
 }
+// User subscription plan type
+export type UserPlan = {
+  planName: string,
+  planId?: string,
+  status: string,
+  startDate?: string,
+  endDate?: string,
+  price?: number,
+  currency?: string,
+  billingPeriod?: string,
+}
+
 export type jwtUser = {
   // account_id:number
   name: string,
   email: string,
   id: number,
   roles: Array<string>,
+  plans?: Array<UserPlan>,
 }
 type jwtTokenUser = {
   AccountId: number,
@@ -115,12 +130,15 @@ export class RemoteSource {
   /**
    * read config from .env File
    *
-   * @returns {object} config
+   * @returns {Record<string, string>} config
    * */
-  readConfig(): object {
-    const result = require("dotenv").config();
+  readConfig(): Record<string, string> {
+    const result = dotenv.config();
     if (result.error) {
       throw result.error;
+    }
+    if (!result.parsed) {
+      throw new Error("Failed to parse .env file: result is undefined");
     }
     return result.parsed;
   }
@@ -171,9 +189,8 @@ export class RemoteSource {
    * save link to remote servive
    */
   async saveLinkremote(link: Linkdata): Promise<number> {
-    const FormData = require('form-data');
     // debug(link)
-    let data = new FormData();
+    const data = new FormData();
     data.append('title', link.title);
     if (link.content) {
       data.append('content', link.content);
@@ -187,7 +204,7 @@ export class RemoteSource {
     // debug(this.REMOTEPASSWORD)
     const linkId = this._httpClient.post(
       "/api/savesolink",
-      data
+      data as FormDataLib
     )
       .then(function (res) {
         // debug(res);
@@ -263,13 +280,12 @@ export class RemoteSource {
     return taskInfo;
   }
   async Updateprocesstime(scropeId: number) {
-    const FormData = require('form-data');
     const data = new FormData();
     data.append('id', scropeId);
 
     await this._httpClient.post(
       "/api/updatescrapeprotime",
-      data,
+      data as FormDataLib,
     ).then(function (res) {
       // debug(res);
       // console.log(res)
@@ -367,24 +383,17 @@ export class RemoteSource {
   //   return jwtuser;
   // }
   //remove token in remote
-  public async removeRemoteToken(): Promise<void>{
-    const loginInfo = await this._httpClient.get(
-      "/api/user/signout",
-    ).then(function (res) {
-       // console.log(res);
-       
-       if (res.status == false) {
-         throw new Error(res.msg);
-       }
-       
-       //const decoded = thisobj.ValidateToken(token);
-      //  return res.data;
-       //return res.data.Token as {token:string};
-     })
-       .catch(function (error) {
-         // console.log(error);
-         throw new Error(error.message);
-       });
+  public async removeRemoteToken(): Promise<void> {
+    try {
+      const res = await this._httpClient.get("/api/user/signout");
+      if (res.status === false) {
+        console.warn("Remote signout returned failure:", res.msg);
+      }
+    } catch (error) {
+      // Backend may be unreachable (fetch failed, network error, etc.). Log and continue so local signout still completes.
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn("Could not remove remote token (backend may be unreachable):", message);
+    }
   }
 }
 

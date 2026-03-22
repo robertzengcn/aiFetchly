@@ -101,7 +101,7 @@ class ConfigurationPlatformAdapter implements IBasePlatformAdapter {
 export class UnifiedPlatformFactory extends BaseModule implements IPlatformAdapterFactory {
     private platformRegistry: PlatformRegistry;
     private platformAdapters: Map<string, IBasePlatformAdapter> = new Map();
-    private isInitialized: boolean = false;
+    private isInitialized= false;
 
     constructor() {
         super();

@@ -1,11 +1,13 @@
 import { RemoteSource, jwtUser } from '@/modules/remotesource'
 // import Store,{ Schema } from 'electron-store';
 import { getUserpath, checkAndCreatePath, getApplogspath } from "@/modules/lib/function"
+import { log } from "@/modules/Logger"
 //import { Scraperdb } from "@/model/scraperdb";
 // import {SequelizeConfig} from "@/config/SequelizeConfig"
 // import * as fs from 'fs';
 // import * as path from 'path';
-import { USERSDBPATH, USERLOGPATH, USEREMAIL,USERNAME} from '@/config/usersetting';
+import { USERSDBPATH, USERLOGPATH, USEREMAIL, USERNAME, USERPLANS, USER_AI_ENABLED } from '@/config/usersetting';
+import { UserPlan } from '@/modules/remotesource';
 import { Token } from "@/modules/token"
 //import {runAfterTableCreate} from "@/modules/lib/databaseinit"
 import { SqliteDb } from "@/config/SqliteDb"
@@ -34,6 +36,36 @@ export class UserController {
 
     // private user: string;
     // private pass: string;
+    
+    /**
+     * Check if a plan is a Plus plan (enables AI features)
+     * Plus plans have planName containing "aifetch-plus" (e.g. aifetch-plus-monthly)
+     */
+    private isPlusPlan(plan: UserPlan): boolean {
+        if (!plan || !plan.planName) return false
+        const planNameLower = plan.planName.toLowerCase()
+        return planNameLower.includes('aifetch-plus')
+    }
+
+    /**
+     * Check if user has any active Plus plan
+     */
+    private hasActivePlusPlan(plans: Array<UserPlan>): boolean {
+        if (!plans || plans.length === 0) return false
+        return plans.some(plan =>
+            plan.status === 'active' && this.isPlusPlan(plan)
+        )
+    }
+
+    /**
+     * Check if AI features are enabled for the current user
+     */
+    public isAIEnabled(): boolean {
+        const tokenService = new Token()
+        const aiEnabled = tokenService.getValue(USER_AI_ENABLED)
+        return aiEnabled === 'true'
+    }
+
     //defined login function which will call remote source with request
     //and return the result
     // public async login(data: userlogin): Promise<jwtUser> {
@@ -117,7 +149,10 @@ export class UserController {
     //     return jwtuser;
     // }
     public getLoginPageUrl(): string {
-        const loginUrl = import.meta.env.VITE_LOGIN_URL as string;
+        // Use environment variable in Node.js, import.meta.env in Vite
+        const loginUrl = process.env.VITE_LOGIN_URL ||
+                        (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_LOGIN_URL) ||
+                        'http://localhost:3000';
         const appName = app.getName() || "";
         const finalapp = appName.replace(/-/g, '');
         
@@ -189,7 +224,7 @@ export class UserController {
             // Open the URL in default browser
             shell.openExternal(finalloginUrl);
         } catch (error) {
-            console.error("Failed to open browser:", error);
+            log.error("Failed to open browser:", error);
             throw new Error(`Failed to open browser: ${error instanceof Error ? error.message : String(error)}`);
         }
     }
@@ -199,14 +234,28 @@ export class UserController {
         const tokenService = new Token()
         const email = tokenService.getValue(USEREMAIL)
         const name = tokenService.getValue(USERNAME)
+        const plansStr = tokenService.getValue(USERPLANS)
+        const aiEnabled = this.isAIEnabled()
         // const listroles = tokenService.getValue(USERROLES)
         // console.log(listroles)
         // const roles = JSON.parse(tokenService.getValue(USERROLES)) || []
-        const data:UserInfoType={
-            name:name,
-            email:email,
+        
+        // Parse plans from stored JSON string
+        let plans = undefined
+        if (plansStr) {
+            try {
+                plans = JSON.parse(plansStr)
+            } catch (error) {
+                log.error('Failed to parse user plans:', error)
+            }
+        }
+        
+        const data: UserInfoType = {
+            name: name,
+            email: email,
+            plans: plans,
+            aiEnabled: aiEnabled,
             //roles:roles
-
         }
         return data;
     }
@@ -214,10 +263,10 @@ export class UserController {
     public async checklogin(): Promise<jwtUser | null> {
         const remoteSourmodel = new RemoteSource();
         const userInfo = await remoteSourmodel.GetUserInfo().then(function (res) {
-            console.log(res);
+            log.debug('User info retrieved:', res);
             return res;
         }).catch(function (error) {
-            console.log(error)
+            log.error('Failed to get user info:', error)
             //debug(error);
             //throw new Error(error.message);
             return null
@@ -236,21 +285,39 @@ export class UserController {
                             //check db exist, create one if not exist
             
                             const userdataPath = getUserpath(res.email)
-                            console.log(userdataPath)
-                            
-                            //     // type: 'object',                 
+                            log.debug('User data path:', userdataPath)
+
+                            //     // type: 'object',
                             const logPath = getApplogspath(res.email)
-            
+
                             await checkAndCreatePath(userdataPath)
                             await checkAndCreatePath(logPath)
                             const tokenService = new Token()
-                            console.log(res)
+                            log.debug('User info from remote:', res)
                             //tokenService.setValue('useremail',res.email)
                             tokenService.setValue(USEREMAIL, res.email)
                             tokenService.setValue(USERNAME, res.name)
                             // tokenService.setValue(USERID, res.id.toString())
                             tokenService.setValue(USERSDBPATH, userdataPath)
                             tokenService.setValue(USERLOGPATH, logPath)
+                            // Save user's subscription plans
+                            if (res.plans && res.plans.length > 0) {
+                                tokenService.setValue(USERPLANS, JSON.stringify(res.plans))
+                                log.info('Saved user plans:', res.plans)
+
+                                // Check if user has Plus plan and enable AI features
+                                const userController = new UserController()
+                                const hasPlusPlan = userController.hasActivePlusPlan(res.plans)
+                                tokenService.setValue(USER_AI_ENABLED, hasPlusPlan ? 'true' : 'false')
+                                log.info('AI features enabled:', hasPlusPlan)
+                            } else {
+                                // Set default Community plan if no plans returned
+                                const defaultPlans = [{ planName: 'Community', status: 'active' }]
+                                tokenService.setValue(USERPLANS, JSON.stringify(defaultPlans))
+                                // Community plan does not have AI features
+                                tokenService.setValue(USER_AI_ENABLED, 'false')
+                                log.info('Saved default Community plan, AI features disabled')
+                            }
                             //const scraperModel = Scraperdb.getInstance(userdataPath);
                             //const dbdatapath=scraperModel.getdbpath(userdataPath)
                             // console.log(dbdatapath)
@@ -262,25 +329,25 @@ export class UserController {
                             }
                             //await runafterbootup()
                             } catch (error) {
-                                console.error('Failed to initialize database connection:', error)
-            
+                                log.error('Failed to initialize database connection:', error)
+
                                 // Log detailed error information
                                 if (error instanceof Error) {
-                                    console.error(`Error name: ${error.name}`)
-                                    console.error(`Error message: ${error.message}`)
-                                    console.error(`Error stack: ${error.stack}`)
-            
-            
+                                    log.error(`Error name: ${error.name}`)
+                                    log.error(`Error message: ${error.message}`)
+                                    log.error(`Error stack: ${error.stack}`)
+
+
                                     // Handle specific error types
                                     if (error.message === 'SQLITE_CANTOPEN') {
-                                        console.error('Could not open SQLite database file. Check path and permissions.')
+                                        log.error('Could not open SQLite database file. Check path and permissions.')
                                     } else if (error.name === 'SQLITE_CORRUPT') {
-                                        console.error('SQLite database file is corrupted.')
+                                        log.error('SQLite database file is corrupted.')
                                     } else if (error.name === 'CannotConnectAlreadyConnectedError') {
-                                        console.log('SQLite database file is already connected.')
+                                        log.info('SQLite database file is already connected.')
                                     }else if(error.name==='CannotConnectAlreadyConnectedError2'){
-                                        console.log('SQLite database file is already connected.')
-            
+                                        log.info('SQLite database file is already connected.')
+
                                     } else {
                                         // Throw a more descriptive error or return a specific error response
                                        throw new Error(`Database initialization failed: ${error.message}`)
@@ -299,7 +366,7 @@ export class UserController {
                 return res;
             })
             .catch(function (error) {
-                console.log(error);
+                log.error('Failed to get user info:', error);
                 //debug(error);
                 throw new Error(error.message);
                 // return null;

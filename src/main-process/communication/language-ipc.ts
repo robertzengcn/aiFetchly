@@ -14,6 +14,9 @@ export function registerLanguagePreferenceIpcHandlers() {
     ipcMain.handle(LANGUAGE_PREFERENCE_GET, async (event) => {
         try {
             const systemSettingCtrl = new SystemSettingController();
+            // Ensure database connection is initialized
+            await systemSettingCtrl.ensureConnection();
+
             const language = await systemSettingCtrl.getLanguagePreference();
             
             const result: CommonMessage<string> = {
@@ -39,12 +42,12 @@ export function registerLanguagePreferenceIpcHandlers() {
     /**
      * Update language preference
      */
-    ipcMain.handle(LANGUAGE_PREFERENCE_UPDATE, async (event, jsonData: string) => {
+    ipcMain.handle(LANGUAGE_PREFERENCE_UPDATE, async (event, jsonData: unknown) => {
         try {
             // Parse JSON data from frontend
             let parsedData: { language: string };
             try {
-                parsedData = JSON.parse(jsonData);
+                parsedData = JSON.parse(jsonData as string);
             } catch (parseError) {
                 const result: CommonMessage<boolean> = {
                     status: false,
@@ -68,6 +71,9 @@ export function registerLanguagePreferenceIpcHandlers() {
             }
 
             const systemSettingCtrl = new SystemSettingController();
+            // Ensure database connection is initialized
+            await systemSettingCtrl.ensureConnection();
+
             const success = await systemSettingCtrl.updateLanguagePreference(language);
             
             const result: CommonMessage<boolean> = {

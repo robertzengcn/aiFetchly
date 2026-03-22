@@ -58,10 +58,10 @@ export class SystemSettingGroupModel extends BaseDb {
        //await this.systemSettingModel.InsertDeepseekSetting(deepseekgroup) 
     }
     public async initSystemSetting(){
-        console.log(settinggroupInit)
+        //console.log(settinggroupInit)
         const repository = await this.getRepository();
         for(const sgelement of settinggroupInit){
-           console.log(sgelement)
+        //    console.log(sgelement)
             let settargroup = await repository.findOne({
                 where:{name: sgelement.name},
              })

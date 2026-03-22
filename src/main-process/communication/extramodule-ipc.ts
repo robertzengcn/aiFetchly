@@ -6,8 +6,8 @@ import { ExtraModule } from "@/entityTypes/extramoduleType"
 export function registerExtraModulesIpcHandlers() {
   console.log("extramodules list register")
  
-  ipcMain.handle(EXTRAMODULECHANNE_LIST, async (event, arg) => {
-    const qdata = JSON.parse(arg);
+  ipcMain.handle(EXTRAMODULECHANNE_LIST, async (event, arg: unknown) => {
+    const qdata = JSON.parse(arg as string);
     if (!Object.prototype.hasOwnProperty.call(qdata, "page")) {
       qdata.page = 0;
     }
@@ -27,8 +27,8 @@ export function registerExtraModulesIpcHandlers() {
     return res
   });
 
-  ipcMain.on(EXTRAMODULECHANNE_INSTALL, async (event, data) => {
-    const qdata = JSON.parse(data);
+  ipcMain.on(EXTRAMODULECHANNE_INSTALL, async (event, data: unknown) => {
+    const qdata = JSON.parse(data as string);
     if (!("name" in qdata)) {
       throw new Error("name not found");
     }
@@ -37,7 +37,7 @@ export function registerExtraModulesIpcHandlers() {
       const extraModulesCtrl = new ExtraModuleController()
       await extraModulesCtrl.installExtraModule(qdata.name, function () {
         
-        event.sender.send(EXTRAMODULECHANNE_MESSAGE, JSON.stringify({
+        (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(EXTRAMODULECHANNE_MESSAGE, JSON.stringify({
           status: true,
           msg: "success",
           data: {
@@ -47,7 +47,7 @@ export function registerExtraModulesIpcHandlers() {
         }))
       }, function (error) {
         if (error.message.length > 0) {
-          event.sender.send(EXTRAMODULECHANNE_MESSAGE, JSON.stringify({
+          (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(EXTRAMODULECHANNE_MESSAGE, JSON.stringify({
             status: false,
             msg: error.message
           }))
@@ -55,7 +55,7 @@ export function registerExtraModulesIpcHandlers() {
       })
     } catch (error) {
       if (error instanceof Error) {
-        event.sender.send(EXTRAMODULECHANNE_MESSAGE, JSON.stringify({
+        (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(EXTRAMODULECHANNE_MESSAGE, JSON.stringify({
           status: false,
           msg: error.message
         }))
@@ -63,8 +63,8 @@ export function registerExtraModulesIpcHandlers() {
     }
   });
 
-  ipcMain.on(EXTRAMODULECHANNE_UNINSTALL, async (event, data) => {
-    const qdata = JSON.parse(data);
+  ipcMain.on(EXTRAMODULECHANNE_UNINSTALL, async (event, data: unknown) => {
+    const qdata = JSON.parse(data as string);
     if (!("name" in qdata)) {
       throw new Error("name not found");
     }
@@ -72,7 +72,7 @@ export function registerExtraModulesIpcHandlers() {
     try {
       const extraModulesCtrl = new ExtraModuleController()
       extraModulesCtrl.removeExtraModule(qdata.name, function () {
-        event.sender.send(EXTRAMODULECHANNE_MESSAGE, JSON.stringify({
+        (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(EXTRAMODULECHANNE_MESSAGE, JSON.stringify({
           status: true,
           msg: "success",
           data: {
@@ -82,7 +82,7 @@ export function registerExtraModulesIpcHandlers() {
         }))
       }, function (message) {
         if (message.length > 0) {
-          event.sender.send(EXTRAMODULECHANNE_MESSAGE, JSON.stringify({
+          (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(EXTRAMODULECHANNE_MESSAGE, JSON.stringify({
             status: false,
             msg: "failed"
           }))
@@ -90,15 +90,15 @@ export function registerExtraModulesIpcHandlers() {
       })
     } catch (error) {
       if (error instanceof Error) {
-        event.sender.send(EXTRAMODULECHANNE_MESSAGE, JSON.stringify({
+        (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(EXTRAMODULECHANNE_MESSAGE, JSON.stringify({
           status: false,
           msg: error.message
         }))
       }
     }
   });
-  ipcMain.on(EXTRAMODULE_UPGRADE, async (event, data) => {
-    const qdata = JSON.parse(data);
+  ipcMain.on(EXTRAMODULE_UPGRADE, async (event, data: unknown) => {
+    const qdata = JSON.parse(data as string);
     if (!("name" in qdata)) {
       throw new Error("name not found");
     }
@@ -109,31 +109,31 @@ export function registerExtraModulesIpcHandlers() {
         status: true,
         code:0,
         msg: "success",
-      }
-      event.sender.send(EXTRAMODULE_UPGRAD_MESSAGE, JSON.stringify(msgData))
+      };
+      (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(EXTRAMODULE_UPGRAD_MESSAGE, JSON.stringify(msgData));
     },(errormsg)=>{
       const msgData:CommonDialogMsg={
         status: false,
         code:0,
         msg: errormsg,
-      }
-      event.sender.send(EXTRAMODULE_UPGRAD_MESSAGE, JSON.stringify(msgData))
+      };
+      (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(EXTRAMODULE_UPGRAD_MESSAGE, JSON.stringify(msgData))
     }).catch((error) => {
       if (error instanceof Error) {
         const msgData:CommonDialogMsg={
           status: false,
           code:0,
           msg: error.message,
-        }
-        event.sender.send(EXTRAMODULE_UPGRAD_MESSAGE, JSON.stringify(msgData))
+        };
+        (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(EXTRAMODULE_UPGRAD_MESSAGE, JSON.stringify(msgData))
       }
     }).then(() => {
       const msgData:CommonDialogMsg={
         status: true,
         code:0,
         msg: "success",
-      }
-      event.sender.send(EXTRAMODULE_UPGRAD_MESSAGE, JSON.stringify(msgData))
+      };
+      (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(EXTRAMODULE_UPGRAD_MESSAGE, JSON.stringify(msgData));
     })
 
   })

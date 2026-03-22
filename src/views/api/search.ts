@@ -3,10 +3,10 @@ import { SEARCHSCRAPERAPI } from '@/config/channellist'
 import { SearchtaskItem,SearchResultFetchparam } from "@/entityTypes/searchControlType"
 import { SearchResult} from '@/views/api/types'
 import { windowInvoke,windowReceive,windowSend } from '@/views/utils/apirequest'
-import {LISTSESARCHRESUT,TASKSEARCHRESULTLIST,SAVESEARCHERRORLOG,RETRYSEARCHTASK,GET_SEARCH_TASK_DETAILS,UPDATE_SEARCH_TASK,SEARCH_TASK_UPDATE_EVENT,CREATE_SEARCH_TASK_ONLY,EXPORT_SEARCH_RESULTS,KILL_SEARCH_PROCESS} from "@/config/channellist";
+import {LISTSESARCHRESUT,TASKSEARCHRESULTLIST,SAVESEARCHERRORLOG,RETRYSEARCHTASK,GET_SEARCH_TASK_DETAILS,UPDATE_SEARCH_TASK,SEARCH_TASK_UPDATE_EVENT,CREATE_SEARCH_TASK_ONLY,EXPORT_SEARCH_RESULTS,KILL_SEARCH_PROCESS,AI_KEYWORDS_GENERATE,ANALYZE_WEBSITE,ANALYZE_WEBSITE_PROGRESS} from "@/config/channellist";
 import {SearchResEntityDisplay} from "@/entityTypes/scrapeType"
 import {ItemSearchparam} from "@/entityTypes/commonType"
-import {TaskDetailsForEdit, SearchTaskUpdateData} from "@/modules/SearchModule"
+import type { TaskDetailsForEdit, SearchTaskUpdateData } from "@/entityTypes/searchControlType"
 //import {CommonDialogMsg} from "@/entityTypes/commonType";
 // import { ipcMain} from 'electron'
 
@@ -131,4 +131,94 @@ export async function killSearchProcess(pid?: number, taskId?: number): Promise<
         throw new Error("Unknown error");
     }
     return resp;
+}
+
+/**
+ * Generate related keywords using AI
+ * @param keywords Array of seed keywords
+ * @param numKeywords Number of keywords to generate per seed (default: 15)
+ * @param keywordType Type of keywords to generate (default: 'seo')
+ * @returns Promise with array of generated keywords
+ */
+export async function generateRelatedKeywords(
+    keywords: string[],
+    numKeywords = 15,
+    keywordType = 'seo'
+): Promise<string[]> {
+    const resp = await windowInvoke(AI_KEYWORDS_GENERATE, {
+        keywords,
+        num_keywords: numKeywords,
+        keyword_type: keywordType
+    });
+    if (!resp) {
+        throw new Error("Unknown error");
+    }
+    return resp;
+}
+
+/**
+ * Batch analysis request item
+ */
+export interface AnalyzeWebsiteBatchItem {
+    resultId: number;
+    url: string;
+}
+
+/**
+ * Batch analysis request
+ */
+export interface AnalyzeWebsiteBatchRequest {
+    items: AnalyzeWebsiteBatchItem[];
+    clientBusiness: string;
+    temperature: number;
+}
+
+/**
+ * Batch analysis response
+ */
+export interface AnalyzeWebsiteBatchResponse {
+    batchId: string;
+    total: number;
+}
+
+/**
+ * Progress update data
+ */
+export interface AnalyzeWebsiteProgressData {
+    batchId: string;
+    completed: number;
+    total: number;
+}
+
+/**
+ * Start batch website analysis
+ * @param request Batch analysis request
+ * @returns Promise with batch analysis response
+ */
+export async function analyzeWebsiteBatch(request: AnalyzeWebsiteBatchRequest): Promise<AnalyzeWebsiteBatchResponse> {
+    const resp = await windowInvoke(ANALYZE_WEBSITE, request);
+    if (!resp) {
+        throw new Error("Failed to start batch analysis");
+    }
+    return resp;
+}
+
+/**
+ * Listen for website analysis progress updates
+ * @param callback The callback function to handle progress updates
+ */
+export function receiveAnalyzeWebsiteProgress(callback: (data: AnalyzeWebsiteProgressData) => void): void {
+    windowReceive(ANALYZE_WEBSITE_PROGRESS, (event: unknown) => {
+        try {
+            // windowReceive passes the event object, extract data from it
+            const eventData = event as { data?: string } | string;
+            const progressData = typeof eventData === 'string' ? eventData : (eventData.data || '');
+            if (!progressData) return;
+            
+            const progress = JSON.parse(progressData) as AnalyzeWebsiteProgressData;
+            callback(progress);
+        } catch (error) {
+            console.error('Error parsing progress data:', error);
+        }
+    });
 }

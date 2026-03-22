@@ -14,8 +14,8 @@ import { EmailTemplateRespdata } from "@/entityTypes/emailmarketingType"
 import { EmailFilterDetailEntity } from "@/entity/EmailFilterDetail.entity";
 export function registerEmailMarketingIpcHandlers() {
 
-  ipcMain.handle(EMAILMARKETINGTEMPLIST, async (event, arg): Promise<CommonResponse<EmailTemplateRespdata>> => {
-    const qdata = JSON.parse(arg) as ItemSearchparam;
+  ipcMain.handle(EMAILMARKETINGTEMPLIST, async (event, arg: unknown): Promise<CommonResponse<EmailTemplateRespdata>> => {
+    const qdata = JSON.parse(arg as string) as ItemSearchparam;
     if (!Object.prototype.hasOwnProperty.call(qdata, "page")) {
       qdata.page = 0;
     }
@@ -68,8 +68,8 @@ export function registerEmailMarketingIpcHandlers() {
   });
 
   //remove email template
-  ipcMain.handle(EMAILMARKETINGTEMPREMOVE, async (event, arg): Promise<CommonMessage<number>> => {
-    const qdata = JSON.parse(arg) as CommonIdrequest<string>;
+  ipcMain.handle(EMAILMARKETINGTEMPREMOVE, async (event, arg: unknown): Promise<CommonMessage<number>> => {
+    const qdata = JSON.parse(arg as string) as CommonIdrequest<string>;
     if (!qdata.id) {
       const resp: CommonMessage<number> = {
         status: false,
@@ -96,8 +96,8 @@ export function registerEmailMarketingIpcHandlers() {
     // }
   });
   //get email template by id
-  ipcMain.handle(EMAILMARKETINGTEMPDETAIL, async (event, arg): Promise<CommonMessage<EmailTemplateRespdata>> => {
-    const qdata = JSON.parse(arg) as CommonIdrequest<string>;
+  ipcMain.handle(EMAILMARKETINGTEMPDETAIL, async (event, arg: unknown): Promise<CommonMessage<EmailTemplateRespdata>> => {
+    const qdata = JSON.parse(arg as string) as CommonIdrequest<string>;
     if (!qdata.id) {
       const resp: CommonMessage<EmailTemplateRespdata> = {
         status: false,
@@ -132,8 +132,8 @@ export function registerEmailMarketingIpcHandlers() {
     }
   });
   //update email template data
-  ipcMain.handle(EMAILMARKETINGTEMPUPDATE, async (event, arg): Promise<CommonMessage<CommonIdrequest<number>>> => {
-    const qdata = JSON.parse(arg) as EmailTemplateRespdata;
+  ipcMain.handle(EMAILMARKETINGTEMPUPDATE, async (event, arg: unknown): Promise<CommonMessage<CommonIdrequest<number>>> => {
+    const qdata = JSON.parse(arg as string) as EmailTemplateRespdata;
     const emailmarketCon = new EmailMarketingController()
     const res = await emailmarketCon.updateEmailtemplate(qdata)
     if (res) {
@@ -152,8 +152,8 @@ export function registerEmailMarketingIpcHandlers() {
       return resp
     }
   })
-  ipcMain.handle(EMAILMARKETINGFILTERLIST, async (event, arg): Promise<CommonResponse<EmailFilterdata>> => {
-    const qdata = JSON.parse(arg) as ItemSearchparam;
+  ipcMain.handle(EMAILMARKETINGFILTERLIST, async (event, arg: unknown): Promise<CommonResponse<EmailFilterdata>> => {
+    const qdata = JSON.parse(arg as string) as ItemSearchparam;
     if (!Object.prototype.hasOwnProperty.call(qdata, "page")) {
       qdata.page = 0;
     }
@@ -214,8 +214,8 @@ export function registerEmailMarketingIpcHandlers() {
     }
 
   })
-  ipcMain.handle(EMAILMARKETFILTERDETAIL, async (event, arg): Promise<CommonMessage<EmailFilterdata>> => {
-    const qdata = JSON.parse(arg) as CommonIdrequest<string>;
+  ipcMain.handle(EMAILMARKETFILTERDETAIL, async (event, arg: unknown): Promise<CommonMessage<EmailFilterdata>> => {
+    const qdata = JSON.parse(arg as string) as CommonIdrequest<string>;
     if (!qdata.id) {
       const resp: CommonMessage<EmailFilterdata> = {
         status: false,
@@ -261,8 +261,8 @@ export function registerEmailMarketingIpcHandlers() {
 
   })
   //update email filter
-  ipcMain.handle(EMAILMARKETFILTERUPDATE, async (event, arg): Promise<CommonMessage<CommonIdrequest<number>>> => {
-    const qdata = JSON.parse(arg) as EmailFilterdata;
+  ipcMain.handle(EMAILMARKETFILTERUPDATE, async (event, arg: unknown): Promise<CommonMessage<CommonIdrequest<number>>> => {
+    const qdata = JSON.parse(arg as string) as EmailFilterdata;
     const emailmarketCon = new EmailMarketingController()
     const res = await emailmarketCon.updateEmailFilter(qdata)
     console.log(res)
@@ -283,8 +283,8 @@ export function registerEmailMarketingIpcHandlers() {
     }
   })
   //delete email filter
-  ipcMain.handle(EMAILFILTERDELETE, async (event, arg): Promise<CommonMessage<number>> => {
-    const qdata = JSON.parse(arg) as CommonIdrequest<string>;
+  ipcMain.handle(EMAILFILTERDELETE, async (event, arg: unknown): Promise<CommonMessage<number>> => {
+    const qdata = JSON.parse(arg as string) as CommonIdrequest<string>;
     if (!qdata.id) {
       const resp: CommonMessage<number> = {
         status: false,
@@ -312,8 +312,8 @@ export function registerEmailMarketingIpcHandlers() {
 
   //email service
   //get email service list
-  ipcMain.handle(EMAILSERVICELIST, async (event, arg): Promise<CommonResponse<EmailServiceListdata>> => {
-    const qdata = JSON.parse(arg) as ItemSearchparam;
+  ipcMain.handle(EMAILSERVICELIST, async (event, arg: unknown): Promise<CommonResponse<EmailServiceListdata>> => {
+    const qdata = JSON.parse(arg as string) as ItemSearchparam;
     if (!Object.prototype.hasOwnProperty.call(qdata, "page")) {
       qdata.page = 0;
     }
@@ -356,8 +356,8 @@ export function registerEmailMarketingIpcHandlers() {
     }
   });
   //email service detail
-  ipcMain.handle(EMAILSERVICEDETAIL, async (event, arg): Promise<CommonMessage<EmailServiceEntitydata>> => {
-    const qdata = JSON.parse(arg) as CommonIdrequest<string>;
+  ipcMain.handle(EMAILSERVICEDETAIL, async (event, arg: unknown): Promise<CommonMessage<EmailServiceEntitydata>> => {
+    const qdata = JSON.parse(arg as string) as CommonIdrequest<string>;
     if (!qdata.id) {
       const resp: CommonMessage<EmailServiceEntitydata> = {
         status: false,
@@ -383,8 +383,8 @@ export function registerEmailMarketingIpcHandlers() {
     }
   });
   //create or update email service
-  ipcMain.handle(EMAILSERVICEUPDATE, async (event, arg): Promise<CommonMessage<CommonIdrequest<number>>> => {
-    const qdata = JSON.parse(arg) as EmailServiceEntitydata;
+  ipcMain.handle(EMAILSERVICEUPDATE, async (event, arg: unknown): Promise<CommonMessage<CommonIdrequest<number>>> => {
+    const qdata = JSON.parse(arg as string) as EmailServiceEntitydata;
     const emailmarketCon = new EmailMarketingController()
     const res = await emailmarketCon.createEmailService(qdata)
     console.log(res)
@@ -406,8 +406,8 @@ export function registerEmailMarketingIpcHandlers() {
   })
 
   //delete email service
-  ipcMain.handle(EMAILSERVICEDELETE, async (event, arg): Promise<CommonMessage<number>> => {
-    const qdata = JSON.parse(arg) as CommonIdrequest<string>;
+  ipcMain.handle(EMAILSERVICEDELETE, async (event, arg: unknown): Promise<CommonMessage<number>> => {
+    const qdata = JSON.parse(arg as string) as CommonIdrequest<string>;
     if (!qdata.id) {
       const resp: CommonMessage<number> = {
         status: false,
@@ -429,7 +429,7 @@ export function registerEmailMarketingIpcHandlers() {
   //SEND test email
 
   ipcMain.on(SENDTESTEMAIL, async (event, arg): Promise<void> => {
-    const qdata = JSON.parse(arg) as EmailSendParam;
+    const qdata = JSON.parse(arg as string) as EmailSendParam;
     // try {
     const emailmarketCon = new EmailMarketingController()
     await emailmarketCon.sendEmail(qdata, (errorMessage: string) => {
@@ -442,8 +442,8 @@ export function registerEmailMarketingIpcHandlers() {
           title: "emailservice.send_test_email_error",
           content: errorMessage
         }
-      }
-      event.sender.send(RECEIVESENDTESTEMAILMESSAGE, JSON.stringify(resp))
+      };
+      (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(RECEIVESENDTESTEMAILMESSAGE, JSON.stringify(resp))
       return
     }, () => {
       // console.log("email send success")
@@ -455,8 +455,8 @@ export function registerEmailMarketingIpcHandlers() {
           title: "emailservice.send_test_email_success",
           content: ""
         }
-      }
-      event.sender.send(RECEIVESENDTESTEMAILMESSAGE, JSON.stringify(resp))
+      };
+      (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(RECEIVESENDTESTEMAILMESSAGE, JSON.stringify(resp))
       return resp
     }).catch((error) => {
       console.log(error)
@@ -478,8 +478,8 @@ export function registerEmailMarketingIpcHandlers() {
           title: "send_test_email_error",
           content: errorMessage
         }
-      }
-      event.sender.send(RECEIVESENDTESTEMAILMESSAGE, JSON.stringify(resp))
+      };
+      (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(RECEIVESENDTESTEMAILMESSAGE, JSON.stringify(resp))
       return resp
     })
 
