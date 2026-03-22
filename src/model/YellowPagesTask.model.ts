@@ -57,7 +57,7 @@ export class YellowPagesTaskModel extends BaseDb {
     concurrency?: number;
     account_id?: number;
     /** Stored as JSON string in DB; pass an object to stringify once, or a pre-serialized JSON string. */
-    proxy_config?: string | object;
+    proxy_config?: string | object | null;
     localBrowser?: string;
     delay_between_requests?: number;
     headless?: boolean;

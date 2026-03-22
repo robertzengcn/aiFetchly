@@ -471,6 +471,13 @@ export class YellowPagesAiSupportHandler {
 
     if (result.status && result.data) {
       this.logInfo(`Contact extraction successful: ${requestId}`);
+      const d = result.data;
+      const socialFromApi =
+        d.socialLinks ??
+        (Array.isArray(d.social_links) ? d.social_links : undefined);
+      const businessName =
+        d.businessName ??
+        (typeof d.business_name === "string" ? d.business_name : undefined);
       return {
         type: "AI_SUPPORT_RESPONSE",
         taskId,
@@ -478,11 +485,15 @@ export class YellowPagesAiSupportHandler {
         success: true,
         requestType: "contact_extraction",
         data: {
-          emails: result.data.emails ?? [],
-          phones: result.data.phones ?? [],
-          address: result.data.address,
-          socialLinks: result.data.socialLinks,
-          confidence: result.data.confidence,
+          emails: d.emails ?? [],
+          phones: d.phones ?? [],
+          address: d.address,
+          socialLinks: socialFromApi,
+          confidence: d.confidence,
+          businessName,
+          website: typeof d.website === "string" ? d.website : undefined,
+          description:
+            typeof d.description === "string" ? d.description : undefined,
         },
       };
     } else {

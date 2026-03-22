@@ -1,7 +1,39 @@
 import type { YellowPagesTaskProxyConfig } from "@/entityTypes/yellowPagesTaskProxyType";
 
 /**
- * Parse `yellow_pages_task.proxy_config` JSON from the database into a validated object.
+ * Validate one persisted proxy object (root form or an element of `proxies`).
+ */
+function parseSingleProxyRecord(
+  o: Record<string, unknown>
+): YellowPagesTaskProxyConfig | undefined {
+  const host = typeof o.host === "string" ? o.host.trim() : "";
+  const portRaw = o.port;
+  const port =
+    typeof portRaw === "number"
+      ? portRaw
+      : typeof portRaw === "string"
+      ? parseInt(portRaw, 10)
+      : NaN;
+  const protocolRaw =
+    typeof o.protocol === "string" ? o.protocol.trim().toLowerCase() : "";
+  const protocol = protocolRaw.length > 0 ? protocolRaw : "http";
+  if (!host || !Number.isFinite(port) || port < 1 || port > 65535) {
+    return undefined;
+  }
+  const username =
+    typeof o.username === "string" && o.username.length > 0
+      ? o.username
+      : undefined;
+  const password =
+    typeof o.password === "string" && o.password.length > 0
+      ? o.password
+      : undefined;
+  return { host, port, protocol, username, password };
+}
+
+/**
+ * Parse `yellow_pages_task.proxy_config` JSON from the database into a validated object
+ * for **launch** (first usable proxy). Supports legacy single-object rows and `{ proxies: [...] }`.
  */
 export function parseYellowPagesProxyConfigJson(
   raw: string | undefined | null
@@ -10,38 +42,29 @@ export function parseYellowPagesProxyConfigJson(
     return undefined;
   }
   try {
-    const j = JSON.parse(raw) as unknown;
+    let j: unknown = JSON.parse(raw);
+    // Legacy rows: proxy_config was double-stringified; first parse yields a JSON string.
+    if (typeof j === "string") {
+      j = JSON.parse(j);
+    }
     if (!j || typeof j !== "object") {
       return undefined;
     }
     const o = j as Record<string, unknown>;
-    const host = typeof o.host === "string" ? o.host.trim() : "";
-    const portRaw = o.port;
-    const port =
-      typeof portRaw === "number"
-        ? portRaw
-        : typeof portRaw === "string"
-        ? parseInt(portRaw, 10)
-        : NaN;
-    const protocol = typeof o.protocol === "string" ? o.protocol.trim() : "";
-    if (
-      !host ||
-      !Number.isFinite(port) ||
-      port < 1 ||
-      port > 65535 ||
-      !protocol
-    ) {
+    if (Array.isArray(o.proxies) && o.proxies.length > 0) {
+      for (const item of o.proxies) {
+        if (item && typeof item === "object") {
+          const parsed = parseSingleProxyRecord(
+            item as Record<string, unknown>
+          );
+          if (parsed) {
+            return parsed;
+          }
+        }
+      }
       return undefined;
     }
-    const username =
-      typeof o.username === "string" && o.username.length > 0
-        ? o.username
-        : undefined;
-    const password =
-      typeof o.password === "string" && o.password.length > 0
-        ? o.password
-        : undefined;
-    return { host, port, protocol, username, password };
+    return parseSingleProxyRecord(o);
   } catch {
     return undefined;
   }

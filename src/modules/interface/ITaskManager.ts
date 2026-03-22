@@ -108,7 +108,7 @@ export interface YellowPagesTaskData {
   max_pages?: number;
   concurrency?: number;
   account_id?: number;
-  proxy_config?: object;
+  proxy_config?: object | null;
   delay_between_requests?: number;
   headless?: boolean;
   aiSupportEnabled?: boolean;
@@ -217,7 +217,8 @@ export interface YellowPagesTask {
   error_log?: string;
   run_log?: string;
   account_id?: number;
-  proxy_config?: object;
+  /** `null` on update clears stored proxy in DB (renderer must send explicit null). */
+  proxy_config?: object | null;
   delay_between_requests: number;
   headless?: boolean;
   aiSupportEnabled?: boolean;

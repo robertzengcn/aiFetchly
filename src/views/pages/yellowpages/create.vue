@@ -1018,34 +1018,48 @@ const loadTaskDetails = async () => {
       }
       
       // Set proxy configuration (nested under task; API returns { task, status, progress })
+      useProxy.value = false
+      proxyValue.value = []
       const rawPc = data.task.proxy_config
       if (rawPc) {
-        let cfg: {
-          host?: string
-          port?: number | string
-          username?: string
-          password?: string
-          protocol?: string
-        }
+        let parsed: Record<string, unknown> | null = null
         if (typeof rawPc === 'string') {
           try {
-            cfg = JSON.parse(rawPc) as typeof cfg
+            const j = JSON.parse(rawPc) as unknown
+            parsed =
+              j && typeof j === 'object' ? (j as Record<string, unknown>) : null
           } catch {
-            cfg = {}
+            parsed = null
           }
-        } else {
-          cfg = rawPc as typeof cfg
+        } else if (typeof rawPc === 'object' && rawPc !== null) {
+          parsed = rawPc as Record<string, unknown>
         }
-        if (cfg.host !== undefined && cfg.port !== undefined) {
-          useProxy.value = true
-          proxyValue.value = [{
-            id: 0,
-            host: cfg.host,
-            port: String(cfg.port),
-            user: cfg.username || '',
-            pass: cfg.password || '',
-            protocol: cfg.protocol || 'http'
-          }]
+        if (parsed) {
+          const list: Array<Record<string, unknown>> = []
+          if (Array.isArray(parsed.proxies) && parsed.proxies.length > 0) {
+            for (const item of parsed.proxies) {
+              if (item && typeof item === 'object') {
+                list.push(item as Record<string, unknown>)
+              }
+            }
+          } else if (
+            typeof parsed.host === 'string' &&
+            parsed.port !== undefined &&
+            parsed.port !== null
+          ) {
+            list.push(parsed)
+          }
+          if (list.length > 0) {
+            useProxy.value = true
+            proxyValue.value = list.map((cfg) => ({
+              id: typeof cfg.id === 'number' ? cfg.id : 0,
+              host: String(cfg.host ?? ''),
+              port: String(cfg.port ?? ''),
+              user: String(cfg.username ?? cfg.user ?? ''),
+              pass: String(cfg.password ?? cfg.pass ?? ''),
+              protocol: String(cfg.protocol ?? 'http')
+            }))
+          }
         }
       }
       
@@ -1100,16 +1114,19 @@ const createTask = async () => {
       taskData.account_id = undefined
     }
 
-    // Add proxy config if enabled
+    // Proxy: persist list, or explicit null so DB clears (undefined is omitted by JSON.stringify)
     if (useProxy.value && proxyValue.value.length > 0) {
-      const p = proxyValue.value[0]
       taskData.proxy_config = {
-        host: p.host,
-        port: parseInt(String(p.port)),
-        username: p.user || undefined,
-        password: p.pass || undefined,
-        protocol: p.protocol
+        proxies: proxyValue.value.map((p) => ({
+          host: p.host,
+          port: parseInt(String(p.port), 10),
+          username: p.user || undefined,
+          password: p.pass || undefined,
+          protocol: (p.protocol && String(p.protocol).trim()) || 'http'
+        }))
       }
+    } else {
+      taskData.proxy_config = null
     }
 
     // Add scheduled time if enabled
@@ -1212,14 +1229,17 @@ const createTaskOnly = async () => {
     }
 
     if (useProxy.value && proxyValue.value.length > 0) {
-      const p = proxyValue.value[0]
       taskData.proxy_config = {
-        host: p.host,
-        port: parseInt(String(p.port)),
-        username: p.user || undefined,
-        password: p.pass || undefined,
-        protocol: p.protocol
+        proxies: proxyValue.value.map((p) => ({
+          host: p.host,
+          port: parseInt(String(p.port), 10),
+          username: p.user || undefined,
+          password: p.pass || undefined,
+          protocol: (p.protocol && String(p.protocol).trim()) || 'http'
+        }))
       }
+    } else {
+      taskData.proxy_config = null
     }
 
     if (scheduleTask.value && scheduledTime.value) {

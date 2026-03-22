@@ -269,24 +269,6 @@ contextBridge.exposeInMainWorld("api", {
       AI_EMAIL_TEMPLATE_STOP,
     ];
     console.log("send", channel, data);
-    // #region agent log
-    if (channel === AI_EMAIL_TEMPLATE_GENERATE_STREAM) {
-      fetch(
-        "http://127.0.0.1:7244/ingest/610c95fc-086a-4479-b1bf-7defc981a30f",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            location: "preload.ts:send",
-            message: "send AI stream",
-            data: { channel, inWhitelist: validChannels.includes(channel) },
-            timestamp: Date.now(),
-            hypothesisId: "C",
-          }),
-        }
-      ).catch(() => undefined);
-    }
-    // #endregion
     if (validChannels.includes(channel)) {
       console.log("send2", channel, data);
       ipcRenderer.send(channel, data);
