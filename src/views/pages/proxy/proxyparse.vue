@@ -5,14 +5,14 @@
     <v-row>
       <v-file-input
         v-model="files"
-        label="Drag and drop your file here or click to select file"
+        :label="t('common.drag_drop_file')"
         accept=".csv"
         outlined
         clearable
         show-size
         @change="handleFileUpload"
       ></v-file-input>
-      <v-btn class="ml-5" @click="outPutcsv">Download Template</v-btn>
+      <v-btn class="ml-5" @click="outPutcsv">{{ t('common.download_template') }}</v-btn>
       <v-btn
         icon
         variant="text"
@@ -35,14 +35,14 @@
     >
       <template v-slot:title>
         <!-- <v-icon class="mr-2">mdi-information</v-icon> -->
-        How to Batch Upload Proxies
+        {{ t('proxy.how_to_batch_upload') }}
       </template>
       <ol class="mt-2">
-        <li><strong>Download Template:</strong> Click the "Download Template" button to get the CSV template file</li>
-        <li><strong>Edit Template:</strong> Open the downloaded CSV file and add your proxy information (host, port, protocol, username, password)</li>
-        <li><strong>The protocol can be http, https, socks5</strong></li>
-        <li><strong>Upload File:</strong> Select your edited CSV file using the file input below</li>
-        <li><strong>Check Proxies:</strong> Use "Check Proxy" to validate the uploaded proxies</li>
+        <li><strong>{{ t('common.download_template') }}:</strong> {{ t('proxy.download_template_hint') }}</li>
+        <li><strong>{{ t('proxy.edit_template') }}:</strong> {{ t('proxy.edit_template_hint') }}</li>
+        <li><strong>{{ t('proxy.protocol_hint') }}</strong></li>
+        <li><strong>{{ t('proxy.upload_file') }}:</strong> {{ t('proxy.upload_file_hint') }}</li>
+        <li><strong>{{ t('proxy.check_proxies') }}:</strong> {{ t('proxy.check_proxies_hint') }}</li>
         <li><strong>Save to System:</strong> Click "Save to My Proxy" to import valid proxies to your account</li>
       </ol>
     </v-alert>
@@ -179,6 +179,10 @@ import Papa from "papaparse";
 import { ProxyParseItem } from "@/entityTypes/proxyType";
 import { checkProxy, importProxydata } from "@/views/api/proxy";
 import { SplitArrayIntoGroups } from "@/views/utils/function";
+import {
+  getMissingProxyFields,
+  isBlankProxyCsvRow,
+} from "@/views/utils/proxyImportParse";
 
 const { t } = useI18n({ inheritLocale: true });
 const showtable = ref(false);
@@ -242,32 +246,108 @@ const handleFileUpload = async () => {
   reader.readAsText(files.value[0]);
   reader.onload = () => {
     console.log(reader.result);
-    const csv = Papa.parse(reader.result, { header: true });
-    // console.log(csv.data);
-    //loop through the csv data
-    // const data = csv.data;
-    //  const result:Array<ProxyParseItem> = [];
-    for (let i = 0; i < csv.data.length; i++) {
-      const row = csv.data[i];
-      if (row.host.length > 0 && row.port.length > 0) {
-        const item: ProxyParseItem = {
-          host: row.host,
-          port: row.port,
-          protocol: row.protocols,
-          user: row.user,
-          pass: row.pass,
-          status: 0,
-        };
+    items.value = [];
+    const csv = Papa.parse(reader.result as string, { header: true });
 
-        items.value.push(item);
+    // Check if CSV has wrong format (single column with colon-separated values)
+    const hasColonSeparatedFormat =
+      csv.meta?.fields?.length === 1 &&
+      csv.meta.fields[0] === "host:port:protocols:user:pass" &&
+      csv.data.length > 0 &&
+      csv.data[0] &&
+      typeof csv.data[0]["host:port:protocols:user:pass"] === "string";
+
+    const invalidRowNumbers: number[] = [];
+
+    for (let i = 0; i < csv.data.length; i++) {
+      const row = csv.data[i] as Record<string, unknown>;
+      let host: string | undefined;
+      let port: string | undefined;
+      let protocol: string | undefined;
+      let user: string | undefined;
+      let pass: string | undefined;
+
+      if (hasColonSeparatedFormat) {
+        const colonSeparatedValue = row["host:port:protocols:user:pass"];
+        if (colonSeparatedValue && typeof colonSeparatedValue === "string") {
+          const parts = colonSeparatedValue.split(":");
+          host = parts[0]?.trim();
+          port = parts[1]?.trim();
+          protocol = parts[2]?.trim() || "";
+          user = parts[3]?.trim() || "";
+          pass = parts[4]?.trim() || "";
+        }
+      } else {
+        host = row.host
+          ? String(row.host)
+          : undefined;
+        port = row.port ? String(row.port) : undefined;
+        protocol =
+          row.protocols !== undefined && row.protocols !== null
+            ? String(row.protocols)
+            : row.protocol !== undefined && row.protocol !== null
+              ? String(row.protocol)
+              : undefined;
+        user = row.user ? String(row.user) : undefined;
+        pass = row.pass ? String(row.pass) : undefined;
+      }
+
+      if (
+        isBlankProxyCsvRow(host, port, protocol, user, pass)
+      ) {
+        continue;
+      }
+
+      const missing = getMissingProxyFields(host, port, protocol);
+      if (missing.length > 0) {
+        invalidRowNumbers.push(i + 2);
+        continue;
+      }
+
+      const item: ProxyParseItem = {
+        host: host!.trim(),
+        port: port!.trim(),
+        protocol: protocol!.trim(),
+        user: user?.trim() ?? "",
+        pass: pass?.trim() ?? "",
+        status: 0,
+      };
+
+      items.value.push(item);
+    }
+
+    if (invalidRowNumbers.length > 0) {
+      const rowsPreview =
+        invalidRowNumbers.length > 12
+          ? `${invalidRowNumbers.slice(0, 12).join(", ")}, …`
+          : invalidRowNumbers.join(", ");
+      if (items.value.length > 0) {
+        setAlert(
+          t("proxy.import_partial_rows_missing_fields", {
+            valid: items.value.length,
+            count: invalidRowNumbers.length,
+            rows: rowsPreview,
+          }),
+          t("proxy.import_proxy"),
+          "warning"
+        );
+      } else {
+        setAlert(
+          t("proxy.import_rows_missing_fields", {
+            count: invalidRowNumbers.length,
+            rows: rowsPreview,
+          }),
+          t("proxy.import_proxy"),
+          "error"
+        );
       }
     }
-    //check items length, and show v-data-table
+
     if (items.value.length > 0) {
       showtable.value = true;
     }
+    loading.value = false;
   };
-  loading.value = false;
 };
 const checkProxyitem = async () => {
   loading.value=true;

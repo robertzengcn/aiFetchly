@@ -17,13 +17,13 @@ export async function getLanguagePreference(): Promise<string> {
 
 /**
  * Update the language preference in system settings
- * @param language - The language code to set (e.g., 'en', 'zh')
+ * @param language - The language code to set (e.g., 'en', 'zh', 'es', 'fr', 'de', 'ja')
  * @returns Promise<boolean> - True if successful, false otherwise
  */
 export async function updateLanguagePreference(language: string): Promise<boolean> {
     try {
         // Validate language code
-        const validLanguages = ['en', 'zh'];
+        const validLanguages = ['en', 'zh', 'es', 'fr', 'de', 'ja'];
         if (!validLanguages.includes(language)) {
             console.error('Invalid language code:', language);
             return false;
@@ -41,7 +41,7 @@ export async function updateLanguagePreference(language: string): Promise<boolea
 /**
  * Language preference types
  */
-export type LanguageCode = 'en' | 'zh';
+export type LanguageCode = 'en' | 'zh' | 'es' | 'fr' | 'de' | 'ja';
 
 export interface LanguagePreference {
     code: LanguageCode;
@@ -62,6 +62,26 @@ export const LANGUAGE_OPTIONS: LanguagePreference[] = [
         code: 'zh',
         label: '中文',
         description: 'Chinese language'
+    },
+    {
+        code: 'es',
+        label: 'Español',
+        description: 'Spanish language'
+    },
+    {
+        code: 'fr',
+        label: 'Français',
+        description: 'French language'
+    },
+    {
+        code: 'de',
+        label: 'Deutsch',
+        description: 'German language'
+    },
+    {
+        code: 'ja',
+        label: '日本語',
+        description: 'Japanese language'
     }
 ];
 

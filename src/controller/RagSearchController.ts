@@ -49,7 +49,7 @@ export class RagSearchController {
      * @param limit - Number of suggestions
      * @returns Array of suggestions
      */
-    async getSuggestions(query: string, limit: number = 5): Promise<string[]> {
+    async getSuggestions(query: string, limit = 5): Promise<string[]> {
         return await this.ragSearchModule.getSuggestions(query, limit);
     }
 
@@ -170,7 +170,7 @@ export class RagSearchController {
      * @param deleteFile - Whether to delete the physical file
      * @returns Promise that resolves to true if deletion was successful, false otherwise
      */
-    async deleteDocument(id: number, deleteFile: boolean = false): Promise<boolean> {
+    async deleteDocument(id: number, deleteFile = false): Promise<boolean> {
         const success = await this.ragSearchModule.deleteDocument(id, deleteFile);
         
         // If document deletion was successful, delete associated chunks

@@ -8,7 +8,7 @@ import { IVectorDatabase, VectorDatabaseConfig, IndexStats } from '@/modules/int
  */
 export abstract class AbstractVectorDatabase implements IVectorDatabase {
     protected config: VectorDatabaseConfig | null = null;
-    protected initialized: boolean = false;
+    protected initialized= false;
     protected indexPath: string = '';
     protected dimension: number = 0;
 

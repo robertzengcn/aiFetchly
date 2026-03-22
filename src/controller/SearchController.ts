@@ -10,6 +10,8 @@ import {Usersearchdata,SearchtaskEntityNum } from "@/entityTypes/searchControlTy
 //import { utilityProcess, MessageChannelMain} from "electron";
 import * as path from 'path';
 import * as fs from 'fs';
+import { exec } from 'child_process';
+import * as process from 'process';
 import {SearchModule} from "@/modules/SearchModule"
 import { Token } from "@/modules/token"
 // import {USERSDBPATH} from '@/config/usersetting';
@@ -412,7 +414,13 @@ export class SearchController {
                 snippet: item.snippet,
                 record_time: item.record_time,
                 visible_link: item.visible_link,
-                keyword: keyEntity?.keyword??""
+                keyword: keyEntity?.keyword??"",
+                ai_industry: item.ai_industry ?? null,
+                ai_match_score: item.ai_match_score ?? null,
+                ai_reasoning: item.ai_reasoning ?? null,
+                ai_client_business: item.ai_client_business ?? null,
+                ai_analysis_time: item.ai_analysis_time ?? null,
+                ai_analysis_status: item.ai_analysis_status ?? null
             }
             datas.push(data)
         }))
@@ -560,7 +568,12 @@ export class SearchController {
                 snippet: item.snippet,
                 record_time: item.record_time,
                 visible_link: item.visible_link,
-                keyword: keyEntity?.keyword ?? ""
+                keyword: keyEntity?.keyword ?? "",
+                ai_industry: item.ai_industry ?? null,
+                ai_match_score: item.ai_match_score ?? null,
+                ai_reasoning: item.ai_reasoning ?? null,
+                ai_client_business: item.ai_client_business ?? null,
+                ai_analysis_time: item.ai_analysis_time ?? null
             };
             resultsWithKeywords.push(data);
         }
@@ -587,7 +600,7 @@ export class SearchController {
             return '';
         }
 
-        const headers = ['ID', 'Keyword', 'Title', 'Link', 'Visible Link', 'Snippet', 'Record Time'];
+        const headers = ['ID', 'Keyword', 'Title', 'Link', 'Visible Link', 'Snippet', 'Record Time', 'Customer Industry', 'Probability of Potential Customers (%)', 'Analysis Reasoning', 'Client Business', 'Analysis Time'];
         const rows = results.map(result => [
             result.id?.toString() ?? '',
             result.keyword ?? '',
@@ -595,7 +608,12 @@ export class SearchController {
             result.link ?? '',
             result.visible_link ?? '',
             this.escapeCSV(result.snippet ?? ''),
-            result.record_time ?? ''
+            result.record_time ?? '',
+            this.escapeCSV(result.ai_industry ?? ''),
+            result.ai_match_score?.toString() ?? '',
+            this.escapeCSV(result.ai_reasoning ?? ''),
+            this.escapeCSV(result.ai_client_business ?? ''),
+            result.ai_analysis_time ?? ''
         ]);
 
         const csvRows = [
@@ -680,8 +698,7 @@ export class SearchController {
             if (!taskId) {
                 // Try to kill process directly using system kill command
                 try {
-                    const { exec } = require('child_process');
-                    const isWindows = require('process').platform === 'win32';
+                    const isWindows = process.platform === 'win32';
                     exec(isWindows ? `taskkill /PID ${pid} /F` : `kill -9 ${pid}`, (error: unknown) => {
                         if (error) {
                             console.error(`Failed to kill process ${pid}:`, error);
@@ -711,8 +728,7 @@ export class SearchController {
                     console.error(`Error killing process ${pid}:`, error);
                     // Try system kill as fallback
                     try {
-                        const { exec } = require('child_process');
-                        const isWindows = require('process').platform === 'win32';
+                        const isWindows = process.platform === 'win32';
                         exec(isWindows ? `taskkill /PID ${pid} /F` : `kill -9 ${pid}`);
                     } catch (killError) {
                         console.error(`Failed to kill process ${pid} using system command:`, killError);
@@ -721,8 +737,7 @@ export class SearchController {
             } else {
                 // Process not in map, try system kill
                 try {
-                    const { exec } = require('child_process');
-                    const isWindows = require('process').platform === 'win32';
+                    const isWindows = process.platform === 'win32';
                     exec(isWindows ? `taskkill /PID ${pid} /F` : `kill -9 ${pid}`);
                 } catch (error) {
                     console.error(`Failed to kill process ${pid}:`, error);
@@ -795,8 +810,7 @@ export class SearchController {
                 // Try system kill as fallback
                 if (pid) {
                     try {
-                        const { exec } = require('child_process');
-                        const isWindows = require('process').platform === 'win32';
+                        const isWindows = process.platform === 'win32';
                         exec(isWindows ? `taskkill /PID ${pid} /F` : `kill -9 ${pid}`);
                     } catch (killError) {
                         console.error(`Failed to kill process ${pid} using system command:`, killError);
@@ -818,7 +832,7 @@ export class SearchController {
 
             return {
                 success: true,
-                pid,
+                pid: pid ?? undefined,
                 message: `Process ${pid} killed successfully for task ${taskId}`
             };
         } catch (error) {

@@ -68,7 +68,7 @@ export function registerMCPToolIpcHandlers(): void {
     // Add new MCP server
     ipcMain.handle(MCP_TOOL_ADD, async (event, data): Promise<CommonMessage<number | null>> => {
         try {
-            const requestData = JSON.parse(data) as MCPServerConfig;
+            const requestData = JSON.parse(data as string) as MCPServerConfig;
             const service = new MCPToolService();
             const id = await service.addMCPServer(requestData);
 
@@ -90,7 +90,7 @@ export function registerMCPToolIpcHandlers(): void {
     // Update MCP server
     ipcMain.handle(MCP_TOOL_UPDATE, async (event, data): Promise<CommonMessage<void>> => {
         try {
-            const requestData = JSON.parse(data) as { id: number; config: Partial<MCPServerConfig> };
+            const requestData = JSON.parse(data as string) as { id: number; config: Partial<MCPServerConfig> };
             const service = new MCPToolService();
             await service.updateMCPServer(requestData.id, requestData.config);
 
@@ -110,7 +110,7 @@ export function registerMCPToolIpcHandlers(): void {
     // Delete MCP server
     ipcMain.handle(MCP_TOOL_DELETE, async (event, data): Promise<CommonMessage<void>> => {
         try {
-            const requestData = JSON.parse(data) as { id: number };
+            const requestData = JSON.parse(data as string) as { id: number };
             const service = new MCPToolService();
             await service.deleteMCPServer(requestData.id);
 
@@ -134,7 +134,7 @@ export function registerMCPToolIpcHandlers(): void {
         inputSchema?: Record<string, unknown>;
     }> | null>> => {
         try {
-            const requestData = JSON.parse(data) as { serverId: number };
+            const requestData = JSON.parse(data as string) as { serverId: number };
             const service = new MCPToolService();
             const tools = await service.discoverTools(requestData.serverId);
 
@@ -156,7 +156,7 @@ export function registerMCPToolIpcHandlers(): void {
     // Toggle server enabled/disabled
     ipcMain.handle(MCP_TOOL_TOGGLE_SERVER, async (event, data): Promise<CommonMessage<void>> => {
         try {
-            const requestData = JSON.parse(data) as { id: number; enabled: boolean };
+            const requestData = JSON.parse(data as string) as { id: number; enabled: boolean };
             const service = new MCPToolService();
             await service.toggleServerEnabled(requestData.id, requestData.enabled);
 
@@ -176,7 +176,7 @@ export function registerMCPToolIpcHandlers(): void {
     // Toggle tool enabled/disabled
     ipcMain.handle(MCP_TOOL_TOGGLE_TOOL, async (event, data): Promise<CommonMessage<void>> => {
         try {
-            const requestData = JSON.parse(data) as { serverId: number; toolName: string; enabled: boolean };
+            const requestData = JSON.parse(data as string) as { serverId: number; toolName: string; enabled: boolean };
             const service = new MCPToolService();
             await service.toggleToolEnabled(requestData.serverId, requestData.toolName, requestData.enabled);
 
@@ -196,7 +196,7 @@ export function registerMCPToolIpcHandlers(): void {
     // Test connection
     ipcMain.handle(MCP_TOOL_TEST_CONNECTION, async (event, data): Promise<CommonMessage<boolean | null>> => {
         try {
-            const requestData = JSON.parse(data) as { serverId: number };
+            const requestData = JSON.parse(data as string) as { serverId: number };
             const service = new MCPToolService();
             const connected = await service.testConnection(requestData.serverId);
 

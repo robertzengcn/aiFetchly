@@ -1,4 +1,5 @@
-import { ipcMain, dialog, app } from 'electron';
+import { ipcMain, app } from 'electron';
+import { dialog } from 'electron';
 import { RagSearchController } from '@/controller/RagSearchController';
 import { SearchRequest, SearchResponse } from '@/modules/RagSearchModule';
 import { CommonMessage, SaveTempFileResponse, DocumentUploadResponse, ChunkAndEmbedResponse, UploadedDocument, RagStatsResponse } from '@/entityTypes/commonType';
@@ -61,7 +62,7 @@ export function registerRagIpcHandlers(): void {
         
         try {
             //console.log('Received data in main process:', typeof data, data);
-            const { fileName, buffer, metadata } = data;
+            const { fileName, buffer, metadata } = data as { fileName: string; buffer: Buffer; metadata?: unknown };
             if (!fileName || !buffer || buffer.length <= 1) {
                 const errorResponse: CommonMessage<SaveTempFileResponse> = {
                     status: false,
@@ -72,12 +73,12 @@ export function registerRagIpcHandlers(): void {
                         databaseError: 'Invalid input parameters'
                     }
                 };
-                event.sender.send(SAVE_TEMP_FILE_COMPLETE, JSON.stringify(errorResponse));
+                (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(SAVE_TEMP_FILE_COMPLETE, JSON.stringify(errorResponse));
                 return;
             }
 
             // Send progress update: Starting file save
-            event.sender.send(SAVE_TEMP_FILE_PROGRESS, JSON.stringify({
+            (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(SAVE_TEMP_FILE_PROGRESS, JSON.stringify({
                 progress: 10,
                 message: 'Starting file save...',
                 fileName: fileName
@@ -90,7 +91,7 @@ export function registerRagIpcHandlers(): void {
             }
             
             // Send progress update: Directory created
-            event.sender.send(SAVE_TEMP_FILE_PROGRESS, JSON.stringify({
+            (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(SAVE_TEMP_FILE_PROGRESS, JSON.stringify({
                 progress: 20,
                 message: 'Directory prepared...',
                 fileName: fileName
@@ -104,7 +105,7 @@ export function registerRagIpcHandlers(): void {
             const appDataFilePath = path.join(appDataDir, uniqueFileName);
             
             // Send progress update: Processing file buffer
-            event.sender.send(SAVE_TEMP_FILE_PROGRESS, JSON.stringify({
+            (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(SAVE_TEMP_FILE_PROGRESS, JSON.stringify({
                 progress: 30,
                 message: 'Processing file buffer...',
                 fileName: fileName
@@ -115,7 +116,7 @@ export function registerRagIpcHandlers(): void {
             let uint8Buffer;
             if (buffer instanceof Uint8Array) {
                 uint8Buffer = buffer;
-            } else if (typeof buffer === 'object' && buffer.constructor === Object) {
+            } else if (typeof buffer === 'object' && buffer !== null && (buffer as any).constructor === Object) {
                 // Handle case where Uint8Array was serialized as plain object
                 const values = Object.values(buffer) as number[];
                 uint8Buffer = new Uint8Array(values);
@@ -127,7 +128,7 @@ export function registerRagIpcHandlers(): void {
             fs.writeFileSync(appDataFilePath, nodeBuffer);
             
             // Send progress update: File saved
-            event.sender.send(SAVE_TEMP_FILE_PROGRESS, JSON.stringify({
+            (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(SAVE_TEMP_FILE_PROGRESS, JSON.stringify({
                 progress: 50,
                 message: 'File saved to disk...',
                 fileName: fileName
@@ -137,7 +138,7 @@ export function registerRagIpcHandlers(): void {
             if (metadata) {
                 try {
                     // Send progress update: Starting database save
-                    event.sender.send(SAVE_TEMP_FILE_PROGRESS, JSON.stringify({
+                    (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(SAVE_TEMP_FILE_PROGRESS, JSON.stringify({
                         progress: 60,
                         message: 'Saving to database...',
                         fileName: fileName
@@ -148,17 +149,18 @@ export function registerRagIpcHandlers(): void {
                     // Extract original filename without timestamp prefix
                     const originalFileName = fileName.replace(/^rag_upload_\d+_/, '');
                     
+                    const metadataTyped = metadata as { title?: string; description?: string; tags?: string[]; author?: string };
                     const uploadOptions = {
                         filePath: appDataFilePath,
                         name: originalFileName,
-                        title: metadata.title || originalFileName.replace(/\.[^/.]+$/, ''),
-                        description: metadata.description || `Uploaded document: ${originalFileName}`,
-                        tags: metadata.tags || ['uploaded', 'knowledge'],
-                        author: metadata.author || 'User',
+                        title: metadataTyped.title || originalFileName.replace(/\.[^/.]+$/, ''),
+                        description: metadataTyped.description || `Uploaded document: ${originalFileName}`,
+                        tags: metadataTyped.tags || ['uploaded', 'knowledge'],
+                        author: metadataTyped.author || 'User',
                     };
                     
                     // Send progress update: Processing document
-                    event.sender.send(SAVE_TEMP_FILE_PROGRESS, JSON.stringify({
+                    (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(SAVE_TEMP_FILE_PROGRESS, JSON.stringify({
                         progress: 80,
                         message: 'Processing document...',
                         fileName: fileName
@@ -203,7 +205,7 @@ export function registerRagIpcHandlers(): void {
             }
             
             // Send progress update: Almost complete
-            event.sender.send(SAVE_TEMP_FILE_PROGRESS, JSON.stringify({
+            (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(SAVE_TEMP_FILE_PROGRESS, JSON.stringify({
                 progress: 90,
                 message: 'Finalizing...',
                 fileName: fileName
@@ -221,7 +223,7 @@ export function registerRagIpcHandlers(): void {
             };
             
             // Send final completion message
-            event.sender.send(SAVE_TEMP_FILE_COMPLETE, JSON.stringify(response));
+            (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(SAVE_TEMP_FILE_COMPLETE, JSON.stringify(response));
         } catch (error) {
             console.error('Error saving temporary file:', error);
             
@@ -250,7 +252,7 @@ export function registerRagIpcHandlers(): void {
                     databaseError: error instanceof Error ? error.message : 'Unknown error'
                 }
             };
-            event.sender.send(SAVE_TEMP_FILE_COMPLETE, JSON.stringify(errorResponse));
+            (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(SAVE_TEMP_FILE_COMPLETE, JSON.stringify(errorResponse));
         }
     });
 
@@ -266,9 +268,10 @@ export function registerRagIpcHandlers(): void {
     });
 
     // Get file stats
-    ipcMain.handle(GET_FILE_STATS, async (event, data: { filePath: string }): Promise<any> => {
+    ipcMain.handle(GET_FILE_STATS, async (event, data: unknown): Promise<any> => {
         try {
-            const stats = fs.statSync(data.filePath);
+            const { filePath } = data as { filePath: string };
+            const stats = fs.statSync(filePath);
             return {
                 size: stats.size,
                 mtime: stats.mtime,
@@ -342,7 +345,7 @@ export function registerRagIpcHandlers(): void {
     // Process RAG query
     ipcMain.handle(RAG_QUERY, async (event, data): Promise<CommonMessage<any | null>> => {
         try {
-            const requestData = JSON.parse(data) as {
+            const requestData = JSON.parse(data as string) as {
                 query: string;
                 options?: any;
             };
@@ -376,7 +379,7 @@ export function registerRagIpcHandlers(): void {
     // Upload document
     ipcMain.handle(RAG_UPLOAD_DOCUMENT, async (event, data): Promise<CommonMessage<DocumentUploadResponse | null>> => {
         try {
-            const options = JSON.parse(data) as {
+            const options = JSON.parse(data as string) as {
                 filePath: string;
                 name: string;
                 title?: string;
@@ -459,7 +462,7 @@ export function registerRagIpcHandlers(): void {
     // Get documents
     ipcMain.handle(RAG_GET_DOCUMENTS, async (event, data): Promise<CommonMessage<DocumentInfo[] | null>> => {
         try {
-            const filters = data ? JSON.parse(data) : undefined;
+            const filters = data ? JSON.parse(data as string) : undefined;
             
             const ragSearchController = await createRagController();
             const documents = await ragSearchController.getDocuments(filters);
@@ -501,7 +504,7 @@ export function registerRagIpcHandlers(): void {
     // Get specific document
     ipcMain.handle(RAG_GET_DOCUMENT, async (event, data): Promise<CommonMessage<any | null>> => {
         try {
-            const { id } = JSON.parse(data) as { id: number };
+            const { id } = JSON.parse(data as string) as { id: number };
             
             const ragSearchController = await createRagController();
             const document = await ragSearchController.getDocument(id);
@@ -551,7 +554,7 @@ export function registerRagIpcHandlers(): void {
     // Update document
     ipcMain.handle(RAG_UPDATE_DOCUMENT, async (event, data): Promise<CommonMessage<void>> => {
         try {
-            const { id, metadata } = JSON.parse(data) as { id: number; metadata: any };
+            const { id, metadata } = JSON.parse(data as string) as { id: number; metadata: any };
             
             const ragSearchController = await createRagController();
             await ragSearchController.updateDocument(id, metadata);
@@ -574,7 +577,7 @@ export function registerRagIpcHandlers(): void {
     // Delete document
     ipcMain.handle(RAG_DELETE_DOCUMENT, async (event, data): Promise<CommonMessage<void>> => {
         try {
-            const { id, deleteFile } = JSON.parse(data) as { id: number; deleteFile?: boolean };
+            const { id, deleteFile } = JSON.parse(data as string) as { id: number; deleteFile?: boolean };
             if (id == null) {
                 const errorResponse: CommonMessage<void> = {
                     status: false,
@@ -634,7 +637,7 @@ export function registerRagIpcHandlers(): void {
     // Search documents
     ipcMain.handle(RAG_SEARCH, async (event, data): Promise<CommonMessage<SearchResponse | null>> => {
         try {
-            const requestData = JSON.parse(data) as SearchRequest;
+            const requestData = JSON.parse(data as string) as SearchRequest;
             
             const ragSearchController = await createRagController();
             
@@ -666,7 +669,7 @@ export function registerRagIpcHandlers(): void {
     // Get search suggestions
     ipcMain.handle(RAG_GET_SUGGESTIONS, async (event, data): Promise<CommonMessage<string[] | null>> => {
         try {
-            const requestData = JSON.parse(data) as { 
+            const requestData = JSON.parse(data as string) as { 
                 query: string; 
                 limit?: number;
             };
@@ -717,7 +720,7 @@ export function registerRagIpcHandlers(): void {
     // Update embedding model
     ipcMain.handle(RAG_UPDATE_EMBEDDING_MODEL, async (event, data): Promise<CommonMessage<{ modelName: string; dimension: number } | null>> => {
         try {
-            const config = JSON.parse(data) as {
+            const config = JSON.parse(data as string) as {
                 model: string;
             };
 
@@ -860,7 +863,7 @@ export function registerRagIpcHandlers(): void {
     // Chunk and embed document
     ipcMain.handle(RAG_CHUNK_AND_EMBED_DOCUMENT, async (event, data): Promise<CommonMessage<ChunkAndEmbedResponse | null>> => {
         try {
-            const requestData = JSON.parse(data) as {
+            const requestData = JSON.parse(data as string) as {
                 documentId: number;
                 // modelName: string;
             };
@@ -889,7 +892,7 @@ export function registerRagIpcHandlers(): void {
     // Download document
     ipcMain.handle(RAG_DOWNLOAD_DOCUMENT, async (event, data): Promise<CommonMessage<{ downloaded: boolean } | null>> => {
         try {
-            const requestData = JSON.parse(data) as {
+            const requestData = JSON.parse(data as string) as {
                 documentId: number;
                 fileName: string;
             };
@@ -957,7 +960,7 @@ export function registerRagIpcHandlers(): void {
     // Get document error log
     ipcMain.handle(RAG_GET_DOCUMENT_ERROR_LOG, async (event, data): Promise<CommonMessage<string | null>> => {
         try {
-            const { documentId } = JSON.parse(data) as { documentId: number };
+            const { documentId } = JSON.parse(data as string) as { documentId: number };
             
             const ragSearchController = await createRagController();
             const errorLog = await ragSearchController.getDocumentErrorLog(documentId);

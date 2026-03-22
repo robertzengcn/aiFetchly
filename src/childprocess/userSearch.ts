@@ -9,9 +9,12 @@ import {SearchDataRun} from "@/entityTypes/scrapeType"
 // import { ProxyController } from "@/controller/proxy-controller";
 import {proxyEntityToUrl,getEnumKeyByValue} from "@/modules/lib/function"
 import { ProxyParseItem} from "@/entityTypes/proxyType"
+import { CookiesType } from "@/entityTypes/cookiesType"
+
+export type CookiesUpdateCallback = (accountId: number, cookies: Array<CookiesType>) => void;
 
 export class UserSearch {
-    public async searchData(data: Usersearchdata,callback?: (arg: ResultParseItemType) => void):Promise<void> {
+    public async searchData(data: Usersearchdata, callback?: (arg: ResultParseItemType) => void, cookiesCallback?: CookiesUpdateCallback):Promise<void> {
 
         const proxyStrList:Array<string> = []
         console.log("proxy are following")
@@ -80,12 +83,18 @@ export class UserSearch {
         const searchDataParam: SearchDataParam = {
             keywords: keywords,
             engine: enginer,
-            cookies:data.cookies
+            cookies:data.cookies,
+            // Propagate accounts so scrapeManager/searchScraper can tag updated cookies with the right account
+            accounts: data.accounts
             //useLocalbrowserdata:data.useLocalbrowserdata
         }
-       const results = await scraper.searchdata(searchDataParam)
+       // Pass callback directly to scraper for immediate result sending
+       const results = await scraper.searchdata(searchDataParam, callback, cookiesCallback)
         //console.log(results)
+        // Note: If callback is provided, results are sent immediately via callback
+        // The results array may be empty or contain only results that weren't sent via callback
         if(callback){
+            // Results are already sent via callback, but we still process any remaining results
             for(const result of results){
             callback(result)
             }

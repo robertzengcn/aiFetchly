@@ -9,7 +9,7 @@ export enum YellowPagesTaskStatus {
   InProgress = 1,
   Completed = 2,
   Failed = 3,
-  Paused = 4
+  Paused = 4,
 }
 
 export type YellowPagesTaskUpdateFields = {
@@ -26,17 +26,21 @@ export type YellowPagesTaskUpdateFields = {
   run_log?: string;
   account_id?: number;
   proxy_config?: string;
+  local_browser?: string;
   delay_between_requests?: number;
   headless?: boolean;
   pid?: number;
-}
+  ai_support_enabled?: boolean;
+};
 
 export class YellowPagesTaskModel extends BaseDb {
   private repository: Repository<YellowPagesTaskEntity>;
 
   constructor(filepath: string) {
     super(filepath);
-    this.repository = this.sqliteDb.connection.getRepository(YellowPagesTaskEntity);
+    this.repository = this.sqliteDb.connection.getRepository(
+      YellowPagesTaskEntity
+    );
   }
 
   /**
@@ -52,23 +56,35 @@ export class YellowPagesTaskModel extends BaseDb {
     max_pages?: number;
     concurrency?: number;
     account_id?: number;
-    proxy_config?: string;
+    /** Stored as JSON string in DB; pass an object to stringify once, or a pre-serialized JSON string. */
+    proxy_config?: string | object | null;
+    localBrowser?: string;
     delay_between_requests?: number;
     headless?: boolean;
+    aiSupportEnabled?: boolean;
   }): Promise<number> {
     const taskEntity = new YellowPagesTaskEntity();
     taskEntity.name = taskData.name;
     taskEntity.platform = taskData.platform;
     taskEntity.keywords = JSON.stringify(taskData.keywords);
-    taskEntity.location = taskData.location || '';
+    taskEntity.location = taskData.location || "";
     taskEntity.max_pages = taskData.max_pages || 1;
     taskEntity.concurrency = taskData.concurrency || 1;
     taskEntity.status = YellowPagesTaskStatus.Pending;
     taskEntity.account_id = taskData.account_id;
-    taskEntity.proxy_config = taskData.proxy_config ? JSON.stringify(taskData.proxy_config) : undefined;
+    taskEntity.proxy_config = taskData.proxy_config
+      ? typeof taskData.proxy_config === "string"
+        ? taskData.proxy_config
+        : JSON.stringify(taskData.proxy_config)
+      : undefined;
+    taskEntity.local_browser = taskData.localBrowser
+      ? String(taskData.localBrowser)
+      : undefined;
     taskEntity.delay_between_requests = taskData.delay_between_requests || 2000;
-    taskEntity.headless = taskData.headless !== undefined ? taskData.headless : true;
-    
+    taskEntity.headless =
+      taskData.headless !== undefined ? taskData.headless : true;
+    taskEntity.ai_support_enabled = taskData.aiSupportEnabled ?? false;
+
     const savedTask = await this.repository.save(taskEntity);
     return savedTask.id;
   }
@@ -78,11 +94,11 @@ export class YellowPagesTaskModel extends BaseDb {
    * @param taskId The task ID
    * @param status The new status
    */
-  async updateTaskStatus(taskId: number, status: YellowPagesTaskStatus): Promise<void> {
-    await this.repository.update(
-      { id: taskId },
-      { status }
-    );
+  async updateTaskStatus(
+    taskId: number,
+    status: YellowPagesTaskStatus
+  ): Promise<void> {
+    await this.repository.update({ id: taskId }, { status });
   }
 
   /**
@@ -91,10 +107,7 @@ export class YellowPagesTaskModel extends BaseDb {
    * @param errorLog The error log content
    */
   async updateTaskErrorLog(taskId: number, errorLog: string): Promise<void> {
-    await this.repository.update(
-      { id: taskId },
-      { error_log: errorLog }
-    );
+    await this.repository.update({ id: taskId }, { error_log: errorLog });
   }
 
   /**
@@ -103,10 +116,7 @@ export class YellowPagesTaskModel extends BaseDb {
    * @param runLog The runtime log content
    */
   async updateTaskRunLog(taskId: number, runLog: string): Promise<void> {
-    await this.repository.update(
-      { id: taskId },
-      { run_log: runLog }
-    );
+    await this.repository.update({ id: taskId }, { run_log: runLog });
   }
 
   /**
@@ -115,10 +125,7 @@ export class YellowPagesTaskModel extends BaseDb {
    * @param pid The process ID
    */
   async updateTaskPID(taskId: number, pid: number): Promise<void> {
-    await this.repository.update(
-      { id: taskId },
-      { pid }
-    );
+    await this.repository.update({ id: taskId }, { pid });
   }
 
   /**
@@ -126,10 +133,7 @@ export class YellowPagesTaskModel extends BaseDb {
    * @param taskId The task ID
    */
   async clearTaskPID(taskId: number): Promise<void> {
-    await this.repository.update(
-      { id: taskId },
-      { pid: 0 }
-    );
+    await this.repository.update({ id: taskId }, { pid: 0 });
   }
 
   /**
@@ -148,9 +152,9 @@ export class YellowPagesTaskModel extends BaseDb {
   async updateTaskCompletion(taskId: number): Promise<void> {
     await this.repository.update(
       { id: taskId },
-      { 
+      {
         completed_at: new Date(),
-        status: YellowPagesTaskStatus.Completed
+        status: YellowPagesTaskStatus.Completed,
       }
     );
   }
@@ -171,20 +175,24 @@ export class YellowPagesTaskModel extends BaseDb {
    * @param sort Sort options
    * @returns Array of task entities
    */
-  async listTasks(page: number = 1, size: number = 10, sort?: SortBy): Promise<YellowPagesTaskEntity[]> {
+  async listTasks(
+    page = 1,
+    size = 10,
+    sort?: SortBy
+  ): Promise<YellowPagesTaskEntity[]> {
     const skip = (page - 1) * size;
     const orderBy: any = {};
-    
+
     if (sort) {
       orderBy[sort.key] = sort.order;
     } else {
-      orderBy.createdAt = 'DESC';
+      orderBy.createdAt = "DESC";
     }
 
     return await this.repository.find({
       skip,
       take: size,
-      order: orderBy
+      order: orderBy,
     });
   }
 
@@ -202,10 +210,13 @@ export class YellowPagesTaskModel extends BaseDb {
    * @param updates The fields to update
    * @returns Success status
    */
-  async updateTask(taskId: number, updates: YellowPagesTaskUpdateFields): Promise<boolean> {
+  async updateTask(
+    taskId: number,
+    updates: YellowPagesTaskUpdateFields
+  ): Promise<boolean> {
     try {
       const updateData: any = { ...updates };
-      
+
       // Handle JSON fields
       if (updates.keywords) {
         updateData.keywords = JSON.stringify(updates.keywords);
@@ -214,13 +225,10 @@ export class YellowPagesTaskModel extends BaseDb {
         updateData.proxy_config = JSON.stringify(updates.proxy_config);
       }
 
-      await this.repository.update(
-        { id: taskId },
-        updateData
-      );
+      await this.repository.update({ id: taskId }, updateData);
       return true;
     } catch (error) {
-      console.error('Error updating task:', error);
+      console.error("Error updating task:", error);
       return false;
     }
   }
@@ -235,7 +243,7 @@ export class YellowPagesTaskModel extends BaseDb {
       await this.repository.delete({ id: taskId });
       return true;
     } catch (error) {
-      console.error('Error deleting task:', error);
+      console.error("Error deleting task:", error);
       return false;
     }
   }
@@ -245,10 +253,12 @@ export class YellowPagesTaskModel extends BaseDb {
    * @param status The status to filter by
    * @returns Array of task entities
    */
-  async getTasksByStatus(status: YellowPagesTaskStatus): Promise<YellowPagesTaskEntity[]> {
+  async getTasksByStatus(
+    status: YellowPagesTaskStatus
+  ): Promise<YellowPagesTaskEntity[]> {
     return await this.repository.find({
       where: { status },
-      order: { createdAt: 'DESC' }
+      order: { createdAt: "DESC" },
     });
   }
 
@@ -276,17 +286,17 @@ export class YellowPagesTaskModel extends BaseDb {
   taskStatusToString(status: YellowPagesTaskStatus): string {
     switch (status) {
       case YellowPagesTaskStatus.Pending:
-        return 'Pending';
+        return "Pending";
       case YellowPagesTaskStatus.InProgress:
-        return 'In Progress';
+        return "In Progress";
       case YellowPagesTaskStatus.Completed:
-        return 'Completed';
+        return "Completed";
       case YellowPagesTaskStatus.Failed:
-        return 'Failed';
+        return "Failed";
       case YellowPagesTaskStatus.Paused:
-        return 'Paused';
+        return "Paused";
       default:
-        return 'Unknown';
+        return "Unknown";
     }
   }
-} 
+}

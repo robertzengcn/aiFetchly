@@ -1,5 +1,7 @@
 //import { SocialAccount } from "@/modules/socialaccount";
-import { BrowserWindow, session } from 'electron'
+import { BrowserWindow } from 'electron';
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const session = require('electron').session;
 import { AccountCookiesEntity } from "@/entity/AccountCookies.entity";
 import { AccountCookiesModule } from "@/modules/accountCookiesModule"
 //import { ProxyController } from "./proxy-controller";
@@ -105,7 +107,7 @@ export class SocialAccountController {
         }
         // const cookies = this.accountCookiesModule.getAccountCookies(accinfo.data.id)
         //let partition_path = "persist:path/" + Date.now() + '-' + Math.random().toString(36).slice(2, 9)
-        let partition_path = this.accountCookiesModule.genPartitionPath()
+        const partition_path = this.accountCookiesModule.genPartitionPath()
 
         if (!cookies) {
             //     if (cookies.partition_path) {
@@ -154,23 +156,37 @@ export class SocialAccountController {
             const cookiesArr: CookiesType[] = JSON.parse(cookies.cookies)
             if (cookiesArr.length > 0) {
                 for (const cookie of cookiesArr) {
-                    // console.log(cookie)
-                    //remove first dot in domain
+                    // remove first dot in domain for URL
                     let url = cookie.domain
                     if (cookie.domain && cookie.domain.charAt(0) === '.') {
                         url = cookie.domain.slice(1);
                     }
-                    let cookieDetails: CookiesParse = {
-                        url: `http${cookie.secure ? 's' : ''}://${url}${cookie.path}`,
+                    const path = cookie.path ?? '/';
+                    // FIX C/E: Default to 'lax' instead of 'no_restriction' when sameSite is not specified.
+                    // Netscape cookie files and some exports don't include sameSite.
+                    // 'no_restriction' (SameSite=None) requires Secure=true in modern Chromium.
+                    let sameSite: 'unspecified' | 'no_restriction' | 'lax' | 'strict' = cookie.sameSite === 'None'
+                        ? 'no_restriction'
+                        : (cookie.sameSite ?? 'lax');
+                    // FIX A/B: When sameSite is 'no_restriction' (SameSite=None),
+                    // Chromium requires Secure=true and https URL.
+                    // If the cookie isn't marked secure, downgrade to 'lax' to avoid rejection.
+                    if (sameSite === 'no_restriction' && !cookie.secure) {
+                        sameSite = 'lax';
+                    }
+                    // Ensure URL protocol matches secure flag
+                    const useHttps = cookie.secure || sameSite === 'no_restriction';
+                    const cookieDetails: CookiesParse = {
+                        url: `http${useHttps ? 's' : ''}://${url}${path}`,
                         name: cookie.name,
                         value: cookie.value,
                         domain: cookie.domain,
-                        path: cookie.path,
+                        path,
                         secure: cookie.secure,
-                        httpOnly: cookie.httpOnly || false,
+                        httpOnly: cookie.httpOnly ?? false,
                         expirationDate: cookie.expirationDate,
-                        sameSite: cookie.sameSite === 'None' ? 'no_restriction' : cookie.sameSite,
-                        hostOnly: cookie.hostOnly
+                        sameSite,
+                        hostOnly: cookie.hostOnly ?? false
                     };
                     //check whether cookies value start with __Host-
                     if (cookie.name.startsWith("__Host-")) {
@@ -188,28 +204,26 @@ export class SocialAccountController {
                         console.log(cookieDetails)
                         await ses.cookies.set(cookieDetails)
                     } catch (error) {
+                        // Log the error but continue processing remaining cookies
+                        // instead of throwing and aborting the entire loop.
                         console.error(`Failed to set cookie: ${cookie.name}`, error);
-                        console.log(cookieDetails)
-                        throw error
                     }
                 }
             }
         }
-        const win = new BrowserWindow({
+        const win: any = new BrowserWindow({
             autoHideMenuBar: true, webPreferences: {
                 session: ses
             }
-        })
-        win.setTitle(winTitle)
-        win.setMenu(null)
+        });
+        win.setTitle(winTitle);
+        win.setMenu(null);
         // showNotification("test title","test message")
 
         const socialTypeUrl = accinfo.data.social_type_id ? this.getSocialPlatformUrl(accinfo.data.social_type_id) : null
         console.log(socialTypeUrl)
         if (socialTypeUrl) {
-            await win.loadURL(socialTypeUrl, {
-                 userAgent: 'Chrome'
-                }).catch((error) => {
+            await win.loadURL(socialTypeUrl).catch((error: Error) => {
                 const ignoreMsg = ["Message 0 rejected by interface blink.mojom.WidgetHost", "ERR_FAILED (-2)"]
 
                 if (!ignoreMsg.some(msg => error.message.includes(msg))) {
@@ -238,12 +252,12 @@ export class SocialAccountController {
             //   };
             //   await dialog.showMessageBox(win,options) 
             // win.webContents.executeJavaScript('alert("Hello, world!")');
-        })
+        });
 
         // winsession.cookies.remove()
         win.on('close', async () => { //   <---- Catch close event
-            if (win && win.webContents && win.webContents.session) {
-                const winsession = win.webContents.session
+            if (win && (win as any).webContents && (win as any).webContents.session) {
+                const winsession = (win as any).webContents.session
                 const cookiescontent = await winsession.cookies.get({ url: socialTypeUrl })
                 console.log("get cookies:")
                 console.log(cookiescontent)

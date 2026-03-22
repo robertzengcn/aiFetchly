@@ -1,5 +1,5 @@
 'use strict';
-import {Scraperdb} from '../../src/model/scraperdb'
+import {Scraperdb} from '@/model/scraperdb'
 
 describe('Module Scraperdb', function(){
     const dbpath=""

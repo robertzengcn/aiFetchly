@@ -46,7 +46,7 @@ export function registerPlatformIpcHandlers() {
   // Get platform detail
   ipcMain.handle(PLATFORM_DETAIL, async (event, data) => {
     try {
-      const qdata = JSON.parse(data)
+      const qdata = JSON.parse(data as string)
       if (!('id' in qdata)) {
         return {
           status: false,
@@ -96,7 +96,7 @@ export function registerPlatformIpcHandlers() {
   // Create new platform
   ipcMain.handle(PLATFORM_CREATE, async (event, data) => {
     try {
-      const platformData: PlatformConfig = JSON.parse(data)
+      const platformData: PlatformConfig = JSON.parse(data as string)
       await platformRegistry.registerPlatform(platformData)
       
       const response: CommonResponse<PlatformConfig> = {
@@ -125,7 +125,7 @@ export function registerPlatformIpcHandlers() {
   // Update platform
   ipcMain.handle(PLATFORM_UPDATE, async (event, data) => {
     try {
-      const qdata = JSON.parse(data)
+      const qdata = JSON.parse(data as string)
       if (!('id' in qdata) || !('updates' in qdata)) {
         return {
           status: false,
@@ -165,7 +165,7 @@ export function registerPlatformIpcHandlers() {
   // Delete platform
   ipcMain.handle(PLATFORM_DELETE, async (event, data) => {
     try {
-      const qdata = JSON.parse(data)
+      const qdata = JSON.parse(data as string)
       if (!('id' in qdata)) {
         return {
           status: false,
@@ -202,7 +202,7 @@ export function registerPlatformIpcHandlers() {
   // Validate platform configuration
   ipcMain.handle(PLATFORM_VALIDATE, async (event, data) => {
     try {
-      const platformData: PlatformConfig = JSON.parse(data)
+      const platformData: PlatformConfig = JSON.parse(data as string)
       const validation = platformRegistry.validatePlatformConfig(platformData)
       
       const response: CommonResponse<any> = {
@@ -259,7 +259,7 @@ export function registerPlatformIpcHandlers() {
   // Toggle platform active status
   ipcMain.handle(PLATFORM_TOGGLE, async (event, data) => {
     try {
-      const qdata = JSON.parse(data)
+      const qdata = JSON.parse(data as string)
       if (!('id' in qdata)) {
         return {
           status: false,

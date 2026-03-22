@@ -1,5 +1,5 @@
 import { ipcMain } from 'electron';
-import { AiChatApi, ChatRequest, StreamEvent, StreamEventType } from '@/api/aiChatApi';
+import { AiChatApi, ChatRequest, StreamEvent, StreamEventType, BatchKeywordGenerationRequestItem } from '@/api/aiChatApi';
 import { getAvailableToolFunctions } from '@/config/aiTools.config';
 import { CommonMessage, ChatMessage, ChatHistoryResponse, ChatStreamChunk, MessageType } from '@/entityTypes/commonType';
 import { AIChatModule } from '@/modules/AIChatModule';
@@ -15,14 +15,18 @@ import { StreamEventProcessor, StreamState } from '@/service/StreamEventProcesso
 import {
     AI_CHAT_MESSAGE,
     AI_CHAT_STREAM,
+    AI_CHAT_STREAM_STOP,
     AI_CHAT_STREAM_COMPLETE,
     AI_CHAT_HISTORY,
     AI_CHAT_CLEAR,
-    AI_CHAT_CONVERSATIONS
+    AI_CHAT_CONVERSATIONS,
+    AI_KEYWORDS_GENERATE
 } from '@/config/channellist';
 // import { Token } from '@/modules/token';
 // import { USERID } from '@/config/usersetting';
 import { v4 as uuidv4 } from 'uuid';
+import { Token } from '@/modules/token';
+import { USER_AI_ENABLED } from '@/config/usersetting';
 
 /**
  * Generate a unique conversation ID in format: user_id:uuid
@@ -36,6 +40,7 @@ function generateConversationId(): string {
 /**
  * Enhance message with RAG context if enabled
  */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 async function enhanceMessageWithRAG(
     message: string,
     useRAG: boolean,
@@ -132,16 +137,26 @@ export function formatYellowPagesResultsForLLM(results: YellowPagesResult[]): st
 }
 
 
+/** AbortController for the currently active AI chat stream; cleared when stream ends or is stopped. */
+let currentStreamAbortController: AbortController | null = null;
+
 /**
  * Register AI Chat IPC handlers
  */
 export function registerAiChatIpcHandlers(): void {
     console.log("AI Chat IPC handlers registered");
 
+    // Stop active AI chat stream (renderer sends when user clicks stop)
+    ipcMain.on(AI_CHAT_STREAM_STOP, () => {
+        if (currentStreamAbortController) {
+            currentStreamAbortController.abort();
+        }
+    });
+
     // Send chat message (non-streaming)
-    ipcMain.handle(AI_CHAT_MESSAGE, async (event, data): Promise<CommonMessage<ChatMessage | null>> => {
+    ipcMain.handle(AI_CHAT_MESSAGE, async (event, data: unknown): Promise<CommonMessage<ChatMessage | null>> => {
         try {
-            const requestData = JSON.parse(data) as {
+            const requestData = JSON.parse(data as string) as {
                 message: string;
                 conversationId?: string;
                 model?: string;
@@ -154,8 +169,11 @@ export function registerAiChatIpcHandlers(): void {
             const ragSearchModule = new RagSearchModule();
             await ragSearchModule.initialize();
             
-            // Generate new conversationId if not provided
-            const conversationId = requestData.conversationId || generateConversationId();
+            // Generate new conversationId if not provided or if it's 'pending' (which causes errors)
+            // 'pending' is used as a placeholder in the frontend but should not be sent to backend
+            const conversationId = (requestData.conversationId && requestData.conversationId !== 'pending')
+                ? requestData.conversationId
+                : generateConversationId();
 
             // Save user message to database
             const userMessageId = `user-${Date.now()}`;
@@ -266,7 +284,21 @@ export function registerAiChatIpcHandlers(): void {
     // Stream chat message
     ipcMain.on(AI_CHAT_STREAM, async (event, data): Promise<void> => {
         try {
-            const requestData = JSON.parse(data) as {
+            // Check AI enable first
+            const tokenService = new Token();
+            const aiEnabled = tokenService.getValue(USER_AI_ENABLED);
+            if (!aiEnabled || aiEnabled === 'false' || aiEnabled === '0') {
+                const errorChunk: ChatStreamChunk = {
+                    content: '',
+                    isComplete: true,
+                    eventType: StreamEventType.ERROR,
+                    errorMessage: 'AI is not enabled'
+                };
+                (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(errorChunk));
+                return;
+            }
+
+            const requestData = JSON.parse(data as string) as {
                 message: string;
                 conversationId?: string;
                 model?: string;
@@ -279,8 +311,11 @@ export function registerAiChatIpcHandlers(): void {
             const ragSearchModule = new RagSearchModule();
             await ragSearchModule.initialize();
             
-            // Generate new conversationId if not provided
-            const conversationId = requestData.conversationId || generateConversationId();
+            // Generate new conversationId if not provided or if it's 'pending' (which causes errors)
+            // 'pending' is used as a placeholder in the frontend but should not be sent to backend
+            const conversationId = (requestData.conversationId && requestData.conversationId !== 'pending')
+                ? requestData.conversationId
+                : generateConversationId();
 
             // Save user message to database
             const userMessageId = `user-${Date.now()}`;
@@ -341,6 +376,9 @@ export function registerAiChatIpcHandlers(): void {
             };
 
             const assistantMessageId = `assistant-${Date.now()}`;
+
+            currentStreamAbortController = new AbortController();
+            const signal = currentStreamAbortController.signal;
             
             // Create stream state
             const streamState: StreamState = {
@@ -352,11 +390,14 @@ export function registerAiChatIpcHandlers(): void {
                 deferredCompletionChunk: null,
                 messageSaved: false,
                 chatModule,
-                aiChatApi
+                aiChatApi,
+                abortSignal: signal,
+                currentPlan: null,
+                planThreadId: undefined
             };
 
             // Create stream event processor
-            const processor = new StreamEventProcessor(event, streamState);
+            const processor = new StreamEventProcessor(event as { sender: { send: (channel: string, ...args: unknown[]) => void } }, streamState);
 
             // Common handler for processing a single stream event and forwarding to UI
             const processStreamEvent = (streamEvent: StreamEvent): void => {
@@ -370,16 +411,45 @@ export function registerAiChatIpcHandlers(): void {
                 }
             };
 
-            // Stream message with event handler
-            await aiChatApi.streamMessage(chatRequest, (streamEvent: StreamEvent) => {
-                processStreamEvent(streamEvent);
-            });
+            const sender = (event as { sender: { send: (channel: string, message: string) => void } }).sender;
 
-            // Note: Message saving is now handled in StreamEventProcessor completion event handlers (DONE, CONVERSATION_END)
-            // or in sendDeferredCompletionIfReady to ensure all content from streamContinueWithToolResults
-            // is included before saving
+            try {
+                // Stream message with event handler
+                await aiChatApi.streamMessage(chatRequest, (streamEvent: StreamEvent) => {
+                    processStreamEvent(streamEvent);
+                }, { signal });
+                // Note: Message saving is now handled in StreamEventProcessor completion event handlers (DONE, CONVERSATION_END)
+                // or in sendDeferredCompletionIfReady to ensure all content from streamContinueWithToolResults
+                // is included before saving
+            } catch (error) {
+                if (error instanceof Error && error.message.includes('tool name is required')) {
+                    return;
+                }
+                const isAbort = error instanceof Error && error.name === 'AbortError';
+                const isDomAbort = error instanceof DOMException && error.name === 'AbortError';
+                if (isAbort || isDomAbort) {
+                    const cancelledChunk: ChatStreamChunk = {
+                        content: '',
+                        isComplete: true,
+                        eventType: 'cancelled',
+                        conversationId
+                    };
+                    sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(cancelledChunk));
+                } else {
+                    console.error('AI Chat stream error:', error);
+                    const errorChunk: ChatStreamChunk = {
+                        content: '',
+                        isComplete: true,
+                        eventType: StreamEventType.ERROR,
+                        errorMessage: error instanceof Error ? error.message : 'Unknown error occurred'
+                    };
+                    sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(errorChunk));
+                }
+            } finally {
+                currentStreamAbortController = null;
+            }
         } catch (error) {
-            if(error instanceof Error && error.message.includes('tool name is required')){
+            if (error instanceof Error && error.message.includes('tool name is required')) {
                 return;
             }
             console.error('AI Chat stream error:', error);
@@ -389,14 +459,16 @@ export function registerAiChatIpcHandlers(): void {
                 eventType: StreamEventType.ERROR,
                 errorMessage: error instanceof Error ? error.message : 'Unknown error occurred'
             };
-            event.sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(errorChunk));
+            (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(errorChunk));
+        } finally {
+            currentStreamAbortController = null;
         }
     });
 
     // Get chat history
-    ipcMain.handle(AI_CHAT_HISTORY, async (event, data): Promise<CommonMessage<ChatHistoryResponse | null>> => {
+    ipcMain.handle(AI_CHAT_HISTORY, async (event, data: unknown): Promise<CommonMessage<ChatHistoryResponse | null>> => {
         try {
-            const requestData = data ? JSON.parse(data) : {};
+            const requestData = data ? JSON.parse(data as string) : {};
             const requestConversationId = requestData.conversationId;
 
             if (!requestConversationId) {
@@ -453,9 +525,9 @@ export function registerAiChatIpcHandlers(): void {
     });
 
     // Clear chat history
-    ipcMain.handle(AI_CHAT_CLEAR, async (event, data): Promise<CommonMessage<void>> => {
+    ipcMain.handle(AI_CHAT_CLEAR, async (event, data: unknown): Promise<CommonMessage<void>> => {
         try {
-            const requestData = data ? JSON.parse(data) : {};
+            const requestData = data ? JSON.parse(data as string) : {};
             const conversationId = requestData.conversationId;
 
             const chatModule = new AIChatModule();
@@ -484,7 +556,8 @@ export function registerAiChatIpcHandlers(): void {
     });
 
     // Get all conversations with metadata
-    ipcMain.handle(AI_CHAT_CONVERSATIONS, async (event, data): Promise<CommonMessage<Array<{
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    ipcMain.handle(AI_CHAT_CONVERSATIONS, async (event, data: unknown): Promise<CommonMessage<Array<{
         conversationId: string;
         lastMessage: string;
         lastMessageTimestamp: Date;
@@ -512,6 +585,80 @@ export function registerAiChatIpcHandlers(): void {
             const errorResponse: CommonMessage<null> = {
                 status: false,
                 msg: error instanceof Error ? error.message : "Unknown error occurred",
+                data: null
+            };
+            return errorResponse;
+        }
+    });
+
+    // Generate keywords using AI
+    ipcMain.handle(AI_KEYWORDS_GENERATE, async (event, data: unknown): Promise<CommonMessage<string[] | null>> => {
+        try {
+            // Check AI enable first
+            const tokenService = new Token();
+            const aiEnabled = tokenService.getValue(USER_AI_ENABLED);
+            if (aiEnabled !== 'true') {
+                return {
+                    status: false,
+                    msg: 'AI features are not enabled. Please upgrade your plan to access AI features.',
+                    data: null
+                };
+            }
+
+            const requestData = data ? JSON.parse(data as string) : {};
+            const seedKeywords: string[] = requestData.keywords || [];
+            const numKeywords: number = requestData.num_keywords || 15;
+            const keywordType: string = requestData.keyword_type || 'seo';
+
+            if (!seedKeywords || seedKeywords.length === 0) {
+                return {
+                    status: false,
+                    msg: 'Seed keywords are required',
+                    data: null
+                };
+            }
+
+            const aiChatApi = new AiChatApi();
+
+            // Prepare batch request - one request per seed keyword
+            const batchRequests: BatchKeywordGenerationRequestItem[] = seedKeywords.map(seedKeyword => ({
+                seed_keywords: [seedKeyword],
+                config: {
+                    num_keywords: numKeywords,
+                    keyword_type: keywordType
+                }
+            }));
+
+            // Call the batch generate API
+            const apiResponse = await aiChatApi.batchGenerateKeywords(batchRequests);
+
+            if (apiResponse.status && apiResponse.data) {
+                // Extract keywords from the response structure
+                // apiResponse.data.keywords is an array of KeywordItem objects with category and keyword
+                // Each KeywordItem has: { category: string, keyword: string }
+                const keywordItems = apiResponse.data.keywords || [];
+                const allKeywords: string[] = keywordItems.map(item => item.keyword);
+
+                // Remove duplicates and return
+                const uniqueKeywords = Array.from(new Set(allKeywords));
+
+                return {
+                    status: true,
+                    msg: apiResponse.msg || 'Keywords generated successfully',
+                    data: uniqueKeywords
+                };
+            } else {
+                return {
+                    status: false,
+                    msg: apiResponse.msg || 'Failed to generate keywords',
+                    data: null
+                };
+            }
+        } catch (error) {
+            console.error('AI Keywords generation error:', error);
+            const errorResponse: CommonMessage<null> = {
+                status: false,
+                msg: error instanceof Error ? error.message : 'Unknown error occurred',
                 data: null
             };
             return errorResponse;

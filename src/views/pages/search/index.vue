@@ -3,15 +3,27 @@
     <v-form ref="form" @submit.prevent="onSubmit">
       <h3>{{ isEditMode ? t('search.edit_task') : t('search.use_hint') }}</h3>
       <v-textarea class="mt-3" v-model="keywords" :label="t('search.input_keywords_hint')"></v-textarea>
-      <v-select v-model="enginer" :items="searchplatform" :label="t('search.search_enginer_name')" required
+      <v-btn 
+        color="primary" 
+        class="mt-2 mb-3" 
+        @click="onGenerateKeywords" 
+        :loading="generatingKeywords"
+        :disabled="!keywords || keywords.trim().length === 0"
+      >
+        {{ t('search.generate_related_keywords') }}
+      </v-btn>
+      <v-select
+v-model="enginer" :items="searchplatform" :label="t('search.search_enginer_name')" required
         :readonly="loading" :rules="[rules.required]" class="mt-3" item-title="name" item-value="key"></v-select>
 
 
       <v-text-field v-model="page_number" :label="t('search.page_number')" clearable class="mt-3"></v-text-field>
 
-      <v-text-field v-model="concurrent_quantity" :label="t('search.concurrent_quantity')" clearable
+      <v-text-field
+v-model="concurrent_quantity" :label="t('search.concurrent_quantity')" clearable
         class="mt-3"></v-text-field>
-      <v-combobox v-model="proxyValue" :items="proxyValue" label="Select proxy" item-title="host" multiple return-object
+      <v-combobox
+v-model="proxyValue" :items="proxyValue" :label="t('search.select_proxy')" item-title="host" multiple return-object
         chips clearable></v-combobox>
       <v-btn color="primary" @click="showProxytable">{{ t('search.choose_proxy') }}</v-btn>
 
@@ -23,8 +35,8 @@
           <v-col cols="6" md="6">
             <p class="mt-5">{{ capletter(t('search.use_local_browser')) }}:</p>
             <v-btn-toggle v-model="useLocalBrowser" mandatory class="mt-3">
-              <v-btn :value=false color="primary">No</v-btn>
-              <v-btn :value=true color="success">Yes</v-btn>
+              <v-btn :value="false" color="primary">No</v-btn>
+              <v-btn :value="true" color="success">Yes</v-btn>
             </v-btn-toggle>
           </v-col>
         </v-row>
@@ -32,7 +44,8 @@
       
         <v-row v-if="useLocalBrowser == true">
           <v-col cols="6" md="6">
-            <v-select v-model="localBrowser" :items="LocalBrowerList" :label="t('search.choose_local_browser')" required
+            <v-select
+v-model="localBrowser" :items="LocalBrowerList" :label="t('search.choose_local_browser')" required
               :readonly="loading" :rules="[rules.required]"></v-select>
           </v-col>
         </v-row>
@@ -49,7 +62,7 @@
     
 
       <v-container v-if="useAccount == true">
-        <AccountSelectedTable :accountSource="enginer" :preSelectedAccounts="accounts" @change="handleAccountChange" />
+        <AccountSelectedTable :account-source="enginer" :pre-selected-accounts="accounts" @change="handleAccountChange" />
       </v-container>
 
       <p class="mt-5">{{ capletter(t('search.show_in_Browser')) }}:</p>
@@ -57,6 +70,17 @@
         <v-btn :value="0" color="primary">No</v-btn>
         <v-btn :value="1" color="success">Yes</v-btn>
       </v-btn-toggle>
+
+      <v-row>
+        <v-col cols="12" md="12">
+          <p class="mt-5">{{ capletter(t('search.enable_ai_recovery')) }}:</p>
+          <p class="text-caption text-grey">{{ t('search.enable_ai_recovery_hint') }}</p>
+          <v-btn-toggle v-model="enableAIRecovery" mandatory class="mt-3">
+            <v-btn :value="false" color="primary">No</v-btn>
+            <v-btn :value="true" color="success">Yes</v-btn>
+          </v-btn-toggle>
+        </v-col>
+      </v-row>
       <div class="d-flex justify-space-between mt-4 mb-4">
         <v-btn color="success" type="submit" :loading="loading" class="flex-grow-1 mr-2">
           {{ isEditMode ? t('common.update') : t('common.submit') }}
@@ -113,7 +137,7 @@ import { useI18n } from "vue-i18n";
 //import router from '@/views/router';
 import { SearhEnginer } from "@/config/searchSetting"
 import { ToArray, CapitalizeFirstLetter } from "@/views/utils/function"
-import { submitScraper, receiveSearchevent, getSearchTaskDetails, updateSearchTask, createSearchTaskOnly } from "@/views/api/search"
+import { submitScraper, receiveSearchevent, getSearchTaskDetails, updateSearchTask, createSearchTaskOnly, generateRelatedKeywords } from "@/views/api/search"
 import { getSocialaccountinfo } from "@/views/api/socialaccount"
 import { Usersearchdata } from "@/entityTypes/searchControlType"
 import { convertNumberToBoolean } from "@/views/utils/function"
@@ -157,6 +181,8 @@ const concurrent_quantity = ref(1);
 const proxyValue = ref<Array<ProxyEntity>>([]);
 const proxytableshow = ref(false);
 const accounts = ref<Array<SocialAccountListData>>([])
+const generatingKeywords = ref(false);
+const enableAIRecovery = ref(false);
 const initialize = () => {
   //searchplatform.value = ToArray(SearhEnginer);
   const seArr: string[] = ToArray(SearhEnginer);
@@ -195,6 +221,7 @@ const loadTaskDetails = async () => {
       useLocalBrowser.value = !!data.localBrowser;
       localBrowser.value = data.localBrowser || '';
       useAccount.value = data.accounts && data.accounts.length > 0;
+      enableAIRecovery.value = data.enableAIRecovery ?? false;
       
       // Set proxies
       if (data.proxys && data.proxys.length > 0) {
@@ -455,7 +482,7 @@ async function onSubmit() {
   }
   
   const subkeyword = keywords.value.split('\n').map(keyword => keyword.trim());
-  let localbowser: string = ""
+  let localbowser = ""
   if (useLocalBrowser.value) {
     localbowser = localBrowser.value
   }
@@ -472,7 +499,8 @@ async function onSubmit() {
     notShowBrowser: !convertNumberToBoolean(showinbrwoser.value),
     proxys: proxyValue.value,
     localBrowser: localbowser,
-    accounts: accountids
+    accounts: accountids,
+    enableAIRecovery: enableAIRecovery.value
   }
   
   try {
@@ -491,7 +519,8 @@ async function onSubmit() {
           user: proxy.user,
           pass: proxy.pass
         })),
-        accounts: subdata.accounts
+        accounts: subdata.accounts,
+        enableAIRecovery: subdata.enableAIRecovery
       };
       
       const result = await updateSearchTask(taskId.value, updateData);
@@ -547,7 +576,7 @@ async function onSaveOnly() {
   }
   
   const subkeyword = keywords.value.split('\n').map(keyword => keyword.trim());
-  let localbowser: string = ""
+  let localbowser = ""
   if (useLocalBrowser.value) {
     localbowser = localBrowser.value
   }
@@ -564,7 +593,8 @@ async function onSaveOnly() {
     notShowBrowser: !convertNumberToBoolean(showinbrwoser.value),
     proxys: proxyValue.value,
     localBrowser: localbowser,
-    accounts: accountids
+    accounts: accountids,
+    enableAIRecovery: enableAIRecovery.value
   }
   
   try {
@@ -586,6 +616,62 @@ async function onSaveOnly() {
     setAlert(translatedMessage, 'Error', 'error');
   } finally {
     loading.value = false;
+  }
+}
+
+/**
+ * Generate related keywords using AI
+ */
+async function onGenerateKeywords() {
+  if (!keywords.value || keywords.value.trim().length === 0) {
+    setAlert(t("search.keywords_empty"), "Error", "error");
+    return;
+  }
+
+  try {
+    generatingKeywords.value = true;
+    
+    // Get current keywords from textarea
+    const currentKeywords = keywords.value
+      .split('\n')
+      .map(k => k.trim())
+      .filter(k => k.length > 0);
+
+    if (currentKeywords.length === 0) {
+      setAlert(t("search.keywords_empty"), "Error", "error");
+      return;
+    }
+
+    // Call the API to generate related keywords
+    const generatedKeywords = await generateRelatedKeywords(currentKeywords, 15, 'seo');
+
+    if (generatedKeywords && generatedKeywords.length > 0) {
+      // Combine original keywords with generated ones, remove duplicates
+      const allKeywords = [...currentKeywords, ...generatedKeywords];
+      const uniqueKeywords = Array.from(new Set(allKeywords));
+      
+      // Update the textarea with all keywords
+      keywords.value = uniqueKeywords.join('\n');
+      
+      setAlert(
+        t('search.keywords_generated_successfully', { count: generatedKeywords.length }),
+        t('common.success') || 'Success',
+        'success'
+      );
+    } else {
+      setAlert(
+        t('search.no_keywords_generated'),
+        t('common.warning') || 'Warning',
+        'warning'
+      );
+    }
+  } catch (error) {
+    console.error('Error generating keywords:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Failed to generate keywords';
+    const translatedMessage = errorMessage.startsWith('search.') ? t(errorMessage) : errorMessage;
+    setAlert(translatedMessage, 'Error', 'error');
+  } finally {
+    generatingKeywords.value = false;
   }
 }
 </script>

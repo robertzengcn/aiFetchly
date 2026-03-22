@@ -1,16 +1,21 @@
 import { Token } from "@/modules/token"
 import { RemoteSource } from "@/modules/remotesource"
-import { USERSDBPATH, TOKENNAME, USERLOGPATH, USEREMAIL, USERNAME } from '@/config/usersetting';
+import { USERSDBPATH, TOKENNAME, USERLOGPATH, USEREMAIL, USERNAME, REFRESHTOKEN, TOKENEXPIRY, REFRESHTOKENEXPIRY } from '@/config/usersetting';
 import { BrowserWindow } from 'electron';
 import { NATIVATECOMMAND } from '@/config/channellist';
 import type { NativateDatatype } from '@/entityTypes/commonType';
+import { TokenRefreshService } from '@/modules/tokenRefresh';
 
 export class User {
     public removeToken() {
+        // Stop background auto-refresh before clearing tokens
+        TokenRefreshService.stopAutoRefresh();
         // Clear all user tokens and data
         const token = new Token();
         token.setValue(TOKENNAME, "");
-        token.setValue(USERSDBPATH, "");
+        token.setValue(REFRESHTOKEN, "");
+        token.setValue(TOKENEXPIRY, "");
+        token.setValue(REFRESHTOKENEXPIRY, "");
         token.setValue(USERSDBPATH, "");
         token.setValue(USERLOGPATH, "");
         token.setValue(USEREMAIL, "");
@@ -20,12 +25,15 @@ export class User {
         try {
             const allWindows = BrowserWindow.getAllWindows();
             if (allWindows.length > 0) {
-                const mainWindow = allWindows[0];
-                if (mainWindow && !mainWindow.isDestroyed()) {
-                    console.log("Sending navigation command to renderer");
-                    mainWindow.webContents.send(NATIVATECOMMAND, {
-                        path: 'login'
-                    } as NativateDatatype);
+                const mainWindow = allWindows[0] as BrowserWindow;
+                if (mainWindow) {
+                    const bw = mainWindow as BrowserWindow;
+                    if (bw && !(bw as any).isDestroyed?.() && (bw as any).webContents) {
+                        console.log("Sending navigation command to renderer");
+                        (bw as any).webContents.send(NATIVATECOMMAND, {
+                            path: 'login'
+                        } as NativateDatatype);
+                    }
                 }
             }
         } catch (ipcError) {

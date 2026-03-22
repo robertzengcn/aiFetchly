@@ -28,9 +28,9 @@ export function registerSystemSettingIpcHandlers() {
         }
         }
     })
-    ipcMain.handle(SYSTEM_SETTING_UPDATE, async (event, arg) => {
+    ipcMain.handle(SYSTEM_SETTING_UPDATE, async (event, arg: unknown) => {
 
-         const qdata = JSON.parse(arg) as SetttingUpdate;
+         const qdata = JSON.parse(arg as string) as SetttingUpdate;
             try {
                 const systemSettingCtrl = new SystemSettingController()
                 const res = await systemSettingCtrl.updateSystemSettings(qdata.id, qdata.value);

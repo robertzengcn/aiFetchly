@@ -1,4 +1,4 @@
-import { ipcMain, dialog, BrowserWindow } from 'electron'
+import { ipcMain, BrowserWindow, dialog } from 'electron'
 //import { UserController, userResponse, userlogin } from '@/controller/UserController'
 import { CampaignController } from '@/controller/campaignController'
 // import { campaignResponse } from '@/modules/campaign'
@@ -26,7 +26,7 @@ export default function SyncMsg(mainWindow: BrowserWindow) {
   ipcMain.handle("campaign:list", async (event, data) => {
     //console.log("handle campaign:list")
     const camControl = new CampaignController()
-    const res = await camControl.getCampaignlist(data).then(function (res) {
+    const res = await camControl.getCampaignlist(data as string).then(function (res) {
       return res
       // return {
       //   status: true,
@@ -52,7 +52,7 @@ export default function SyncMsg(mainWindow: BrowserWindow) {
   });
   //get social task list
   ipcMain.handle("socialtask:list", async (event, data) => {
-    const qdata = JSON.parse(data);
+    const qdata = JSON.parse(data as string);
     if (!("id" in qdata)) {
       //throw new Error("id not found");
       return {
@@ -83,7 +83,7 @@ export default function SyncMsg(mainWindow: BrowserWindow) {
   });
   //get social task info
   ipcMain.handle("socialtask:info", async (event, data) => {
-    const qdata = JSON.parse(data);
+    const qdata = JSON.parse(data as string);
     if (!("id" in qdata)) {
       //throw new Error("id not found");
       return {
@@ -163,7 +163,7 @@ export default function SyncMsg(mainWindow: BrowserWindow) {
   });
   //save social task
   ipcMain.handle("socialtask:save", async (event, data) => {
-    const qdata = JSON.parse(data);
+    const qdata = JSON.parse(data as string);
 
     const socialControl = new SocialTaskController()
     const res = await socialControl.saveSocialTask(qdata).then(function (res) {
@@ -188,7 +188,7 @@ export default function SyncMsg(mainWindow: BrowserWindow) {
   });
 
   ipcMain.handle("socialtaskrun:list", async (event, data) => {
-    const qdata = JSON.parse(data);
+    const qdata = JSON.parse(data as string);
     if (!("id" in qdata)) {
       //throw new Error("id not found");
       return {
@@ -227,7 +227,7 @@ export default function SyncMsg(mainWindow: BrowserWindow) {
     // return res as SocialTaskResponse;
   });
   ipcMain.handle("socialtaskresult:list", async (event, data) => {
-    const qdata = JSON.parse(data);
+    const qdata = JSON.parse(data as string);
     if (!("id" in qdata)) {
       //throw new Error("id not found");
       return {

@@ -1,262 +1,287 @@
-import { Menu, app, shell } from 'electron';
-import * as path from 'path';
-import * as fs from 'fs';
+import { app, BrowserWindow, Menu, shell } from "electron";
+import type { MenuItemConstructorOptions } from "electron";
+import * as path from "path";
+import * as fs from "fs";
 
 /**
  * Menu Manager for Session Recording Control
- * 
+ *
  * Provides application menu with session recording toggle and management options
  */
 export class MenuManager {
-    private isRecordingEnabled: boolean = false;
-    private sessionsDirectory: string;
+  private isRecordingEnabled = false;
+  private sessionsDirectory: string;
 
-    constructor() {
-        // Get sessions directory path
-        this.sessionsDirectory = path.join(app.getPath('userData'), 'sessions');
-        
-        // Load recording preference from user settings
-        this.loadRecordingPreference();
-    }
+  constructor() {
+    // Get sessions directory path
+    this.sessionsDirectory = path.join(app.getPath("userData"), "sessions");
 
-    /**
-     * Create the main application menu
-     */
-    createMenu(): Menu {
-        const template: Electron.MenuItemConstructorOptions[] = [
-            {
-                label: 'File',
-                submenu: [
-                    {
-                        label: 'Quit',
-                        accelerator: process.platform === 'darwin' ? 'Cmd+Q' : 'Ctrl+Q',
-                        click: () => {
-                            app.quit();
-                        }
-                    }
-                ]
+    // Load recording preference from user settings
+    this.loadRecordingPreference();
+  }
+
+  /**
+   * Create the main application menu
+   */
+  createMenu(): ReturnType<typeof Menu.buildFromTemplate> {
+    const template: MenuItemConstructorOptions[] = [
+      {
+        label: "File",
+        submenu: [
+          {
+            label: "Quit",
+            accelerator: process.platform === "darwin" ? "Cmd+Q" : "Ctrl+Q",
+            click: () => {
+              (app as any).quit();
             },
-            {
-                label: 'Session Recording',
-                submenu: [
-                    {
-                        label: 'Enable Recording',
-                        type: 'checkbox',
-                        checked: this.isRecordingEnabled,
-                        click: () => this.toggleRecording()
-                    },
-                    { type: 'separator' },
-                    {
-                        label: 'View Sessions Folder',
-                        click: () => this.openSessionsFolder()
-                    },
-                    {
-                        label: 'Session Recording Settings',
-                        click: () => this.openRecordingSettings()
-                    }
-                ]
-            },
-            {
-                label: 'Help',
-                submenu: [
-                    {
-                        label: 'Show Dev Console',
-                        accelerator: process.platform === 'darwin' ? 'Cmd+Option+I' : 'Ctrl+Shift+I',
-                        click: () => this.showDevConsole()
-                    },
-                    { type: 'separator' },
-                    {
-                        label: 'About',
-                        click: () => this.showAbout()
-                    }
-                ]
-            }
-        ];
+          },
+        ],
+      },
+      {
+        label: "Edit",
+        submenu: [
+          { role: "undo" },
+          { role: "redo" },
+          { type: "separator" },
+          { role: "cut" },
+          { role: "copy" },
+          { role: "paste" },
+          { role: "selectAll" },
+        ],
+      },
+      {
+        label: "Session Recording",
+        submenu: [
+          {
+            label: "Enable Recording",
+            type: "checkbox",
+            checked: this.isRecordingEnabled,
+            click: () => this.toggleRecording(),
+          },
+          { type: "separator" },
+          {
+            label: "View Sessions Folder",
+            click: () => this.openSessionsFolder(),
+          },
+          {
+            label: "Session Recording Settings",
+            click: () => this.openRecordingSettings(),
+          },
+        ],
+      },
+      {
+        label: "Help",
+        submenu: [
+          {
+            label: "Show Dev Console",
+            accelerator:
+              process.platform === "darwin" ? "Cmd+Option+I" : "Ctrl+Shift+I",
+            click: () => this.showDevConsole(),
+          },
+          { type: "separator" },
+          {
+            label: "About",
+            click: () => this.showAbout(),
+          },
+        ],
+      },
+    ];
 
-        // Add platform-specific menu items
-        if (process.platform === 'darwin') {
-            template.unshift({
-                label: app.getName(),
-                submenu: [
-                    { role: 'about' },
-                    { type: 'separator' },
-                    { role: 'services' },
-                    { type: 'separator' },
-                    { role: 'hide' },
-                    { role: 'hideOthers' },
-                    { role: 'unhide' },
-                    { type: 'separator' },
-                    { role: 'quit' }
-                ]
-            });
+    // Add platform-specific menu items
+    if (process.platform === "darwin") {
+      template.unshift({
+        label: app.getName(),
+        submenu: [
+          { role: "about" },
+          { type: "separator" },
+          { role: "services" },
+          { type: "separator" },
+          { role: "hide" },
+          { role: "hideOthers" },
+          { role: "unhide" },
+          { type: "separator" },
+          { role: "quit" },
+        ],
+      });
+    }
+
+    return Menu.buildFromTemplate(template);
+  }
+
+  /**
+   * Toggle session recording on/off
+   */
+  toggleRecording(): void {
+    this.isRecordingEnabled = !this.isRecordingEnabled;
+    this.saveRecordingPreference();
+
+    console.log(
+      `Session recording ${this.isRecordingEnabled ? "enabled" : "disabled"}`
+    );
+
+    // Update menu item
+    this.updateMenu();
+
+    // Notify main process about recording state change
+    this.notifyRecordingStateChange();
+  }
+
+  /**
+   * Open sessions folder in file explorer
+   */
+  openSessionsFolder(): void {
+    try {
+      // Ensure sessions directory exists
+      if (!fs.existsSync(this.sessionsDirectory)) {
+        fs.mkdirSync(this.sessionsDirectory, { recursive: true });
+      }
+
+      // Open folder in default file manager
+      shell.openPath(this.sessionsDirectory);
+      console.log(`Opened sessions folder: ${this.sessionsDirectory}`);
+    } catch (error) {
+      console.error("Failed to open sessions folder:", error);
+    }
+  }
+
+  /**
+   * Open recording settings (placeholder for future implementation)
+   */
+  openRecordingSettings(): void {
+    console.log("Opening session recording settings...");
+    // TODO: Implement settings dialog
+    // This could open a modal window with recording configuration options
+  }
+
+  /**
+   * Show about dialog
+   */
+  showAbout(): void {
+    console.log("Showing about dialog...");
+    // TODO: Implement about dialog
+  }
+
+  /**
+   * Show developer console
+   */
+  showDevConsole(): void {
+    try {
+      // Get the focused window or the first window
+      const allWindows = BrowserWindow.getAllWindows();
+      const mainWindow =
+        allWindows.length > 0 ? (allWindows[0] as BrowserWindow) : null;
+
+      if (mainWindow) {
+        const bw = mainWindow as BrowserWindow;
+        if (bw && !(bw as any).isDestroyed?.() && (bw as any).webContents) {
+          if ((bw as any).webContents.isDevToolsOpened()) {
+            (bw as any).webContents.closeDevTools();
+          } else {
+            (bw as any).webContents.openDevTools();
+          }
         }
-
-        return Menu.buildFromTemplate(template);
+        console.log("Toggled developer console");
+      } else {
+        console.warn("No window available to show dev console");
+      }
+    } catch (error) {
+      console.error("Failed to show dev console:", error);
     }
+  }
 
-    /**
-     * Toggle session recording on/off
-     */
-    toggleRecording(): void {
-        this.isRecordingEnabled = !this.isRecordingEnabled;
-        this.saveRecordingPreference();
-        
-        console.log(`Session recording ${this.isRecordingEnabled ? 'enabled' : 'disabled'}`);
-        
-        // Update menu item
-        this.updateMenu();
-        
-        // Notify main process about recording state change
-        this.notifyRecordingStateChange();
-    }
+  /**
+   * Update menu to reflect current recording state
+   */
+  private updateMenu(): void {
+    // Recreate menu with updated state
+    const menu = this.createMenu();
+    Menu.setApplicationMenu(menu);
+  }
 
-    /**
-     * Open sessions folder in file explorer
-     */
-    openSessionsFolder(): void {
-        try {
-            // Ensure sessions directory exists
-            if (!fs.existsSync(this.sessionsDirectory)) {
-                fs.mkdirSync(this.sessionsDirectory, { recursive: true });
-            }
-            
-            // Open folder in default file manager
-            shell.openPath(this.sessionsDirectory);
-            console.log(`Opened sessions folder: ${this.sessionsDirectory}`);
-        } catch (error) {
-            console.error('Failed to open sessions folder:', error);
-        }
-    }
+  /**
+   * Load recording preference from user settings
+   */
+  private loadRecordingPreference(): void {
+    try {
+      const userDataPath = app.getPath("userData");
+      const configPath = path.join(
+        userDataPath,
+        "session-recording-config.json"
+      );
 
-    /**
-     * Open recording settings (placeholder for future implementation)
-     */
-    openRecordingSettings(): void {
-        console.log('Opening session recording settings...');
-        // TODO: Implement settings dialog
-        // This could open a modal window with recording configuration options
+      if (fs.existsSync(configPath)) {
+        const configData = fs.readFileSync(configPath, "utf8");
+        const config = JSON.parse(configData);
+        this.isRecordingEnabled = config.enabled || false;
+        console.log(`Loaded recording preference: ${this.isRecordingEnabled}`);
+      } else {
+        // Default to disabled
+        this.isRecordingEnabled = false;
+        console.log("No recording preference found, defaulting to disabled");
+      }
+    } catch (error) {
+      console.error("Failed to load recording preference:", error);
+      this.isRecordingEnabled = false;
     }
+  }
 
-    /**
-     * Show about dialog
-     */
-    showAbout(): void {
-        console.log('Showing about dialog...');
-        // TODO: Implement about dialog
-    }
+  /**
+   * Save recording preference to user settings
+   */
+  private saveRecordingPreference(): void {
+    try {
+      const userDataPath = app.getPath("userData");
+      const configPath = path.join(
+        userDataPath,
+        "session-recording-config.json"
+      );
 
-    /**
-     * Show developer console
-     */
-    showDevConsole(): void {
-        try {
-            // Get the focused window or the first window
-            const { BrowserWindow } = require('electron');
-            const focusedWindow = BrowserWindow.getFocusedWindow();
-            const mainWindow = focusedWindow || BrowserWindow.getAllWindows()[0];
-            
-            if (mainWindow) {
-                if (mainWindow.webContents.isDevToolsOpened()) {
-                    mainWindow.webContents.closeDevTools();
-                } else {
-                    mainWindow.webContents.openDevTools();
-                }
-                console.log('Toggled developer console');
-            } else {
-                console.warn('No window available to show dev console');
-            }
-        } catch (error) {
-            console.error('Failed to show dev console:', error);
-        }
-    }
+      const config = {
+        enabled: this.isRecordingEnabled,
+        lastUpdated: new Date().toISOString(),
+        sessionsDirectory: this.sessionsDirectory,
+      };
 
-    /**
-     * Update menu to reflect current recording state
-     */
-    private updateMenu(): void {
-        // Recreate menu with updated state
-        const menu = this.createMenu();
-        Menu.setApplicationMenu(menu);
+      fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+      console.log(`Saved recording preference: ${this.isRecordingEnabled}`);
+    } catch (error) {
+      console.error("Failed to save recording preference:", error);
     }
+  }
 
-    /**
-     * Load recording preference from user settings
-     */
-    private loadRecordingPreference(): void {
-        try {
-            const userDataPath = app.getPath('userData');
-            const configPath = path.join(userDataPath, 'session-recording-config.json');
-            
-            if (fs.existsSync(configPath)) {
-                const configData = fs.readFileSync(configPath, 'utf8');
-                const config = JSON.parse(configData);
-                this.isRecordingEnabled = config.enabled || false;
-                console.log(`Loaded recording preference: ${this.isRecordingEnabled}`);
-            } else {
-                // Default to disabled
-                this.isRecordingEnabled = false;
-                console.log('No recording preference found, defaulting to disabled');
-            }
-        } catch (error) {
-            console.error('Failed to load recording preference:', error);
-            this.isRecordingEnabled = false;
-        }
-    }
+  /**
+   * Notify main process about recording state change
+   */
+  private notifyRecordingStateChange(): void {
+    // This will be used to communicate with the main process
+    // and potentially other parts of the application
+    console.log(`Recording state changed: ${this.isRecordingEnabled}`);
 
-    /**
-     * Save recording preference to user settings
-     */
-    private saveRecordingPreference(): void {
-        try {
-            const userDataPath = app.getPath('userData');
-            const configPath = path.join(userDataPath, 'session-recording-config.json');
-            
-            const config = {
-                enabled: this.isRecordingEnabled,
-                lastUpdated: new Date().toISOString(),
-                sessionsDirectory: this.sessionsDirectory
-            };
-            
-            fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
-            console.log(`Saved recording preference: ${this.isRecordingEnabled}`);
-        } catch (error) {
-            console.error('Failed to save recording preference:', error);
-        }
-    }
+    // TODO: Implement IPC communication to notify main process
+    // and update global recording state
+  }
 
-    /**
-     * Notify main process about recording state change
-     */
-    private notifyRecordingStateChange(): void {
-        // This will be used to communicate with the main process
-        // and potentially other parts of the application
-        console.log(`Recording state changed: ${this.isRecordingEnabled}`);
-        
-        // TODO: Implement IPC communication to notify main process
-        // and update global recording state
-    }
+  /**
+   * Get current recording status
+   */
+  getRecordingStatus(): boolean {
+    return this.isRecordingEnabled;
+  }
 
-    /**
-     * Get current recording status
-     */
-    getRecordingStatus(): boolean {
-        return this.isRecordingEnabled;
-    }
+  /**
+   * Set recording status programmatically
+   */
+  setRecordingStatus(enabled: boolean): void {
+    this.isRecordingEnabled = enabled;
+    this.saveRecordingPreference();
+    this.updateMenu();
+    this.notifyRecordingStateChange();
+  }
 
-    /**
-     * Set recording status programmatically
-     */
-    setRecordingStatus(enabled: boolean): void {
-        this.isRecordingEnabled = enabled;
-        this.saveRecordingPreference();
-        this.updateMenu();
-        this.notifyRecordingStateChange();
-    }
-
-    /**
-     * Get sessions directory path
-     */
-    getSessionsDirectory(): string {
-        return this.sessionsDirectory;
-    }
+  /**
+   * Get sessions directory path
+   */
+  getSessionsDirectory(): string {
+    return this.sessionsDirectory;
+  }
 }

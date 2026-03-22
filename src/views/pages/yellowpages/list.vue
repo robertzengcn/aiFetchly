@@ -26,18 +26,18 @@
           @click="manualRefresh"
           class="mr-2"
           :loading="loading"
-          title="Manual refresh"
+          :title="t('yellowPages.list_manual_refresh')"
         >
-          {{ t('home.refresh') || 'Refresh' }}
+          {{ t('home.refresh') }}
         </v-btn>
         <v-btn
           :color="autoRefreshEnabled ? (isPageVisible ? 'success' : 'warning') : 'secondary'"
           :prepend-icon="autoRefreshEnabled ? (isPageVisible ? 'mdi-refresh' : 'mdi-pause') : 'mdi-refresh-off'"
           @click="toggleAutoRefresh"
           class="mr-2"
-          :title="autoRefreshEnabled ? (isPageVisible ? 'Auto-refresh enabled (5s)' : 'Auto-refresh paused (page not visible)') : 'Auto-refresh disabled'"
+          :title="autoRefreshEnabled ? (isPageVisible ? t('yellowPages.list_auto_refresh_enabled') : t('yellowPages.list_auto_refresh_paused')) : t('yellowPages.list_auto_refresh_disabled')"
         >
-          {{ autoRefreshEnabled ? (isPageVisible ? 'Auto-refresh ON' : 'Auto-refresh PAUSED') : 'Auto-refresh OFF' }}
+          {{ autoRefreshEnabled ? (isPageVisible ? t('yellowPages.list_auto_refresh_on') : t('yellowPages.list_auto_refresh_paused_btn')) : t('yellowPages.list_auto_refresh_off') }}
         </v-btn>
         <!-- <v-btn
           color="secondary"
@@ -68,11 +68,11 @@
             <div class="d-flex align-center">
               <v-icon class="mr-1" size="small">mdi-clock-outline</v-icon>
               <span class="text-caption text-medium-emphasis">
-                Last updated: {{ lastRefreshTime.toLocaleTimeString() }}
+                {{ t('yellowPages.list_last_updated') }}: {{ lastRefreshTime.toLocaleTimeString() }}
               </span>
               <v-divider vertical class="mx-2"></v-divider>
               <span class="text-caption text-medium-emphasis">
-                Auto-refresh: {{ autoRefreshIntervalMs / 1000 }}s
+                {{ t('yellowPages.list_auto_refresh_interval', { seconds: autoRefreshIntervalMs / 1000 }) }}
               </span>
             </div>
           </v-card-title>
@@ -132,7 +132,7 @@
                   :label="t('home.search_tasks')"
                   prepend-inner-icon="mdi-magnify"
                   clearable
-                  placeholder="Search by task name or platform..."
+                  :placeholder="t('yellowPages.list_search_placeholder')"
                 />
               </v-col>
               <v-col cols="12" md="2">
@@ -187,7 +187,7 @@
                   class="ml-2"
                 >
                   <v-icon size="small" class="mr-1">mdi-loading</v-icon>
-                  Applying filters...
+                  {{ t('yellowPages.list_applying_filters') }}
                 </v-chip>
               </v-col>
             </v-row>
@@ -205,7 +205,7 @@
             class="mr-2 mb-1"
           >
             <v-icon size="small" class="mr-1">mdi-magnify</v-icon>
-            Search: "{{ searchQuery }}"
+            {{ t('yellowPages.list_filter_search') }}: "{{ searchQuery }}"
           </v-chip>
           <v-chip
             v-if="statusFilter"
@@ -216,7 +216,7 @@
             class="mr-2 mb-1"
           >
             <v-icon size="small" class="mr-1">mdi-filter</v-icon>
-            Status: {{ statusOptions.find(s => s.value === statusFilter)?.title }}
+            {{ t('yellowPages.list_filter_status') }}: {{ statusOptions.find(s => s.value === statusFilter)?.title }}
           </v-chip>
           <v-chip
             v-if="platformFilter"
@@ -227,7 +227,7 @@
             class="mr-2 mb-1"
           >
             <v-icon size="small" class="mr-1">mdi-web</v-icon>
-            Platform: {{ platformOptions.find(p => p.value === platformFilter)?.title }}
+            {{ t('yellowPages.list_filter_platform') }}: {{ platformOptions.find(p => p.value === platformFilter)?.title }}
           </v-chip>
           <v-chip
             v-if="priorityFilter"
@@ -238,7 +238,7 @@
             class="mr-2 mb-1"
           >
             <v-icon size="small" class="mr-1">mdi-priority-high</v-icon>
-            Priority: {{ priorityOptions.find(p => p.value === priorityFilter)?.title }}
+            {{ t('yellowPages.list_filter_priority') }}: {{ priorityOptions.find(p => p.value === priorityFilter)?.title }}
           </v-chip>
         </div>
       </v-col>
@@ -257,7 +257,7 @@
                 size="small"
                 class="ml-2"
               >
-                {{ total }} of {{ totalUnfiltered }} tasks match filters
+                {{ t('yellowPages.list_tasks_match_filters', { total, totalUnfiltered }) }}
               </v-chip>
             </div>
             <v-chip color="info" size="small">
@@ -267,16 +267,16 @@
           <v-card-text>
             <div v-if="!loading && hasActiveFilters && total === 0" class="text-center py-8">
               <v-icon size="64" color="grey-lighten-1" class="mb-4">mdi-filter-off</v-icon>
-              <h3 class="text-h6 text-grey-darken-1 mb-2">No tasks match your filters</h3>
+              <h3 class="text-h6 text-grey-darken-1 mb-2">{{ t('yellowPages.list_no_tasks_match_filters') }}</h3>
               <p class="text-body-2 text-grey-darken-1 mb-4">
-                Try adjusting your search criteria or clearing some filters
+                {{ t('yellowPages.list_adjust_search_or_clear') }}
               </p>
               <v-btn
                 color="primary"
                 variant="outlined"
                 @click="clearFilters"
               >
-                Clear All Filters
+                {{ t('yellowPages.list_clear_all_filters') }}
               </v-btn>
             </div>
             <YellowPagesTaskTable
@@ -478,7 +478,7 @@ const notification = reactive({
 })
 
 // Notification methods
-const showNotification = (message: string, type: 'success' | 'error' | 'warning' | 'info' = 'info', timeout: number = 3000) => {
+const showNotification = (message: string, type: 'success' | 'error' | 'warning' | 'info' = 'info', timeout = 3000) => {
   notification.message = message
   notification.type = type
   notification.timeout = timeout
@@ -757,14 +757,14 @@ const stopTask = async (task: any) => {
     if (!task.pid) {
       console.warn(`Task ${task.id} has no PID, cannot stop process`);
       // Show user feedback that task is not running
-      alert(`Task "${task.name}" is not currently running`);
+      alert(t('yellowPages.list_task_not_running', { name: task.name }));
       return;
     }
 
     console.log(`Stopping task ${task.id} with PID ${task.pid}`);
     
     // Show confirmation dialog
-    if (!confirm(`Are you sure you want to stop task "${task.name}" (PID: ${task.pid})?\n\nThis will terminate the running process and update the task status.`)) {
+    if (!confirm(t('yellowPages.list_confirm_stop_task', { name: task.name, pid: task.pid }))) {
       return;
     }
     
@@ -775,7 +775,7 @@ const stopTask = async (task: any) => {
       console.log(`Successfully stopped process for task ${task.id}: ${result.message}`);
       
       // Show success message
-      alert(`Successfully stopped task "${task.name}"!\n\nTask status has been updated to "Pending" and the table will refresh to show the changes.`);
+      alert(t('yellowPages.list_task_stopped_success', { name: task.name }));
       
       // Temporarily pause auto-refresh to avoid conflicts
       const wasAutoRefreshEnabled = autoRefreshEnabled.value
@@ -807,13 +807,13 @@ const stopTask = async (task: any) => {
     } else {
       console.error(`Failed to stop process for task ${task.id}: ${result.message}`);
       // Show error message to user
-      alert(`Failed to stop task "${task.name}": ${result.message}`);
+      alert(t('yellowPages.list_task_stop_failed', { name: task.name, message: result.message }));
     }
   } catch (error) {
     console.error(`Failed to stop task ${task.id}:`, error);
     // Show error message to user
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    alert(`Error stopping task "${task.name}": ${errorMessage}`);
+    const errorMessage = error instanceof Error ? error.message : t('yellowPages.list_unknown_error');
+    alert(t('yellowPages.list_error_stopping_task', { name: task.name, message: errorMessage }));
   }
 }
 
@@ -825,8 +825,8 @@ const pauseTask = async (task: any) => {
     //showNotification(`Task "${task.name}" paused successfully`, 'success')
   } catch (error) {
     console.error('Failed to pause task:', error)
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred'
-    showNotification(`Failed to pause task "${task.name}": ${errorMessage}`, 'error', 5000)
+    const errorMessage = error instanceof Error ? error.message : t('yellowPages.list_unknown_error_occurred')
+    showNotification(t('yellowPages.list_task_pause_failed', { name: task.name, message: errorMessage }), 'error', 5000)
   }
 }
 
@@ -835,27 +835,21 @@ const resumeTask = async (task: any) => {
     // TODO: Replace with actual API call
     await resumeYellowPagesTask(task.id)
     await loadTasks()
-    showNotification(`Task "${task.name}" resumed successfully`, 'success')
+    showNotification(t('yellowPages.list_task_resumed_success', { name: task.name }), 'success')
   } catch (error) {
     console.error('Failed to resume task:', error)
     const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred'
-    showNotification(`Failed to resume task "${task.name}": ${errorMessage}`, 'error', 5000)
+    showNotification(t('yellowPages.list_task_resume_failed', { name: task.name, message: errorMessage }), 'error', 5000)
   }
 }
 
 const viewTaskResults = (task: any) => {
   // Check if task has results
   if (!task.results_count || task.results_count === 0) {
-    // Show a message for tasks with no results
-    const message = task.status === TaskStatus.InProgress 
-      ? 'Task is still running. Results will be available when scraping completes.'
-      : 'This task has no results yet.';
-    
-    // You could add a toast notification here
-    console.log(message);
-    
-    // Optionally, you could show an alert or use a notification system
-    if (confirm(message + '\n\nDo you still want to view the results page?')) {
+    const message = task.status === TaskStatus.InProgress
+      ? t('yellowPages.list_task_still_running_results')
+      : t('yellowPages.list_task_no_results_yet')
+    if (confirm(message + '\n\n' + t('yellowPages.list_view_results_anyway_confirm'))) {
       router.push(`/yellowpages/results/${task.id}`)
     }
   } else {

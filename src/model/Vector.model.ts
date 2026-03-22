@@ -122,7 +122,35 @@ export class VectorModel extends BaseDb {
             const exists = await this.virtualTableExists(virtualTableName);
             
             if (!exists) {
-                throw new Error(`Virtual table '${virtualTableName}' does not exist`);
+                // Try to find metadata by virtual table name to get model name and dimension
+                const metadata = await this.metadataModel.findByVirtualTableName(virtualTableName);
+                
+                if (metadata) {
+                    // Use ensureVirtualTable with metadata information
+                    await this.ensureVirtualTable(
+                        metadata.model_name,
+                        metadata.dimension,
+                        {
+                            indexType: metadata.index_type,
+                            virtualTableName: virtualTableName
+                        }
+                    );
+                } else {
+                    // If metadata doesn't exist, create virtual table directly using the dimension parameter
+                    // This is a fallback when metadata is missing but we have the dimension
+                    try {
+                        const queryRunner = this.sqliteDb.connection.createQueryRunner();
+                        const sql = this.getVirtualTableSQL(dimension, virtualTableName);
+                        
+                        await queryRunner.query(sql);
+                        await queryRunner.release();
+                        
+                        console.log(`Created virtual table '${virtualTableName}' directly (dimension: ${dimension})`);
+                    } catch (createError) {
+                        const errorMessage = createError instanceof Error ? createError.message : String(createError);
+                        throw new Error(`Virtual table '${virtualTableName}' does not exist and failed to create it: ${errorMessage}`);
+                    }
+                }
             }
 
             // Convert to Float32Array and Buffer for virtual table insertion

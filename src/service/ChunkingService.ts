@@ -1,14 +1,14 @@
 import { RAGChunkEntity } from '@/entity/RAGChunk.entity';
 import { RAGDocumentEntity } from '@/entity/RAGDocument.entity';
-import { SqliteDb } from '@/config/SqliteDb';
+// import { SqliteDb } from '@/config/SqliteDb';
 import { RagConfigApi, ChunkingConfig } from '@/api/ragConfigApi';
 import { RAGChunkModule } from '@/modules/RAGChunkModule';
+import { HtmlConversionService } from '@/service/HtmlConversionService';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { PDFDocument } from 'pdf-lib';
 import pdf2md from 'pdf2md-ts';
-import TurndownService from 'turndown';
 import * as mammoth from 'mammoth';
 
 export interface ChunkingOptions {
@@ -43,6 +43,7 @@ export class ChunkingService {
     // private db: SqliteDb;
     private ragConfigApi: RagConfigApi;
     private ragChunkModule: RAGChunkModule;
+    private htmlConversionService: HtmlConversionService;
     private cachedConfig: ChunkingConfig | null = null;
     private configCacheExpiry: number = 0;
     private readonly CACHE_DURATION_MS = 30 * 60 * 1000; // 30 minutes
@@ -58,6 +59,7 @@ export class ChunkingService {
         // this.db = db;
         this.ragConfigApi = new RagConfigApi();
         this.ragChunkModule = new RAGChunkModule();
+        this.htmlConversionService = new HtmlConversionService();
         this.initializeConfig();
     }
 
@@ -164,16 +166,24 @@ export class ChunkingService {
         // Get configuration from cache or remote API
         const remoteConfig = await this.getChunkingConfig();
         
-        // Merge remote config with default options and user-provided options
+        // Start with defaults, then override with remote config only if values are defined
         const chunkingOptions: ChunkingOptions = {
-            ...this.defaultOptions,
-            chunkSize: remoteConfig.chunkSize,
-            overlapSize: remoteConfig.overlapSize,
-            strategy: remoteConfig.strategy,
-            preserveWhitespace: remoteConfig.preserveWhitespace,
-            minChunkSize: remoteConfig.minChunkSize,
-            ...options // User options override everything
+            chunkSize: remoteConfig.chunkSize ?? this.defaultOptions.chunkSize,
+            overlapSize: remoteConfig.overlapSize ?? this.defaultOptions.overlapSize,
+            strategy: remoteConfig.strategy ?? this.defaultOptions.strategy,
+            preserveWhitespace: remoteConfig.preserveWhitespace ?? this.defaultOptions.preserveWhitespace ?? true,
+            minChunkSize: remoteConfig.minChunkSize ?? this.defaultOptions.minChunkSize ?? 100,
         };
+        
+        // Apply user-provided options only if they are defined (not undefined)
+        // This ensures undefined values in options don't override remote config
+        if (options) {
+            if (options.chunkSize !== undefined) chunkingOptions.chunkSize = options.chunkSize;
+            if (options.overlapSize !== undefined) chunkingOptions.overlapSize = options.overlapSize;
+            if (options.strategy !== undefined) chunkingOptions.strategy = options.strategy;
+            if (options.preserveWhitespace !== undefined) chunkingOptions.preserveWhitespace = options.preserveWhitespace;
+            if (options.minChunkSize !== undefined) chunkingOptions.minChunkSize = options.minChunkSize;
+        }
         
         // Read document content
         const documentContent = await this.extractDocumentContent(document);
@@ -220,101 +230,6 @@ export class ChunkingService {
         return chunkEntities;
     }
 
-    /**
-     * Convert HTML content to markdown using turndown
-     */
-    private convertHtmlToMarkdown(htmlContent: string): string {
-        try {
-            // First, clean the HTML content to remove unwanted elements
-            const cleanedHtml = this.cleanHtmlContent(htmlContent);
-
-            const turndownService = new TurndownService({
-                headingStyle: 'atx',
-                bulletListMarker: '-',
-                codeBlockStyle: 'fenced',
-                emDelimiter: '*',
-                strongDelimiter: '**',
-                linkStyle: 'inlined',
-                linkReferenceStyle: 'full'
-            });
-
-            // Add custom rules for better conversion
-            turndownService.addRule('strikethrough', {
-                filter: ['del', 's'],
-                replacement: (content) => `~~${content}~~`
-            });
-
-            turndownService.addRule('highlight', {
-                filter: 'mark',
-                replacement: (content) => `==${content}==`
-            });
-
-            // Add rule to remove script and style content completely
-            turndownService.addRule('removeScripts', {
-                filter: ['script', 'style', 'noscript'],
-                replacement: () => ''
-            });
-
-            // Add rule to clean up navigation and header elements
-            turndownService.addRule('removeNavigation', {
-                filter: ['nav', 'header', 'footer', 'aside'],
-                replacement: (content) => content.trim() ? `\n\n${content}\n\n` : ''
-            });
-
-            // Convert HTML to markdown
-            const markdown = turndownService.turndown(cleanedHtml);
-            
-            // Clean up extra whitespace and normalize line breaks
-            return markdown
-                .replace(/\n{3,}/g, '\n\n') // Replace multiple newlines with double newlines
-                .replace(/[ \t]+$/gm, '') // Remove trailing whitespace from lines
-                .replace(/^\s*\n/gm, '') // Remove empty lines at start
-                .trim();
-        } catch (error) {
-            console.error('Error converting HTML to markdown:', error);
-            // Fallback: return the original HTML content if conversion fails
-            return htmlContent;
-        }
-    }
-
-    /**
-     * Clean HTML content by removing unwanted elements and scripts
-     */
-    private cleanHtmlContent(htmlContent: string): string {
-        try {
-            // Remove script tags and their content completely
-            let cleaned = htmlContent.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
-            
-            // Remove style tags and their content completely
-            cleaned = cleaned.replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '');
-            
-            // Remove noscript tags and their content
-            cleaned = cleaned.replace(/<noscript\b[^<]*(?:(?!<\/noscript>)<[^<]*)*<\/noscript>/gi, '');
-            
-            // Remove comments
-            cleaned = cleaned.replace(/<!--[\s\S]*?-->/g, '');
-            
-            // Remove meta tags (except viewport)
-            cleaned = cleaned.replace(/<meta(?![^>]*viewport)[^>]*>/gi, '');
-            
-            // Remove link tags that are not stylesheets or canonical
-            cleaned = cleaned.replace(/<link(?![^>]*(?:stylesheet|canonical))[^>]*>/gi, '');
-            
-            // Remove script-related attributes from other elements
-            cleaned = cleaned.replace(/\s*on\w+\s*=\s*["'][^"']*["']/gi, '');
-            
-            // Remove data attributes that might contain scripts
-            cleaned = cleaned.replace(/\s*data-[^=]*\s*=\s*["'][^"']*["']/gi, '');
-            
-            // Clean up extra whitespace
-            cleaned = cleaned.replace(/\s+/g, ' ').trim();
-            
-            return cleaned;
-        } catch (error) {
-            console.error('Error cleaning HTML content:', error);
-            return htmlContent;
-        }
-    }
 
     /**
      * Extract DOCX content using mammoth and convert to markdown
@@ -344,7 +259,7 @@ export class ChunkingService {
             }
 
             // Convert HTML to markdown using our existing method
-            const markdownContent = this.convertHtmlToMarkdown(htmlContent);
+            const markdownContent = this.htmlConversionService.convertHtmlToMarkdown(htmlContent);
 
             if (markdownContent && markdownContent.trim().length > 0) {
                 console.log(`Successfully converted DOCX to markdown: ${markdownContent.length} characters`);
@@ -492,7 +407,7 @@ export class ChunkingService {
                 case '.htm':
                     const htmlContent = fs.readFileSync(document.filePath, 'utf-8');
                     console.log(`Converting HTML file to markdown: ${path.basename(document.filePath)}`);
-                    const markdownFromHtml = this.convertHtmlToMarkdown(htmlContent);
+                    const markdownFromHtml = this.htmlConversionService.convertHtmlToMarkdown(htmlContent);
                     return {
                         content: markdownFromHtml,
                         contentType: 'markdown',

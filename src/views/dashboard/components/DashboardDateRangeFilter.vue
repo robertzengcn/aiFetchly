@@ -294,8 +294,14 @@ onMounted(() => {
 }
 
 .filter-buttons {
-  flex: 1;
-  min-width: 200px;
+  flex: 1 1 auto;
+  min-width: 360px;
+  overflow: visible;
+}
+
+.filter-buttons :deep(.v-chip-group) {
+  flex-wrap: wrap;
+  gap: 4px;
 }
 
 .v-chip {
@@ -303,6 +309,11 @@ onMounted(() => {
 }
 
 @media (max-width: 768px) {
+  .filter-buttons {
+    min-width: 0;
+    width: 100%;
+  }
+
   .v-chip {
     min-height: 44px;
     min-width: 44px;

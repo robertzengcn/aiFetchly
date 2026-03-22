@@ -81,8 +81,22 @@
                     required
                     rows="3"
                     clearable
-                    
-                  />
+                  >
+                    <template v-slot:append-inner>
+                      <v-btn
+                        color="deep-purple"
+                        variant="tonal"
+                        size="small"
+                        :loading="aiKeywordsLoading"
+                        :disabled="aiKeywordsLoading"
+                        @click="handleAiQueryKeywords"
+                        class="mt-1"
+                      >
+                        <v-icon size="small" class="mr-1">mdi-robot</v-icon>
+                        {{ $t('yellowPages.ai_query_keywords') }}
+                      </v-btn>
+                    </template>
+                  </v-textarea>
                   <!-- <div class="d-flex flex-wrap mt-2">
                     <v-chip
                       v-for="keyword in taskForm.keywords"
@@ -168,19 +182,61 @@
                     persistent-hint
                   />
                 </v-col>
+                <v-col cols="12" md="6">
+                  <v-switch
+                    v-model="taskForm.aiSupportEnabled"
+                    :label="$t('yellowPages.ai_support')"
+                    color="deep-purple"
+                    :hint="$t('yellowPages.ai_support_hint')"
+                    persistent-hint
+                  >
+                    <template v-slot:label>
+                      <div class="d-flex align-center">
+                        <v-icon size="small" class="mr-1">mdi-robot</v-icon>
+                        {{ $t('yellowPages.ai_support') }}
+                      </div>
+                    </template>
+                  </v-switch>
+                </v-col>
+              </v-row>
+
+              <!-- Local Browser Settings -->
+              <v-row>
+                <v-col cols="12" md="6">
+                  <v-switch
+                    v-model="useLocalBrowser"
+                    :label="$t('search.use_local_browser')"
+                    color="primary"
+                    hide-details
+                  />
+                </v-col>
+              </v-row>
+
+              <v-row v-if="useLocalBrowser">
+                <v-col cols="12" md="6">
+                  <v-select
+                    v-model="taskForm.localBrowser"
+                    :items="LocalBrowerList"
+                    :label="$t('search.choose_local_browser')"
+                    :rules="[v => !!v || $t('common.fill_require_field')]"
+                    required
+                    clearable
+                    :disabled="isDetailMode"
+                  />
+                </v-col>
               </v-row>
 
               <!-- Account Selection -->
               <v-row>
                 <v-col cols="12" md="6">
-                  <p class="mb-2">Use account</p>
+                  <p class="mb-2">{{ $t('yellowPages.use_account') }}</p>
                   <v-btn-toggle 
                     v-model="useAccount" 
                     mandatory
                     :disabled="selectedPlatform?.authentication?.requiresCookies"
                   >
-                    <v-btn :value="false" color="primary" :disabled="selectedPlatform?.authentication?.requiresCookies">No</v-btn>
-                    <v-btn :value="true" color="success">Yes</v-btn>
+                    <v-btn :value="false" color="primary" :disabled="selectedPlatform?.authentication?.requiresCookies">{{ $t('common.no') }}</v-btn>
+                    <v-btn :value="true" color="success">{{ $t('common.yes') }}</v-btn>
                   </v-btn-toggle>
                   <div v-if="selectedPlatform?.authentication?.requiresCookies" class="mt-2">
                     <v-alert
@@ -193,7 +249,7 @@
                         <v-icon size="small">mdi-alert</v-icon>
                       </template>
                       <span class="text-caption">
-                        Account required for platform: {{ selectedPlatform.display_name }}
+                        {{ $t('yellowPages.account_required_for_platform', { name: selectedPlatform.display_name }) }}
                       </span>
                     </v-alert>
                   </div>
@@ -210,8 +266,8 @@
               <v-row v-if="useAccount === true || selectedPlatform?.authentication?.requiresCookies">
                 <v-col cols="12">
                   <AccountSelectedTable
-                    :accountSource="taskForm.platform"
-                    :preSelectedAccounts="selectedAccounts"
+                    :account-source="taskForm.platform"
+                    :pre-selected-accounts="selectedAccounts"
                     @change="handleAccountChange"
                   />
                 </v-col>
@@ -224,7 +280,7 @@
                     <v-card-title class="text-subtitle-1 pa-0 mb-3">
                       {{ $t('home.proxy_configuration') }}
                     </v-card-title>
-                    <v-combobox v-model="proxyValue" :items="proxyValue" label="Select proxy" item-title="host" multiple return-object chips clearable></v-combobox>
+                    <v-combobox v-model="proxyValue" :items="proxyValue" :label="$t('common.select_proxy')" item-title="host" multiple return-object chips clearable></v-combobox>
                     <v-btn color="primary" @click="showProxytable">{{ $t('search.choose_proxy') }}</v-btn>
 
                     <div v-if="proxytableshow" class="mt-3">
@@ -382,15 +438,15 @@
                             </div>
                             <div v-if="scheduleType === 'one-time'" class="d-flex justify-space-between mb-2">
                               <span class="font-weight-medium">{{ $t('home.run_at') }}:</span>
-                              <span>{{ scheduledTime ? new Date(scheduledTime).toLocaleString() : 'Not set' }}</span>
+                              <span>{{ scheduledTime ? new Date(scheduledTime).toLocaleString() : $t('yellowPages.not_set') }}</span>
                             </div>
                             <div v-if="scheduleType === 'recurring'" class="d-flex justify-space-between mb-2">
                               <span class="font-weight-medium">{{ $t('home.cron_expression') }}:</span>
-                              <span class="font-family-mono">{{ cronExpression || 'Not set' }}</span>
+                              <span class="font-family-mono">{{ cronExpression || $t('yellowPages.not_set') }}</span>
                             </div>
                             <div class="d-flex justify-space-between mb-2">
                               <span class="font-weight-medium">{{ $t('home.schedule_name') }}:</span>
-                              <span>{{ scheduleName || 'Not set' }}</span>
+                              <span>{{ scheduleName || $t('yellowPages.not_set') }}</span>
                             </div>
                             <div class="d-flex justify-space-between mb-2">
                               <span class="font-weight-medium">{{ $t('home.schedule_status') }}:</span>
@@ -425,31 +481,35 @@
             <div class="text-body-2">
               <div class="d-flex justify-space-between mb-2">
                 <span class="font-weight-medium">{{ $t('home.name') }}:</span>
-                <span>{{ taskForm.name || 'Not set' }}</span>
+                <span>{{ taskForm.name || $t('yellowPages.not_set') }}</span>
               </div>
               <div class="d-flex justify-space-between mb-2">
                 <span class="font-weight-medium">{{ $t('home.platform') }}:</span>
-                <span>{{ taskForm.platform || 'Not set' }}</span>
+                <span>{{ taskForm.platform || $t('yellowPages.not_set') }}</span>
               </div>
               <div class="d-flex justify-space-between mb-2">
                 <span class="font-weight-medium">{{ $t('home.keywords') }}:</span>
-                <span>{{ taskForm.keywords.length || 0 }} selected</span>
+                <span>{{ keywordsCount }} selected</span>
               </div>
               <div class="d-flex justify-space-between mb-2">
                 <span class="font-weight-medium">{{ $t('home.location') }}:</span>
-                <span>{{ taskForm.location || 'Not set' }}</span>
+                <span>{{ taskForm.location || $t('yellowPages.not_set') }}</span>
               </div>
               <div class="d-flex justify-space-between mb-2">
                 <span class="font-weight-medium">{{ $t('home.max_pages') }}:</span>
-                <span>{{ taskForm.max_pages || 'Not set' }}</span>
+                <span>{{ taskForm.max_pages || $t('yellowPages.not_set') }}</span>
               </div>
               <div class="d-flex justify-space-between mb-2">
                 <span class="font-weight-medium">{{ $t('home.concurrency') }}:</span>
-                <span>{{ taskForm.concurrency || 'Not set' }}</span>
+                <span>{{ taskForm.concurrency || $t('yellowPages.not_set') }}</span>
               </div>
               <div class="d-flex justify-space-between mb-2">
                 <span class="font-weight-medium">{{ $t('home.headless_mode') }}:</span>
-                <span>{{ taskForm.headless ? 'Enabled' : 'Disabled' }}</span>
+                <span>{{ taskForm.headless ? $t('yellowPages.enabled') : $t('yellowPages.disabled') }}</span>
+              </div>
+              <div class="d-flex justify-space-between mb-2" v-if="useLocalBrowser && taskForm.localBrowser">
+                <span class="font-weight-medium">{{ $t('search.use_local_browser') }}:</span>
+                <span>{{ taskForm.localBrowser === 'chrome' ? 'Chrome' : taskForm.localBrowser === 'firefox' ? 'Firefox' : '' }}</span>
               </div>
             </div>
           </v-card-text>
@@ -492,7 +552,7 @@
               <!-- Authentication Information -->
               <div v-if="selectedPlatform.authentication" class="mt-3 pt-3 border-top">
                 <div class="mb-2">
-                  <span class="font-weight-medium">Authentication:</span>
+                  <span class="font-weight-medium">{{ $t('yellowPages.authentication') }}:</span>
                 </div>
                 <div v-if="selectedPlatform.authentication.requiresCookies" class="mb-2">
                   <v-chip
@@ -501,10 +561,10 @@
                     class="mr-2"
                   >
                     <v-icon size="small" class="mr-1">mdi-cookie</v-icon>
-                    Requires Cookies
+                    {{ $t('yellowPages.requires_cookies') }}
                   </v-chip>
                   <span class="text-caption text-medium-emphasis">
-                    Account required for authentication
+                    {{ $t('yellowPages.account_required_for_auth') }}
                   </span>
                 </div>
                 <div v-if="selectedPlatform.authentication.requiresLogin" class="mb-2">
@@ -514,7 +574,7 @@
                     class="mr-2"
                   >
                     <v-icon size="small" class="mr-1">mdi-login</v-icon>
-                    Requires Login
+                    {{ $t('yellowPages.requires_login') }}
                   </v-chip>
                 </div>
                 <div v-if="selectedPlatform.authentication.requiresApiKey" class="mb-2">
@@ -524,7 +584,7 @@
                     class="mr-2"
                   >
                     <v-icon size="small" class="mr-1">mdi-key</v-icon>
-                    Requires API Key
+                    {{ $t('yellowPages.requires_api_key') }}
                   </v-chip>
                 </div>
                 <div v-if="selectedPlatform.authentication.requiresOAuth" class="mb-2">
@@ -534,7 +594,7 @@
                     class="mr-2"
                   >
                     <v-icon size="small" class="mr-1">mdi-oauth</v-icon>
-                    Requires OAuth
+                    {{ $t('yellowPages.requires_oauth') }}
                   </v-chip>
                 </div>
               </div>
@@ -548,10 +608,10 @@
                     class="mr-2"
                   >
                     <v-icon size="small" class="mr-1">mdi-map-marker</v-icon>
-                    Location Required
+                    {{ $t('yellowPages.location_required') }}
                   </v-chip>
                   <span class="text-caption text-medium-emphasis">
-                    This platform requires a location for search
+                    {{ $t('yellowPages.platform_requires_location') }}
                   </span>
                 </div>
               </div>
@@ -685,6 +745,10 @@ import CronExpressionBuilder from '@/views/pages/schedule/widgets/CronExpression
 import { createSchedule } from '@/views/api/schedule'
 import { TaskType, TriggerType } from '@/entity/ScheduleTask.entity'
 import SuccessNotification from '@/views/components/widgets/SuccessNotification.vue'
+import { generateRelatedKeywords } from '@/views/api/search'
+import { windowInvoke } from '@/views/utils/apirequest'
+import { QUERY_USER_INFO } from '@/config/channellist'
+import type { UserInfoType } from '@/entityTypes/userType'
 
 // Router
 const router = useRouter()
@@ -715,6 +779,8 @@ const taskForm = reactive({
   concurrency: 2,
   delay_between_requests: 2000,
   headless: true,
+  aiSupportEnabled: false,
+  localBrowser: '' as string,
   account_id: undefined as number | undefined,
   proxy_config: undefined as any,
   scheduled_at: undefined as Date | undefined
@@ -723,11 +789,13 @@ const taskForm = reactive({
 // UI state
 const creating = ref(false)
 const loading = ref(false)
+const aiKeywordsLoading = ref(false)
 const useProxy = ref(false)
 const scheduleTask = ref(false)
 const keywordsInput = ref('')
 const scheduledTime = ref('')
 const useAccount = ref(false)
+const useLocalBrowser = ref(false)
 const selectedAccounts = ref<SocialAccountListData[]>([])
 const proxyValue = ref<Array<ProxyEntity>>([])
 const proxytableshow = ref(false)
@@ -745,6 +813,12 @@ const nextRunTime = ref('')
 const scheduleTypeOptions = [
   { title: 'One Time', value: 'one-time' },
   { title: 'Recurring', value: 'recurring' }
+]
+
+// Local browser options
+const LocalBrowerList = [
+  { title: 'Chrome', value: 'chrome' },
+  { title: 'Firefox', value: 'firefox' }
 ]
 
 // Cron presets
@@ -779,6 +853,13 @@ const minDateTime = computed(() => {
 const platforms = ref<PlatformSummary[]>([])
 const selectedPlatform = computed((): PlatformSummary | undefined => {
   return platforms.value.find(p => p.name === taskForm.platform)
+})
+
+// Parsed keywords from input (comma/newline separated) for preview and validation
+const keywordsCount = computed(() => {
+  const raw = (keywordsInput.value || '').trim()
+  if (!raw) return 0
+  return raw.split(/[\n,]/).map((k) => k.trim()).filter((k) => k.length > 0).length
 })
 
 // Dialog states
@@ -825,6 +906,31 @@ const removeKeyword = (keyword: string) => {
   keywordsInput.value = taskForm.keywords.join(', ')
 }
 
+/** Call AI to generate related keywords and fill the keywords field. Uses current keywords as seeds or a default. */
+async function handleAiQueryKeywords() {
+  aiKeywordsLoading.value = true
+  errorDialog.show = false
+  try {
+    const raw = (keywordsInput.value || '').trim()
+    const seedKeywords = raw
+      ? raw.split(/[\n,]/).map((k) => k.trim()).filter((k) => k.length > 0)
+      : [$t('yellowPages.ai_query_keywords_default_seed') || 'business']
+    if (seedKeywords.length === 0) {
+      seedKeywords.push($t('yellowPages.ai_query_keywords_default_seed') || 'business')
+    }
+    const generated = await generateRelatedKeywords(seedKeywords, 15, 'seo')
+    const newKeywords = generated && generated.length > 0 ? generated : []
+    const existing = raw ? raw.split(/[\n,]/).map((k) => k.trim()).filter(Boolean) : []
+    const combined = [...new Set([...existing, ...newKeywords])]
+    keywordsInput.value = combined.join(', ')
+  } catch (err) {
+    errorDialog.message = err instanceof Error ? err.message : String(err)
+    errorDialog.show = true
+  } finally {
+    aiKeywordsLoading.value = false
+  }
+}
+
 const validateForm = async () => {
   if (!form.value) return { valid: false, errors: [$t('common.error')] }
   
@@ -866,7 +972,7 @@ const validateForm = async () => {
       
       // Check if platform requires cookies but no account is selected
       if (selectedPlatform.value?.authentication?.requiresCookies && selectedAccounts.value.length === 0) {
-        fieldErrors.push(`Account required for platform: ${selectedPlatform.value.display_name}`)
+        fieldErrors.push($t('yellowPages.account_required_for_platform', { name: selectedPlatform.value.display_name }))
       }
       
       // Check if platform requires location but location is empty
@@ -934,7 +1040,16 @@ const loadTaskDetails = async () => {
       taskForm.concurrency = data.task.concurrency || 2
       taskForm.delay_between_requests = data.task.delay_between_requests || 2000
       taskForm.headless = data.task.headless !== undefined ? data.task.headless : true
+      taskForm.aiSupportEnabled = data.task.aiSupportEnabled ?? data.task.ai_support_enabled ?? false
+      taskForm.localBrowser = data.task.localBrowser ?? data.task.local_browser ?? ''
       taskForm.account_id = data.task.account_id || undefined
+
+      // Set local browser selection
+      if (data.task.localBrowser || data.task.local_browser) {
+        useLocalBrowser.value = true
+      } else {
+        useLocalBrowser.value = false
+      }
       
       // Set keywords
       if (data.task.keywords && data.task.keywords.length > 0) {
@@ -948,23 +1063,56 @@ const loadTaskDetails = async () => {
         // Note: Account details will be loaded by AccountSelectedTable component
       }
       
-      // Set proxy configuration
-      if (data.proxy_config) {
-        useProxy.value = true
-        proxyValue.value = [{
-          id: 0,
-          host: data.proxy_config.host,
-          port: data.proxy_config.port.toString(),
-          user: data.proxy_config.username || '',
-          pass: data.proxy_config.password || '',
-          protocol: data.proxy_config.protocol || 'http'
-        }]
+      // Set proxy configuration (nested under task; API returns { task, status, progress })
+      useProxy.value = false
+      proxyValue.value = []
+      const rawPc = data.task.proxy_config
+      if (rawPc) {
+        let parsed: Record<string, unknown> | null = null
+        if (typeof rawPc === 'string') {
+          try {
+            const j = JSON.parse(rawPc) as unknown
+            parsed =
+              j && typeof j === 'object' ? (j as Record<string, unknown>) : null
+          } catch {
+            parsed = null
+          }
+        } else if (typeof rawPc === 'object' && rawPc !== null) {
+          parsed = rawPc as Record<string, unknown>
+        }
+        if (parsed) {
+          const list: Array<Record<string, unknown>> = []
+          if (Array.isArray(parsed.proxies) && parsed.proxies.length > 0) {
+            for (const item of parsed.proxies) {
+              if (item && typeof item === 'object') {
+                list.push(item as Record<string, unknown>)
+              }
+            }
+          } else if (
+            typeof parsed.host === 'string' &&
+            parsed.port !== undefined &&
+            parsed.port !== null
+          ) {
+            list.push(parsed)
+          }
+          if (list.length > 0) {
+            useProxy.value = true
+            proxyValue.value = list.map((cfg) => ({
+              id: typeof cfg.id === 'number' ? cfg.id : 0,
+              host: String(cfg.host ?? ''),
+              port: String(cfg.port ?? ''),
+              user: String(cfg.username ?? cfg.user ?? ''),
+              pass: String(cfg.password ?? cfg.pass ?? ''),
+              protocol: String(cfg.protocol ?? 'http')
+            }))
+          }
+        }
       }
       
       // Set scheduling if exists
-      if (data.scheduled_at) {
+      if (data.task.scheduled_at) {
         scheduleTask.value = true
-        scheduledTime.value = new Date(data.scheduled_at).toISOString().slice(0, 16)
+        scheduledTime.value = new Date(data.task.scheduled_at).toISOString().slice(0, 16)
         scheduleType.value = 'one-time'
       }
       
@@ -1012,16 +1160,26 @@ const createTask = async () => {
       taskData.account_id = undefined
     }
 
-    // Add proxy config if enabled
+    // Set local browser if enabled
+    if (useLocalBrowser.value) {
+      taskData.localBrowser = taskForm.localBrowser
+    } else {
+      (taskData as any).localBrowser = undefined
+    }
+
+    // Proxy: persist list, or explicit null so DB clears (undefined is omitted by JSON.stringify)
     if (useProxy.value && proxyValue.value.length > 0) {
-      const p = proxyValue.value[0]
       taskData.proxy_config = {
-        host: p.host,
-        port: parseInt(String(p.port)),
-        username: p.user || undefined,
-        password: p.pass || undefined,
-        protocol: p.protocol
+        proxies: proxyValue.value.map((p) => ({
+          host: p.host,
+          port: parseInt(String(p.port), 10),
+          username: p.user || undefined,
+          password: p.pass || undefined,
+          protocol: (p.protocol && String(p.protocol).trim()) || 'http'
+        }))
       }
+    } else {
+      taskData.proxy_config = null
     }
 
     // Add scheduled time if enabled
@@ -1124,14 +1282,17 @@ const createTaskOnly = async () => {
     }
 
     if (useProxy.value && proxyValue.value.length > 0) {
-      const p = proxyValue.value[0]
       taskData.proxy_config = {
-        host: p.host,
-        port: parseInt(String(p.port)),
-        username: p.user || undefined,
-        password: p.pass || undefined,
-        protocol: p.protocol
+        proxies: proxyValue.value.map((p) => ({
+          host: p.host,
+          port: parseInt(String(p.port), 10),
+          username: p.user || undefined,
+          password: p.pass || undefined,
+          protocol: (p.protocol && String(p.protocol).trim()) || 'http'
+        }))
       }
+    } else {
+      taskData.proxy_config = null
     }
 
     if (scheduleTask.value && scheduledTime.value) {
@@ -1308,7 +1469,7 @@ const calculateNextRunTime = async () => {
   try {
     // Simple next run time calculation for common patterns
     const now = new Date()
-    let nextRun = new Date(now)
+    const nextRun = new Date(now)
     
     const parts = cronExpression.value.split(' ')
     const [minute, hour, day, month, weekday] = parts
@@ -1409,9 +1570,22 @@ watch(() => taskForm.platform, (newPlatform) => {
 })
 
 // Lifecycle
-onMounted(() => {
+onMounted(async () => {
   loadPlatforms()
-  
+
+  // When creating a new task, default AI support to on if user has AI enabled
+  if (isCreateMode.value) {
+    try {
+      // windowInvoke returns result.data, i.e. the UserInfoType object directly
+      const userInfo = (await windowInvoke(QUERY_USER_INFO)) as UserInfoType | undefined
+      if (userInfo?.aiEnabled === true) {
+        taskForm.aiSupportEnabled = true
+      }
+    } catch {
+      // Ignore: leave aiSupportEnabled as false
+    }
+  }
+
   // If in edit mode or detail mode, load task details
   if ((isEditMode.value || isDetailMode.value) && taskId.value) {
     loadTaskDetails()
