@@ -35,6 +35,10 @@ import {
   isAiSupportResponseMessage,
 } from "@/modules/interface/BackgroundProcessMessages";
 import { SessionRecordingManager } from "@/modules/SessionRecordingManager";
+import {
+  getChromeExcutepath,
+  getFirefoxExcutepath,
+} from "@/modules/lib/function";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
@@ -649,7 +653,12 @@ export class YellowPagesScraper {
     screenshot_after?: string;
   }> {
     if (!this.page) {
-      return { action_id: action.action_id, success: false, element_found: false, error: "No page available" };
+      return {
+        action_id: action.action_id,
+        success: false,
+        element_found: false,
+        error: "No page available",
+      };
     }
     const result = await executePuppeteerAction(this.page, action);
     if (result.success) return result;
@@ -658,19 +667,36 @@ export class YellowPagesScraper {
         try {
           const frames = this.page!.frames();
           if (frames.length < 2) return false;
-          const challengeFrame = frames.find((f) => /cloudflare|turnstile/i.test((f as { url(): string }).url()));
+          const challengeFrame = frames.find((f) =>
+            /cloudflare|turnstile/i.test((f as { url(): string }).url())
+          );
           if (!challengeFrame) return false;
           let frameEl: ElementHandle<Element> | null = null;
-          if (typeof (challengeFrame as { frameElement?(): Promise<ElementHandle<Element> | null> }).frameElement === "function") {
-            frameEl = await (challengeFrame as { frameElement(): Promise<ElementHandle<Element> | null> }).frameElement();
+          if (
+            typeof (
+              challengeFrame as {
+                frameElement?(): Promise<ElementHandle<Element> | null>;
+              }
+            ).frameElement === "function"
+          ) {
+            frameEl = await (
+              challengeFrame as {
+                frameElement(): Promise<ElementHandle<Element> | null>;
+              }
+            ).frameElement();
           }
           if (!frameEl) {
-            const iframe = await this.page!.$('iframe[src*="cloudflare"], iframe[src*="turnstile"]');
+            const iframe = await this.page!.$(
+              'iframe[src*="cloudflare"], iframe[src*="turnstile"]'
+            );
             if (!iframe) return false;
             const box = await iframe.boundingBox();
             await iframe.dispose();
             if (!box) return false;
-            await this.page!.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+            await this.page!.mouse.click(
+              box.x + box.width / 2,
+              box.y + box.height / 2
+            );
             await this.sleep(2000);
             await this.waitForCloudflareChallenge(10000);
             return true;
@@ -678,7 +704,10 @@ export class YellowPagesScraper {
           const box = await frameEl.boundingBox();
           await frameEl.dispose();
           if (!box) return false;
-          await this.page!.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+          await this.page!.mouse.click(
+            box.x + box.width / 2,
+            box.y + box.height / 2
+          );
           await this.sleep(2000);
           await this.waitForCloudflareChallenge(10000);
           return true;
@@ -721,7 +750,9 @@ export class YellowPagesScraper {
         pageUrl: params.pageUrl,
         pageContent: "",
         selectorsAvailable: params.selectorsAvailable,
-        maxIterations: params.maxIterations ?? YellowPagesScraper.OBSERVE_EXECUTE_MAX_ITERATIONS,
+        maxIterations:
+          params.maxIterations ??
+          YellowPagesScraper.OBSERVE_EXECUTE_MAX_ITERATIONS,
         goalContext: params.goalContext,
         stepContext: params.stepContext,
         errorInfo: params.errorInfo,
@@ -929,8 +960,7 @@ export class YellowPagesScraper {
         `Completed Yellow Pages scraping for task ${this.taskData.taskId}`
       );
     } catch (error) {
-      const base =
-        error instanceof Error ? error : new Error(String(error));
+      const base = error instanceof Error ? error : new Error(String(error));
       let toReport = base;
       if (
         base.message.includes("ERR_TUNNEL_CONNECTION_FAILED") ||
@@ -1038,7 +1068,35 @@ export class YellowPagesScraper {
   private async initializeBrowser(): Promise<void> {
     try {
       // Use BrowserManager to get proper launch options with stealth mode
-      const browserManager = new BrowserManager({ enableStealth: true });
+      let localBrowserPath: string | undefined = undefined;
+      if (this.taskData.localBrowser) {
+        switch (this.taskData.localBrowser) {
+          case "chrome": {
+            localBrowserPath = getChromeExcutepath();
+            break;
+          }
+          case "firefox": {
+            localBrowserPath = getFirefoxExcutepath();
+            break;
+          }
+          default: {
+            throw new Error(
+              `Unsupported localBrowser value: ${this.taskData.localBrowser}`
+            );
+          }
+        }
+
+        if (!localBrowserPath) {
+          throw new Error(
+            `localBrowser executable path not found for: ${this.taskData.localBrowser}`
+          );
+        }
+      }
+
+      const browserManager = new BrowserManager({
+        enableStealth: true,
+        localBrowserPath,
+      });
 
       // Override headless setting if specified in task data
       const headless =
@@ -1261,9 +1319,8 @@ export class YellowPagesScraper {
                   businessData.business_name
                 );
                 // Convert BusinessData to ScrapingResult format
-                let converted = this.convertBusinessDataToScrapingResult(
-                  businessData
-                );
+                let converted =
+                  this.convertBusinessDataToScrapingResult(businessData);
                 converted = await this.enrichScrapingResultWithAiIfNeeded(
                   converted,
                   "adapter_extract_custom_search"
@@ -1373,7 +1430,7 @@ export class YellowPagesScraper {
             );
             try {
               const captured = await this.capturePageStateForAiSupport();
-              const aiResult = await this.requestAiSupport({      
+              const aiResult = await this.requestAiSupport({
                 requestType: "step_guidance",
                 pageUrl: this.page.url(),
                 stepContext: "custom_search_failed",
@@ -1428,7 +1485,9 @@ export class YellowPagesScraper {
                         const businessData =
                           await this.adapter.extractBusinessData(this.page!);
                         let converted =
-                          this.convertBusinessDataToScrapingResult(businessData);
+                          this.convertBusinessDataToScrapingResult(
+                            businessData
+                          );
                         converted =
                           await this.enrichScrapingResultWithAiIfNeeded(
                             converted,
@@ -1606,9 +1665,8 @@ export class YellowPagesScraper {
                 `📊 Adapter extracted business data:`,
                 businessData.business_name
               );
-              let converted = this.convertBusinessDataToScrapingResult(
-                businessData
-              );
+              let converted =
+                this.convertBusinessDataToScrapingResult(businessData);
               converted = await this.enrichScrapingResultWithAiIfNeeded(
                 converted,
                 "adapter_extract_generic_nav_page1"
@@ -1667,9 +1725,8 @@ export class YellowPagesScraper {
                 `📊 Adapter extracted business data:`,
                 businessData.business_name
               );
-              let converted = this.convertBusinessDataToScrapingResult(
-                businessData
-              );
+              let converted =
+                this.convertBusinessDataToScrapingResult(businessData);
               converted = await this.enrichScrapingResultWithAiIfNeeded(
                 converted,
                 "adapter_extract_generic_nav_pagination"
@@ -6252,8 +6309,7 @@ export class YellowPagesScraper {
     aiData: NonNullable<AiSupportResult["data"]>,
     businessName = "Unknown"
   ): ScrapingResult {
-    const resolvedName =
-      aiData.businessName?.trim() || businessName;
+    const resolvedName = aiData.businessName?.trim() || businessName;
     const w = aiData.website?.trim();
     const website =
       w && this.isValidWebsiteUrl(w)
@@ -6411,7 +6467,7 @@ export class YellowPagesScraper {
             `🔄 Attempting page refresh (attempt ${attempt + 1}/${maxRetries})`
           );
           //await this.page.reload({ waitUntil: "networkidle2" });
-          await this.sleep(5000); // Wait 5 seconds 
+          await this.sleep(5000); // Wait 5 seconds
         }
       } catch (error) {
         console.error(

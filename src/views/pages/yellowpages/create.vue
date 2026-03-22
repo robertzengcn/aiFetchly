@@ -200,6 +200,32 @@
                 </v-col>
               </v-row>
 
+              <!-- Local Browser Settings -->
+              <v-row>
+                <v-col cols="12" md="6">
+                  <v-switch
+                    v-model="useLocalBrowser"
+                    :label="$t('search.use_local_browser')"
+                    color="primary"
+                    hide-details
+                  />
+                </v-col>
+              </v-row>
+
+              <v-row v-if="useLocalBrowser">
+                <v-col cols="12" md="6">
+                  <v-select
+                    v-model="taskForm.localBrowser"
+                    :items="LocalBrowerList"
+                    :label="$t('search.choose_local_browser')"
+                    :rules="[v => !!v || $t('common.fill_require_field')]"
+                    required
+                    clearable
+                    :disabled="isDetailMode"
+                  />
+                </v-col>
+              </v-row>
+
               <!-- Account Selection -->
               <v-row>
                 <v-col cols="12" md="6">
@@ -481,6 +507,10 @@
                 <span class="font-weight-medium">{{ $t('home.headless_mode') }}:</span>
                 <span>{{ taskForm.headless ? $t('yellowPages.enabled') : $t('yellowPages.disabled') }}</span>
               </div>
+              <div class="d-flex justify-space-between mb-2" v-if="useLocalBrowser && taskForm.localBrowser">
+                <span class="font-weight-medium">{{ $t('search.use_local_browser') }}:</span>
+                <span>{{ taskForm.localBrowser === 'chrome' ? 'Chrome' : taskForm.localBrowser === 'firefox' ? 'Firefox' : '' }}</span>
+              </div>
             </div>
           </v-card-text>
         </v-card>
@@ -750,6 +780,7 @@ const taskForm = reactive({
   delay_between_requests: 2000,
   headless: true,
   aiSupportEnabled: false,
+  localBrowser: '' as string,
   account_id: undefined as number | undefined,
   proxy_config: undefined as any,
   scheduled_at: undefined as Date | undefined
@@ -764,6 +795,7 @@ const scheduleTask = ref(false)
 const keywordsInput = ref('')
 const scheduledTime = ref('')
 const useAccount = ref(false)
+const useLocalBrowser = ref(false)
 const selectedAccounts = ref<SocialAccountListData[]>([])
 const proxyValue = ref<Array<ProxyEntity>>([])
 const proxytableshow = ref(false)
@@ -781,6 +813,12 @@ const nextRunTime = ref('')
 const scheduleTypeOptions = [
   { title: 'One Time', value: 'one-time' },
   { title: 'Recurring', value: 'recurring' }
+]
+
+// Local browser options
+const LocalBrowerList = [
+  { title: 'Chrome', value: 'chrome' },
+  { title: 'Firefox', value: 'firefox' }
 ]
 
 // Cron presets
@@ -1003,7 +1041,15 @@ const loadTaskDetails = async () => {
       taskForm.delay_between_requests = data.task.delay_between_requests || 2000
       taskForm.headless = data.task.headless !== undefined ? data.task.headless : true
       taskForm.aiSupportEnabled = data.task.aiSupportEnabled ?? data.task.ai_support_enabled ?? false
+      taskForm.localBrowser = data.task.localBrowser ?? data.task.local_browser ?? ''
       taskForm.account_id = data.task.account_id || undefined
+
+      // Set local browser selection
+      if (data.task.localBrowser || data.task.local_browser) {
+        useLocalBrowser.value = true
+      } else {
+        useLocalBrowser.value = false
+      }
       
       // Set keywords
       if (data.task.keywords && data.task.keywords.length > 0) {
@@ -1112,6 +1158,13 @@ const createTask = async () => {
       taskData.account_id = selectedAccounts.value[0].id
     } else {
       taskData.account_id = undefined
+    }
+
+    // Set local browser if enabled
+    if (useLocalBrowser.value) {
+      taskData.localBrowser = taskForm.localBrowser
+    } else {
+      (taskData as any).localBrowser = undefined
     }
 
     // Proxy: persist list, or explicit null so DB clears (undefined is omitted by JSON.stringify)
