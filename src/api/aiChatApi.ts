@@ -229,7 +229,13 @@ export interface ContactExtractionResponse {
   phones: string[];
   address?: string;
   socialLinks?: string[];
+  /** Server may return snake_case depending on proxy/serializer */
+  social_links?: string[];
   confidence?: number;
+  businessName?: string;
+  business_name?: string;
+  website?: string;
+  description?: string;
 }
 
 /** Response from screenshot upload (POST /api/ai/scrape/screenshot/upload) */

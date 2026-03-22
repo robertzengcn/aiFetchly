@@ -135,20 +135,6 @@ export async function generateAIEmailTemplate(
       content: string;
       fullContent: string;
     }): void => {
-      fetch(
-        "http://127.0.0.1:7244/ingest/610c95fc-086a-4479-b1bf-7defc981a30f",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            location: "emailmarketing.ts:handleChunk",
-            message: "received chunk",
-            data: { hasContent: !!chunkData?.content },
-            timestamp: Date.now(),
-            hypothesisId: "E",
-          }),
-        }
-      ).catch(() => {});
       onChunk?.(chunkData);
     };
 
@@ -157,20 +143,6 @@ export async function generateAIEmailTemplate(
       status: boolean;
       data: AIEmailTemplateResponse;
     }): void => {
-      fetch(
-        "http://127.0.0.1:7244/ingest/610c95fc-086a-4479-b1bf-7defc981a30f",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            location: "emailmarketing.ts:handleComplete",
-            message: "received complete",
-            data: { status: response?.status },
-            timestamp: Date.now(),
-            hypothesisId: "E",
-          }),
-        }
-      ).catch(() => {});
       onComplete?.(response);
       if (response.status && response.data) {
         resolve(response.data);
@@ -210,19 +182,6 @@ export async function generateAIEmailTemplate(
       window.api.receive(AI_EMAIL_TEMPLATE_ERROR, handleError);
     }
 
-    // #region agent log
-    fetch("http://127.0.0.1:7244/ingest/610c95fc-086a-4479-b1bf-7defc981a30f", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        location: "emailmarketing.ts:generateAIEmailTemplate:beforeSend",
-        message: "about to send IPC",
-        data: { hasWindowApi: !!(window as unknown as { api?: unknown }).api },
-        timestamp: Date.now(),
-        hypothesisId: "A,C",
-      }),
-    }).catch(() => {});
-    // #endregion
     try {
       window.api?.send(AI_EMAIL_TEMPLATE_GENERATE_STREAM, data);
     } catch (err) {

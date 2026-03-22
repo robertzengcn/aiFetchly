@@ -103,6 +103,9 @@ interface AiSupportResult {
     address?: string;
     socialLinks?: string[];
     confidence?: number;
+    businessName?: string;
+    website?: string;
+    description?: string;
     suggestedSelectors?: Record<string, string>;
     suggestedActions?: string[];
     shouldSkip?: boolean;
@@ -926,19 +929,28 @@ export class YellowPagesScraper {
         `Completed Yellow Pages scraping for task ${this.taskData.taskId}`
       );
     } catch (error) {
-      console.error(
-        `Error in Yellow Pages scraping for task ${this.taskData.taskId}:`,
-        error
-      );
-
-      // Call error callback
-      if (this.onErrorCallback) {
-        this.onErrorCallback(
-          error instanceof Error ? error : new Error(String(error))
+      const base =
+        error instanceof Error ? error : new Error(String(error));
+      let toReport = base;
+      if (
+        base.message.includes("ERR_TUNNEL_CONNECTION_FAILED") ||
+        base.message.includes("TUNNEL_CONNECTION_FAILED")
+      ) {
+        toReport = new Error(
+          `${base.message} — Proxy HTTPS tunnel failed; check host, port, protocol (http vs socks), and credentials.`
         );
       }
+      // One line to stderr (avoid logging the Error object twice — stacks look "uncaught")
+      console.error(
+        `Error in Yellow Pages scraping for task ${this.taskData.taskId}: ${toReport.message}`
+      );
 
-      throw error;
+      if (this.onErrorCallback) {
+        this.onErrorCallback(toReport);
+      }
+      // Do not rethrow: onErrorCallback already notifies the main process; rethrowing
+      // duplicated ERROR IPC and stderr noise from the parentPort handler.
+      return;
     } finally {
       await this.cleanup();
     }
@@ -1249,9 +1261,14 @@ export class YellowPagesScraper {
                   businessData.business_name
                 );
                 // Convert BusinessData to ScrapingResult format
-                results = [
-                  this.convertBusinessDataToScrapingResult(businessData),
-                ];
+                let converted = this.convertBusinessDataToScrapingResult(
+                  businessData
+                );
+                converted = await this.enrichScrapingResultWithAiIfNeeded(
+                  converted,
+                  "adapter_extract_custom_search"
+                );
+                results = [converted];
               }
 
               // Add results to total
@@ -1410,11 +1427,14 @@ export class YellowPagesScraper {
                       if (this.adapter && hasCustomExtraction) {
                         const businessData =
                           await this.adapter.extractBusinessData(this.page!);
-                        results = [
-                          this.convertBusinessDataToScrapingResult(
-                            businessData
-                          ),
-                        ];
+                        let converted =
+                          this.convertBusinessDataToScrapingResult(businessData);
+                        converted =
+                          await this.enrichScrapingResultWithAiIfNeeded(
+                            converted,
+                            "adapter_extract_after_ai_search_recovery"
+                          );
+                        results = [converted];
                       } else {
                         results = await this.extractBusinessData();
                       }
@@ -1586,9 +1606,14 @@ export class YellowPagesScraper {
                 `📊 Adapter extracted business data:`,
                 businessData.business_name
               );
-              results = [
-                this.convertBusinessDataToScrapingResult(businessData),
-              ];
+              let converted = this.convertBusinessDataToScrapingResult(
+                businessData
+              );
+              converted = await this.enrichScrapingResultWithAiIfNeeded(
+                converted,
+                "adapter_extract_generic_nav_page1"
+              );
+              results = [converted];
             } catch (error) {
               if (this.aiSupportEnabled && this.page) {
                 try {
@@ -1642,9 +1667,14 @@ export class YellowPagesScraper {
                 `📊 Adapter extracted business data:`,
                 businessData.business_name
               );
-              results = [
-                this.convertBusinessDataToScrapingResult(businessData),
-              ];
+              let converted = this.convertBusinessDataToScrapingResult(
+                businessData
+              );
+              converted = await this.enrichScrapingResultWithAiIfNeeded(
+                converted,
+                "adapter_extract_generic_nav_pagination"
+              );
+              results = [converted];
             } catch (error) {
               if (this.aiSupportEnabled && this.page) {
                 try {
@@ -2565,15 +2595,23 @@ export class YellowPagesScraper {
                 result
               );
               if (enhancedResult) {
-                results.push(enhancedResult);
+                const enriched = await this.enrichScrapingResultWithAiIfNeeded(
+                  enhancedResult,
+                  "generic_extract_after_detail"
+                );
+                results.push(enriched);
                 console.log(
-                  `✅ Enhanced data extracted for item ${itemNumber}: ${enhancedResult.business_name}`
+                  `✅ Enhanced data extracted for item ${itemNumber}: ${enriched.business_name}`
                 );
               } else {
                 console.log(
                   `⚠️ No enhanced data for item ${itemNumber}, using basic result`
                 );
-                results.push(result);
+                const enriched = await this.enrichScrapingResultWithAiIfNeeded(
+                  result,
+                  "generic_extract_detail_nav_failed"
+                );
+                results.push(enriched);
               }
 
               // After returning from detail page, re-query all elements to handle page re-render
@@ -2604,9 +2642,13 @@ export class YellowPagesScraper {
                 }
               }
             } else {
-              results.push(result);
+              const enriched = await this.enrichScrapingResultWithAiIfNeeded(
+                result,
+                "generic_extract_list_only"
+              );
+              results.push(enriched);
               console.log(
-                `✅ Basic data extracted for item ${itemNumber}: ${result.business_name}`
+                `✅ Basic data extracted for item ${itemNumber}: ${enriched.business_name}`
               );
             }
           } else {
@@ -6066,6 +6108,106 @@ export class YellowPagesScraper {
   }
 
   /**
+   * True when adapter/generic extraction likely missed name or both email and phone.
+   */
+  private needsAiBusinessEnrichment(r: ScrapingResult): boolean {
+    if (!r.business_name?.trim()) {
+      return true;
+    }
+    const hasEmail = Boolean(r.email?.trim());
+    const hasPhone = Boolean(r.phone?.trim());
+    if (!hasEmail && !hasPhone) {
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Merge LLM-extracted fields into an existing result (fill gaps only).
+   */
+  private mergeAiExtractIntoScrapingResult(
+    base: ScrapingResult,
+    ai: NonNullable<AiSupportResult["data"]>
+  ): ScrapingResult {
+    const out: ScrapingResult = { ...base };
+    const aiName = ai.businessName?.trim();
+    if (aiName && !out.business_name?.trim()) {
+      out.business_name = aiName;
+    }
+    if (!out.email?.trim() && ai.emails?.[0]) {
+      out.email = ai.emails[0];
+    }
+    if (!out.phone?.trim() && ai.phones?.[0]) {
+      out.phone = ai.phones[0];
+    }
+    const aiWebsite = ai.website?.trim();
+    if (!out.website?.trim() && aiWebsite) {
+      if (this.isValidWebsiteUrl(aiWebsite)) {
+        out.website = aiWebsite;
+      } else if (aiWebsite.toLowerCase().startsWith("www.")) {
+        out.website = `https://${aiWebsite}`;
+      }
+    }
+    if (!out.description?.trim() && ai.description?.trim()) {
+      out.description = ai.description.trim();
+    }
+    const hasAddr =
+      Boolean(out.address?.street?.trim()) ||
+      Boolean(out.address?.city?.trim());
+    if (!hasAddr && ai.address?.trim()) {
+      out.address = {
+        ...out.address,
+        street: ai.address.trim(),
+      };
+    }
+    if (
+      (!out.social_media || out.social_media.length === 0) &&
+      ai.socialLinks &&
+      ai.socialLinks.length > 0
+    ) {
+      out.social_media = [...ai.socialLinks];
+    }
+    return out;
+  }
+
+  /**
+   * When AI support is on and the listing lacks a name or both email and phone,
+   * ask the server to extract business/contact fields from the current page HTML.
+   */
+  private async enrichScrapingResultWithAiIfNeeded(
+    result: ScrapingResult,
+    stepContext: string,
+    errorInfo?: string
+  ): Promise<ScrapingResult> {
+    if (!this.aiSupportEnabled || !this.needsAiBusinessEnrichment(result)) {
+      return result;
+    }
+    if (!this.page) {
+      return result;
+    }
+    try {
+      const aiExtract = await this.requestAiSupport({
+        requestType: "contact_extraction",
+        pageUrl: this.page.url(),
+        businessName: result.business_name,
+        stepContext,
+        errorInfo:
+          errorInfo ??
+          "Structured extraction returned incomplete business or contact fields; extract from page HTML.",
+      });
+      if (aiExtract.success && aiExtract.data) {
+        console.log(
+          "🤖 AI enriched listing from page HTML (missing name or email/phone)"
+        );
+        return this.mergeAiExtractIntoScrapingResult(result, aiExtract.data);
+      }
+    } catch (err: unknown) {
+      console.warn("🤖 AI HTML enrichment failed:", err);
+    }
+    return result;
+  }
+
+  /**
    * Convert BusinessData to ScrapingResult
    */
   private convertBusinessDataToScrapingResult(
@@ -6110,11 +6252,20 @@ export class YellowPagesScraper {
     aiData: NonNullable<AiSupportResult["data"]>,
     businessName = "Unknown"
   ): ScrapingResult {
+    const resolvedName =
+      aiData.businessName?.trim() || businessName;
+    const w = aiData.website?.trim();
+    const website =
+      w && this.isValidWebsiteUrl(w)
+        ? w
+        : w && w.toLowerCase().startsWith("www.")
+        ? `https://${w}`
+        : undefined;
     const result: ScrapingResult = {
-      business_name: businessName,
+      business_name: resolvedName,
       email: aiData.emails?.[0] || undefined,
       phone: aiData.phones?.[0] || undefined,
-      website: undefined,
+      website,
       address: aiData.address
         ? {
             street: aiData.address,
@@ -6125,6 +6276,7 @@ export class YellowPagesScraper {
           }
         : undefined,
       social_media: aiData.socialLinks || undefined,
+      description: aiData.description?.trim() || undefined,
     };
     return result;
   }

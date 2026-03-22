@@ -78,47 +78,11 @@ export function registerAIEmailTemplateHandlers(): void {
   // Streaming generation handler
   ipcMain.on(AI_EMAIL_TEMPLATE_GENERATE_STREAM, async (...args: unknown[]) => {
     const [event, requestData] = args as [IpcMainEvent, AIEmailTemplateRequest];
-    // #region agent log
-    fetch("http://127.0.0.1:7244/ingest/610c95fc-086a-4479-b1bf-7defc981a30f", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        location: "ai-email-template-ipc.ts:handler:entry",
-        message: "IPC handler invoked",
-        data: {
-          hasRequestData: !!requestData,
-          promptLen: requestData?.prompt?.length,
-        },
-        timestamp: Date.now(),
-        hypothesisId: "C,D",
-      }),
-    }).catch(() => {});
-    // #endregion
     //console.log("AI Email Template Request Data:", requestData);
     try {
       // 1. Check AI enable (MANDATORY - first check)
       const tokenService = new Token();
       const aiEnabled = tokenService.getValue(USER_AI_ENABLED);
-      // #region agent log
-      fetch(
-        "http://127.0.0.1:7244/ingest/610c95fc-086a-4479-b1bf-7defc981a30f",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            location: "ai-email-template-ipc.ts:afterAiCheck",
-            message: "AI check",
-            data: {
-              aiEnabled: String(aiEnabled),
-              willReturnEarly:
-                !aiEnabled || aiEnabled === "false" || aiEnabled === "0",
-            },
-            timestamp: Date.now(),
-            hypothesisId: "E",
-          }),
-        }
-      ).catch(() => {});
-      // #endregion
       if (!aiEnabled || aiEnabled === "false" || aiEnabled === "0") {
         event.sender.send(AI_EMAIL_TEMPLATE_ERROR, {
           type: "error",
@@ -131,22 +95,6 @@ export function registerAIEmailTemplateHandlers(): void {
 
       // 2. Validate request
       const validation = validateAIRequest(requestData);
-      // #region agent log
-      fetch(
-        "http://127.0.0.1:7244/ingest/610c95fc-086a-4479-b1bf-7defc981a30f",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            location: "ai-email-template-ipc.ts:afterValidation",
-            message: "validation result",
-            data: { isValid: validation.isValid, errors: validation.errors },
-            timestamp: Date.now(),
-            hypothesisId: "E",
-          }),
-        }
-      ).catch(() => {});
-      // #endregion
       if (!validation.isValid) {
         event.sender.send(AI_EMAIL_TEMPLATE_ERROR, {
           type: "error",

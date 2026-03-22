@@ -356,6 +356,9 @@ export interface AiExtractedContactData {
   address?: string;
   socialLinks?: string[];
   confidence?: number;
+  businessName?: string;
+  website?: string;
+  description?: string;
 }
 
 /**
