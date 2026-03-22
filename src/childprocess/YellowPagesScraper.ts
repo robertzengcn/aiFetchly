@@ -585,6 +585,28 @@ export class YellowPagesScraper {
       this.aiRequestCounter
     }-${Date.now()}`;
 
+    // Sanitize previousActionResults to avoid oversized payloads:
+    // - Drop per-action screenshots (screenshot_after) which are not used by the backend LLM
+    // - Optionally cap the number of previous actions sent
+    let sanitizedPrevious: typeof params.previousActionResults | undefined;
+    if (
+      params.requestType === "observe_execute" &&
+      params.previousActionResults &&
+      Array.isArray(params.previousActionResults)
+    ) {
+      const MAX_PREVIOUS_ACTIONS = 5;
+      const tail = params.previousActionResults.slice(-MAX_PREVIOUS_ACTIONS);
+      sanitizedPrevious = tail.map((r) => ({
+        action_id: r.action_id,
+        success: r.success,
+        error: r.error,
+        element_found: r.element_found,
+        // Intentionally omit screenshot_after to keep request body small.
+      }));
+    } else {
+      sanitizedPrevious = params.previousActionResults;
+    }
+
     const requestMessage: AiSupportRequestMessage = {
       type: "AI_SUPPORT_REQUEST",
       taskId: this.taskData.taskId,
@@ -600,7 +622,7 @@ export class YellowPagesScraper {
       selectorsTried: params.selectorsTried,
       goal: params.goal,
       sessionId: params.sessionId,
-      previousActionResults: params.previousActionResults,
+      previousActionResults: sanitizedPrevious,
       iteration: params.iteration,
       selectorsAvailable: params.selectorsAvailable,
       maxIterations: params.maxIterations,
@@ -2285,6 +2307,83 @@ export class YellowPagesScraper {
           console.warn(
             `Search button not found with selector: ${searchForm.searchButton}`
           );
+
+          // Try AI support if enabled before falling back to Enter key
+          if (this.aiSupportEnabled && this.page) {
+            try {
+              console.log(
+                "🤖 Requesting AI support for search button not found..."
+              );
+              const captured = await this.capturePageStateForAiSupport();
+              const buttonAiResult = await this.requestAiSupport({
+                requestType: "step_guidance",
+                pageUrl: this.page.url(),
+                stepContext: "platform_searchButton_not_found",
+                errorInfo: `Platform searchButton selector '${searchForm.searchButton}' not found on page. Need alternative selector or action to submit search form.`,
+                selectorsTried: {
+                  searchButton: searchForm.searchButton,
+                  keywordInput: searchForm.keywordInput || "",
+                  locationInput: searchForm.locationInput || "",
+                },
+                pageContent: captured.pageContent,
+                screenshot: captured.screenshot,
+              });
+
+              if (buttonAiResult.success && buttonAiResult.data) {
+                const guidance = buttonAiResult.data;
+                if (guidance.suggestedSelectors?.searchButton) {
+                  console.log(
+                    "🤖 AI provided alternative searchButton selector"
+                  );
+                  const altBtn = await this.page.$(
+                    guidance.suggestedSelectors.searchButton
+                  );
+                  if (altBtn) {
+                    // Log action for AI training
+                    if (this.sessionManager.getRecordingStatus() && this.page) {
+                      const currentState =
+                        await this.sessionManager.capturePageState(this.page);
+                      this.sessionManager.logAction(
+                        currentState,
+                        `click('${guidance.suggestedSelectors.searchButton}')`
+                      );
+                    }
+                    await altBtn.click();
+                    console.log(
+                      "✅ Alternative searchButton clicked successfully"
+                    );
+                    return; // Success, exit early
+                  } else {
+                    console.warn(
+                      "⚠️ Alternative searchButton selector also not found"
+                    );
+                  }
+                } else if (guidance.actions?.length) {
+                  console.log(
+                    "🤖 AI provided suggested actions to submit search"
+                  );
+                  // Execute suggested actions
+                  for (const action of guidance.actions) {
+                    const result = await this.executeAction(action);
+                    if (!result.success) {
+                      console.warn(
+                        `⚠️ AI suggested action failed: ${
+                          action.description || action.type
+                        }`
+                      );
+                    }
+                  }
+                  // If any action succeeded, return
+                  return;
+                }
+              }
+            } catch (buttonAiErr) {
+              console.warn(
+                "🤖 AI support for searchButton not found failed:",
+                buttonAiErr
+              );
+            }
+          }
 
           // Log action for AI training (fallback)
           if (this.sessionManager.getRecordingStatus() && this.page) {
@@ -5538,6 +5637,52 @@ export class YellowPagesScraper {
   }
 
   /**
+   * Try to get past robot verification using the observe-execute AI loop.
+   * @returns true if robot verification no longer detected after AI actions, false otherwise
+   */
+  private async attemptAiRobotVerificationBypass(): Promise<boolean> {
+    if (!this.page || !this.aiSupportEnabled) return false;
+
+    const pageUrl = this.page.url();
+    const goal =
+      "Pass the robot verification challenge and return to normal searchable page state. If a slider is present, drag the slider handle left-to-right to complete verification. Otherwise use safe actions: wait for challenge render, click visible verification/send button once, then wait for page to load.";
+
+    console.log(
+      "🤖 Attempting AI robot verification bypass via observe-execute..."
+    );
+    const result = await this.observeExecuteLoop({
+      goal,
+      pageUrl,
+      maxIterations: 5,
+      goalContext: "robot_verification",
+    });
+
+    if (!result.success || !result.data) {
+      console.log("🤖 AI robot verification bypass failed or returned no data");
+      return false;
+    }
+    if (result.data.status !== "goal_achieved") {
+      console.log(
+        `🤖 AI robot verification bypass did not achieve goal (status=${result.data.status})`
+      );
+      return false;
+    }
+
+    const stillBlocked = await this.detectRobotVerification();
+    if (stillBlocked) {
+      console.log(
+        "🤖 AI reported goal_achieved but robot verification is still detected locally; treat bypass as failed."
+      );
+      return false;
+    } else {
+      console.log(
+        "✅ AI robot verification bypass succeeded – challenge no longer detected"
+      );
+    }
+    return true;
+  }
+
+  /**
    * Handle robot verification detection and notify parent process
    */
   private async handleRobotVerificationDetection(): Promise<void> {
@@ -5546,6 +5691,19 @@ export class YellowPagesScraper {
     try {
       const isRobotVerification = await this.detectRobotVerification();
       if (isRobotVerification) {
+        if (this.aiSupportEnabled) {
+          console.log(
+            "🤖 Robot verification detected. Attempting AI support to pass verification..."
+          );
+          const bypassOk = await this.attemptAiRobotVerificationBypass();
+          if (bypassOk) {
+            console.log(
+              "✅ Robot verification appears resolved with AI support; continuing scraping."
+            );
+            return;
+          }
+        }
+
         console.log(
           "🤖 Robot verification challenge detected! Notifying parent process..."
         );
@@ -5970,10 +6128,133 @@ export class YellowPagesScraper {
           console.log("Submitted search form");
         }
       } else {
-        // Try pressing Enter key with human-like timing
+        console.warn(
+          "⚠️ No submit button found with any of the common selectors"
+        );
+
+        // Try AI support if enabled before falling back to Enter key
+        if (this.aiSupportEnabled && this.page) {
+          try {
+            console.log(
+              "🤖 Requesting AI support for submit button not found..."
+            );
+            const captured = await this.capturePageStateForAiSupport();
+            const buttonAiResult = await this.requestAiSupport({
+              requestType: "step_guidance",
+              pageUrl: this.page.url(),
+              stepContext: "submit_searchForm_button_not_found",
+              errorInfo: `No submit button found using common selectors: ${submitSelectors.join(
+                ", "
+              )}. Need alternative selector or action to submit the search form.`,
+              selectorsTried: {
+                submitSelectors: submitSelectors.join(", "),
+              },
+              pageContent: captured.pageContent,
+              screenshot: captured.screenshot,
+            });
+
+            if (buttonAiResult.success && buttonAiResult.data) {
+              const guidance = buttonAiResult.data;
+              if (guidance.suggestedSelectors?.searchButton) {
+                console.log(
+                  "🤖 AI provided alternative submit button selector"
+                );
+                const altBtn = await this.page.$(
+                  guidance.suggestedSelectors.searchButton
+                );
+                if (altBtn) {
+                  await this.humanLikeClick(
+                    this.page,
+                    guidance.suggestedSelectors.searchButton
+                  );
+                  console.log(
+                    "✅ Alternative submit button clicked successfully"
+                  );
+
+                  // Wait for navigation
+                  await this.page.waitForNavigation({
+                    waitUntil: "networkidle2",
+                    timeout: 15000,
+                  });
+
+                  // Check for Cloudflare protection after form submission
+                  await this.handleCloudflareDetection();
+                  return; // Success, exit early
+                } else {
+                  console.warn(
+                    "⚠️ Alternative submit button selector also not found"
+                  );
+                }
+              } else if (guidance.actions?.length) {
+                console.log(
+                  "🤖 AI provided suggested actions to submit search"
+                );
+                // Execute suggested actions
+                for (const action of guidance.actions) {
+                  const result = await this.executeAction(action);
+                  if (!result.success) {
+                    console.warn(
+                      `⚠️ AI suggested action failed: ${
+                        action.description || action.type
+                      }`
+                    );
+                  }
+                }
+
+                // Wait for navigation
+                await this.page.waitForNavigation({
+                  waitUntil: "networkidle2",
+                  timeout: 15000,
+                });
+
+                // Check for Cloudflare protection after form submission
+                await this.handleCloudflareDetection();
+                return; // Success, exit early
+              } else if (guidance.suggestedActions?.length) {
+                // Try observe-execute as last resort
+                console.log(
+                  "🤖 AI suggested observe-execute to submit search form"
+                );
+                const observeResult = await this.observeExecuteLoop({
+                  goal: "Click the submit/search button to submit the search form",
+                  pageUrl: this.page.url(),
+                  selectorsAvailable: {
+                    commonSelectors: submitSelectors.join(", "),
+                  },
+                  goalContext:
+                    "Search form is filled with keyword and location, need to submit the form",
+                  maxIterations: 3,
+                });
+
+                if (observeResult.success) {
+                  // Wait for navigation
+                  await this.page.waitForNavigation({
+                    waitUntil: "networkidle2",
+                    timeout: 15000,
+                  });
+
+                  // Check for Cloudflare protection after form submission
+                  await this.handleCloudflareDetection();
+                  return; // Success, exit early
+                }
+
+                console.warn(
+                  "⚠️ Observe-execute also failed to submit search form"
+                );
+              }
+            }
+          } catch (buttonAiErr) {
+            console.warn(
+              "🤖 AI support for submit button not found failed:",
+              buttonAiErr
+            );
+          }
+        }
+
+        // Final fallback to Enter key
         await this.sleep(Math.random() * 200 + 100);
         await this.page.keyboard.press("Enter");
-        console.log("Submitted search form using Enter key");
+        console.log("Submitted search form using Enter key (final fallback)");
       }
 
       // Wait for navigation
