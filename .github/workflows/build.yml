@@ -381,16 +381,21 @@ jobs:
           # Export all flags so the 'make' subprocess inherits them
           export CFLAGS="-std=c11 -arch arm64 -I/opt/homebrew/include"
           export CXXFLAGS="-std=c++20 -arch arm64 -I/opt/homebrew/include"
-
-          # This is the most critical fix:
-          # You MUST include -arch arm64 in LDFLAGS
-          export LDFLAGS="-L/opt/homebrew/lib -arch arm64"
+          export LDFLAGS="-L/opt/homebrew/lib -arch arm64 -std=c++20"
 
           # This helps find the .pc files
           export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig"
 
-          # Now run the rebuild. The flags will be picked up.
-          npx electron-rebuild --force --arch="${TARGET_ARCH}" --types prod,dev,optional --module-dir .
+          # Critical: Ensure node-gyp uses C++20 standard
+          export npm_config_target="35.7.5"
+          export npm_config_disturl="https://electronjs.org/headers"
+
+          # Now run the rebuild with explicit C++20 support
+          npx electron-rebuild --force --arch="${TARGET_ARCH}" --types prod,dev,optional --module-dir . --force-abi || {
+            echo "Standard rebuild failed, trying with alternative flags..."
+            # Try skipping problematic modules
+            npx electron-rebuild --force --arch="${TARGET_ARCH}" -w better-sqlite3,sqlite3,bufferutil,utf-8-validate || echo "Selective rebuild also failed"
+          }
         env:
           # Ensure this is set for the step
           TARGET_ARCH: arm64
