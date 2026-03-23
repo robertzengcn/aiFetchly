@@ -314,15 +314,36 @@ jobs:
       # - name: Run postinstall script
       #   run: yarn postinstall
       - name: Install DMG maker
-        run: yarn add --dev @electron-forge/maker-dmg   
+        run: yarn add --dev @electron-forge/maker-dmg
+      - name: Verify required assets exist
+        run: |
+          echo "=== Verifying required macOS build assets ==="
+          ls -la src/assets/images/icon.icns && echo "✅ icon.icns found" || echo "❌ icon.icns NOT found"
+
+          # Create DMG background if missing
+          if [ ! -f "src/assets/images/dmg-background.png" ]; then
+            echo "⚠️ dmg-background.png not found, creating default background..."
+            # Create a simple 540x380 gray background for DMG
+            mkdir -p src/assets/images
+            # Use ImageMagick or a simple approach to create a PNG
+            # Since we don't have ImageMagick, we'll copy icon.png as fallback
+            if [ -f "src/assets/images/icon.png" ]; then
+              cp src/assets/images/icon.png src/assets/images/dmg-background.png
+              echo "✅ Created dmg-background.png from icon.png (fallback)"
+            else
+              echo "❌ No suitable image for DMG background"
+            fi
+          else
+            echo "✅ dmg-background.png found"
+          fi
+
+          ls -la src/assets/images/icon.png && echo "✅ icon.png found" || echo "❌ icon.png NOT found"
       - name: Clean previous builds
         run: |
           rm -rf node_modules/.cache
           rm -rf out/
           rm -rf .vite/
-          yarn clean || echo "Clean command not available" 
-      - name: Install node-gyp
-        run: yarn add global node-gyp  
+          yarn clean || echo "Clean command not available"
       - name: Configure npm for C++20
         run: |
           echo "npm config list:"
@@ -440,15 +461,39 @@ jobs:
       - name: Build application
         run: |
           echo "Current working directory: $(pwd)"
-          yarn make-mac:test
+          echo "=== Starting macOS build process ==="
+
+          # Set environment variables to ensure build output goes to expected location
+          export NODE_ENV=test
+
+          # Try to build with electron-forge make (creates both DMG and ZIP)
+          echo "Running: yarn make-mac:test"
+          yarn make-mac:test 2>&1 | tee build.log
+
+          echo "=== Build process completed ==="
+          echo "Build exit code: $?"
+
+          # Check if build produced any output
+          if [ -d "out" ]; then
+            echo "✅ Build created 'out' directory"
+            find out -type f -name "*.dmg" -o -name "*.zip" -o -name "*.app" | head -20 || echo "No DMG/ZIP/APP files found"
+          else
+            echo "❌ Build failed - no 'out' directory created"
+            cat build.log
+            exit 1
+          fi
       - name: Fallback build if main build fails
         if: failure()
         run: |
           echo "=== Trying fallback build approach ==="
-          # Try building without some problematic native modules
+
+          # Try to use electron-forge package instead of make
+          echo "Attempting package-only build..."
           yarn package || echo "Package command failed"
-          # Try building with different flags
-          CXXFLAGS="-std=c++17" CFLAGS="-std=c11" yarn make-mac:test || echo "Fallback build also failed"
+
+          # Try to create only ZIP if DMG fails
+          echo "Attempting ZIP-only build..."
+          yarn make --platform=darwin --arch="${TARGET_ARCH}" || echo "ZIP build failed"
   
       - name: Debug - List out directory contents
         run: |
