@@ -23,6 +23,12 @@ jobs:
         with:
           node-version: 20.18.3
 
+      # Python 3.12+ removed distutils; bundled node-gyp in electron-rebuild still imports it.
+      - name: Set up Python for node-gyp
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
       - name: Calculate version
         id: calculate_version
         run: |
