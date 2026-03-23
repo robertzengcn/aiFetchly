@@ -453,11 +453,23 @@ jobs:
       - name: Debug - List out directory contents
         run: |
           echo "=== Contents of out directory ==="
-          ls -la out/
+          if [ -d "out" ]; then
+            ls -la out/
+          else
+            echo "out/ directory does not exist (build may have failed)"
+          fi
           echo "=== Contents of out/make directory ==="
-          ls -la out/make/ || echo "out/make directory does not exist"
+          if [ -d "out/make" ]; then
+            ls -la out/make/
+          else
+            echo "out/make directory does not exist"
+          fi
           echo "=== Contents of out directory recursively ==="
-          find out/ -type f -name "*.dmg" -o -name "*.zip" -o -name "*.app" || echo "No DMG, ZIP, or APP files found"
+          if [ -d "out" ]; then
+            find out/ -type f \( -name "*.dmg" -o -name "*.zip" -o -name "*.app" \) || echo "No DMG, ZIP, or APP files found"
+          else
+            echo "out/ directory does not exist"
+          fi
   
       - name: Upload artifact
         uses: actions/upload-artifact@v4
