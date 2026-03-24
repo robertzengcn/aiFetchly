@@ -487,6 +487,16 @@ jobs:
           echo "=== Build process completed ==="
           echo "Build exit code: ${BUILD_EXIT_CODE}"
 
+          # If build failed, show the error from the log
+          if [ ${BUILD_EXIT_CODE} -ne 0 ]; then
+            echo "❌ Build command failed with exit code ${BUILD_EXIT_CODE}"
+            echo "=== Checking build log for errors ==="
+            grep -i "error\|fail\|cannot" build.log | tail -20 || echo "No obvious error messages found"
+            echo ""
+            echo "=== Last 100 lines of build log ==="
+            tail -100 build.log
+          fi
+
           # Check if build produced any output
           if [ -d "out" ]; then
             echo "✅ Build created 'out' directory"
@@ -509,14 +519,27 @@ jobs:
               if ! find out -type f \( -name "*.dmg" -o -name "*.zip" \) 2>/dev/null | grep -q .; then
                 echo ""
                 echo "⚠️ APP bundle found but no distributables (DMG/ZIP)"
-                echo "Attempting to run makers explicitly..."
+                echo "Checking build log for maker errors..."
+                echo "=== Last 50 lines of build log ==="
+                tail -50 build.log
 
-                # Try running makers directly
-                npx @electron-forge/maker-dmg --config forge.config.js || echo "DMG maker failed"
-                npx @electron-forge/maker-zip --config forge.config.js || echo "ZIP maker failed"
+                echo ""
+                echo "Attempting to run makers explicitly with --skip-package..."
+
+                # Try running makers using electron-forge make with --skip-package
+                # This skips packaging and only runs the makers
+                yarn electron-forge make --skip-package 2>&1 | tee -a build.log || echo "Makers failed again"
 
                 echo "=== After running makers explicitly ==="
                 find out -type f \( -name "*.dmg" -o -name "*.zip" \) 2>/dev/null || echo "Still no distributables"
+
+                # Last resort: Try to create DMG manually using hdiutil
+                if [ -d "out/aiFetchly-darwin-arm64/aiFetchly.app" ]; then
+                  echo ""
+                  echo "Last resort: Creating DMG manually using hdiutil..."
+                  mkdir -p out/make
+                  hdiutil create -volname "aiFetchly" -srcfolder "out/aiFetchly-darwin-arm64/aiFetchly.app" -ov -format UDZO "out/make/aiFetchly.dmg" || echo "Manual DMG creation failed"
+                fi
               fi
             fi
           else
@@ -547,34 +570,17 @@ jobs:
       - name: Verify electron-forge makers
         run: |
           echo "=== Checking available electron-forge makers ==="
-          yarn electron-forge make --help 2>&1 | head -20 || true
+          echo "Makers in node_modules:"
+          ls -la node_modules/@electron-forge/ | grep maker || echo "No makers found"
           echo ""
-          echo "=== Checking if maker packages are installed ==="
-          npm list @electron-forge/maker-dmg @electron-forge/maker-zip 2>&1 || echo "Some maker packages may not be installed"
+          echo "Checking if @electron-forge/maker-dmg is installed:"
+          npm list @electron-forge/maker-dmg 2>&1 || echo "Not installed"
           echo ""
-          echo "=== Node modules in @electron-forge ==="
-          ls -la node_modules/@electron-forge/ | grep maker || echo "No makers found in @electron-forge directory"
-
-      - name: Debug - List out directory contents
-        run: |
-          echo "=== Contents of out directory ==="
-          if [ -d "out" ]; then
-            ls -la out/
-          else
-            echo "out/ directory does not exist (build may have failed)"
-          fi
-          echo "=== Contents of out/make directory ==="
-          if [ -d "out/make" ]; then
-            ls -la out/make/
-          else
-            echo "out/make directory does not exist"
-          fi
-          echo "=== Contents of out directory recursively ==="
-          if [ -d "out" ]; then
-            find out/ -type f \( -name "*.dmg" -o -name "*.zip" -o -name "*.app" \) || echo "No DMG, ZIP, or APP files found"
-          else
-            echo "out/ directory does not exist"
-          fi
+          echo "Checking if @electron-forge/maker-zip is installed:"
+          npm list @electron-forge/maker-zip 2>&1 || echo "Not installed"
+          echo ""
+          echo " forge.config.js makers config:"
+          grep -A 30 "makers:" forge.config.js || echo "No makers config found"
 
       - name: Upload build log for debugging
         if: always()
