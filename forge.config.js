@@ -35,7 +35,7 @@ const EXTERNAL_DEPENDENCIES = [
   "@napi-rs/canvas",
   "reflect-metadata",
   "@mixmark-io/domino",
-  "electron-log/main"
+  "electron-log",
 ];
 //import { ForgeConfig } from '@electron-forge/shared-types';
 // import { AutoUnpackNativesPlugin } from "@electron-forge/plugin-auto-unpack-natives";
