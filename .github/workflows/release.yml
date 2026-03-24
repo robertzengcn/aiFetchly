@@ -195,7 +195,11 @@ jobs:
         run: CXXFLAGS="-std=c++20" CFLAGS="-std=c11" yarn rebuild-better-sqlite
 
       - name: Build application
-        run: yarn make-mac:test
+        run: |
+          # Increase Node.js heap size to prevent out-of-memory errors during build
+          export NODE_OPTIONS="--max-old-space-size=4096"
+          echo "Building with increased heap size (4GB)"
+          yarn make-mac:test
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
