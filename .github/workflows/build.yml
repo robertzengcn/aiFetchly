@@ -156,6 +156,9 @@ jobs:
       - name: Build application
         run: |
           echo "Current working directory: $(pwd)"
+          # Increase Node.js heap size to prevent out-of-memory errors during build
+          export NODE_OPTIONS="--max-old-space-size=4096"
+          echo "Building with increased heap size (4GB)"
           yarn make-win:test
         shell: bash
 
@@ -466,6 +469,13 @@ jobs:
           # Set environment variables to ensure build output goes to expected location
           export NODE_ENV=test
 
+          # Increase Node.js heap size to prevent out-of-memory errors during build
+          # The renderer build (Vite + Vue) requires significant memory
+          export NODE_OPTIONS="--max-old-space-size=4096"
+
+          echo "Node.js heap size set to 4GB"
+          echo "NODE_OPTIONS: $NODE_OPTIONS"
+
           # Try to build with electron-forge make (creates both DMG and ZIP)
           echo "Running: yarn make-mac:test"
           yarn make-mac:test 2>&1 | tee build.log
@@ -486,6 +496,9 @@ jobs:
         if: failure()
         run: |
           echo "=== Trying fallback build approach ==="
+
+          # Increase Node.js heap size for fallback builds as well
+          export NODE_OPTIONS="--max-old-space-size=4096"
 
           # Try to use electron-forge package instead of make
           echo "Attempting package-only build..."
