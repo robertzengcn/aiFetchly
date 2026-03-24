@@ -182,12 +182,9 @@ module.exports = {
       config: {
         format: "ULFO",
         icon: "./src/assets/images/icon.icns",
-        // background is optional - will be skipped if file doesn't exist
-        background: require("fs").existsSync(
-          "./src/assets/images/dmg-background.png"
-        )
-          ? "./src/assets/images/dmg-background.png"
-          : undefined,
+        // Note: background image removed to prevent build failures
+        // If needed, create src/assets/images/dmg-background.png and uncomment below
+        // background: "./src/assets/images/dmg-background.png",
         contents: [
           {
             x: 130,
