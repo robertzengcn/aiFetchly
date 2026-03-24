@@ -185,18 +185,8 @@ module.exports = {
         // Note: background image removed to prevent build failures
         // If needed, create src/assets/images/dmg-background.png and uncomment below
         // background: "./src/assets/images/dmg-background.png",
-        contents: [
-          {
-            x: 130,
-            y: 220,
-          },
-          {
-            x: 410,
-            y: 220,
-            type: "link",
-            path: "/Applications",
-          },
-        ],
+        // contents array removed - using electron-forge defaults
+        // Defaults will place the app and a link to /Applications automatically
         window: {
           width: 540,
           height: 380,
