@@ -476,22 +476,58 @@ jobs:
           echo "Node.js heap size set to 4GB"
           echo "NODE_OPTIONS: $NODE_OPTIONS"
 
+          # Clean any previous build artifacts
+          rm -rf out/ || true
+
           # Try to build with electron-forge make (creates both DMG and ZIP)
           echo "Running: yarn make-mac:test"
           yarn make-mac:test 2>&1 | tee build.log
 
+          BUILD_EXIT_CODE=${PIPESTATUS[0]}
           echo "=== Build process completed ==="
-          echo "Build exit code: $?"
+          echo "Build exit code: ${BUILD_EXIT_CODE}"
 
           # Check if build produced any output
           if [ -d "out" ]; then
             echo "✅ Build created 'out' directory"
-            find out -type f -name "*.dmg" -o -name "*.zip" -o -name "*.app" | head -20 || echo "No DMG/ZIP/APP files found"
+            echo "=== Contents of 'out' directory ==="
+            ls -laR out/ | head -100 || true
+            echo ""
+            echo "=== Searching for all build artifacts ==="
+            find out -type f 2>/dev/null | head -50 || echo "No files found"
+            echo ""
+            echo "=== Checking for specific file types ==="
+            echo "DMG files:"
+            find out -type f -name "*.dmg" 2>/dev/null || echo "  No DMG files found"
+            echo "ZIP files:"
+            find out -type f -name "*.zip" 2>/dev/null || echo "  No ZIP files found"
+            echo "APP bundles:"
+            find out -type d -name "*.app" 2>/dev/null || echo "  No APP bundles found"
+
+            # If no DMG/ZIP but APP exists, try to run makers explicitly
+            if find out -type d -name "*.app" 2>/dev/null | grep -q .; then
+              if ! find out -type f \( -name "*.dmg" -o -name "*.zip" \) 2>/dev/null | grep -q .; then
+                echo ""
+                echo "⚠️ APP bundle found but no distributables (DMG/ZIP)"
+                echo "Attempting to run makers explicitly..."
+
+                # Try running makers directly
+                npx @electron-forge/maker-dmg --config forge.config.js || echo "DMG maker failed"
+                npx @electron-forge/maker-zip --config forge.config.js || echo "ZIP maker failed"
+
+                echo "=== After running makers explicitly ==="
+                find out -type f \( -name "*.dmg" -o -name "*.zip" \) 2>/dev/null || echo "Still no distributables"
+              fi
+            fi
           else
             echo "❌ Build failed - no 'out' directory created"
-            cat build.log
+            echo "=== Last 100 lines of build log ==="
+            tail -100 build.log
             exit 1
           fi
+
+          # Exit with the actual build exit code
+          exit ${BUILD_EXIT_CODE}
       - name: Fallback build if main build fails
         if: failure()
         run: |
@@ -508,6 +544,17 @@ jobs:
           echo "Attempting ZIP-only build..."
           yarn make --platform=darwin --arch="${TARGET_ARCH}" || echo "ZIP build failed"
   
+      - name: Verify electron-forge makers
+        run: |
+          echo "=== Checking available electron-forge makers ==="
+          yarn electron-forge make --help 2>&1 | head -20 || true
+          echo ""
+          echo "=== Checking if maker packages are installed ==="
+          npm list @electron-forge/maker-dmg @electron-forge/maker-zip 2>&1 || echo "Some maker packages may not be installed"
+          echo ""
+          echo "=== Node modules in @electron-forge ==="
+          ls -la node_modules/@electron-forge/ | grep maker || echo "No makers found in @electron-forge directory"
+
       - name: Debug - List out directory contents
         run: |
           echo "=== Contents of out directory ==="
@@ -528,9 +575,19 @@ jobs:
           else
             echo "out/ directory does not exist"
           fi
-  
+
+      - name: Upload build log for debugging
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-build-log-v${{ steps.calculate_version.outputs.version }}
+          path: build.log
+          if-no-files-found: ignore
+
       - name: Upload artifact
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: electron-app-macos-v${{ steps.calculate_version.outputs.version }}
-          path: out/make
+          path: out/
+          if-no-files-found: error
