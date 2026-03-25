@@ -360,7 +360,7 @@ export default ({ mode }) => {
             sourcemap: true,
         },
         test: {
-            include: ['test/vitest/main/*.test.ts'],
+            include: ['test/vitest/main/**/*.test.ts'],
         }
     })
 }

@@ -209,7 +209,10 @@ export class YellowPagesProcessManager extends BaseModule {
         userDataPath: app.getPath("userData"),
       };
 
-      const parsedProxy = parseYellowPagesProxyConfigJson(task.proxy_config);
+      const parsedProxy = parseYellowPagesProxyConfigJson(
+        task.proxy_config,
+        taskId
+      );
       if (parsedProxy) {
         taskData.proxyConfig = parsedProxy;
         console.log(

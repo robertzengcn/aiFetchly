@@ -15,7 +15,6 @@ import { PagineGialleItAdapter } from "./PagineGialleItAdapter";
 import { YelpComAdapter } from "./YelpComAdapter";
 import { ITownPageAdapter } from "./ITownPageAdapter";
 import { USonarYellowPageAdapter } from "./USonarYellowPageAdapter";
-import { YellowPagesJpAdapter } from "./YellowPagesJpAdapter";
 
 /**
  * Factory class for creating platform adapters
@@ -76,9 +75,6 @@ export class PlatformAdapterFactory {
       case "USonarYellowPageAdapter":
         return new USonarYellowPageAdapter(platformConfig);
 
-      case "YellowPagesJpAdapter":
-        return new YellowPagesJpAdapter(platformConfig);
-
       default:
         throw new Error(
           `Unknown adapter class: ${className}. Available classes: ${PlatformAdapterFactory.getAvailableAdapters().join(
@@ -108,7 +104,6 @@ export class PlatformAdapterFactory {
       "PagineGialleItAdapter",
       "ITownPageAdapter",
       "USonarYellowPageAdapter",
-      "YellowPagesJpAdapter",
     ];
     return availableClasses.includes(className);
   }
@@ -132,7 +127,6 @@ export class PlatformAdapterFactory {
       "PagineGialleItAdapter",
       "ITownPageAdapter",
       "USonarYellowPageAdapter",
-      "YellowPagesJpAdapter",
     ];
   }
 
@@ -187,9 +181,6 @@ export class PlatformAdapterFactory {
 
       case "USonarYellowPageAdapter":
         return USonarYellowPageAdapter;
-
-      case "YellowPagesJpAdapter":
-        return YellowPagesJpAdapter;
 
       default:
         throw new Error(
