@@ -40,35 +40,46 @@ describe("USonarYellowPageAdapter", () => {
   });
 
   test("should have search form selectors defined", () => {
-    expect(adapter.config.selectors.searchForm.keywordInput).toBeTruthy();
-    expect(adapter.config.selectors.searchForm.locationInput).toBeTruthy();
-    expect(adapter.config.selectors.searchForm.searchButton).toBeTruthy();
+    expect(adapter.config.selectors!.searchForm).toBeTruthy();
+    const searchForm = adapter.config.selectors!.searchForm as {
+      keywordInput?: string;
+      locationInput?: string;
+      searchButton?: string;
+    };
+    expect(searchForm.keywordInput).toBeTruthy();
+    expect(searchForm.locationInput).toBeTruthy();
+    expect(searchForm.searchButton).toBeTruthy();
   });
 
   test("should have business data selectors defined", () => {
-    expect(adapter.config.selectors.businessList).toBeTruthy();
-    expect(adapter.config.selectors.businessItem).toBeTruthy();
-    expect(adapter.config.selectors.businessName).toBeTruthy();
-    expect(adapter.config.selectors.phone).toBeTruthy();
-    expect(adapter.config.selectors.website).toBeTruthy();
-    expect(adapter.config.selectors.address).toBeTruthy();
+    expect(adapter.config.selectors!.businessList).toBeTruthy();
+    expect(adapter.config.selectors!.businessItem).toBeTruthy();
+    expect(adapter.config.selectors!.businessName).toBeTruthy();
+    expect(adapter.config.selectors!.phone).toBeTruthy();
+    expect(adapter.config.selectors!.website).toBeTruthy();
+    expect(adapter.config.selectors!.address).toBeTruthy();
   });
 
   test("should have pagination selectors defined", () => {
-    expect(adapter.config.selectors.pagination.nextButton).toBeTruthy();
-    expect(adapter.config.selectors.pagination.currentPage).toBeTruthy();
+    expect(adapter.config.selectors!.pagination).toBeTruthy();
+    const pagination = adapter.config.selectors!.pagination as {
+      nextButton?: string;
+      currentPage?: string;
+    };
+    expect(pagination.nextButton).toBeTruthy();
+    expect(pagination.currentPage).toBeTruthy();
   });
 
   test("should support proxy", () => {
-    expect(adapter.config.settings.supportsProxy).toBe(true);
+    expect(adapter.config.settings!.supportsProxy).toBe(true);
   });
 
   test("should support cookies", () => {
-    expect(adapter.config.settings.supportsCookies).toBe(true);
+    expect(adapter.config.settings!.supportsCookies).toBe(true);
   });
 
   test("should not require authentication", () => {
-    expect(adapter.config.settings.requiresAuthentication).toBe(false);
+    expect(adapter.config.settings!.requiresAuthentication).toBe(false);
   });
 
   test("should handle page load with cookie consent", async () => {
@@ -91,34 +102,35 @@ describe("USonarYellowPageAdapter", () => {
   });
 
   test("should have correct platform metadata", () => {
-    expect(adapter.config.metadata.category).toBe("business-directory");
-    expect(adapter.config.metadata.tags).toContain("japan");
-    expect(adapter.config.metadata.tags).toContain("yellow-pages");
-    expect(adapter.config.metadata.tags).toContain("usonar");
+    expect(adapter.config.metadata!.category).toBe("business-directory");
+    expect(adapter.config.metadata!.tags).toContain("japan");
+    expect(adapter.config.metadata!.tags).toContain("yellow-pages");
+    expect(adapter.config.metadata!.tags).toContain("usonar");
   });
 
   test("should have search URL pattern configured", () => {
-    expect(
-      adapter.config.settings.searchUrlPattern
-    ).toContain("https://yellowpage.usonar.co.jp/search");
-    expect(adapter.config.settings.searchUrlPattern).toContain("{keywords}");
-    expect(adapter.config.settings.searchUrlPattern).toContain("{area}");
+    expect(adapter.config.settings!.searchUrlPattern).toContain(
+      "https://yellowpage.usonar.co.jp/search"
+    );
+    expect(adapter.config.settings!.searchUrlPattern).toContain("{keywords}");
+    expect(adapter.config.settings!.searchUrlPattern).toContain("{area}");
   });
 
   test("should have result URL pattern configured", () => {
-    expect(adapter.config.settings.resultUrlPattern).toContain(
+    expect(adapter.config.settings!.resultUrlPattern).toContain(
       "https://yellowpage.usonar.co.jp"
     );
-    expect(adapter.config.settings.resultUrlPattern).toContain("{path}");
+    expect(adapter.config.settings!.resultUrlPattern).toContain("{path}");
   });
 
   test("should use specific selectors for uSonar platform", () => {
     // uSonar uses 'keyword' and 'area' parameters
-    expect(adapter.config.selectors.searchForm.keywordInput).toContain(
-      'input[name="q"]'
-    );
-    expect(adapter.config.selectors.searchForm.locationInput).toContain(
-      'input[name="area"]'
-    );
+    expect(adapter.config.selectors!.searchForm).toBeTruthy();
+    const searchForm = adapter.config.selectors!.searchForm as {
+      keywordInput?: string;
+      locationInput?: string;
+    };
+    expect(searchForm.keywordInput).toContain('input[name="q"]');
+    expect(searchForm.locationInput).toContain('input[name="area"]');
   });
 });

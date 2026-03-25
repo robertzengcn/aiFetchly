@@ -36,7 +36,8 @@ function parseSingleProxyRecord(
  * for **launch** (first usable proxy). Supports legacy single-object rows and `{ proxies: [...] }`.
  */
 export function parseYellowPagesProxyConfigJson(
-  raw: string | undefined | null
+  raw: string | undefined | null,
+  sessionKey?: number
 ): YellowPagesTaskProxyConfig | undefined {
   if (!raw || typeof raw !== "string" || raw.trim() === "") {
     return undefined;
@@ -52,17 +53,21 @@ export function parseYellowPagesProxyConfigJson(
     }
     const o = j as Record<string, unknown>;
     if (Array.isArray(o.proxies) && o.proxies.length > 0) {
+      const parsedProxies: YellowPagesTaskProxyConfig[] = [];
       for (const item of o.proxies) {
         if (item && typeof item === "object") {
           const parsed = parseSingleProxyRecord(
             item as Record<string, unknown>
           );
-          if (parsed) {
-            return parsed;
-          }
+          if (parsed) parsedProxies.push(parsed);
         }
       }
-      return undefined;
+
+      if (parsedProxies.length === 0) return undefined;
+
+      const key = sessionKey ?? Date.now();
+      const idx = Math.abs(key) % parsedProxies.length;
+      return parsedProxies[idx];
     }
     return parseSingleProxyRecord(o);
   } catch {

@@ -781,10 +781,11 @@ export class YellowPagesScraper {
       },
       {
         requestAiSupport: async (req) => {
+          // runObserveExecuteLoop provides pageContent/screenshot placeholders;
+          // for YellowPagesScraper we want fresh capture from the current page.
+          const { pageContent: _pageContent, screenshot: _screenshot, ...rest } = req;
           const res = await this.requestAiSupport({
-            ...req,
-            pageContent: undefined as unknown as string,
-            screenshot: undefined,
+            ...rest,
           });
           return {
             success: res.success,
@@ -2198,6 +2199,10 @@ export class YellowPagesScraper {
   ): Promise<void> {
     if (!this.page || !this.platformInfo.selectors.searchForm) return;
 
+    let keywordFilled = false;
+    let locationFilled = false;
+    let aiRecoveryAttempted = false;
+
     try {
       const frame = this.page.mainFrame();
       const searchForm = this.platformInfo.selectors.searchForm;
@@ -2228,6 +2233,7 @@ export class YellowPagesScraper {
           // Clear field first
           await keywordField.click({ clickCount: 3 });
           await keywordField.type(keyword, { delay: 100 }); // Human-like typing
+          keywordFilled = true;
         } else {
           console.warn(
             `Keyword input field not found with selector: ${searchForm.keywordInput}`
@@ -2257,6 +2263,7 @@ export class YellowPagesScraper {
           // Clear field first
           await locationField.click({ clickCount: 3 });
           await locationField.type(location, { delay: 100 }); // Human-like typing
+          locationFilled = true;
         } else {
           console.warn(
             `Location input field not found with selector: ${searchForm.locationInput}`
@@ -2271,6 +2278,99 @@ export class YellowPagesScraper {
         "Error filling search form with platform selectors:",
         error
       );
+
+      // AI recovery: if filling inputs fails (e.g., element not clickable),
+      // try the observe-execute loop to recover by clicking/focusing and typing correctly.
+      if (this.aiSupportEnabled && this.page) {
+        try {
+          const searchForm = this.platformInfo.selectors.searchForm;
+          const selectorsAvailable: Record<string, string> = {};
+
+          if (searchForm.keywordInput) {
+            selectorsAvailable.keywordInput = searchForm.keywordInput;
+          }
+          if (searchForm.locationInput) {
+            selectorsAvailable.locationInput = searchForm.locationInput;
+          }
+
+          console.log(
+            "🤖 Requesting AI support for fillSearchFormWithPlatformSelectors error recovery..."
+          );
+          const observeResult = await this.observeExecuteLoop({
+            goal: "Fill the keyword and location fields for the search form so the scraper can submit it.",
+            pageUrl: this.page.url(),
+            selectorsAvailable,
+            maxIterations: YellowPagesScraper.ERROR_RECOVERY_MAX_ITERATIONS,
+            goalContext:
+              `The search form needs to be filled with these exact values:
+keyword="${keyword}"
+location="${location}"
+
+The initial attempt to fill using platform selectors failed with a click/type error. Recover by focusing/clicking the correct inputs and entering the provided keyword and location values.`,
+            stepContext: "platform_fill_searchForm_error_recovery",
+            errorInfo:
+              `${error instanceof Error ? error.message : String(error)}. keyword="${keyword}", location="${location}"`,
+          });
+
+          // Only stop fallback logic if observe-execute reports success.
+          if (observeResult.success) {
+            aiRecoveryAttempted = true;
+            return;
+          }
+        } catch (aiError: unknown) {
+          console.warn(
+            "🤖 AI recovery for fillSearchFormWithPlatformSelectors failed:",
+            aiError instanceof Error ? aiError.message : aiError
+          );
+        }
+      }
+    }
+
+    // If selectors existed but we didn't successfully type into one/both fields,
+    // recovery may be needed (some pages only log warnings and never throw).
+    if (this.aiSupportEnabled && this.page && !aiRecoveryAttempted) {
+      if (!keywordFilled || !locationFilled) {
+        try {
+          const searchForm = this.platformInfo.selectors.searchForm;
+          const selectorsAvailable: Record<string, string> = {};
+          if (searchForm.keywordInput) {
+            selectorsAvailable.keywordInput = searchForm.keywordInput;
+          }
+          if (searchForm.locationInput) {
+            selectorsAvailable.locationInput = searchForm.locationInput;
+          }
+
+          console.log(
+            "🤖 Requesting AI support for fillSearchFormWithPlatformSelectors missing-field recovery..."
+          );
+          await this.observeExecuteLoop({
+            goal: "Fill missing keyword and/or location fields and prepare the form for submission.",
+            pageUrl: this.page.url(),
+            selectorsAvailable,
+            maxIterations: YellowPagesScraper.ERROR_RECOVERY_MAX_ITERATIONS,
+            goalContext:
+              `The search form needs to be filled with:
+keyword="${keyword}"
+location="${location}"
+
+The initial deterministic filling did not succeed for ${
+                !keywordFilled && !locationFilled
+                  ? "both fields"
+                  : !keywordFilled
+                    ? "keyword field"
+                    : "location field"
+              }. Recover by focusing/clicking the correct inputs and typing the values.`,
+            stepContext: "platform_fill_searchForm_missing_field_recovery",
+            errorInfo:
+              `keywordFilled=${keywordFilled}, locationFilled=${locationFilled}`,
+          });
+        } catch (aiError: unknown) {
+          console.warn(
+            "🤖 AI recovery for fillSearchFormWithPlatformSelectors missing-field failed:",
+            aiError instanceof Error ? aiError.message : aiError
+          );
+        }
+      }
     }
   }
 
@@ -2445,6 +2545,52 @@ export class YellowPagesScraper {
         "Error submitting search form with platform selector:",
         error
       );
+
+      // AI recovery: attempt to submit the form when the platform selector path fails.
+      // This keeps the scraper resilient against minor DOM/selector changes.
+      if (this.aiSupportEnabled && this.page) {
+        try {
+          const searchForm = this.platformInfo.selectors.searchForm;
+          const selectorsAvailable: Record<string, string> = {};
+
+          if (searchForm?.searchButton) selectorsAvailable.searchButton = searchForm.searchButton;
+          if (searchForm?.keywordInput) selectorsAvailable.keywordInput = searchForm.keywordInput;
+          if (searchForm?.locationInput) selectorsAvailable.locationInput = searchForm.locationInput;
+
+          const observeResult = await this.observeExecuteLoop({
+            goal: "Submit the search form to load results (click the submit/search element or run the correct submit action).",
+            pageUrl: this.page.url(),
+            selectorsAvailable,
+            maxIterations: YellowPagesScraper.ERROR_RECOVERY_MAX_ITERATIONS,
+            goalContext:
+              "Search form is filled with keyword and location. The initial platform selector submission failed; recover by clicking the correct UI element.",
+            stepContext: "platform_submit_searchForm_error_recovery",
+            errorInfo:
+              error instanceof Error ? error.message : String(error),
+          });
+
+          if (observeResult.success) {
+            // Wait for navigation after AI execution, then re-run protections.
+            try {
+              await this.page.waitForNavigation({
+                waitUntil: "networkidle2",
+                timeout: 15000,
+              });
+            } catch {
+              // Non-fatal: navigation may already have occurred.
+            }
+
+            await this.handleCloudflareDetection();
+            await this.handleRobotVerificationDetection();
+            return;
+          }
+        } catch (aiError: unknown) {
+          console.warn(
+            "🤖 AI recovery for submitSearchFormWithPlatformSelector failed:",
+            aiError instanceof Error ? aiError.message : aiError
+          );
+        }
+      }
     }
   }
 

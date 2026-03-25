@@ -173,6 +173,18 @@ export class HttpClient {
     // Handle 403 Forbidden - Token expired
     if (res.status === 403) {
       console.warn("Received 403 Forbidden - Attempting token refresh");
+      const tokenModel = new Token();
+      const refreshToken = tokenModel.getValue(REFRESHTOKEN);
+
+      // Prevent refresh-on-403 recursion during signout.
+      // If the signout endpoint itself is protected and returns 403,
+      // attempting token refresh will lead to another signout attempt -> loop.
+      if (endpoint === "/api/user/signout") {
+        delete this._headers["Authorization"];
+        throw new Error(
+          "Authentication failed: token expired while signing out"
+        );
+      }
 
       // Worker processes cannot refresh tokens or access ElectronStoreService
       if (this._isWorker) {
@@ -182,8 +194,7 @@ export class HttpClient {
       }
 
       // Check if refresh token exists
-      const tokenModel = new Token();
-      const refreshToken = tokenModel.getValue(REFRESHTOKEN);
+      // (tokenModel/refreshToken loaded for debug logging above)
 
       if (refreshToken && refreshToken.trim().length > 0) {
         // Try to refresh token and retry request
@@ -338,6 +349,15 @@ export class HttpClient {
     // Handle 403 Forbidden - Token expired
     if (res.status === 403) {
       console.warn("Received 403 Forbidden - Attempting token refresh");
+
+      // Prevent refresh-on-403 recursion during signout.
+      // postStream isn't used by removeRemoteToken today, but keep behavior consistent.
+      if (endpoint === "/api/user/signout") {
+        delete this._headers["Authorization"];
+        throw new Error(
+          "Authentication failed: token expired while signing out"
+        );
+      }
 
       // Worker processes cannot refresh tokens or access ElectronStoreService
       if (this._isWorker) {

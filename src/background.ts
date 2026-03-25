@@ -5,6 +5,8 @@ import { app, BrowserWindow, Menu, dialog } from "electron";
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const autoUpdater = require("electron").autoUpdater;
 // eslint-disable-next-line @typescript-eslint/no-var-requires
+const globalShortcut = require("electron").globalShortcut;
+// eslint-disable-next-line @typescript-eslint/no-var-requires
 const session = require("electron").session;
 // import { createProtocol } from 'vue-cli-plugin-electron-builder/lib'
 import installExtension, { VUEJS3_DEVTOOLS } from "electron-devtools-installer";
@@ -81,6 +83,40 @@ process.on("unhandledRejection", (reason) => {
 });
 
 let win: BrowserWindow | null;
+
+function registerMenuBarShortcuts(mainWindow: BrowserWindow): void {
+  if (process.platform === "darwin") {
+    return;
+  }
+
+  const setMenuBarHidden = (hidden: boolean): void => {
+    // When autoHideMenuBar is true, the menu can still be revealed by Alt.
+    // We additionally control visibility so it starts hidden by default.
+    (mainWindow as any).setAutoHideMenuBar(hidden);
+    (mainWindow as any).setMenuBarVisibility(!hidden);
+  };
+
+  // Default: hidden (callers may call this again later, it's idempotent)
+  setMenuBarHidden(true);
+
+  // Toggle menu bar visibility
+  globalShortcut.register("CommandOrControl+Shift+M", () => {
+    if ((mainWindow as any).isDestroyed()) {
+      return;
+    }
+    const currentlyVisible = (mainWindow as any).isMenuBarVisible();
+    setMenuBarHidden(currentlyVisible);
+  });
+
+  // Show menu bar (quick access)
+  globalShortcut.register("Alt+M", () => {
+    if ((mainWindow as any).isDestroyed()) {
+      return;
+    }
+    setMenuBarHidden(false);
+  });
+}
+
 function initialize() {
   // protocol.registerSchemesAsPrivileged([
 
@@ -224,11 +260,6 @@ function initialize() {
   }
 
   async function createWindow() {
-    let hiddenMenuBar = true;
-    if (isDevelopment) {
-      hiddenMenuBar = false;
-    }
-
     // Check if window already exists and is not destroyed
     if (win && !(win as any).isDestroyed()) {
       console.log("Window already exists and is valid, focusing...");
@@ -238,7 +269,8 @@ function initialize() {
 
     // Create the browser window.
     win = new BrowserWindow({
-      autoHideMenuBar: hiddenMenuBar,
+      // Hide by default on Windows/Linux. (macOS uses the system menu bar.)
+      autoHideMenuBar: process.platform !== "darwin",
       icon: path.join(__dirname, "/icon.png"),
       width: 800,
       height: 600,
@@ -257,6 +289,9 @@ function initialize() {
     });
 
     if (win) {
+      // Ensure menu bar is hidden by default + register shortcuts to show/toggle.
+      registerMenuBarShortcuts(win);
+
       console.log(
         "Window exist, prepare to register communication ipc handlers"
       );
@@ -603,6 +638,10 @@ function initialize() {
         }
       }
     }
+  });
+
+  (app as any).on("will-quit", () => {
+    globalShortcut.unregisterAll();
   });
 
   // Exit cleanly on request from parent process in development mode.

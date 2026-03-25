@@ -25,17 +25,17 @@ export const Platform_itownpage_jp: PlatformConfig = {
   max_concurrent_requests: 1,
   selectors: {
     searchForm: {
-      keywordInput: 'input[name="keyword"], input[type="search"]',
-      locationInput: 'input[name="address"], input[name="area"]',
-      searchButton: 'button[type="submit"], input[type="submit"]',
-      formContainer: "form",
+      keywordInput: '#form1 > div > div:nth-child(1) > div.c-search-area__selected.js-area-box > input',
+      locationInput: '#form1 > div > div:nth-child(2) > div.c-search-area__selected.js-genre-box > input',
+      searchButton: '#form1 > div > div.c-search-area__submit > button',
+      formContainer: "form1",
     },
     businessList:
-      '.search-result, .search-results, .result-list, ul.results, ol.results, [id*="result"]',
+      '#wrapper > main > div.l-archive-container',
     businessItem:
-      ".search-result-item, .result-item, .shop-card, li.result, li.shop, article.result",
-    businessName: "h2 a, h3 a, .shop-name a, .store-name a, .result-title a",
-    detailPageLink: "h2 a, h3 a, a[href]",
+      "article.c-archive-board",
+    businessName: "h2 a",
+    detailPageLink: "h2 a",
     phone: 'a[href^="tel:"], .tel, .phone, [class*="tel"]',
     website:
       'a[href^="http"]:not([href*="itp.ne.jp"]), a[target="_blank"], .website a',

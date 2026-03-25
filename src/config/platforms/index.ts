@@ -10,7 +10,6 @@ import { Platform_yelp_com } from "./yelp-com";
 import { Platform_yellowpages_com } from "./yellowpages-com";
 import { Platform_itownpage_jp } from "./itownpage-jp";
 import { Platform_usonar_yellowpage_jp } from "./usonar-yellowpage-jp";
-import { Platform_yellowpages_jp } from "./yellowpages-jp";
 // import { Platform_example } from './example-platform';
 // import { Platform_api_key_example } from './api-key-example';
 // import { Platform_oauth_example } from './oauth-example';
@@ -41,7 +40,6 @@ export const platforms: PlatformConfig[] = [
   Platform_yellowpages_com,
   Platform_itownpage_jp,
   Platform_usonar_yellowpage_jp,
-  Platform_yellowpages_jp,
   // Platform_example,
   // Platform_api_key_example,
   // Platform_oauth_example,
