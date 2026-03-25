@@ -9,6 +9,9 @@ export const Platform_itownpage_jp: PlatformConfig = {
   name: "iTownPage",
   display_name: "iTownPage (Japan)",
   base_url: "https://itp.ne.jp",
+  // URL Verification: https://itp.ne.jp is the official iTownPage Japan domain
+  // Note: iTownPage (also known as "itp") is a major Japanese business directory
+  // The site uses itp.ne.jp as the main domain (no www subdomain)
   country: "Japan",
   language: "ja",
   is_active: true,

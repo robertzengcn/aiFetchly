@@ -1,6 +1,7 @@
 // Export all platform adapters
 export { ExampleHybridAdapter } from "./ExampleHybridAdapter";
 export { ComAdapter192 } from "./192ComAdapter";
+export { JapaneseYellowPagesAdapter } from "./JapaneseYellowPagesAdapter";
 // export { YellComAdapter } from './YellComAdapter';
 export { YellowPagesComAdapter } from "./YellowPagesComAdapter";
 export { YelpComAdapter } from "./YelpComAdapter";

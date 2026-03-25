@@ -9,6 +9,10 @@ export const Platform_yellowpages_jp: PlatformConfig = {
   name: "YellowPages-JP",
   display_name: "YellowPages-JP (Japan)",
   base_url: "https://www.yellowpages-jp.com",
+  // URL Verification: https://www.yellowpages-jp.com is a Japanese yellow pages directory
+  // Note: This appears to be a generic or hypothetical Japanese yellow pages domain
+  // Actual URL should be verified before production use
+  // If this domain doesn't exist, please update with the correct domain
   country: "Japan",
   language: "ja",
   is_active: true,

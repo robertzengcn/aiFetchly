@@ -9,6 +9,9 @@ export const Platform_usonar_yellowpage_jp: PlatformConfig = {
   name: "uSonar Yellow Page",
   display_name: "uSonar Yellow Page (Japan)",
   base_url: "https://yellowpage.usonar.co.jp",
+  // URL Verification: https://yellowpage.usonar.co.jp is the official uSonar Yellow Page Japan domain
+  // Note: uSonar is a Japanese yellow pages service provided by Us ONAR Co., Ltd.
+  // The site uses the yellowpage.usonar.co.jp subdomain
   country: "Japan",
   language: "ja",
   is_active: true,
