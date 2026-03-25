@@ -1,155 +1,202 @@
-import { BasePlatformAdapter } from '@/modules/BasePlatformAdapter';
-import { IBasePlatformAdapter } from '@/modules/interface/IBasePlatformAdapter';
-import { PlatformConfig } from '@/modules/interface/IPlatformConfig';
-import { ExampleHybridAdapter } from './ExampleHybridAdapter';
-import { ComAdapter192 } from './192ComAdapter';
+import { BasePlatformAdapter } from "@/modules/BasePlatformAdapter";
+import { IBasePlatformAdapter } from "@/modules/interface/IBasePlatformAdapter";
+import { PlatformConfig } from "@/modules/interface/IPlatformConfig";
+import { ExampleHybridAdapter } from "./ExampleHybridAdapter";
+import { ComAdapter192 } from "./192ComAdapter";
 // import { YellComAdapter } from './YellComAdapter';
-import { YellowPagesComAdapter } from './YellowPagesComAdapter';
+import { YellowPagesComAdapter } from "./YellowPagesComAdapter";
 // import { YelpComAdapter } from './YelpComAdapter';
-import { YellowPagesCaAdapter } from './YellowPagesCaAdapter';
-import { ExampleClassBasedAdapter } from './ExampleClassBasedAdapter';
-import { Adapter11880 } from './11880Adapter';
-import { AdapterGelbeseiten } from './GelbeseitenAdapter';
-import { PagesJaunesAdapter } from './PagesJaunesAdapter';
-import { PagineGialleItAdapter } from './PagineGialleItAdapter';
-import { YelpComAdapter } from './YelpComAdapter';
+import { YellowPagesCaAdapter } from "./YellowPagesCaAdapter";
+import { ExampleClassBasedAdapter } from "./ExampleClassBasedAdapter";
+import { Adapter11880 } from "./11880Adapter";
+import { AdapterGelbeseiten } from "./GelbeseitenAdapter";
+import { PagesJaunesAdapter } from "./PagesJaunesAdapter";
+import { PagineGialleItAdapter } from "./PagineGialleItAdapter";
+import { YelpComAdapter } from "./YelpComAdapter";
+import { ITownPageAdapter } from "./ITownPageAdapter";
+import { USonarYellowPageAdapter } from "./USonarYellowPageAdapter";
+import { YellowPagesJpAdapter } from "./YellowPagesJpAdapter";
 
 /**
  * Factory class for creating platform adapters
  * This avoids dynamic imports in child processes by using direct class references
  */
 export class PlatformAdapterFactory {
-    
-    /**
-     * Create an adapter instance by class name
-     * @param className The name of the adapter class
-     * @param platformConfig Platform configuration
-     * @returns Platform adapter instance
-     */
-    static createAdapter(className: string, platformConfig: PlatformConfig): BasePlatformAdapter {
-        switch (className) {
-            case 'ExampleHybridAdapter':
-                return new ExampleHybridAdapter(platformConfig) as unknown as BasePlatformAdapter;
-                
-            case 'ComAdapter192':
-                return new ComAdapter192(platformConfig);
-                
-            // case 'YellComAdapter':
-            //     return new YellComAdapter(platformConfig);
-                
-            case 'YellowPagesComAdapter':
-                return new YellowPagesComAdapter(platformConfig);
-                
-            case 'YelpComAdapter':
-                return new YelpComAdapter(platformConfig);
-                
-            case 'YellowPagesCaAdapter':
-                return new YellowPagesCaAdapter(platformConfig);
-                
-            case 'ExampleClassBasedAdapter':
-                return new ExampleClassBasedAdapter(platformConfig) as unknown as BasePlatformAdapter;
-                
-            case 'Adapter11880':
-                return new Adapter11880(platformConfig);
-                
-            case 'AdapterGelbeseiten':
-                return new AdapterGelbeseiten(platformConfig);
-                
-            case 'PagesJaunesAdapter':
-                return new PagesJaunesAdapter(platformConfig);
-                
-            case 'PagineGialleItAdapter':
-                return new PagineGialleItAdapter(platformConfig);
-                
-            default:
-                throw new Error(`Unknown adapter class: ${className}. Available classes: ${PlatformAdapterFactory.getAvailableAdapters().join(', ')}`);
-        }
+  /**
+   * Create an adapter instance by class name
+   * @param className The name of the adapter class
+   * @param platformConfig Platform configuration
+   * @returns Platform adapter instance
+   */
+  static createAdapter(
+    className: string,
+    platformConfig: PlatformConfig
+  ): BasePlatformAdapter {
+    switch (className) {
+      case "ExampleHybridAdapter":
+        return new ExampleHybridAdapter(
+          platformConfig
+        ) as unknown as BasePlatformAdapter;
+
+      case "ComAdapter192":
+        return new ComAdapter192(platformConfig);
+
+      // case 'YellComAdapter':
+      //     return new YellComAdapter(platformConfig);
+
+      case "YellowPagesComAdapter":
+        return new YellowPagesComAdapter(platformConfig);
+
+      case "YelpComAdapter":
+        return new YelpComAdapter(platformConfig);
+
+      case "YellowPagesCaAdapter":
+        return new YellowPagesCaAdapter(platformConfig);
+
+      case "ExampleClassBasedAdapter":
+        return new ExampleClassBasedAdapter(
+          platformConfig
+        ) as unknown as BasePlatformAdapter;
+
+      case "Adapter11880":
+        return new Adapter11880(platformConfig);
+
+      case "AdapterGelbeseiten":
+        return new AdapterGelbeseiten(platformConfig);
+
+      case "PagesJaunesAdapter":
+        return new PagesJaunesAdapter(platformConfig);
+
+      case "PagineGialleItAdapter":
+        return new PagineGialleItAdapter(platformConfig);
+
+      case "ITownPageAdapter":
+        return new ITownPageAdapter(platformConfig);
+
+      case "USonarYellowPageAdapter":
+        return new USonarYellowPageAdapter(platformConfig);
+
+      case "YellowPagesJpAdapter":
+        return new YellowPagesJpAdapter(platformConfig);
+
+      default:
+        throw new Error(
+          `Unknown adapter class: ${className}. Available classes: ${PlatformAdapterFactory.getAvailableAdapters().join(
+            ", "
+          )}`
+        );
     }
-    
-    /**
-     * Check if an adapter class is available
-     * @param className The name of the adapter class
-     * @returns True if the adapter class is available
-     */
-    static isAdapterAvailable(className: string): boolean {
-        const availableClasses = [
-            'ExampleHybridAdapter',
-            'ComAdapter192',
-            // 'YellComAdapter',
-            'YellowPagesComAdapter',
-            'YelpComAdapter',
-            'YellowPagesCaAdapter',
-            'ExampleClassBasedAdapter',
-            'Adapter11880',
-            'AdapterGelbeseiten',
-            'PagesJaunesAdapter',
-            'PagineGialleItAdapter'
-        ];
-        return availableClasses.includes(className);
+  }
+
+  /**
+   * Check if an adapter class is available
+   * @param className The name of the adapter class
+   * @returns True if the adapter class is available
+   */
+  static isAdapterAvailable(className: string): boolean {
+    const availableClasses = [
+      "ExampleHybridAdapter",
+      "ComAdapter192",
+      // 'YellComAdapter',
+      "YellowPagesComAdapter",
+      "YelpComAdapter",
+      "YellowPagesCaAdapter",
+      "ExampleClassBasedAdapter",
+      "Adapter11880",
+      "AdapterGelbeseiten",
+      "PagesJaunesAdapter",
+      "PagineGialleItAdapter",
+      "ITownPageAdapter",
+      "USonarYellowPageAdapter",
+      "YellowPagesJpAdapter",
+    ];
+    return availableClasses.includes(className);
+  }
+
+  /**
+   * Get all available adapter class names
+   * @returns Array of available adapter class names
+   */
+  static getAvailableAdapters(): string[] {
+    return [
+      "ExampleHybridAdapter",
+      "ComAdapter192",
+      // 'YellComAdapter',
+      "YellowPagesComAdapter",
+      "YelpComAdapter",
+      "YellowPagesCaAdapter",
+      "ExampleClassBasedAdapter",
+      "Adapter11880",
+      "AdapterGelbeseiten",
+      "PagesJaunesAdapter",
+      "PagineGialleItAdapter",
+      "ITownPageAdapter",
+      "USonarYellowPageAdapter",
+      "YellowPagesJpAdapter",
+    ];
+  }
+
+  /**
+   * Get adapter class constructor by name
+   * @param className The name of the adapter class
+   * @returns The adapter class constructor
+   */
+  static getAdapterClass(
+    className: string
+  ): new (config: PlatformConfig) => BasePlatformAdapter {
+    switch (className) {
+      case "ExampleHybridAdapter":
+        return ExampleHybridAdapter as unknown as new (
+          config: PlatformConfig
+        ) => BasePlatformAdapter;
+
+      case "ComAdapter192":
+        return ComAdapter192;
+
+      // case 'YellComAdapter':
+      //     return YellComAdapter;
+
+      case "YellowPagesComAdapter":
+        return YellowPagesComAdapter;
+
+      case "YelpComAdapter":
+        return YelpComAdapter;
+
+      case "YellowPagesCaAdapter":
+        return YellowPagesCaAdapter;
+
+      case "ExampleClassBasedAdapter":
+        return ExampleClassBasedAdapter as unknown as new (
+          config: PlatformConfig
+        ) => BasePlatformAdapter;
+
+      case "Adapter11880":
+        return Adapter11880;
+
+      case "AdapterGelbeseiten":
+        return AdapterGelbeseiten;
+
+      case "PagesJaunesAdapter":
+        return PagesJaunesAdapter;
+
+      case "PagineGialleItAdapter":
+        return PagineGialleItAdapter;
+
+      case "ITownPageAdapter":
+        return ITownPageAdapter;
+
+      case "USonarYellowPageAdapter":
+        return USonarYellowPageAdapter;
+
+      case "YellowPagesJpAdapter":
+        return YellowPagesJpAdapter;
+
+      default:
+        throw new Error(
+          `Unknown adapter class: ${className}. Available classes: ${PlatformAdapterFactory.getAvailableAdapters().join(
+            ", "
+          )}`
+        );
     }
-    
-    /**
-     * Get all available adapter class names
-     * @returns Array of available adapter class names
-     */
-    static getAvailableAdapters(): string[] {
-        return [
-            'ExampleHybridAdapter',
-            'ComAdapter192',
-            // 'YellComAdapter',
-            'YellowPagesComAdapter',
-            'YelpComAdapter',
-            'YellowPagesCaAdapter',
-            'ExampleClassBasedAdapter',
-            'Adapter11880',
-            'AdapterGelbeseiten',
-            'PagesJaunesAdapter',
-            'PagineGialleItAdapter'
-        ];
-    }
-    
-    /**
-     * Get adapter class constructor by name
-     * @param className The name of the adapter class
-     * @returns The adapter class constructor
-     */
-    static getAdapterClass(className: string): new (config: PlatformConfig) => BasePlatformAdapter {
-        switch (className) {
-            case 'ExampleHybridAdapter':
-                return ExampleHybridAdapter as unknown as new (config: PlatformConfig) => BasePlatformAdapter;
-                
-            case 'ComAdapter192':
-                return ComAdapter192;
-                
-            // case 'YellComAdapter':
-            //     return YellComAdapter;
-                
-            case 'YellowPagesComAdapter':
-                return YellowPagesComAdapter;
-                
-            case 'YelpComAdapter':
-                return YelpComAdapter;
-                
-            case 'YellowPagesCaAdapter':
-                return YellowPagesCaAdapter;
-                
-            case 'ExampleClassBasedAdapter':
-                return ExampleClassBasedAdapter as unknown as new (config: PlatformConfig) => BasePlatformAdapter;
-                
-            case 'Adapter11880':
-                return Adapter11880;
-                
-            case 'AdapterGelbeseiten':
-                return AdapterGelbeseiten;
-                
-            case 'PagesJaunesAdapter':
-                return PagesJaunesAdapter;
-                
-            case 'PagineGialleItAdapter':
-                return PagineGialleItAdapter;
-                
-            default:
-                throw new Error(`Unknown adapter class: ${className}. Available classes: ${PlatformAdapterFactory.getAvailableAdapters().join(', ')}`);
-        }
-    }
+  }
 }
