@@ -735,7 +735,10 @@ export class YellowPagesScraper {
    * @param selector - Selector string that may contain comma-separated selectors
    * @returns true if any selector was found, false otherwise
    */
-  private async hasAnySelectorOnPage(page: Page, selector: string): Promise<boolean> {
+  private async hasAnySelectorOnPage(
+    page: Page,
+    selector: string
+  ): Promise<boolean> {
     const selectors = this.splitSelectors(selector);
 
     for (const sel of selectors) {
@@ -753,6 +756,113 @@ export class YellowPagesScraper {
     }
 
     return false;
+  }
+
+  /**
+   * Try multiple selectors on an element and return the first matching element
+   * This handles comma-separated selectors like 'h2 a, h3 a, .title a'
+   *
+   * @param element - Puppeteer ElementHandle to query within
+   * @param selector - Selector string that may contain comma-separated selectors
+   * @returns First matching element or null
+   */
+  private async tryFindElementInElement(
+    element: any,
+    selector: string
+  ): Promise<any | null> {
+    if (!element) return null;
+
+    const selectors = this.splitSelectors(selector);
+
+    for (const sel of selectors) {
+      try {
+        const found = await element.$(sel);
+        if (found) {
+          console.log(`✅ Found element with selector: ${sel}`);
+          return found;
+        }
+      } catch {
+        // Invalid selector, continue to next
+        console.debug(`⚠️ Invalid selector: ${sel}`);
+        continue;
+      }
+    }
+
+    console.debug(`⚠️ No element found for selectors: ${selectors.join(", ")}`);
+    return null;
+  }
+
+  /**
+   * Try multiple selectors on an element and return all matching elements from the first successful selector
+   * This handles comma-separated selectors like 'div.result, .search-result'
+   *
+   * @param element - Puppeteer ElementHandle to query within
+   * @param selector - Selector string that may contain comma-separated selectors
+   * @returns Array of matching elements from the first successful selector
+   */
+  private async tryFindElementsInElement(
+    element: any,
+    selector: string
+  ): Promise<any[]> {
+    if (!element) return [];
+
+    const selectors = this.splitSelectors(selector);
+
+    for (const sel of selectors) {
+      try {
+        const elements = await element.$$(sel);
+        if (elements && elements.length > 0) {
+          console.log(
+            `✅ Found ${elements.length} elements with selector: ${sel}`
+          );
+          return elements;
+        }
+      } catch {
+        // Invalid selector, continue to next
+        console.debug(`⚠️ Invalid selector: ${sel}`);
+        continue;
+      }
+    }
+
+    console.debug(
+      `⚠️ No elements found for selectors: ${selectors.join(", ")}`
+    );
+    return [];
+  }
+
+  /**
+   * Try multiple selectors on page and return all matching ElementHandles from the first successful selector
+   * This handles comma-separated selectors like 'div.result, .search-result'
+   * Returns ElementHandle[] (Puppeteer handles) not Element[]
+   *
+   * @param selector - Selector string that may contain comma-separated selectors
+   * @returns Array of ElementHandle from the first successful selector
+   */
+  private async tryFindElementHandles(selector: string): Promise<any[]> {
+    if (!this.page) return [];
+
+    const selectors = this.splitSelectors(selector);
+
+    for (const sel of selectors) {
+      try {
+        const elements = await this.page.$$(sel);
+        if (elements && elements.length > 0) {
+          console.log(
+            `✅ Found ${elements.length} elements with selector: ${sel}`
+          );
+          return elements;
+        }
+      } catch {
+        // Invalid selector, continue to next
+        console.debug(`⚠️ Invalid selector: ${sel}`);
+        continue;
+      }
+    }
+
+    console.debug(
+      `⚠️ No elements found for selectors: ${selectors.join(", ")}`
+    );
+    return [];
   }
 
   /**
@@ -3056,8 +3166,10 @@ The initial deterministic filling did not succeed for ${
         );
       }
       console.log("selectors.businessItem", selectors.businessItem);
-      // Extract all business listings
-      const businessElements = await this.page.$$(selectors.businessItem);
+      // Extract all business listings using comma-separated selector support
+      const businessElements = await this.tryFindElementHandles(
+        selectors.businessItem
+      );
       console.log(`Found ${businessElements.length} business listings`);
 
       // Track processed businesses to prevent duplicates when platforms add more results to current page
@@ -3309,9 +3421,12 @@ The initial deterministic filling did not succeed for ${
     try {
       const identifierParts: string[] = [];
 
-      // Extract business name
+      // Extract business name using comma-separated selector support
       if (selectors.businessName) {
-        const name = await element.$(selectors.businessName);
+        const name = await this.tryFindElementInElement(
+          element,
+          selectors.businessName
+        );
         if (name) {
           const nameText = await name.evaluate(
             (el) => el.textContent?.trim() || ""
@@ -3325,7 +3440,10 @@ The initial deterministic filling did not succeed for ${
       // Extract phone number for identifier (basic extraction only)
       let phoneText: string | undefined = undefined;
       if (selectors.phone) {
-        const phone = await element.$(selectors.phone);
+        const phone = await this.tryFindElementInElement(
+          element,
+          selectors.phone
+        );
         if (phone) {
           phoneText = await phone.evaluate(
             (el) => el.textContent?.trim() || ""
@@ -3341,9 +3459,12 @@ The initial deterministic filling did not succeed for ${
         }
       }
 
-      // Extract address
+      // Extract address using comma-separated selector support
       if (selectors.address) {
-        const address = await element.$(selectors.address);
+        const address = await this.tryFindElementInElement(
+          element,
+          selectors.address
+        );
         if (address) {
           const addressText = await address.evaluate(
             (el) => el.textContent?.trim() || ""
@@ -3354,9 +3475,12 @@ The initial deterministic filling did not succeed for ${
         }
       }
 
-      // Extract website URL
+      // Extract website URL using comma-separated selector support
       if (selectors.website) {
-        const website = await element.$(selectors.website);
+        const website = await this.tryFindElementInElement(
+          element,
+          selectors.website
+        );
         if (website) {
           const websiteUrl = await website.evaluate(
             (el) => el.getAttribute("href") || ""
@@ -3740,11 +3864,16 @@ The initial deterministic filling did not succeed for ${
             });
 
             // Wait for new results to load
-            const found = await this.waitForAnySelector(selectors.businessList, {
-              timeout: 10000,
-            });
+            const found = await this.waitForAnySelector(
+              selectors.businessList,
+              {
+                timeout: 10000,
+              }
+            );
             if (!found) {
-              throw new Error(`Business list not found after pagination: ${selectors.businessList}`);
+              throw new Error(
+                `Business list not found after pagination: ${selectors.businessList}`
+              );
             }
 
             // Update captured search page URL after successful navigation
@@ -3826,8 +3955,11 @@ The initial deterministic filling did not succeed for ${
     if (!this.page || !selectors.navigation?.detailLink) return basicResult;
 
     try {
-      // Find the detail page link
-      const detailLink = await element.$(selectors.navigation.detailLink);
+      // Find the detail page link using comma-separated selector support
+      const detailLink = await this.tryFindElementInElement(
+        element,
+        selectors.navigation.detailLink
+      );
       console.log("detailLink2", detailLink);
       if (!detailLink) {
         console.log("Detail link not found, using basic result");
@@ -4417,11 +4549,17 @@ The initial deterministic filling did not succeed for ${
             );
 
             // Wait for search results to be ready
-            const found = await this.waitForAnySelectorOnPage(searchResultsPage, selectors.businessList, {
-              timeout: 10000,
-            });
+            const found = await this.waitForAnySelectorOnPage(
+              searchResultsPage,
+              selectors.businessList,
+              {
+                timeout: 10000,
+              }
+            );
             if (!found) {
-              throw new Error(`Business list not found on search results page: ${selectors.businessList}`);
+              throw new Error(
+                `Business list not found on search results page: ${selectors.businessList}`
+              );
             }
 
             // Update captured search page URL
@@ -4453,7 +4591,9 @@ The initial deterministic filling did not succeed for ${
           timeout: 10000,
         });
         if (!found) {
-          throw new Error(`Business list not found after back navigation: ${selectors.businessList}`);
+          throw new Error(
+            `Business list not found after back navigation: ${selectors.businessList}`
+          );
         }
 
         // Update captured search page URL
@@ -5357,7 +5497,7 @@ The initial deterministic filling did not succeed for ${
   }
 
   /**
-   * Extract text from element - handles page re-rendering
+   * Extract text from element - handles page re-rendering and comma-separated selectors
    */
   private async extractText(
     element: any,
@@ -5371,8 +5511,11 @@ The initial deterministic filling did not succeed for ${
     // Retry logic with fresh element queries
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        // Always get a fresh element reference to avoid stale DOM references
-        const textElement = await element.$(selector);
+        // Use tryFindElementInElement to handle comma-separated selectors
+        const textElement = await this.tryFindElementInElement(
+          element,
+          selector
+        );
         if (textElement) {
           // Immediately extract text without validation to avoid additional DOM queries
           const text = await textElement.evaluate((el) => {
@@ -5419,7 +5562,7 @@ The initial deterministic filling did not succeed for ${
   }
 
   /**
-   * Extract attribute from element - handles page re-rendering
+   * Extract attribute from element - handles page re-rendering and comma-separated selectors
    */
   private async extractAttribute(
     element: any,
@@ -5434,8 +5577,11 @@ The initial deterministic filling did not succeed for ${
     // Retry logic with fresh element queries
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        // Always get a fresh element reference to avoid stale DOM references
-        const attrElement = await element.$(selector);
+        // Use tryFindElementInElement to handle comma-separated selectors
+        const attrElement = await this.tryFindElementInElement(
+          element,
+          selector
+        );
         if (attrElement) {
           // Immediately extract attribute without validation to avoid additional DOM queries
           const attrValue = await attrElement.evaluate((el, attr) => {
@@ -5482,7 +5628,7 @@ The initial deterministic filling did not succeed for ${
   }
 
   /**
-   * Extract array from element - handles page re-rendering
+   * Extract array from element - handles page re-rendering and comma-separated selectors
    */
   private async extractArray(
     element: any,
@@ -5496,8 +5642,8 @@ The initial deterministic filling did not succeed for ${
     // Retry logic with fresh element queries
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        // Always get fresh element references to avoid stale DOM references
-        const elements = await element.$$(selector);
+        // Use tryFindElementsInElement to handle comma-separated selectors
+        const elements = await this.tryFindElementsInElement(element, selector);
         const array: string[] = [];
 
         for (const el of elements) {
