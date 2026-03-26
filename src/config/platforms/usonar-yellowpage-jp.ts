@@ -25,7 +25,7 @@ export const Platform_usonar_yellowpage_jp: PlatformConfig = {
   max_concurrent_requests: 1,
   selectors: {
     searchForm: {
-      keywordInput: 'input[name="q"], input[type="search"]',
+      keywordInput: 'input[name="keyword"]',
       locationInput: 'input[name="area"], select[name="prefecture"]',
       searchButton: 'button[type="submit"], input[type="submit"], form button',
       formContainer: "form",
