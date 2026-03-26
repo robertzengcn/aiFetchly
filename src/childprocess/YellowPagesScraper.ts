@@ -597,6 +597,165 @@ export class YellowPagesScraper {
   }
 
   /**
+   * Wait for any of the comma-separated selectors to appear on the page
+   * This handles comma-separated selectors like '.search-result, .search-results, .company-list'
+   *
+   * @param selector - Selector string that may contain comma-separated selectors
+   * @param options - waitForSelector options
+   * @returns true if any selector was found, false otherwise
+   */
+  private async waitForAnySelector(
+    selector: string,
+    options?: { timeout?: number }
+  ): Promise<boolean> {
+    if (!this.page) return false;
+
+    const selectors = this.splitSelectors(selector);
+    if (selectors.length === 0) return false;
+
+    // If there's only one selector, use the standard waitForSelector
+    if (selectors.length === 1) {
+      try {
+        await this.page.waitForSelector(selectors[0], options);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
+    // Try each selector in sequence
+    const timeout = options?.timeout ?? 30000;
+    const startTime = Date.now();
+
+    for (const sel of selectors) {
+      try {
+        const remainingTime = timeout - (Date.now() - startTime);
+        if (remainingTime <= 0) break;
+
+        await this.page.waitForSelector(sel, {
+          timeout: Math.min(remainingTime, 5000), // Wait max 5 seconds per selector
+        });
+        console.log(`✅ Found element with selector: ${sel}`);
+        return true;
+      } catch {
+        // Selector not found, try next one
+        continue;
+      }
+    }
+
+    console.debug(`⚠️ No element found for selectors: ${selectors.join(", ")}`);
+    return false;
+  }
+
+  /**
+   * Check if any of the comma-separated selectors exists on the page
+   * This handles comma-separated selectors like '.search-result, .search-results, .company-list'
+   *
+   * @param selector - Selector string that may contain comma-separated selectors
+   * @returns true if any selector was found, false otherwise
+   */
+  private async hasAnySelector(selector: string): Promise<boolean> {
+    if (!this.page) return false;
+
+    const selectors = this.splitSelectors(selector);
+
+    for (const sel of selectors) {
+      try {
+        const element = await this.page.$(sel);
+        if (element) {
+          console.log(`✅ Found element with selector: ${sel}`);
+          await element.dispose();
+          return true;
+        }
+      } catch {
+        // Invalid selector, continue to next
+        continue;
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Wait for any of the comma-separated selectors to appear on a specific page
+   * This handles comma-separated selectors like '.search-result, .search-results, .company-list'
+   *
+   * @param page - The Puppeteer Page instance to use
+   * @param selector - Selector string that may contain comma-separated selectors
+   * @param options - waitForSelector options
+   * @returns true if any selector was found, false otherwise
+   */
+  private async waitForAnySelectorOnPage(
+    page: Page,
+    selector: string,
+    options?: { timeout?: number }
+  ): Promise<boolean> {
+    const selectors = this.splitSelectors(selector);
+    if (selectors.length === 0) return false;
+
+    // If there's only one selector, use the standard waitForSelector
+    if (selectors.length === 1) {
+      try {
+        await page.waitForSelector(selectors[0], options);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
+    // Try each selector in sequence
+    const timeout = options?.timeout ?? 30000;
+    const startTime = Date.now();
+
+    for (const sel of selectors) {
+      try {
+        const remainingTime = timeout - (Date.now() - startTime);
+        if (remainingTime <= 0) break;
+
+        await page.waitForSelector(sel, {
+          timeout: Math.min(remainingTime, 5000), // Wait max 5 seconds per selector
+        });
+        console.log(`✅ Found element with selector: ${sel}`);
+        return true;
+      } catch {
+        // Selector not found, try next one
+        continue;
+      }
+    }
+
+    console.debug(`⚠️ No element found for selectors: ${selectors.join(", ")}`);
+    return false;
+  }
+
+  /**
+   * Check if any of the comma-separated selectors exists on a specific page
+   * This handles comma-separated selectors like '.search-result, .search-results, .company-list'
+   *
+   * @param page - The Puppeteer Page instance to check
+   * @param selector - Selector string that may contain comma-separated selectors
+   * @returns true if any selector was found, false otherwise
+   */
+  private async hasAnySelectorOnPage(page: Page, selector: string): Promise<boolean> {
+    const selectors = this.splitSelectors(selector);
+
+    for (const sel of selectors) {
+      try {
+        const element = await page.$(sel);
+        if (element) {
+          console.log(`✅ Found element with selector: ${sel}`);
+          await element.dispose();
+          return true;
+        }
+      } catch {
+        // Invalid selector, continue to next
+        continue;
+      }
+    }
+
+    return false;
+  }
+
+  /**
    * Handle an AI_SUPPORT_RESPONSE message from the main process.
    * Resolves the matching pending promise so requestAiSupport() completes.
    */
@@ -2867,9 +3026,12 @@ The initial deterministic filling did not succeed for ${
         throw new Error("Page is not initialized");
       }
       // Wait for business list to load
-      await this.page.waitForSelector(selectors.businessList, {
+      const found = await this.waitForAnySelector(selectors.businessList, {
         timeout: 10000,
       });
+      if (!found) {
+        throw new Error(`Business list not found: ${selectors.businessList}`);
+      }
 
       // Check for Cloudflare protection before proceeding with data extraction
       await this.handleCloudflareDetection();
@@ -3105,9 +3267,17 @@ The initial deterministic filling did not succeed for ${
               "✅ AI recovered page state, retrying business data extraction"
             );
             try {
-              await this.page.waitForSelector(selectors.businessList, {
-                timeout: 10000,
-              });
+              const found = await this.waitForAnySelector(
+                selectors.businessList,
+                {
+                  timeout: 10000,
+                }
+              );
+              if (!found) {
+                throw new Error(
+                  `Business list not found: ${selectors.businessList}`
+                );
+              }
               return await this.extractBusinessData();
             } catch (retryErr) {
               console.warn(
@@ -3570,9 +3740,12 @@ The initial deterministic filling did not succeed for ${
             });
 
             // Wait for new results to load
-            await this.page.waitForSelector(selectors.businessList, {
+            const found = await this.waitForAnySelector(selectors.businessList, {
               timeout: 10000,
             });
+            if (!found) {
+              throw new Error(`Business list not found after pagination: ${selectors.businessList}`);
+            }
 
             // Update captured search page URL after successful navigation
             this.searchPageUrl = this.page.url();
@@ -4128,7 +4301,8 @@ The initial deterministic filling did not succeed for ${
 
           // Try to check if page contains business list selector
           try {
-            const hasBusinessList = await page.$(
+            const hasBusinessList = await this.hasAnySelectorOnPage(
+              page,
               this.platformInfo.selectors.businessList
             );
             if (hasBusinessList) {
@@ -4243,9 +4417,12 @@ The initial deterministic filling did not succeed for ${
             );
 
             // Wait for search results to be ready
-            await searchResultsPage.waitForSelector(selectors.businessList, {
+            const found = await this.waitForAnySelectorOnPage(searchResultsPage, selectors.businessList, {
               timeout: 10000,
             });
+            if (!found) {
+              throw new Error(`Business list not found on search results page: ${selectors.businessList}`);
+            }
 
             // Update captured search page URL
             this.searchPageUrl = searchResultsPage.url();
@@ -4272,9 +4449,12 @@ The initial deterministic filling did not succeed for ${
         await this.page.goBack({ waitUntil: "networkidle2" });
 
         // Wait for search results to reload
-        await this.page.waitForSelector(selectors.businessList, {
+        const found = await this.waitForAnySelector(selectors.businessList, {
           timeout: 10000,
         });
+        if (!found) {
+          throw new Error(`Business list not found after back navigation: ${selectors.businessList}`);
+        }
 
         // Update captured search page URL
         this.searchPageUrl = this.page.url();
