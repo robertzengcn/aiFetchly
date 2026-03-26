@@ -438,6 +438,165 @@ export class YellowPagesScraper {
   }
 
   /**
+   * Split selector string by comma to handle multiple selectors
+   * For example: 'input[name="area"], select[name="prefecture"]' becomes ['input[name="area"]', 'select[name="prefecture"]']
+   *
+   * @param selector - Selector string that may contain comma-separated selectors
+   * @returns Array of individual selectors
+   */
+  private splitSelectors(selector: string): string[] {
+    if (!selector || typeof selector !== "string") {
+      return [];
+    }
+    return selector
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+  }
+
+  /**
+   * Try multiple selectors in order and return the first matching element
+   * This handles comma-separated selectors like 'input[name="area"], select[name="prefecture"]'
+   *
+   * @param selector - Selector string that may contain comma-separated selectors
+   * @returns First matching element or null
+   */
+  private async tryFindElement(selector: string): Promise<Element | null> {
+    if (!this.page) return null;
+
+    const selectors = this.splitSelectors(selector);
+
+    for (const sel of selectors) {
+      try {
+        const element = await this.page.evaluate((s) => {
+          return document.querySelector(s);
+        }, sel);
+
+        if (element) {
+          console.log(`✅ Found element with selector: ${sel}`);
+          return element;
+        }
+      } catch (error) {
+        // Invalid selector, continue to next
+        console.debug(`⚠️ Invalid selector: ${sel}`);
+        continue;
+      }
+    }
+
+    console.debug(`⚠️ No element found for selectors: ${selectors.join(", ")}`);
+    return null;
+  }
+
+  /**
+   * Try multiple selectors in order and return all matching elements from the first successful selector
+   * This handles comma-separated selectors like 'div.result, .search-result'
+   *
+   * @param selector - Selector string that may contain comma-separated selectors
+   * @returns Array of matching elements from the first successful selector
+   */
+  private async tryFindElements(selector: string): Promise<Element[]> {
+    if (!this.page) return [];
+
+    const selectors = this.splitSelectors(selector);
+
+    for (const sel of selectors) {
+      try {
+        const elements = await this.page.evaluate((s) => {
+          const els = document.querySelectorAll(s);
+          return Array.from(els);
+        }, sel);
+
+        if (elements && elements.length > 0) {
+          console.log(
+            `✅ Found ${elements.length} elements with selector: ${sel}`
+          );
+          return elements;
+        }
+      } catch (error) {
+        // Invalid selector, continue to next
+        console.debug(`⚠️ Invalid selector: ${sel}`);
+        continue;
+      }
+    }
+
+    console.debug(
+      `⚠️ No elements found for selectors: ${selectors.join(", ")}`
+    );
+    return [];
+  }
+
+  /**
+   * Try multiple selectors in order and click the first matching element
+   * This handles comma-separated selectors for button/link clicking
+   *
+   * @param selector - Selector string that may contain comma-separated selectors
+   * @returns true if element was found and clicked, false otherwise
+   */
+  private async tryClickElement(selector: string): Promise<boolean> {
+    if (!this.page) return false;
+
+    const selectors = this.splitSelectors(selector);
+
+    for (const sel of selectors) {
+      try {
+        const element = await this.page.$(sel);
+        if (element) {
+          console.log(`✅ Clicking element with selector: ${sel}`);
+          await element.click();
+          return true;
+        }
+      } catch (error) {
+        // Error clicking, continue to next selector
+        console.debug(`⚠️ Could not click element with selector: ${sel}`);
+        continue;
+      }
+    }
+
+    console.debug(
+      `⚠️ No clickable element found for selectors: ${selectors.join(", ")}`
+    );
+    return false;
+  }
+
+  /**
+   * Try multiple selectors in order and type text into the first matching element
+   * This handles comma-separated selectors for input field typing
+   *
+   * @param selector - Selector string that may contain comma-separated selectors
+   * @param text - Text to type into the field
+   * @returns true if element was found and text was typed, false otherwise
+   */
+  private async tryTypeIntoElement(
+    selector: string,
+    text: string
+  ): Promise<boolean> {
+    if (!this.page) return false;
+
+    const selectors = this.splitSelectors(selector);
+
+    for (const sel of selectors) {
+      try {
+        const element = await this.page.$(sel);
+        if (element) {
+          console.log(`✅ Typing into element with selector: ${sel}`);
+          await element.click({ clickCount: 3 }); // Focus and select all
+          await element.type(text, { delay: 100 });
+          return true;
+        }
+      } catch (error) {
+        // Error typing, continue to next selector
+        console.debug(`⚠️ Could not type into element with selector: ${sel}`);
+        continue;
+      }
+    }
+
+    console.debug(
+      `⚠️ No input element found for selectors: ${selectors.join(", ")}`
+    );
+    return false;
+  }
+
+  /**
    * Handle an AI_SUPPORT_RESPONSE message from the main process.
    * Resolves the matching pending promise so requestAiSupport() completes.
    */
@@ -783,7 +942,11 @@ export class YellowPagesScraper {
         requestAiSupport: async (req) => {
           // runObserveExecuteLoop provides pageContent/screenshot placeholders;
           // for YellowPagesScraper we want fresh capture from the current page.
-          const { pageContent: _pageContent, screenshot: _screenshot, ...rest } = req;
+          const {
+            pageContent: _pageContent,
+            screenshot: _screenshot,
+            ...rest
+          } = req;
           const res = await this.requestAiSupport({
             ...rest,
           });
@@ -1474,27 +1637,15 @@ export class YellowPagesScraper {
                 );
                 const sel = aiResult.data.suggestedSelectors;
                 try {
+                  // Use tryTypeIntoElement to handle comma-separated selectors
                   if (sel.keywordInput) {
-                    const kwEl = await this.page.$(sel.keywordInput);
-                    if (kwEl) {
-                      await kwEl.click({ clickCount: 3 });
-                      await kwEl.type(keyword, {
-                        delay: 50 + Math.random() * 80,
-                      });
-                    }
+                    await this.tryTypeIntoElement(sel.keywordInput, keyword);
                   }
                   if (sel.locationInput && location) {
-                    const locEl = await this.page.$(sel.locationInput);
-                    if (locEl) {
-                      await locEl.click({ clickCount: 3 });
-                      await locEl.type(location, {
-                        delay: 50 + Math.random() * 80,
-                      });
-                    }
+                    await this.tryTypeIntoElement(sel.locationInput, location);
                   }
                   if (sel.searchButton) {
-                    const btn = await this.page.$(sel.searchButton);
-                    if (btn) await btn.click();
+                    await this.tryClickElement(sel.searchButton);
                   }
                   await this.sleep(2000);
                   // If we got here without throw, retry extraction loop for this keyword with current page
@@ -2209,30 +2360,12 @@ export class YellowPagesScraper {
 
       // Fill keyword field if selector exists (main frame to avoid detached iframe)
       if (searchForm.keywordInput) {
-        const keywordField = await frame.$(searchForm.keywordInput);
-        if (keywordField) {
-          console.log(
-            `Filling keyword field with platform selector: ${searchForm.keywordInput}`
-          );
-
-          // Log action for AI training
-          if (this.sessionManager.getRecordingStatus() && this.page) {
-            const currentState = await this.sessionManager.capturePageState(
-              this.page
-            );
-            this.sessionManager.logAction(
-              currentState,
-              `type('${searchForm.keywordInput}', '${keyword}')`
-            );
-          }
-          // Scroll the page to bring the keyword field into view
-          await keywordField.evaluate((el) =>
-            el.scrollIntoView({ behavior: "smooth", block: "center" })
-          );
-
-          // Clear field first
-          await keywordField.click({ clickCount: 3 });
-          await keywordField.type(keyword, { delay: 100 }); // Human-like typing
+        // Use tryTypeIntoElement to handle comma-separated selectors
+        const keywordTyped = await this.tryTypeIntoElement(
+          searchForm.keywordInput,
+          keyword
+        );
+        if (keywordTyped) {
           keywordFilled = true;
         } else {
           console.warn(
@@ -2242,27 +2375,13 @@ export class YellowPagesScraper {
       }
 
       // Fill location field if selector exists
-      if (searchForm.locationInput) {
-        const locationField = await frame.$(searchForm.locationInput);
-        if (locationField) {
-          console.log(
-            `Filling location field with platform selector: ${searchForm.locationInput}`
-          );
-
-          // Log action for AI training
-          if (this.sessionManager.getRecordingStatus() && this.page) {
-            const currentState = await this.sessionManager.capturePageState(
-              this.page
-            );
-            this.sessionManager.logAction(
-              currentState,
-              `type('${searchForm.locationInput}', '${location}')`
-            );
-          }
-
-          // Clear field first
-          await locationField.click({ clickCount: 3 });
-          await locationField.type(location, { delay: 100 }); // Human-like typing
+      if (searchForm.locationInput && location) {
+        // Use tryTypeIntoElement to handle comma-separated selectors
+        const locationTyped = await this.tryTypeIntoElement(
+          searchForm.locationInput,
+          location
+        );
+        if (locationTyped) {
           locationFilled = true;
         } else {
           console.warn(
@@ -2301,15 +2420,15 @@ export class YellowPagesScraper {
             pageUrl: this.page.url(),
             selectorsAvailable,
             maxIterations: YellowPagesScraper.ERROR_RECOVERY_MAX_ITERATIONS,
-            goalContext:
-              `The search form needs to be filled with these exact values:
+            goalContext: `The search form needs to be filled with these exact values:
 keyword="${keyword}"
 location="${location}"
 
 The initial attempt to fill using platform selectors failed with a click/type error. Recover by focusing/clicking the correct inputs and entering the provided keyword and location values.`,
             stepContext: "platform_fill_searchForm_error_recovery",
-            errorInfo:
-              `${error instanceof Error ? error.message : String(error)}. keyword="${keyword}", location="${location}"`,
+            errorInfo: `${
+              error instanceof Error ? error.message : String(error)
+            }. keyword="${keyword}", location="${location}"`,
           });
 
           // Only stop fallback logic if observe-execute reports success.
@@ -2348,21 +2467,19 @@ The initial attempt to fill using platform selectors failed with a click/type er
             pageUrl: this.page.url(),
             selectorsAvailable,
             maxIterations: YellowPagesScraper.ERROR_RECOVERY_MAX_ITERATIONS,
-            goalContext:
-              `The search form needs to be filled with:
+            goalContext: `The search form needs to be filled with:
 keyword="${keyword}"
 location="${location}"
 
 The initial deterministic filling did not succeed for ${
-                !keywordFilled && !locationFilled
-                  ? "both fields"
-                  : !keywordFilled
-                    ? "keyword field"
-                    : "location field"
-              }. Recover by focusing/clicking the correct inputs and typing the values.`,
+              !keywordFilled && !locationFilled
+                ? "both fields"
+                : !keywordFilled
+                ? "keyword field"
+                : "location field"
+            }. Recover by focusing/clicking the correct inputs and typing the values.`,
             stepContext: "platform_fill_searchForm_missing_field_recovery",
-            errorInfo:
-              `keywordFilled=${keywordFilled}, locationFilled=${locationFilled}`,
+            errorInfo: `keywordFilled=${keywordFilled}, locationFilled=${locationFilled}`,
           });
         } catch (aiError: unknown) {
           console.warn(
@@ -2385,25 +2502,9 @@ The initial deterministic filling did not succeed for ${
       const searchForm = this.platformInfo.selectors.searchForm;
 
       if (searchForm.searchButton) {
-        const submitButton = await frame.$(searchForm.searchButton);
-        if (submitButton) {
-          console.log(
-            `Submitting search form with platform selector: ${searchForm.searchButton}`
-          );
-
-          // Log action for AI training
-          if (this.sessionManager.getRecordingStatus() && this.page) {
-            const currentState = await this.sessionManager.capturePageState(
-              this.page
-            );
-            this.sessionManager.logAction(
-              currentState,
-              `click('${searchForm.searchButton}')`
-            );
-          }
-
-          await submitButton.click();
-        } else {
+        // Use tryClickElement to handle comma-separated selectors
+        const clicked = await this.tryClickElement(searchForm.searchButton);
+        if (!clicked) {
           console.warn(
             `Search button not found with selector: ${searchForm.searchButton}`
           );
@@ -2553,9 +2654,12 @@ The initial deterministic filling did not succeed for ${
           const searchForm = this.platformInfo.selectors.searchForm;
           const selectorsAvailable: Record<string, string> = {};
 
-          if (searchForm?.searchButton) selectorsAvailable.searchButton = searchForm.searchButton;
-          if (searchForm?.keywordInput) selectorsAvailable.keywordInput = searchForm.keywordInput;
-          if (searchForm?.locationInput) selectorsAvailable.locationInput = searchForm.locationInput;
+          if (searchForm?.searchButton)
+            selectorsAvailable.searchButton = searchForm.searchButton;
+          if (searchForm?.keywordInput)
+            selectorsAvailable.keywordInput = searchForm.keywordInput;
+          if (searchForm?.locationInput)
+            selectorsAvailable.locationInput = searchForm.locationInput;
 
           const observeResult = await this.observeExecuteLoop({
             goal: "Submit the search form to load results (click the submit/search element or run the correct submit action).",
@@ -2565,8 +2669,7 @@ The initial deterministic filling did not succeed for ${
             goalContext:
               "Search form is filled with keyword and location. The initial platform selector submission failed; recover by clicking the correct UI element.",
             stepContext: "platform_submit_searchForm_error_recovery",
-            errorInfo:
-              error instanceof Error ? error.message : String(error),
+            errorInfo: error instanceof Error ? error.message : String(error),
           });
 
           if (observeResult.success) {
