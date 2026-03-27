@@ -14,6 +14,7 @@ export { PagineGialleItAdapter } from "./PagineGialleItAdapter";
 export { ITownPageAdapter } from "./ITownPageAdapter";
 export { USonarYellowPageAdapter } from "./USonarYellowPageAdapter";
 export { KoreaLocalPagesAdapter } from "./KoreaLocalPagesAdapter";
+export { YellowPagesComSgAdapter } from "./YellowPagesComSgAdapter";
 
 // Export the factory
 export { PlatformAdapterFactory } from "./PlatformAdapterFactory";
