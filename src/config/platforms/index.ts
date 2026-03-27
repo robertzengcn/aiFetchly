@@ -11,6 +11,7 @@ import { Platform_yellowpages_com } from "./yellowpages-com";
 import { Platform_itownpage_jp } from "./itownpage-jp";
 import { Platform_usonar_yellowpage_jp } from "./usonar-yellowpage-jp";
 import { Platform_korealocalpages_kr } from "./korealocalpages-kr";
+import { Platform_yellowpages_com_sg } from "./yellowpages-com-sg";
 // import { Platform_example } from './example-platform';
 // import { Platform_api_key_example } from './api-key-example';
 // import { Platform_oauth_example } from './oauth-example';
@@ -42,6 +43,7 @@ export const platforms: PlatformConfig[] = [
   Platform_itownpage_jp,
   Platform_usonar_yellowpage_jp,
   Platform_korealocalpages_kr,
+  Platform_yellowpages_com_sg,
   // Platform_example,
   // Platform_api_key_example,
   // Platform_oauth_example,
