@@ -960,6 +960,8 @@ export class YellowPagesScraper {
     pageContent?: string;
     /** Pre-captured screenshot base64 (use with pageContent when page may close) */
     screenshot?: string;
+    /** Skip auto screenshot capture for this AI request */
+    skipScreenshotCapture?: boolean;
   }): Promise<AiSupportResult> {
     if (!this.aiSupportEnabled) {
       return {
@@ -991,7 +993,11 @@ export class YellowPagesScraper {
         if (pageContent === "" && params.pageContent === undefined) {
           pageContent = await this.getSimplifiedPageContent();
         }
-        if (screenshot === undefined && params.screenshot === undefined) {
+        if (
+          screenshot === undefined &&
+          params.screenshot === undefined &&
+          !params.skipScreenshotCapture
+        ) {
           const buf = await this.page!.screenshot({ encoding: "base64" });
           screenshot = typeof buf === "string" ? buf : undefined;
         }
@@ -3332,6 +3338,61 @@ The initial deterministic filling did not succeed for ${
             }
           } else {
             console.log(`⚠️ No data extracted for item ${itemNumber}`);
+
+            // AI fallback: ask AI support to extract contact/business fields from the page HTML
+            // when structured extraction yields nothing for this item.
+            if (
+              this.aiSupportEnabled &&
+              this.page &&
+              // Avoid spamming AI for every empty row: focus on early failures.
+              itemNumber <= 3
+            ) {
+              try {
+                const pageContent = await this.buildBusinessItemContextForAi(
+                  currentElement as ElementHandle<Element>,
+                  {
+                    businessList: selectors.businessList,
+                    businessItem: selectors.businessItem,
+                    businessName: selectors.businessName,
+                    phone: selectors.phone,
+                    email: selectors.email,
+                    website: selectors.website,
+                    address: selectors.address,
+                  },
+                  itemNumber
+                );
+                const aiExtract = await this.requestAiSupport({
+                  requestType: "contact_extraction",
+                  pageUrl: this.page.url(),
+                  businessName: "Unknown",
+                  stepContext: "extract_business_item_no_data",
+                  errorInfo: `No structured business data extracted for item ${itemNumber}. Please extract at least business name plus email/phone/website/address if present.`,
+                  selectorsAvailable: {
+                    businessList: selectors.businessList,
+                    businessItem: selectors.businessItem,
+                    businessName: selectors.businessName,
+                    phone: selectors.phone ?? "",
+                    email: selectors.email ?? "",
+                    website: selectors.website ?? "",
+                    address: selectors.address ?? "",
+                  },
+                  pageContent,
+                  skipScreenshotCapture: true,
+                });
+                if (aiExtract.success && aiExtract.data) {
+                  const aiResult = this.buildScrapingResultFromAiContactData(
+                    aiExtract.data,
+                    `Unknown-${itemNumber}`
+                  );
+                  results.push(aiResult);
+                  console.log(
+                    `🤖 AI extracted data for item ${itemNumber}: ${aiResult.business_name}`
+                  );
+                }
+              } catch (aiErr: unknown) {
+                console.warn("🤖 AI fallback (no data extracted) failed:", aiErr);
+              }
+            }
           }
 
           // Log progress summary
@@ -3340,6 +3401,62 @@ The initial deterministic filling did not succeed for ${
           );
         } catch (error) {
           console.error(`❌ Error processing item ${i + 1}:`, error);
+          // AI fallback: when extraction throws, ask AI to extract usable fields
+          // so the run can continue with partial results.
+          if (this.aiSupportEnabled && this.page) {
+            try {
+              const errMsg = error instanceof Error ? error.message : String(error);
+              const currentElement =
+                businessElements[i] as ElementHandle<Element> | undefined;
+              const pageContent = currentElement
+                ? await this.buildBusinessItemContextForAi(
+                    currentElement,
+                    {
+                      businessList: selectors.businessList,
+                      businessItem: selectors.businessItem,
+                      businessName: selectors.businessName,
+                      phone: selectors.phone,
+                      email: selectors.email,
+                      website: selectors.website,
+                      address: selectors.address,
+                    },
+                    i + 1
+                  )
+                : `Context: business-list-item-fallback\nItemNumber: ${
+                    i + 1
+                  }\nPageURL: ${this.page.url()}\nError: no stable element reference`;
+              const aiExtract = await this.requestAiSupport({
+                requestType: "contact_extraction",
+                pageUrl: this.page.url(),
+                businessName: "Unknown",
+                stepContext: "extract_business_item_error",
+                errorInfo: `Error extracting business info for item ${i + 1}: ${errMsg}. Extract business name and any contact fields from current page HTML.`,
+                selectorsAvailable: {
+                  businessList: selectors.businessList,
+                  businessItem: selectors.businessItem,
+                  businessName: selectors.businessName,
+                  phone: selectors.phone ?? "",
+                  email: selectors.email ?? "",
+                  website: selectors.website ?? "",
+                  address: selectors.address ?? "",
+                },
+                pageContent,
+                skipScreenshotCapture: true,
+              });
+              if (aiExtract.success && aiExtract.data) {
+                const aiResult = this.buildScrapingResultFromAiContactData(
+                  aiExtract.data,
+                  `Unknown-${i + 1}`
+                );
+                results.push(aiResult);
+                console.log(
+                  `🤖 AI recovered extraction for item ${i + 1}: ${aiResult.business_name}`
+                );
+              }
+            } catch (aiErr: unknown) {
+              console.warn("🤖 AI fallback (item error) failed:", aiErr);
+            }
+          }
           // Continue with next element
         }
       }
@@ -3408,6 +3525,81 @@ The initial deterministic filling did not succeed for ${
     }
 
     return results;
+  }
+
+  /**
+   * Build focused AI context for a single business list item.
+   * Avoids sending full-page HTML for list-page extraction fallbacks.
+   */
+  private async buildBusinessItemContextForAi(
+    element: ElementHandle<Element>,
+    selectors: {
+      businessList: string;
+      businessItem: string;
+      businessName?: string;
+      phone?: string;
+      email?: string;
+      website?: string;
+      address?: string;
+    },
+    itemNumber: number
+  ): Promise<string> {
+    const safeText = (v: unknown): string =>
+      typeof v === "string" ? v.trim() : "";
+
+    try {
+      const itemContext = await element.evaluate(
+        (el, sel) => {
+          const pickText = (selector?: string): string => {
+            if (!selector) return "";
+            const target = el.querySelector(selector);
+            return target?.textContent?.trim() || "";
+          };
+          const pickHref = (selector?: string): string => {
+            if (!selector) return "";
+            const target = el.querySelector(selector) as HTMLAnchorElement | null;
+            return target?.href || "";
+          };
+
+          return {
+            outerHTML: (el as HTMLElement).outerHTML || "",
+            innerText: (el as HTMLElement).innerText || "",
+            extracted: {
+              businessName: pickText(sel.businessName),
+              phone: pickText(sel.phone),
+              email: pickText(sel.email),
+              website: pickHref(sel.website),
+              address: pickText(sel.address),
+            },
+          };
+        },
+        selectors
+      );
+
+      const trimmedOuter = safeText(itemContext.outerHTML).slice(0, 10000);
+      const trimmedText = safeText(itemContext.innerText).slice(0, 3000);
+
+      return [
+        `Context: business-list-item-fallback`,
+        `ItemNumber: ${itemNumber}`,
+        `PageURL: ${this.page?.url() || ""}`,
+        `BusinessListSelector: ${selectors.businessList}`,
+        `BusinessItemSelector: ${selectors.businessItem}`,
+        `CandidateExtractedFields: ${JSON.stringify(itemContext.extracted)}`,
+        `BusinessItemText:`,
+        trimmedText,
+        `BusinessItemHTML:`,
+        trimmedOuter,
+      ].join("\n");
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      return [
+        `Context: business-list-item-fallback`,
+        `ItemNumber: ${itemNumber}`,
+        `PageURL: ${this.page?.url() || ""}`,
+        `Error: failed to build focused item context (${msg})`,
+      ].join("\n");
+    }
   }
 
   /**
