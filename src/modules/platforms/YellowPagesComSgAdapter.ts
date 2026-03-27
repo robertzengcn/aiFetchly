@@ -38,6 +38,13 @@ export class YellowPagesComSgAdapter extends BasePlatformAdapter {
     const selectors = this.config.selectors;
 
     // Get business list elements
+    if (!selectors || !selectors.businessList) {
+      console.log('No selectors configured');
+      return {
+        business_name: '',
+        raw_data: { businesses: [], totalCount: 0 }
+      };
+    }
     const businessListSelectors = (selectors.businessList as string).split(',').map(s => s.trim());
     let businessElements: any[] = [];
 
@@ -93,6 +100,11 @@ export class YellowPagesComSgAdapter extends BasePlatformAdapter {
   private async waitForContent(page: Page): Promise<void> {
     try {
       // Wait for any of the possible business list selectors
+      if (!this.config.selectors?.businessList) {
+        console.log('No businessList selector configured, waiting default time');
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        return;
+      }
       const businessListSelectors = (this.config.selectors.businessList as string).split(',').map(s => s.trim());
 
       await Promise.race([
