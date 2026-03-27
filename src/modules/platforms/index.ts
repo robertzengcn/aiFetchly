@@ -13,7 +13,7 @@ export { PagesJaunesAdapter } from "./PagesJaunesAdapter";
 export { PagineGialleItAdapter } from "./PagineGialleItAdapter";
 export { ITownPageAdapter } from "./ITownPageAdapter";
 export { USonarYellowPageAdapter } from "./USonarYellowPageAdapter";
-export { YellowPagesJpAdapter } from "./YellowPagesJpAdapter";
+export { KoreaLocalPagesAdapter } from "./KoreaLocalPagesAdapter";
 
 // Export the factory
 export { PlatformAdapterFactory } from "./PlatformAdapterFactory";
