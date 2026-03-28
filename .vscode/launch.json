@@ -5,7 +5,7 @@
       "type": "node",
       "request": "launch",
       "name": "Electron Main",
-      // "runtimeExecutable": "/Users/cengjianze/.nvm/versions/node/v22.19.0/bin/node",
+      "runtimeExecutable": "${env:HOME}/.nvm/versions/node/v22.19.0/bin/node",
       "runtimeArgs": [
         "${workspaceFolder}/node_modules/@electron-forge/cli/dist/electron-forge-start.js",
         "--vscode",
@@ -25,7 +25,7 @@
       "type": "node",
       "request": "launch",
       "name": "Vitest Debug Current Test File",
-      "runtimeExecutable": "/Users/cengjianze/.nvm/versions/node/v22.19.0/bin/node",
+      "runtimeExecutable": "${env:HOME}/.nvm/versions/node/v22.19.0/bin/node",
       "autoAttachChildProcesses": true,
       "skipFiles": ["<node_internals>/**", "**/node_modules/**"],
       "program": "${workspaceRoot}/node_modules/vitest/vitest.mjs",
