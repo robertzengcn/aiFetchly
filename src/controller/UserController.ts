@@ -217,8 +217,22 @@ export class UserController {
       // eslint-disable-next-line no-new
       new URL(finalloginUrl);
     } catch (error: unknown) {
+      const envS = typeof envLoginUrlRaw === "string" ? envLoginUrlRaw : "";
+      const metaS = typeof metaLoginUrlRaw === "string" ? metaLoginUrlRaw : "";
       log.error("[getLoginPageUrl] Invalid URL after build", {
         finalloginUrl,
+        rawLen: loginUrlRaw.length,
+        loginUrlLen: loginUrl.length,
+        envDefined: envLoginUrlRaw !== undefined,
+        envLen: envS.length,
+        envTruthy: Boolean(envLoginUrlRaw),
+        envWhitespaceOnly: envS.length > 0 && envS.trim().length === 0,
+        metaLen: metaS.length,
+        metaTruthy: Boolean(metaLoginUrlRaw),
+        metaWhitespaceOnly: metaS.length > 0 && metaS.trim().length === 0,
+        hasHttpScheme: /^https?:\/\//i.test(finalloginUrl),
+        pathOnlyRelative:
+          finalloginUrl.startsWith("/") && !finalloginUrl.startsWith("//"),
         error:
           error instanceof Error
             ? { name: error.name, message: error.message, stack: error.stack }
