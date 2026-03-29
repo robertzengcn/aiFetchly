@@ -10,6 +10,7 @@ import { Token } from "@/modules/token";
 import { TOKENNAME, REFRESHTOKEN } from "@/config/usersetting";
 import { User } from "@/modules/user";
 import { TokenRefreshService } from "@/modules/tokenRefresh";
+import { resolveViteLoginBase } from "@/config/viteLoginUrl";
 
 // export type RemoteResp = {
 //   status: boolean,
@@ -23,11 +24,8 @@ export class HttpClient {
   private _refreshInProgress = false;
   private _isWorker = false;
   constructor() {
-    // Use process.env for environment variables in Electron main process
-    // NOTE: Removed import.meta.env check - Vite statically replaces import.meta.env.VITE_*
-    // at build time which causes Invalid URL errors in the main process.
-    // process.env is loaded correctly via Vite's loadEnv() in vite.main.config.mjs
-    let loginUrl: string | undefined = process.env.VITE_LOGIN_URL;
+    const resolved = resolveViteLoginBase();
+    let loginUrl: string | undefined = resolved?.value;
 
     // Validate and ensure we have a valid URL
     if (!loginUrl || loginUrl.trim() === "") {
@@ -163,7 +161,7 @@ export class HttpClient {
     endpoint: string,
     options: RequestInit,
     isRetry = false
-  ): Promise<any> {
+  ): Promise<unknown> {
     // await this.setheaderToken()
     const res = await fetch(this.baseUrl + endpoint, {
       ...options,
@@ -233,7 +231,7 @@ export class HttpClient {
     return this;
   }
 
-  public async get(endpoint: string, options = {}): Promise<any> {
+  public async get(endpoint: string, options = {}): Promise<unknown> {
     // const body = new URLSearchParams(params).toString();
     //console.log(this._headers)
     return this._fetchJSON(endpoint, {
@@ -248,7 +246,7 @@ export class HttpClient {
     endpoint: string,
     formData: FormData | FormDataLib,
     options = {}
-  ): Promise<any> {
+  ): Promise<unknown> {
     // const body=new URLSearchParams(formData)
     // const body=formData
     // var requestOptions = {
