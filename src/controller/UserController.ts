@@ -158,16 +158,6 @@ export class UserController {
   //     return jwtuser;
   // }
   public getLoginPageUrl(): string {
-    const envLoginUrlRaw = process.env.VITE_LOGIN_URL;
-    const metaLoginUrlRaw =
-      typeof import.meta !== "undefined" && import.meta.env
-        ? (import.meta.env.VITE_LOGIN_URL as string | undefined)
-        : undefined;
-    const metaLoginUrlTestRaw =
-      typeof import.meta !== "undefined" && import.meta.env
-        ? (import.meta.env.VITE_LOGIN_URL_TEST as string | undefined)
-        : undefined;
-
     const resolved = resolveViteLoginBase();
     const loginUrlRaw = resolved?.value;
 
@@ -180,6 +170,7 @@ export class UserController {
       },
       body: JSON.stringify({
         sessionId: "6f1b64",
+        runId: "post-fix",
         location: "UserController.ts:getLoginPageUrl",
         message: "resolveViteLoginBase",
         data: {
@@ -194,6 +185,7 @@ export class UserController {
         },
         timestamp: Date.now(),
       }),
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
     }).catch((_err: unknown) => {
       /* telemetry send failure is non-critical */
     });
@@ -201,12 +193,8 @@ export class UserController {
 
     if (loginUrlRaw === undefined) {
       const msg =
-        "VITE_LOGIN_URL is not set or is empty after trim. Set VITE_LOGIN_URL (or VITE_LOGIN_URL_TEST) in .env at build time; CI should map secret VITE_LOGIN_URL_TEST to VITE_LOGIN_URL in .env.";
-      log.error("[getLoginPageUrl] " + msg, {
-        hasProcessEnv: envLoginUrlRaw !== undefined,
-        hasMetaEnv: metaLoginUrlRaw !== undefined,
-        hasMetaTestEnv: metaLoginUrlTestRaw !== undefined,
-      });
+        "VITE_LOGIN_URL is not set or is empty. Set VITE_LOGIN_URL in .env at build time; CI maps secret VITE_LOGIN_URL_TEST to VITE_LOGIN_URL in .env.";
+      log.error("[getLoginPageUrl] " + msg);
       throw new Error(msg);
     }
     if (loginUrlRaw === "undefined" || loginUrlRaw === "null") {
@@ -294,6 +282,7 @@ export class UserController {
       },
       body: JSON.stringify({
         sessionId: "6f1b64",
+        runId: "post-fix",
         location: "UserController.ts:getLoginPageUrl",
         message: "finalloginUrl built",
         data: {
@@ -303,14 +292,13 @@ export class UserController {
         },
         timestamp: Date.now(),
       }),
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
     }).catch((_err: unknown) => {
       /* telemetry send failure is non-critical */
     });
     // #endregion
 
     log.debug("[getLoginPageUrl] Build login URL", {
-      envLoginUrlRaw,
-      metaLoginUrlRaw,
       loginUrlRaw,
       loginUrl,
       appName,

@@ -345,6 +345,14 @@ export default ({ mode }) => {
             conditions: ['node'],
             // mainFields: ['main', 'module', 'browser']
         },
+        define: {
+            // Embed VITE_LOGIN_URL as a build-time string literal so the
+            // packaged app never needs to read a .env file at runtime.
+            // process.env is populated from .env by loadEnv() above.
+            'process.env.VITE_LOGIN_URL': JSON.stringify(
+                process.env.VITE_LOGIN_URL || process.env.VITE_LOGIN_URL_TEST || ''
+            ),
+        },
         build: {
             rollupOptions: {
                 external: [
