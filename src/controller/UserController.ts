@@ -30,6 +30,23 @@ import { shell } from "electron";
 import { app } from "electron";
 // import {Token} from "@/modules/token"
 
+/**
+ * Prefer `process.env`, then Vite-inlined `import.meta.env`.
+ * Empty and whitespace-only values are treated as missing so a space-only
+ * value does not win over a real URL (which would yield `new URL("/login?…")` → Invalid URL).
+ */
+function resolveViteLoginBase(
+  envVar: string | undefined,
+  metaVar: string | undefined
+): string | undefined {
+  for (const v of [envVar, metaVar]) {
+    if (typeof v !== "string") continue;
+    const t = v.trim();
+    if (t.length > 0) return t;
+  }
+  return undefined;
+}
+
 // const debug = require('debug')('user-controller');
 export type userlogin = {
   user: string;
@@ -163,12 +180,16 @@ export class UserController {
         ? (import.meta.env.VITE_LOGIN_URL as string | undefined)
         : undefined;
 
-    // Prefer env var in packaged/main process; fallback to Vite env in dev; then localhost.
-    const loginUrlRaw = (
-      envLoginUrlRaw ||
-      metaLoginUrlRaw ||
-      "http://localhost:3000"
-    ).trim();
+    const loginUrlRaw = resolveViteLoginBase(envLoginUrlRaw, metaLoginUrlRaw);
+    if (loginUrlRaw === undefined) {
+      const msg =
+        "VITE_LOGIN_URL is not set or is empty after trim. Set VITE_LOGIN_URL in .env at build time (e.g. CI secrets) or export it for the main process.";
+      log.error("[getLoginPageUrl] " + msg, {
+        hasProcessEnv: envLoginUrlRaw !== undefined,
+        hasMetaEnv: metaLoginUrlRaw !== undefined,
+      });
+      throw new Error(msg);
+    }
 
     const ensureProtocol = (raw: string): string => {
       const trimmed = raw.trim();
@@ -191,12 +212,22 @@ export class UserController {
     };
 
     const loginUrl = ensureProtocol(loginUrlRaw);
+    const trimmedBase = loginUrl.trim();
+    if (trimmedBase.length === 0 || /^https?:\/\/?$/i.test(trimmedBase)) {
+      const msg =
+        "VITE_LOGIN_URL is not a usable base URL (empty or scheme-only such as http://). Fix .env / CI secret.";
+      log.error("[getLoginPageUrl] " + msg, { loginUrlRaw, trimmedBase });
+      throw new Error(msg);
+    }
+
     const appName = app.getName() || "";
     const finalapp = appName.replace(/-/g, "");
 
-    // Build the login URL with app name
+    // Build the login URL with app name (encode app for valid query characters)
     const finalloginUrl =
-      loginUrl.replace(/\/$/, "") + "/login?app=" + finalapp;
+      loginUrl.replace(/\/$/, "") +
+      "/login?app=" +
+      encodeURIComponent(finalapp);
 
     log.debug("[getLoginPageUrl] Build login URL", {
       envLoginUrlRaw,

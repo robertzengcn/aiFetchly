@@ -39,10 +39,11 @@ const EXTERNAL_DEPENDENCIES = [
 ];
 //import { ForgeConfig } from '@electron-forge/shared-types';
 // import { AutoUnpackNativesPlugin } from "@electron-forge/plugin-auto-unpack-natives";
-// Determine the environment and load the corresponding .env file
+// Base .env (CI writes this), then mode-specific overrides e.g. .env.test for NODE_ENV=test.
+// Previously only `.env.${NODE_ENV}` was loaded, so `make-win:test` never saw vars from `.env`.
+dotenv.config({ path: path.resolve(__dirname, ".env") });
 const env = process.env.NODE_ENV || "development";
-const envFile = `.env.${env}`;
-dotenv.config({ path: path.resolve(__dirname, envFile) });
+dotenv.config({ path: path.resolve(__dirname, `.env.${env}`) });
 module.exports = {
   packagerConfig: {
     icon: "./src/assets/images/icon",
