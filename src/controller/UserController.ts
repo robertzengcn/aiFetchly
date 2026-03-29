@@ -161,36 +161,6 @@ export class UserController {
     const resolved = resolveViteLoginBase();
     const loginUrlRaw = resolved?.value;
 
-    // #region agent log
-    fetch("http://127.0.0.1:7242/ingest/a8010ee7-485a-4897-a54e-df8f89390712", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Debug-Session-Id": "6f1b64",
-      },
-      body: JSON.stringify({
-        sessionId: "6f1b64",
-        runId: "post-fix",
-        location: "UserController.ts:getLoginPageUrl",
-        message: "resolveViteLoginBase",
-        data: {
-          hypothesisId: "H1",
-          hasResolved: resolved !== undefined,
-          source: resolved?.source,
-          valueLen: resolved?.value.length,
-          firstCharCode:
-            resolved && resolved.value.length > 0
-              ? resolved.value.charCodeAt(0)
-              : null,
-        },
-        timestamp: Date.now(),
-      }),
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    }).catch((_err: unknown) => {
-      /* telemetry send failure is non-critical */
-    });
-    // #endregion
-
     if (loginUrlRaw === undefined) {
       const msg =
         "VITE_LOGIN_URL is not set or is empty. Set VITE_LOGIN_URL in .env at build time; CI maps secret VITE_LOGIN_URL_TEST to VITE_LOGIN_URL in .env.";
@@ -260,7 +230,6 @@ export class UserController {
       log.error(
         "[getLoginPageUrl] failed to compose /login URL from base (pathname/searchParams)",
         {
-          hypothesisId: "H3",
           baseHrefLen: baseUrl.href.length,
           error:
             error instanceof Error
@@ -272,31 +241,6 @@ export class UserController {
         "Could not build login URL from VITE_LOGIN_URL; check it is a full origin (e.g. https://host.com)."
       );
     }
-
-    // #region agent log
-    fetch("http://127.0.0.1:7242/ingest/a8010ee7-485a-4897-a54e-df8f89390712", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Debug-Session-Id": "6f1b64",
-      },
-      body: JSON.stringify({
-        sessionId: "6f1b64",
-        runId: "post-fix",
-        location: "UserController.ts:getLoginPageUrl",
-        message: "finalloginUrl built",
-        data: {
-          hypothesisId: "H3",
-          ok: true,
-          resultLen: finalloginUrl.length,
-        },
-        timestamp: Date.now(),
-      }),
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    }).catch((_err: unknown) => {
-      /* telemetry send failure is non-critical */
-    });
-    // #endregion
 
     log.debug("[getLoginPageUrl] Build login URL", {
       loginUrlRaw,

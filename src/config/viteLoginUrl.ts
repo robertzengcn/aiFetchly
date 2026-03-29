@@ -46,30 +46,6 @@ export function resolveViteLoginBase(): ViteLoginResolved | undefined {
   // Replaced with a string literal at build time via vite.main.config.mjs
   // define: { 'process.env.VITE_LOGIN_URL': JSON.stringify(...) }
   const raw: string | undefined = process.env.VITE_LOGIN_URL;
-  // #region agent log
-  fetch("http://127.0.0.1:7242/ingest/a8010ee7-485a-4897-a54e-df8f89390712", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Debug-Session-Id": "6f1b64",
-    },
-    body: JSON.stringify({
-      sessionId: "6f1b64",
-      runId: "post-fix",
-      hypothesisId: "define-embed",
-      location: "viteLoginUrl.ts:resolveViteLoginBase",
-      message: "resolveViteLoginBase called",
-      data: {
-        rawType: typeof raw,
-        rawLen: typeof raw === "string" ? raw.length : null,
-        rawStart: typeof raw === "string" ? raw.slice(0, 8) : null,
-      },
-      timestamp: Date.now(),
-    }),
-  }).catch((_err: unknown) => {
-    /* telemetry send failure is non-critical */
-  });
-  // #endregion
   if (typeof raw !== "string") return undefined;
   const t = normalizeViteLoginUrlString(raw);
   if (t.length === 0) return undefined;
