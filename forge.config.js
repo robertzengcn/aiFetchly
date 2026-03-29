@@ -53,8 +53,9 @@ module.exports = {
 
     // },
     asar: {
-      unpackDir: "**/node_modules/{better-sqlite3,sqlite3,sqlite-vec}/**",
-      // Vite copies vec0.* into .vite/build; DLLs must be on real disk for Windows LoadLibrary
+      // .vite/build holds vec0.* copied by Vite; node_modules holds native deps — both must be real disk
+      unpackDir:
+        "**/{.vite,node_modules/better-sqlite3,node_modules/sqlite3,node_modules/sqlite-vec}/**",
       unpack: "**/vec0.*",
     },
     ignore: (file) => {

@@ -190,6 +190,11 @@ export class UserController {
       });
       throw new Error(msg);
     }
+    if (loginUrlRaw === "undefined" || loginUrlRaw === "null") {
+      throw new Error(
+        "VITE_LOGIN_URL must not be the literal text 'undefined' or 'null'; fix .env / CI secret value."
+      );
+    }
 
     const ensureProtocol = (raw: string): string => {
       const trimmed = raw.trim();
@@ -212,22 +217,37 @@ export class UserController {
     };
 
     const loginUrl = ensureProtocol(loginUrlRaw);
-    const trimmedBase = loginUrl.trim();
-    if (trimmedBase.length === 0 || /^https?:\/\/?$/i.test(trimmedBase)) {
-      const msg =
-        "VITE_LOGIN_URL is not a usable base URL (empty or scheme-only such as http://). Fix .env / CI secret.";
-      log.error("[getLoginPageUrl] " + msg, { loginUrlRaw, trimmedBase });
-      throw new Error(msg);
+    const baseStr = loginUrl.trim();
+
+    let baseUrl: URL;
+    try {
+      baseUrl = new URL(baseStr);
+    } catch (error: unknown) {
+      log.error(
+        "[getLoginPageUrl] VITE_LOGIN_URL is not a valid absolute URL (whatwg URL parse failed)",
+        {
+          loginUrlRawLen: loginUrlRaw.length,
+          baseLen: baseStr.length,
+          hasHttpScheme: /^https?:\/\//i.test(baseStr),
+          error:
+            error instanceof Error
+              ? { name: error.name, message: error.message }
+              : String(error),
+        }
+      );
+      throw new Error(
+        "VITE_LOGIN_URL must be a valid absolute URL (e.g. https://your-marketing-host.com)."
+      );
     }
 
     const appName = app.getName() || "";
     const finalapp = appName.replace(/-/g, "");
 
-    // Build the login URL with app name (encode app for valid query characters)
-    const finalloginUrl =
-      loginUrl.replace(/\/$/, "") +
-      "/login?app=" +
-      encodeURIComponent(finalapp);
+    // Resolve /login against the configured origin (avoids string concat bugs like https:/login).
+    const finalloginUrl = new URL(
+      `/login?app=${encodeURIComponent(finalapp)}`,
+      baseUrl
+    ).href;
 
     log.debug("[getLoginPageUrl] Build login URL", {
       envLoginUrlRaw,
@@ -238,41 +258,6 @@ export class UserController {
       finalapp,
       finalloginUrl,
     });
-
-    if (!finalloginUrl.trim()) {
-      throw new Error("Login URL is empty after building final URL");
-    }
-
-    // Validate with WHATWG URL parser (same thing that throws "Invalid URL" in Node).
-    try {
-      // eslint-disable-next-line no-new
-      new URL(finalloginUrl);
-    } catch (error: unknown) {
-      const envS = typeof envLoginUrlRaw === "string" ? envLoginUrlRaw : "";
-      const metaS = typeof metaLoginUrlRaw === "string" ? metaLoginUrlRaw : "";
-      log.error("[getLoginPageUrl] Invalid URL after build", {
-        finalloginUrl,
-        rawLen: loginUrlRaw.length,
-        loginUrlLen: loginUrl.length,
-        envDefined: envLoginUrlRaw !== undefined,
-        envLen: envS.length,
-        envTruthy: Boolean(envLoginUrlRaw),
-        envWhitespaceOnly: envS.length > 0 && envS.trim().length === 0,
-        metaLen: metaS.length,
-        metaTruthy: Boolean(metaLoginUrlRaw),
-        metaWhitespaceOnly: metaS.length > 0 && metaS.trim().length === 0,
-        hasHttpScheme: /^https?:\/\//i.test(finalloginUrl),
-        pathOnlyRelative:
-          finalloginUrl.startsWith("/") && !finalloginUrl.startsWith("//"),
-        error:
-          error instanceof Error
-            ? { name: error.name, message: error.message, stack: error.stack }
-            : String(error),
-      });
-      throw error instanceof Error
-        ? error
-        : new Error(`Invalid login URL: ${String(error)}`);
-    }
 
     return finalloginUrl;
   }

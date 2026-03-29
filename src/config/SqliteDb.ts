@@ -58,6 +58,43 @@ import * as fs from "fs";
 import path from "node:path";
 
 /**
+ * True if `absolutePath` lives under an `app.asar` segment (Electron archive).
+ * `app.asar.unpacked` is NOT inside the archive — OS loaders can read those files.
+ */
+function isPathInsideAppAsarArchive(absolutePath: string): boolean {
+  const parts = absolutePath.split(/[/\\]/);
+  return parts.includes("app.asar");
+}
+
+/**
+ * Map .../app.asar/... to .../app.asar.unpacked/... (first segment only).
+ * Native extensions must load from the unpacked mirror, not from inside the asar.
+ */
+function mirroredAppAsarUnpackedPath(absolutePath: string): string {
+  return absolutePath.replace(/app\.asar([\\/])/, "app.asar.unpacked$1");
+}
+
+/**
+ * If the file exists only under app.asar, return the real-disk unpacked path when present.
+ * Never returns a path inside app.asar — LoadLibrary/dlopen cannot use archive paths.
+ */
+function resolveNativeExtensionPathForLoad(
+  candidatePath: string
+): string | null {
+  if (!fs.existsSync(candidatePath)) {
+    return null;
+  }
+  if (!isPathInsideAppAsarArchive(candidatePath)) {
+    return candidatePath;
+  }
+  const unpacked = mirroredAppAsarUnpackedPath(candidatePath);
+  if (fs.existsSync(unpacked)) {
+    return unpacked;
+  }
+  return null;
+}
+
+/**
  * Get the path to the sqlite-vec native extension for Electron
  * This function handles path resolution for both development and packaged Electron apps
  * Manually constructs the path because sqlite-vec's getLoadablePath() uses import.meta.url
@@ -188,15 +225,16 @@ function getSqliteVecExtensionPath(): string | null {
     // Check build extension paths first (most reliable)
     for (const buildPath of buildExtensionPaths) {
       try {
-        if (fs.existsSync(buildPath)) {
+        const resolved = resolveNativeExtensionPathForLoad(buildPath);
+        if (resolved) {
           console.log(
-            `Found sqlite-vec extension in build directory: ${buildPath}`
+            `Found sqlite-vec extension in build directory: ${resolved}`
           );
           // #region agent log
           {
             const inAsarOnly =
-              buildPath.includes("app.asar") &&
-              !buildPath.includes("app.asar.unpacked");
+              resolved.includes("app.asar") &&
+              !resolved.includes("app.asar.unpacked");
             let unpackedVecPath: string | null = null;
             let unpackedVecExists = false;
             try {
@@ -238,7 +276,8 @@ function getSqliteVecExtensionPath(): string | null {
                   location: "SqliteDb.ts:getSqliteVecExtensionPath",
                   message: "sqlite-vec path resolved",
                   data: {
-                    chosenPath: buildPath,
+                    rawCandidate: buildPath,
+                    chosenPath: resolved,
                     inAsarOnly,
                     platform: process.platform,
                     arch: process.arch,
@@ -255,7 +294,7 @@ function getSqliteVecExtensionPath(): string | null {
             });
           }
           // #endregion
-          return buildPath;
+          return resolved;
         }
       } catch (error) {
         // Path might be invalid, continue
@@ -278,11 +317,13 @@ function getSqliteVecExtensionPath(): string | null {
           pkgName,
           extensionName
         );
-        if (fs.existsSync(platformPackagePath)) {
+        const resolvedPkg =
+          resolveNativeExtensionPathForLoad(platformPackagePath);
+        if (resolvedPkg) {
           console.log(
-            `Found sqlite-vec extension at (via require.resolve): ${platformPackagePath}`
+            `Found sqlite-vec extension at (via require.resolve): ${resolvedPkg}`
           );
-          return platformPackagePath;
+          return resolvedPkg;
         }
       }
     } catch (error) {
@@ -377,9 +418,10 @@ function getSqliteVecExtensionPath(): string | null {
             pkgName,
             extensionName
           );
-          if (fs.existsSync(directPath)) {
-            console.log(`Found sqlite-vec extension at: ${directPath}`);
-            return directPath;
+          const resolvedDirect = resolveNativeExtensionPathForLoad(directPath);
+          if (resolvedDirect) {
+            console.log(`Found sqlite-vec extension at: ${resolvedDirect}`);
+            return resolvedDirect;
           }
         }
       } catch (error) {
