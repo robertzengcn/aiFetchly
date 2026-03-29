@@ -3,9 +3,14 @@ import { Token } from "@/modules/token";
 import { TOKENNAME } from "@/config/usersetting";
 import { BrowserWindow } from "electron";
 import { log } from "@/modules/Logger";
+import { resolveViteLoginBase } from "@/config/viteLoginUrl";
 import WebSocket from "ws";
 import { UserController } from "@/controller/UserController";
-import type { WSConnectionStatus, WSMessage, WSClientEvent } from "@/entityTypes/websocketType";
+import type {
+  WSConnectionStatus,
+  WSMessage,
+  WSClientEvent,
+} from "@/entityTypes/websocketType";
 
 // Export types from shared file
 export type { WSConnectionStatus, WSMessage, WSClientEvent };
@@ -26,24 +31,30 @@ export const SubscriptionNotificationTypes = {
 const WS_CONFIG = {
   MAX_RECONNECT_ATTEMPTS: parseInt(process.env.WS_MAX_RECONNECT || "10", 10),
   RECONNECT_DELAY: parseInt(process.env.WS_RECONNECT_DELAY || "3000", 10),
-  MAX_RECONNECT_DELAY: parseInt(process.env.WS_MAX_RECONNECT_DELAY || "60000", 10),
-  HEARTBEAT_INTERVAL: parseInt(process.env.WS_HEARTBEAT_INTERVAL || "30000", 10),
+  MAX_RECONNECT_DELAY: parseInt(
+    process.env.WS_MAX_RECONNECT_DELAY || "60000",
+    10
+  ),
+  HEARTBEAT_INTERVAL: parseInt(
+    process.env.WS_HEARTBEAT_INTERVAL || "30000",
+    10
+  ),
 } as const;
 
 /**
  * WebSocket client for connecting to the marketing server
- * 
+ *
  * Features:
  * - Automatic reconnection with exponential backoff
  * - Heartbeat/ping-pong mechanism
  * - Authentication via JWT token
  * - IPC message forwarding to renderer process
- * 
+ *
  * @example
  * ```typescript
  * const wsClient = WebSocketClient.getInstance();
  * wsClient.connect(mainWindow);
- * 
+ *
  * // Later, to disconnect
  * wsClient.disconnect();
  * ```
@@ -65,13 +76,16 @@ export class WebSocketClient {
   private manualDisconnect = false;
 
   // Message queue for offline scenarios
-  private messageQueue: Array<{ message: Record<string, unknown>; timestamp: number }> = [];
+  private messageQueue: Array<{
+    message: Record<string, unknown>;
+    timestamp: number;
+  }> = [];
   private readonly MAX_QUEUE_SIZE = 100;
   private readonly QUEUE_MESSAGE_TTL = 5 * 60 * 1000; // 5 minutes
 
   private constructor() {
-    // Get base URL from environment
-    let loginUrl: string | undefined = process.env.VITE_LOGIN_URL;
+    // Same resolution as UserController.getLoginPageUrl (process + Vite-inlined env).
+    let loginUrl: string | undefined = resolveViteLoginBase()?.value;
 
     if (!loginUrl || loginUrl.trim() === "") {
       // In production, fail fast if URL is not configured
@@ -80,7 +94,9 @@ export class WebSocketClient {
       }
       // In development, use localhost as fallback
       loginUrl = "http://localhost:3000";
-      log.warn("VITE_LOGIN_URL not set, using localhost fallback for development");
+      log.warn(
+        "VITE_LOGIN_URL not set, using localhost fallback for development"
+      );
     }
 
     // Convert HTTP URL to WebSocket URL
@@ -190,7 +206,7 @@ export class WebSocketClient {
 
   /**
    * Connect to the WebSocket server
-   * 
+   *
    * @param win - BrowserWindow instance for sending IPC messages
    */
   public connect(win: BrowserWindow): void {
@@ -356,8 +372,14 @@ export class WebSocketClient {
       SubscriptionNotificationTypes.PAYMENT_FAILED,
     ];
 
-    if (subscriptionNotificationTypes.includes(notificationType as typeof subscriptionNotificationTypes[number])) {
-      log.info(`Subscription change detected (${notificationType}), refreshing user info...`);
+    if (
+      subscriptionNotificationTypes.includes(
+        notificationType as (typeof subscriptionNotificationTypes)[number]
+      )
+    ) {
+      log.info(
+        `Subscription change detected (${notificationType}), refreshing user info...`
+      );
       this.refreshUserInfoOnSubscriptionChange(notificationType);
     }
   }
@@ -366,7 +388,9 @@ export class WebSocketClient {
    * Refresh user info when subscription status changes
    * This updates the user's plan and AI enabled flag in the token service
    */
-  private async refreshUserInfoOnSubscriptionChange(notificationType: string): Promise<void> {
+  private async refreshUserInfoOnSubscriptionChange(
+    notificationType: string
+  ): Promise<void> {
     try {
       const userController = new UserController();
 
@@ -396,10 +420,15 @@ export class WebSocketClient {
           } as WSMessage,
         });
       } else {
-        log.warn(`Failed to refresh user info after ${notificationType}: jwtUser is null`);
+        log.warn(
+          `Failed to refresh user info after ${notificationType}: jwtUser is null`
+        );
       }
     } catch (error) {
-      log.error(`Failed to refresh user info after ${notificationType}:`, error);
+      log.error(
+        `Failed to refresh user info after ${notificationType}:`,
+        error
+      );
     }
   }
 
@@ -407,9 +436,18 @@ export class WebSocketClient {
    * Send an event to the renderer process via IPC
    */
   private sendToRenderer(event: WSClientEvent): void {
-    if (this.win && !(this.win as any).isDestroyed()) {
+    if (
+      this.win &&
+      !(this.win as unknown as { isDestroyed: () => boolean }).isDestroyed()
+    ) {
       try {
-        (this.win as any).webContents.send("websocket:event", event);
+        (
+          this.win as unknown as {
+            webContents: {
+              send: (channel: string, event: WSClientEvent) => void;
+            };
+          }
+        ).webContents.send("websocket:event", event);
       } catch (error) {
         log.error("Failed to send WebSocket event to renderer:", error);
       }
@@ -482,7 +520,9 @@ export class WebSocketClient {
     );
 
     this.reconnectAttempts++;
-    log.info(`WebSocket reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
+    log.info(
+      `WebSocket reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`
+    );
 
     this.reconnectTimeout = setTimeout(() => {
       this.doConnect();
@@ -563,10 +603,15 @@ export class WebSocketClient {
       return;
     }
 
-    log.info(`Processing ${this.messageQueue.length} queued WebSocket messages`);
+    log.info(
+      `Processing ${this.messageQueue.length} queued WebSocket messages`
+    );
 
     const now = Date.now();
-    const processedMessages: Array<{ message: Record<string, unknown>; timestamp: number }> = [];
+    const processedMessages: Array<{
+      message: Record<string, unknown>;
+      timestamp: number;
+    }> = [];
 
     for (const queued of this.messageQueue) {
       // Check if message has expired
@@ -591,7 +636,9 @@ export class WebSocketClient {
       this.messageQueue = this.messageQueue.filter(
         (m) => !processedMessages.includes(m)
       );
-      log.info(`Sent ${processedMessages.length} queued messages, ${this.messageQueue.length} remaining`);
+      log.info(
+        `Sent ${processedMessages.length} queued messages, ${this.messageQueue.length} remaining`
+      );
     }
   }
 
@@ -632,7 +679,7 @@ export class WebSocketClient {
   public reconnect(): void {
     this.disconnect();
     this.manualDisconnect = false;
-    
+
     if (this.win && this.hasValidToken()) {
       this.doConnect();
     }

@@ -10,6 +10,7 @@ import { Token } from "@/modules/token";
 import { TOKENNAME, REFRESHTOKEN } from "@/config/usersetting";
 import { User } from "@/modules/user";
 import { TokenRefreshService } from "@/modules/tokenRefresh";
+import { resolveViteLoginBase } from "@/config/viteLoginUrl";
 
 // export type RemoteResp = {
 //   status: boolean,
@@ -23,11 +24,8 @@ export class HttpClient {
   private _refreshInProgress = false;
   private _isWorker = false;
   constructor() {
-    // Use process.env for environment variables in Electron main process
-    // NOTE: Removed import.meta.env check - Vite statically replaces import.meta.env.VITE_*
-    // at build time which causes Invalid URL errors in the main process.
-    // process.env is loaded correctly via Vite's loadEnv() in vite.main.config.mjs
-    let loginUrl: string | undefined = process.env.VITE_LOGIN_URL;
+    const resolved = resolveViteLoginBase();
+    let loginUrl: string | undefined = resolved?.value;
 
     // Validate and ensure we have a valid URL
     if (!loginUrl || loginUrl.trim() === "") {
@@ -163,7 +161,7 @@ export class HttpClient {
     endpoint: string,
     options: RequestInit,
     isRetry = false
-  ): Promise<any> {
+  ): Promise<unknown> {
     // await this.setheaderToken()
     const res = await fetch(this.baseUrl + endpoint, {
       ...options,
@@ -244,22 +242,24 @@ export class HttpClient {
     return this;
   }
 
-  public async get(endpoint: string, options = {}): Promise<any> {
-    // const body = new URLSearchParams(params).toString();
-    //console.log(this._headers)
-    return this._fetchJSON(endpoint, {
+  /**
+   * JSON responses vary by route; explicit `get<MyType>()` is preferred.
+   * Default `any` preserves legacy property access (`res.data.data`, etc.).
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  public async get<T = any>(endpoint: string, options = {}): Promise<T> {
+    return (await this._fetchJSON(endpoint, {
       ...options,
       method: "GET",
-      // headers: this._headers,
-    });
+    })) as T;
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  public async post(
+  public async post<T = any>(
     endpoint: string,
     formData: FormData | FormDataLib,
     options = {}
-  ): Promise<any> {
+  ): Promise<T> {
     // const body=new URLSearchParams(formData)
     // const body=formData
     // var requestOptions = {
@@ -272,18 +272,18 @@ export class HttpClient {
     // .then(response => {return response.json()})
     // const postheader={'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'}
     // let mergedhead = {...this._headers, ...postheader};
-    return this._fetchJSON(endpoint, {
+    return (await this._fetchJSON(endpoint, {
       ...options,
       // headers: this._headers,
       body: formData as BodyInit,
       method: "POST",
-    });
+    })) as T;
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  public async put(endpoint: string, data): Promise<any> {
+  public async put<T = any>(endpoint: string, data): Promise<T> {
     console.log(JSON.stringify(data));
-    return this._fetchJSON(endpoint, {
+    return (await this._fetchJSON(endpoint, {
       // headers: this._headers,
       body: data ? JSON.stringify(data) : undefined,
       method: "PUT",
@@ -291,32 +291,41 @@ export class HttpClient {
         Accept: "application/json",
         "Content-Type": "application/json",
       },
-    });
+    })) as T;
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  public async patch(endpoint: string, operations, options = {}): Promise<any> {
-    return this._fetchJSON(endpoint, {
+  public async patch<T = any>(
+    endpoint: string,
+    operations,
+    options = {}
+  ): Promise<T> {
+    return (await this._fetchJSON(endpoint, {
       ...options,
       body: JSON.stringify(operations),
       method: "PATCH",
       // headers: this._headers,
-    });
+    })) as T;
   }
 
-  public async delete(endpoint: string, options = {}) {
-    return this._fetchJSON(endpoint, {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  public async delete<T = any>(endpoint: string, options = {}): Promise<T> {
+    return (await this._fetchJSON(endpoint, {
       ...options,
       method: "DELETE",
       // headers: this._headers,
-    });
+    })) as T;
   }
   // post json data
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  public async postJson(endpoint: string, data, options = {}): Promise<any> {
+  public async postJson<T = any>(
+    endpoint: string,
+    data,
+    options = {}
+  ): Promise<T> {
     // this.setHeader('Accept', 'application/json')
     // this.setHeader('Content-Type', 'application/json')
-    return this._fetchJSON(endpoint, {
+    return (await this._fetchJSON(endpoint, {
       ...options,
       body: JSON.stringify(data),
       method: "POST",
@@ -325,7 +334,7 @@ export class HttpClient {
         "Content-Type": "application/json",
       },
       // headers: this._headers,
-    });
+    })) as T;
   }
 
   /** Post JSON and return stream response. Callers may pass options.signal (AbortSignal) to abort the request. */
