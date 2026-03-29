@@ -29,23 +29,7 @@ import { shell } from "electron";
 // const packageJson = require('../../../package.json');
 import { app } from "electron";
 // import {Token} from "@/modules/token"
-
-/**
- * Prefer `process.env`, then Vite-inlined `import.meta.env`.
- * Empty and whitespace-only values are treated as missing so a space-only
- * value does not win over a real URL (which would yield `new URL("/login?…")` → Invalid URL).
- */
-function resolveViteLoginBase(
-  envVar: string | undefined,
-  metaVar: string | undefined
-): string | undefined {
-  for (const v of [envVar, metaVar]) {
-    if (typeof v !== "string") continue;
-    const t = v.trim();
-    if (t.length > 0) return t;
-  }
-  return undefined;
-}
+import { resolveViteLoginBase } from "@/config/viteLoginUrl";
 
 // const debug = require('debug')('user-controller');
 export type userlogin = {
@@ -179,14 +163,49 @@ export class UserController {
       typeof import.meta !== "undefined" && import.meta.env
         ? (import.meta.env.VITE_LOGIN_URL as string | undefined)
         : undefined;
+    const metaLoginUrlTestRaw =
+      typeof import.meta !== "undefined" && import.meta.env
+        ? (import.meta.env.VITE_LOGIN_URL_TEST as string | undefined)
+        : undefined;
 
-    const loginUrlRaw = resolveViteLoginBase(envLoginUrlRaw, metaLoginUrlRaw);
+    const resolved = resolveViteLoginBase();
+    const loginUrlRaw = resolved?.value;
+
+    // #region agent log
+    fetch("http://127.0.0.1:7242/ingest/a8010ee7-485a-4897-a54e-df8f89390712", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Debug-Session-Id": "6f1b64",
+      },
+      body: JSON.stringify({
+        sessionId: "6f1b64",
+        location: "UserController.ts:getLoginPageUrl",
+        message: "resolveViteLoginBase",
+        data: {
+          hypothesisId: "H1",
+          hasResolved: resolved !== undefined,
+          source: resolved?.source,
+          valueLen: resolved?.value.length,
+          firstCharCode:
+            resolved && resolved.value.length > 0
+              ? resolved.value.charCodeAt(0)
+              : null,
+        },
+        timestamp: Date.now(),
+      }),
+    }).catch((_err: unknown) => {
+      /* telemetry send failure is non-critical */
+    });
+    // #endregion
+
     if (loginUrlRaw === undefined) {
       const msg =
-        "VITE_LOGIN_URL is not set or is empty after trim. Set VITE_LOGIN_URL in .env at build time (e.g. CI secrets) or export it for the main process.";
+        "VITE_LOGIN_URL is not set or is empty after trim. Set VITE_LOGIN_URL (or VITE_LOGIN_URL_TEST) in .env at build time; CI should map secret VITE_LOGIN_URL_TEST to VITE_LOGIN_URL in .env.";
       log.error("[getLoginPageUrl] " + msg, {
         hasProcessEnv: envLoginUrlRaw !== undefined,
         hasMetaEnv: metaLoginUrlRaw !== undefined,
+        hasMetaTestEnv: metaLoginUrlTestRaw !== undefined,
       });
       throw new Error(msg);
     }
@@ -243,11 +262,51 @@ export class UserController {
     const appName = app.getName() || "";
     const finalapp = appName.replace(/-/g, "");
 
-    // Resolve /login against the configured origin (avoids string concat bugs like https:/login).
-    const finalloginUrl = new URL(
-      `/login?app=${encodeURIComponent(finalapp)}`,
-      baseUrl
-    ).href;
+    let finalloginUrl: string;
+    try {
+      const u = new URL("/", baseUrl);
+      u.pathname = "/login";
+      u.searchParams.set("app", finalapp);
+      finalloginUrl = u.href;
+    } catch (error: unknown) {
+      log.error(
+        "[getLoginPageUrl] failed to compose /login URL from base (pathname/searchParams)",
+        {
+          hypothesisId: "H3",
+          baseHrefLen: baseUrl.href.length,
+          error:
+            error instanceof Error
+              ? { name: error.name, message: error.message }
+              : String(error),
+        }
+      );
+      throw new Error(
+        "Could not build login URL from VITE_LOGIN_URL; check it is a full origin (e.g. https://host.com)."
+      );
+    }
+
+    // #region agent log
+    fetch("http://127.0.0.1:7242/ingest/a8010ee7-485a-4897-a54e-df8f89390712", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Debug-Session-Id": "6f1b64",
+      },
+      body: JSON.stringify({
+        sessionId: "6f1b64",
+        location: "UserController.ts:getLoginPageUrl",
+        message: "finalloginUrl built",
+        data: {
+          hypothesisId: "H3",
+          ok: true,
+          resultLen: finalloginUrl.length,
+        },
+        timestamp: Date.now(),
+      }),
+    }).catch((_err: unknown) => {
+      /* telemetry send failure is non-critical */
+    });
+    // #endregion
 
     log.debug("[getLoginPageUrl] Build login URL", {
       envLoginUrlRaw,
