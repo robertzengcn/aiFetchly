@@ -50,17 +50,26 @@ jobs:
           echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
         shell: bash
 
-      - name: Create .env file
+      # Use bash so .env is UTF-8 (PowerShell redirects can confuse dotenv). Forge loads .env then .env.${NODE_ENV}.
+      - name: Write .env for test build
+        shell: bash
         run: |
-          touch .env
-          echo "NODE_ENV=test" >> .env
-          cat .env    
-      - name: Create .env file 
-        run: |
-          touch .env
-          echo "VITE_LOGIN_URL=${{ secrets.VITE_LOGIN_URL_TEST }}" >> .env
-          echo "UPDATESERVER=${{ secrets.UPDATESERVER }}" >> .env
-          cat .env       
+          set -euo pipefail
+          if [ -z "${{ secrets.VITE_LOGIN_URL_TEST }}" ]; then
+            echo "::error::secrets.VITE_LOGIN_URL_TEST is empty. Add it in repo Settings > Secrets, or fork PRs cannot use secrets."
+            exit 1
+          fi
+          {
+            echo "NODE_ENV=test"
+            echo "VITE_LOGIN_URL=${{ secrets.VITE_LOGIN_URL_TEST }}"
+            echo "UPDATESERVER=${{ secrets.UPDATESERVER }}"
+          } > .env
+          cp .env .env.test
+          if ! grep -qE '^VITE_LOGIN_URL=.' .env; then
+            echo "::error::.env has empty VITE_LOGIN_URL after write"
+            exit 1
+          fi
+          echo "OK: .env and .env.test written (VITE_LOGIN_URL non-empty)"
       - name: Install dependencies
         run: yarn install
       # - name: Run postinstall script
@@ -278,17 +287,25 @@ jobs:
           echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
         shell: bash
 
-      - name: Create .env file
+      - name: Write .env for test build
+        shell: bash
         run: |
-            touch .env
-            echo "NODE_ENV=test" >> .env
-            cat .env               
-      - name: Create .env file 
-        run: |
-            touch .env  
-            echo "VITE_LOGIN_URL=${{ secrets.VITE_LOGIN_URL_TEST }}" >> .env
-            echo "UPDATESERVER=${{ secrets.UPDATESERVER }}" >> .env
-            cat .env
+          set -euo pipefail
+          if [ -z "${{ secrets.VITE_LOGIN_URL_TEST }}" ]; then
+            echo "::error::secrets.VITE_LOGIN_URL_TEST is empty. Add it in repo Settings > Secrets, or fork PRs cannot use secrets."
+            exit 1
+          fi
+          {
+            echo "NODE_ENV=test"
+            echo "VITE_LOGIN_URL=${{ secrets.VITE_LOGIN_URL_TEST }}"
+            echo "UPDATESERVER=${{ secrets.UPDATESERVER }}"
+          } > .env
+          cp .env .env.test
+          if ! grep -qE '^VITE_LOGIN_URL=.' .env; then
+            echo "::error::.env has empty VITE_LOGIN_URL after write"
+            exit 1
+          fi
+          echo "OK: .env and .env.test written (VITE_LOGIN_URL non-empty)"
       - name: Install setuptools
         run: |
             brew install python-setuptools                 

@@ -11,6 +11,7 @@ import {
 import { User } from "@/modules/user";
 import { CommonApiresp } from "@/entityTypes/commonType";
 import { log } from "@/modules/Logger";
+import { resolveViteLoginBase } from "@/config/viteLoginUrl";
 
 /**
  * Token refresh response data interface
@@ -66,11 +67,8 @@ export class TokenRefreshService {
   private static _consecutiveFailures = 0;
 
   constructor() {
-    // Use process.env for environment variables in Electron main process
-    // NOTE: Removed import.meta.env check - Vite statically replaces import.meta.env.VITE_*
-    // at build time which causes Invalid URL errors in Electron main process.
-    // process.env is loaded correctly via Vite's loadEnv() in vite.main.config.mjs
-    let loginUrl: string | undefined = process.env.VITE_LOGIN_URL;
+    const resolved = resolveViteLoginBase();
+    let loginUrl: string | undefined = resolved?.value;
 
     // Validate and ensure we have a valid URL
     if (!loginUrl || loginUrl.trim() === "") {
