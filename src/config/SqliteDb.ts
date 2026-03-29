@@ -230,70 +230,6 @@ function getSqliteVecExtensionPath(): string | null {
           console.log(
             `Found sqlite-vec extension in build directory: ${resolved}`
           );
-          // #region agent log
-          {
-            const inAsarOnly =
-              resolved.includes("app.asar") &&
-              !resolved.includes("app.asar.unpacked");
-            let unpackedVecPath: string | null = null;
-            let unpackedVecExists = false;
-            try {
-              if (
-                typeof process !== "undefined" &&
-                (process as NodeJS.Process & { type: string }).type ===
-                  "browser" &&
-                app &&
-                typeof (app as { getAppPath?: () => string }).getAppPath ===
-                  "function"
-              ) {
-                const ap = (
-                  app as unknown as { getAppPath: () => string }
-                ).getAppPath();
-                if ((app as { isPackaged?: boolean }).isPackaged) {
-                  const up = ap.replace(/app\.asar$/, "app.asar.unpacked");
-                  unpackedVecPath = path.join(
-                    up,
-                    ".vite",
-                    "build",
-                    extensionName
-                  );
-                  unpackedVecExists = fs.existsSync(unpackedVecPath);
-                }
-              }
-            } catch {
-              // ignore
-            }
-            fetch(
-              "http://127.0.0.1:7242/ingest/a8010ee7-485a-4897-a54e-df8f89390712",
-              {
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                  "X-Debug-Session-Id": "18feb8",
-                },
-                body: JSON.stringify({
-                  sessionId: "18feb8",
-                  location: "SqliteDb.ts:getSqliteVecExtensionPath",
-                  message: "sqlite-vec path resolved",
-                  data: {
-                    rawCandidate: buildPath,
-                    chosenPath: resolved,
-                    inAsarOnly,
-                    platform: process.platform,
-                    arch: process.arch,
-                    unpackedVecPath,
-                    unpackedVecExists,
-                    buildPathsTriedCount: buildExtensionPaths.length,
-                  },
-                  timestamp: Date.now(),
-                  hypothesisId: "H1_H5",
-                }),
-              }
-            ).catch((_err: unknown) => {
-              /* telemetry send failure is non-critical */
-            });
-          }
-          // #endregion
           return resolved;
         }
       } catch (error) {
@@ -531,28 +467,6 @@ export class SqliteDb {
                 "sqlite-vec extension loaded successfully from:",
                 extensionPath
               );
-              // #region agent log
-              fetch(
-                "http://127.0.0.1:7242/ingest/a8010ee7-485a-4897-a54e-df8f89390712",
-                {
-                  method: "POST",
-                  headers: {
-                    "Content-Type": "application/json",
-                    "X-Debug-Session-Id": "18feb8",
-                  },
-                  body: JSON.stringify({
-                    sessionId: "18feb8",
-                    location: "SqliteDb.ts:prepareDatabase",
-                    message: "sqlite-vec loadExtension ok",
-                    data: { extensionPath },
-                    timestamp: Date.now(),
-                    hypothesisId: "H1",
-                  }),
-                }
-              ).catch((_err: unknown) => {
-                /* telemetry send failure is non-critical */
-              });
-              // #endregion
             } else {
               console.warn(
                 "sqlite-vec extension not found. Vector operations will not work."
@@ -565,39 +479,6 @@ export class SqliteDb {
             }
           } catch (error) {
             console.error("Failed to load sqlite-vec extension:", error);
-            // #region agent log
-            {
-              const errMsg =
-                error instanceof Error ? error.message : String(error);
-              fetch(
-                "http://127.0.0.1:7242/ingest/a8010ee7-485a-4897-a54e-df8f89390712",
-                {
-                  method: "POST",
-                  headers: {
-                    "Content-Type": "application/json",
-                    "X-Debug-Session-Id": "18feb8",
-                  },
-                  body: JSON.stringify({
-                    sessionId: "18feb8",
-                    location: "SqliteDb.ts:prepareDatabase:catch",
-                    message: "sqlite-vec loadExtension failed",
-                    data: {
-                      errMsg,
-                      extPathAttempted: extensionPath,
-                      inAsarOnly:
-                        extensionPath != null &&
-                        extensionPath.includes("app.asar") &&
-                        !extensionPath.includes("app.asar.unpacked"),
-                    },
-                    timestamp: Date.now(),
-                    hypothesisId: "H1_H3",
-                  }),
-                }
-              ).catch((_err: unknown) => {
-                /* telemetry send failure is non-critical */
-              });
-            }
-            // #endregion
             // Don't throw - allow database to initialize even if extension fails
             // This allows the app to start, but vector operations will fail
             // The error will be logged for debugging
