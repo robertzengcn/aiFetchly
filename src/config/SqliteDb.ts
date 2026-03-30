@@ -46,6 +46,7 @@ import { RAGDocumentEntity } from "@/entity/RAGDocument.entity";
 import { RAGChunkEntity } from "@/entity/RAGChunk.entity";
 // import { RAGModelEntity } from "@/entity/RAGModel.entity";
 import { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
+import { AIChatAttachmentEntity } from "@/entity/AIChatAttachment.entity";
 import { VectorEntity, VectorMetadataEntity } from "@/entity/Vector.entity";
 import { MCPToolEntity } from "@/entity/MCPTool.entity";
 import { TaskEntity } from "@/entity/Task.entity";
@@ -444,6 +445,7 @@ export class SqliteDb {
           RAGChunkEntity,
           // RAGModelEntity,
           AIChatMessageEntity,
+          AIChatAttachmentEntity,
           VectorEntity,
           VectorMetadataEntity,
           MCPToolEntity,

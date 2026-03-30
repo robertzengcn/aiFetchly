@@ -316,6 +316,24 @@ class="message-bubble" :class="{
                   <v-icon v-if="!isResendingMessage || resendingMessageId !== message.id" size="small">mdi-refresh</v-icon>
                 </v-btn>
               </div>
+              <div
+                v-if="message.role === 'user' && (message.metadata?.attachments as any[])?.length"
+                class="attachment-preview"
+              >
+                <div class="attachment-preview-header">
+                  <v-icon size="x-small" class="mr-1">mdi-file-document</v-icon>
+                  <strong>{{ t('knowledge.documents') }}</strong>
+                </div>
+                <div class="attachment-preview-files">
+                  <div
+                    v-for="(att, idx) in (message.metadata?.attachments as any[])"
+                    :key="`${att.fileName}-${idx}`"
+                    class="attachment-preview-file"
+                  >
+                    {{ att.fileName }}
+                  </div>
+                </div>
+              </div>
               <!-- eslint-disable-next-line vue/no-v-html -->
               <div class="message-text" v-html="formatMessage(message.content)"></div>
               <div class="message-timestamp" :title="formatFullTimestamp(message.timestamp)">
@@ -531,8 +549,20 @@ class="message-bubble" :class="{
           <v-btn
             icon
             size="small"
+            variant="text"
             color="primary"
-            :disabled="!inputMessage.trim() && !isLoading"
+            :disabled="isLoading || selectedUploadFiles.length >= MAX_UPLOAD_FILES"
+            :loading="isUploadingFiles"
+            @click="triggerFilePicker"
+            :title="t('knowledge.select_files')"
+          >
+            <v-icon size="small">mdi-paperclip</v-icon>
+          </v-btn>
+          <v-btn
+            icon
+            size="small"
+            color="primary"
+            :disabled="(!inputMessage.trim() && selectedUploadFiles.length === 0) && !isLoading"
             :loading="false"
             @click="isLoading ? handleStopStream() : handleSendMessage()"
             :title="isLoading ? (t('knowledge.stop_generating') || 'Stop generating') : ''"
@@ -541,6 +571,46 @@ class="message-bubble" :class="{
           </v-btn>
         </template>
       </v-textarea>
+
+      <input
+        ref="fileInputRef"
+        type="file"
+        multiple
+        hidden
+        :accept="fileAccept"
+        @change="handleFileSelection"
+      />
+    </div>
+
+    <div
+      v-if="selectedUploadFiles.length > 0"
+      class="attached-files-preview"
+    >
+      <div class="attached-files-header">
+        <v-icon size="x-small" class="mr-1">mdi-paperclip</v-icon>
+        <strong>{{ t('knowledge.documents') }}</strong>
+      </div>
+      <div class="attached-files-list">
+        <div
+          v-for="(f, index) in selectedUploadFiles"
+          :key="`${f.name}-${index}`"
+          class="attached-file-item"
+        >
+          <span class="attached-file-name">{{ f.name }}</span>
+          <span class="attached-file-size">({formatBytes(f.size)})</span>
+          <v-btn
+            icon
+            size="x-small"
+            variant="text"
+            color="primary"
+            :disabled="isLoading || isUploadingFiles"
+            @click="removeSelectedFile(index)"
+            :title="t('common.comfirm_delete') || 'Remove'"
+          >
+            <v-icon size="x-small">mdi-close</v-icon>
+          </v-btn>
+        </div>
+      </div>
     </div>
 
     <!-- MCP Tool Manager Dialog -->
@@ -617,8 +687,7 @@ class="message-bubble" :class="{
 import { ref, computed, onMounted, nextTick, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { streamChatMessage, stopStreamingChat, getChatHistory, clearChatHistory, getConversations, ConversationMetadata } from '@/views/api/aiChat';
-import { ChatMessage, ChatStreamChunk, Plan, PlanStep, PlanStepStatus } from '@/entityTypes/commonType';
-import { MessageType } from '@/entityTypes/commonType';
+import { ChatMessage, ChatStreamChunk, Plan, PlanStep, PlanStepStatus, MessageType, UploadedFilePayload } from '@/entityTypes/commonType';
 import MCPToolManager from './MCPToolManager.vue';
 
 // Stream state enum for type safety
@@ -663,12 +732,15 @@ const emit = defineEmits<{
 const messages = ref<ChatMessage[]>([]);
 const inputMessage = ref('');
 const isLoading = ref(false);
+const isUploadingFiles = ref(false);
 const isLoadingHistory = ref(false);
 const isTyping = ref(false);
 const messagesContainer = ref<HTMLElement | null>(null);
 const showScrollButton = ref(false);
 const conversationId = ref<string | undefined>(undefined);
 const inputField = ref<HTMLTextAreaElement | null>(null);
+const fileInputRef = ref<HTMLInputElement | null>(null);
+const selectedUploadFiles = ref<File[]>([]);
 const useRAGContext = ref(false);
 const isExecutingTool = ref(false);
 const currentToolName = ref('');
@@ -682,6 +754,14 @@ const isLoadingConversations = ref(false);
 const copiedMessageId = ref<string | null>(null);
 const showMCPToolManager = ref(false);
 const activeStreamConversationId = ref<string | undefined>(undefined);
+
+const MAX_UPLOAD_FILES = 3;
+const MAX_UPLOAD_FILE_BYTES = 5 * 1024 * 1024; // 5MB
+const MAX_TOTAL_MESSAGE_CHARS = 95000; // must stay below aifetchserver AskStreamData.message max_length (100000)
+
+// Accept text-ish formats only for v1; further validated in code.
+const fileAccept =
+  '.txt,.md,.csv,.json,.html,.htm,.xml,text/plain,text/markdown,text/csv,application/json,text/html,application/xml';
 
 // Resend message state
 const isResendingMessage = ref(false);
@@ -705,6 +785,102 @@ function createAssistantMessage(content = ''): ChatMessage {
     timestamp: new Date(),
     conversationId: conversationId.value || StreamState.PENDING
   };
+}
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let i = 0;
+  let value = bytes;
+  while (value >= 1024 && i < units.length - 1) {
+    value /= 1024;
+    i++;
+  }
+  const precision = i === 0 ? 0 : 1;
+  return `${value.toFixed(precision)} ${units[i]}`;
+}
+
+
+function isSupportedTextFile(file: File): boolean {
+  const mime = (file.type || '').toLowerCase();
+  const nameLower = file.name.toLowerCase();
+
+  // Prefer MIME when available
+  if (mime.startsWith('text/')) return true;
+  if (mime === 'application/json' || mime === 'application/xml' || mime === 'application/xhtml+xml') {
+    return true;
+  }
+
+  // Fallback by extension (browser may provide empty mime)
+  return (
+    nameLower.endsWith('.txt') ||
+    nameLower.endsWith('.md') ||
+    nameLower.endsWith('.csv') ||
+    nameLower.endsWith('.json') ||
+    nameLower.endsWith('.html') ||
+    nameLower.endsWith('.htm')
+  );
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  // Convert ArrayBuffer -> base64 string (browser-safe).
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  const chunkSize = 8192; // keep low to avoid engine argument limits
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    for (let j = 0; j < chunk.length; j++) {
+      binary += String.fromCharCode(chunk[j]);
+    }
+  }
+  return btoa(binary);
+}
+
+function triggerFilePicker(): void {
+  fileInputRef.value?.click();
+}
+
+function removeSelectedFile(index: number): void {
+  selectedUploadFiles.value = selectedUploadFiles.value.filter((_, i) => i !== index);
+}
+
+async function handleFileSelection(event: Event): Promise<void> {
+  const target = event.target as HTMLInputElement;
+  const fileList = target.files;
+  if (!fileList || fileList.length === 0) return;
+
+  if (selectedUploadFiles.value.length >= MAX_UPLOAD_FILES) {
+    streamError.value = t('knowledge.upload_failed') || 'Upload failed';
+    target.value = '';
+    return;
+  }
+
+  const files = Array.from(fileList);
+  const remainingSlots = MAX_UPLOAD_FILES - selectedUploadFiles.value.length;
+  const toConsider = files.slice(0, remainingSlots);
+
+  const newFiles: File[] = [];
+  let hadInvalid = false;
+  for (const file of toConsider) {
+    if (file.size > MAX_UPLOAD_FILE_BYTES) {
+      hadInvalid = true;
+      continue;
+    }
+    if (!isSupportedTextFile(file)) {
+      hadInvalid = true;
+      continue;
+    }
+    newFiles.push(file);
+  }
+
+  selectedUploadFiles.value = [...selectedUploadFiles.value, ...newFiles];
+
+  if (hadInvalid) {
+    streamError.value = t('knowledge.upload_failed') || 'Upload failed';
+  }
+
+  // Allow selecting the same file again
+  target.value = '';
 }
 
 // Filter out messages with empty content (unless they have a messageType like tool calls, plans, etc.)
@@ -983,7 +1159,10 @@ async function handleCopyMessage(content: string, messageId: string) {
 /**
  * Core send logic shared by new messages and resend
  */
-async function sendMessage(userMessageContent: string): Promise<void> {
+async function sendMessage(
+  userMessageContent: string,
+  uploadedFiles?: UploadedFilePayload[]
+): Promise<void> {
   if (!userMessageContent.trim() || isLoading.value) return;
 
   isLoading.value = true;
@@ -1008,7 +1187,16 @@ async function sendMessage(userMessageContent: string): Promise<void> {
     role: 'user',
     content: userMessageContent,
     timestamp: new Date(),
-    conversationId: conversationId.value || StreamState.PENDING
+    conversationId: conversationId.value || StreamState.PENDING,
+    metadata: uploadedFiles?.length
+      ? {
+          attachments: uploadedFiles.map((f) => ({
+            fileName: f.fileName,
+            mimeType: f.mimeType,
+            sizeBytes: f.sizeBytes,
+          })),
+        }
+      : undefined,
   };
   messages.value.push(userMessage);
   
@@ -1281,7 +1469,8 @@ async function sendMessage(userMessageContent: string): Promise<void> {
       streamConversationId,
       undefined, // model
       useRAGContext.value, // useRAG flag
-      5 // ragLimit
+      5, // ragLimit
+      uploadedFiles // attachments for local persistence
     );
   } catch (error) {
     console.error('Error sending message:', error);
@@ -1317,9 +1506,85 @@ async function sendMessage(userMessageContent: string): Promise<void> {
  */
 async function handleSendMessage() {
   const trimmed = inputMessage.value.trim();
-  if (!trimmed) return;
-  inputMessage.value = '';
-  await sendMessage(trimmed);
+  if (!trimmed && selectedUploadFiles.value.length === 0) return;
+  if (isUploadingFiles.value) return;
+
+  isUploadingFiles.value = true;
+  streamError.value = null;
+
+  try {
+    const uploadedFiles: UploadedFilePayload[] = [];
+    let finalMessage =
+      trimmed.length > MAX_TOTAL_MESSAGE_CHARS
+        ? trimmed.slice(0, MAX_TOTAL_MESSAGE_CHARS)
+        : trimmed;
+
+    for (const file of selectedUploadFiles.value) {
+      if (file.size > MAX_UPLOAD_FILE_BYTES) continue;
+      if (!isSupportedTextFile(file)) continue;
+
+      const mimeType = file.type || 'text/plain';
+
+      const buf = await file.arrayBuffer();
+      const contentBase64 = arrayBufferToBase64(buf);
+      uploadedFiles.push({
+        fileName: file.name,
+        mimeType,
+        sizeBytes: file.size,
+        contentBase64,
+      });
+
+      // Extract text to inject into the prompt (v1: text-only).
+      let extractedText = '';
+      try {
+        extractedText = await file.text();
+      } catch {
+        extractedText = '';
+      }
+
+      extractedText = (extractedText || '').replace(/\r\n/g, '\n').trim();
+
+      const prefix = `[Attached file: ${file.name} (${mimeType})]\n`;
+      const sep = finalMessage ? '\n\n' : '';
+
+      const remaining = MAX_TOTAL_MESSAGE_CHARS - finalMessage.length - sep.length;
+      if (remaining <= prefix.length) {
+        finalMessage = `${finalMessage}${sep}${prefix.slice(0, remaining)}`;
+        continue;
+      }
+
+      const textCapacity = remaining - prefix.length;
+      let truncated = false;
+      let truncatedText = extractedText;
+      if (truncatedText.length > textCapacity) {
+        truncated = true;
+        truncatedText = truncatedText.slice(0, textCapacity);
+      }
+
+      finalMessage = `${finalMessage}${sep}${prefix}${truncatedText}${
+        truncated ? '\n[truncated]' : ''
+      }`;
+
+      if (finalMessage.length >= MAX_TOTAL_MESSAGE_CHARS) break;
+    }
+
+    if (finalMessage.length > MAX_TOTAL_MESSAGE_CHARS) {
+      finalMessage = finalMessage.slice(0, MAX_TOTAL_MESSAGE_CHARS);
+    }
+
+    if (!finalMessage.trim()) {
+      streamError.value = t('knowledge.upload_failed') || 'Upload failed';
+      return;
+    }
+
+    // Clear inputs after building the request payload.
+    inputMessage.value = '';
+    selectedUploadFiles.value = [];
+
+    await sendMessage(finalMessage, uploadedFiles);
+  } finally {
+    isUploadingFiles.value = false;
+  }
 }
 
 /**
@@ -2520,6 +2785,79 @@ onMounted(() => {
   to {
     transform: rotate(360deg);
   }
+}
+
+/* Attachment preview in message bubbles */
+.attachment-preview {
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  background-color: rgba(var(--v-theme-primary), 0.06);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.attachment-preview-header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 4px;
+  color: rgb(var(--v-theme-primary));
+}
+
+.attachment-preview-files {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.attachment-preview-file {
+  color: rgb(var(--v-theme-on-surface-variant));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Attached files preview below input area */
+.attached-files-preview {
+  padding: 8px 16px;
+  background-color: rgb(var(--v-theme-surface));
+  border-top: 1px solid rgba(var(--v-border-color), 0.1);
+}
+
+.attached-files-header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: rgb(var(--v-theme-primary));
+}
+
+.attached-files-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.attached-file-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background-color: rgba(var(--v-theme-on-surface), 0.04);
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.attached-file-name {
+  color: rgb(var(--v-theme-on-surface));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.attached-file-size {
+  color: rgb(var(--v-theme-on-surface-variant));
+  font-size: 11px;
+  flex-shrink: 0;
 }
 </style>
 
