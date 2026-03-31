@@ -421,5 +421,12 @@ export type UploadedFilePayload = {
   contentBase64: string;
 };
 
+export type LLMImageAttachmentPayload = {
+  type: "image";
+  mediaType: string;
+  dataBase64: string;
+  detail?: "auto" | "low" | "high";
+};
+
 // Re-export metadata types for convenience
 export * from "./metadataType";

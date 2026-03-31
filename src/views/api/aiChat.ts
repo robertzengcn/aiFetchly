@@ -9,6 +9,7 @@ import {
   ChatHistoryResponse,
   ChatStreamChunk,
   CommonMessage,
+  LLMImageAttachmentPayload,
   UploadedFilePayload,
 } from "@/entityTypes/commonType";
 import {
@@ -55,7 +56,8 @@ export async function sendChatMessage(
   model?: string,
   useRAG?: boolean,
   ragLimit?: number,
-  uploadedFiles?: UploadedFilePayload[]
+  uploadedFiles?: UploadedFilePayload[],
+  attachments?: LLMImageAttachmentPayload[]
 ): Promise<AIChatResponse<ChatMessage>> {
   try {
     const requestData = {
@@ -65,6 +67,7 @@ export async function sendChatMessage(
       useRAG,
       ragLimit,
       uploadedFiles,
+      attachments,
     };
 
     const response: CommonMessage<ChatMessage> = await windowInvoke(
@@ -119,7 +122,8 @@ export async function streamChatMessage(
   model?: string,
   useRAG?: boolean,
   ragLimit?: number,
-  uploadedFiles?: UploadedFilePayload[]
+  uploadedFiles?: UploadedFilePayload[],
+  attachments?: LLMImageAttachmentPayload[]
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     // Accumulate full content for potential future use
@@ -180,6 +184,7 @@ export async function streamChatMessage(
       useRAG,
       ragLimit,
       uploadedFiles,
+      attachments,
     };
     windowSend(AI_CHAT_STREAM, requestData);
   });
