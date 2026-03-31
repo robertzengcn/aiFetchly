@@ -19,6 +19,8 @@
         "${workspaceFolder}/.vite/**"
       ],
       "sourceMaps": true,
+      "autoAttachChildProcesses": true,
+      "skipFiles": ["<node_internals>/**"],
       "console": "integratedTerminal"
     },
     {
