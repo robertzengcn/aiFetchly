@@ -69,6 +69,7 @@ export default {
   route: {
     dashboard: "仪表板",
     home: "首页",
+    statistic: "数据统计",
     system_setting: "系统设置",
     campaign: "活动",
     campaign_list: "活动列表",

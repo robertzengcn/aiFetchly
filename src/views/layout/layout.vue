@@ -96,9 +96,6 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
                             </v-list-item>
                         </v-list>
                     </v-menu>
-                    <v-btn variant="text" icon="mdi-chat" @click="toggleChatPanel">
-                        <v-icon size="small"></v-icon>
-                    </v-btn>
                     <v-btn variant="text" append-icon="mdi-chevron-down" class="mr-2">
                         <!-- <v-avatar size="x-small" class="avatar mr-2">
                             <v-img :src="wxtx" alt="{{userName}}"></v-img>
@@ -161,20 +158,6 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
           :timeout="snaptimeout"
         />
 
-        <!-- AI Chat Panel -->
-        <div class="ai-chat-panel" :class="{ 'panel-open': chatPanelOpen }">
-          <AiChatBox
-            :visible="chatPanelOpen"
-            @close="toggleChatPanel"
-          />
-        </div>
-
-        <!-- Backdrop overlay -->
-        <div
-          v-if="chatPanelOpen"
-          class="chat-backdrop"
-          @click="toggleChatPanel"
-        ></div>
     </v-layout>
    
 </template>
@@ -188,11 +171,10 @@ import { useMainStore } from '@/views/store/appMain';
 import { Signout } from '@/views/api/users'
 import {setLanguage} from '@/views/utils/cookies'
 import {useI18n} from "vue-i18n";
-import { ref,onMounted,onUnmounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import {receiveSystemMessage} from '@/views/api/layout'
 import {CommonDialogMsg} from "@/entityTypes/commonType"
 import NoticeSnackbar from '@/views/components/widgets/noticeSnackbar.vue';
-import AiChatBox from '@/views/components/aiChat/AiChatBox.vue';
 import {GetloginUserInfo} from '@/views/api/users'
 import { getAppName } from '@/views/api/app'
 import { packageAppName } from '@/config/appPackage'
@@ -238,7 +220,6 @@ const permanent = computed(() => {
 const showNotice = ref(false);
 const showCloudflareNotification = ref(false);
 const currentCloudflareNotification = ref<CommonDialogMsg | null>(null);
-const chatPanelOpen = ref(false);
 const {t,locale} = useI18n();
 const location="end"
 type languageType = {
@@ -309,18 +290,6 @@ const getTranslatedTitle = (title: string): string => {
         return t(title);
     }
     return title;
-}
-
-const toggleChatPanel = () => {
-    chatPanelOpen.value = !chatPanelOpen.value;
-}
-
-// Keyboard shortcut for toggling chat (Ctrl/Cmd + K)
-const handleKeyboardShortcut = (e: KeyboardEvent) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-        e.preventDefault();
-        toggleChatPanel();
-    }
 }
 
 const getMessageIcon = (type: NoticeType): string => {
@@ -415,8 +384,7 @@ onMounted(async () => {
     await initializeLanguageSynchronization()
     
     // Add keyboard shortcut listener
-    window.addEventListener('keydown', handleKeyboardShortcut)
-    
+
     receiveSystemMessage((res:CommonDialogMsg)=>{
        console.log(res)
         //revice system message
@@ -428,10 +396,6 @@ onMounted(async () => {
 }
 )
 
-onUnmounted(() => {
-    // Clean up keyboard shortcut listener
-    window.removeEventListener('keydown', handleKeyboardShortcut)
-})
 const showDialog=(status:boolean, content:string)=>{
     // Use the new message system for multiple messages
     const messageType: NoticeType = status ? 'success' : 'error';
@@ -520,60 +484,4 @@ const showDialog=(status:boolean, content:string)=>{
     box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
 }
 
-/* AI Chat Panel Styles */
-.ai-chat-panel {
-    position: fixed;
-    top: 0;
-    right: -420px;
-    width: 400px;
-    height: 100vh;
-    background-color: #ffffff;
-    box-shadow: -2px 0 16px rgba(0, 0, 0, 0.1);
-    transition: right 0.3s ease-in-out;
-    z-index: 9998;
-}
-
-.ai-chat-panel.panel-open {
-    right: 0;
-}
-
-.chat-backdrop {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background-color: rgba(0, 0, 0, 0.3);
-    z-index: 9997;
-    animation: fadeIn 0.3s ease-in-out;
-}
-
-@keyframes fadeIn {
-    from {
-        opacity: 0;
-    }
-    to {
-        opacity: 1;
-    }
-}
-
-/* Dark theme support for chat panel */
-:deep(.v-theme--dark) {
-    .ai-chat-panel {
-        background-color: #1e1e1e;
-        box-shadow: -2px 0 16px rgba(0, 0, 0, 0.5);
-    }
-}
-
-/* Mobile responsiveness for chat panel */
-@media (max-width: 768px) {
-    .ai-chat-panel {
-        width: 100%;
-        right: -100%;
-    }
-
-    .ai-chat-panel.panel-open {
-        right: 0;
-    }
-}
 </style>

@@ -79,6 +79,7 @@ export default {
   route: {
     dashboard: "ダッシュボード",
     home: "ホーム",
+    statistic: "統計",
     system_setting: "システム設定",
     campaign: "キャンペーン",
     campaign_list: "キャンペーン一覧",

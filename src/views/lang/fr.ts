@@ -79,6 +79,7 @@ export default {
   route: {
     dashboard: "Tableau de bord",
     home: "Accueil",
+    statistic: "Statistiques",
     system_setting: "Paramètres système",
     campaign: "Campagne",
     campaign_list: "Liste des campagnes",
