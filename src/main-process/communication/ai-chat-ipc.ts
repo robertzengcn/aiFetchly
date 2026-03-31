@@ -13,6 +13,7 @@ import {
   ChatHistoryResponse,
   ChatStreamChunk,
   MessageType,
+  LLMImageAttachmentPayload,
   UploadedFilePayload,
 } from "@/entityTypes/commonType";
 import { AIChatModule } from "@/modules/AIChatModule";
@@ -60,6 +61,7 @@ function generateConversationId(): string {
 
 const MAX_UPLOAD_FILE_BYTES = 5 * 1024 * 1024; // must match frontend v1 limits
 const MAX_REMOTE_MESSAGE_CHARS = 95000; // must stay below backend AskStreamData.message max_length (100000)
+const MAX_BASE64_LENGTH = Math.ceil((MAX_UPLOAD_FILE_BYTES * 4) / 3) + 16;
 
 function normalizeUploadedFiles(input: unknown): UploadedFilePayload[] {
   if (!Array.isArray(input)) return [];
@@ -100,6 +102,58 @@ function normalizeUploadedFiles(input: unknown): UploadedFilePayload[] {
 function truncateForRemote(message: string): string {
   if (message.length <= MAX_REMOTE_MESSAGE_CHARS) return message;
   return message.slice(0, MAX_REMOTE_MESSAGE_CHARS);
+}
+
+const ALLOWED_IMAGE_MIME_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif",
+]);
+
+const MAX_TOTAL_ATTACHMENTS_BASE64_LENGTH = 10 * 1024 * 1024; // ~13.3MB base64 cap across all attachments
+
+function normalizeLLMAttachments(input: unknown): LLMImageAttachmentPayload[] {
+  if (!Array.isArray(input)) return [];
+
+  const result: LLMImageAttachmentPayload[] = [];
+  let runningLength = 0;
+
+  for (const item of input) {
+    if (!item || typeof item !== "object") continue;
+    const rec = item as Record<string, unknown>;
+    const type = rec.type;
+    const mediaType = rec.mediaType;
+    const dataBase64 = rec.dataBase64;
+    const detail = rec.detail;
+
+    if (type !== "image") continue;
+    if (typeof mediaType !== "string" || !ALLOWED_IMAGE_MIME_TYPES.has(mediaType)) continue;
+    if (typeof dataBase64 !== "string" || dataBase64.length === 0) continue;
+    if (dataBase64.length > MAX_BASE64_LENGTH) {
+      console.warn(
+        `normalizeLLMAttachments: skipping attachment with mediaType "${mediaType}" — base64 length ${dataBase64.length} exceeds per-file limit ${MAX_BASE64_LENGTH}`
+      );
+      continue;
+    }
+    if (runningLength + dataBase64.length > MAX_TOTAL_ATTACHMENTS_BASE64_LENGTH) {
+      console.warn(
+        `normalizeLLMAttachments: skipping attachment with mediaType "${mediaType}" — total payload would exceed ${MAX_TOTAL_ATTACHMENTS_BASE64_LENGTH}`
+      );
+      continue;
+    }
+
+    runningLength += dataBase64.length;
+
+    result.push({
+      type: "image",
+      mediaType,
+      dataBase64,
+      detail: detail === "low" || detail === "high" ? detail : "auto",
+    });
+  }
+
+  return result;
 }
 
 type AttachmentSaveResult = {
@@ -298,6 +352,7 @@ export function registerAiChatIpcHandlers(): void {
           useRAG?: boolean;
           ragLimit?: number;
           uploadedFiles?: unknown;
+          attachments?: unknown;
         };
 
         const aiChatApi = new AiChatApi();
@@ -321,6 +376,9 @@ export function registerAiChatIpcHandlers(): void {
           userMessageId,
           requestData.message,
           requestData.uploadedFiles
+        );
+        const normalizedAttachments = normalizeLLMAttachments(
+          requestData.attachments
         );
 
         // If useRAG is true, perform local RAG search and append results to the message
@@ -381,6 +439,7 @@ export function registerAiChatIpcHandlers(): void {
           useRAG: requestData.useRAG,
           ragLimit: requestData.ragLimit,
           functions: availableTools,
+          attachments: normalizedAttachments,
         };
 
         const apiResponse = await aiChatApi.sendMessage(chatRequest);
@@ -461,6 +520,7 @@ export function registerAiChatIpcHandlers(): void {
         useRAG?: boolean;
         ragLimit?: number;
         uploadedFiles?: unknown;
+        attachments?: unknown;
       };
 
       const aiChatApi = new AiChatApi();
@@ -484,6 +544,9 @@ export function registerAiChatIpcHandlers(): void {
         userMessageId,
         requestData.message,
         requestData.uploadedFiles
+      );
+      const normalizedAttachments = normalizeLLMAttachments(
+        requestData.attachments
       );
 
       // If useRAG is true, perform local RAG search and append results to the message
@@ -544,6 +607,7 @@ export function registerAiChatIpcHandlers(): void {
         useRAG: requestData.useRAG,
         ragLimit: requestData.ragLimit,
         functions: availableTools,
+        attachments: normalizedAttachments,
       };
 
       const assistantMessageId = `assistant-${Date.now()}`;

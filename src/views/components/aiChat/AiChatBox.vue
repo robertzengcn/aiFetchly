@@ -687,7 +687,7 @@ class="message-bubble" :class="{
 import { ref, computed, onMounted, nextTick, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { streamChatMessage, stopStreamingChat, getChatHistory, clearChatHistory, getConversations, ConversationMetadata } from '@/views/api/aiChat';
-import { ChatMessage, ChatStreamChunk, Plan, PlanStep, PlanStepStatus, MessageType, UploadedFilePayload } from '@/entityTypes/commonType';
+import { ChatMessage, ChatStreamChunk, Plan, PlanStep, PlanStepStatus, MessageType, UploadedFilePayload, LLMImageAttachmentPayload } from '@/entityTypes/commonType';
 import MCPToolManager from './MCPToolManager.vue';
 
 // Stream state enum for type safety
@@ -759,9 +759,8 @@ const MAX_UPLOAD_FILES = 3;
 const MAX_UPLOAD_FILE_BYTES = 5 * 1024 * 1024; // 5MB
 const MAX_TOTAL_MESSAGE_CHARS = 95000; // must stay below aifetchserver AskStreamData.message max_length (100000)
 
-// Accept text-ish formats only for v1; further validated in code.
-const fileAccept =
-  '.txt,.md,.csv,.json,.html,.htm,.xml,text/plain,text/markdown,text/csv,application/json,text/html,application/xml';
+// For LLM-native attachments, use image inputs only.
+const fileAccept = 'image/*,.png,.jpg,.jpeg,.webp,.gif';
 
 // Resend message state
 const isResendingMessage = ref(false);
@@ -801,25 +800,28 @@ function formatBytes(bytes: number): string {
 }
 
 
-function isSupportedTextFile(file: File): boolean {
+function isSupportedAttachmentFile(file: File): boolean {
   const mime = (file.type || '').toLowerCase();
   const nameLower = file.name.toLowerCase();
-
-  // Prefer MIME when available
-  if (mime.startsWith('text/')) return true;
-  if (mime === 'application/json' || mime === 'application/xml' || mime === 'application/xhtml+xml') {
-    return true;
-  }
-
-  // Fallback by extension (browser may provide empty mime)
+  if (mime.startsWith('image/')) return true;
   return (
-    nameLower.endsWith('.txt') ||
-    nameLower.endsWith('.md') ||
-    nameLower.endsWith('.csv') ||
-    nameLower.endsWith('.json') ||
-    nameLower.endsWith('.html') ||
-    nameLower.endsWith('.htm')
+    nameLower.endsWith('.png') ||
+    nameLower.endsWith('.jpg') ||
+    nameLower.endsWith('.jpeg') ||
+    nameLower.endsWith('.webp') ||
+    nameLower.endsWith('.gif')
   );
+}
+
+function resolveAttachmentMimeType(file: File): string {
+  const mime = (file.type || '').toLowerCase();
+  if (mime.startsWith('image/')) return mime;
+  const nameLower = file.name.toLowerCase();
+  if (nameLower.endsWith('.png')) return 'image/png';
+  if (nameLower.endsWith('.jpg') || nameLower.endsWith('.jpeg')) return 'image/jpeg';
+  if (nameLower.endsWith('.webp')) return 'image/webp';
+  if (nameLower.endsWith('.gif')) return 'image/gif';
+  return 'application/octet-stream';
 }
 
 function arrayBufferToBase64(buffer: ArrayBuffer): string {
@@ -866,7 +868,7 @@ async function handleFileSelection(event: Event): Promise<void> {
       hadInvalid = true;
       continue;
     }
-    if (!isSupportedTextFile(file)) {
+    if (!isSupportedAttachmentFile(file)) {
       hadInvalid = true;
       continue;
     }
@@ -930,8 +932,8 @@ function canResendMessage(message: ChatMessage): boolean {
   return (
     message.role === 'user' &&
     (!message.messageType || message.messageType === MESSAGE_TYPE.MESSAGE) &&
-    message.content &&
-    message.content.trim()
+    Boolean(message.content) &&
+    Boolean(message.content.trim())
   );
 }
 
@@ -1161,7 +1163,8 @@ async function handleCopyMessage(content: string, messageId: string) {
  */
 async function sendMessage(
   userMessageContent: string,
-  uploadedFiles?: UploadedFilePayload[]
+  uploadedFiles?: UploadedFilePayload[],
+  attachments?: LLMImageAttachmentPayload[]
 ): Promise<void> {
   if (!userMessageContent.trim() || isLoading.value) return;
 
@@ -1470,7 +1473,8 @@ async function sendMessage(
       undefined, // model
       useRAGContext.value, // useRAG flag
       5, // ragLimit
-      uploadedFiles // attachments for local persistence
+      uploadedFiles, // attachments for local persistence
+      attachments
     );
   } catch (error) {
     console.error('Error sending message:', error);
@@ -1514,6 +1518,7 @@ async function handleSendMessage() {
 
   try {
     const uploadedFiles: UploadedFilePayload[] = [];
+    const attachments: LLMImageAttachmentPayload[] = [];
     let finalMessage =
       trimmed.length > MAX_TOTAL_MESSAGE_CHARS
         ? trimmed.slice(0, MAX_TOTAL_MESSAGE_CHARS)
@@ -1521,9 +1526,9 @@ async function handleSendMessage() {
 
     for (const file of selectedUploadFiles.value) {
       if (file.size > MAX_UPLOAD_FILE_BYTES) continue;
-      if (!isSupportedTextFile(file)) continue;
+      if (!isSupportedAttachmentFile(file)) continue;
 
-      const mimeType = file.type || 'text/plain';
+      const mimeType = resolveAttachmentMimeType(file);
 
       const buf = await file.arrayBuffer();
       const contentBase64 = arrayBufferToBase64(buf);
@@ -1533,55 +1538,30 @@ async function handleSendMessage() {
         sizeBytes: file.size,
         contentBase64,
       });
-
-      // Extract text to inject into the prompt (v1: text-only).
-      let extractedText = '';
-      try {
-        extractedText = await file.text();
-      } catch {
-        extractedText = '';
+      if (mimeType.startsWith('image/')) {
+        attachments.push({
+          type: 'image',
+          mediaType: mimeType,
+          dataBase64: contentBase64,
+          detail: 'auto',
+        });
       }
-
-      extractedText = (extractedText || '').replace(/\r\n/g, '\n').trim();
-
-      const prefix = `[Attached file: ${file.name} (${mimeType})]\n`;
-      const sep = finalMessage ? '\n\n' : '';
-
-      const remaining = MAX_TOTAL_MESSAGE_CHARS - finalMessage.length - sep.length;
-      if (remaining <= prefix.length) {
-        finalMessage = `${finalMessage}${sep}${prefix.slice(0, remaining)}`;
-        continue;
-      }
-
-      const textCapacity = remaining - prefix.length;
-      let truncated = false;
-      let truncatedText = extractedText;
-      if (truncatedText.length > textCapacity) {
-        truncated = true;
-        truncatedText = truncatedText.slice(0, textCapacity);
-      }
-
-      finalMessage = `${finalMessage}${sep}${prefix}${truncatedText}${
-        truncated ? '\n[truncated]' : ''
-      }`;
-
-      if (finalMessage.length >= MAX_TOTAL_MESSAGE_CHARS) break;
-    }
-
-    if (finalMessage.length > MAX_TOTAL_MESSAGE_CHARS) {
-      finalMessage = finalMessage.slice(0, MAX_TOTAL_MESSAGE_CHARS);
     }
 
     if (!finalMessage.trim()) {
-      streamError.value = t('knowledge.upload_failed') || 'Upload failed';
-      return;
+      if (attachments.length > 0) {
+        finalMessage = 'Please analyze attached file(s).';
+      } else {
+        streamError.value = t('knowledge.upload_failed') || 'Upload failed';
+        return;
+      }
     }
 
     // Clear inputs after building the request payload.
     inputMessage.value = '';
     selectedUploadFiles.value = [];
 
-    await sendMessage(finalMessage, uploadedFiles);
+    await sendMessage(finalMessage, uploadedFiles, attachments);
   } finally {
     isUploadingFiles.value = false;
   }

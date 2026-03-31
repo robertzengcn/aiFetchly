@@ -1,6 +1,10 @@
 "use strict";
 import { HttpClient } from "@/modules/lib/httpclient";
-import { CommonApiresp, ChatApiResponse } from "@/entityTypes/commonType";
+import {
+  CommonApiresp,
+  ChatApiResponse,
+  LLMImageAttachmentPayload,
+} from "@/entityTypes/commonType";
 import { Token } from "@/modules/token";
 import { USER_AI_ENABLED } from "@/config/usersetting";
 import type { AIEmailTemplateRequest } from "@/entityTypes/emailmarketingType";
@@ -17,6 +21,7 @@ export interface ChatRequest {
   useRAG?: boolean;
   ragLimit?: number;
   functions?: ToolFunction[];
+  attachments?: LLMImageAttachmentPayload[];
 }
 
 /**
@@ -29,6 +34,7 @@ interface ChatApiRequestData {
   model?: string;
   system_prompt?: string;
   client_tools?: ToolFunction[];
+  attachments?: LLMImageAttachmentPayload[];
 }
 
 /**
@@ -505,6 +511,7 @@ export class AiChatApi {
       message: request.message,
       conversation_id: request.conversationId,
       system_prompt: request.systemPrompt,
+      attachments: request.attachments,
     };
 
     // Only include model if specified
@@ -551,6 +558,7 @@ export class AiChatApi {
       conversation_id: request.conversationId,
       system_prompt: request.systemPrompt,
       client_tools: request.functions,
+      attachments: request.attachments,
     };
 
     // Only include model if specified
