@@ -168,6 +168,11 @@ export type NativateDatatype = {
   path: string;
 };
 
+export type LoginStatusType = {
+  status: "processing" | "error";
+  message?: string;
+};
+
 // RAG Configuration Types
 
 /**

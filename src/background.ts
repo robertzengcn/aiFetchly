@@ -29,7 +29,7 @@ import fs from "fs";
 import ProtocolRegistry from "protocol-registry";
 //import { RemoteSource } from '@/modules/remotesource'
 import { UserController } from "@/controller/UserController";
-import { NATIVATECOMMAND } from "@/config/channellist";
+import { NATIVATECOMMAND, LOGIN_STATUS } from "@/config/channellist";
 import { NativateDatatype } from "@/entityTypes/commonType";
 import { ScheduleManager } from "@/modules/ScheduleManager";
 import { runafterbootup } from "@/modules/bootuprun";
@@ -810,11 +810,19 @@ function clearTokens(): void {
 
 async function handleDeepLink(url: string) {
   try {
+    // Notify frontend that login processing has started
+    if (win && !(win as any).isDestroyed()) {
+      (win as any).webContents.send(LOGIN_STATUS, {
+        status: "processing",
+      });
+    }
+
     const parsedUrl = new URL(url);
 
     // Validate deep link origin to prevent malicious token injection
     if (!isValidDeepLinkOrigin(parsedUrl)) {
       log.error("Invalid deep link origin:", url);
+      sendLoginError("Invalid deep link origin. This link may be malicious.");
       dialog.showErrorBox(
         "Security Error",
         "Invalid deep link origin. This link may be malicious."
@@ -876,6 +884,7 @@ async function handleDeepLink(url: string) {
 
     if (!token) {
       log.error("No token found in deep link");
+      sendLoginError("No authentication token found.");
       return;
     }
 
@@ -922,6 +931,7 @@ async function handleDeepLink(url: string) {
         storageError instanceof Error
           ? storageError.message
           : String(storageError);
+      sendLoginError(`Failed to store authentication tokens: ${errorMessage}`);
       dialog.showErrorBox(
         "Authentication Error",
         `Failed to store authentication tokens: ${errorMessage}`
@@ -1069,6 +1079,7 @@ async function handleDeepLink(url: string) {
         }
       } else {
         log.error("Failed to get user info from remote source");
+        sendLoginError("Failed to get user info from remote source.");
         dialog.showErrorBox(
           "User Info Error",
           "Failed to get user info from remote source."
@@ -1081,6 +1092,7 @@ async function handleDeepLink(url: string) {
       log.error("Error updating user info:", userError);
       const errorMessage =
         userError instanceof Error ? userError.message : String(userError);
+      sendLoginError(`Failed to update user information: ${errorMessage}`);
       dialog.showErrorBox(
         "User Info Update Error",
         `Failed to update user information: ${errorMessage}`
@@ -1093,6 +1105,7 @@ async function handleDeepLink(url: string) {
     log.error("Failed to handle deep link:", error);
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error("Deep link handling error:", errorMessage);
+    sendLoginError(`Failed to process authentication link: ${errorMessage}`);
 
     // Show error dialog to user
     if ((app as any).isReady()) {
@@ -1101,6 +1114,15 @@ async function handleDeepLink(url: string) {
         `Failed to process authentication link: ${errorMessage}`
       );
     }
+  }
+}
+
+function sendLoginError(message: string): void {
+  if (win && !(win as any).isDestroyed()) {
+    (win as any).webContents.send(LOGIN_STATUS, {
+      status: "error",
+      message,
+    });
   }
 }
 
