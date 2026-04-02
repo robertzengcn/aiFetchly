@@ -56,12 +56,11 @@
 //import { UserModule } from '@/views/store/modules/user'
 import {openPage, getLoginUrl} from "@/views/api/users"
 import { onMounted, onUnmounted, ref } from "vue";
-import {receiveRedirectevent} from "@/views/api/users"
-import router from '@/views/router';
+import { receiveRedirectevent } from "@/views/api/users";
 //import { defineComponent } from "vue";
 import {NATIVATECOMMAND, LOGIN_STATUS} from "@/config/channellist"
 import { useI18n } from 'vue-i18n'
-import type {LoginStatusType} from "@/entityTypes/commonType"
+import type { LoginStatusType, NativateDatatype } from "@/entityTypes/commonType"
 
 const { t } = useI18n()
 const alertContent=ref('');
@@ -72,14 +71,33 @@ const loginUrl = ref<any>('');
 
 
 
+const handleNavigateCommand = (data: NativateDatatype): void => {
+  console.log("Received redirect event:", data);
+  isLoading.value = false;
+  showLoginUrl.value = false;
+  // Router navigation is handled once in App.vue (NATIVATECOMMAND) to avoid duplicate router.push.
+};
+
+const handleLoginStatus = (data: LoginStatusType): void => {
+  if (data.status === "processing") {
+    isLoading.value = true;
+    showLoginUrl.value = false;
+  } else if (data.status === "error") {
+    isLoading.value = false;
+    alertContent.value = data.message || t("layout.login_failed");
+    dialog.value = true;
+  }
+};
+
 onMounted(() => {
-  receiveMsg()
-  receiveLoginStatus()
-})
+  receiveRedirectevent(NATIVATECOMMAND, handleNavigateCommand);
+  window.api.receive(LOGIN_STATUS, handleLoginStatus);
+});
 
 onUnmounted(() => {
-  window.api.removeListener(LOGIN_STATUS, handleLoginStatus)
-})
+  window.api.removeListener(NATIVATECOMMAND, handleNavigateCommand);
+  window.api.removeListener(LOGIN_STATUS, handleLoginStatus);
+});
 const redirectToLogin = async () => {
     try {
         isLoading.value = true;
@@ -126,35 +144,6 @@ const copyToClipboard = async () => {
         alertContent.value = t('layout.copy_failed');
         dialog.value = true;
     }
-}
-
-const receiveMsg = () => {
-    receiveRedirectevent(NATIVATECOMMAND, function (data)  {
-        console.log("Received redirect event:", data);
-        isLoading.value = false; // Reset loading state when receiving response
-        showLoginUrl.value = false; // Hide URL when redirecting
-        if (data.path) {
-            router.push({
-                name: data.path
-            });
-        }
-
-    });
-}
-
-const handleLoginStatus = (data: LoginStatusType) => {
-    if (data.status === 'processing') {
-        isLoading.value = true;
-        showLoginUrl.value = false;
-    } else if (data.status === 'error') {
-        isLoading.value = false;
-        alertContent.value = data.message || t('layout.login_failed');
-        dialog.value = true;
-    }
-}
-
-const receiveLoginStatus = () => {
-    window.api.receive(LOGIN_STATUS, handleLoginStatus)
 }
 
 </script>

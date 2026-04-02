@@ -1,4 +1,13 @@
 import { ipcRenderer, contextBridge } from "electron";
+
+/** Maps renderer callbacks to the ipcRenderer listener so removeListener works. */
+type IpcRendererOnCallback = NonNullable<
+  Parameters<typeof ipcRenderer.on>[1]
+>;
+const ipcReceiveWrappers = new WeakMap<
+  (...args: unknown[]) => void,
+  IpcRendererOnCallback
+>();
 import {
   EXTRAMODULECHANNE_LIST,
   EXTRAMODULECHANNE_INSTALL,
@@ -326,11 +335,15 @@ contextBridge.exposeInMainWorld("api", {
       // Contact Extraction Progress Channel
       CONTACT_EXTRACTION_PROGRESS,
     ];
-    const regex = "/^socialtask:log:/";
+    const isSocialTaskLogChannel = /^socialtask:log:/.test(channel);
 
-    if (validChannels.includes(channel) || channel.test(regex)) {
+    if (validChannels.includes(channel) || isSocialTaskLogChannel) {
       // Deliberately strip event as it includes `sender`
-      ipcRenderer.on(channel, (event, ...args) => func(...args));
+      const wrapped: IpcRendererOnCallback = (_event, ...args) => {
+        func(...args);
+      };
+      ipcReceiveWrappers.set(func, wrapped);
+      ipcRenderer.on(channel, wrapped);
     }
   },
   removeListener: (channel, func) => {
@@ -376,10 +389,14 @@ contextBridge.exposeInMainWorld("api", {
       // Contact Extraction Progress Channel
       CONTACT_EXTRACTION_PROGRESS,
     ];
-    const regex = "/^socialtask:log:/";
+    const isSocialTaskLogChannel = /^socialtask:log:/.test(channel);
 
-    if (validChannels.includes(channel) || channel.test(regex)) {
-      ipcRenderer.removeListener(channel, func);
+    if (validChannels.includes(channel) || isSocialTaskLogChannel) {
+      const wrapped = ipcReceiveWrappers.get(func);
+      if (wrapped) {
+        ipcRenderer.removeListener(channel, wrapped);
+        ipcReceiveWrappers.delete(func);
+      }
     }
   },
   removeAllListeners: (channel) => {
