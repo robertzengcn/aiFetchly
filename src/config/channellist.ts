@@ -107,6 +107,7 @@ export const OPENLOGINPAGE = "open:page";
 export const GET_LOGIN_URL = "user:get_login_url";
 export const USER_LOGIN = "user:Login";
 export const NATIVATECOMMAND = "navigate:command";
+export const LOGIN_STATUS = "login:status";
 export const VIDEO_PUBLISH = "video:publish";
 export const VIDEO_PUBLISH_RECORD_MESSAGE = "video:publish:record:message";
 export const VIDEO_PUBLISH_RECORD_DELETE = "video:publish:record:delete";

@@ -37,7 +37,7 @@ export const createTranslatedRoutes = (): RouteRecordRaw[] => {
       path: "/statistic",
       name: "Statistic",
       meta: {
-        visible: true,
+        visible: false,
         title: computed(() => t("router.statistic")),
         icon: "mdi-chart-bar",
       },
@@ -50,7 +50,7 @@ export const createTranslatedRoutes = (): RouteRecordRaw[] => {
             title: computed(() => t("router.statistic")),
             icon: "mdi-chart-bar",
             keepAlive: false,
-            visible: true,
+            visible: false,
           },
           component: () => import("@/views/pages/statistic/index.vue"),
           children: [],
