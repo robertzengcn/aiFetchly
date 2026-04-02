@@ -1173,7 +1173,11 @@ async function sendMessage(
   streamError.value = null;
 
   // Track the conversation ID for this stream
-  const streamConversationId = conversationId.value || StreamState.PENDING;
+  // IMPORTANT: This value must stay in sync with `activeStreamConversationId`.
+  // The backend assigns the real conversationId via a `conversation_start` chunk.
+  // If we keep a stale `PENDING` id here, the `complete` error handler (and its catch)
+  // can skip UI updates.
+  let streamConversationId = conversationId.value || StreamState.PENDING;
   activeStreamConversationId.value = streamConversationId;
 
   // Reset tool-related states
@@ -1354,6 +1358,7 @@ async function sendMessage(
               // Update active stream conversation ID if it was 'pending'
               if (activeStreamConversationId.value === StreamState.PENDING) {
                 activeStreamConversationId.value = chunk.conversationId;
+                streamConversationId = chunk.conversationId;
                 console.log('activeStreamConversationId.value', activeStreamConversationId.value);
               }
 
@@ -1485,6 +1490,20 @@ async function sendMessage(
       isTyping.value = false;
       isLoading.value = false;
       isExecutingTool.value = false;
+      
+      // If streaming failed before any tokens arrived, we may still have a trailing
+      // empty assistant placeholder. Remove it to avoid showing a blank bubble.
+      const lastIndex = messages.value.length - 1;
+      if (lastIndex >= 0) {
+        const lastMessage = messages.value[lastIndex];
+        if (
+          lastMessage.role === 'assistant' &&
+          (!lastMessage.content || lastMessage.content.trim() === '') &&
+          lastMessage.conversationId === streamConversationId
+        ) {
+          messages.value.splice(lastIndex, 1);
+        }
+      }
       
       // Show error message
       const errorMessage: ChatMessage = {
