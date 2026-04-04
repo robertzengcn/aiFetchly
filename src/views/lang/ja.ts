@@ -1086,6 +1086,12 @@ export default {
     column_status: "ステータス",
     column_enabled: "有効",
     column_disabled: "無効",
+    approval_title: "スキル許可リクエスト",
+    approval_description:
+      "このスキルは実行に許可が必要です。外部リソースにアクセスしたり、ユーザーの代わりに操作を実行する場合があります。",
+    approval_deny: "拒否",
+    approval_allow_once: "一度だけ許可",
+    approval_always_allow: "常に許可",
   },
   schedule: {
     create_new_schedule: "新規スケジュールを作成",

@@ -7,9 +7,9 @@
  *   SKILL_NETWORK_DOMAIN_<skillName>_<domain> → 'always' | 'once'
  */
 
-import { Token } from '@/modules/token';
-import type { SkillPermissionCategory } from '@/entityTypes/skillTypes';
-import { SkillRegistry } from '@/config/skillsRegistry';
+import { Token } from "@/modules/token";
+import type { SkillPermissionCategory } from "@/entityTypes/skillTypes";
+import { SkillRegistry } from "@/config/skillsRegistry";
 
 // ---------------------------------------------------------------------------
 // Key helpers
@@ -23,11 +23,17 @@ function networkDomainKey(skillName: string, domain: string): string {
   return `SKILL_NETWORK_DOMAIN_${skillName}_${domain}`;
 }
 
+/**
+ * In-memory set for session-only (non-persistent) grants.
+ * Cleared on app restart.
+ */
+const sessionGrants = new Set<string>();
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-export type PermissionStatus = 'granted' | 'denied' | 'unknown';
+export type PermissionStatus = "granted" | "denied" | "unknown";
 
 export interface PermissionCheckResult {
   /** Whether the skill is allowed to execute. */
@@ -55,11 +61,11 @@ function checkPermission(skillName: string): PermissionCheckResult {
   const skill = SkillRegistry.getSkill(skillName);
 
   if (!skill) {
-    return { allowed: false, reason: 'Unknown skill', needsPrompt: false };
+    return { allowed: false, reason: "Unknown skill", needsPrompt: false };
   }
 
   // Pure skills never require confirmation
-  if (skill.permissionCategory === 'pure') {
+  if (skill.permissionCategory === "pure") {
     return { allowed: true, needsPrompt: false };
   }
 
@@ -67,12 +73,21 @@ function checkPermission(skillName: string): PermissionCheckResult {
   const token = new Token();
   const stored = token.getValue(permissionKey(skillName));
 
-  if (stored === 'granted') {
+  if (stored === "granted") {
     return { allowed: true, needsPrompt: false };
   }
 
-  if (stored === 'denied') {
-    return { allowed: false, reason: 'Permission denied by user', needsPrompt: false };
+  if (stored === "denied") {
+    return {
+      allowed: false,
+      reason: "Permission denied by user",
+      needsPrompt: false,
+    };
+  }
+
+  // Check session-only grant (non-persistent)
+  if (sessionGrants.has(skillName)) {
+    return { allowed: true, needsPrompt: false };
   }
 
   // No stored decision → need to prompt
@@ -86,12 +101,13 @@ function checkPermission(skillName: string): PermissionCheckResult {
  * @param persistent - If true, store permanently; if false, only for this session.
  */
 function grantPermission(skillName: string, persistent: boolean): void {
-  const token = new Token();
   if (persistent) {
-    token.setValue(permissionKey(skillName), 'granted');
+    const token = new Token();
+    token.setValue(permissionKey(skillName), "granted");
+  } else {
+    // Session-only grant — stored in memory, cleared on restart
+    sessionGrants.add(skillName);
   }
-  // Non-persistent grants are handled at runtime by the executor
-  // (no need to store — the execution proceeds immediately)
 }
 
 /**
@@ -99,7 +115,7 @@ function grantPermission(skillName: string, persistent: boolean): void {
  */
 function denyPermission(skillName: string): void {
   const token = new Token();
-  token.setValue(permissionKey(skillName), 'denied');
+  token.setValue(permissionKey(skillName), "denied");
 }
 
 /**
@@ -108,7 +124,8 @@ function denyPermission(skillName: string): void {
  */
 function revokePermission(skillName: string): void {
   const token = new Token();
-  token.setValue(permissionKey(skillName), '');
+  token.setValue(permissionKey(skillName), "");
+  sessionGrants.delete(skillName);
 }
 
 /**
@@ -118,23 +135,26 @@ function getPermissionStatus(skillName: string): PermissionStatus {
   const token = new Token();
   const value = token.getValue(permissionKey(skillName));
 
-  if (value === 'granted') return 'granted';
-  if (value === 'denied') return 'denied';
-  return 'unknown';
+  if (value === "granted") return "granted";
+  if (value === "denied") return "denied";
+  return "unknown";
 }
 
 /**
  * Check whether a skill is allowed to access a specific network domain.
  */
-function checkNetworkDomain(skillName: string, domain: string): PermissionCheckResult {
+function checkNetworkDomain(
+  skillName: string,
+  domain: string
+): PermissionCheckResult {
   const token = new Token();
   const stored = token.getValue(networkDomainKey(skillName, domain));
 
-  if (stored === 'always') {
+  if (stored === "always") {
     return { allowed: true, needsPrompt: false };
   }
 
-  if (stored === 'once') {
+  if (stored === "once") {
     return { allowed: true, needsPrompt: false };
   }
 
@@ -150,7 +170,10 @@ function grantNetworkDomain(
   persistent: boolean
 ): void {
   const token = new Token();
-  token.setValue(networkDomainKey(skillName, domain), persistent ? 'always' : 'once');
+  token.setValue(
+    networkDomainKey(skillName, domain),
+    persistent ? "always" : "once"
+  );
 }
 
 // ---------------------------------------------------------------------------

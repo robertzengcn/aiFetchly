@@ -1101,6 +1101,12 @@ export default {
     column_status: "Statut",
     column_enabled: "Activée",
     column_disabled: "Désactivée",
+    approval_title: "Demande d'autorisation de compétence",
+    approval_description:
+      "Cette compétence nécessite votre autorisation pour s'exécuter. Elle peut accéder à des ressources externes ou effectuer des actions en votre nom.",
+    approval_deny: "Refuser",
+    approval_allow_once: "Autoriser une fois",
+    approval_always_allow: "Toujours autoriser",
   },
   schedule: {
     create_new_schedule: "Create New Schedule",

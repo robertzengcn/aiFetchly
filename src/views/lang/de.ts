@@ -1108,6 +1108,12 @@ export default {
     column_status: "Status",
     column_enabled: "Aktiviert",
     column_disabled: "Deaktiviert",
+    approval_title: "Fähigkeits-Berechtigungsanfrage",
+    approval_description:
+      "Diese Fähigkeit benötigt Ihre Erlaubnis zur Ausführung. Sie kann auf externe Ressourcen zugreifen oder Aktionen in Ihrem Namen durchführen.",
+    approval_deny: "Ablehnen",
+    approval_allow_once: "Einmal erlauben",
+    approval_always_allow: "Immer erlauben",
   },
   schedule: {
     create_new_schedule: "Neue Planung erstellen",

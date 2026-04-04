@@ -2,7 +2,7 @@
   <div class="skill-approval-card">
     <div class="approval-header">
       <v-icon size="small" color="warning" class="mr-2">mdi-shield-alert</v-icon>
-      <span class="approval-title">Skill Permission Request</span>
+      <span class="approval-title">{{ t('skills.approval_title') }}</span>
     </div>
     <div class="approval-body">
       <div class="skill-info">
@@ -14,7 +14,7 @@
         </v-chip>
       </div>
       <p class="approval-description mt-2">
-        This skill requires your permission to execute. It may access external resources or perform actions on your behalf.
+        {{ t('skills.approval_description') }}
       </p>
     </div>
     <div class="approval-actions">
@@ -25,7 +25,7 @@
         :disabled="isProcessing"
         @click="handleDeny"
       >
-        Deny
+        {{ t('skills.approval_deny') }}
       </v-btn>
       <v-btn
         size="small"
@@ -34,7 +34,7 @@
         :disabled="isProcessing"
         @click="handleAllowOnce"
       >
-        Allow Once
+        {{ t('skills.approval_allow_once') }}
       </v-btn>
       <v-btn
         size="small"
@@ -43,7 +43,7 @@
         :loading="isProcessing"
         @click="handleAlwaysAllow"
       >
-        Always Allow
+        {{ t('skills.approval_always_allow') }}
       </v-btn>
     </div>
   </div>
@@ -51,6 +51,9 @@
 
 <script setup lang="ts">
 import { computed, ref } from "vue";
+import { useI18n } from "vue-i18n";
+
+const { t } = useI18n();
 
 interface Props {
   toolName: string;

@@ -1115,6 +1115,12 @@ export default {
     column_status: "Estado",
     column_enabled: "Activada",
     column_disabled: "Desactivada",
+    approval_title: "Solicitud de permiso de habilidad",
+    approval_description:
+      "Esta habilidad requiere su permiso para ejecutarse. Puede acceder a recursos externos o realizar acciones en su nombre.",
+    approval_deny: "Denegar",
+    approval_allow_once: "Permitir una vez",
+    approval_always_allow: "Permitir siempre",
   },
   schedule: {
     create_new_schedule: "Crear nueva programación",

@@ -15,7 +15,9 @@
  * All handlers check AI enable first per CLAUDE.md rules.
  */
 
-import { ipcMain } from "electron";
+import { ipcMain, app } from "electron";
+import * as fs from "fs";
+import * as path from "path";
 import { Token } from "@/modules/token";
 import { USER_AI_ENABLED } from "@/config/usersetting";
 import {
@@ -129,6 +131,8 @@ export function registerSkillsIpcHandlers(): void {
     if (notEnabled) return notEnabled;
 
     const data = extractData<{ skillName: string }>(args);
+    const nameError = validateString(data?.skillName, "skillName");
+    if (nameError) return { status: false, msg: nameError, data: null };
     try {
       SkillPermissionService.denyPermission(data.skillName);
       return { status: true, msg: "Permission denied", data: null };
@@ -144,6 +148,8 @@ export function registerSkillsIpcHandlers(): void {
     if (notEnabled) return notEnabled;
 
     const data = extractData<{ skillName: string }>(args);
+    const nameError = validateString(data?.skillName, "skillName");
+    if (nameError) return { status: false, msg: nameError, data: null };
     try {
       SkillPermissionService.revokePermission(data.skillName);
       return { status: true, msg: "Permission revoked", data: null };
@@ -159,6 +165,8 @@ export function registerSkillsIpcHandlers(): void {
     if (notEnabled) return notEnabled;
 
     const data = extractData<{ skillName: string }>(args);
+    const nameError = validateString(data?.skillName, "skillName");
+    if (nameError) return { status: false, msg: nameError, data: null };
     try {
       const permissionStatus = SkillPermissionService.getPermissionStatus(
         data.skillName
@@ -268,6 +276,28 @@ export function registerSkillsIpcHandlers(): void {
       if (success) {
         const { SkillRegistry } = await import("@/config/skillsRegistry");
         SkillRegistry.unregisterSkill(data.skillName);
+
+        // Clean up skill files from disk
+        try {
+          const skillsDir = path.join(
+            app.getPath("userData"),
+            "installed_skills",
+            data.skillName
+          );
+          if (fs.existsSync(skillsDir)) {
+            fs.rmSync(skillsDir, { recursive: true, force: true });
+          }
+        } catch (cleanupError) {
+          console.warn(
+            `[SkillsIPC] Failed to clean up skill files for "${
+              data.skillName
+            }": ${
+              cleanupError instanceof Error
+                ? cleanupError.message
+                : cleanupError
+            }`
+          );
+        }
       }
 
       return {
