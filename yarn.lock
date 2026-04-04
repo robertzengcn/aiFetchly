@@ -4140,6 +4140,11 @@ acorn@^8.11.0, acorn@^8.12.1, acorn@^8.15.0, acorn@^8.4.1, acorn@^8.9.0:
   resolved "https://registry.npmmirror.com/acorn/-/acorn-8.15.0.tgz#a360898bc415edaac46c8241f6383975b930b816"
   integrity sha512-NZyJarBfL7nWwIq+FDL6Zp/yHEhePMNnnJ0y3qfieCrmNvYct8uvtiV41UvlSe6apAfk0fY1FbWx+NwfmpvtTg==
 
+adm-zip@^0.5.17:
+  version "0.5.17"
+  resolved "https://registry.npmmirror.com/adm-zip/-/adm-zip-0.5.17.tgz#5c0b65f37aeec5c2a94995c024f931f62e4bbc5a"
+  integrity sha512-+Ut8d9LLqwEvHHJl1+PIHqoyDxFgVN847JTVM3Izi3xHDWPE4UtzzXysMZQs64DMcrJfBeS/uoEP4AD3HQHnQQ==
+
 agent-base@6, agent-base@^6.0.2:
   version "6.0.2"
   resolved "https://registry.npmmirror.com/agent-base/-/agent-base-6.0.2.tgz#49fff58577cfee3f37176feab4c22e00f86d7f77"
@@ -8108,6 +8113,13 @@ isobject@^3.0.1:
   resolved "https://registry.npmmirror.com/isobject/-/isobject-3.0.1.tgz#4e431e92b11a9731636aa1f9c8d1ccbcfdab78df"
   integrity sha512-WhB9zCku7EGTj/HQQRz5aUQEUeoQZH2bWcltRErOpymJ4boYE6wL9Tbr23krRPSZ+C5zqNSrSw+Cc7sZZ4b7vg==
 
+isolated-vm@^6.1.2:
+  version "6.1.2"
+  resolved "https://registry.npmmirror.com/isolated-vm/-/isolated-vm-6.1.2.tgz#812c655f9dc4e1328a766d520cff6c3a88ee911b"
+  integrity sha512-GGfsHqtlZiiurZaxB/3kY7LLAXR3sgzDul0fom4cSyBjx6ZbjpTrFWiH3z/nUfLJGJ8PIq9LQmQFiAxu24+I7A==
+  dependencies:
+    node-gyp-build "^4.8.4"
+
 isomorphic-timers-promises@^1.0.1:
   version "1.0.1"
   resolved "https://registry.npmmirror.com/isomorphic-timers-promises/-/isomorphic-timers-promises-1.0.1.tgz#e4137c24dbc54892de8abae3a4b5c1ffff381598"
@@ -9357,7 +9369,7 @@ node-forge@^0.8.4:
   resolved "https://registry.npmmirror.com/node-forge/-/node-forge-0.8.5.tgz#57906f07614dc72762c84cef442f427c0e1b86ee"
   integrity sha512-vFMQIWt+J/7FLNyKouZ9TazT74PRV3wgv9UT4cRjC8BffxFbKXkgIWR42URCPSnHm/QDz6BOlb2Q0U4+VQT67Q==
 
-node-gyp-build@^4.2.1, node-gyp-build@^4.3.0:
+node-gyp-build@^4.2.1, node-gyp-build@^4.3.0, node-gyp-build@^4.8.4:
   version "4.8.4"
   resolved "https://registry.npmmirror.com/node-gyp-build/-/node-gyp-build-4.8.4.tgz#8a70ee85464ae52327772a90d66c6077a900cfc8"
   integrity sha512-LA4ZjwlnUblHVgq0oBF3Jl/6h/Nvs5fzBLwdEF4nuxnFdsfajde4WfxtJr3CaiH+F6ewcIB/q4jQ4UzPyid+CQ==

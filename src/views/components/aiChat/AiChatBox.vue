@@ -139,6 +139,15 @@ class="message-bubble" :class="{
 
             <!-- Tool Result Message -->
             <template v-else-if="message.messageType === MESSAGE_TYPE.TOOL_RESULT">
+              <!-- Skill Permission Approval Card -->
+              <SkillApprovalCard
+                v-if="(message.metadata?.toolResult as Record<string, unknown>)?.needsPermissionPrompt"
+                :tool-name="String(message.metadata?.toolName || '')"
+                :permission-category="String((message.metadata?.toolResult as Record<string, unknown>)?.permissionCategory || '')"
+                @grant="(payload) => handleSkillPermissionGrant(message, payload.persistent)"
+                @deny="handleSkillPermissionDeny(message)"
+              />
+              <template v-else>
               <div class="tool-result-header">
                 <v-icon size="small" :color="message.metadata?.success === false ? 'error' : 'success'" class="mr-1">
                   {{ message.metadata?.success === false ? 'mdi-alert-circle' : 'mdi-check-circle' }}
@@ -173,6 +182,7 @@ class="message-bubble" :class="{
                 <v-icon size="x-small" class="mr-1">mdi-clock-outline</v-icon>
                 {{ formatTimestamp(message.timestamp) }}
               </div>
+              </template>
             </template>
 
             <!-- Plan Created Message -->
@@ -689,6 +699,7 @@ import { useI18n } from 'vue-i18n';
 import { streamChatMessage, stopStreamingChat, getChatHistory, clearChatHistory, getConversations, ConversationMetadata } from '@/views/api/aiChat';
 import { ChatMessage, ChatStreamChunk, Plan, PlanStep, PlanStepStatus, MessageType, UploadedFilePayload, LLMImageAttachmentPayload } from '@/entityTypes/commonType';
 import MCPToolManager from './MCPToolManager.vue';
+import SkillApprovalCard from './SkillApprovalCard.vue';
 
 // Stream state enum for type safety
 // This ensures type safety for stream state management
@@ -1648,6 +1659,43 @@ async function handleNewConversation() {
   scrollToBottom();
   if (inputField.value && inputField.value.focus) {
     inputField.value.focus();
+  }
+}
+
+/**
+ * Handle skill permission grant — user approved the skill execution.
+ * Removes the permission prompt message from chat so the user can re-trigger.
+ */
+function handleSkillPermissionGrant(message: ChatMessage, _persistent: boolean): void {
+  const idx = messages.value.findIndex((m) => m.id === message.id);
+  if (idx !== -1) {
+    messages.value = [
+      ...messages.value.slice(0, idx),
+      {
+        ...messages.value[idx],
+        content: 'Permission granted. Please resend your message to execute the skill.',
+        metadata: { ...messages.value[idx].metadata, toolResult: undefined, success: true },
+      },
+      ...messages.value.slice(idx + 1),
+    ];
+  }
+}
+
+/**
+ * Handle skill permission deny — user denied the skill execution.
+ */
+function handleSkillPermissionDeny(message: ChatMessage): void {
+  const idx = messages.value.findIndex((m) => m.id === message.id);
+  if (idx !== -1) {
+    messages.value = [
+      ...messages.value.slice(0, idx),
+      {
+        ...messages.value[idx],
+        content: 'Permission denied. The skill will not be executed.',
+        metadata: { ...messages.value[idx].metadata, toolResult: undefined, success: false },
+      },
+      ...messages.value.slice(idx + 1),
+    ];
   }
 }
 

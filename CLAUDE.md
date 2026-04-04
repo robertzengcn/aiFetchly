@@ -564,6 +564,8 @@ Current branch (`sqlite-vec-merge`) is integrating sqlite-vec for vector similar
 ## Active Technologies
 - TypeScript 5.x (001-ai-contact-extraction)
 - SQLite with TypeORM (local), Remote AI server (HTTP/SSE) (001-ai-email-template)
+- TypeScript 5.x + Electron, Vue 3, Vuetify, Pinia, TypeORM, better-sqlite3, Puppeteer (001-skill-system)
+- SQLite (TypeORM) for installed skills; Token service for permission grants (001-skill-system)
 
 ## Recent Changes
 - 001-ai-contact-extraction: Added TypeScript 5.x

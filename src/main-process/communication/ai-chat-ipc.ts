@@ -7,6 +7,7 @@ import {
   BatchKeywordGenerationRequestItem,
 } from "@/api/aiChatApi";
 import { getAvailableToolFunctions } from "@/config/aiTools.config";
+import { SkillRegistry } from "@/config/skillsRegistry";
 import {
   CommonMessage,
   ChatMessage,
@@ -128,7 +129,11 @@ function normalizeLLMAttachments(input: unknown): LLMImageAttachmentPayload[] {
     const detail = rec.detail;
 
     if (type !== "image") continue;
-    if (typeof mediaType !== "string" || !ALLOWED_IMAGE_MIME_TYPES.has(mediaType)) continue;
+    if (
+      typeof mediaType !== "string" ||
+      !ALLOWED_IMAGE_MIME_TYPES.has(mediaType)
+    )
+      continue;
     if (typeof dataBase64 !== "string" || dataBase64.length === 0) continue;
     if (dataBase64.length > MAX_BASE64_LENGTH) {
       console.warn(
@@ -136,7 +141,10 @@ function normalizeLLMAttachments(input: unknown): LLMImageAttachmentPayload[] {
       );
       continue;
     }
-    if (runningLength + dataBase64.length > MAX_TOTAL_ATTACHMENTS_BASE64_LENGTH) {
+    if (
+      runningLength + dataBase64.length >
+      MAX_TOTAL_ATTACHMENTS_BASE64_LENGTH
+    ) {
       console.warn(
         `normalizeLLMAttachments: skipping attachment with mediaType "${mediaType}" — total payload would exceed ${MAX_TOTAL_ATTACHMENTS_BASE64_LENGTH}`
       );
@@ -428,8 +436,8 @@ export function registerAiChatIpcHandlers(): void {
 
         enhancedMessage = truncateForRemote(enhancedMessage);
 
-        // Get available tools (static + MCP)
-        const availableTools = await getAvailableToolFunctions();
+        // Get available tools (registry-built-in + MCP)
+        const availableTools = await SkillRegistry.getAllToolFunctions();
 
         // Send to remote API
         const chatRequest: ChatRequest = {
@@ -596,8 +604,8 @@ export function registerAiChatIpcHandlers(): void {
 
       enhancedMessage = truncateForRemote(enhancedMessage);
 
-      // Get available tools (static + MCP)
-      const availableTools = await getAvailableToolFunctions();
+      // Get available tools (registry-built-in + MCP)
+      const availableTools = await SkillRegistry.getAllToolFunctions();
 
       // Send to remote API for streaming
       const chatRequest: ChatRequest = {

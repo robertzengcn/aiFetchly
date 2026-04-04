@@ -51,6 +51,7 @@ import { VectorEntity, VectorMetadataEntity } from "@/entity/Vector.entity";
 import { MCPToolEntity } from "@/entity/MCPTool.entity";
 import { TaskEntity } from "@/entity/Task.entity";
 import { ContactInfoEntity } from "@/entity/ContactInfo.entity";
+import { InstalledSkillEntity } from "@/entity/InstalledSkill.entity";
 // import sqlite3 from "sqlite3";
 import Database from "better-sqlite3";
 import { app } from "electron";
@@ -451,6 +452,7 @@ export class SqliteDb {
           MCPToolEntity,
           TaskEntity,
           ContactInfoEntity,
+          InstalledSkillEntity,
         ],
         synchronize: true,
         migrations: [],

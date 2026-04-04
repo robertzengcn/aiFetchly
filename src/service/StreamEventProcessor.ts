@@ -20,9 +20,10 @@ import {
 } from "@/config/channellist";
 import { AIChatModule } from "@/modules/AIChatModule";
 import { AiChatApi } from "@/api/aiChatApi";
-import { getAvailableToolFunctions } from "@/config/aiTools.config";
 import { ToolExecutionService } from "./ToolExecutionService";
 import { ToolExecutor } from "./ToolExecutor";
+import { SkillExecutor } from "./SkillExecutor";
+import { SkillRegistry } from "@/config/skillsRegistry";
 import { MessageType } from "@/entityTypes/commonType";
 import { PlanValidator } from "./ValidationUtils";
 import {
@@ -263,12 +264,28 @@ export class StreamEventProcessor {
   ): Promise<void> {
     const toolStartMs = Date.now();
     try {
-      // Use ToolExecutor to execute the tool
-      const toolResult = await ToolExecutor.execute(
-        toolName,
-        toolParams,
-        this.state.streamConversationId
-      );
+      // Use SkillExecutor for registry-known skills, fall back to ToolExecutor for MCP/legacy
+      let toolResult: Record<string, unknown>;
+      if (SkillRegistry.isRegistered(toolName)) {
+        const skillResult = await SkillExecutor.execute(toolName, toolParams, {
+          conversationId: this.state.streamConversationId,
+          toolCallId: toolId,
+        });
+        // Convert ToolExecutionResult to the format expected by sendToolResult
+        toolResult = skillResult.success
+          ? (skillResult.result as Record<string, unknown>)
+          : {
+              ...(skillResult.result as Record<string, unknown>),
+              success: false,
+            };
+      } else {
+        // MCP tools and legacy tools still go through ToolExecutor
+        toolResult = await ToolExecutor.execute(
+          toolName,
+          toolParams,
+          this.state.streamConversationId
+        );
+      }
 
       // Save tool result to database
       await this.saveToolResult(toolId, toolName, toolResult, toolStartMs);
@@ -381,7 +398,7 @@ export class StreamEventProcessor {
       ];
 
       // Get available tools (static + MCP)
-      const availableTools = await getAvailableToolFunctions();
+      const availableTools = await SkillRegistry.getAllToolFunctions();
 
       // Continue the stream with tool results
       await this.state.aiChatApi.streamContinueWithToolResults(

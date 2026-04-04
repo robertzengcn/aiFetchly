@@ -258,6 +258,19 @@ export const MCP_TOOL_TOGGLE_SERVER = "mcp:tool:toggle:server";
 export const MCP_TOOL_TOGGLE_TOOL = "mcp:tool:toggle:tool";
 export const MCP_TOOL_TEST_CONNECTION = "mcp:tool:test:connection";
 
+// Skill Management Channels
+export const SKILL_CHECK_PERMISSION = "skill:check-permission";
+export const SKILL_GRANT_PERMISSION = "skill:grant-permission";
+export const SKILL_DENY_PERMISSION = "skill:deny-permission";
+export const SKILL_REVOKE_PERMISSION = "skill:revoke-permission";
+export const SKILL_GET_PERMISSION_STATUS = "skill:get-permission-status";
+
+// Skill Import & Management Channels
+export const SKILL_IMPORT = "skill:import";
+export const SKILL_LIST_INSTALLED = "skill:list-installed";
+export const SKILL_TOGGLE = "skill:toggle";
+export const SKILL_UNINSTALL = "skill:uninstall";
+
 // Dashboard Channels
 export const DASHBOARD_SUMMARY = "dashboard:summary";
 export const DASHBOARD_TRENDS = "dashboard:trends";
