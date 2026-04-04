@@ -1,0 +1,168 @@
+/**
+ * Type definitions for the AI Skills System.
+ *
+ * Skills are named, versioned capabilities that the AI can invoke
+ * during conversations. They are composed of a manifest (metadata)
+ * and executable logic.
+ */
+
+import type { ToolFunction } from "@/api/aiChatApi";
+
+/**
+ * Result returned by a skill's execute function.
+ * The SkillExecutor wraps this into a full ToolExecutionResult.
+ */
+export interface SkillExecutionResult {
+  readonly success: boolean;
+  readonly result: Record<string, unknown>;
+}
+
+// ---------------------------------------------------------------------------
+// Tier — Where a skill executes
+// ---------------------------------------------------------------------------
+
+/** Execution tier determines the runtime environment for a skill. */
+export type SkillTier =
+  | "renderer" // Pure computation in renderer process (no side effects)
+  | "main" // Main process via IPC (filesystem, OS, Puppeteer)
+  | "sandboxed"; // Isolated VM for untrusted code (isolated-vm)
+
+// ---------------------------------------------------------------------------
+// Permission categories — Risk-based classification
+// ---------------------------------------------------------------------------
+
+/**
+ * Permission category determines the user-consent policy for a skill.
+ *
+ * - `pure`        — No side effects. Auto-allowed, never prompts the user.
+ * - `network`     — External HTTP calls. Prompts once per domain.
+ * - `filesystem`  — Local file read/write. Always prompts.
+ * - `automation`  — Puppeteer, social posting, scraping. Always prompts.
+ */
+export type SkillPermissionCategory =
+  | "pure"
+  | "network"
+  | "filesystem"
+  | "automation";
+
+// ---------------------------------------------------------------------------
+// Skill source — Origin of the skill
+// ---------------------------------------------------------------------------
+
+/** Where the skill comes from. */
+export type SkillSource =
+  | "built-in" // Shipped with the app, fully trusted
+  | "user" // Personal script written by a power user
+  | "marketplace"; // Imported from an external source
+
+// ---------------------------------------------------------------------------
+// SkillDefinition — Full runtime representation of a registered skill
+// ---------------------------------------------------------------------------
+
+/**
+ * Complete definition of a skill in the registry.
+ *
+ * Each entry maps 1:1 to a `ToolFunction` (the LLM-facing subset:
+ * name, description, parameters) plus execution metadata.
+ */
+export interface SkillDefinition {
+  /** Unique kebab-case identifier (e.g., `google_search`). */
+  readonly name: string;
+
+  /** Human-readable description shown to the LLM. */
+  readonly description: string;
+
+  /** JSON Schema for input validation. */
+  readonly parameters: Record<string, unknown>;
+
+  /** Where the skill executes. */
+  readonly tier: SkillTier;
+
+  /** Whether user consent is needed before execution. */
+  readonly requiresConfirmation: boolean;
+
+  /** Risk-based permission classification. */
+  readonly permissionCategory: SkillPermissionCategory;
+
+  /** The function that runs the skill. */
+  readonly execute: (
+    args: Record<string, unknown>,
+    context: SkillExecutionContext
+  ) => Promise<SkillExecutionResult>;
+
+  /** Origin of the skill. */
+  readonly source: SkillSource;
+}
+
+// ---------------------------------------------------------------------------
+// SkillExecutionContext — Context passed to the executor
+// ---------------------------------------------------------------------------
+
+/** Runtime context for a single skill execution. */
+export interface SkillExecutionContext {
+  /** The conversation where this execution originated. */
+  readonly conversationId: string;
+
+  /** The skill being invoked. */
+  readonly skillName?: string;
+
+  /** Server-assigned tool call ID for correlating request/response. */
+  readonly toolCallId: string;
+
+  /** Arguments from the LLM's tool_call event. */
+  readonly args?: Record<string, unknown>;
+}
+
+// ---------------------------------------------------------------------------
+// SkillManifest — JSON structure within a skill package zip
+// ---------------------------------------------------------------------------
+
+/**
+ * Manifest for importable skill packages.
+ * Stored in `skill.json` at the root of the zip.
+ */
+export interface SkillManifest {
+  /** Unique kebab-case identifier. */
+  readonly name: string;
+
+  /** Semver version string (e.g., `1.0.0`). */
+  readonly version: string;
+
+  /** Human-readable description (max 500 characters). */
+  readonly description: string;
+
+  /** Skill author (optional). */
+  readonly author?: string;
+
+  /** Runtime type — only `javascript` is supported initially. */
+  readonly runtime: "javascript";
+
+  /** Relative path within the zip to the entry JS file. */
+  readonly entry: string;
+
+  /** JSON Schema for inputs. */
+  readonly parameters: Record<string, unknown>;
+
+  /** Declared permission requirements. */
+  readonly permissions?: SkillPermissionCategory[];
+}
+
+// ---------------------------------------------------------------------------
+// Helper: convert SkillDefinition → ToolFunction
+// ---------------------------------------------------------------------------
+
+/**
+ * Extracts the LLM-facing subset of a `SkillDefinition`.
+ *
+ * This is the shape that gets sent to the AI server as `client_tools`.
+ */
+export function skillDefinitionToToolFunction(
+  skill: SkillDefinition
+): ToolFunction {
+  return {
+    type: "function",
+    name: skill.name,
+    description: skill.description,
+    parameters: skill.parameters,
+  };
+}

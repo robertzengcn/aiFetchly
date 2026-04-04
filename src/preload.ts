@@ -1,9 +1,7 @@
 import { ipcRenderer, contextBridge } from "electron";
 
 /** Maps renderer callbacks to the ipcRenderer listener so removeListener works. */
-type IpcRendererOnCallback = NonNullable<
-  Parameters<typeof ipcRenderer.on>[1]
->;
+type IpcRendererOnCallback = NonNullable<Parameters<typeof ipcRenderer.on>[1]>;
 const ipcReceiveWrappers = new WeakMap<
   (...args: unknown[]) => void,
   IpcRendererOnCallback
@@ -229,6 +227,17 @@ import {
   AI_EMAIL_TEMPLATE_ERROR,
   AI_EMAIL_TEMPLATE_STOP,
   AI_EMAIL_TEMPLATE_VALIDATE,
+  // Skill Management Channels
+  SKILL_CHECK_PERMISSION,
+  SKILL_GRANT_PERMISSION,
+  SKILL_DENY_PERMISSION,
+  SKILL_REVOKE_PERMISSION,
+  SKILL_GET_PERMISSION_STATUS,
+  // Skill Import & Management Channels
+  SKILL_IMPORT,
+  SKILL_LIST_INSTALLED,
+  SKILL_TOGGLE,
+  SKILL_UNINSTALL,
 } from "@/config/channellist";
 
 // window.ipcRenderer = ipcRenderer
@@ -607,6 +616,17 @@ contextBridge.exposeInMainWorld("api", {
       RETRY_CONTACT_EXTRACTION,
       // AI Email Template Channels
       AI_EMAIL_TEMPLATE_VALIDATE,
+      // Skill Permission Channels
+      SKILL_CHECK_PERMISSION,
+      SKILL_GRANT_PERMISSION,
+      SKILL_DENY_PERMISSION,
+      SKILL_REVOKE_PERMISSION,
+      SKILL_GET_PERMISSION_STATUS,
+      // Skill Import & Management Channels
+      SKILL_IMPORT,
+      SKILL_LIST_INSTALLED,
+      SKILL_TOGGLE,
+      SKILL_UNINSTALL,
     ];
     if (validChannels.includes(channel)) {
       return ipcRenderer.invoke(channel, data);

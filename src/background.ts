@@ -11,6 +11,7 @@ const session = require("electron").session;
 // import { createProtocol } from 'vue-cli-plugin-electron-builder/lib'
 import installExtension, { VUEJS3_DEVTOOLS } from "electron-devtools-installer";
 import { registerCommunicationIpcHandlers } from "./main-process/communication/";
+import { SkillImportService } from "@/service/SkillImportService";
 import * as path from "path";
 import { Token } from "@/modules/token";
 import { MenuManager } from "@/main-process/menu/MenuManager";
@@ -323,6 +324,11 @@ function initialize() {
       }
       //if (userdataPath){//register communication ipc handlers
       registerCommunicationIpcHandlers(win);
+
+      // Load persisted skills into runtime registry
+      SkillImportService.loadPersistedSkills().catch((err: unknown) => {
+        console.warn("[Startup] Failed to load persisted skills:", err);
+      });
       //}
     }
 

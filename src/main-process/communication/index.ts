@@ -26,6 +26,7 @@ import { registerMCPToolIpcHandlers } from "@/main-process/communication/mcp-too
 import { registerSearchResultIpcHandlers } from "@/main-process/communication/search-result-ipc";
 import { registerWebSocketIpcHandlers } from "@/main-process/communication/websocket-ipc";
 import { registerContactExtractionHandlers } from "@/main-process/communication/contactExtraction-ipc";
+import { registerSkillsIpcHandlers } from "@/main-process/communication/skills-ipc";
 export function registerCommunicationIpcHandlers(win: BrowserWindow) {
   try {
     SyncMsg(win);
@@ -52,6 +53,7 @@ export function registerCommunicationIpcHandlers(win: BrowserWindow) {
     registerSearchResultIpcHandlers();
     registerWebSocketIpcHandlers(win);
     registerContactExtractionHandlers();
+    registerSkillsIpcHandlers();
     AsyncMsg();
   } catch (e) {
     console.log("registerCommunicationIpcHandlers error:");
