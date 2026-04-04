@@ -1108,6 +1108,12 @@ export default {
     column_status: "Status",
     column_enabled: "Enabled",
     column_disabled: "Disabled",
+    approval_title: "Skill Permission Request",
+    approval_description:
+      "This skill requires your permission to execute. It may access external resources or perform actions on your behalf.",
+    approval_deny: "Deny",
+    approval_allow_once: "Allow Once",
+    approval_always_allow: "Always Allow",
   },
   schedule: {
     create_new_schedule: "Create New Schedule",

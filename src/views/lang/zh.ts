@@ -1068,6 +1068,12 @@ export default {
     column_status: "状态",
     column_enabled: "已启用",
     column_disabled: "已禁用",
+    approval_title: "技能权限请求",
+    approval_description:
+      "此技能需要您的许可才能执行。它可能会访问外部资源或代表您执行操作。",
+    approval_deny: "拒绝",
+    approval_allow_once: "允许一次",
+    approval_always_allow: "始终允许",
   },
   schedule: {
     create_new_schedule: "创建新计划",

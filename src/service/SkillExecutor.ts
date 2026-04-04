@@ -28,10 +28,10 @@ const SENSITIVE_PATTERNS = [
   /\bsk-[a-zA-Z0-9]{20,}\b/, // OpenAI-style API keys
   /\bpk_[a-zA-Z0-9]{20,}\b/, // Stripe-style keys
   /\bat_[a-zA-Z0-9]{20,}\b/, // Generic access tokens
-  /\bpassword\s*[:=]\s*\S+/i, // password=xxx
-  /\btoken\s*[:=]\s*\S+/i, // token=xxx
-  /\bcookie\s*[:=]\s*\S+/i, // cookie=xxx
-  /\bsecret\s*[:=]\s*\S+/i, // secret=xxx
+  /\bpassword\s*[:=]\s*["']?\S{4,}/i, // password=xxx or password:"xxx" (4+ chars)
+  /\btoken\s*[:=]\s*["']?\S{8,}/i, // token=xxx (8+ chars to avoid "token:bearer")
+  /\bcookie\s*[:=]\s*["']?\S{8,}/i, // cookie=xxx (8+ chars)
+  /\bsecret\s*[:=]\s*["']?\S{4,}/i, // secret=xxx (4+ chars)
 ] as const;
 
 /**
@@ -39,7 +39,7 @@ const SENSITIVE_PATTERNS = [
  * Rejects arguments containing sensitive patterns.
  */
 function validateArgs(
-  args: Record<string, unknown>,
+  args: Record<string, unknown>
 ): { valid: true } | { valid: false; reason: string } {
   const serialized = JSON.stringify(args);
 
@@ -61,7 +61,7 @@ function validateArgs(
 
 /** Sanitize args for logging — strips sensitive values. */
 function sanitizeForLog(
-  args: Record<string, unknown>,
+  args: Record<string, unknown>
 ): Record<string, unknown> {
   const sanitized: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(args)) {
@@ -82,7 +82,7 @@ function auditLog(
   args: Record<string, unknown>,
   success: boolean,
   durationMs: number,
-  error?: string,
+  error?: string
 ): void {
   const sanitizedArgs = sanitizeForLog(args);
   const logEntry = {
@@ -114,7 +114,7 @@ function auditLog(
 async function execute(
   name: string,
   args: Record<string, unknown>,
-  context: SkillExecutionContext,
+  context: SkillExecutionContext
 ): Promise<ToolExecutionResult> {
   const startTime = Date.now();
   const toolCallId = context.toolCallId;
@@ -196,8 +196,7 @@ async function execute(
     auditLog(name, args, result.success, result.execution_time_ms);
     return result;
   } catch (error) {
-    const errorMessage =
-      error instanceof Error ? error.message : String(error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
     const result: ToolExecutionResult = {
       tool_call_id: toolCallId,
       tool_name: name,
@@ -218,13 +217,13 @@ async function executeViaToolExecutor(
   name: string,
   args: Record<string, unknown>,
   context: SkillExecutionContext,
-  startTime: number,
+  startTime: number
 ): Promise<ToolExecutionResult> {
   try {
     const result = await ToolExecutor.execute(
       name,
       args,
-      context.conversationId,
+      context.conversationId
     );
     const execResult: ToolExecutionResult = {
       tool_call_id: context.toolCallId,
@@ -236,8 +235,7 @@ async function executeViaToolExecutor(
     auditLog(name, args, true, execResult.execution_time_ms);
     return execResult;
   } catch (error) {
-    const errorMessage =
-      error instanceof Error ? error.message : String(error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
     const execResult: ToolExecutionResult = {
       tool_call_id: context.toolCallId,
       tool_name: name,

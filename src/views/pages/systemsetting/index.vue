@@ -28,12 +28,8 @@
               class="mb-2"
             >
               <v-icon left>mdi-view-dashboard</v-icon>
-              {{ t('route.skills_management') }}
+              {{ t('system_settings.manage_skills') }}
             </v-btn>
-        <v-btn color="primary" variant="outlined" block @click="navigateToSkills">
-          <v-icon left>mdi-view-dashboard</v-icon>
-          {{ t('system_settings.manage_skill') }}
-        </v-btn>
           </v-card-text>
         </v-card>
       </v-col>
