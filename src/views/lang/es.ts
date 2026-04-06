@@ -137,6 +137,7 @@ export default {
     email_service_edit: "Editar servicio de correo",
     knowledge_library: "Biblioteca de conocimiento",
     mcp_tools: "Herramientas MCP",
+    skills: "Habilidades",
     skills_management: "Gestión de Habilidades",
     login: "Iniciar sesión",
     not_found: "No encontrado",
