@@ -127,6 +127,7 @@ export default {
     email_service_edit: "编辑邮件服务",
     knowledge_library: "知识库",
     mcp_tools: "MCP工具",
+    skills: "技能",
     skills_management: "技能管理",
     login: "登录",
     not_found: "未找到",

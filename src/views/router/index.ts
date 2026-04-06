@@ -598,6 +598,28 @@ export const constantRoutes: RouteRecordRaw[] = [
     ],
   },
   {
+    path: "/skills",
+    name: "Skills",
+    meta: {
+      visible: true,
+      title: "route.skills",
+      icon: "mdi-lightning-bolt",
+    },
+    component: Layout,
+    children: [
+      {
+        path: "management",
+        component: () => import("@/views/pages/systemsetting/skills.vue"),
+        name: "SkillsManagement",
+        meta: {
+          visible: true,
+          title: "route.skills_management",
+          icon: "mdi-lightning-bolt",
+        },
+      },
+    ],
+  },
+  {
     path: "/emailmarketing",
     name: "Email_Marketing",
     meta: {

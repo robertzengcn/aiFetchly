@@ -721,6 +721,28 @@ export const createTranslatedRoutes = (): RouteRecordRaw[] => {
       ],
     },
     {
+      path: "/skills",
+      name: "Skills",
+      meta: {
+        visible: true,
+        title: computed(() => t("router.skills")),
+        icon: "mdi-lightning-bolt",
+      },
+      component: Layout,
+      children: [
+        {
+          path: "management",
+          component: () => import("@/views/pages/systemsetting/skills.vue"),
+          name: "SkillsManagement",
+          meta: {
+            visible: true,
+            title: computed(() => t("router.skills_management")),
+            icon: "mdi-lightning-bolt",
+          },
+        },
+      ],
+    },
+    {
       path: "/login",
       name: "login",
       meta: {

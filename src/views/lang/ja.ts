@@ -137,6 +137,7 @@ export default {
     email_service_edit: "メールサービスを編集",
     knowledge_library: "ナレッジライブラリ",
     mcp_tools: "MCPツール",
+    skills: "スキル",
     skills_management: "スキル管理",
     login: "ログイン",
     not_found: "見つかりません",
