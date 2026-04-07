@@ -18,8 +18,8 @@
         <!-- Empty state -->
         <div v-else-if="skills.length === 0" class="text-center pa-4">
           <v-icon size="64" color="grey-lighten-2">mdi-view-dashboard</v-icon>
-          <p class="mt-4 text-grey">{{ t('skills.no_skills_installed') }}</p>
-          <p class="text-grey">{{ t('skills.no_skills_description') }}</p>
+          <p class="mt-4 text-grey">{{ t('skills.no_skill_installed') }}</p>
+          <p class="text-grey">{{ t('skills.no_skill_description') }}</p>
           <v-btn color="primary" class="mt-4" @click="triggerImport">
             <v-icon left>mdi-upload</v-icon>
             {{ t('skills.import_button') }}
