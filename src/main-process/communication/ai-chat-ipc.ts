@@ -52,7 +52,10 @@ import {
 import { v4 as uuidv4 } from "uuid";
 import { Token } from "@/modules/token";
 import { USER_AI_ENABLED } from "@/config/usersetting";
-import { DocumentService, StagedAttachmentReference } from "@/service/DocumentService";
+import {
+  DocumentService,
+  StagedAttachmentReference,
+} from "@/service/DocumentService";
 
 /**
  * Generate a unique conversation ID in format: user_id:uuid
@@ -82,7 +85,8 @@ function isSupportedUploadedFile(fileName: string, mimeType: string): boolean {
     return true;
   }
 
-  if (lowerMime === "application/pdf" || lowerName.endsWith(".pdf")) return true;
+  if (lowerMime === "application/pdf" || lowerName.endsWith(".pdf"))
+    return true;
   if (
     lowerMime === "text/csv" ||
     lowerMime === "application/csv" ||
@@ -95,6 +99,16 @@ function isSupportedUploadedFile(fileName: string, mimeType: string): boolean {
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
     lowerName.endsWith(".docx")
   ) {
+    return true;
+  }
+  if (
+    lowerMime ===
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+    lowerName.endsWith(".xlsx")
+  ) {
+    return true;
+  }
+  if (lowerName.endsWith(".xls")) {
     return true;
   }
 
@@ -153,7 +167,9 @@ function buildAttachmentReferenceBlock(
 
   const lines = references.map(
     (ref, index) =>
-      `${index + 1}. file_name="${sanitizeForPrompt(ref.fileName)}" attachment_ref="${ref.refId}"`
+      `${index + 1}. file_name="${sanitizeForPrompt(
+        ref.fileName
+      )}" attachment_ref="${ref.refId}"`
   );
 
   return [

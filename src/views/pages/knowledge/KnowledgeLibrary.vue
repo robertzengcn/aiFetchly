@@ -117,7 +117,7 @@
               </div>
               
               <div class="text-body-2 text-grey">
-                PDF, TXT, DOC, DOCX, MD, HTML files supported
+                PDF, TXT, DOC, DOCX, MD, HTML, CSV, Excel files supported
               </div>
               
               <v-btn
@@ -145,7 +145,7 @@
             ref="fileInput"
             type="file"
             multiple
-            accept=".pdf,.txt,.doc,.docx,.md,.html,.htm"
+            accept=".pdf,.txt,.doc,.docx,.md,.html,.htm,.csv,.xlsx,.xls"
             style="display: none"
             @change="onFileSelect"
           />

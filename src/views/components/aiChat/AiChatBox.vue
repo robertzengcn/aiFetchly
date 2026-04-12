@@ -812,7 +812,7 @@ const MAX_UPLOAD_FILE_BYTES = 5 * 1024 * 1024; // 5MB
 const MAX_TOTAL_MESSAGE_CHARS = 95000; // must stay below aifetchserver AskStreamData.message max_length (100000)
 
 // Allow images plus supported document files for chat uploads.
-const fileAccept = 'image/*,.png,.jpg,.jpeg,.webp,.gif,.csv,.pdf,.docx';
+const fileAccept = 'image/*,.png,.jpg,.jpeg,.webp,.gif,.csv,.pdf,.docx,.xlsx,.xls';
 
 // Resend message state
 const isResendingMessage = ref(false);
@@ -860,7 +860,9 @@ function isSupportedAttachmentFile(file: File): boolean {
     mime === 'text/csv' ||
     mime === 'application/csv' ||
     mime === 'application/pdf' ||
-    mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+    mime === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+    mime === 'application/vnd.ms-excel'
   ) {
     return true;
   }
@@ -872,7 +874,9 @@ function isSupportedAttachmentFile(file: File): boolean {
     nameLower.endsWith('.gif') ||
     nameLower.endsWith('.csv') ||
     nameLower.endsWith('.pdf') ||
-    nameLower.endsWith('.docx')
+    nameLower.endsWith('.docx') ||
+    nameLower.endsWith('.xlsx') ||
+    nameLower.endsWith('.xls')
   );
 }
 
@@ -883,7 +887,9 @@ function resolveAttachmentMimeType(file: File): string {
     mime === 'text/csv' ||
     mime === 'application/csv' ||
     mime === 'application/pdf' ||
-    mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+    mime === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+    mime === 'application/vnd.ms-excel'
   ) {
     return mime;
   }
@@ -895,6 +901,8 @@ function resolveAttachmentMimeType(file: File): string {
   if (nameLower.endsWith('.csv')) return 'text/csv';
   if (nameLower.endsWith('.pdf')) return 'application/pdf';
   if (nameLower.endsWith('.docx')) return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  if (nameLower.endsWith('.xlsx')) return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  if (nameLower.endsWith('.xls')) return 'application/vnd.ms-excel';
   return 'application/octet-stream';
 }
 
