@@ -5,14 +5,19 @@
       "type": "node",
       "request": "launch",
       "name": "Electron Main",
-      "runtimeExecutable": "${env:HOME}/.nvm/versions/node/v22.19.0/bin/node",
+      "runtimeExecutable": "${workspaceFolder}/node_modules/.bin/electron-forge",
       "runtimeArgs": [
-        "${workspaceFolder}/node_modules/@electron-forge/cli/dist/electron-forge-start.js",
+        "start",
         "--vscode",
         "--inspect-electron",
-        "--"
+        "--",
+        "--disable-gpu",
+        "--no-sandbox"
       ],
       "cwd": "${workspaceFolder}",
+      "env": {
+        "DISPLAY": ":0"
+      },
       "outFiles": [
         "${workspaceFolder}/.vite/build/**/*.js"
       ],
