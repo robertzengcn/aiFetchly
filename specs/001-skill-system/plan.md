@@ -1,161 +1,206 @@
-# Implementation Plan: AI Skills System
+# Implementation Plan: CSV & Excel Upload Support for AI Chat and Knowledge Library
 
-**Branch**: 001-skill-system | **Date**: 2026-04-03 | **Spec**: spec.md
-**Input**: Feature specification from /specs/001-skill-system/spec.md
+**Branch**: `001-skill-system` | **Date**: 2026-04-12 | **Spec**: inline
+**Input**: User request + referenced strategy docs in `doc/RAG Excel Support Strategies.md` and `doc/Convert Excel to Markdown All Sheets.md`
 
 ## Summary
 
-Build a unified AI Skills System that enables the AI chat to execute built-in, user-authored, and marketplace-sourced capabilities during conversations. The core technical approach is a static TypeScript skill registry that wraps the existing ToolExecutor, a SkillExecutor service that validates/permission-checks/dispatches skill calls through the existing SSE streaming infrastructure, and a phased rollout from core execution loop through permissions to marketplace import.
+Enable CSV and Excel (.xlsx/.xls) file uploads in two UI surfaces:
+1. **AI Chat Box** -- users attach .csv/.xlsx files to chat messages; backend converts to markdown for LLM context
+2. **Knowledge Library** -- users upload .csv/.xlsx files for RAG (text extraction -> chunking -> embedding)
+
+**Technical approach**: Use `xlsx` (SheetJS) for Excel parsing with `sheet_to_html()` piped through the existing `HtmlConversionService` (turndown) for clean markdown conversion. Use `papaparse` for robust CSV parsing. Both libraries are already installed except `xlsx`.
+
+**RAG strategy** (per `doc/RAG Excel Support Strategies.md`): Use **Markdown Chunking** pattern for initial implementation -- convert sheets to markdown, then let `ChunkingService` handle splitting. Row-as-a-Document pattern is a future optimization for record-heavy files.
 
 ## Technical Context
 
-**Language/Version**: TypeScript 5.x
-**Primary Dependencies**: Electron, Vue 3, Vuetify, Pinia, TypeORM, better-sqlite3, Puppeteer
-**Storage**: SQLite (TypeORM) for installed skills; Token service for permission grants
-**Testing**: Mocha (modules), Vitest (main process/utility), Vue test utils
-**Target Platform**: Electron desktop application (Windows/macOS/Linux)
-**Project Type**: Electron desktop app (renderer + main process + child processes)
-**Performance Goals**: Tool-call round-trip < 2s (built-in), registry enumeration < 10ms
-**Constraints**: No dynamic imports, no any types, immutable patterns, < 400 lines per skill file
-**Scale/Scope**: 12 existing built-in tools to migrate, ~5 new files, ~7 files to modify
+**Language/Version**: TypeScript 5.x on Node.js (Electron)
+**Primary Dependencies**: xlsx (to add), papaparse (existing), turndown (existing), HtmlConversionService (existing)
+**Storage**: SQLite (TypeORM) for documents/chunks; sqlite-vec for vector embeddings
+**Testing**: Mocha + Vitest
+**Target Platform**: Electron desktop app (Windows/macOS/Linux)
+**Project Type**: Desktop application (Electron main process + Vue renderer)
+**Performance Goals**: Conversion < 5s for files up to 50MB; chat attachments limited to 100 rows/sheet for LLM safety
+**Constraints**: Chat file limit 5MB; Knowledge Library limit 50MB; row cap for LLM context safety
+**Scale/Scope**: Single-user desktop app; typical files < 10k rows
 
 ## Constitution Check
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-The project constitution is a template (not yet filled with specific principles). Checking against CLAUDE.md rules:
+| Principle | Status | Notes |
+|-----------|--------|-------|
+| File organization (many small files < 800 lines) | PASS | Extending existing focused service/module files |
+| Error handling (explicit at every level) | PASS | Conversion errors surfaced to user via existing error channels |
+| Input validation (at system boundaries) | PASS | File type + size validation already exists; extending to new types |
+| No mutation (immutable patterns) | PASS | Following existing patterns |
+| No `any` type (TypeScript rules) | PASS | Will use proper types for xlsx workbook/sheet interfaces |
 
-| Gate | Status | Notes |
-|------|--------|-------|
-| No any types | PASS | All interfaces use Record<string, unknown> with type guards |
-| No dynamic imports | PASS | Static registry with compile-time registration |
-| File size < 400 lines | PASS | Each skill file < 400 lines; registry < 200 lines |
-| Three-layer DB architecture | PASS | Model/Module/IPC pattern followed for all DB operations |
-| Child processes in src/childprocess/ | N/A | No new child processes in this feature |
-| i18n for all UI text | PASS | Will update all 6 language files for new UI |
-| AI enable check in IPC handlers | PASS | All skill IPC handlers check USER_AI_ENABLED first |
-| Worker processes no direct DB | N/A | No worker processes in this feature |
+No violations. All gates pass.
 
-**Post-Phase 1 re-check**: All design artifacts maintain compliance. No violations.
+## Current State Analysis
+
+| Layer | File | CSV | Excel (.xlsx) |
+|-------|------|-----|---------------|
+| **Frontend - Chat** | `AiChatBox.vue` `fileAccept` | Supported | NOT listed |
+| **Frontend - Library** | `KnowledgeLibrary.vue` upload `accept` | NOT listed | NOT listed |
+| **Frontend - Chat** | `AiChatBox.vue` `isSupportedAttachmentFile()` | Supported | NOT listed |
+| **Backend - Chat IPC** | `ai-chat-ipc.ts` `isSupportedUploadedFile()` | Supported | NOT listed |
+| **Backend - Chat Attach** | `DocumentService.ts` `resolveSupportedExtension()` | Supported | **Throws error** |
+| **Backend - Chat Attach** | `DocumentService.ts` `convertUploadedAttachmentToMarkdown()` | Supported | **Throws error** |
+| **Backend - RAG File Types** | `RAGDocumentModule.ts` `supportedFileTypes` | NOT listed | NOT listed |
+| **Backend - RAG Chunking** | `ChunkingService.ts` `extractDocumentContent()` | NOT handled | NOT handled |
+
+**Key gaps**:
+- CSV: supported in chat attachments but NOT in RAG pipeline (file type list, text extraction, chunking)
+- Excel: NOT supported anywhere; DocumentService explicitly throws "Excel attachments are not supported"
+
+## Conversion Pipeline Design
+
+Per `doc/Convert Excel to Markdown All Sheets.md`:
+
+```
+.xlsx file
+  -> xlsx.readFile() / xlsx.read(buffer)
+  -> for each sheet: xlsx.utils.sheet_to_html(worksheet)
+  -> HtmlConversionService.convertHtmlToMarkdown(htmlTable)   [already exists]
+  -> Concatenate with "## Sheet: {name}" headers
+  -> Final markdown string
+```
+
+For **chat attachments**: Cap at 100 rows/sheet (per doc recommendation for LLM context safety).
+For **RAG/knowledge library**: No row cap; full conversion then standard markdown chunking.
+
+For **CSV**: Use `papaparse` (already installed) instead of naive comma-splitting to handle quoted values, escaped commas, and multi-line fields.
 
 ## Project Structure
 
-### Documentation (this feature)
-
-specs/001-skill-system/
-  plan.md              # This file
-  research.md          # Phase 0: Technical decisions and rationale
-  data-model.md        # Phase 1: Entity definitions and state transitions
-  quickstart.md        # Phase 1: Developer onboarding guide
-  contracts/           # Phase 1: API and IPC contracts
-    registry-contracts.md
-  tasks.md             # Phase 2: Task breakdown (via /speckit.tasks)
-
-### Source Code (repository root)
-
+```text
 src/
-  config/
-    skillsRegistry.ts           # NEW: Static skill registry
-  service/
-    SkillExecutor.ts            # NEW: Validates, dispatches, returns results
-    SkillPermissionService.ts   # NEW (Phase 2): Permission checks and storage
-    SkillImportService.ts       # NEW (Phase 3): Zip import and manifest validation
-    ToolExecutor.ts             # MODIFY: Wrapped by SkillExecutor
-    StreamEventProcessor.ts     # MODIFY: Integrate SkillExecutor in tool_call handler
-  main-process/
-    communication/
-      skills-ipc.ts           # NEW (Phase 3): IPC for main-process skills and import
-  entity/
-    InstalledSkill.ts           # NEW (Phase 3): TypeORM entity
-  model/
-    InstalledSkill.model.ts     # NEW (Phase 3): Data access layer
-  modules/
-    SkillManagementModule.ts    # NEW (Phase 3): Business logic for skill CRUD
-  entityTypes/
-    skillTypes.ts               # NEW: Type definitions for skill system
-  views/
-    components/
-      aiChat/
-        SkillApprovalCard.vue   # NEW (Phase 2): Inline permission prompt
-    pages/
-      systemsetting/
-        skills.vue              # NEW (Phase 3): Skills management page
-  preload.ts                    # MODIFY: Add skill IPC channels
-  background.ts                 # MODIFY: Register skills IPC handlers
+├── service/
+│   ├── ChunkingService.ts          # MODIFY: add .csv/.xlsx/.xls cases to extractDocumentContent()
+│   └── DocumentService.ts          # MODIFY: add Excel support, improve CSV with papaparse
+├── modules/
+│   └── RAGDocumentModule.ts        # MODIFY: add .csv/.xlsx/.xls to supportedFileTypes[]
+├── main-process/communication/
+│   └── ai-chat-ipc.ts             # MODIFY: add .xlsx to isSupportedUploadedFile()
+├── views/
+│   ├── components/aiChat/
+│   │   └── AiChatBox.vue          # MODIFY: add .xlsx/.xls to fileAccept + validation
+│   ├── pages/knowledge/
+│   │   └── KnowledgeLibrary.vue   # MODIFY: add .csv/.xlsx/.xls to upload accept
+│   └── lang/{en,zh,es,fr,de,ja}.ts  # MODIFY: update file type hint strings
+```
 
-test/
-  modules/
-    skillExecutor.test.ts       # NEW: Mocha tests for executor
-  vitest/
-    main/
-      skills-ipc.test.ts        # NEW: Vitest tests for IPC handlers
-    utilitycode/
-      skillsRegistry.test.ts    # NEW: Vitest tests for registry
+**Structure Decision**: Extending existing layers. No new files or directories required. All changes fit within existing service/module/IPC/view architecture.
 
-**Structure Decision**: Follows the existing Electron + Vue 3 architecture. New files placed in their conventional directories. No new directory structures needed.
+## Implementation Tasks
+
+### Task 1: Add `xlsx` dependency
+- `yarn add xlsx`
+- Verify compilation with Electron's Node.js version
+- No native binaries -- pure JS, should work in Electron without rebuild
+
+### Task 2: ChunkingService -- CSV/Excel text extraction
+File: `src/service/ChunkingService.ts` (currently ~950 lines)
+
+Add two new cases to `extractDocumentContent()` switch statement:
+
+**`.csv` case**:
+- Read file as UTF-8 string
+- Parse with `papaparse` (handles quoted fields, escaped commas, line breaks in cells)
+- Convert parsed rows to markdown table
+- Return `DocumentContent { contentType: 'markdown', originalFormat: 'csv' }`
+
+**`.xlsx` / `.xls` case**:
+- Read file as Buffer
+- Parse with `xlsx.read(buffer)`
+- For each sheet: `xlsx.utils.sheet_to_html(worksheet)` -> `HtmlConversionService.convertHtmlToMarkdown()`
+- Prepend `## Sheet: {sheetName}` header for each sheet
+- Return `DocumentContent { contentType: 'markdown', originalFormat: 'xlsx' }`
+
+### Task 3: DocumentService -- Excel conversion for chat attachments
+File: `src/service/DocumentService.ts` (currently ~380 lines)
+
+**Update `resolveSupportedExtension()`**:
+- Change return type union to include `'.xlsx'`
+- Add `.xlsx` / `.xls` detection returning `'.xlsx'`
+- Remove the explicit "Excel attachments are not supported" error throw
+
+**Add `convertXlsxBufferToMarkdown()` private method**:
+- Parse buffer with `xlsx.read(buffer, { type: 'buffer' })`
+- For each sheet: `sheet_to_html()` -> `HtmlConversionService.convertHtmlToMarkdown()`
+- Include sheet name headers (`## Sheet: {name}`)
+- Cap at 100 rows/sheet for chat context safety (per `doc/Convert Excel to Markdown All Sheets.md`)
+
+**Improve `convertCsvBufferToMarkdown()`**:
+- Replace naive `line.split(',')` with `papaparse.parse()` for proper CSV handling
+- Handles: quoted values, escaped commas, multi-line fields, BOM markers
+
+**Update `convertUploadedAttachmentToMarkdown()`**:
+- Add `.xlsx` case calling `convertXlsxBufferToMarkdown()`
+
+### Task 4: RAGDocumentModule -- file type registration
+File: `src/modules/RAGDocumentModule.ts`
+
+- Add `.csv`, `.xlsx`, `.xls` to `supportedFileTypes` array (line 33-36)
+- Currently: `['.txt', '.md', '.pdf', '.doc', '.docx', '.rtf', '.html', '.htm', '.xml', '.json']`
+- New: `['.txt', '.md', '.pdf', '.doc', '.docx', '.rtf', '.html', '.htm', '.xml', '.json', '.csv', '.xlsx', '.xls']`
+
+### Task 5: AI Chat IPC -- file validation
+File: `src/main-process/communication/ai-chat-ipc.ts`
+
+In `isSupportedUploadedFile()` (line 70-101), add:
+```typescript
+if (
+    lowerMime === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+    lowerName.endsWith('.xlsx')
+) {
+    return true;
+}
+if (lowerName.endsWith('.xls')) {
+    return true;
+}
+```
+
+### Task 6: Frontend -- AiChatBox.vue file picker
+File: `src/views/components/aiChat/AiChatBox.vue`
+
+**Update `fileAccept`** (line 815):
+- Currently: `'image/*,.png,.jpg,.jpeg,.webp,.gif,.csv,.pdf,.docx'`
+- New: `'image/*,.png,.jpg,.jpeg,.webp,.gif,.csv,.pdf,.docx,.xlsx,.xls'`
+
+**Update `isSupportedAttachmentFile()`** (line 855-877):
+- Add `.xlsx` / `.xls` extension checks
+
+**Update `resolveAttachmentMimeType()`** (line 879-899):
+- Add `.xlsx` -> `'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'`
+- Add `.xls` -> `'application/vnd.ms-excel'`
+
+### Task 7: Frontend -- KnowledgeLibrary.vue upload dialog
+File: `src/views/pages/knowledge/KnowledgeLibrary.vue`
+
+**Update file input `accept`** (line 148):
+- Currently: `'.pdf,.txt,.doc,.docx,.md,.html,.htm'`
+- New: `'.pdf,.txt,.doc,.docx,.md,.html,.htm,.csv,.xlsx,.xls'`
+
+**Update supported types hint text** (line 119-121):
+- Currently: `"PDF, TXT, DOC, DOCX, MD, HTML files supported"`
+- New: `"PDF, TXT, DOC, DOCX, MD, HTML, CSV, Excel files supported"`
+
+### Task 8: i18n -- Update all 6 language files
+Files: `src/views/lang/{en,zh,es,fr,de,ja}.ts`
+
+- Update any translation strings that list supported file types
+- No new keys needed -- existing error/upload messages cover the new types
+
+### Task 9: Tests
+- Unit test: CSV to markdown conversion (papaparse-based)
+- Unit test: Excel to markdown conversion (xlsx + turndown pipeline)
+- Unit test: Row capping for chat attachments (100 rows/sheet limit)
+- Verify existing chunking strategies work on spreadsheet-derived markdown
 
 ## Complexity Tracking
 
 No violations to justify.
-
-## Phased Implementation
-
-### Phase 1: Core Execution Loop (P0)
-
-**Goal**: AI can invoke any built-in skill during chat and receive results.
-
-| Step | Deliverable | Files |
-|------|-------------|-------|
-| 1.1 | Create skill type definitions | src/entityTypes/skillTypes.ts |
-| 1.2 | Create static skill registry with 2-3 migrated tools | src/config/skillsRegistry.ts |
-| 1.3 | Create SkillExecutor that wraps ToolExecutor | src/service/SkillExecutor.ts |
-| 1.4 | Wire tool_call handler to use SkillExecutor | src/service/StreamEventProcessor.ts |
-| 1.5 | End-to-end verification | Manual test |
-| 1.6 | Migrate all remaining built-in tools | src/config/aiTools.config.ts to registry |
-| 1.7 | Unit tests for registry and executor | test/ |
-
-**Exit Criteria**: AI calls any built-in tool during chat; result appears in conversation; MCP tools unchanged.
-
-### Phase 2: Permissions and Security (P1)
-
-**Goal**: User-authored skills run safely; permissions protect sensitive operations.
-
-| Step | Deliverable | Files |
-|------|-------------|-------|
-| 2.1 | Permission service with Token storage | src/service/SkillPermissionService.ts |
-| 2.2 | Add permission categories to registry entries | src/config/skillsRegistry.ts |
-| 2.3 | Confirmation prompts for high-risk skills | SkillApprovalCard.vue, IPC handler |
-| 2.4 | Integrate permission checks into SkillExecutor | src/service/SkillExecutor.ts |
-| 2.5 | Audit logging for all executions | src/service/SkillExecutor.ts |
-| 2.6 | Sandboxed executor with isolated-vm | src/service/SandboxedSkillExecutor.ts |
-| 2.7 | Tests for permissions and sandboxing | test/ |
-
-**Exit Criteria**: Pure skills auto-execute; high-risk skills require approval; sandboxed skills cannot access filesystem/process; all executions logged.
-
-### Phase 3: Import and Management UI (P2)
-
-**Goal**: Users can import, manage, and use external skill packages.
-
-| Step | Deliverable | Files |
-|------|-------------|-------|
-| 3.1 | InstalledSkill entity and SQLite migration | src/entity/InstalledSkill.ts |
-| 3.2 | Data access model | src/model/InstalledSkill.model.ts |
-| 3.3 | Business logic module | src/modules/SkillManagementModule.ts |
-| 3.4 | Skill import service (zip + validation) | src/service/SkillImportService.ts |
-| 3.5 | Skills IPC handlers | src/main-process/communication/skills-ipc.ts |
-| 3.6 | Preload and background registration | src/preload.ts, src/background.ts |
-| 3.7 | Skills management page | src/views/pages/systemsetting/skills.vue |
-| 3.8 | Navigation integration | Menu/route config |
-| 3.9 | i18n translations | All 6 language files |
-| 3.10 | Hot registration for imported skills | Registry dynamic additions |
-| 3.11 | Tests for import and management | test/ |
-
-**Exit Criteria**: Users import .zip skill packages through UI; skills appear in chat; can enable/disable/uninstall.
-
-## Dependencies Between Phases
-
-Phase 1 (Core Loop) is the foundation.
-Phase 2 (Permissions) builds on the registry and executor from Phase 1.
-Phase 3 (Import and UI) builds on permissions and executor from Phase 2.
-
-Each phase is independently deployable. Phase 1 delivers immediate value (working tool calls). Phase 2 adds security. Phase 3 adds extensibility.
