@@ -267,15 +267,26 @@ export class PlanValidator {
         const stepData = data as Record<string, unknown>;
         const result: PlanStepEventData = {};
 
-        // step_id is required
-        const stepIdError = ValidationUtils.validateNonEmptyString(stepData.step_id, 'step_id');
-        if (stepIdError) {
-            errors.push(stepIdError);
+        // Accept explicit step_id or server 0-based step_index (matches step-${index+1} from plan_created)
+        const explicitStepId = ValidationUtils.sanitizeString(stepData.step_id);
+        const stepIndexRaw = stepData.step_index;
+        const hasValidStepIndex =
+            typeof stepIndexRaw === 'number' &&
+            Number.isInteger(stepIndexRaw) &&
+            stepIndexRaw >= 0 &&
+            stepIndexRaw < PLAN_CONFIG.MAX_PLAN_STEPS;
+
+        if (explicitStepId) {
+            result.step_id = explicitStepId;
+        } else if (hasValidStepIndex) {
+            result.step_id = `step-${stepIndexRaw + 1}`;
+            result.step_number = stepIndexRaw + 1;
+        } else {
+            errors.push('Plan step requires step_id or a valid step_index (0-based integer)');
             return { isValid: false, errors };
         }
-        result.step_id = ValidationUtils.sanitizeString(stepData.step_id)!;
 
-        // Optional validations
+        // Optional validations (explicit step_number overrides index-derived default)
         const stepNumberError = ValidationUtils.validatePositiveInteger(stepData.step_number, 'step_number');
         if (stepNumberError) errors.push(stepNumberError);
         else if (stepData.step_number !== undefined) result.step_number = stepData.step_number as number;
@@ -297,18 +308,20 @@ export class PlanValidator {
             }
         }
 
-        // Description validation
-        if (stepData.description !== undefined) {
-            if (typeof stepData.description !== 'string') {
+        // Description: canonical `description` or remote `step_description`
+        const descriptionValue =
+            stepData.description !== undefined ? stepData.description : stepData.step_description;
+        if (descriptionValue !== undefined) {
+            if (typeof descriptionValue !== 'string') {
                 errors.push('Step description must be a string');
             } else {
                 const descLengthError = ValidationUtils.validateStringLength(
-                    stepData.description,
+                    descriptionValue,
                     'Step description',
                     PLAN_CONFIG.MAX_STEP_DESCRIPTION_LENGTH
                 );
                 if (descLengthError) errors.push(descLengthError);
-                else result.description = ValidationUtils.sanitizeString(stepData.description);
+                else result.description = ValidationUtils.sanitizeString(descriptionValue);
             }
         }
 

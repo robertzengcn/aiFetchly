@@ -9,6 +9,7 @@
       "runtimeArgs": [
         "${workspaceFolder}/node_modules/@electron-forge/cli/dist/electron-forge-start.js",
         "--vscode",
+        "--inspect-electron",
         "--"
       ],
       "cwd": "${workspaceFolder}",
@@ -16,7 +17,8 @@
         "${workspaceFolder}/.vite/build/**/*.js"
       ],
       "resolveSourceMapLocations": [
-        "${workspaceFolder}/.vite/**"
+        "${workspaceFolder}/**",
+        "!**/node_modules/**"
       ],
       "sourceMaps": true,
       "autoAttachChildProcesses": true,

@@ -3,53 +3,65 @@ import { Repository } from "typeorm";
 import { InstalledSkillEntity } from "@/entity/InstalledSkill.entity";
 
 export class InstalledSkillModel extends BaseDb {
-    private repository: Repository<InstalledSkillEntity>;
+  private repository: Repository<InstalledSkillEntity> | null = null;
 
-    constructor(filepath: string) {
-        super(filepath);
-        this.repository = this.sqliteDb.connection.getRepository(InstalledSkillEntity);
-    }
+  constructor(filepath: string) {
+    super(filepath);
+  }
 
-    async findAll(): Promise<InstalledSkillEntity[]> {
-        return await this.repository.find({
-            order: { createdAt: "DESC" },
-        });
+  private async getRepository(): Promise<Repository<InstalledSkillEntity>> {
+    if (!this.repository) {
+      await this.ensureConnection();
+      this.repository =
+        this.sqliteDb.connection.getRepository(InstalledSkillEntity);
     }
+    return this.repository;
+  }
 
-    async findEnabled(): Promise<InstalledSkillEntity[]> {
-        return await this.repository.find({
-            where: { enabled: 1 },
-        });
-    }
+  async findAll(): Promise<InstalledSkillEntity[]> {
+    const repo = await this.getRepository();
+    return await repo.find({
+      order: { createdAt: "DESC" },
+    });
+  }
 
-    async findByName(name: string): Promise<InstalledSkillEntity | null> {
-        return await this.repository.findOne({ where: { name } });
-    }
+  async findEnabled(): Promise<InstalledSkillEntity[]> {
+    const repo = await this.getRepository();
+    return await repo.find({
+      where: { enabled: 1 },
+    });
+  }
 
-    async create(skill: Partial<InstalledSkillEntity>): Promise<number> {
-        const entity = this.repository.create(skill);
-        const saved = await this.repository.save(entity);
-        return saved.id;
-    }
+  async findByName(name: string): Promise<InstalledSkillEntity | null> {
+    const repo = await this.getRepository();
+    return await repo.findOne({ where: { name } });
+  }
 
-    async updateByName(
-        name: string,
-        data: Partial<InstalledSkillEntity>,
-    ): Promise<boolean> {
-        const result = await this.repository.update({ name }, data);
-        return (result.affected ?? 0) > 0;
-    }
+  async create(skill: Partial<InstalledSkillEntity>): Promise<number> {
+    const repo = await this.getRepository();
+    const entity = repo.create(skill);
+    const saved = await repo.save(entity);
+    return saved.id;
+  }
 
-    async remove(name: string): Promise<boolean> {
-        const result = await this.repository.delete({ name });
-        return (result.affected ?? 0) > 0;
-    }
+  async updateByName(
+    name: string,
+    data: Partial<InstalledSkillEntity>
+  ): Promise<boolean> {
+    const repo = await this.getRepository();
+    const result = await repo.update({ name }, data);
+    return (result.affected ?? 0) > 0;
+  }
 
-    async toggle(name: string, enabled: boolean): Promise<boolean> {
-        const result = await this.repository.update(
-            { name },
-            { enabled: enabled ? 1 : 0 },
-        );
-        return (result.affected ?? 0) > 0;
-    }
+  async remove(name: string): Promise<boolean> {
+    const repo = await this.getRepository();
+    const result = await repo.delete({ name });
+    return (result.affected ?? 0) > 0;
+  }
+
+  async toggle(name: string, enabled: boolean): Promise<boolean> {
+    const repo = await this.getRepository();
+    const result = await repo.update({ name }, { enabled: enabled ? 1 : 0 });
+    return (result.affected ?? 0) > 0;
+  }
 }

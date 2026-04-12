@@ -132,7 +132,7 @@ async function fetchSkills(): Promise<void> {
   isLoading.value = true;
   try {
     const response = await window.api.invoke("skill:list-installed", {});
-    if (response.status && response.data?.skills) {
+    if (response.status && Array.isArray(response.data?.skills)) {
       skills.value = response.data.skills.map((s: Record<string, unknown>) => ({
         name: String(s.name),
         source: String(s.source),
@@ -176,17 +176,23 @@ async function handleUninstall(skill: SkillEntry): Promise<void> {
 }
 
 function triggerImport(): void {
-  fileInput.value?.click();
+  const input = fileInput.value;
+  if (!input) return;
+  // Allow selecting the same ZIP again: `change` only fires when the value differs.
+  input.value = "";
+  input.click();
 }
 
 async function handleFileSelect(event: Event): Promise<void> {
   const target = event.target as HTMLInputElement;
   const file = target.files?.[0];
-  if (!file) return;
 
   try {
+    if (!file) return;
+
+    const zipPath = window.api.getPathForFile(file);
     const response = await window.api.invoke("skill:import", {
-      zipPath: (file as File & { path: string }).path,
+      zipPath,
     });
     if (response.status) {
       await fetchSkills();
@@ -195,6 +201,9 @@ async function handleFileSelect(event: Event): Promise<void> {
     }
   } catch (error) {
     alert(t('skills.import_error'));
+  } finally {
+    // Reset again so the next open + same file selection always fires `change`.
+    target.value = "";
   }
 }
 

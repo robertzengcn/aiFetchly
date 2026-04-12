@@ -32,6 +32,12 @@ interface SkillManifest {
   permissions?: string[];
 }
 
+interface SkillMarkdownMetadata {
+  name?: string;
+  description?: string;
+  version?: string;
+}
+
 const VALID_PERMISSIONS = new Set(["network", "filesystem", "automation"]);
 const VALID_RUNTIMES = new Set(["javascript"]);
 const SEMVER_REGEX = /^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.]+)?$/;
@@ -41,6 +47,239 @@ const NAME_REGEX = /^[a-z][a-z0-9_-]*$/;
 const MAX_UNCOMPRESSED_SIZE = 50 * 1024 * 1024;
 /** Max number of entries in a skill zip */
 const MAX_ZIP_ENTRIES = 500;
+
+function parseSkillMarkdownMetadata(content: string): SkillMarkdownMetadata {
+  const lines = content.split(/\r?\n/);
+  if (lines[0]?.trim() !== "---") {
+    return {};
+  }
+
+  const metadata: SkillMarkdownMetadata = {};
+  for (let i = 1; i < lines.length; i += 1) {
+    const line = lines[i].trim();
+    if (line === "---") {
+      break;
+    }
+
+    const separatorIndex = line.indexOf(":");
+    if (separatorIndex <= 0) {
+      continue;
+    }
+    const key = line.slice(0, separatorIndex).trim();
+    const value = line.slice(separatorIndex + 1).trim();
+    if (!value) {
+      continue;
+    }
+    if (key === "name") metadata.name = value;
+    if (key === "description") metadata.description = value;
+    if (key === "version") metadata.version = value;
+  }
+
+  return metadata;
+}
+
+function sanitizeSkillName(raw: string): string {
+  const normalized = raw
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^[-_]+|[-_]+$/g, "");
+
+  if (!normalized) {
+    return "imported-skill";
+  }
+  if (/^[a-z]/.test(normalized)) {
+    return normalized;
+  }
+  return `skill-${normalized}`;
+}
+
+function buildManifestFromSkillMarkdown(
+  skillMdContent: string,
+  zipPath: string
+): SkillManifest {
+  const metadata = parseSkillMarkdownMetadata(skillMdContent);
+  const fallbackName = sanitizeSkillName(path.basename(zipPath, ".zip"));
+  const name = sanitizeSkillName(metadata.name ?? fallbackName);
+  const description = metadata.description ?? "Imported skill from SKILL.md";
+  const version = metadata.version ?? "1.0.0";
+
+  return {
+    name,
+    version,
+    description,
+    runtime: "javascript",
+    entry: "__skill_md_wrapper__.js",
+    parameters: {
+      type: "object",
+      properties: {},
+      additionalProperties: true,
+    },
+    permissions: [],
+  };
+}
+
+function buildSkillMarkdownWrapperCode(
+  skillName: string,
+  skillMdPath: string
+): string {
+  const escapedName = JSON.stringify(skillName);
+  const escapedPath = JSON.stringify(skillMdPath);
+  return `setResult({
+  success: false,
+  error: "This imported package only contains SKILL.md and is documentation-only in this app.",
+  skillName: ${escapedName},
+  skillFile: ${escapedPath},
+});`;
+}
+
+function pickSingleEntryByBasename(
+  zip: AdmZip,
+  basename: "manifest.json" | "SKILL.md"
+): AdmZip.IZipEntry | null {
+  // Prefer exact root match first
+  const root = zip.getEntry(basename);
+  if (root) return root;
+
+  // Otherwise accept a single match anywhere in the zip
+  const matches = zip
+    .getEntries()
+    .filter(
+      (e) =>
+        e.entryName.split("/").pop()?.toLowerCase() === basename.toLowerCase()
+    );
+
+  if (matches.length === 1) return matches[0] ?? null;
+  return null;
+}
+
+function findFirstFileByBasename(
+  dir: string,
+  basenameLower: string,
+  maxFiles = 2000
+): string | null {
+  const queue: string[] = [dir];
+  let seen = 0;
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current) break;
+
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      seen += 1;
+      if (seen > maxFiles) return null;
+
+      const fullPath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        queue.push(fullPath);
+        continue;
+      }
+      if (entry.isFile() && entry.name.toLowerCase() === basenameLower) {
+        return fullPath;
+      }
+    }
+  }
+
+  return null;
+}
+
+function selectZipWithSkillFiles(zip: AdmZip):
+  | {
+      ok: true;
+      zip: AdmZip;
+      source: "outer" | "inner";
+      innerEntryName?: string;
+    }
+  | { ok: false; error: string; debug: Record<string, unknown> } {
+  const outerHasManifest = Boolean(
+    pickSingleEntryByBasename(zip, "manifest.json")
+  );
+  const outerHasSkillMd = Boolean(pickSingleEntryByBasename(zip, "SKILL.md"));
+  if (outerHasManifest || outerHasSkillMd) {
+    return { ok: true, zip, source: "outer" };
+  }
+
+  const innerZipCandidates = zip
+    .getEntries()
+    .filter((e) => !e.isDirectory && e.entryName.toLowerCase().endsWith(".zip"))
+    .slice(0, 20);
+
+  const matches: {
+    entryName: string;
+    hasManifest: boolean;
+    hasSkillMd: boolean;
+  }[] = [];
+
+  for (const entry of innerZipCandidates) {
+    try {
+      const innerZip = new AdmZip(entry.getData());
+      const hasManifest = Boolean(
+        pickSingleEntryByBasename(innerZip, "manifest.json")
+      );
+      const hasSkillMd = Boolean(
+        pickSingleEntryByBasename(innerZip, "SKILL.md")
+      );
+      if (hasManifest || hasSkillMd) {
+        matches.push({ entryName: entry.entryName, hasManifest, hasSkillMd });
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  if (matches.length === 1) {
+    const chosen = matches[0];
+    const chosenEntry = zip.getEntry(chosen.entryName);
+    if (!chosenEntry) {
+      return {
+        ok: false,
+        error: "Failed to locate selected inner zip entry",
+        debug: { matches },
+      };
+    }
+    try {
+      const innerZip = new AdmZip(chosenEntry.getData());
+      return {
+        ok: true,
+        zip: innerZip,
+        source: "inner",
+        innerEntryName: chosen.entryName,
+      };
+    } catch {
+      return {
+        ok: false,
+        error: "Selected inner zip is corrupted",
+        debug: { matches, chosen: chosen.entryName },
+      };
+    }
+  }
+
+  if (matches.length > 1) {
+    return {
+      ok: false,
+      error:
+        "This zip contains multiple inner zip packages with SKILL.md/manifest.json. Please import one of the inner zips directly.",
+      debug: { matches },
+    };
+  }
+
+  return {
+    ok: false,
+    error: "Missing manifest.json in zip root (or SKILL.md fallback)",
+    debug: {
+      outerEntryCount: zip.getEntries().length,
+      innerZipCandidates: innerZipCandidates.map((e) => e.entryName),
+      matches,
+    },
+  };
+}
 
 function validateManifest(raw: unknown):
   | {
@@ -178,21 +417,39 @@ async function importFromZip(zipPath: string): Promise<
     return { success: false, error: "Invalid or corrupted zip file" };
   }
 
-  // 2. Read manifest.json from zip
-  const manifestEntry = zip.getEntry("manifest.json");
-  if (!manifestEntry) {
-    return {
-      success: false,
-      error: "Missing manifest.json in zip root",
-    };
+  const selectedZip = selectZipWithSkillFiles(zip);
+  if (!selectedZip.ok) {
+    return { success: false, error: selectedZip.error };
   }
 
+  const effectiveZip = selectedZip.zip;
+
+  // 2. Read manifest.json from zip, or fallback to SKILL.md-only package
+  const manifestEntry = pickSingleEntryByBasename(
+    effectiveZip,
+    "manifest.json"
+  );
+  let generatedFromSkillMd = false;
   let rawManifest: unknown;
-  try {
-    const manifestContent = manifestEntry.getData().toString("utf-8");
-    rawManifest = JSON.parse(manifestContent) as unknown;
-  } catch {
-    return { success: false, error: "manifest.json is not valid JSON" };
+  if (manifestEntry) {
+    try {
+      const manifestContent = manifestEntry.getData().toString("utf-8");
+      rawManifest = JSON.parse(manifestContent) as unknown;
+    } catch {
+      return { success: false, error: "manifest.json is not valid JSON" };
+    }
+  } else {
+    const skillMdEntry = pickSingleEntryByBasename(effectiveZip, "SKILL.md");
+
+    if (!skillMdEntry) {
+      return {
+        success: false,
+        error: "Missing manifest.json in zip root (or SKILL.md fallback)",
+      };
+    }
+    const skillMdContent = skillMdEntry.getData().toString("utf-8");
+    rawManifest = buildManifestFromSkillMarkdown(skillMdContent, zipPath);
+    generatedFromSkillMd = true;
   }
 
   // 3. Validate manifest
@@ -213,8 +470,8 @@ async function importFromZip(zipPath: string): Promise<
     };
   }
 
-  const entryFile = zip.getEntry(entryPath);
-  if (!entryFile) {
+  const entryFile = effectiveZip.getEntry(entryPath);
+  if (!generatedFromSkillMd && !entryFile) {
     return {
       success: false,
       error: `Entry file "${entryPath}" not found in zip`,
@@ -222,7 +479,7 @@ async function importFromZip(zipPath: string): Promise<
   }
 
   // 4b. Zip bomb and path traversal protection
-  const zipEntries = zip.getEntries();
+  const zipEntries = effectiveZip.getEntries();
   if (zipEntries.length > MAX_ZIP_ENTRIES) {
     return {
       success: false,
@@ -270,7 +527,7 @@ async function importFromZip(zipPath: string): Promise<
   fs.mkdirSync(skillDir, { recursive: true });
 
   try {
-    zip.extractAllTo(skillDir, true);
+    effectiveZip.extractAllTo(skillDir, true);
   } catch (extractError) {
     // Atomic cleanup on failure
     fs.rmSync(skillDir, { recursive: true, force: true });
@@ -284,6 +541,26 @@ async function importFromZip(zipPath: string): Promise<
 
   // 7. Verify entry file exists after extraction
   const extractedEntry = path.join(skillDir, entryPath);
+  if (generatedFromSkillMd) {
+    try {
+      const skillMdPathForWrapper =
+        findFirstFileByBasename(skillDir, "skill.md") ??
+        path.join(skillDir, "SKILL.md");
+      const wrapperCode = buildSkillMarkdownWrapperCode(
+        manifest.name,
+        skillMdPathForWrapper
+      );
+      fs.writeFileSync(extractedEntry, wrapperCode, "utf-8");
+    } catch (writeError) {
+      fs.rmSync(skillDir, { recursive: true, force: true });
+      return {
+        success: false,
+        error: `Failed to generate entry file: ${
+          writeError instanceof Error ? writeError.message : "Unknown error"
+        }`,
+      };
+    }
+  }
   if (!fs.existsSync(extractedEntry)) {
     // Cleanup and fail
     fs.rmSync(skillDir, { recursive: true, force: true });
