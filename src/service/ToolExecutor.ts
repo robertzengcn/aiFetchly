@@ -12,6 +12,7 @@ import { WebsiteAnalysisService } from "@/service/WebsiteAnalysisService";
 import { RateLimiter, RateLimitConfig } from "./RateLimiter";
 import { AiChatApi, BatchKeywordGenerationRequestItem } from "@/api/aiChatApi";
 import { extractContactFromUrls } from "@/main-process/communication/contactExtraction-ipc";
+import { DocumentService } from "@/service/DocumentService";
 
 /**
  * Rate limiting configuration for tool execution
@@ -159,6 +160,12 @@ export class ToolExecutor {
 
       case "extract_contact_info":
         return await this.executeContactExtraction(toolParams);
+
+      case "read_attachment_content":
+        return await this.executeReadAttachmentContent(
+          toolParams,
+          conversationId
+        );
 
       default:
         return {
@@ -1115,5 +1122,55 @@ export class ToolExecutor {
         error: r.error,
       })),
     };
+  }
+
+  /**
+   * Execute read_attachment_content: read staged markdown content by attachment_ref.
+   */
+  private static async executeReadAttachmentContent(
+    toolParams: Record<string, unknown>,
+    conversationId: string
+  ): Promise<Record<string, unknown>> {
+    const attachmentRef =
+      typeof toolParams.attachment_ref === "string"
+        ? toolParams.attachment_ref.trim()
+        : "";
+
+    if (!attachmentRef) {
+      return {
+        success: false,
+        error:
+          "attachment_ref parameter is required and must be a non-empty string",
+      };
+    }
+
+    const maxLength =
+      typeof toolParams.max_length === "number"
+        ? Math.max(1000, Math.min(300000, Math.round(toolParams.max_length)))
+        : 120000;
+
+    try {
+      const documentService = new DocumentService();
+      const staged = await documentService.readStagedAttachment(
+        conversationId,
+        attachmentRef
+      );
+      const isTruncated = staged.markdown.length > maxLength;
+      const content = isTruncated
+        ? staged.markdown.slice(0, maxLength)
+        : staged.markdown;
+
+      return {
+        success: true,
+        fileName: staged.fileName,
+        content,
+        truncated: isTruncated,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Failed to read attachment content",
+      };
+    }
   }
 }

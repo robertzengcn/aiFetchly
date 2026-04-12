@@ -1,4 +1,4 @@
-import { ipcRenderer, contextBridge } from "electron";
+import { ipcRenderer, contextBridge, webUtils } from "electron";
 
 /** Maps renderer callbacks to the ipcRenderer listener so removeListener works. */
 type IpcRendererOnCallback = NonNullable<Parameters<typeof ipcRenderer.on>[1]>;
@@ -246,6 +246,7 @@ import {
 //     userLogin: (data) => ipcRenderer.invoke('user:login', data)
 // })
 contextBridge.exposeInMainWorld("api", {
+  getPathForFile: (file: File) => webUtils.getPathForFile(file),
   send: (channel, data) => {
     // whitelist channels
     const validChannels = [

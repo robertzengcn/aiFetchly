@@ -551,8 +551,12 @@ class="message-bubble" :class="{
         variant="outlined"
         density="compact"
         hide-details
-        @keydown.enter.exact.prevent="handleSendMessage"
+        @keydown.enter="handleEnterKey"
         @keydown.shift.enter.prevent="inputMessage += '\n'"
+        @keydown.down="handleSlashArrowDown"
+        @keydown.up="handleSlashArrowUp"
+        @keydown.esc="handleSlashEscape"
+        @keydown.tab="handleSlashTab"
         :disabled="isLoading"
       >
         <template v-slot:append-inner>
@@ -581,6 +585,25 @@ class="message-bubble" :class="{
           </v-btn>
         </template>
       </v-textarea>
+
+      <div
+        v-if="showSlashMenu"
+        class="slash-command-menu"
+      >
+        <div v-if="filteredSlashCommands.length > 0">
+          <div
+            v-for="(cmd, index) in filteredSlashCommands"
+            :key="cmd.name"
+            class="slash-command-item"
+            :class="{ 'is-selected': index === selectedSlashIndex }"
+            @mousedown.prevent="inputMessage = cmd.usage; showSlashMenu = false"
+          >
+            <div class="slash-command-name">{{ cmd.name }}</div>
+            <div class="slash-command-description">{{ cmd.description }}</div>
+          </div>
+        </div>
+        <div v-else class="slash-command-empty">No commands found</div>
+      </div>
 
       <input
         ref="fileInputRef"
@@ -722,6 +745,22 @@ const MESSAGE_TYPE = {
     PLAN_EXECUTE_RESUME: MessageType.PLAN_EXECUTE_RESUME
 } as const;
 
+type SlashCommandDefinition = {
+  name: '/skills';
+  description: string;
+  usage: string;
+  examples: readonly string[];
+};
+
+const AI_CHAT_SLASH_COMMANDS: readonly SlashCommandDefinition[] = [
+  {
+    name: '/skills',
+    description: 'List currently available AI skills/tools in this system.',
+    usage: '/skills',
+    examples: ['/skills'],
+  },
+] as const;
+
 // i18n setup
 const { t } = useI18n();
 
@@ -765,13 +804,15 @@ const isLoadingConversations = ref(false);
 const copiedMessageId = ref<string | null>(null);
 const showMCPToolManager = ref(false);
 const activeStreamConversationId = ref<string | undefined>(undefined);
+const showSlashMenu = ref(false);
+const selectedSlashIndex = ref(0);
 
 const MAX_UPLOAD_FILES = 3;
 const MAX_UPLOAD_FILE_BYTES = 5 * 1024 * 1024; // 5MB
 const MAX_TOTAL_MESSAGE_CHARS = 95000; // must stay below aifetchserver AskStreamData.message max_length (100000)
 
-// For LLM-native attachments, use image inputs only.
-const fileAccept = 'image/*,.png,.jpg,.jpeg,.webp,.gif';
+// Allow images plus supported document files for chat uploads.
+const fileAccept = 'image/*,.png,.jpg,.jpeg,.webp,.gif,.csv,.pdf,.docx';
 
 // Resend message state
 const isResendingMessage = ref(false);
@@ -815,23 +856,45 @@ function isSupportedAttachmentFile(file: File): boolean {
   const mime = (file.type || '').toLowerCase();
   const nameLower = file.name.toLowerCase();
   if (mime.startsWith('image/')) return true;
+  if (
+    mime === 'text/csv' ||
+    mime === 'application/csv' ||
+    mime === 'application/pdf' ||
+    mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  ) {
+    return true;
+  }
   return (
     nameLower.endsWith('.png') ||
     nameLower.endsWith('.jpg') ||
     nameLower.endsWith('.jpeg') ||
     nameLower.endsWith('.webp') ||
-    nameLower.endsWith('.gif')
+    nameLower.endsWith('.gif') ||
+    nameLower.endsWith('.csv') ||
+    nameLower.endsWith('.pdf') ||
+    nameLower.endsWith('.docx')
   );
 }
 
 function resolveAttachmentMimeType(file: File): string {
   const mime = (file.type || '').toLowerCase();
   if (mime.startsWith('image/')) return mime;
+  if (
+    mime === 'text/csv' ||
+    mime === 'application/csv' ||
+    mime === 'application/pdf' ||
+    mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  ) {
+    return mime;
+  }
   const nameLower = file.name.toLowerCase();
   if (nameLower.endsWith('.png')) return 'image/png';
   if (nameLower.endsWith('.jpg') || nameLower.endsWith('.jpeg')) return 'image/jpeg';
   if (nameLower.endsWith('.webp')) return 'image/webp';
   if (nameLower.endsWith('.gif')) return 'image/gif';
+  if (nameLower.endsWith('.csv')) return 'text/csv';
+  if (nameLower.endsWith('.pdf')) return 'application/pdf';
+  if (nameLower.endsWith('.docx')) return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
   return 'application/octet-stream';
 }
 
@@ -930,6 +993,23 @@ const allStepsCompleted = computed(() => {
   );
 });
 
+const slashQuery = computed(() => {
+  const trimmed = inputMessage.value.trimStart();
+  if (!trimmed.startsWith('/')) return '';
+  return trimmed.slice(1).trim().toLowerCase();
+});
+
+const filteredSlashCommands = computed<SlashCommandDefinition[]>(() => {
+  const query = slashQuery.value;
+  if (!query) {
+    return [...AI_CHAT_SLASH_COMMANDS];
+  }
+  return AI_CHAT_SLASH_COMMANDS.filter((cmd) => {
+    const normalizedName = cmd.name.slice(1).toLowerCase();
+    return normalizedName.includes(query);
+  });
+});
+
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const activeStepIndex = computed(() => {
   if (!currentPlan.value) return -1;
@@ -1007,6 +1087,20 @@ watch(conversationId, (newId, oldId) => {
 watch(showConversationsDialog, (isOpen) => {
   if (isOpen) {
     loadConversations();
+  }
+});
+
+watch(inputMessage, (newValue) => {
+  const trimmed = newValue.trimStart();
+  const inSlashMode = trimmed.startsWith('/');
+  showSlashMenu.value = inSlashMode;
+  if (!inSlashMode) {
+    selectedSlashIndex.value = 0;
+    return;
+  }
+  const maxIndex = Math.max(filteredSlashCommands.value.length - 1, 0);
+  if (selectedSlashIndex.value > maxIndex) {
+    selectedSlashIndex.value = 0;
   }
 });
 
@@ -1540,6 +1634,7 @@ async function sendMessage(
  */
 async function handleSendMessage() {
   const trimmed = inputMessage.value.trim();
+  if (showSlashMenu.value && trimmed.startsWith('/')) return;
   if (!trimmed && selectedUploadFiles.value.length === 0) return;
   if (isUploadingFiles.value) return;
 
@@ -1595,6 +1690,52 @@ async function handleSendMessage() {
   } finally {
     isUploadingFiles.value = false;
   }
+}
+
+function handleSlashArrowDown(event: KeyboardEvent): void {
+  if (!showSlashMenu.value || filteredSlashCommands.value.length === 0) return;
+  event.preventDefault();
+  selectedSlashIndex.value =
+    (selectedSlashIndex.value + 1) % filteredSlashCommands.value.length;
+}
+
+function handleSlashArrowUp(event: KeyboardEvent): void {
+  if (!showSlashMenu.value || filteredSlashCommands.value.length === 0) return;
+  event.preventDefault();
+  selectedSlashIndex.value =
+    (selectedSlashIndex.value - 1 + filteredSlashCommands.value.length) %
+    filteredSlashCommands.value.length;
+}
+
+function handleSlashEscape(event: KeyboardEvent): void {
+  if (!showSlashMenu.value) return;
+  event.preventDefault();
+  showSlashMenu.value = false;
+}
+
+function applySelectedSlashCommand(): void {
+  if (!showSlashMenu.value || filteredSlashCommands.value.length === 0) return;
+  const selected = filteredSlashCommands.value[selectedSlashIndex.value];
+  if (!selected) return;
+  inputMessage.value = selected.usage;
+  showSlashMenu.value = false;
+}
+
+function handleSlashTab(event: KeyboardEvent): void {
+  if (!showSlashMenu.value || filteredSlashCommands.value.length === 0) return;
+  event.preventDefault();
+  applySelectedSlashCommand();
+}
+
+function handleEnterKey(event: KeyboardEvent): void {
+  if (event.shiftKey) return;
+  if (!showSlashMenu.value || filteredSlashCommands.value.length === 0) {
+    event.preventDefault();
+    void handleSendMessage();
+    return;
+  }
+  event.preventDefault();
+  applySelectedSlashCommand();
 }
 
 /**
@@ -2231,6 +2372,47 @@ onMounted(() => {
   padding: 12px 16px;
   border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
   background-color: rgb(var(--v-theme-surface));
+}
+
+.slash-command-menu {
+  margin-top: 8px;
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  border-radius: 8px;
+  background-color: rgb(var(--v-theme-surface));
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.slash-command-item {
+  padding: 8px 10px;
+  cursor: pointer;
+  border-bottom: 1px solid rgba(var(--v-border-color), 0.12);
+
+  &:last-child {
+    border-bottom: none;
+  }
+
+  &.is-selected {
+    background-color: rgba(var(--v-theme-primary), 0.08);
+  }
+}
+
+.slash-command-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: rgb(var(--v-theme-primary));
+}
+
+.slash-command-description {
+  font-size: 12px;
+  color: rgb(var(--v-theme-on-surface-variant));
+  margin-top: 2px;
+}
+
+.slash-command-empty {
+  padding: 10px;
+  font-size: 12px;
+  color: rgb(var(--v-theme-on-surface-variant));
 }
 
 /* Scrollbar styling */

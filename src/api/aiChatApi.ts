@@ -21,6 +21,8 @@ export interface ChatRequest {
   useRAG?: boolean;
   ragLimit?: number;
   functions?: ToolFunction[];
+  // Image-only multimodal attachments. Document attachments are staged locally
+  // and referenced in message text for tool-based retrieval.
   attachments?: LLMImageAttachmentPayload[];
 }
 
@@ -34,6 +36,7 @@ interface ChatApiRequestData {
   model?: string;
   system_prompt?: string;
   client_tools?: ToolFunction[];
+  // Image-only payload for server multimodal support.
   attachments?: LLMImageAttachmentPayload[];
 }
 
@@ -45,6 +48,39 @@ export interface ToolFunction {
   name: string;
   description?: string;
   parameters?: Record<string, unknown>;
+}
+
+export type SlashCommandName = "/skills";
+
+export interface SlashCommandDefinition {
+  name: SlashCommandName;
+  description: string;
+  usage: string;
+  examples: readonly string[];
+}
+
+export const AI_CHAT_SLASH_COMMANDS: readonly SlashCommandDefinition[] = [
+  {
+    name: "/skills",
+    description: "List currently available AI skills/tools in this system.",
+    usage: "/skills",
+    examples: ["/skills"],
+  },
+] as const;
+
+export function formatSkillsAsChatMarkdown(skills: ToolFunction[]): string {
+  if (skills.length === 0) {
+    return "No skills are currently available.";
+  }
+
+  const header = `Available skills (${skills.length}):`;
+  const lines = skills.map((skill, index) => {
+    const desc = skill.description?.trim()
+      ? skill.description.trim()
+      : "No description";
+    return `${index + 1}. \`${skill.name}\` - ${desc}`;
+  });
+  return `${header}\n\n${lines.join("\n")}`;
 }
 
 /**
@@ -129,6 +165,8 @@ export enum StreamEventType {
   TOOL_RESULT = "tool_result", // Tool execution results
   ERROR = "error", // Error conditions
   DONE = "done", // Response completion
+  /** Alias for stream end when the wire format uses `complete` instead of `done` */
+  COMPLETE = "complete",
   CONVERSATION_START = "conversation_start", // Session initialization
   CONVERSATION_END = "conversation_end", // Conversation termination
   PONG = "pong", // Keep alive

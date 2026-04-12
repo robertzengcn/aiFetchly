@@ -57,9 +57,13 @@ function checkAiEnabled(): AiDisabledResponse | null {
   return null;
 }
 
+/**
+ * ipcMain.handle listeners receive (event, ...invokeArgs). Spread `...args` puts the
+ * IpcMainInvokeEvent at index 0 and the renderer payload at index 1.
+ */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function extractData<T>(args: unknown[]): T {
-  return args[0] as T;
+  return args[1] as T;
 }
 
 /**

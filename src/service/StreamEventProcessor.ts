@@ -127,6 +127,7 @@ export class StreamEventProcessor {
         break;
 
       case StreamEventType.DONE:
+      case StreamEventType.COMPLETE:
         this.handleDoneEvent();
         break;
 
@@ -1071,7 +1072,11 @@ export class StreamEventProcessor {
    */
   private handlePlanStepStartEvent(streamEvent: StreamEvent): void {
     try {
-      const stepData = this.validatePlanStepData(streamEvent.data.content);
+      const stepDataInput =
+        streamEvent.data.data && typeof streamEvent.data.data === "object"
+          ? streamEvent.data.data
+          : streamEvent.data.content;
+      const stepData = this.validatePlanStepData(stepDataInput);
       if (!stepData || !stepData.step_id) {
         throw new Error("Invalid plan step start data - missing step_id");
       }
@@ -1125,7 +1130,11 @@ export class StreamEventProcessor {
    */
   private handlePlanStepCompleteEvent(streamEvent: StreamEvent): void {
     try {
-      const stepData = this.validatePlanStepData(streamEvent.data.content);
+      const stepDataInput =
+        streamEvent.data.data && typeof streamEvent.data.data === "object"
+          ? streamEvent.data.data
+          : streamEvent.data.content;
+      const stepData = this.validatePlanStepData(stepDataInput);
       if (!stepData || !stepData.step_id) {
         throw new Error("Invalid plan step complete data - missing step_id");
       }
