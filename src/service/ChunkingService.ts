@@ -4,14 +4,16 @@ import { RAGDocumentEntity } from "@/entity/RAGDocument.entity";
 import { RagConfigApi, ChunkingConfig } from "@/api/ragConfigApi";
 import { RAGChunkModule } from "@/modules/RAGChunkModule";
 import { HtmlConversionService } from "@/service/HtmlConversionService";
+import {
+  SpreadsheetConversionService,
+  RAG_MAX_ROWS,
+} from "@/service/SpreadsheetConversionService";
 import * as crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 import { PDFDocument } from "pdf-lib";
 import pdf2md from "pdf2md-ts";
 import * as mammoth from "mammoth";
-import * as XLSX from "xlsx";
-import Papa from "papaparse";
 
 export interface ChunkingOptions {
   chunkSize: number;
@@ -46,6 +48,7 @@ export class ChunkingService {
   private ragConfigApi: RagConfigApi;
   private ragChunkModule: RAGChunkModule;
   private htmlConversionService: HtmlConversionService;
+  private spreadsheetService: SpreadsheetConversionService;
   private cachedConfig: ChunkingConfig | null = null;
   private configCacheExpiry = 0;
   private readonly CACHE_DURATION_MS = 30 * 60 * 1000; // 30 minutes
@@ -62,6 +65,7 @@ export class ChunkingService {
     this.ragConfigApi = new RagConfigApi();
     this.ragChunkModule = new RAGChunkModule();
     this.htmlConversionService = new HtmlConversionService();
+    this.spreadsheetService = new SpreadsheetConversionService();
     this.initializeConfig();
   }
 
@@ -524,23 +528,13 @@ export class ChunkingService {
         }
 
         case ".csv": {
-          const csvRaw = fs.readFileSync(document.filePath, "utf-8");
-          if (!csvRaw.trim()) return null;
-          const csvResult = Papa.parse(csvRaw.trim(), {
-            skipEmptyLines: true,
-            header: false,
-          });
-          if (!csvResult.data || csvResult.data.length === 0) return null;
-          const csvRows = csvResult.data as string[][];
-          const csvHeader = csvRows[0];
-          const csvBody = csvRows.slice(1);
-          const escapeCsv = (v: string): string =>
-            String(v).replace(/\|/g, "\\|");
-          const csvMarkdown = [
-            `| ${csvHeader.map(escapeCsv).join(" | ")} |`,
-            `| ${csvHeader.map(() => "---").join(" | ")} |`,
-            ...csvBody.map((row) => `| ${row.map(escapeCsv).join(" | ")} |`),
-          ].join("\n");
+          const csvBuffer = fs.readFileSync(document.filePath);
+          const csvMarkdown =
+            this.spreadsheetService.convertCsvBufferToMarkdown(csvBuffer, {
+              maxRowsPerSheet: RAG_MAX_ROWS,
+              normalizeColumns: true,
+            });
+          if (!csvMarkdown.trim()) return null;
           return {
             content: csvMarkdown,
             contentType: "markdown",
@@ -556,21 +550,11 @@ export class ChunkingService {
         case ".xlsx":
         case ".xls": {
           const xlsxBuffer = fs.readFileSync(document.filePath);
-          const workbook = XLSX.read(xlsxBuffer, { type: "buffer" });
-          if (!workbook.SheetNames || workbook.SheetNames.length === 0)
-            return null;
-          const sheetParts: string[] = [];
-          for (const sheetName of workbook.SheetNames) {
-            const ws = workbook.Sheets[sheetName];
-            if (!ws) continue;
-            const html = XLSX.utils.sheet_to_html(ws);
-            if (!html || !html.trim()) continue;
-            const md = this.htmlConversionService.convertHtmlToMarkdown(html);
-            if (md.trim()) {
-              sheetParts.push(`## Sheet: ${sheetName}\n\n${md.trim()}`);
-            }
-          }
-          const xlsxMarkdown = sheetParts.join("\n\n");
+          const xlsxMarkdown =
+            this.spreadsheetService.convertXlsxBufferToMarkdown(xlsxBuffer, {
+              maxRowsPerSheet: RAG_MAX_ROWS,
+              normalizeColumns: true,
+            });
           if (!xlsxMarkdown.trim()) return null;
           return {
             content: xlsxMarkdown,
@@ -1075,7 +1059,6 @@ export class ChunkingService {
     const lines = content.split("\n");
     let currentChunk = "";
     let startPosition = 0;
-    const inTag = false;
     let tagDepth = 0;
 
     for (let i = 0; i < lines.length; i++) {

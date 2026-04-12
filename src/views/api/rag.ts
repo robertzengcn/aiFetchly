@@ -44,7 +44,7 @@ import {
 import { DocumentMetadata } from "@/entityTypes/metadataType";
 import { RagStatsResponse } from "@/entityTypes/commonType";
 // RAG API response types
-export interface RAGResponse<T = any> {
+export interface RAGResponse<T = unknown> {
   success: boolean;
   data?: T;
   message?: string;
@@ -138,9 +138,15 @@ export async function getRAGStats(): Promise<CommonMessage<RagStatsResponse>> {
 /**
  * Process a RAG query
  */
+export interface RAGQueryOptions {
+  topK?: number;
+  minScore?: number;
+  filterTags?: string[];
+}
+
 export async function processRAGQuery(query: {
   query: string;
-  options?: any;
+  options?: RAGQueryOptions;
 }): Promise<RAGResponse> {
   return await windowInvoke(RAG_QUERY, query);
 }
@@ -162,7 +168,20 @@ export async function uploadDocument(options: {
 /**
  * Get all documents
  */
-export async function getDocuments(filters?: any): Promise<DocumentInfo[]> {
+export interface DocumentFilters {
+  status?: string;
+  processingStatus?: string;
+  fileType?: string;
+  name?: string;
+  tags?: string[];
+  author?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export async function getDocuments(
+  filters?: DocumentFilters
+): Promise<DocumentInfo[]> {
   const response = await windowInvoke(RAG_GET_DOCUMENTS, filters);
   if (response) {
     return response;
@@ -182,9 +201,16 @@ export async function getDocument(
 /**
  * Update document metadata
  */
+export interface UpdateDocumentMetadata {
+  title?: string;
+  description?: string;
+  tags?: string[];
+  author?: string;
+}
+
 export async function updateDocument(
   id: number,
-  metadata: any
+  metadata: UpdateDocumentMetadata
 ): Promise<RAGResponse> {
   return await windowInvoke(RAG_UPDATE_DOCUMENT, { id, metadata });
 }
@@ -388,7 +414,7 @@ export async function saveTempFile(
 
   return new Promise((resolve, reject) => {
     // Set up progress listener
-    const progressHandler = (progressData: any) => {
+    const progressHandler = (progressData: string) => {
       try {
         const progress: FileUploadProgress = JSON.parse(progressData);
         if (onProgress) {
@@ -400,7 +426,7 @@ export async function saveTempFile(
     };
 
     // Set up completion listener
-    const completeHandler = (completeData: any) => {
+    const completeHandler = (completeData: string) => {
       try {
         const result: FileUploadComplete = JSON.parse(completeData);
 
