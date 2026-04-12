@@ -13,8 +13,10 @@ import { PDFDocument } from "pdf-lib";
 import pdf2md from "pdf2md-ts";
 import * as mammoth from "mammoth";
 import { HtmlConversionService } from "@/service/HtmlConversionService";
-import * as XLSX from "xlsx";
-import Papa from "papaparse";
+import {
+  SpreadsheetConversionService,
+  CHAT_MAX_ROWS,
+} from "@/service/SpreadsheetConversionService";
 
 export interface StagedAttachmentReference {
   refId: string;
@@ -29,6 +31,7 @@ export interface StagedAttachmentContent {
 export class DocumentService {
   private ragDocumentModule: RAGDocumentModule;
   private htmlConversionService: HtmlConversionService;
+  private spreadsheetService: SpreadsheetConversionService;
   private readonly stagedAttachmentRoot: string;
   private static readonly STAGED_ATTACHMENT_TTL_MS = 24 * 60 * 60 * 1000; // 24h
   private static readonly MAX_STAGED_ATTACHMENT_BYTES = 2 * 1024 * 1024; // 2MB
@@ -36,6 +39,7 @@ export class DocumentService {
   constructor() {
     this.ragDocumentModule = new RAGDocumentModule();
     this.htmlConversionService = new HtmlConversionService();
+    this.spreadsheetService = new SpreadsheetConversionService();
     this.stagedAttachmentRoot = path.join(
       app.getPath("userData"),
       "ai-chat-attachments"
@@ -181,7 +185,7 @@ export class DocumentService {
 
   /**
    * Convert uploaded attachment content to markdown text.
-   * Supported: PDF, CSV, DOCX.
+   * Supported: PDF, CSV, DOCX, XLSX.
    */
   async convertUploadedAttachmentToMarkdown(
     fileName: string,
@@ -189,40 +193,45 @@ export class DocumentService {
     contentBase64: string
   ): Promise<string> {
     const ext = this.resolveSupportedExtension(fileName, mimeType);
-    const sourcePath = path.join(
-      os.tmpdir(),
-      `aifetchly-attachment-${Date.now()}-${crypto.randomUUID()}${ext}`
-    );
+    const binary = Buffer.from(contentBase64, "base64");
 
-    try {
-      const binary = Buffer.from(contentBase64, "base64");
-      fs.writeFileSync(sourcePath, binary);
-
-      let markdown = "";
-      if (ext === ".pdf") {
-        markdown = await this.convertPdfFileToMarkdown(sourcePath);
-      } else if (ext === ".docx") {
-        markdown = await this.convertDocxFileToMarkdown(sourcePath);
-      } else if (ext === ".csv") {
-        markdown = this.convertCsvBufferToMarkdown(binary);
-      } else if (ext === ".xlsx") {
-        markdown = this.convertXlsxBufferToMarkdown(binary, {
-          maxRowsPerSheet: 100,
-        });
-      } else {
-        throw new Error(`Unsupported attachment type: ${fileName}`);
-      }
-
-      const normalized = markdown.trim();
-      if (!normalized) {
-        throw new Error(`Empty markdown content after conversion: ${fileName}`);
-      }
-      return normalized;
-    } finally {
-      if (fs.existsSync(sourcePath)) {
-        fs.unlinkSync(sourcePath);
+    // CSV and XLSX can be converted directly from the buffer — no temp file needed
+    let markdown = "";
+    if (ext === ".csv") {
+      markdown = this.spreadsheetService.convertCsvBufferToMarkdown(binary, {
+        maxRowsPerSheet: CHAT_MAX_ROWS,
+        normalizeColumns: true,
+      });
+    } else if (ext === ".xlsx") {
+      markdown = this.spreadsheetService.convertXlsxBufferToMarkdown(binary, {
+        maxRowsPerSheet: CHAT_MAX_ROWS,
+        normalizeColumns: true,
+      });
+    } else {
+      // PDF and DOCX still require a temp file on disk
+      const sourcePath = path.join(
+        os.tmpdir(),
+        `aifetchly-attachment-${Date.now()}-${crypto.randomUUID()}${ext}`
+      );
+      try {
+        fs.writeFileSync(sourcePath, binary);
+        if (ext === ".pdf") {
+          markdown = await this.convertPdfFileToMarkdown(sourcePath);
+        } else if (ext === ".docx") {
+          markdown = await this.convertDocxFileToMarkdown(sourcePath);
+        }
+      } finally {
+        if (fs.existsSync(sourcePath)) {
+          fs.unlinkSync(sourcePath);
+        }
       }
     }
+
+    const normalized = markdown.trim();
+    if (!normalized) {
+      throw new Error(`Empty markdown content after conversion: ${fileName}`);
+    }
+    return normalized;
   }
 
   /**
@@ -374,74 +383,6 @@ export class DocumentService {
       return "";
     }
     return this.htmlConversionService.convertHtmlToMarkdown(htmlContent).trim();
-  }
-
-  private convertCsvBufferToMarkdown(csvBuffer: Buffer): string {
-    const raw = csvBuffer.toString("utf-8").trim();
-    if (!raw) {
-      return "";
-    }
-
-    const result = Papa.parse(raw, {
-      skipEmptyLines: true,
-      header: false,
-    });
-
-    if (!result.data || result.data.length === 0) {
-      return "";
-    }
-
-    const rows = result.data as string[][];
-    const header = rows[0];
-    const body = rows.slice(1);
-    const escapeCell = (value: string): string =>
-      String(value).replace(/\|/g, "\\|");
-
-    const headerLine = `| ${header.map(escapeCell).join(" | ")} |`;
-    const dividerLine = `| ${header.map(() => "---").join(" | ")} |`;
-    const bodyLines = body.map(
-      (row) => `| ${row.map(escapeCell).join(" | ")} |`
-    );
-    return [headerLine, dividerLine, ...bodyLines].join("\n");
-  }
-
-  private convertXlsxBufferToMarkdown(
-    xlsxBuffer: Buffer,
-    options?: { maxRowsPerSheet?: number }
-  ): string {
-    const workbook = XLSX.read(xlsxBuffer, { type: "buffer" });
-    if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
-      return "";
-    }
-
-    const sheetMarkdowns: string[] = [];
-    for (const sheetName of workbook.SheetNames) {
-      const worksheet = workbook.Sheets[sheetName];
-      if (!worksheet) continue;
-
-      if (options?.maxRowsPerSheet) {
-        const rangeRef = worksheet["!ref"];
-        if (rangeRef) {
-          const range = XLSX.utils.decode_range(rangeRef);
-          const maxEndRow = Math.min(range.e.r, options.maxRowsPerSheet);
-          const cappedRef = XLSX.utils.encode_range({
-            s: range.s,
-            e: { r: maxEndRow, c: range.e.c },
-          });
-          worksheet["!ref"] = cappedRef;
-        }
-      }
-
-      const html = XLSX.utils.sheet_to_html(worksheet);
-      if (!html || !html.trim()) continue;
-
-      const markdown = this.htmlConversionService.convertHtmlToMarkdown(html);
-      if (markdown.trim()) {
-        sheetMarkdowns.push(`## Sheet: ${sheetName}\n\n${markdown.trim()}`);
-      }
-    }
-
-    return sheetMarkdowns.join("\n\n");
   }
 
   private sanitizePathSegment(value: string): string {
