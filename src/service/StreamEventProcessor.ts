@@ -95,6 +95,26 @@ export class StreamEventProcessor {
     this.state = state;
   }
 
+  private serializeToolResultContent(
+    toolResult: unknown,
+    fallback = ""
+  ): string {
+    if (typeof toolResult === "string") {
+      return toolResult;
+    }
+
+    if (toolResult === undefined || toolResult === null) {
+      return fallback;
+    }
+
+    try {
+      return JSON.stringify(toolResult, null, 2);
+    } catch (error) {
+      console.warn("Failed to serialize tool result content:", error);
+      return String(toolResult);
+    }
+  }
+
   /**
    * Process a single stream event
    */
@@ -293,7 +313,7 @@ export class StreamEventProcessor {
 
       // Send tool result to UI
       const resultChunk: ChatStreamChunk = {
-        content: "",
+        content: this.serializeToolResultContent(toolResult),
         isComplete: false,
         messageId: this.state.assistantMessageId,
         eventType: StreamEventType.TOOL_RESULT,
@@ -431,7 +451,7 @@ export class StreamEventProcessor {
 
     // Send error result to UI
     const errorResult: ChatStreamChunk = {
-      content: "",
+      content: this.serializeToolResultContent(errorToolResult),
       isComplete: false,
       messageId: this.state.assistantMessageId,
       eventType: StreamEventType.TOOL_RESULT,
@@ -542,7 +562,7 @@ export class StreamEventProcessor {
     }
 
     const chunk: ChatStreamChunk = {
-      content: "",
+      content: this.serializeToolResultContent(toolResult),
       isComplete: false,
       messageId: this.state.assistantMessageId,
       eventType: StreamEventType.TOOL_RESULT,
