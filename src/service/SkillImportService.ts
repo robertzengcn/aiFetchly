@@ -17,6 +17,34 @@ import { app } from "electron";
 import { SkillManagementModule } from "@/modules/SkillManagementModule";
 import { SkillRegistry } from "@/config/skillsRegistry";
 
+function emitSkillDebugLog(
+  hypothesisId: string,
+  location: string,
+  message: string,
+  data: Record<string, unknown>
+): void {
+  // #region agent log
+  fetch("http://127.0.0.1:7466/ingest/4d24544e-b441-4a64-b79f-84293905d2cc", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Debug-Session-Id": "285bd0",
+    },
+    body: JSON.stringify({
+      sessionId: "285bd0",
+      runId: "post-fix",
+      hypothesisId,
+      location,
+      message,
+      data,
+      timestamp: Date.now(),
+    }),
+  }).catch((_e: unknown) => {
+    /* debug log failure is non-critical */
+  });
+  // #endregion
+}
+
 // ---------------------------------------------------------------------------
 // Manifest validation
 // ---------------------------------------------------------------------------
@@ -121,15 +149,19 @@ function buildManifestFromSkillMarkdown(
 
 function buildSkillMarkdownWrapperCode(
   skillName: string,
-  skillMdPath: string
+  skillMdPath: string,
+  skillMdContent: string
 ): string {
   const escapedName = JSON.stringify(skillName);
   const escapedPath = JSON.stringify(skillMdPath);
+  const escapedContent = JSON.stringify(skillMdContent);
   return `setResult({
-  success: false,
-  error: "This imported package only contains SKILL.md and is documentation-only in this app.",
+  success: true,
+  mode: "documentation_skill",
   skillName: ${escapedName},
   skillFile: ${escapedPath},
+  guidance: ${escapedContent},
+  message: "This skill was imported from SKILL.md. Guidance is returned for the assistant to follow.",
 });`;
 }
 
@@ -423,6 +455,12 @@ async function importFromZip(zipPath: string): Promise<
   }
 
   const effectiveZip = selectedZip.zip;
+  emitSkillDebugLog("H2", "SkillImportService.ts:428", "Selected zip source", {
+    zipPath,
+    source: selectedZip.source,
+    innerEntryName: selectedZip.innerEntryName ?? null,
+    effectiveEntryCount: effectiveZip.getEntries().length,
+  });
 
   // 2. Read manifest.json from zip, or fallback to SKILL.md-only package
   const manifestEntry = pickSingleEntryByBasename(
@@ -451,6 +489,18 @@ async function importFromZip(zipPath: string): Promise<
     rawManifest = buildManifestFromSkillMarkdown(skillMdContent, zipPath);
     generatedFromSkillMd = true;
   }
+  emitSkillDebugLog(
+    manifestEntry ? "H1" : "H1",
+    "SkillImportService.ts:456",
+    "Manifest resolution result",
+    {
+      manifestFound: Boolean(manifestEntry),
+      generatedFromSkillMd,
+      manifestEntryName: manifestEntry?.entryName ?? null,
+      resolvedEntry: (rawManifest as { entry?: unknown })?.entry ?? null,
+      resolvedName: (rawManifest as { name?: unknown })?.name ?? null,
+    }
+  );
 
   // 3. Validate manifest
   const validation = validateManifest(rawManifest);
@@ -546,9 +596,21 @@ async function importFromZip(zipPath: string): Promise<
       const skillMdPathForWrapper =
         findFirstFileByBasename(skillDir, "skill.md") ??
         path.join(skillDir, "SKILL.md");
+      const skillMdContent = fs.readFileSync(skillMdPathForWrapper, "utf-8");
       const wrapperCode = buildSkillMarkdownWrapperCode(
         manifest.name,
-        skillMdPathForWrapper
+        skillMdPathForWrapper,
+        skillMdContent
+      );
+      emitSkillDebugLog(
+        "H1",
+        "SkillImportService.ts:560",
+        "Generating SKILL.md wrapper entry",
+        {
+          skillName: manifest.name,
+          extractedEntry,
+          skillMdPathForWrapper,
+        }
       );
       fs.writeFileSync(extractedEntry, wrapperCode, "utf-8");
     } catch (writeError) {
@@ -614,7 +676,47 @@ function registerImportedSkill(
   skillDir: string
 ): void {
   const entryPath = path.join(skillDir, manifest.entry);
-  const code = fs.readFileSync(entryPath, "utf-8");
+  let code = fs.readFileSync(entryPath, "utf-8");
+  const isLegacyDocsOnlyWrapper =
+    manifest.entry === "__skill_md_wrapper__.js" &&
+    code.includes("documentation-only in this app");
+  if (isLegacyDocsOnlyWrapper) {
+    const skillMdPath =
+      findFirstFileByBasename(skillDir, "skill.md") ??
+      path.join(skillDir, "SKILL.md");
+    try {
+      const skillMdContent = fs.readFileSync(skillMdPath, "utf-8");
+      code = buildSkillMarkdownWrapperCode(
+        manifest.name,
+        skillMdPath,
+        skillMdContent
+      );
+      fs.writeFileSync(entryPath, code, "utf-8");
+      emitSkillDebugLog(
+        "H5",
+        "SkillImportService.ts:692",
+        "Migrated legacy SKILL.md wrapper to guidance mode",
+        {
+          skillName: manifest.name,
+          entryPath,
+          skillMdPath,
+        }
+      );
+    } catch {
+      // Keep legacy wrapper if SKILL.md cannot be read/written.
+    }
+  }
+  emitSkillDebugLog(
+    "H3",
+    "SkillImportService.ts:626",
+    "Registering skill code",
+    {
+      skillName: manifest.name,
+      entryPath,
+      isWrapper: code.includes("documentation-only in this app"),
+      codePrefix: code.slice(0, 120),
+    }
+  );
 
   SkillRegistry.registerSkill({
     name: manifest.name,
@@ -627,7 +729,10 @@ function registerImportedSkill(
     requiresConfirmation: (manifest.permissions?.length ?? 0) > 0,
     source: "user",
     execute: async (args: Record<string, unknown>) => {
-      // Use SandboxedSkillExecutor for imported skills
+      // Dynamic import is intentional here: isolated-vm (native module) must
+      // NOT be loaded at startup — only when a skill actually runs.
+      // isolated-vm is listed in vite.main.config.mjs externals so Vite
+      // passes it through as require() without triggering HMR.
       const { SandboxedSkillExecutor } = await import(
         "@/service/SandboxedSkillExecutor"
       );
@@ -649,6 +754,16 @@ async function loadPersistedSkills(): Promise<void> {
   for (const skill of skills) {
     try {
       const manifest = JSON.parse(skill.manifest_json) as SkillManifest;
+      emitSkillDebugLog(
+        "H3",
+        "SkillImportService.ts:667",
+        "Loading persisted skill manifest",
+        {
+          skillName: skill.name,
+          manifestEntry: manifest.entry,
+          manifestRuntime: manifest.runtime,
+        }
+      );
       const skillsDir = getInstalledSkillsDir();
       const skillDir = path.join(skillsDir, skill.name);
 

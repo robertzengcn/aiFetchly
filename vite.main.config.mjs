@@ -362,7 +362,8 @@ export default ({ mode }) => {
                     'typeorm',
                     'sqlite-vec',
                     'canvas', 
-                    '@napi-rs/canvas'
+                    '@napi-rs/canvas',
+                    'isolated-vm',
                 ]
             },
             sourcemap: true,
