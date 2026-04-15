@@ -629,6 +629,27 @@ function unregisterSkill(name: string): void {
   registry.delete(name);
 }
 
+/**
+ * Find a user-installed skill that declares support for the given file extension.
+ *
+ * Searches skills with `source === "user"` that have a non-empty
+ * `supportedFileTypes` array containing the lower-cased extension.
+ * Returns the first match, or `null` if none found.
+ */
+function findSkillForFileExtension(ext: string): SkillDefinition | null {
+  const normalized = ext.toLowerCase();
+  for (const skill of registry.values()) {
+    if (
+      skill.source === "user" &&
+      skill.supportedFileTypes &&
+      skill.supportedFileTypes.includes(normalized)
+    ) {
+      return skill;
+    }
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Exports
 // ---------------------------------------------------------------------------
@@ -639,4 +660,5 @@ export const SkillRegistry = {
   isRegistered,
   registerSkill,
   unregisterSkill,
+  findSkillForFileExtension,
 } as const;

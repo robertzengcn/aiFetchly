@@ -19,34 +19,6 @@ import { SkillRegistry } from "@/config/skillsRegistry";
 import { ToolExecutor } from "@/service/ToolExecutor";
 import { SkillPermissionService } from "@/service/SkillPermissionService";
 
-function emitSkillExecDebugLog(
-  hypothesisId: string,
-  location: string,
-  message: string,
-  data: Record<string, unknown>
-): void {
-  // #region agent log
-  fetch("http://127.0.0.1:7466/ingest/4d24544e-b441-4a64-b79f-84293905d2cc", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Debug-Session-Id": "285bd0",
-    },
-    body: JSON.stringify({
-      sessionId: "285bd0",
-      runId: "post-fix",
-      hypothesisId,
-      location,
-      message,
-      data,
-      timestamp: Date.now(),
-    }),
-  }).catch((_e: unknown) => {
-    /* debug log failure is non-critical */
-  });
-  // #endregion
-}
-
 // ---------------------------------------------------------------------------
 // Input sanitization (FR-003, FR-024)
 // ---------------------------------------------------------------------------
@@ -146,30 +118,9 @@ async function execute(
 ): Promise<ToolExecutionResult> {
   const startTime = Date.now();
   const toolCallId = context.toolCallId;
-  emitSkillExecDebugLog(
-    "H4",
-    "SkillExecutor.ts:128",
-    "Skill execute requested",
-    {
-      skillName: name,
-      argKeys: Object.keys(args),
-      conversationId: context.conversationId,
-    }
-  );
 
   // 1. Validate — skill must be registered
   const skill = SkillRegistry.getSkill(name);
-  emitSkillExecDebugLog(
-    "H4",
-    "SkillExecutor.ts:136",
-    "Skill registry lookup result",
-    {
-      skillName: name,
-      found: Boolean(skill),
-      source: skill?.source ?? null,
-      permissionCategory: skill?.permissionCategory ?? null,
-    }
-  );
   if (!skill) {
     // Fall back to ToolExecutor for MCP tools (mcp_* prefix)
     if (name.startsWith("mcp_")) {
@@ -235,25 +186,6 @@ async function execute(
   // 4. Execute based on tier
   try {
     const execResult = await skill.execute(args, context);
-    emitSkillExecDebugLog(
-      "H4",
-      "SkillExecutor.ts:209",
-      "Skill execute raw result",
-      {
-        skillName: name,
-        success: execResult.success,
-        hasError:
-          typeof execResult.result === "object" &&
-          execResult.result !== null &&
-          "error" in execResult.result,
-        errorValue:
-          typeof execResult.result === "object" &&
-          execResult.result !== null &&
-          "error" in execResult.result
-            ? String((execResult.result as { error?: unknown }).error)
-            : null,
-      }
-    );
     const result: ToolExecutionResult = {
       tool_call_id: toolCallId,
       tool_name: name,

@@ -16,34 +16,12 @@ import * as path from "path";
 import { app } from "electron";
 import { SkillManagementModule } from "@/modules/SkillManagementModule";
 import { SkillRegistry } from "@/config/skillsRegistry";
-
-function emitSkillDebugLog(
-  hypothesisId: string,
-  location: string,
-  message: string,
-  data: Record<string, unknown>
-): void {
-  // #region agent log
-  fetch("http://127.0.0.1:7466/ingest/4d24544e-b441-4a64-b79f-84293905d2cc", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Debug-Session-Id": "285bd0",
-    },
-    body: JSON.stringify({
-      sessionId: "285bd0",
-      runId: "post-fix",
-      hypothesisId,
-      location,
-      message,
-      data,
-      timestamp: Date.now(),
-    }),
-  }).catch((_e: unknown) => {
-    /* debug log failure is non-critical */
-  });
-  // #endregion
-}
+import type {
+  SkillExecutionContext,
+  SkillExecutionResult,
+} from "@/entityTypes/skillTypes";
+import { DocumentService } from "@/service/DocumentService";
+import { SkillWorkerClient } from "@/service/SkillWorkerClient";
 
 // ---------------------------------------------------------------------------
 // Manifest validation
@@ -58,6 +36,7 @@ interface SkillManifest {
   entry: string;
   parameters: Record<string, unknown>;
   permissions?: string[];
+  supportedFileTypes?: readonly string[];
 }
 
 interface SkillMarkdownMetadata {
@@ -140,7 +119,18 @@ function buildManifestFromSkillMarkdown(
     entry: "__skill_md_wrapper__.js",
     parameters: {
       type: "object",
-      properties: {},
+      properties: {
+        attachment_ref: {
+          type: "string",
+          description:
+            "Optional. When set, loads staged attachment markdown for this conversation (same as read_attachment_content). Use for spreadsheets and documents the user uploaded.",
+        },
+        max_length: {
+          type: "number",
+          description:
+            "Optional. Max characters of attachment content to return (default 120000, min 1000, max 300000).",
+        },
+      },
       additionalProperties: true,
     },
     permissions: [],
@@ -161,8 +151,21 @@ function buildSkillMarkdownWrapperCode(
   skillName: ${escapedName},
   skillFile: ${escapedPath},
   guidance: ${escapedContent},
-  message: "This skill was imported from SKILL.md. Guidance is returned for the assistant to follow.",
+  message: "This skill was imported from SKILL.md. Pass attachment_ref to load uploaded spreadsheet/document data; otherwise only guidance is returned.",
 });`;
+}
+
+/** Max characters of SKILL.md guidance included in attachment responses. */
+const SKILL_GUIDANCE_CAP = 8000;
+
+function isSkillMarkdownDocumentationEntry(manifest: SkillManifest): boolean {
+  return manifest.entry === "__skill_md_wrapper__.js";
+}
+
+function resolveAttachmentMaxLength(args: Record<string, unknown>): number {
+  return typeof args.max_length === "number"
+    ? Math.max(1000, Math.min(300000, Math.round(args.max_length)))
+    : 120000;
 }
 
 function pickSingleEntryByBasename(
@@ -455,12 +458,6 @@ async function importFromZip(zipPath: string): Promise<
   }
 
   const effectiveZip = selectedZip.zip;
-  emitSkillDebugLog("H2", "SkillImportService.ts:428", "Selected zip source", {
-    zipPath,
-    source: selectedZip.source,
-    innerEntryName: selectedZip.innerEntryName ?? null,
-    effectiveEntryCount: effectiveZip.getEntries().length,
-  });
 
   // 2. Read manifest.json from zip, or fallback to SKILL.md-only package
   const manifestEntry = pickSingleEntryByBasename(
@@ -489,18 +486,6 @@ async function importFromZip(zipPath: string): Promise<
     rawManifest = buildManifestFromSkillMarkdown(skillMdContent, zipPath);
     generatedFromSkillMd = true;
   }
-  emitSkillDebugLog(
-    manifestEntry ? "H1" : "H1",
-    "SkillImportService.ts:456",
-    "Manifest resolution result",
-    {
-      manifestFound: Boolean(manifestEntry),
-      generatedFromSkillMd,
-      manifestEntryName: manifestEntry?.entryName ?? null,
-      resolvedEntry: (rawManifest as { entry?: unknown })?.entry ?? null,
-      resolvedName: (rawManifest as { name?: unknown })?.name ?? null,
-    }
-  );
 
   // 3. Validate manifest
   const validation = validateManifest(rawManifest);
@@ -602,16 +587,6 @@ async function importFromZip(zipPath: string): Promise<
         skillMdPathForWrapper,
         skillMdContent
       );
-      emitSkillDebugLog(
-        "H1",
-        "SkillImportService.ts:560",
-        "Generating SKILL.md wrapper entry",
-        {
-          skillName: manifest.name,
-          extractedEntry,
-          skillMdPathForWrapper,
-        }
-      );
       fs.writeFileSync(extractedEntry, wrapperCode, "utf-8");
     } catch (writeError) {
       fs.rmSync(skillDir, { recursive: true, force: true });
@@ -692,31 +667,10 @@ function registerImportedSkill(
         skillMdContent
       );
       fs.writeFileSync(entryPath, code, "utf-8");
-      emitSkillDebugLog(
-        "H5",
-        "SkillImportService.ts:692",
-        "Migrated legacy SKILL.md wrapper to guidance mode",
-        {
-          skillName: manifest.name,
-          entryPath,
-          skillMdPath,
-        }
-      );
     } catch {
       // Keep legacy wrapper if SKILL.md cannot be read/written.
     }
   }
-  emitSkillDebugLog(
-    "H3",
-    "SkillImportService.ts:626",
-    "Registering skill code",
-    {
-      skillName: manifest.name,
-      entryPath,
-      isWrapper: code.includes("documentation-only in this app"),
-      codePrefix: code.slice(0, 120),
-    }
-  );
 
   SkillRegistry.registerSkill({
     name: manifest.name,
@@ -728,20 +682,127 @@ function registerImportedSkill(
       "pure",
     requiresConfirmation: (manifest.permissions?.length ?? 0) > 0,
     source: "user",
-    execute: async (args: Record<string, unknown>) => {
-      // Dynamic import is intentional here: isolated-vm (native module) must
-      // NOT be loaded at startup — only when a skill actually runs.
-      // isolated-vm is listed in vite.main.config.mjs externals so Vite
-      // passes it through as require() without triggering HMR.
-      const { SandboxedSkillExecutor } = await import(
-        "@/service/SandboxedSkillExecutor"
-      );
-      return SandboxedSkillExecutor.execute(code, args, {
-        conversationId: "",
-        toolCallId: "",
-      });
-    },
+    supportedFileTypes: manifest.supportedFileTypes,
+    execute: buildImportedSkillExecuteHandler(manifest, skillDir, code),
   });
+}
+
+/**
+ * Lazily-initialized DocumentService shared across all skill executions.
+ *
+ * Instantiating DocumentService allocates RAGDocumentModule,
+ * HtmlConversionService, and SpreadsheetConversionService — caching avoids
+ * re-creating these on every skill invocation.
+ */
+let sharedDocumentService: DocumentService | null = null;
+
+function getSharedDocumentService(): DocumentService {
+  if (!sharedDocumentService) {
+    sharedDocumentService = new DocumentService();
+  }
+  return sharedDocumentService;
+}
+
+/**
+ * Creates the `execute` handler for an imported skill.
+ *
+ * Captures `manifest` and `skillDir` as explicit frozen copies so the
+ * closure is immune to any later mutation of the outer variables.
+ */
+function buildImportedSkillExecuteHandler(
+  manifest: SkillManifest,
+  skillDir: string,
+  code: string
+): (
+  args: Record<string, unknown>,
+  context: SkillExecutionContext
+) => Promise<SkillExecutionResult> {
+  // Freeze a snapshot of manifest fields used inside the closure.
+  const capturedName = manifest.name;
+  const capturedIsDocSkill = isSkillMarkdownDocumentationEntry(manifest);
+  const capturedSkillDir = skillDir;
+  const capturedCode = code;
+
+  return async (
+    args: Record<string, unknown>,
+    context: SkillExecutionContext
+  ): Promise<SkillExecutionResult> => {
+    const attachmentRef =
+      typeof args.attachment_ref === "string" ? args.attachment_ref.trim() : "";
+    const conversationId = context.conversationId?.trim() ?? "";
+
+    if (capturedIsDocSkill && attachmentRef) {
+      if (!conversationId) {
+        return {
+          success: false,
+          result: {
+            error:
+              "attachment_ref was set but conversationId is missing; cannot load staged attachment.",
+            mode: "documentation_skill_attachment_error",
+          },
+        };
+      }
+      const maxLength = resolveAttachmentMaxLength(args);
+      try {
+        const documentService = getSharedDocumentService();
+        const staged = await documentService.readStagedAttachment(
+          conversationId,
+          attachmentRef
+        );
+        const isTruncated = staged.markdown.length > maxLength;
+        const content = isTruncated
+          ? staged.markdown.slice(0, maxLength)
+          : staged.markdown;
+
+        const skillMdPath =
+          findFirstFileByBasename(capturedSkillDir, "skill.md") ??
+          path.join(capturedSkillDir, "SKILL.md");
+        let skillGuidance = "";
+        try {
+          const fullGuidance = fs.readFileSync(skillMdPath, "utf-8");
+          skillGuidance =
+            fullGuidance.length > SKILL_GUIDANCE_CAP
+              ? `${fullGuidance.slice(
+                  0,
+                  SKILL_GUIDANCE_CAP
+                )}\n...[skill guidance truncated]`
+              : fullGuidance;
+        } catch {
+          skillGuidance = "";
+        }
+
+        return {
+          success: true,
+          result: {
+            mode: "documentation_skill_with_attachment",
+            skillName: capturedName,
+            skillFile: skillMdPath,
+            fileName: staged.fileName,
+            content,
+            truncated: isTruncated,
+            skillGuidance,
+            message:
+              "Loaded staged attachment as markdown. `content` is the spreadsheet/document data; use `skillGuidance` for analysis patterns from SKILL.md.",
+          },
+        };
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        return {
+          success: false,
+          result: {
+            error: errorMsg,
+            mode: "documentation_skill_attachment_error",
+            hint: "Ensure the file was attached in this chat and attachment_ref matches the value from the system prompt.",
+          },
+        };
+      }
+    }
+
+    return SkillWorkerClient.getInstance().execute(capturedCode, args, {
+      conversationId: context.conversationId,
+      toolCallId: context.toolCallId,
+    });
+  };
 }
 
 /**
@@ -754,16 +815,6 @@ async function loadPersistedSkills(): Promise<void> {
   for (const skill of skills) {
     try {
       const manifest = JSON.parse(skill.manifest_json) as SkillManifest;
-      emitSkillDebugLog(
-        "H3",
-        "SkillImportService.ts:667",
-        "Loading persisted skill manifest",
-        {
-          skillName: skill.name,
-          manifestEntry: manifest.entry,
-          manifestRuntime: manifest.runtime,
-        }
-      );
       const skillsDir = getInstalledSkillsDir();
       const skillDir = path.join(skillsDir, skill.name);
 

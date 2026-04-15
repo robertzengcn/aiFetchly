@@ -379,6 +379,10 @@ module.exports = {
             config: "vite.googleProxyCheck.config.mjs",
           },
           {
+            entry: "src/childprocess/SkillWorker.ts",
+            config: "vite.skillWorker.config.mjs",
+          },
+          {
             entry:
               "src/childprocess/contact-extraction/ContactExtractionWorker.ts",
             config: "vite.contactExtractionWorker.config.mjs",
