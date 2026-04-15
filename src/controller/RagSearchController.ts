@@ -332,6 +332,7 @@ export class RagSearchController {
         };
       }
       steps.chunking = true;
+      await this.checkAndSetDefaultEmbeddingModel();
       const model = await this.getDefaultEmbeddingModel();
       if (!model) {
         throw new Error("Default embedding model not found");

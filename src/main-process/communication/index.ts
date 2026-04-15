@@ -27,7 +27,18 @@ import { registerSearchResultIpcHandlers } from "@/main-process/communication/se
 import { registerWebSocketIpcHandlers } from "@/main-process/communication/websocket-ipc";
 import { registerContactExtractionHandlers } from "@/main-process/communication/contactExtraction-ipc";
 import { registerSkillsIpcHandlers } from "@/main-process/communication/skills-ipc";
+
+type GlobalIpcState = typeof globalThis & {
+  __aifetchlyIpcHandlersRegistered?: boolean;
+};
+
 export function registerCommunicationIpcHandlers(win: BrowserWindow) {
+  const globalState = globalThis as GlobalIpcState;
+  if (globalState.__aifetchlyIpcHandlersRegistered) {
+    console.warn("[IPC] Skipping duplicate handler registration (HMR guard)");
+    return;
+  }
+  globalState.__aifetchlyIpcHandlersRegistered = true;
   try {
     SyncMsg(win);
     registerExtraModulesIpcHandlers();

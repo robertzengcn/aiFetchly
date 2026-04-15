@@ -8,6 +8,11 @@ const isWorker =
   !!process.env?.WORKER_TYPE &&
   typeof process.send === 'function';
 
+type GlobalLoggerState = typeof globalThis & {
+  __aifetchlyLoggerInstance?: Logger;
+  __aifetchlyLoggerInitialized?: boolean;
+};
+
 /**
  * Worker-only: log proxy that forwards to main process via process.send.
  * Worker code must not use Electron or electron-log; main process handles actual logging.
@@ -103,17 +108,30 @@ export class Logger {
   }
 
   public static getInstance(): Logger {
+    const globalState = globalThis as GlobalLoggerState;
+    if (globalState.__aifetchlyLoggerInstance) {
+      Logger.instance = globalState.__aifetchlyLoggerInstance;
+      return Logger.instance;
+    }
+
     if (!Logger.instance) {
       Logger.instance = new Logger();
+      globalState.__aifetchlyLoggerInstance = Logger.instance;
     }
     return Logger.instance;
   }
 
   private initialize(): void {
+    const globalState = globalThis as GlobalLoggerState;
+    if (globalState.__aifetchlyLoggerInitialized) {
+      return;
+    }
+
     const elog = this.electronLog;
     if (typeof (elog as unknown as { initialize?: () => void }).initialize === 'function') {
       (elog as unknown as { initialize: () => void }).initialize();
     }
+    globalState.__aifetchlyLoggerInitialized = true;
 
     if ((elog as unknown as { transports?: { file?: { level?: string } } }).transports?.file) {
       (elog as unknown as { transports: { file: { level: string } } }).transports.file.level = 'debug';

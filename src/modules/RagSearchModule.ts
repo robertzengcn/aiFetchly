@@ -7,7 +7,7 @@ import { DocumentUploadOptions } from '@/modules/RAGDocumentModule';
 import { ChunkingService } from '@/service/ChunkingService';
 import { RAGDocumentEntity } from '@/entity/RAGDocument.entity';
 import { RAGChunkEntity } from '@/entity/RAGChunk.entity';
-import { RagConfigApi } from '@/api/ragConfigApi';
+import { RagConfigApi, resolveDefaultEmbeddingFromAvailableModels } from '@/api/ragConfigApi';
 import { SystemSettingModule } from '@/modules/SystemSettingModule';
 import { SystemSettingGroupModule } from '@/modules/SystemSettingGroupModule';
 import { app } from 'electron';
@@ -793,13 +793,16 @@ export class RagSearchModule extends BaseModule {
                 const modelsResponse = await this.ragConfigApi.getAvailableEmbeddingModels();
 
                 if (modelsResponse.status && modelsResponse.data) {
-                    const defaultModel = modelsResponse.data.default_model;
-                    const defaultDimensions = modelsResponse.data.default_dimensions;
-                    console.log(`Setting default embedding model to: ${defaultModel}:${defaultDimensions}`);
+                    const resolved = resolveDefaultEmbeddingFromAvailableModels(modelsResponse.data);
+                    if (!resolved) {
+                        console.warn('Could not resolve default embedding model and dimension from API response');
+                        return;
+                    }
+                    console.log(`Setting default embedding model to: ${resolved.modelName}:${resolved.dimension}`);
 
                     await this.systemSettingModule.updateDefaultEmbeddingModel(
-                        defaultModel,
-                        defaultDimensions,
+                        resolved.modelName,
+                        resolved.dimension,
                         embeddingGroup
                     );
                     console.log('Default embedding model updated successfully');
@@ -814,17 +817,20 @@ export class RagSearchModule extends BaseModule {
 
                 if (modelsResponse.status && modelsResponse.data) {
                     const availableModels = modelsResponse.data.models;
-                    const defaultModelName = modelsResponse.data.default_model;
-                    const defaultDimensions = modelsResponse.data.default_dimensions;
+                    const resolved = resolveDefaultEmbeddingFromAvailableModels(modelsResponse.data);
                     const isCurrentModelAvailable = Object.keys(availableModels).includes(defaultEmbeddingModel.modelName);
 
                     if (!isCurrentModelAvailable) {
+                        if (!resolved) {
+                            console.warn('Current default model unavailable and API did not return a resolvable default');
+                            return;
+                        }
                         console.log(`Current default embedding model '${defaultEmbeddingModel.modelName}' is not available`);
-                        console.log(`Updating to new default model: ${defaultModelName}:${defaultDimensions}`);
+                        console.log(`Updating to new default model: ${resolved.modelName}:${resolved.dimension}`);
 
                         await this.systemSettingModule.updateDefaultEmbeddingModel(
-                            defaultModelName,
-                            defaultDimensions,
+                            resolved.modelName,
+                            resolved.dimension,
                             embeddingGroup
                         );
                         console.log('Default embedding model updated to available model');

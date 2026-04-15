@@ -50,11 +50,62 @@ export interface AvailableModelsResponse {
     models: Record<string, ModelInfo>;
     /** Default model name */
     default_model: string;
-    default_dimensions: number;
+    /** Optional; server may omit and only send per-model `dimensions` under `models` */
+    default_dimensions?: number;
     /** Total number of models */
     total_models: number;
     /** Number of configured models */
     configured_models: number;
+}
+
+/**
+ * Normalize embedding dimension from API (number or numeric string).
+ */
+export function normalizeEmbeddingDimension(value: unknown): number | null {
+    if (typeof value === "number" && Number.isInteger(value) && value > 0) {
+        return value;
+    }
+    if (typeof value === "string") {
+        const parsed = parseInt(value, 10);
+        if (!Number.isNaN(parsed) && parsed > 0) {
+            return parsed;
+        }
+    }
+    return null;
+}
+
+/**
+ * Resolve default model name and vector dimension from `/api/ai/embedding/models` payload.
+ * Prefer top-level `default_dimensions` when present; otherwise use `models[default_model].dimensions`.
+ */
+export function resolveDefaultEmbeddingFromAvailableModels(
+    data: AvailableModelsResponse
+): { modelName: string; dimension: number } | null {
+    const models = data.models;
+    const preferredName = data.default_model?.trim();
+    const directDim = normalizeEmbeddingDimension(data.default_dimensions);
+
+    if (directDim !== null && preferredName) {
+        return { modelName: preferredName, dimension: directDim };
+    }
+
+    if (preferredName && models?.[preferredName]) {
+        const dim = normalizeEmbeddingDimension(models[preferredName].dimensions);
+        if (dim !== null) {
+            return { modelName: preferredName, dimension: dim };
+        }
+    }
+
+    if (models) {
+        for (const key of Object.keys(models)) {
+            const dim = normalizeEmbeddingDimension(models[key]?.dimensions);
+            if (dim !== null) {
+                return { modelName: key, dimension: dim };
+            }
+        }
+    }
+
+    return null;
 }
 
 /**
