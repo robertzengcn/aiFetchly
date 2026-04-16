@@ -85,7 +85,9 @@ jobs:
             echo "lzma-native deps directory not found"
           fi
       - name: Rebuild electron
-        run: yarn electron-rebuild --force --types prod,dev,optional --module-dir .         
+        # isolated-vm@6.1.2 cannot compile against Electron 35 V8 13.5 (upstream issue: laverdet/isolated-vm#528).
+        # Exclude it from rebuild; the module is also excluded in forge.config.js rebuildConfig.onlyModules.
+        run: yarn electron-rebuild --force --types prod,dev,optional --module-dir . --excluded-modules isolated-vm
       - name: Rebuild sqlite3
         run: yarn rebuild-sqlite3
       - name: Rebuild better sqlite
@@ -431,8 +433,9 @@ jobs:
           export npm_config_target="35.7.5"
           export npm_config_disturl="https://electronjs.org/headers"
 
-          # Now run the rebuild with explicit C++20 support
-          npx electron-rebuild --force --arch="${TARGET_ARCH}" --types prod,dev,optional --module-dir . --force-abi || {
+          # Now run the rebuild with explicit C++20 support.
+          # isolated-vm@6.1.2 cannot compile against Electron 35 V8 13.5 (upstream issue: laverdet/isolated-vm#528).
+          npx electron-rebuild --force --arch="${TARGET_ARCH}" --types prod,dev,optional --module-dir . --excluded-modules isolated-vm || {
             echo "Standard rebuild failed, trying with alternative flags..."
             # Try skipping problematic modules
             npx electron-rebuild --force --arch="${TARGET_ARCH}" -w better-sqlite3,sqlite3,bufferutil,utf-8-validate || echo "Selective rebuild also failed"
@@ -452,19 +455,19 @@ jobs:
       - name: yarn electron-rebuild
         run: |
           TARGET_ARCH="${TARGET_ARCH:-$(uname -m)}"
-          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" yarn electron-rebuild --arch="${TARGET_ARCH}"
+          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" yarn electron-rebuild --arch="${TARGET_ARCH}" --excluded-modules isolated-vm
       - name: Rebuild with verbose output
         run: |
           echo "=== Rebuilding with verbose output ==="
           TARGET_ARCH="${TARGET_ARCH:-$(uname -m)}"
-          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" DEBUG=* npx electron-rebuild --force --arch="${TARGET_ARCH}" --verbose || echo "Verbose rebuild failed, continuing..."
+          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" DEBUG=* npx electron-rebuild --force --arch="${TARGET_ARCH}" --verbose --excluded-modules isolated-vm || echo "Verbose rebuild failed, continuing..."
       - name: Rebuild C modules specifically
         run: |
           echo "=== Rebuilding C modules specifically ==="
           # Rebuild bufferutil and utf-8-validate which are C modules
           TARGET_ARCH="${TARGET_ARCH:-$(uname -m)}"
-          CFLAGS="-std=c11" yarn electron-rebuild --arch="${TARGET_ARCH}" -f -w bufferutil || echo "bufferutil rebuild failed"
-          CFLAGS="-std=c11" yarn electron-rebuild --arch="${TARGET_ARCH}" -f -w utf-8-validate || echo "utf-8-validate rebuild failed"
+          CFLAGS="-std=c11" yarn electron-rebuild --arch="${TARGET_ARCH}" -f -w bufferutil --excluded-modules isolated-vm || echo "bufferutil rebuild failed"
+          CFLAGS="-std=c11" yarn electron-rebuild --arch="${TARGET_ARCH}" -f -w utf-8-validate --excluded-modules isolated-vm || echo "utf-8-validate rebuild failed"
       - name: Debug - Check native modules
         run: |
           echo "=== Checking native modules ==="

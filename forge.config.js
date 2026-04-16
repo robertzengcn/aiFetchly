@@ -124,7 +124,18 @@ module.exports = {
     //   })()
     // ],
   },
-  rebuildConfig: {},
+  rebuildConfig: {
+    // isolated-vm@6.1.2 fails to compile against Electron 35 V8 13.5 headers
+    // (known upstream issue: laverdet/isolated-vm#528). Exclude it from rebuild
+    // so Forge startup is not blocked; the pre-built Node.js binary is used instead.
+    onlyModules: [
+      "better-sqlite3",
+      "sqlite3",
+      "bufferutil",
+      "utf-8-validate",
+      "keytar",
+    ],
+  },
   makers: [
     {
       name: "@electron-forge/maker-squirrel",
