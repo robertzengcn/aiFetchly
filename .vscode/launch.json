@@ -8,10 +8,10 @@
       "runtimeExecutable": "${workspaceFolder}/node_modules/.bin/electron-forge",
       "runtimeArgs": [
         "start",
-        "--vscode",
         "--inspect-electron",
         "--",
         "--disable-gpu",
+        "--disable-software-rasterizer",
         "--no-sandbox"
       ],
       "cwd": "${workspaceFolder}",
