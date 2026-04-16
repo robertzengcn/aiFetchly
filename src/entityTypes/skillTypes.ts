@@ -92,6 +92,13 @@ export interface SkillDefinition {
 
   /** Origin of the skill. */
   readonly source: SkillSource;
+
+  /**
+   * File extensions this skill can handle (e.g. [".xlsx", ".csv"]).
+   * When an uploaded attachment matches, the AI model is directed to call
+   * this skill instead of the generic `read_attachment_content` tool.
+   */
+  readonly supportedFileTypes?: readonly string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -145,6 +152,12 @@ export interface SkillManifest {
 
   /** Declared permission requirements. */
   readonly permissions?: SkillPermissionCategory[];
+
+  /**
+   * File extensions this skill can handle (e.g. [".xlsx", ".csv"]).
+   * Used to route uploaded attachments to the right skill automatically.
+   */
+  readonly supportedFileTypes?: readonly string[];
 }
 
 // ---------------------------------------------------------------------------

@@ -157,25 +157,47 @@ function normalizeUploadedFiles(input: unknown): UploadedFilePayload[] {
   return result;
 }
 
+/**
+ * Build the attachment reference block injected into the system message.
+ *
+ * When a user-installed skill declares `supportedFileTypes` matching a file's
+ * extension, the model is directed to call that skill with `attachment_ref`
+ * so it receives both the document data AND the skill's guidance in a single
+ * tool call.  For all other files the generic `read_attachment_content` tool
+ * is still recommended.
+ *
+ * @param extToSkillName  Map from lower-cased extension (e.g. ".xlsx") to the
+ *                        skill name that handles it. Built by the caller via
+ *                        SkillRegistry.findSkillForFileExtension().
+ */
 function buildAttachmentReferenceBlock(
-  references: StagedAttachmentReference[]
+  references: StagedAttachmentReference[],
+  extToSkillName: ReadonlyMap<string, string>
 ): string {
   if (references.length === 0) return "";
 
   const sanitizeForPrompt = (value: string): string =>
     value.replace(/[\r\n]/g, " ").replace(/"/g, '\\"');
 
-  const lines = references.map(
-    (ref, index) =>
-      `${index + 1}. file_name="${sanitizeForPrompt(
-        ref.fileName
-      )}" attachment_ref="${ref.refId}"`
-  );
+  const lines = references.map((ref, index) => {
+    const ext = ref.fileName.toLowerCase().slice(ref.fileName.lastIndexOf("."));
+    const matchingSkill = extToSkillName.get(ext);
+    const suggestedTool = matchingSkill
+      ? `\`${matchingSkill}\``
+      : "`read_attachment_content`";
+    return `${index + 1}. file_name="${sanitizeForPrompt(
+      ref.fileName
+    )}" attachment_ref="${
+      ref.refId
+    }" → call ${suggestedTool} with attachment_ref="${
+      ref.refId
+    }" to load this file`;
+  });
 
   return [
     "",
     "Attached documents are staged locally.",
-    "If document content is needed, call tool `read_attachment_content` with one of these attachment_ref values.",
+    "Use the suggested tool for each file (pass the exact attachment_ref value shown).",
     ...lines,
   ].join("\n");
 }
@@ -213,7 +235,23 @@ async function buildMessageWithAttachmentReferences(
     return message;
   }
 
-  return `${message}${buildAttachmentReferenceBlock(stagedReferences)}`;
+  // Build a map of file extension → skill name for all unique extensions
+  // present in the staged attachments, using capability-based lookup.
+  const extToSkillName = new Map<string, string>();
+  for (const ref of stagedReferences) {
+    const ext = ref.fileName.toLowerCase().slice(ref.fileName.lastIndexOf("."));
+    if (!extToSkillName.has(ext)) {
+      const skill = SkillRegistry.findSkillForFileExtension(ext);
+      if (skill) {
+        extToSkillName.set(ext, skill.name);
+      }
+    }
+  }
+
+  return `${message}${buildAttachmentReferenceBlock(
+    stagedReferences,
+    extToSkillName
+  )}`;
 }
 
 function truncateForRemote(message: string): string {
