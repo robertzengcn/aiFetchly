@@ -838,6 +838,14 @@ function createAssistantMessage(content = ''): ChatMessage {
   };
 }
 
+function isStreamableAssistantMessage(message: ChatMessage | undefined): boolean {
+  return Boolean(
+    message &&
+    message.role === 'assistant' &&
+    (!message.messageType || message.messageType === MESSAGE_TYPE.MESSAGE)
+  );
+}
+
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return '0 B';
   const units = ['B', 'KB', 'MB', 'GB'];
@@ -1381,10 +1389,9 @@ async function sendMessage(
             let lastIndex = messages.value.length - 1;
             const lastMessage = messages.value[lastIndex];
 
-            // If the last message is NOT an assistant message OR if it's a plan_execute_resume message,
-            // append a new assistant message so we can stream into it
-            // This handles cases where the last message is from 'user', 'system', 'tool', plan_execute_resume, or any other role
-            if (lastMessage.role !== 'assistant' || lastMessage.messageType === MESSAGE_TYPE.PLAN_EXECUTE_RESUME) {
+            // Stream tokens only into plain assistant text messages.
+            // Tool/plan/system assistant messages should never receive conversational tokens.
+            if (!isStreamableAssistantMessage(lastMessage)) {
               messages.value.push(createAssistantMessage());
               lastIndex = messages.value.length - 1; // Update to point at the new assistant message
             }
@@ -1433,15 +1440,20 @@ async function sendMessage(
             console.log('tool_result', chunk);
             // Hide tool execution indicator and show result
             isExecutingTool.value = false;
-            if (chunk.toolResult) {
-              toolResult.value = chunk.toolResult;
+            const hasContentPayload =
+              typeof chunk.content === 'string' && chunk.content.trim().length > 0;
+            if (chunk.toolResult || hasContentPayload) {
+              toolResult.value = (chunk.toolResult as Record<string, unknown>) || null;
               showToolResult.value = false;
 
               // Add tool result message to chat history
               const toolResultMessage: ChatMessage = {
                 id: `tool-result-${chunk.toolId || Date.now()}-${Date.now()}`,
                 role: 'assistant',
-                content: '',
+                content:
+                  typeof chunk.content === 'string' && chunk.content.trim().length > 0
+                    ? chunk.content
+                    : JSON.stringify(chunk.toolResult ?? {}, null, 2),
                 timestamp: new Date(),
                 conversationId: chunk.conversationId || conversationId.value,
                 messageType: MessageType.TOOL_RESULT,
