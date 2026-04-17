@@ -22,6 +22,7 @@ import type {
 } from "@/entityTypes/skillTypes";
 import { DocumentService } from "@/service/DocumentService";
 import { SkillWorkerClient } from "@/service/SkillWorkerClient";
+import { PythonSkillRuntimeService } from "@/service/PythonSkillRuntimeService";
 
 // ---------------------------------------------------------------------------
 // Manifest validation
@@ -37,6 +38,7 @@ interface SkillManifest {
   parameters: Record<string, unknown>;
   permissions?: string[];
   supportedFileTypes?: readonly string[];
+  documentationOnly?: boolean;
 }
 
 interface SkillMarkdownMetadata {
@@ -108,7 +110,9 @@ function buildManifestFromSkillMarkdown(
   const metadata = parseSkillMarkdownMetadata(skillMdContent);
   const fallbackName = sanitizeSkillName(path.basename(zipPath, ".zip"));
   const name = sanitizeSkillName(metadata.name ?? fallbackName);
-  const description = metadata.description ?? "Imported skill from SKILL.md";
+  const rawDescription =
+    metadata.description ?? "Imported skill from SKILL.md";
+  const description = `${rawDescription} [documentation-only in aiFetchly]`;
   const version = metadata.version ?? "1.0.0";
 
   return {
@@ -134,6 +138,7 @@ function buildManifestFromSkillMarkdown(
       additionalProperties: true,
     },
     permissions: [],
+    documentationOnly: true,
   };
 }
 
@@ -151,7 +156,7 @@ function buildSkillMarkdownWrapperCode(
   skillName: ${escapedName},
   skillFile: ${escapedPath},
   guidance: ${escapedContent},
-  message: "This skill was imported from SKILL.md. Pass attachment_ref to load uploaded spreadsheet/document data; otherwise only guidance is returned.",
+  message: "This skill was imported from SKILL.md and runs in documentation-only mode. Pass attachment_ref to load converted attachment content and guidance; no file transformations are executed.",
 });`;
 }
 
@@ -159,7 +164,17 @@ function buildSkillMarkdownWrapperCode(
 const SKILL_GUIDANCE_CAP = 8000;
 
 function isSkillMarkdownDocumentationEntry(manifest: SkillManifest): boolean {
-  return manifest.entry === "__skill_md_wrapper__.js";
+  return manifest.documentationOnly === true;
+}
+
+function isLegacyDocumentationWrapper(
+  manifest: SkillManifest,
+  code: string
+): boolean {
+  return (
+    manifest.entry === "__skill_md_wrapper__.js" &&
+    code.includes('mode: "documentation_skill"')
+  );
 }
 
 function resolveAttachmentMaxLength(args: Record<string, unknown>): number {
@@ -652,6 +667,10 @@ function registerImportedSkill(
 ): void {
   const entryPath = path.join(skillDir, manifest.entry);
   let code = fs.readFileSync(entryPath, "utf-8");
+  const isDocumentationOnly =
+    manifest.documentationOnly === true ||
+    isLegacyDocumentationWrapper(manifest, code);
+  manifest.documentationOnly = isDocumentationOnly;
   const isLegacyDocsOnlyWrapper =
     manifest.entry === "__skill_md_wrapper__.js" &&
     code.includes("documentation-only in this app");
@@ -682,6 +701,7 @@ function registerImportedSkill(
       "pure",
     requiresConfirmation: (manifest.permissions?.length ?? 0) > 0,
     source: "user",
+    documentationOnly: isDocumentationOnly,
     supportedFileTypes: manifest.supportedFileTypes,
     execute: buildImportedSkillExecuteHandler(manifest, skillDir, code),
   });
@@ -731,7 +751,49 @@ function buildImportedSkillExecuteHandler(
       typeof args.attachment_ref === "string" ? args.attachment_ref.trim() : "";
     const conversationId = context.conversationId?.trim() ?? "";
 
-    if (capturedIsDocSkill && attachmentRef) {
+    if (capturedIsDocSkill) {
+      const runtimeResult =
+        await PythonSkillRuntimeService.executeDocumentationSkill(
+          capturedName,
+          args,
+          context
+        );
+      if (runtimeResult) {
+        return runtimeResult;
+      }
+
+      const skillMdPath =
+        findFirstFileByBasename(capturedSkillDir, "skill.md") ??
+        path.join(capturedSkillDir, "SKILL.md");
+      let skillGuidance = "";
+      try {
+        const fullGuidance = fs.readFileSync(skillMdPath, "utf-8");
+        skillGuidance =
+          fullGuidance.length > SKILL_GUIDANCE_CAP
+            ? `${fullGuidance.slice(
+                0,
+                SKILL_GUIDANCE_CAP
+              )}\n...[skill guidance truncated]`
+            : fullGuidance;
+      } catch {
+        skillGuidance = "";
+      }
+
+      if (!attachmentRef) {
+        return {
+          success: true,
+          result: {
+            mode: "documentation_skill",
+            documentationOnly: true,
+            skillName: capturedName,
+            skillFile: skillMdPath,
+            skillGuidance,
+            message:
+              "Documentation-only skill loaded guidance from SKILL.md. Attach a supported file and pass attachment_ref to load content.",
+          },
+        };
+      }
+
       if (!conversationId) {
         return {
           success: false,
@@ -742,6 +804,7 @@ function buildImportedSkillExecuteHandler(
           },
         };
       }
+
       const maxLength = resolveAttachmentMaxLength(args);
       try {
         const documentService = getSharedDocumentService();
@@ -754,27 +817,11 @@ function buildImportedSkillExecuteHandler(
           ? staged.markdown.slice(0, maxLength)
           : staged.markdown;
 
-        const skillMdPath =
-          findFirstFileByBasename(capturedSkillDir, "skill.md") ??
-          path.join(capturedSkillDir, "SKILL.md");
-        let skillGuidance = "";
-        try {
-          const fullGuidance = fs.readFileSync(skillMdPath, "utf-8");
-          skillGuidance =
-            fullGuidance.length > SKILL_GUIDANCE_CAP
-              ? `${fullGuidance.slice(
-                  0,
-                  SKILL_GUIDANCE_CAP
-                )}\n...[skill guidance truncated]`
-              : fullGuidance;
-        } catch {
-          skillGuidance = "";
-        }
-
         return {
           success: true,
           result: {
             mode: "documentation_skill_with_attachment",
+            documentationOnly: true,
             skillName: capturedName,
             skillFile: skillMdPath,
             fileName: staged.fileName,
@@ -782,7 +829,7 @@ function buildImportedSkillExecuteHandler(
             truncated: isTruncated,
             skillGuidance,
             message:
-              "Loaded staged attachment as markdown. `content` is the spreadsheet/document data; use `skillGuidance` for analysis patterns from SKILL.md.",
+              "Documentation-only skill loaded staged attachment as markdown. `content` and `skillGuidance` are provided for analysis; no external scripts were executed and no files were transformed.",
           },
         };
       } catch (error) {

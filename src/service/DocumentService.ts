@@ -26,6 +26,11 @@ export interface StagedAttachmentReference {
 export interface StagedAttachmentContent {
   fileName: string;
   markdown: string;
+  sha256?: string;
+}
+
+interface StageAttachmentOptions {
+  attachmentSha256?: string;
 }
 
 export class DocumentService {
@@ -240,7 +245,8 @@ export class DocumentService {
   async stageAttachmentMarkdown(
     conversationId: string,
     fileName: string,
-    markdown: string
+    markdown: string,
+    options?: StageAttachmentOptions
   ): Promise<StagedAttachmentReference> {
     this.cleanupExpiredStagedFiles();
     const safeConversationId = this.sanitizePathSegment(
@@ -255,7 +261,14 @@ export class DocumentService {
     const filePath = path.join(stageDir, `${refId}.md`);
     const metadataPath = path.join(stageDir, `${refId}.meta.json`);
     fs.writeFileSync(filePath, markdown, "utf-8");
-    fs.writeFileSync(metadataPath, JSON.stringify({ fileName }), "utf-8");
+    fs.writeFileSync(
+      metadataPath,
+      JSON.stringify({
+        fileName,
+        sha256: options?.attachmentSha256 || null,
+      }),
+      "utf-8"
+    );
 
     return {
       refId,
@@ -295,12 +308,19 @@ export class DocumentService {
     }
 
     let fileName = path.basename(filePath);
+    let sha256: string | undefined;
     if (fs.existsSync(metadataPath)) {
       try {
         const metadataRaw = fs.readFileSync(metadataPath, "utf-8");
-        const metadata = JSON.parse(metadataRaw) as { fileName?: string };
+        const metadata = JSON.parse(metadataRaw) as {
+          fileName?: string;
+          sha256?: string;
+        };
         if (metadata.fileName) {
           fileName = metadata.fileName;
+        }
+        if (metadata.sha256) {
+          sha256 = metadata.sha256;
         }
       } catch {
         // Fallback to default filename above if metadata cannot be parsed.
@@ -310,6 +330,7 @@ export class DocumentService {
     return {
       fileName,
       markdown,
+      sha256,
     };
   }
 
