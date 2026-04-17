@@ -94,6 +94,12 @@ export interface SkillDefinition {
   readonly source: SkillSource;
 
   /**
+   * True when the imported skill is derived from SKILL.md guidance only and
+   * does not provide a real executable entrypoint for side-effect operations.
+   */
+  readonly documentationOnly?: boolean;
+
+  /**
    * File extensions this skill can handle (e.g. [".xlsx", ".csv"]).
    * When an uploaded attachment matches, the AI model is directed to call
    * this skill instead of the generic `read_attachment_content` tool.
@@ -172,10 +178,14 @@ export interface SkillManifest {
 export function skillDefinitionToToolFunction(
   skill: SkillDefinition
 ): ToolFunction {
+  const description = skill.documentationOnly
+    ? `[documentation-only skill] ${skill.description} NOTE: This skill does not execute external scripts or mutate files in aiFetchly.`
+    : skill.description;
+
   return {
     type: "function",
     name: skill.name,
-    description: skill.description,
+    description,
     parameters: skill.parameters,
   };
 }

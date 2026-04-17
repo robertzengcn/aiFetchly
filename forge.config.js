@@ -394,6 +394,10 @@ module.exports = {
             config: "vite.skillWorker.config.mjs",
           },
           {
+            entry: "src/childprocess/PythonRuntimeWorker.ts",
+            config: "vite.pythonRuntimeWorker.config.mjs",
+          },
+          {
             entry:
               "src/childprocess/contact-extraction/ContactExtractionWorker.ts",
             config: "vite.contactExtractionWorker.config.mjs",

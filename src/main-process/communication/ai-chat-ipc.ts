@@ -50,6 +50,7 @@ import {
 // import { Token } from '@/modules/token';
 // import { USERID } from '@/config/usersetting';
 import { v4 as uuidv4 } from "uuid";
+import * as crypto from "crypto";
 import { Token } from "@/modules/token";
 import { USER_AI_ENABLED } from "@/config/usersetting";
 import {
@@ -132,6 +133,12 @@ function normalizeUploadedFiles(input: unknown): UploadedFilePayload[] {
     if (typeof mimeType !== "string") continue;
     if (typeof sizeBytes !== "number" || !Number.isFinite(sizeBytes)) continue;
     if (typeof contentBase64 !== "string") continue;
+    if (contentBase64.length > MAX_BASE64_LENGTH) {
+      console.warn(
+        `normalizeUploadedFiles: skipping file "${fileName}" — base64 length ${contentBase64.length} exceeds limit ${MAX_BASE64_LENGTH}`
+      );
+      continue;
+    }
     if (!isSupportedUploadedFile(fileName, mimeType)) {
       console.warn(
         `normalizeUploadedFiles: skipping file "${fileName}" — unsupported file type ${mimeType}`
@@ -139,9 +146,16 @@ function normalizeUploadedFiles(input: unknown): UploadedFilePayload[] {
       continue;
     }
 
+    const decodedByteLength = Buffer.byteLength(contentBase64, "base64");
+    if (decodedByteLength > MAX_UPLOAD_FILE_BYTES) {
+      console.warn(
+        `normalizeUploadedFiles: skipping file "${fileName}" — decoded size ${decodedByteLength} exceeds limit ${MAX_UPLOAD_FILE_BYTES}`
+      );
+      continue;
+    }
     if (sizeBytes > MAX_UPLOAD_FILE_BYTES) {
       console.warn(
-        `normalizeUploadedFiles: skipping file "${fileName}" — size ${sizeBytes} exceeds limit ${MAX_UPLOAD_FILE_BYTES}`
+        `normalizeUploadedFiles: skipping file "${fileName}" — declared size ${sizeBytes} exceeds limit ${MAX_UPLOAD_FILE_BYTES}`
       );
       continue;
     }
@@ -149,7 +163,7 @@ function normalizeUploadedFiles(input: unknown): UploadedFilePayload[] {
     result.push({
       fileName,
       mimeType,
-      sizeBytes,
+      sizeBytes: decodedByteLength,
       contentBase64,
     });
   }
@@ -226,7 +240,13 @@ async function buildMessageWithAttachmentReferences(
     const staged = await documentService.stageAttachmentMarkdown(
       conversationId,
       file.fileName,
-      markdown
+      markdown,
+      {
+        attachmentSha256: crypto
+          .createHash("sha256")
+          .update(Buffer.from(file.contentBase64, "base64"))
+          .digest("hex"),
+      }
     );
     stagedReferences.push(staged);
   }

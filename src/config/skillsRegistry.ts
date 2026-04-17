@@ -641,6 +641,7 @@ function findSkillForFileExtension(ext: string): SkillDefinition | null {
   for (const skill of registry.values()) {
     if (
       skill.source === "user" &&
+      !skill.documentationOnly &&
       skill.supportedFileTypes &&
       skill.supportedFileTypes.includes(normalized)
     ) {
