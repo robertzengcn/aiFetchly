@@ -130,9 +130,47 @@ export interface SkillExecutionContext {
 // SkillManifest — JSON structure within a skill package zip
 // ---------------------------------------------------------------------------
 
+/** Non-pip system dependency declared by a Python skill (e.g. Poppler). */
+export interface SkillPythonSystemDep {
+  readonly name: string;
+  readonly probe: string;
+  readonly install_hint?: {
+    readonly darwin?: string;
+    readonly linux?: string;
+    readonly win32?: string;
+  };
+}
+
+/** Python runtime block in manifest.json when `runtime` is `"python"`. */
+export interface SkillPythonManifestBlock {
+  /** Interpreter constraint (e.g. `">=3.10"`). Only `>=M.m` is strictly enforced. */
+  readonly version: string;
+  /** Relative path to a hash-pinned requirements file inside the skill zip. */
+  readonly requirements_file: string;
+  /** Optional binaries that must exist on PATH (probed via `probe --version`). */
+  readonly system?: readonly SkillPythonSystemDep[];
+}
+
+/**
+ * Optional Python sidecar for `runtime: "javascript"` documentation skills.
+ * When present and the tool is invoked with `attachment_ref`, aiFetchly may
+ * run the listed `.py` entry with a per-skill venv (same rules as `python` block)
+ * instead of only returning SKILL.md + converted attachment markdown.
+ */
+export interface SkillPythonAttachmentExecutionBlock {
+  readonly version: string;
+  readonly requirements_file: string;
+  /** Relative path to the `.py` script (not the JS documentation entry). */
+  readonly entry: string;
+  readonly system?: readonly SkillPythonSystemDep[];
+}
+
+/** Supported skill package runtimes. */
+export type SkillManifestRuntime = "javascript" | "python";
+
 /**
  * Manifest for importable skill packages.
- * Stored in `skill.json` at the root of the zip.
+ * Stored in `manifest.json` at the root of the zip.
  */
 export interface SkillManifest {
   /** Unique kebab-case identifier. */
@@ -147,10 +185,10 @@ export interface SkillManifest {
   /** Skill author (optional). */
   readonly author?: string;
 
-  /** Runtime type — only `javascript` is supported initially. */
-  readonly runtime: "javascript";
+  /** Runtime type — `javascript` (sandboxed VM) or `python` (per-skill venv). */
+  readonly runtime: SkillManifestRuntime;
 
-  /** Relative path within the zip to the entry JS file. */
+  /** Relative path within the zip to the entry file (.js or .py). */
   readonly entry: string;
 
   /** JSON Schema for inputs. */
@@ -164,6 +202,22 @@ export interface SkillManifest {
    * Used to route uploaded attachments to the right skill automatically.
    */
   readonly supportedFileTypes?: readonly string[];
+
+  /**
+   * When true, skill is documentation-only (SKILL.md wrapper); no JS/Python
+   * execution for side effects.
+   */
+  readonly documentationOnly?: boolean;
+
+  /** Required when `runtime` is `"python"`; ignored for JavaScript skills. */
+  readonly python?: SkillPythonManifestBlock;
+
+  /**
+   * Optional Python execution for documentation-only JavaScript skills when
+   * `attachment_ref` is set. Requires hash-pinned `requirements_file` and a
+   * `.py` entry inside the skill zip; venv is prepared on import like Python skills.
+   */
+  readonly python_attachment_execution?: SkillPythonAttachmentExecutionBlock;
 }
 
 // ---------------------------------------------------------------------------

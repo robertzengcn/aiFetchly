@@ -710,23 +710,19 @@ export class AiChatApi {
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
         buffer = lines.pop() || "";
-        let eventProcessedInBatch = false;
 
         for (const line of lines) {
           const trimmedLine = line.trim();
+          // Blank line terminates one SSE message; emit every complete event in
+          // this chunk (do not cap at one per read — that dropped tool_call etc.
+          // after plan_created when the server flushed multiple events together).
           if (!trimmedLine) {
-            if (
-              !eventProcessedInBatch &&
-              currentEvent.event &&
-              currentEvent.data
-            ) {
-              const eventToProcess: StreamEvent = {
+            if (currentEvent.event && currentEvent.data) {
+              onEvent({
                 event: currentEvent.event,
                 data: currentEvent.data,
-              };
-              currentEvent = { event: undefined, data: undefined };
-              eventProcessedInBatch = true;
-              onEvent(eventToProcess);
+              } as StreamEvent);
+              currentEvent = {};
             }
             continue;
           }

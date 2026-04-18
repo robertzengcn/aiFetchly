@@ -13,9 +13,13 @@
 import type { ToolFunction } from "@/api/aiChatApi";
 import type {
   SkillDefinition,
-  SkillExecutionContext,
+  SkillManifest,
 } from "@/entityTypes/skillTypes";
 import { skillDefinitionToToolFunction } from "@/entityTypes/skillTypes";
+import * as fs from "fs";
+import { SkillManagementModule } from "@/modules/SkillManagementModule";
+import { SkillDiagnosticsService } from "@/service/SkillDiagnosticsService";
+import { SkillEnvironmentManager } from "@/service/SkillEnvironmentManager";
 import { MCPToolService } from "@/service/MCPToolService";
 import { ToolExecutor } from "@/service/ToolExecutor";
 
@@ -563,6 +567,113 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       return { success: true, result };
     },
   },
+  {
+    name: "skill_diagnose",
+    description:
+      "Classify stderr from a failed Python skill or environment setup (read-only). " +
+      "Pass skill_name to enrich hints from the skill manifest when possible.",
+    parameters: {
+      type: "object",
+      properties: {
+        skill_name: {
+          type: "string",
+          description: "Installed skill name (kebab-case from manifest.json).",
+        },
+        stderr: {
+          type: "string",
+          description: "Error output from the failed run.",
+        },
+      },
+      required: ["skill_name", "stderr"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "pure",
+    source: "built-in",
+    execute: async (args): Promise<{ success: boolean; result: Record<string, unknown> }> => {
+      const skillName =
+        typeof args.skill_name === "string" ? args.skill_name.trim() : "";
+      const stderr = typeof args.stderr === "string" ? args.stderr : "";
+      if (!skillName) {
+        return { success: false, result: { error: "skill_name is required" } };
+      }
+      let manifest: SkillManifest | undefined;
+      try {
+        const module = new SkillManagementModule();
+        const row = await module.getSkillByName(skillName);
+        if (row) {
+          manifest = JSON.parse(row.manifest_json) as SkillManifest;
+        }
+      } catch {
+        manifest = undefined;
+      }
+      const diagnosed = SkillDiagnosticsService.diagnoseStderr(stderr, manifest);
+      return {
+        success: true,
+        result: { ...diagnosed } as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "skill_repair_environment",
+    description:
+      "Rebuild the local Python venv for an installed Python skill using its hash-pinned requirements file. Requires user confirmation.",
+    parameters: {
+      type: "object",
+      properties: {
+        skill_name: {
+          type: "string",
+          description: "Installed skill name from manifest.json.",
+        },
+      },
+      required: ["skill_name"],
+    },
+    tier: "main",
+    requiresConfirmation: true,
+    permissionCategory: "filesystem",
+    source: "built-in",
+    execute: async (
+      args
+    ): Promise<{ success: boolean; result: Record<string, unknown> }> => {
+      const skillName =
+        typeof args.skill_name === "string" ? args.skill_name.trim() : "";
+      if (!skillName) {
+        return { success: false, result: { error: "skill_name is required" } };
+      }
+      const module = new SkillManagementModule();
+      const row = await module.getSkillByName(skillName);
+      if (!row) {
+        return { success: false, result: { error: "Skill not found" } };
+      }
+      const manifest = JSON.parse(row.manifest_json) as SkillManifest;
+      if (manifest.runtime !== "python") {
+        return {
+          success: false,
+          result: {
+            error: "skill_repair_environment applies only to Python skills",
+          },
+        };
+      }
+      const skillDir = SkillEnvironmentManager.getInstalledSkillRoot(skillName);
+      if (!fs.existsSync(skillDir)) {
+        return {
+          success: false,
+          result: { error: "Skill directory missing on disk" },
+        };
+      }
+      try {
+        await SkillEnvironmentManager.repair(skillDir, manifest);
+      } catch (error: unknown) {
+        return {
+          success: false,
+          result: {
+            error: error instanceof Error ? error.message : String(error),
+          },
+        };
+      }
+      return { success: true, result: { repaired: true, skillName } };
+    },
+  },
 ];
 
 // Register all built-in skills at module load time
@@ -634,6 +745,8 @@ function unregisterSkill(name: string): void {
  *
  * Searches skills with `source === "user"` that have a non-empty
  * `supportedFileTypes` array containing the lower-cased extension.
+ * Documentation-only skills are included so the chat system prompt can route
+ * staged uploads to them with `attachment_ref` (see ai-chat-ipc).
  * Returns the first match, or `null` if none found.
  */
 function findSkillForFileExtension(ext: string): SkillDefinition | null {
@@ -641,7 +754,6 @@ function findSkillForFileExtension(ext: string): SkillDefinition | null {
   for (const skill of registry.values()) {
     if (
       skill.source === "user" &&
-      !skill.documentationOnly &&
       skill.supportedFileTypes &&
       skill.supportedFileTypes.includes(normalized)
     ) {

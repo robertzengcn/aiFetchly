@@ -33,10 +33,23 @@ import { SkillWorkerClient } from "@/service/SkillWorkerClient";
 // Manifest validation
 // ---------------------------------------------------------------------------
 
+/**
+ * When SKILL.md (or a persisted manifest) omits `supportedFileTypes`, map a
+ * few known Anthropic-style skill names to extensions so staged uploads get
+ * `attachment_ref` routing in the system prompt (see findSkillForFileExtension).
+ */
+const SKILL_ONLY_FALLBACK_TYPES_BY_SANITIZED_NAME: Readonly<
+  Record<string, readonly string[]>
+> = {
+  pdf: [".pdf"],
+};
+
 interface SkillMarkdownMetadata {
   name?: string;
   description?: string;
   version?: string;
+  /** Normalized extensions with leading dot, e.g. [".pdf"]. */
+  supportedFileTypes?: string[];
 }
 
 const VALID_PERMISSIONS = new Set(["network", "filesystem", "automation"]);
@@ -98,6 +111,33 @@ function validatePythonRequirementsInZip(
   return null;
 }
 
+function validatePythonSystemDepsArray(
+  system: unknown,
+  labelPrefix: string
+): string | null {
+  if (system === undefined) {
+    return null;
+  }
+  if (!Array.isArray(system)) {
+    return `${labelPrefix}.system must be an array when present.`;
+  }
+  for (const dep of system as unknown[]) {
+    if (!dep || typeof dep !== "object") {
+      return `Each ${labelPrefix}.system entry must be an object.`;
+    }
+    const d = dep as Record<string, unknown>;
+    if (typeof d.name !== "string" || typeof d.probe !== "string") {
+      return `Each ${labelPrefix}.system entry requires string name and probe.`;
+    }
+    if (d.install_hint !== undefined) {
+      if (typeof d.install_hint !== "object" || d.install_hint === null) {
+        return `${labelPrefix}.system[].install_hint must be an object when present.`;
+      }
+    }
+  }
+  return null;
+}
+
 function validatePythonManifestFields(
   m: Record<string, unknown>
 ): string | null {
@@ -128,26 +168,57 @@ function validatePythonManifestFields(
   if (typeof m.entry === "string" && !m.entry.toLowerCase().endsWith(".py")) {
     return 'Python skill entry must be a ".py" file.';
   }
-  if (p.system !== undefined) {
-    if (!Array.isArray(p.system)) {
-      return "python.system must be an array when present.";
-    }
-    for (const dep of p.system as unknown[]) {
-      if (!dep || typeof dep !== "object") {
-        return "Each python.system entry must be an object.";
-      }
-      const d = dep as Record<string, unknown>;
-      if (typeof d.name !== "string" || typeof d.probe !== "string") {
-        return "Each python.system entry requires string name and probe.";
-      }
-      if (d.install_hint !== undefined) {
-        if (typeof d.install_hint !== "object" || d.install_hint === null) {
-          return "python.system[].install_hint must be an object when present.";
-        }
-      }
-    }
+  const systemErr = validatePythonSystemDepsArray(p.system, "python");
+  if (systemErr) {
+    return systemErr;
   }
   return null;
+}
+
+function validatePythonAttachmentExecutionFields(
+  m: Record<string, unknown>
+): string | null {
+  if (m.python_attachment_execution === undefined) {
+    return null;
+  }
+  if (m.runtime === "python") {
+    return (
+      'Field "python_attachment_execution" is only allowed when runtime is ' +
+      '"javascript"; use the top-level "python" block for Python skills.'
+    );
+  }
+  if (m.runtime !== "javascript") {
+    return null;
+  }
+  const block = m.python_attachment_execution;
+  if (!block || typeof block !== "object") {
+    return "python_attachment_execution must be an object when present.";
+  }
+  const b = block as Record<string, unknown>;
+  if (typeof b.version !== "string" || b.version.trim().length === 0) {
+    return "python_attachment_execution.version is required and must be a non-empty string.";
+  }
+  if (
+    typeof b.requirements_file !== "string" ||
+    b.requirements_file.trim().length === 0
+  ) {
+    return "python_attachment_execution.requirements_file is required.";
+  }
+  const rf = b.requirements_file as string;
+  if (rf.includes("..") || path.isAbsolute(rf)) {
+    return "python_attachment_execution.requirements_file must be a relative path without '..'.";
+  }
+  if (typeof b.entry !== "string" || !b.entry.toLowerCase().endsWith(".py")) {
+    return 'python_attachment_execution.entry must be a relative path to a ".py" file.';
+  }
+  const ent = b.entry as string;
+  if (ent.includes("..") || path.isAbsolute(ent)) {
+    return "python_attachment_execution.entry must be a relative path without '..'.";
+  }
+  return validatePythonSystemDepsArray(
+    b.system,
+    "python_attachment_execution"
+  );
 }
 
 /**
@@ -158,20 +229,44 @@ export function validatePythonSkillZip(
   effectiveZip: AdmZip,
   manifest: SkillManifest
 ): string | null {
-  if (manifest.runtime !== "python") {
-    return null;
+  if (manifest.runtime === "python") {
+    const envErr = validateZipDoesNotShipPythonEnv(effectiveZip);
+    if (envErr) {
+      return envErr;
+    }
+    if (!manifest.python) {
+      return "Python manifest block missing.";
+    }
+    return validatePythonRequirementsInZip(
+      effectiveZip,
+      manifest.python.requirements_file
+    );
   }
-  const envErr = validateZipDoesNotShipPythonEnv(effectiveZip);
-  if (envErr) {
-    return envErr;
+
+  if (
+    manifest.runtime === "javascript" &&
+    manifest.python_attachment_execution
+  ) {
+    const envErr = validateZipDoesNotShipPythonEnv(effectiveZip);
+    if (envErr) {
+      return envErr;
+    }
+    const block = manifest.python_attachment_execution;
+    const reqErr = validatePythonRequirementsInZip(
+      effectiveZip,
+      block.requirements_file
+    );
+    if (reqErr) {
+      return reqErr;
+    }
+    const pyRel = block.entry;
+    const pyEntry = effectiveZip.getEntry(pyRel);
+    if (!pyEntry || pyEntry.isDirectory) {
+      return `python_attachment_execution.entry not found in zip: ${pyRel}`;
+    }
   }
-  if (!manifest.python) {
-    return "Python manifest block missing.";
-  }
-  return validatePythonRequirementsInZip(
-    effectiveZip,
-    manifest.python.requirements_file
-  );
+
+  return null;
 }
 
 /** Max uncompressed bytes per skill zip (50 MB) */
@@ -204,6 +299,22 @@ function parseSkillMarkdownMetadata(content: string): SkillMarkdownMetadata {
     if (key === "name") metadata.name = value;
     if (key === "description") metadata.description = value;
     if (key === "version") metadata.version = value;
+    if (key === "supported_file_types" || key === "supportedFileTypes") {
+      const parts = value.split(",").map((p) => {
+        const t = p
+          .trim()
+          .toLowerCase()
+          .replace(/^["'[]+|["'\]]+$/g, "");
+        if (!t) {
+          return "";
+        }
+        return t.startsWith(".") ? t : `.${t}`;
+      });
+      const normalized = parts.filter((p) => p.length > 0);
+      if (normalized.length > 0) {
+        metadata.supportedFileTypes = normalized;
+      }
+    }
   }
 
   return metadata;
@@ -236,12 +347,20 @@ function buildManifestFromSkillMarkdown(
   const description = `${rawDescription} [documentation-only in aiFetchly]`;
   const version = metadata.version ?? "1.0.0";
 
+  const supportedFileTypes =
+    metadata.supportedFileTypes && metadata.supportedFileTypes.length > 0
+      ? metadata.supportedFileTypes
+      : SKILL_ONLY_FALLBACK_TYPES_BY_SANITIZED_NAME[name];
+
   return {
     name,
     version,
     description,
     runtime: "javascript",
     entry: "__skill_md_wrapper__.js",
+    ...(supportedFileTypes && supportedFileTypes.length > 0
+      ? { supportedFileTypes: [...supportedFileTypes] }
+      : {}),
     parameters: {
       type: "object",
       properties: {
@@ -520,6 +639,11 @@ function validateManifest(raw: unknown):
     return { valid: false, error: pythonFieldError };
   }
 
+  const attachmentPythonError = validatePythonAttachmentExecutionFields(m);
+  if (attachmentPythonError) {
+    return { valid: false, error: attachmentPythonError };
+  }
+
   // Parameters — must be valid JSON Schema with type: object
   if (!m.parameters || typeof m.parameters !== "object") {
     return {
@@ -765,6 +889,21 @@ async function importFromZip(zipPath: string): Promise<
         }`,
       };
     }
+  } else if (manifest.python_attachment_execution) {
+    try {
+      await SkillEnvironmentManager.prepare(
+        skillDir,
+        buildSyntheticPythonManifestForAttachmentExecution(manifest)
+      );
+    } catch (prepError: unknown) {
+      fs.rmSync(skillDir, { recursive: true, force: true });
+      return {
+        success: false,
+        error: `Python attachment execution environment setup failed: ${
+          prepError instanceof Error ? prepError.message : String(prepError)
+        }`,
+      };
+    }
   }
 
   // 8. Store metadata in SQLite
@@ -859,9 +998,16 @@ function registerImportedSkill(
   const isDocumentationOnly =
     manifest.documentationOnly === true ||
     isLegacyDocumentationWrapper(manifest, code);
+  const mergedSupportedTypes =
+    manifest.supportedFileTypes && manifest.supportedFileTypes.length > 0
+      ? manifest.supportedFileTypes
+      : SKILL_ONLY_FALLBACK_TYPES_BY_SANITIZED_NAME[manifest.name];
   const resolvedManifest: SkillManifest = {
     ...manifest,
     documentationOnly: isDocumentationOnly,
+    ...(mergedSupportedTypes && mergedSupportedTypes.length > 0
+      ? { supportedFileTypes: [...mergedSupportedTypes] }
+      : {}),
   };
   const isLegacyDocsOnlyWrapper =
     manifest.entry === "__skill_md_wrapper__.js" &&
@@ -894,6 +1040,47 @@ function registerImportedSkill(
     documentationOnly: isDocumentationOnly,
     supportedFileTypes: resolvedManifest.supportedFileTypes,
     execute: buildImportedSkillExecuteHandler(resolvedManifest, skillDir, code),
+  });
+}
+
+function buildSyntheticPythonManifestForAttachmentExecution(
+  base: SkillManifest
+): SkillManifest {
+  const block = base.python_attachment_execution;
+  if (!block) {
+    throw new Error("python_attachment_execution block missing");
+  }
+  return {
+    name: base.name,
+    version: base.version,
+    description: base.description,
+    author: base.author,
+    runtime: "python",
+    entry: block.entry,
+    parameters: base.parameters,
+    permissions: base.permissions,
+    supportedFileTypes: base.supportedFileTypes,
+    documentationOnly: false,
+    python: {
+      version: block.version,
+      requirements_file: block.requirements_file,
+      system: block.system,
+    },
+  };
+}
+
+function stagedFileMatchesSupportedTypes(
+  supported: readonly string[] | undefined,
+  fileName: string
+): boolean {
+  const ext = path.extname(fileName).toLowerCase();
+  if (!supported || supported.length === 0) {
+    return true;
+  }
+  return supported.some((t) => {
+    const raw = t.trim().toLowerCase();
+    const normalized = raw.startsWith(".") ? raw : `.${raw}`;
+    return ext === normalized;
   });
 }
 
@@ -932,6 +1119,8 @@ function buildImportedSkillExecuteHandler(
   const capturedIsDocSkill = isSkillMarkdownDocumentationEntry(manifest);
   const capturedSkillDir = skillDir;
   const capturedCode = code;
+  const capturedPythonAttachment = manifest.python_attachment_execution;
+  const capturedSupported = manifest.supportedFileTypes;
 
   return async (
     args: Record<string, unknown>,
@@ -940,6 +1129,57 @@ function buildImportedSkillExecuteHandler(
     const attachmentRef =
       typeof args.attachment_ref === "string" ? args.attachment_ref.trim() : "";
     const conversationId = context.conversationId?.trim() ?? "";
+
+    if (
+      capturedIsDocSkill &&
+      capturedPythonAttachment &&
+      attachmentRef.length > 0
+    ) {
+      if (!conversationId) {
+        return {
+          success: false,
+          result: {
+            error:
+              "attachment_ref was set but conversationId is missing; cannot run Python sidecar or load staged attachment.",
+            mode: "documentation_skill_attachment_error",
+          },
+        };
+      }
+      try {
+        const documentService = getSharedDocumentService();
+        const stagedPeek = await documentService.readStagedAttachment(
+          conversationId,
+          attachmentRef
+        );
+        if (
+          stagedFileMatchesSupportedTypes(
+            capturedSupported,
+            stagedPeek.fileName
+          )
+        ) {
+          const synthetic = buildSyntheticPythonManifestForAttachmentExecution(
+            manifest
+          );
+          return await PythonSkillRuntimeService.executePythonSkill({
+            manifest: synthetic,
+            skillDir: capturedSkillDir,
+            args,
+            context,
+          });
+        }
+      } catch (error: unknown) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        return {
+          success: false,
+          result: {
+            error: errorMsg,
+            mode: "documentation_skill_attachment_error",
+            hint:
+              "Python attachment sidecar could not read the staged file. Ensure attachment_ref matches the system prompt.",
+          },
+        };
+      }
+    }
 
     if (capturedIsDocSkill) {
       const skillMdPath =
