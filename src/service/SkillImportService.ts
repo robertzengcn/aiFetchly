@@ -13,33 +13,25 @@
 import AdmZip from "adm-zip";
 import * as fs from "fs";
 import * as path from "path";
-import { app } from "electron";
 import { SkillManagementModule } from "@/modules/SkillManagementModule";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import type {
   SkillExecutionContext,
   SkillExecutionResult,
+  SkillManifest,
 } from "@/entityTypes/skillTypes";
 import { DocumentService } from "@/service/DocumentService";
-import { SkillWorkerClient } from "@/service/SkillWorkerClient";
+import {
+  SkillEnvironmentManager,
+  getElectronUserDataPath,
+  assertRequirementsFileHasHashes,
+} from "@/service/SkillEnvironmentManager";
 import { PythonSkillRuntimeService } from "@/service/PythonSkillRuntimeService";
+import { SkillWorkerClient } from "@/service/SkillWorkerClient";
 
 // ---------------------------------------------------------------------------
 // Manifest validation
 // ---------------------------------------------------------------------------
-
-interface SkillManifest {
-  name: string;
-  version: string;
-  description: string;
-  author?: string;
-  runtime: string;
-  entry: string;
-  parameters: Record<string, unknown>;
-  permissions?: string[];
-  supportedFileTypes?: readonly string[];
-  documentationOnly?: boolean;
-}
 
 interface SkillMarkdownMetadata {
   name?: string;
@@ -48,9 +40,139 @@ interface SkillMarkdownMetadata {
 }
 
 const VALID_PERMISSIONS = new Set(["network", "filesystem", "automation"]);
-const VALID_RUNTIMES = new Set(["javascript"]);
+const VALID_RUNTIMES = new Set(["javascript", "python"]);
 const SEMVER_REGEX = /^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.]+)?$/;
 const NAME_REGEX = /^[a-z][a-z0-9_-]*$/;
+
+function resolvePermissionCategory(
+  permissions: readonly string[] | undefined
+): "pure" | "network" | "filesystem" | "automation" {
+  if (!permissions || permissions.length === 0) {
+    return "pure";
+  }
+  const first = permissions[0];
+  if (typeof first === "string" && VALID_PERMISSIONS.has(first)) {
+    return first as "network" | "filesystem" | "automation";
+  }
+  return "pure";
+}
+
+function validateZipDoesNotShipPythonEnv(zip: AdmZip): string | null {
+  for (const entry of zip.getEntries()) {
+    const normalized = entry.entryName.replace(/\\/g, "/");
+    if (normalized === ".env" || normalized.startsWith(".env/")) {
+      return (
+        "Skill zip must not ship a pre-built .env directory; " +
+        "environments are created locally after import."
+      );
+    }
+  }
+  return null;
+}
+
+function validatePythonRequirementsInZip(
+  zip: AdmZip,
+  requirementsRelative: string
+): string | null {
+  if (
+    requirementsRelative.includes("..") ||
+    path.isAbsolute(requirementsRelative)
+  ) {
+    return "Invalid python.requirements_file path.";
+  }
+  const entry = zip.getEntry(requirementsRelative);
+  if (!entry || entry.isDirectory) {
+    return `requirements file not found in zip: ${requirementsRelative}`;
+  }
+  let content: string;
+  try {
+    content = entry.getData().toString("utf-8");
+  } catch {
+    return "Failed to read requirements file from zip.";
+  }
+  try {
+    assertRequirementsFileHasHashes(content);
+  } catch (error: unknown) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  return null;
+}
+
+function validatePythonManifestFields(
+  m: Record<string, unknown>
+): string | null {
+  if (m.runtime !== "python") {
+    return null;
+  }
+  if (m.documentationOnly === true) {
+    return "Python skills cannot use documentationOnly.";
+  }
+  const py = m.python;
+  if (!py || typeof py !== "object") {
+    return 'Python skills require a top-level "python" object in manifest.json.';
+  }
+  const p = py as Record<string, unknown>;
+  if (typeof p.version !== "string" || p.version.trim().length === 0) {
+    return "python.version is required and must be a non-empty string.";
+  }
+  if (
+    typeof p.requirements_file !== "string" ||
+    p.requirements_file.trim().length === 0
+  ) {
+    return "python.requirements_file is required.";
+  }
+  const rf = p.requirements_file as string;
+  if (rf.includes("..") || path.isAbsolute(rf)) {
+    return "python.requirements_file must be a relative path without '..'.";
+  }
+  if (typeof m.entry === "string" && !m.entry.toLowerCase().endsWith(".py")) {
+    return 'Python skill entry must be a ".py" file.';
+  }
+  if (p.system !== undefined) {
+    if (!Array.isArray(p.system)) {
+      return "python.system must be an array when present.";
+    }
+    for (const dep of p.system as unknown[]) {
+      if (!dep || typeof dep !== "object") {
+        return "Each python.system entry must be an object.";
+      }
+      const d = dep as Record<string, unknown>;
+      if (typeof d.name !== "string" || typeof d.probe !== "string") {
+        return "Each python.system entry requires string name and probe.";
+      }
+      if (d.install_hint !== undefined) {
+        if (typeof d.install_hint !== "object" || d.install_hint === null) {
+          return "python.system[].install_hint must be an object when present.";
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Validates Python-specific zip rules (no shipped .env, hash-pinned requirements).
+ * Returns an error message or null when OK. No-op for JavaScript skills.
+ */
+export function validatePythonSkillZip(
+  effectiveZip: AdmZip,
+  manifest: SkillManifest
+): string | null {
+  if (manifest.runtime !== "python") {
+    return null;
+  }
+  const envErr = validateZipDoesNotShipPythonEnv(effectiveZip);
+  if (envErr) {
+    return envErr;
+  }
+  if (!manifest.python) {
+    return "Python manifest block missing.";
+  }
+  return validatePythonRequirementsInZip(
+    effectiveZip,
+    manifest.python.requirements_file
+  );
+}
 
 /** Max uncompressed bytes per skill zip (50 MB) */
 const MAX_UNCOMPRESSED_SIZE = 50 * 1024 * 1024;
@@ -110,8 +232,7 @@ function buildManifestFromSkillMarkdown(
   const metadata = parseSkillMarkdownMetadata(skillMdContent);
   const fallbackName = sanitizeSkillName(path.basename(zipPath, ".zip"));
   const name = sanitizeSkillName(metadata.name ?? fallbackName);
-  const rawDescription =
-    metadata.description ?? "Imported skill from SKILL.md";
+  const rawDescription = metadata.description ?? "Imported skill from SKILL.md";
   const description = `${rawDescription} [documentation-only in aiFetchly]`;
   const version = metadata.version ?? "1.0.0";
 
@@ -390,8 +511,13 @@ function validateManifest(raw: unknown):
       valid: false,
       error: `Unsupported runtime "${
         m.runtime as string
-      }". Must be "javascript".`,
+      }". Must be "javascript" or "python".`,
     };
+  }
+
+  const pythonFieldError = validatePythonManifestFields(m);
+  if (pythonFieldError) {
+    return { valid: false, error: pythonFieldError };
   }
 
   // Parameters — must be valid JSON Schema with type: object
@@ -437,7 +563,7 @@ function validateManifest(raw: unknown):
 // ---------------------------------------------------------------------------
 
 function getInstalledSkillsDir(): string {
-  const userDataPath = app.getPath("userData");
+  const userDataPath = getElectronUserDataPath();
   const skillsDir = path.join(userDataPath, "installed_skills");
   if (!fs.existsSync(skillsDir)) {
     fs.mkdirSync(skillsDir, { recursive: true });
@@ -508,6 +634,11 @@ async function importFromZip(zipPath: string): Promise<
     return { success: false, error: validation.error };
   }
   const manifest = validation.manifest;
+
+  const pythonZipError = validatePythonSkillZip(effectiveZip, manifest);
+  if (pythonZipError) {
+    return { success: false, error: pythonZipError };
+  }
 
   // 4. Verify entry file exists in zip
   const entryPath = manifest.entry;
@@ -622,6 +753,20 @@ async function importFromZip(zipPath: string): Promise<
     };
   }
 
+  if (manifest.runtime === "python") {
+    try {
+      await SkillEnvironmentManager.prepare(skillDir, manifest);
+    } catch (prepError: unknown) {
+      fs.rmSync(skillDir, { recursive: true, force: true });
+      return {
+        success: false,
+        error: `Python environment setup failed: ${
+          prepError instanceof Error ? prepError.message : String(prepError)
+        }`,
+      };
+    }
+  }
+
   // 8. Store metadata in SQLite
   try {
     await module.installSkill({
@@ -659,18 +804,65 @@ async function importFromZip(zipPath: string): Promise<
 }
 
 /**
+ * Register an imported Python skill (manifest-driven; no bundled script names).
+ */
+function registerImportedPythonSkill(
+  manifest: SkillManifest,
+  skillDir: string
+): void {
+  if (manifest.runtime !== "python" || !manifest.python) {
+    throw new Error("registerImportedPythonSkill requires runtime python");
+  }
+  const entryFsPath = path.join(skillDir, manifest.entry);
+  if (!fs.existsSync(entryFsPath)) {
+    throw new Error(`Python entry file not found: ${manifest.entry}`);
+  }
+
+  SkillRegistry.registerSkill({
+    name: manifest.name,
+    description: manifest.description,
+    parameters: manifest.parameters,
+    tier: "sandboxed",
+    permissionCategory: resolvePermissionCategory(manifest.permissions),
+    requiresConfirmation: (manifest.permissions?.length ?? 0) > 0,
+    source: "user",
+    documentationOnly: false,
+    supportedFileTypes: manifest.supportedFileTypes,
+    execute: async (
+      args: Record<string, unknown>,
+      context: SkillExecutionContext
+    ): Promise<SkillExecutionResult> => {
+      return await PythonSkillRuntimeService.executePythonSkill({
+        manifest,
+        skillDir,
+        args,
+        context,
+      });
+    },
+  });
+}
+
+/**
  * Register an imported skill into the runtime SkillRegistry.
  */
 function registerImportedSkill(
   manifest: SkillManifest,
   skillDir: string
 ): void {
+  if (manifest.runtime === "python") {
+    registerImportedPythonSkill(manifest, skillDir);
+    return;
+  }
+
   const entryPath = path.join(skillDir, manifest.entry);
   let code = fs.readFileSync(entryPath, "utf-8");
   const isDocumentationOnly =
     manifest.documentationOnly === true ||
     isLegacyDocumentationWrapper(manifest, code);
-  manifest.documentationOnly = isDocumentationOnly;
+  const resolvedManifest: SkillManifest = {
+    ...manifest,
+    documentationOnly: isDocumentationOnly,
+  };
   const isLegacyDocsOnlyWrapper =
     manifest.entry === "__skill_md_wrapper__.js" &&
     code.includes("documentation-only in this app");
@@ -692,18 +884,16 @@ function registerImportedSkill(
   }
 
   SkillRegistry.registerSkill({
-    name: manifest.name,
-    description: manifest.description,
-    parameters: manifest.parameters,
+    name: resolvedManifest.name,
+    description: resolvedManifest.description,
+    parameters: resolvedManifest.parameters,
     tier: "sandboxed",
-    permissionCategory:
-      (manifest.permissions?.[0] as "network" | "filesystem" | "automation") ??
-      "pure",
-    requiresConfirmation: (manifest.permissions?.length ?? 0) > 0,
+    permissionCategory: resolvePermissionCategory(resolvedManifest.permissions),
+    requiresConfirmation: (resolvedManifest.permissions?.length ?? 0) > 0,
     source: "user",
     documentationOnly: isDocumentationOnly,
-    supportedFileTypes: manifest.supportedFileTypes,
-    execute: buildImportedSkillExecuteHandler(manifest, skillDir, code),
+    supportedFileTypes: resolvedManifest.supportedFileTypes,
+    execute: buildImportedSkillExecuteHandler(resolvedManifest, skillDir, code),
   });
 }
 
@@ -752,16 +942,6 @@ function buildImportedSkillExecuteHandler(
     const conversationId = context.conversationId?.trim() ?? "";
 
     if (capturedIsDocSkill) {
-      const runtimeResult =
-        await PythonSkillRuntimeService.executeDocumentationSkill(
-          capturedName,
-          args,
-          context
-        );
-      if (runtimeResult) {
-        return runtimeResult;
-      }
-
       const skillMdPath =
         findFirstFileByBasename(capturedSkillDir, "skill.md") ??
         path.join(capturedSkillDir, "SKILL.md");
@@ -892,4 +1072,5 @@ export const SkillImportService = {
   importFromZip,
   loadPersistedSkills,
   validateManifest,
+  validatePythonSkillZip,
 } as const;
