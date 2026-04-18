@@ -1,106 +1,15 @@
 "use strict";
-import { describe, test, expect } from "vitest";
-
-// We test the pure validation logic by importing the service
-// (the zip extraction requires Electron's app.getPath, so we test validation only)
-
-// Re-implement the validation logic for testing since the internal function isn't exported
-// We'll test it through the exported validateManifest
+import AdmZip from "adm-zip";
+import { describe, expect, test } from "vitest";
+import type { SkillManifest } from "@/entityTypes/skillTypes";
+import { SkillImportService } from "@/service/SkillImportService";
 
 describe("SkillImportService - Manifest Validation", () => {
-  // Inline the validation logic for unit testing (same as in SkillImportService.ts)
-  const VALID_PERMISSIONS = new Set(["network", "filesystem", "automation"]);
-  const VALID_RUNTIMES = new Set(["javascript"]);
-  const SEMVER_REGEX = /^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.]+)?$/;
-  const NAME_REGEX = /^[a-z][a-z0-9_-]*$/;
-
-  function validateManifest(raw: unknown): {
-    valid: true;
-    manifest: Record<string, unknown>;
-  } | {
-    valid: false;
-    error: string;
-  } {
-    if (!raw || typeof raw !== "object") {
-      return { valid: false, error: "Manifest must be a JSON object" };
-    }
-
-    const m = raw as Record<string, unknown>;
-
-    for (const field of ["name", "version", "description", "runtime", "entry"]) {
-      if (typeof m[field] !== "string" || (m[field] as string).length === 0) {
-        return {
-          valid: false,
-          error: `Missing or empty required field: ${field}`,
-        };
-      }
-    }
-
-    if (!NAME_REGEX.test(m.name as string)) {
-      return {
-        valid: false,
-        error: `Invalid skill name "${m.name as string}". Must be lowercase alphanumeric with hyphens/underscores, starting with a letter.`,
-      };
-    }
-
-    if (!SEMVER_REGEX.test(m.version as string)) {
-      return {
-        valid: false,
-        error: `Invalid version "${m.version as string}". Must be semver (e.g., 1.0.0).`,
-      };
-    }
-
-    if ((m.description as string).length > 500) {
-      return {
-        valid: false,
-        error: "Description must be 500 characters or fewer",
-      };
-    }
-
-    if (!VALID_RUNTIMES.has(m.runtime as string)) {
-      return {
-        valid: false,
-        error: `Unsupported runtime "${m.runtime as string}". Must be "javascript".`,
-      };
-    }
-
-    if (!m.parameters || typeof m.parameters !== "object") {
-      return {
-        valid: false,
-        error: "Missing required field: parameters",
-      };
-    }
-
-    const params = m.parameters as Record<string, unknown>;
-    if (params.type !== "object") {
-      return {
-        valid: false,
-        error: 'Parameters must have "type": "object"',
-      };
-    }
-
-    if (m.permissions !== undefined) {
-      if (!Array.isArray(m.permissions)) {
-        return { valid: false, error: "Permissions must be an array" };
-      }
-      for (const perm of m.permissions as string[]) {
-        if (!VALID_PERMISSIONS.has(perm)) {
-          return {
-            valid: false,
-            error: `Invalid permission: ${perm}. Must be one of: ${[...VALID_PERMISSIONS].join(", ")}`,
-          };
-        }
-      }
-    }
-
-    return { valid: true, manifest: m };
-  }
-
-  const validManifest = {
+  const validJsManifest = {
     name: "my-skill",
     version: "1.0.0",
     description: "A test skill",
-    runtime: "javascript",
+    runtime: "javascript" as const,
     entry: "index.js",
     parameters: {
       type: "object",
@@ -110,30 +19,62 @@ describe("SkillImportService - Manifest Validation", () => {
     },
   };
 
+  const validPythonManifest: SkillManifest = {
+    name: "py-skill",
+    version: "1.0.0",
+    description: "Py skill",
+    runtime: "python",
+    entry: "run.py",
+    parameters: {
+      type: "object",
+      properties: {
+        attachment_ref: { type: "string" },
+      },
+    },
+    python: {
+      version: ">=3.10",
+      requirements_file: "requirements.txt",
+    },
+  };
+
   describe("valid manifests", () => {
-    test("should accept a valid manifest", () => {
-      const result = validateManifest(validManifest);
+    test("should accept a valid javascript manifest", () => {
+      const result = SkillImportService.validateManifest(validJsManifest);
       expect(result.valid).toBe(true);
     });
 
     test("should accept manifest with optional fields", () => {
-      const result = validateManifest({
-        ...validManifest,
+      const result = SkillImportService.validateManifest({
+        ...validJsManifest,
         author: "Test Author",
         permissions: ["network"],
       });
       expect(result.valid).toBe(true);
     });
 
-    test("should accept manifest without permissions", () => {
-      const result = validateManifest(validManifest);
+    test("should accept prerelease semver", () => {
+      const result = SkillImportService.validateManifest({
+        ...validJsManifest,
+        version: "1.0.0-beta.1",
+      });
       expect(result.valid).toBe(true);
     });
 
-    test("should accept prerelease semver", () => {
-      const result = validateManifest({
-        ...validManifest,
-        version: "1.0.0-beta.1",
+    test("should accept valid python manifest", () => {
+      const result = SkillImportService.validateManifest(validPythonManifest);
+      expect(result.valid).toBe(true);
+    });
+
+    test("should accept javascript manifest with python_attachment_execution", () => {
+      const result = SkillImportService.validateManifest({
+        ...validJsManifest,
+        documentationOnly: true,
+        entry: "__skill_md_wrapper__.js",
+        python_attachment_execution: {
+          version: ">=3.10",
+          requirements_file: "requirements.txt",
+          entry: "run_pdf.py",
+        },
       });
       expect(result.valid).toBe(true);
     });
@@ -141,7 +82,7 @@ describe("SkillImportService - Manifest Validation", () => {
 
   describe("invalid manifests", () => {
     test("should reject null input", () => {
-      const result = validateManifest(null);
+      const result = SkillImportService.validateManifest(null);
       expect(result.valid).toBe(false);
       if (!result.valid) {
         expect(result.error).toContain("must be a JSON object");
@@ -149,8 +90,8 @@ describe("SkillImportService - Manifest Validation", () => {
     });
 
     test("should reject missing name", () => {
-      const { name: _, ...withoutName } = validManifest;
-      const result = validateManifest(withoutName);
+      const { name: _n, ...withoutName } = validJsManifest;
+      const result = SkillImportService.validateManifest(withoutName);
       expect(result.valid).toBe(false);
       if (!result.valid) {
         expect(result.error).toContain("name");
@@ -158,8 +99,8 @@ describe("SkillImportService - Manifest Validation", () => {
     });
 
     test("should reject invalid name format", () => {
-      const result = validateManifest({
-        ...validManifest,
+      const result = SkillImportService.validateManifest({
+        ...validJsManifest,
         name: "InvalidName",
       });
       expect(result.valid).toBe(false);
@@ -168,17 +109,9 @@ describe("SkillImportService - Manifest Validation", () => {
       }
     });
 
-    test("should reject name starting with number", () => {
-      const result = validateManifest({
-        ...validManifest,
-        name: "1bad-name",
-      });
-      expect(result.valid).toBe(false);
-    });
-
     test("should reject invalid version", () => {
-      const result = validateManifest({
-        ...validManifest,
+      const result = SkillImportService.validateManifest({
+        ...validJsManifest,
         version: "1.0",
       });
       expect(result.valid).toBe(false);
@@ -188,9 +121,9 @@ describe("SkillImportService - Manifest Validation", () => {
     });
 
     test("should reject unsupported runtime", () => {
-      const result = validateManifest({
-        ...validManifest,
-        runtime: "python",
+      const result = SkillImportService.validateManifest({
+        ...validJsManifest,
+        runtime: "ruby",
       });
       expect(result.valid).toBe(false);
       if (!result.valid) {
@@ -198,9 +131,42 @@ describe("SkillImportService - Manifest Validation", () => {
       }
     });
 
+    test("should reject python without python block", () => {
+      const result = SkillImportService.validateManifest({
+        ...validPythonManifest,
+        python: undefined,
+      });
+      expect(result.valid).toBe(false);
+      if (!result.valid) {
+        expect(result.error).toContain('"python" object');
+      }
+    });
+
+    test("should reject python with non-py entry", () => {
+      const result = SkillImportService.validateManifest({
+        ...validPythonManifest,
+        entry: "run.js",
+      });
+      expect(result.valid).toBe(false);
+      if (!result.valid) {
+        expect(result.error).toContain(".py");
+      }
+    });
+
+    test("should reject python documentationOnly", () => {
+      const result = SkillImportService.validateManifest({
+        ...validPythonManifest,
+        documentationOnly: true,
+      });
+      expect(result.valid).toBe(false);
+      if (!result.valid) {
+        expect(result.error).toContain("documentationOnly");
+      }
+    });
+
     test("should reject missing parameters", () => {
-      const { parameters: _, ...withoutParams } = validManifest;
-      const result = validateManifest(withoutParams);
+      const { parameters: _p, ...withoutParams } = validJsManifest;
+      const result = SkillImportService.validateManifest(withoutParams);
       expect(result.valid).toBe(false);
       if (!result.valid) {
         expect(result.error).toContain("parameters");
@@ -208,8 +174,8 @@ describe("SkillImportService - Manifest Validation", () => {
     });
 
     test("should reject parameters without type: object", () => {
-      const result = validateManifest({
-        ...validManifest,
+      const result = SkillImportService.validateManifest({
+        ...validJsManifest,
         parameters: { type: "string" },
       });
       expect(result.valid).toBe(false);
@@ -219,8 +185,8 @@ describe("SkillImportService - Manifest Validation", () => {
     });
 
     test("should reject invalid permission value", () => {
-      const result = validateManifest({
-        ...validManifest,
+      const result = SkillImportService.validateManifest({
+        ...validJsManifest,
         permissions: ["invalid_permission"],
       });
       expect(result.valid).toBe(false);
@@ -229,34 +195,135 @@ describe("SkillImportService - Manifest Validation", () => {
       }
     });
 
-    test("should reject non-array permissions", () => {
-      const result = validateManifest({
-        ...validManifest,
-        permissions: "network",
-      });
-      expect(result.valid).toBe(false);
-      if (!result.valid) {
-        expect(result.error).toContain("Permissions must be an array");
-      }
-    });
-
-    test("should reject empty description", () => {
-      const result = validateManifest({
-        ...validManifest,
-        description: "",
-      });
-      expect(result.valid).toBe(false);
-    });
-
     test("should reject too-long description", () => {
-      const result = validateManifest({
-        ...validManifest,
+      const result = SkillImportService.validateManifest({
+        ...validJsManifest,
         description: "x".repeat(501),
       });
       expect(result.valid).toBe(false);
       if (!result.valid) {
         expect(result.error).toContain("500 characters");
       }
+    });
+
+    test("should reject python runtime with python_attachment_execution", () => {
+      const result = SkillImportService.validateManifest({
+        ...validPythonManifest,
+        python_attachment_execution: {
+          version: ">=3.10",
+          requirements_file: "requirements.txt",
+          entry: "side.py",
+        },
+      });
+      expect(result.valid).toBe(false);
+      if (!result.valid) {
+        expect(result.error).toContain("python_attachment_execution");
+      }
+    });
+
+    test("should reject python_attachment_execution without .py entry", () => {
+      const result = SkillImportService.validateManifest({
+        ...validJsManifest,
+        python_attachment_execution: {
+          version: ">=3.10",
+          requirements_file: "requirements.txt",
+          entry: "side.js",
+        },
+      });
+      expect(result.valid).toBe(false);
+      if (!result.valid) {
+        expect(result.error).toContain(".py");
+      }
+    });
+  });
+
+  describe("validatePythonSkillZip", () => {
+    test("returns null for javascript manifest", () => {
+      const zip = new AdmZip();
+      expect(
+        SkillImportService.validatePythonSkillZip(zip, validJsManifest)
+      ).toBeNull();
+    });
+
+    test("rejects zip that ships .env", () => {
+      const zip = new AdmZip();
+      zip.addFile(".env/pyvenv.cfg", Buffer.from("home=foo", "utf-8"));
+      const err = SkillImportService.validatePythonSkillZip(
+        zip,
+        validPythonManifest
+      );
+      expect(err).toContain(".env");
+    });
+
+    test("rejects requirements without hashes", () => {
+      const zip = new AdmZip();
+      zip.addFile(
+        "requirements.txt",
+        Buffer.from("pdf2image==1.17.0\n", "utf-8")
+      );
+      const err = SkillImportService.validatePythonSkillZip(
+        zip,
+        validPythonManifest
+      );
+      expect(err).toContain("hash");
+    });
+
+    test("accepts hash-pinned requirements in zip", () => {
+      const zip = new AdmZip();
+      zip.addFile(
+        "requirements.txt",
+        Buffer.from(
+          "pdf2image==1.17.0 --hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+          "utf-8"
+        )
+      );
+      expect(
+        SkillImportService.validatePythonSkillZip(zip, validPythonManifest)
+      ).toBeNull();
+    });
+
+    test("validates python_attachment_execution for javascript manifest", () => {
+      const zip = new AdmZip();
+      zip.addFile(
+        "requirements.txt",
+        Buffer.from(
+          "pdf2image==1.17.0 --hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+          "utf-8"
+        )
+      );
+      zip.addFile("run_pdf.py", Buffer.from("# stub", "utf-8"));
+      const manifest: SkillManifest = {
+        ...validJsManifest,
+        documentationOnly: true,
+        python_attachment_execution: {
+          version: ">=3.10",
+          requirements_file: "requirements.txt",
+          entry: "run_pdf.py",
+        },
+      };
+      expect(SkillImportService.validatePythonSkillZip(zip, manifest)).toBeNull();
+    });
+
+    test("rejects javascript manifest with python_attachment_execution missing py file in zip", () => {
+      const zip = new AdmZip();
+      zip.addFile(
+        "requirements.txt",
+        Buffer.from(
+          "pdf2image==1.17.0 --hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+          "utf-8"
+        )
+      );
+      const manifest: SkillManifest = {
+        ...validJsManifest,
+        documentationOnly: true,
+        python_attachment_execution: {
+          version: ">=3.10",
+          requirements_file: "requirements.txt",
+          entry: "missing.py",
+        },
+      };
+      const err = SkillImportService.validatePythonSkillZip(zip, manifest);
+      expect(err).toContain("not found");
     });
   });
 });

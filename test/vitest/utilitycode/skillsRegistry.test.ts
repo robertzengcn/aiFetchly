@@ -170,4 +170,54 @@ describe('SkillRegistry', () => {
       }).not.toThrow();
     });
   });
+
+  describe('findSkillForFileExtension', () => {
+    const docSkillName = 'test_doc_skill_pdf_route';
+    const noTypesName = 'test_doc_skill_no_types';
+
+    afterEach(() => {
+      for (const n of [docSkillName, noTypesName]) {
+        try {
+          SkillRegistry.unregisterSkill(n);
+        } catch {
+          // ignore
+        }
+      }
+    });
+
+    test('returns documentation-only user skill when extension matches', () => {
+      SkillRegistry.registerSkill({
+        name: docSkillName,
+        description: 'Doc-only PDF guidance',
+        parameters: { type: 'object', properties: {} },
+        tier: 'sandboxed',
+        requiresConfirmation: false,
+        permissionCategory: 'pure',
+        execute: vi.fn(),
+        source: 'user',
+        documentationOnly: true,
+        supportedFileTypes: ['.pdf'],
+      });
+
+      const hit = SkillRegistry.findSkillForFileExtension('.pdf');
+      expect(hit).not.toBeNull();
+      expect(hit!.name).toBe(docSkillName);
+    });
+
+    test('returns null when user skill has no supportedFileTypes', () => {
+      SkillRegistry.registerSkill({
+        name: noTypesName,
+        description: 'No types',
+        parameters: { type: 'object', properties: {} },
+        tier: 'sandboxed',
+        requiresConfirmation: false,
+        permissionCategory: 'pure',
+        execute: vi.fn(),
+        source: 'user',
+        documentationOnly: true,
+      });
+
+      expect(SkillRegistry.findSkillForFileExtension('.pdf')).toBeNull();
+    });
+  });
 });
