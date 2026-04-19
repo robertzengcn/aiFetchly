@@ -161,6 +161,12 @@ export default {
     document_deleted_successfully: "Document deleted successfully",
     found_results: "Found {count} results",
     upload_failed: "Upload failed",
+    upload_failed_max_files:
+      "Maximum {max} files allowed. Remove existing files first.",
+    upload_failed_file_too_large:
+      'File "{name}" exceeds the {maxSize} size limit.',
+    upload_failed_unsupported_type:
+      'File "{name}" type is not supported. Allowed: images, CSV, PDF, DOCX, XLS, XLSX.',
     error: "Error",
     // Document Management translations
     document_management: "Document Management",
@@ -1115,6 +1121,12 @@ export default {
     approval_deny: "Deny",
     approval_allow_once: "Allow Once",
     approval_always_allow: "Always Allow",
+    permission_resume_failed:
+      "Could not run the skill after permission was granted.",
+    permission_resume_no_tool_id:
+      "Missing tool call information; cannot continue execution.",
+    permission_resume_no_active_stream:
+      "No active chat stream. Try sending your message again.",
   },
   schedule: {
     create_new_schedule: "Create New Schedule",

@@ -720,7 +720,8 @@ class="message-bubble" :class="{
 import { ref, computed, onMounted, nextTick, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { streamChatMessage, stopStreamingChat, getChatHistory, clearChatHistory, getConversations, ConversationMetadata } from '@/views/api/aiChat';
-import { ChatMessage, ChatStreamChunk, Plan, PlanStep, PlanStepStatus, MessageType, UploadedFilePayload, LLMImageAttachmentPayload } from '@/entityTypes/commonType';
+import { ChatMessage, ChatStreamChunk, Plan, PlanStep, PlanStepStatus, MessageType, UploadedFilePayload, LLMImageAttachmentPayload, CommonMessage } from '@/entityTypes/commonType';
+import { AI_CHAT_RESUME_TOOL_AFTER_PERMISSION } from '@/config/channellist';
 import MCPToolManager from './MCPToolManager.vue';
 import SkillApprovalCard from './SkillApprovalCard.vue';
 
@@ -942,7 +943,7 @@ async function handleFileSelection(event: Event): Promise<void> {
   if (!fileList || fileList.length === 0) return;
 
   if (selectedUploadFiles.value.length >= MAX_UPLOAD_FILES) {
-    streamError.value = t('knowledge.upload_failed') || 'Upload failed';
+    streamError.value = t('knowledge.upload_failed_max_files', { max: MAX_UPLOAD_FILES }) || `Maximum ${MAX_UPLOAD_FILES} files allowed. Remove existing files first.`;
     target.value = '';
     return;
   }
@@ -952,14 +953,20 @@ async function handleFileSelection(event: Event): Promise<void> {
   const toConsider = files.slice(0, remainingSlots);
 
   const newFiles: File[] = [];
-  let hadInvalid = false;
+  const invalidReasons: string[] = [];
   for (const file of toConsider) {
     if (file.size > MAX_UPLOAD_FILE_BYTES) {
-      hadInvalid = true;
+      invalidReasons.push(
+        t('knowledge.upload_failed_file_too_large', { name: file.name, maxSize: formatBytes(MAX_UPLOAD_FILE_BYTES) })
+        || `File "${file.name}" exceeds the ${formatBytes(MAX_UPLOAD_FILE_BYTES)} size limit.`
+      );
       continue;
     }
     if (!isSupportedAttachmentFile(file)) {
-      hadInvalid = true;
+      invalidReasons.push(
+        t('knowledge.upload_failed_unsupported_type', { name: file.name })
+        || `File "${file.name}" type is not supported.`
+      );
       continue;
     }
     newFiles.push(file);
@@ -967,8 +974,8 @@ async function handleFileSelection(event: Event): Promise<void> {
 
   selectedUploadFiles.value = [...selectedUploadFiles.value, ...newFiles];
 
-  if (hadInvalid) {
-    streamError.value = t('knowledge.upload_failed') || 'Upload failed';
+  if (invalidReasons.length > 0) {
+    streamError.value = invalidReasons.join('\n');
   }
 
   // Allow selecting the same file again
@@ -1442,6 +1449,41 @@ async function sendMessage(
             isExecutingTool.value = false;
             const hasContentPayload =
               typeof chunk.content === 'string' && chunk.content.trim().length > 0;
+
+            if (chunk.replacesPermissionPromptForToolId) {
+              const rid = chunk.replacesPermissionPromptForToolId;
+              const existingIdx = messages.value.findIndex(
+                (m) =>
+                  m.messageType === MessageType.TOOL_RESULT &&
+                  m.metadata?.toolId === rid
+              );
+              if (existingIdx !== -1 && (chunk.toolResult || hasContentPayload)) {
+                const tr = (chunk.toolResult || {}) as Record<string, unknown>;
+                toolResult.value = tr;
+                showToolResult.value = false;
+                messages.value[existingIdx] = {
+                  ...messages.value[existingIdx],
+                  content:
+                    typeof chunk.content === 'string' && chunk.content.trim().length > 0
+                      ? chunk.content
+                      : JSON.stringify(chunk.toolResult ?? {}, null, 2),
+                  metadata: {
+                    ...messages.value[existingIdx].metadata,
+                    toolName: chunk.toolName ?? messages.value[existingIdx].metadata?.toolName,
+                    toolId: rid,
+                    toolResult: chunk.toolResult,
+                    success: tr.success !== false && !tr.error,
+                    executionTimeMs: tr.executionTimeMs as number | undefined,
+                    summary: tr.summary as string | undefined,
+                    error: tr.error as string | undefined,
+                  },
+                };
+                throttledScrollToBottom();
+              }
+              isTyping.value = true;
+              break;
+            }
+
             if (chunk.toolResult || hasContentPayload) {
               toolResult.value = (chunk.toolResult as Record<string, unknown>) || null;
               showToolResult.value = false;
@@ -1697,7 +1739,8 @@ async function handleSendMessage() {
       if (attachments.length > 0) {
         finalMessage = 'Please analyze attached file(s).';
       } else {
-        streamError.value = t('knowledge.upload_failed') || 'Upload failed';
+        streamError.value = t('knowledge.upload_failed_file_too_large', { name: selectedUploadFiles.value.map(f => f.name).join(', '), maxSize: formatBytes(MAX_UPLOAD_FILE_BYTES) })
+          || `All selected files exceed the ${formatBytes(MAX_UPLOAD_FILE_BYTES)} size limit or are unsupported.`;
         return;
       }
     }
@@ -1824,21 +1867,118 @@ async function handleNewConversation() {
 }
 
 /**
- * Handle skill permission grant — user approved the skill execution.
- * Removes the permission prompt message from chat so the user can re-trigger.
+ * Resolve OpenAI-style tool_call id for a permission row (metadata or nearest prior tool_call).
  */
-function handleSkillPermissionGrant(message: ChatMessage, _persistent: boolean): void {
+function resolveToolIdForPermissionMessage(message: ChatMessage): string | undefined {
+  const direct = message.metadata?.toolId;
+  if (typeof direct === 'string' && direct.length > 0) {
+    return direct;
+  }
+  const toolName = message.metadata?.toolName;
+  if (typeof toolName !== 'string' || !toolName) {
+    return undefined;
+  }
   const idx = messages.value.findIndex((m) => m.id === message.id);
-  if (idx !== -1) {
-    messages.value = [
-      ...messages.value.slice(0, idx),
-      {
-        ...messages.value[idx],
-        content: 'Permission granted. Please resend your message to execute the skill.',
-        metadata: { ...messages.value[idx].metadata, toolResult: undefined, success: true },
-      },
-      ...messages.value.slice(idx + 1),
-    ];
+  if (idx <= 0) {
+    return undefined;
+  }
+  for (let i = idx - 1; i >= 0; i--) {
+    const m = messages.value[i];
+    if (
+      m.messageType === MessageType.TOOL_CALL &&
+      m.metadata?.toolName === toolName &&
+      typeof m.metadata?.toolId === 'string' &&
+      m.metadata.toolId.length > 0
+    ) {
+      return m.metadata.toolId;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Handle skill permission grant — user approved; main process re-runs the tool and continues the stream.
+ */
+async function handleSkillPermissionGrant(
+  message: ChatMessage,
+  _persistent: boolean
+): Promise<void> {
+  const toolId = resolveToolIdForPermissionMessage(message);
+  if (!toolId) {
+    const idx = messages.value.findIndex((m) => m.id === message.id);
+    if (idx !== -1) {
+      messages.value = [
+        ...messages.value.slice(0, idx),
+        {
+          ...messages.value[idx],
+          content:
+            t('skills.permission_resume_no_tool_id') ||
+            'Missing tool call information; cannot continue execution.',
+          metadata: {
+            ...messages.value[idx].metadata,
+            toolResult: undefined,
+            success: false,
+          },
+        },
+        ...messages.value.slice(idx + 1),
+      ];
+    }
+    return;
+  }
+
+  try {
+    const raw: unknown = await window.api.invoke(
+      AI_CHAT_RESUME_TOOL_AFTER_PERMISSION,
+      JSON.stringify({
+        toolId,
+        conversationId: message.conversationId || conversationId.value,
+      })
+    );
+    const res = raw as CommonMessage<{ ok: boolean; error?: string } | null>;
+    if (!res.status || !res.data?.ok) {
+      const errMsg =
+        res.data?.error ||
+        res.msg ||
+        t('skills.permission_resume_failed') ||
+        'Could not continue the skill after permission was granted.';
+      const errIdx = messages.value.findIndex((m) => m.id === message.id);
+      if (errIdx !== -1) {
+        messages.value = [
+          ...messages.value.slice(0, errIdx),
+          {
+            ...messages.value[errIdx],
+            content: errMsg,
+            metadata: {
+              ...messages.value[errIdx].metadata,
+              toolResult: { error: errMsg, success: false },
+              success: false,
+              error: errMsg,
+            },
+          },
+          ...messages.value.slice(errIdx + 1),
+        ];
+      }
+    }
+  } catch (error) {
+    const errMsg =
+      error instanceof Error ? error.message : String(error);
+    const errIdx = messages.value.findIndex((m) => m.id === message.id);
+    if (errIdx !== -1) {
+      messages.value = [
+        ...messages.value.slice(0, errIdx),
+        {
+          ...messages.value[errIdx],
+          content: errMsg,
+          metadata: {
+            ...messages.value[errIdx].metadata,
+            toolResult: { error: errMsg, success: false },
+            success: false,
+            error: errMsg,
+          },
+        },
+        ...messages.value.slice(errIdx + 1),
+      ];
+    }
   }
 }
 

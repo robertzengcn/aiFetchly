@@ -163,6 +163,12 @@ export default {
     document_deleted_successfully: "ドキュメントの削除に成功しました",
     found_results: "{count}件の結果が見つかりました",
     upload_failed: "アップロードに失敗しました",
+    upload_failed_max_files:
+      "ファイルは最大{max}個までです。既存のファイルを削除してください。",
+    upload_failed_file_too_large:
+      "ファイル「{name}」は{maxSize}の制限を超えています。",
+    upload_failed_unsupported_type:
+      "ファイル「{name}」の形式はサポートされていません。対応形式：画像、CSV、PDF、DOCX、XLS、XLSX。",
     error: "エラー",
     document_management: "ドキュメント管理",
     search_by_name: "名前で検索",
@@ -1093,6 +1099,11 @@ export default {
     approval_deny: "拒否",
     approval_allow_once: "一度だけ許可",
     approval_always_allow: "常に許可",
+    permission_resume_failed: "許可後もスキルを実行できませんでした。",
+    permission_resume_no_tool_id:
+      "ツール呼び出し情報がないため続行できません。",
+    permission_resume_no_active_stream:
+      "アクティブなチャットがありません。メッセージを再送信してください。",
   },
   schedule: {
     create_new_schedule: "新規スケジュールを作成",

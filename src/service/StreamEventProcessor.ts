@@ -43,6 +43,19 @@ export const PLAN_CONFIG = {
   MAX_PLAN_DESCRIPTION_LENGTH: 2000,
 } as const;
 
+/** Tool results waiting for in-chat skill permission before continuing the AI stream. */
+export interface PendingSkillPermissionTool {
+  readonly toolName: string;
+  readonly toolParams: Record<string, unknown>;
+  readonly toolStartMs: number;
+}
+
+function isDeferredSkillPermissionResult(
+  toolResult: Record<string, unknown>
+): boolean {
+  return toolResult.needsPermissionPrompt === true;
+}
+
 /**
  * Configuration constants for timeouts and limits
  */
@@ -89,10 +102,123 @@ export interface StreamState {
 export class StreamEventProcessor {
   private event: IpcMainEvent;
   private state: StreamState;
+  private readonly pendingSkillPermissionByToolId = new Map<
+    string,
+    PendingSkillPermissionTool
+  >();
 
   constructor(event: IpcMainEvent, state: StreamState) {
     this.event = event;
     this.state = state;
+  }
+
+  /**
+   * Re-run a registry skill after the user granted permission in the UI.
+   * Sends the real tool result to the renderer and continues the remote stream.
+   */
+  async resumeToolAfterSkillPermissionGrant(
+    toolId: string,
+    conversationId?: string
+  ): Promise<{ ok: true } | { ok: false; error: string }> {
+    if (conversationId && conversationId !== this.state.streamConversationId) {
+      return {
+        ok: false,
+        error: "Conversation does not match the active stream.",
+      };
+    }
+
+    const pending = this.pendingSkillPermissionByToolId.get(toolId);
+    if (!pending) {
+      return {
+        ok: false,
+        error:
+          "No pending permission request for this tool call, or the stream already continued.",
+      };
+    }
+    this.pendingSkillPermissionByToolId.delete(toolId);
+
+    const resumeStart = Date.now();
+    const { toolName, toolParams } = pending;
+
+    try {
+      let toolResult: Record<string, unknown>;
+      if (SkillRegistry.isRegistered(toolName)) {
+        const skillResult = await SkillExecutor.execute(toolName, toolParams, {
+          conversationId: this.state.streamConversationId,
+          toolCallId: toolId,
+        });
+        toolResult = skillResult.success
+          ? (skillResult.result as Record<string, unknown>)
+          : {
+              ...(skillResult.result as Record<string, unknown>),
+              success: false,
+            };
+      } else {
+        return { ok: false, error: "Tool is not a registered skill." };
+      }
+
+      if (isDeferredSkillPermissionResult(toolResult)) {
+        this.pendingSkillPermissionByToolId.set(toolId, pending);
+        const blockedChunk: ChatStreamChunk = {
+          content: this.serializeToolResultContent(toolResult),
+          isComplete: false,
+          messageId: this.state.assistantMessageId,
+          eventType: StreamEventType.TOOL_RESULT,
+          toolResult,
+          conversationId: this.state.streamConversationId,
+          toolId,
+          toolName,
+          replacesPermissionPromptForToolId: toolId,
+        };
+        this.event.sender.send(
+          AI_CHAT_STREAM_CHUNK,
+          JSON.stringify(blockedChunk)
+        );
+        return {
+          ok: false,
+          error: "Permission is still required for this skill.",
+        };
+      }
+
+      await this.saveToolResult(toolId, toolName, toolResult, resumeStart);
+
+      const resultChunk: ChatStreamChunk = {
+        content: this.serializeToolResultContent(toolResult),
+        isComplete: false,
+        messageId: this.state.assistantMessageId,
+        eventType: StreamEventType.TOOL_RESULT,
+        toolResult,
+        conversationId: this.state.streamConversationId,
+        toolId,
+        toolName,
+        replacesPermissionPromptForToolId: toolId,
+      };
+      this.event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(resultChunk));
+
+      await this.sendToolResultToAI(
+        toolId,
+        toolName,
+        toolResult,
+        resumeStart,
+        this.state.planThreadId
+      );
+
+      if (toolId) {
+        this.state.pendingToolCalls.delete(toolId);
+        console.log(
+          `Tool call completed after permission: ${toolName} (ID: ${toolId}), pending: ${this.state.pendingToolCalls.size}`
+        );
+        this.sendDeferredCompletionIfReady();
+      }
+      return { ok: true };
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown error occurred";
+      await this.handleToolError(toolId, toolName, errorMessage, resumeStart, {
+        replacePermissionPromptForToolId: toolId,
+      });
+      return { ok: false, error: errorMessage };
+    }
   }
 
   private serializeToolResultContent(
@@ -311,6 +437,8 @@ export class StreamEventProcessor {
       // Save tool result to database
       await this.saveToolResult(toolId, toolName, toolResult, toolStartMs);
 
+      const deferredPermission = isDeferredSkillPermissionResult(toolResult);
+
       // Send tool result to UI
       const resultChunk: ChatStreamChunk = {
         content: this.serializeToolResultContent(toolResult),
@@ -319,8 +447,22 @@ export class StreamEventProcessor {
         eventType: StreamEventType.TOOL_RESULT,
         toolResult: toolResult,
         conversationId: this.state.streamConversationId,
+        toolId,
+        toolName,
       };
       this.event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(resultChunk));
+
+      if (deferredPermission) {
+        this.pendingSkillPermissionByToolId.set(toolId, {
+          toolName,
+          toolParams,
+          toolStartMs,
+        });
+        console.log(
+          `Tool call deferred for skill permission: ${toolName} (ID: ${toolId}), pending stream tools: ${this.state.pendingToolCalls.size}`
+        );
+        return;
+      }
 
       // Send tool result back to AI server to continue the stream
       await this.sendToolResultToAI(
@@ -442,7 +584,8 @@ export class StreamEventProcessor {
     toolId: string,
     toolName: string,
     errorMessage: string,
-    toolStartMs: number
+    toolStartMs: number,
+    options?: { replacePermissionPromptForToolId?: string }
   ): Promise<void> {
     const errorToolResult = {
       success: false,
@@ -457,6 +600,14 @@ export class StreamEventProcessor {
       eventType: StreamEventType.TOOL_RESULT,
       toolResult: errorToolResult,
       conversationId: this.state.streamConversationId,
+      toolId,
+      toolName,
+      ...(options?.replacePermissionPromptForToolId
+        ? {
+            replacesPermissionPromptForToolId:
+              options.replacePermissionPromptForToolId,
+          }
+        : {}),
     };
     this.event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(errorResult));
 

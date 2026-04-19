@@ -156,8 +156,8 @@ async function execute(
   const permCheck = SkillPermissionService.checkPermission(name);
   if (!permCheck.allowed) {
     if (permCheck.needsPrompt) {
-      // Return a special result indicating permission is needed
-      // The caller (StreamEventProcessor) will handle prompting the user
+      // Return a special result indicating permission is needed.
+      // StreamEventProcessor shows the UI prompt, defers sendToolResultToAI until the user grants.
       const result: ToolExecutionResult = {
         tool_call_id: toolCallId,
         tool_name: name,

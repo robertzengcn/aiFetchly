@@ -163,6 +163,12 @@ export default {
     document_deleted_successfully: "Dokument erfolgreich gelöscht",
     found_results: "{count} Ergebnisse gefunden",
     upload_failed: "Hochladen fehlgeschlagen",
+    upload_failed_max_files:
+      "Maximal {max} Dateien erlaubt. Entfernen Sie zuerst vorhandene Dateien.",
+    upload_failed_file_too_large:
+      'Datei "{name}" überschreitet das {maxSize} Limit.',
+    upload_failed_unsupported_type:
+      'Dateityp von "{name}" wird nicht unterstützt. Erlaubt: Bilder, CSV, PDF, DOCX, XLS, XLSX.',
     error: "Fehler",
     document_management: "Dokumentenverwaltung",
     search_by_name: "Nach Name suchen",
@@ -1115,6 +1121,12 @@ export default {
     approval_deny: "Ablehnen",
     approval_allow_once: "Einmal erlauben",
     approval_always_allow: "Immer erlauben",
+    permission_resume_failed:
+      "Die Fähigkeit konnte nach der Erlaubnis nicht ausgeführt werden.",
+    permission_resume_no_tool_id:
+      "Tool-Aufrufinformationen fehlen; Ausführung nicht möglich.",
+    permission_resume_no_active_stream:
+      "Kein aktiver Chat-Stream. Bitte Nachricht erneut senden.",
   },
   schedule: {
     create_new_schedule: "Neue Planung erstellen",
