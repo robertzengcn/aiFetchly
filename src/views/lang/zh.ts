@@ -152,6 +152,10 @@ export default {
     document_deleted_successfully: "文档删除成功",
     found_results: "找到 {count} 个结果",
     upload_failed: "上传失败",
+    upload_failed_max_files: "最多允许上传 {max} 个文件，请先移除已有文件。",
+    upload_failed_file_too_large: '文件 "{name}" 超过了 {maxSize} 的限制。',
+    upload_failed_unsupported_type:
+      '文件 "{name}" 的类型不支持。支持格式：图片、CSV、PDF、DOCX、XLS、XLSX。',
     error: "错误",
     // Document Management translations
     document_management: "文档管理",
@@ -1075,6 +1079,9 @@ export default {
     approval_deny: "拒绝",
     approval_allow_once: "允许一次",
     approval_always_allow: "始终允许",
+    permission_resume_failed: "已授权但无法继续执行该技能。",
+    permission_resume_no_tool_id: "缺少工具调用信息，无法继续执行。",
+    permission_resume_no_active_stream: "没有进行中的对话流，请重新发送消息。",
   },
   schedule: {
     create_new_schedule: "创建新计划",

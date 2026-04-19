@@ -163,6 +163,12 @@ export default {
     document_deleted_successfully: "Documento eliminado correctamente",
     found_results: "Se encontraron {count} resultados",
     upload_failed: "Error al subir",
+    upload_failed_max_files:
+      "Máximo {max} archivos permitidos. Elimine archivos existentes primero.",
+    upload_failed_file_too_large:
+      'El archivo "{name}" excede el límite de {maxSize}.',
+    upload_failed_unsupported_type:
+      'El tipo de archivo "{name}" no es compatible. Formatos permitidos: imágenes, CSV, PDF, DOCX, XLS, XLSX.',
     error: "Error",
     document_management: "Gestión de documentos",
     search_by_name: "Buscar por nombre",
@@ -1122,6 +1128,12 @@ export default {
     approval_deny: "Denegar",
     approval_allow_once: "Permitir una vez",
     approval_always_allow: "Permitir siempre",
+    permission_resume_failed:
+      "No se pudo ejecutar la habilidad tras conceder el permiso.",
+    permission_resume_no_tool_id:
+      "Falta información de la llamada a la herramienta; no se puede continuar.",
+    permission_resume_no_active_stream:
+      "No hay una conversación activa. Vuelve a enviar el mensaje.",
   },
   schedule: {
     create_new_schedule: "Crear nueva programación",

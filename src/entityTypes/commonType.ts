@@ -320,6 +320,8 @@ export interface ChatStreamChunk {
   toolParams?: Record<string, unknown>;
   toolId?: string;
   toolResult?: Record<string, unknown>;
+  /** When set, replace the existing permission-prompt tool result row for this tool call. */
+  replacesPermissionPromptForToolId?: string;
   errorMessage?: string;
   conversationId?: string;
   // Plan execute agent fields

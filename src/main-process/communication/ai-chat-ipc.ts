@@ -42,6 +42,7 @@ import {
   AI_CHAT_STREAM_STOP,
   AI_CHAT_STREAM_CHUNK,
   AI_CHAT_STREAM_COMPLETE,
+  AI_CHAT_RESUME_TOOL_AFTER_PERMISSION,
   AI_CHAT_HISTORY,
   AI_CHAT_CLEAR,
   AI_CHAT_CONVERSATIONS,
@@ -565,11 +566,91 @@ export function formatYellowPagesResultsForLLM(
 /** AbortController for the currently active AI chat stream; cleared when stream ends or is stopped. */
 let currentStreamAbortController: AbortController | null = null;
 
+/** Active stream processor (same lifetime as the in-flight `streamMessage` call). */
+let currentStreamEventProcessor: StreamEventProcessor | null = null;
+
 /**
  * Register AI Chat IPC handlers
  */
 export function registerAiChatIpcHandlers(): void {
   console.log("AI Chat IPC handlers registered");
+
+  ipcMain.handle(
+    AI_CHAT_RESUME_TOOL_AFTER_PERMISSION,
+    async (
+      _event,
+      data: unknown
+    ): Promise<CommonMessage<{ ok: boolean; error?: string } | null>> => {
+      try {
+        const tokenService = new Token();
+        const aiEnabled = tokenService.getValue(USER_AI_ENABLED);
+        if (!aiEnabled || aiEnabled === "false" || aiEnabled === "0") {
+          return {
+            status: false,
+            msg: "AI is not enabled",
+            data: null,
+          };
+        }
+
+        const parsed = data
+          ? (JSON.parse(data as string) as {
+              toolId?: string;
+              conversationId?: string;
+            })
+          : {};
+        const toolId = parsed.toolId;
+        if (!toolId || typeof toolId !== "string") {
+          return {
+            status: false,
+            msg: "toolId is required",
+            data: null,
+          };
+        }
+
+        if (!currentStreamEventProcessor) {
+          return {
+            status: false,
+            msg: "No active chat stream",
+            data: {
+              ok: false,
+              error:
+                "No active chat stream to continue. Try sending your message again.",
+            },
+          };
+        }
+
+        const result =
+          await currentStreamEventProcessor.resumeToolAfterSkillPermissionGrant(
+            toolId,
+            typeof parsed.conversationId === "string"
+              ? parsed.conversationId
+              : undefined
+          );
+
+        if (!result.ok) {
+          return {
+            status: false,
+            msg: result.error,
+            data: { ok: false, error: result.error },
+          };
+        }
+
+        return {
+          status: true,
+          msg: "OK",
+          data: { ok: true },
+        };
+      } catch (error) {
+        const msg =
+          error instanceof Error ? error.message : "Unknown error occurred";
+        return {
+          status: false,
+          msg,
+          data: { ok: false, error: msg },
+        };
+      }
+    }
+  );
 
   // Stop active AI chat stream (renderer sends when user clicks stop)
   ipcMain.on(AI_CHAT_STREAM_STOP, () => {
@@ -978,6 +1059,7 @@ export function registerAiChatIpcHandlers(): void {
         },
         streamState
       );
+      currentStreamEventProcessor = processor;
 
       // Common handler for processing a single stream event and forwarding to UI
       const processStreamEvent = (streamEvent: StreamEvent): void => {
@@ -1043,6 +1125,9 @@ export function registerAiChatIpcHandlers(): void {
         }
       } finally {
         currentStreamAbortController = null;
+        if (currentStreamEventProcessor === processor) {
+          currentStreamEventProcessor = null;
+        }
       }
     } catch (error) {
       if (
@@ -1066,6 +1151,7 @@ export function registerAiChatIpcHandlers(): void {
       ).sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(errorChunk));
     } finally {
       currentStreamAbortController = null;
+      currentStreamEventProcessor = null;
     }
   });
 

@@ -11,10 +11,7 @@
  */
 
 import type { ToolFunction } from "@/api/aiChatApi";
-import type {
-  SkillDefinition,
-  SkillManifest,
-} from "@/entityTypes/skillTypes";
+import type { SkillDefinition, SkillManifest } from "@/entityTypes/skillTypes";
 import { skillDefinitionToToolFunction } from "@/entityTypes/skillTypes";
 import * as fs from "fs";
 import { SkillManagementModule } from "@/modules/SkillManagementModule";
@@ -22,6 +19,7 @@ import { SkillDiagnosticsService } from "@/service/SkillDiagnosticsService";
 import { SkillEnvironmentManager } from "@/service/SkillEnvironmentManager";
 import { MCPToolService } from "@/service/MCPToolService";
 import { ToolExecutor } from "@/service/ToolExecutor";
+import { DocSkillScriptRunnerService } from "@/service/DocSkillScriptRunnerService";
 
 // ---------------------------------------------------------------------------
 // Internal state
@@ -590,7 +588,9 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     requiresConfirmation: false,
     permissionCategory: "pure",
     source: "built-in",
-    execute: async (args): Promise<{ success: boolean; result: Record<string, unknown> }> => {
+    execute: async (
+      args
+    ): Promise<{ success: boolean; result: Record<string, unknown> }> => {
       const skillName =
         typeof args.skill_name === "string" ? args.skill_name.trim() : "";
       const stderr = typeof args.stderr === "string" ? args.stderr : "";
@@ -607,11 +607,89 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       } catch {
         manifest = undefined;
       }
-      const diagnosed = SkillDiagnosticsService.diagnoseStderr(stderr, manifest);
+      const diagnosed = SkillDiagnosticsService.diagnoseStderr(
+        stderr,
+        manifest
+      );
       return {
         success: true,
         result: { ...diagnosed } as Record<string, unknown>,
       };
+    },
+  },
+  {
+    name: "run_skill_script",
+    description:
+      "Run a Python script from an installed skill's scripts/ directory. " +
+      "Use this when a documentation-only skill (e.g. pdf, image, docx) provides SKILL.md guidance " +
+      "and you need to actually execute a transformation — for example converting a PDF to images, " +
+      "extracting pages, or running OCR. " +
+      "First call the skill tool with the attachment to get guidance, then call run_skill_script " +
+      "with the script_name and attachment_ref to execute the Python script. " +
+      "Scripts follow the convention: python script.py <input_file> <output_dir>. " +
+      "Output files are placed in a run directory and listed in the result.",
+    parameters: {
+      type: "object",
+      properties: {
+        skill_name: {
+          type: "string",
+          description:
+            "Name of the installed skill whose scripts/ directory contains the script (e.g. 'pdf', 'image').",
+        },
+        script_name: {
+          type: "string",
+          description:
+            "Name of the Python script to run without the .py extension (e.g. 'convert_pdf_to_images'). " +
+            "If not found, the response lists available_scripts.",
+        },
+        attachment_ref: {
+          type: "string",
+          description:
+            "Conversation-scoped attachment reference for the input file. " +
+            "Pass the attachment_ref from the system prompt when processing an uploaded file.",
+        },
+      },
+      required: ["skill_name", "script_name"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "filesystem",
+    source: "built-in",
+    execute: async (
+      args,
+      context
+    ): Promise<{ success: boolean; result: Record<string, unknown> }> => {
+      const skillName =
+        typeof args.skill_name === "string" ? args.skill_name.trim() : "";
+      const scriptName =
+        typeof args.script_name === "string" ? args.script_name.trim() : "";
+      const attachmentRef =
+        typeof args.attachment_ref === "string" &&
+        args.attachment_ref.trim().length > 0
+          ? args.attachment_ref.trim()
+          : undefined;
+
+      if (!skillName) {
+        return { success: false, result: { error: "skill_name is required" } };
+      }
+      if (!scriptName) {
+        const available =
+          DocSkillScriptRunnerService.listAvailableScripts(skillName);
+        return {
+          success: false,
+          result: {
+            error: "script_name is required",
+            available_scripts: available,
+          },
+        };
+      }
+
+      return DocSkillScriptRunnerService.runSkillScript({
+        skillName,
+        scriptName,
+        attachmentRef,
+        conversationId: context.conversationId,
+      });
     },
   },
   {

@@ -161,7 +161,13 @@ export default {
     document_uploaded_successfully: 'Document "{name}" uploaded successfully',
     document_deleted_successfully: "Document deleted successfully",
     found_results: "Found {count} results",
-    upload_failed: "Upload failed",
+    upload_failed: "Échec du téléchargement",
+    upload_failed_max_files:
+      "Maximum {max} fichiers autorisés. Supprimez d'abord les fichiers existants.",
+    upload_failed_file_too_large:
+      'Le fichier "{name}" dépasse la limite de {maxSize}.',
+    upload_failed_unsupported_type:
+      'Le type de fichier "{name}" n\'est pas pris en charge. Formats acceptés : images, CSV, PDF, DOCX, XLS, XLSX.',
     error: "Error",
     // Document Management translations
     document_management: "Document Management",
@@ -1108,6 +1114,12 @@ export default {
     approval_deny: "Refuser",
     approval_allow_once: "Autoriser une fois",
     approval_always_allow: "Toujours autoriser",
+    permission_resume_failed:
+      "Impossible d'exécuter la compétence après l'autorisation.",
+    permission_resume_no_tool_id:
+      "Informations d'appel d'outil manquantes ; impossible de continuer.",
+    permission_resume_no_active_stream:
+      "Aucun flux de conversation actif. Renvoyez votre message.",
   },
   schedule: {
     create_new_schedule: "Create New Schedule",

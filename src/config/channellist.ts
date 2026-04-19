@@ -243,6 +243,9 @@ export const AI_CHAT_STREAM = "ai-chat:stream";
 export const AI_CHAT_STREAM_STOP = "ai-chat:stream-stop";
 export const AI_CHAT_STREAM_CHUNK = "ai-chat:stream-chunk";
 export const AI_CHAT_STREAM_COMPLETE = "ai-chat:stream-complete";
+/** Resume a skill/tool call after the user granted permission in the chat UI. */
+export const AI_CHAT_RESUME_TOOL_AFTER_PERMISSION =
+  "ai-chat:resume-tool-after-permission";
 export const AI_CHAT_HISTORY = "ai-chat:history";
 export const AI_CHAT_CLEAR = "ai-chat:clear";
 export const AI_CHAT_CONVERSATIONS = "ai-chat:conversations";

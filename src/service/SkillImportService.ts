@@ -215,10 +215,7 @@ function validatePythonAttachmentExecutionFields(
   if (ent.includes("..") || path.isAbsolute(ent)) {
     return "python_attachment_execution.entry must be a relative path without '..'.";
   }
-  return validatePythonSystemDepsArray(
-    b.system,
-    "python_attachment_execution"
-  );
+  return validatePythonSystemDepsArray(b.system, "python_attachment_execution");
 }
 
 /**
@@ -1157,9 +1154,8 @@ function buildImportedSkillExecuteHandler(
             stagedPeek.fileName
           )
         ) {
-          const synthetic = buildSyntheticPythonManifestForAttachmentExecution(
-            manifest
-          );
+          const synthetic =
+            buildSyntheticPythonManifestForAttachmentExecution(manifest);
           return await PythonSkillRuntimeService.executePythonSkill({
             manifest: synthetic,
             skillDir: capturedSkillDir,
@@ -1174,8 +1170,7 @@ function buildImportedSkillExecuteHandler(
           result: {
             error: errorMsg,
             mode: "documentation_skill_attachment_error",
-            hint:
-              "Python attachment sidecar could not read the staged file. Ensure attachment_ref matches the system prompt.",
+            hint: "Python attachment sidecar could not read the staged file. Ensure attachment_ref matches the system prompt.",
           },
         };
       }
@@ -1199,17 +1194,31 @@ function buildImportedSkillExecuteHandler(
         skillGuidance = "";
       }
 
+      // Discover runnable Python scripts for the AI to call via run_skill_script
+      const scriptsDir = path.join(capturedSkillDir, "scripts");
+      const availableScripts: string[] = fs.existsSync(scriptsDir)
+        ? fs
+            .readdirSync(scriptsDir)
+            .filter((f) => f.endsWith(".py"))
+            .map((f) => path.basename(f, ".py"))
+            .sort()
+        : [];
+
       if (!attachmentRef) {
         return {
           success: true,
           result: {
             mode: "documentation_skill",
-            documentationOnly: true,
             skillName: capturedName,
-            skillFile: skillMdPath,
             skillGuidance,
+            ...(availableScripts.length > 0
+              ? {
+                  available_scripts: availableScripts,
+                  run_scripts_hint: `To execute a Python transformation, call run_skill_script with skill_name="${capturedName}" and one of the available script names.`,
+                }
+              : {}),
             message:
-              "Documentation-only skill loaded guidance from SKILL.md. Attach a supported file and pass attachment_ref to load content.",
+              "Skill guidance loaded from SKILL.md. To process a file, attach a supported file and pass attachment_ref.",
           },
         };
       }
@@ -1241,15 +1250,17 @@ function buildImportedSkillExecuteHandler(
           success: true,
           result: {
             mode: "documentation_skill_with_attachment",
-            documentationOnly: true,
             skillName: capturedName,
-            skillFile: skillMdPath,
             fileName: staged.fileName,
             content,
             truncated: isTruncated,
-            skillGuidance,
-            message:
-              "Documentation-only skill loaded staged attachment as markdown. `content` and `skillGuidance` are provided for analysis; no external scripts were executed and no files were transformed.",
+            ...(skillGuidance ? { skillGuidance } : {}),
+            ...(availableScripts.length > 0
+              ? {
+                  available_scripts: availableScripts,
+                  run_scripts_hint: `To run a Python transformation on this file, call run_skill_script with skill_name="${capturedName}", one of the available script names, and attachment_ref="${attachmentRef}".`,
+                }
+              : {}),
           },
         };
       } catch (error) {
