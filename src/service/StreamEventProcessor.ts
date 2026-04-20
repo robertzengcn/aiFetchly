@@ -94,6 +94,13 @@ export interface StreamState {
   // Plan execute agent state
   currentPlan: Plan | null;
   planThreadId?: string;
+  /**
+   * True while the main HTTP stream has ended but the user has not finished the
+   * in-chat skill permission flow (see ai-chat-ipc retained processor).
+   */
+  awaitingSkillPermissionGrant?: boolean;
+  /** Clears main-process stream globals when this turn no longer needs them. */
+  releaseMainProcessStreamBinding?: () => void;
 }
 
 /**
@@ -102,6 +109,8 @@ export interface StreamState {
 export class StreamEventProcessor {
   private event: IpcMainEvent;
   private state: StreamState;
+  /** toolIds currently executed by local tool pipeline. */
+  private readonly localExecutingToolIds = new Set<string>();
   private readonly pendingSkillPermissionByToolId = new Map<
     string,
     PendingSkillPermissionTool
@@ -110,6 +119,23 @@ export class StreamEventProcessor {
   constructor(event: IpcMainEvent, state: StreamState) {
     this.event = event;
     this.state = state;
+  }
+
+  /** True when a skill is waiting for the user to approve execution in the chat UI. */
+  hasPendingSkillPermission(): boolean {
+    return this.pendingSkillPermissionByToolId.size > 0;
+  }
+
+  /**
+   * Drop main-process references (abort controller + processor) once the
+   * permission wait is over and no tool calls are in flight.
+   */
+  private tryReleaseRetainedMainProcessStreamBinding(): void {
+    if (!this.state.awaitingSkillPermissionGrant) return;
+    if (this.hasPendingSkillPermission()) return;
+    if (this.state.pendingToolCalls.size !== 0) return;
+    this.state.awaitingSkillPermissionGrant = false;
+    this.state.releaseMainProcessStreamBinding?.();
   }
 
   /**
@@ -205,10 +231,12 @@ export class StreamEventProcessor {
 
       if (toolId) {
         this.state.pendingToolCalls.delete(toolId);
+        this.localExecutingToolIds.delete(toolId);
         console.log(
           `Tool call completed after permission: ${toolName} (ID: ${toolId}), pending: ${this.state.pendingToolCalls.size}`
         );
         this.sendDeferredCompletionIfReady();
+        this.tryReleaseRetainedMainProcessStreamBinding();
       }
       return { ok: true };
     } catch (error) {
@@ -368,6 +396,7 @@ export class StreamEventProcessor {
     // Add tool to pending set
     if (toolId) {
       this.state.pendingToolCalls.add(toolId);
+      this.localExecutingToolIds.add(toolId);
       console.log(
         `Tool call started: ${toolName} (ID: ${toolId}), pending: ${this.state.pendingToolCalls.size}`
       );
@@ -453,6 +482,7 @@ export class StreamEventProcessor {
       this.event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(resultChunk));
 
       if (deferredPermission) {
+        this.state.awaitingSkillPermissionGrant = true;
         this.pendingSkillPermissionByToolId.set(toolId, {
           toolName,
           toolParams,
@@ -476,10 +506,12 @@ export class StreamEventProcessor {
       // Remove tool from pending set
       if (toolId) {
         this.state.pendingToolCalls.delete(toolId);
+        this.localExecutingToolIds.delete(toolId);
         console.log(
           `Tool call completed: ${toolName} (ID: ${toolId}), pending: ${this.state.pendingToolCalls.size}`
         );
         this.sendDeferredCompletionIfReady();
+        this.tryReleaseRetainedMainProcessStreamBinding();
       }
     } catch (error) {
       console.error(`Error executing tool ${toolName}:`, error);
@@ -651,12 +683,14 @@ export class StreamEventProcessor {
     // Remove tool from pending set even on error
     if (toolId) {
       this.state.pendingToolCalls.delete(toolId);
+      this.localExecutingToolIds.delete(toolId);
       console.log(
         `Tool call failed: ${toolName} (ID: ${toolId}), pending: ${this.state.pendingToolCalls.size}`
       );
 
       // Check if we can send completion (deferred completion will be handled when stream ends)
       this.sendDeferredCompletionIfReady();
+      this.tryReleaseRetainedMainProcessStreamBinding();
     }
   }
 
@@ -703,13 +737,22 @@ export class StreamEventProcessor {
       })();
     }
 
-    // Remove tool from pending set if this is a server result
+    // Remove tool from pending set if this is a server-managed result.
+    // For locally executed tools, the continuation stream may emit a TOOL_RESULT
+    // acknowledgement before TOKEN/DONE; clearing pending here can trigger
+    // deferred completion too early and hide later assistant tokens.
     if (toolId && this.state.pendingToolCalls.has(toolId)) {
-      this.state.pendingToolCalls.delete(toolId);
-      console.log(
-        `Tool result received from server (ID: ${toolId}), pending: ${this.state.pendingToolCalls.size}`
-      );
-      this.sendDeferredCompletionIfReady();
+      if (this.localExecutingToolIds.has(toolId)) {
+        console.log(
+          `Ignoring server TOOL_RESULT pending-clear for local tool (ID: ${toolId})`
+        );
+      } else {
+        this.state.pendingToolCalls.delete(toolId);
+        console.log(
+          `Tool result received from server (ID: ${toolId}), pending: ${this.state.pendingToolCalls.size}`
+        );
+        this.sendDeferredCompletionIfReady();
+      }
     }
 
     const chunk: ChatStreamChunk = {
