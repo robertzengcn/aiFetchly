@@ -654,9 +654,9 @@ export function registerAiChatIpcHandlers(): void {
 
   // Stop active AI chat stream (renderer sends when user clicks stop)
   ipcMain.on(AI_CHAT_STREAM_STOP, () => {
-    if (currentStreamAbortController) {
-      currentStreamAbortController.abort();
-    }
+    currentStreamAbortController?.abort();
+    currentStreamAbortController = null;
+    currentStreamEventProcessor = null;
   });
 
   // Send chat message (non-streaming)
@@ -1050,6 +1050,7 @@ export function registerAiChatIpcHandlers(): void {
         abortSignal: signal,
         currentPlan: null,
         planThreadId: undefined,
+        awaitingSkillPermissionGrant: false,
       };
 
       // Create stream event processor
@@ -1059,6 +1060,11 @@ export function registerAiChatIpcHandlers(): void {
         },
         streamState
       );
+      streamState.releaseMainProcessStreamBinding = () => {
+        if (currentStreamEventProcessor !== processor) return;
+        currentStreamEventProcessor = null;
+        currentStreamAbortController = null;
+      };
       currentStreamEventProcessor = processor;
 
       // Common handler for processing a single stream event and forwarding to UI
@@ -1124,9 +1130,15 @@ export function registerAiChatIpcHandlers(): void {
           sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(errorChunk));
         }
       } finally {
-        currentStreamAbortController = null;
-        if (currentStreamEventProcessor === processor) {
-          currentStreamEventProcessor = null;
+        const retainForSkillPermission =
+          currentStreamEventProcessor === processor &&
+          processor.hasPendingSkillPermission() &&
+          !signal.aborted;
+        if (!retainForSkillPermission) {
+          currentStreamAbortController = null;
+          if (currentStreamEventProcessor === processor) {
+            currentStreamEventProcessor = null;
+          }
         }
       }
     } catch (error) {
@@ -1150,8 +1162,11 @@ export function registerAiChatIpcHandlers(): void {
         }
       ).sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(errorChunk));
     } finally {
-      currentStreamAbortController = null;
-      currentStreamEventProcessor = null;
+      const p = currentStreamEventProcessor;
+      if (!p || !p.hasPendingSkillPermission()) {
+        currentStreamAbortController = null;
+        currentStreamEventProcessor = null;
+      }
     }
   });
 

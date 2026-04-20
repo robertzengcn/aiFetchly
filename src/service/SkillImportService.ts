@@ -28,6 +28,7 @@ import {
 } from "@/service/SkillEnvironmentManager";
 import { PythonSkillRuntimeService } from "@/service/PythonSkillRuntimeService";
 import { SkillWorkerClient } from "@/service/SkillWorkerClient";
+import { listAllSkillScriptStemNames } from "@/service/DocSkillScriptRunnerService";
 
 // ---------------------------------------------------------------------------
 // Manifest validation
@@ -1195,14 +1196,10 @@ function buildImportedSkillExecuteHandler(
       }
 
       // Discover runnable Python scripts for the AI to call via run_skill_script
-      const scriptsDir = path.join(capturedSkillDir, "scripts");
-      const availableScripts: string[] = fs.existsSync(scriptsDir)
-        ? fs
-            .readdirSync(scriptsDir)
-            .filter((f) => f.endsWith(".py"))
-            .map((f) => path.basename(f, ".py"))
-            .sort()
-        : [];
+      const availableScripts = listAllSkillScriptStemNames(
+        capturedSkillDir,
+        capturedName
+      );
 
       if (!attachmentRef) {
         return {

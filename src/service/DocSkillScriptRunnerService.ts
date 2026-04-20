@@ -209,6 +209,61 @@ function sanitizeFileName(input: string): string {
   return sanitized.length > 0 ? sanitized : "attachment.bin";
 }
 
+/**
+ * Candidate `scripts/` directories for a skill on disk.
+ *
+ * Many skill zips extract flat (`<skillDir>/scripts/…`). Repos zipped with a
+ * top-level folder named like the skill land as `<skillDir>/<name>/scripts/…`.
+ */
+function candidateSkillScriptsDirs(
+  skillDir: string,
+  skillName: string
+): readonly string[] {
+  return [
+    path.join(skillDir, SCRIPT_SUBDIR),
+    path.join(skillDir, skillName, SCRIPT_SUBDIR),
+  ] as const;
+}
+
+/**
+ * Lists unique script stems (no `.py`) from every existing candidate scripts dir.
+ */
+export function listAllSkillScriptStemNames(
+  skillDir: string,
+  skillName: string
+): string[] {
+  const names = new Set<string>();
+  for (const dir of candidateSkillScriptsDirs(skillDir, skillName)) {
+    try {
+      if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) continue;
+      for (const f of fs.readdirSync(dir)) {
+        if (f.endsWith(".py")) names.add(path.basename(f, ".py"));
+      }
+    } catch {
+      continue;
+    }
+  }
+  return [...names].sort();
+}
+
+function findScriptInSkillDirs(
+  skillDir: string,
+  skillName: string,
+  safeScriptFileName: string
+): { scriptPath: string; scriptsDir: string } | null {
+  for (const scriptsDir of candidateSkillScriptsDirs(skillDir, skillName)) {
+    const scriptPath = path.join(scriptsDir, safeScriptFileName);
+    try {
+      if (fs.existsSync(scriptPath) && fs.statSync(scriptPath).isFile()) {
+        return { scriptPath, scriptsDir };
+      }
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -250,36 +305,31 @@ async function runSkillScript(
     };
   }
 
-  // Skill must have a scripts/ directory
   const skillDir = path.join(
     getElectronUserDataPath(),
     "installed_skills",
     skillName
   );
-  const scriptsDir = path.join(skillDir, SCRIPT_SUBDIR);
 
   const safeScript = sanitizeScriptName(scriptName);
-  const scriptPath = path.join(scriptsDir, safeScript);
+  const resolved = findScriptInSkillDirs(skillDir, skillName, safeScript);
 
-  if (!fs.existsSync(scriptPath)) {
-    const available = fs.existsSync(scriptsDir)
-      ? fs
-          .readdirSync(scriptsDir)
-          .filter((f) => f.endsWith(".py"))
-          .map((f) => path.basename(f, ".py"))
-      : [];
+  if (!resolved) {
+    const available = listAllSkillScriptStemNames(skillDir, skillName);
     return {
       success: false,
       result: {
-        error: `Script "${safeScript}" not found in ${skillName}/scripts/`,
+        error: `Script "${safeScript}" not found under ${skillName} (checked scripts/ and ${skillName}/scripts/).`,
         available_scripts: available,
         hint:
           available.length > 0
             ? `Use one of: ${available.join(", ")}`
-            : "No Python scripts found in this skill's scripts/ directory.",
+            : "No Python scripts found. Re-import the skill zip so it includes a scripts/ folder, or use a zip whose root is SKILL.md + scripts/ (not only a nested folder without those at the install root).",
       },
     };
   }
+
+  const { scriptPath } = resolved;
 
   // Ensure sandbox venv exists
   let pythonBin: string;
@@ -455,13 +505,7 @@ function listAvailableScripts(skillName: string): string[] {
     "installed_skills",
     skillName
   );
-  const scriptsDir = path.join(skillDir, SCRIPT_SUBDIR);
-  if (!fs.existsSync(scriptsDir)) return [];
-  return fs
-    .readdirSync(scriptsDir)
-    .filter((f) => f.endsWith(".py"))
-    .map((f) => path.basename(f, ".py"))
-    .sort();
+  return listAllSkillScriptStemNames(skillDir, skillName);
 }
 
 export const DocSkillScriptRunnerService = {
