@@ -1,9 +1,10 @@
 /**
  * Retry orchestration for skills that fail due to missing system dependencies.
  *
- * Flow: detect missing_system_tool → resolve → install → retry skill once.
- * This service is called from StreamEventProcessor when a skill execution fails
- * with a system dependency error.
+ * Flow: detect missing_system_tool → resolve → [user approval] → install → retry skill once.
+ *
+ * Phase 1 (resolveOnly): Diagnose + resolve — no side effects, returns recommendation.
+ * Phase 2 (installAndRetry): Called ONLY after user approves via DependencyInstallDialog.
  */
 
 import { SkillDiagnosticsService } from "@/service/SkillDiagnosticsService";
@@ -11,7 +12,10 @@ import { SystemDependencyModule } from "@/modules/SystemDependencyModule";
 import { SkillExecutor } from "@/service/SkillExecutor";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import type { SkillManifest } from "@/entityTypes/skillTypes";
-import type { InstallResultData } from "@/entityTypes/systemDependencyTypes";
+import type {
+  InstallResultData,
+  ResolveSystemDependencyOutput,
+} from "@/entityTypes/systemDependencyTypes";
 import type { ToolExecutionResult } from "@/api/aiChatApi";
 
 export interface RetryContext {
@@ -38,23 +42,34 @@ export interface RetryResult {
   readonly message: string;
 }
 
+/** Result of the resolve-only phase (before user approval). */
+export interface ResolveOnlyResult {
+  /** Whether the error is a system dependency issue. */
+  readonly isDependencyError: boolean;
+  /** The advisory resolution, if identified. */
+  readonly resolution: ResolveSystemDependencyOutput | null;
+  /** Human-readable status message. */
+  readonly message: string;
+}
+
 /**
- * Service that orchestrates the full self-healing retry loop:
+ * Service that orchestrates the self-healing retry loop.
  *
- * 1. Diagnose stderr → classify as missing_system_tool
- * 2. Resolve dependency → get catalog match with confidence
- * 3. Install dependency → user-approved, catalog-validated
- * 4. Retry skill once → re-invoke SkillExecutor with original args
+ * Split into two phases to enforce FR-006 (user approval gate):
+ *
+ * Phase 1 — resolveOnly: Diagnose stderr → classify → resolve against catalog.
+ *   No side effects. Returns a recommendation for the UI to show the user.
+ *
+ * Phase 2 — installAndRetry: Called ONLY after the user explicitly approves.
+ *   Installs the dependency and retries the skill execution once.
  */
 export const SystemDependencyRetryService = {
   /**
-   * Attempt a self-healing retry for a failed skill execution.
+   * Phase 1: Diagnose and resolve WITHOUT installing.
    *
-   * Returns a RetryResult indicating what happened. The caller is responsible
-   * for sending the result to the renderer and AI server.
+   * Returns a recommendation to present to the user for approval.
    */
-  async attemptRetry(context: RetryContext): Promise<RetryResult> {
-    // Step 1: Diagnose the error
+  resolveOnly(context: RetryContext): ResolveOnlyResult {
     const diagnosis = SkillDiagnosticsService.diagnoseStderr(
       context.stderr,
       context.manifest
@@ -62,16 +77,12 @@ export const SystemDependencyRetryService = {
 
     if (diagnosis.cause !== "missing_system_tool" || !diagnosis.dependency_id) {
       return {
-        retried: false,
-        retrySuccess: false,
-        retryResult: null,
-        installResult: null,
-        dependencyId: null,
+        isDependencyError: false,
+        resolution: null,
         message: `Not a system dependency error: ${diagnosis.cause}`,
       };
     }
 
-    // Step 2: Resolve via catalog
     const mod = new SystemDependencyModule();
     const resolution = mod.resolve(
       {
@@ -87,19 +98,36 @@ export const SystemDependencyRetryService = {
 
     if (!resolution.resolved || !resolution.dependency_id) {
       return {
-        retried: false,
-        retrySuccess: false,
-        retryResult: null,
-        installResult: null,
-        dependencyId: diagnosis.dependency_id,
+        isDependencyError: false,
+        resolution: null,
         message: resolution.reason,
       };
     }
 
-    // Step 3: Install (user approval happens in UI before this is called)
+    return {
+      isDependencyError: true,
+      resolution,
+      message: resolution.reason,
+    };
+  },
+
+  /**
+   * Phase 2: Install a user-approved dependency and retry the skill.
+   *
+   * MUST only be called after the user explicitly approves via
+   * DependencyInstallDialog (enforces FR-006).
+   */
+  async installAndRetry(
+    dependencyId: string,
+    reason: string,
+    context: RetryContext
+  ): Promise<RetryResult> {
+    const mod = new SystemDependencyModule();
+
+    // Install the approved dependency
     const installResult = await mod.install({
-      dependency_id: resolution.dependency_id,
-      reason: resolution.reason,
+      dependency_id: dependencyId,
+      reason,
       conversation_id: context.conversationId,
       skill_name: context.toolName,
     });
@@ -110,19 +138,19 @@ export const SystemDependencyRetryService = {
         retrySuccess: false,
         retryResult: null,
         installResult,
-        dependencyId: resolution.dependency_id,
+        dependencyId,
         message: `Install completed with status "${installResult.install_status}", retry not recommended.`,
       };
     }
 
-    // Step 4: Retry skill execution once
+    // Retry skill execution once
     if (!SkillRegistry.isRegistered(context.toolName)) {
       return {
         retried: false,
         retrySuccess: false,
         retryResult: null,
         installResult,
-        dependencyId: resolution.dependency_id,
+        dependencyId,
         message: `Tool "${context.toolName}" is not a registered skill, cannot retry.`,
       };
     }
@@ -141,10 +169,10 @@ export const SystemDependencyRetryService = {
       retrySuccess: retryResult.success,
       retryResult,
       installResult,
-      dependencyId: resolution.dependency_id,
+      dependencyId,
       message: retryResult.success
-        ? `Successfully retried "${context.toolName}" after installing "${resolution.dependency_id}".`
-        : `Retry of "${context.toolName}" failed after installing "${resolution.dependency_id}".`,
+        ? `Successfully retried "${context.toolName}" after installing "${dependencyId}".`
+        : `Retry of "${context.toolName}" failed after installing "${dependencyId}".`,
     };
   },
 } as const;

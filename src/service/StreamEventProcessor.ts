@@ -17,6 +17,7 @@ import {
 import {
   AI_CHAT_STREAM_CHUNK,
   AI_CHAT_STREAM_COMPLETE,
+  SYSTEM_DEPENDENCY_PROMPT,
 } from "@/config/channellist";
 import { AIChatModule } from "@/modules/AIChatModule";
 import { AiChatApi } from "@/api/aiChatApi";
@@ -32,6 +33,7 @@ import {
   RecoveryStrategy,
 } from "./ErrorClassification";
 import { SystemDependencyRetryService } from "./SystemDependencyRetryService";
+import type { RetryContext } from "./SystemDependencyRetryService";
 import { SkillDiagnosticsService } from "./SkillDiagnosticsService";
 
 /**
@@ -116,6 +118,17 @@ export class StreamEventProcessor {
   private readonly pendingSkillPermissionByToolId = new Map<
     string,
     PendingSkillPermissionTool
+  >();
+
+  /** Pending dependency install approvals: toolId → { resolution, context } */
+  private readonly pendingDependencyByToolId = new Map<
+    string,
+    {
+      readonly resolution: import("@/entityTypes/systemDependencyTypes").ResolveSystemDependencyOutput;
+      readonly reason: string;
+      readonly context: RetryContext;
+      readonly toolStartMs: number;
+    }
   >();
 
   constructor(event: IpcMainEvent, state: StreamState) {
@@ -458,7 +471,7 @@ export class StreamEventProcessor {
             };
 
         // Check if the skill failed due to a missing system dependency
-        // and attempt self-healing retry if applicable
+        // and prompt the user for approval before installing (FR-006).
         if (
           toolResult.success === false &&
           SkillRegistry.isRegistered(toolName)
@@ -474,36 +487,40 @@ export class StreamEventProcessor {
             diagnosis.dependency_id
           ) {
             console.log(
-              `Detected missing system dependency "${diagnosis.dependency_id}" for tool ${toolName}, attempting retry`
+              `Detected missing system dependency "${diagnosis.dependency_id}" for tool ${toolName}, prompting user for approval`
             );
-            const retryOutcome =
-              await SystemDependencyRetryService.attemptRetry({
-                toolName,
-                toolParams,
-                conversationId: this.state.streamConversationId,
-                toolCallId: toolId,
-                stderr: errorStr,
+
+            const retryContext: RetryContext = {
+              toolName,
+              toolParams,
+              conversationId: this.state.streamConversationId,
+              toolCallId: toolId,
+              stderr: errorStr,
+            };
+            const resolveResult =
+              SystemDependencyRetryService.resolveOnly(retryContext);
+
+            if (resolveResult.isDependencyError && resolveResult.resolution) {
+              // Save pending state so the IPC handler can resume after user responds
+              this.pendingDependencyByToolId.set(toolId, {
+                resolution: resolveResult.resolution,
+                reason: resolveResult.message,
+                context: retryContext,
+                toolStartMs,
               });
 
-            if (retryOutcome.retried && retryOutcome.retryResult) {
-              // Replace toolResult with retry result
-              toolResult = retryOutcome.retryResult.success
-                ? (retryOutcome.retryResult.result as Record<string, unknown>)
-                : {
-                    ...(retryOutcome.retryResult.result as Record<
-                      string,
-                      unknown
-                    >),
-                    success: false,
-                    _dependency_retry: true,
-                    _dependency_id: retryOutcome.dependencyId,
-                    _retry_message: retryOutcome.message,
-                  };
-              console.log(
-                `Dependency retry ${
-                  retryOutcome.retrySuccess ? "succeeded" : "failed"
-                } for ${toolName}`
-              );
+              // Prompt the renderer to show DependencyInstallDialog
+              this.event.sender.send(SYSTEM_DEPENDENCY_PROMPT, {
+                toolId,
+                toolName,
+                conversationId: this.state.streamConversationId,
+                resolution: resolveResult.resolution,
+                reason: resolveResult.message,
+              });
+
+              // Mark as deferred — execution will resume when user responds
+              // via SYSTEM_DEPENDENCY_PROMPT_RESPONSE IPC handler
+              return;
             }
           }
         }
@@ -1794,5 +1811,94 @@ export class StreamEventProcessor {
         console.error("Failed to emit error chunk:", emitError);
       }
     }
+  }
+
+  /**
+   * Resume execution after the user responds to the dependency install prompt.
+   *
+   * Called from the SYSTEM_DEPENDENCY_PROMPT_RESPONSE IPC handler.
+   * If approved: installs the dependency, retries the skill, and sends the result.
+   * If denied: sends the original error result.
+   */
+  async resumeAfterDependencyApproval(
+    toolId: string,
+    approved: boolean
+  ): Promise<void> {
+    const pending = this.pendingDependencyByToolId.get(toolId);
+    if (!pending) {
+      console.warn(`No pending dependency install for toolId ${toolId}`);
+      return;
+    }
+    this.pendingDependencyByToolId.delete(toolId);
+
+    let toolResult: Record<string, unknown>;
+
+    if (approved) {
+      console.log(
+        `User approved install of "${pending.resolution.dependency_id}", proceeding`
+      );
+      const retryOutcome = await SystemDependencyRetryService.installAndRetry(
+        pending.resolution.dependency_id ?? "",
+        pending.reason,
+        pending.context
+      );
+
+      if (retryOutcome.retried && retryOutcome.retryResult) {
+        toolResult = retryOutcome.retryResult.success
+          ? (retryOutcome.retryResult.result as Record<string, unknown>)
+          : {
+              ...(retryOutcome.retryResult.result as Record<string, unknown>),
+              success: false,
+              _dependency_retry: true,
+              _dependency_id: retryOutcome.dependencyId,
+              _retry_message: retryOutcome.message,
+            };
+        console.log(
+          `Dependency retry ${
+            retryOutcome.retrySuccess ? "succeeded" : "failed"
+          } for ${pending.context.toolName}`
+        );
+      } else {
+        // Install happened but retry was not recommended or failed
+        toolResult = {
+          success: false,
+          error: retryOutcome.message,
+          _dependency_retry: true,
+          _dependency_id: retryOutcome.dependencyId,
+          _install_status: retryOutcome.installResult?.install_status,
+        };
+      }
+    } else {
+      // User denied — log denial and return original error
+      console.log(
+        `User denied install of "${pending.resolution.dependency_id}"`
+      );
+      toolResult = {
+        success: false,
+        error: `User denied installation of system dependency "${pending.resolution.dependency_id}".`,
+        _dependency_denied: true,
+        _dependency_id: pending.resolution.dependency_id,
+      };
+    }
+
+    // Save and send the result
+    await this.saveToolResult(
+      toolId,
+      pending.context.toolName,
+      toolResult,
+      pending.toolStartMs
+    );
+
+    const resultChunk: ChatStreamChunk = {
+      content: this.serializeToolResultContent(toolResult),
+      isComplete: false,
+      messageId: this.state.assistantMessageId,
+      eventType: StreamEventType.TOOL_RESULT,
+      toolResult,
+      conversationId: this.state.streamConversationId,
+      toolId,
+      toolName: pending.context.toolName,
+    };
+    this.event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(resultChunk));
   }
 }

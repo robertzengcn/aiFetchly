@@ -73,7 +73,7 @@ export class SystemDependencyAuditLogger {
     dependency_id: string;
     missing_binary: string;
     suggested_by_ai: boolean;
-    user_decision: "approved" | "denied";
+    user_decision: "approved" | "denied" | "suggested";
     installer_backend?: string | null;
     package_name?: string | null;
     execution_status?: string | null;

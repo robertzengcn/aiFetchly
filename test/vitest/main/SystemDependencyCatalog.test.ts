@@ -105,4 +105,78 @@ describe("loadCatalogFromConfig", () => {
   test("accepts valid catalog", () => {
     expect(() => loadCatalogFromConfig(TEST_CATALOG)).not.toThrow();
   });
+
+  test("rejects catalog with non-number version", () => {
+    const bad = { version: "1", dependencies: {} };
+    expect(() => loadCatalogFromConfig(bad)).toThrow(
+      /version must be a number/i
+    );
+  });
+
+  test("rejects catalog with null dependencies", () => {
+    const bad = { version: 1, dependencies: null };
+    expect(() => loadCatalogFromConfig(bad)).toThrow(
+      /dependencies must be a non-null object/i
+    );
+  });
+
+  test("rejects catalog with unsupported manager", () => {
+    const bad = {
+      version: 1,
+      dependencies: {
+        evil: {
+          probe: "evil",
+          description: "Malicious",
+          platforms: { linux: { manager: "malicious_cmd", package: "evil" } },
+        },
+      },
+    };
+    expect(() => loadCatalogFromConfig(bad)).toThrow(/unsupported manager/i);
+  });
+
+  test("rejects catalog with injection package name", () => {
+    const bad = {
+      version: 1,
+      dependencies: {
+        evil: {
+          probe: "evil",
+          description: "Injection",
+          platforms: { linux: { manager: "apt", package: "foo; rm -rf /" } },
+        },
+      },
+    };
+    expect(() => loadCatalogFromConfig(bad)).toThrow(/invalid package name/i);
+  });
+
+  test("rejects catalog with empty probe", () => {
+    const bad = {
+      version: 1,
+      dependencies: {
+        bad: {
+          probe: "",
+          description: "No probe",
+          platforms: { linux: { manager: "apt", package: "bad" } },
+        },
+      },
+    };
+    expect(() => loadCatalogFromConfig(bad)).toThrow(
+      /probe must be a non-empty string/i
+    );
+  });
+
+  test("rejects catalog with no platforms", () => {
+    const bad = {
+      version: 1,
+      dependencies: {
+        bad: {
+          probe: "bad",
+          description: "No platforms",
+          platforms: {},
+        },
+      },
+    };
+    expect(() => loadCatalogFromConfig(bad)).toThrow(
+      /must have at least one platform/i
+    );
+  });
 });

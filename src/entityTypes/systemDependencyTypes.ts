@@ -41,7 +41,10 @@ export interface DependencyCatalog {
   /** Schema version for forward compatibility. */
   readonly version: number;
   /** Dependency entries keyed by normalized dependency_id. */
-  readonly dependencies: Record<string, Omit<DependencyCatalogEntry, "dependency_id">>;
+  readonly dependencies: Record<
+    string,
+    Omit<DependencyCatalogEntry, "dependency_id">
+  >;
 }
 
 // ---------------------------------------------------------------------------
@@ -78,8 +81,8 @@ export interface ResolveSystemDependencyInput {
   readonly stderr: string;
   /** Skill manifest containing system dependency declarations. */
   readonly manifest?: import("@/entityTypes/skillTypes").SkillManifest;
-  /** Current platform. */
-  readonly platform: NodeJS.Platform;
+  /** Current platform (optional — resolver uses all platform candidates). */
+  readonly platform?: NodeJS.Platform;
 }
 
 /** Output from the advisory resolver. */
@@ -145,7 +148,7 @@ export interface InstallSystemDependencyResponse {
 // ---------------------------------------------------------------------------
 
 /** User decision on an install prompt. */
-export type AuditUserDecision = "approved" | "denied";
+export type AuditUserDecision = "approved" | "denied" | "suggested";
 
 /** Request to query audit log entries. */
 export interface GetAuditLogRequest {

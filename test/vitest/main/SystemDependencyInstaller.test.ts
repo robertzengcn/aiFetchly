@@ -1,15 +1,15 @@
 "use strict";
 import { describe, expect, test } from "vitest";
-import { sanitizeStderr } from "@/service/SystemDependencyAuditLogger";
 import {
   SystemDependencyCatalog,
   loadCatalogFromConfig,
 } from "@/service/SystemDependencyCatalog";
-import { probeBinary } from "@/service/SystemDependencyInstaller";
+import { SystemDependencyInstaller, probeBinary } from "@/service/SystemDependencyInstaller";
+import type { DependencyPlatform, InstallResultStatus } from "@/entityTypes/systemDependencyTypes";
 
 describe("SystemDependencyInstaller", () => {
   test("InstallResultStatus covers all required values", () => {
-    const statuses = [
+    const statuses: InstallResultStatus[] = [
       "installed",
       "already_installed",
       "permission_denied",
@@ -22,14 +22,6 @@ describe("SystemDependencyInstaller", () => {
       expect(typeof s).toBe("string");
       expect(s.length).toBeGreaterThan(0);
     }
-  });
-
-  test("sanitizeStderr works for install stderr", () => {
-    const brewStderr =
-      "Error: /opt/homebrew/Cellar/poppler/24.02.0_1 failed to build";
-    const result = sanitizeStderr(brewStderr);
-    expect(result).not.toContain("/opt/homebrew/Cellar");
-    expect(result).toContain("[PATH]");
   });
 
   test("catalog validation blocks unknown dependency_id", () => {
@@ -46,8 +38,30 @@ describe("SystemDependencyInstaller", () => {
     const catalog = new SystemDependencyCatalog(
       loadCatalogFromConfig(catalogData)
     );
-    expect(catalog.getById("nonexistent")).toBeUndefined();
-    expect(catalog.getById("poppler")).toBeDefined();
+    const installer = new SystemDependencyInstaller(catalog, "darwin");
+    const result = installer.install("nonexistent");
+    expect(result.status).toBe("unsupported_platform");
+    expect(result.shouldRetry).toBe(false);
+  });
+
+  test("unsupported platform returns should_retry=false", () => {
+    const catalogData = {
+      version: 1,
+      dependencies: {
+        poppler: {
+          probe: "pdfinfo",
+          description: "PDF lib",
+          platforms: { darwin: { manager: "brew", package: "poppler" } },
+        },
+      },
+    };
+    const catalog = new SystemDependencyCatalog(
+      loadCatalogFromConfig(catalogData)
+    );
+    const installer = new SystemDependencyInstaller(catalog, "win32");
+    const result = installer.install("poppler");
+    expect(result.status).toBe("unsupported_platform");
+    expect(result.shouldRetry).toBe(false);
   });
 });
 

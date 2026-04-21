@@ -26,7 +26,7 @@ describe("SystemDependencyModule.resolve()", () => {
           system: [{ name: "poppler", probe: "pdfinfo" }],
         },
       } as SkillManifest,
-      platform: "darwin",
+      platform: "darwin" as NodeJS.Platform,
     };
 
     const catalogData = {
@@ -73,7 +73,7 @@ describe("SystemDependencyModule.resolve()", () => {
     // No manifest → pattern-only match → lower confidence
     const result = resolver.resolve({
       stderr: "PDFInfoNotInstalledError",
-      platform: "darwin",
+      platform: "darwin" as NodeJS.Platform,
     });
 
     expect(result.resolved).toBe(true);
@@ -92,7 +92,7 @@ describe("SystemDependencyModule.resolve()", () => {
 
     const result = resolver.resolve({
       stderr: "Random unrelated error",
-      platform: "darwin",
+      platform: "darwin" as NodeJS.Platform,
     });
 
     expect(result.resolved).toBe(false);
