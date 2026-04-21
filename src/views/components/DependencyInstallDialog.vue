@@ -33,10 +33,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from "vue";
+import { ref, computed, onMounted, onUnmounted } from "vue";
 import { useI18n } from "vue-i18n";
 import type { ResolveSystemDependencyOutput } from "@/entityTypes/systemDependencyTypes";
-import { installSystemDependency } from "@/views/api/systemDependency";
+import {
+  onDependencyPrompt,
+  respondToDependencyPrompt,
+  type DependencyPromptPayload,
+} from "@/views/api/systemDependency";
 
 const { t } = useI18n();
 
@@ -49,9 +53,12 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: "result", data: { approved: boolean; status?: string }): void;
+  (e: "update:visible", value: boolean): void;
 }>();
 
 const loading = ref(false);
+/** The toolId from the main process prompt — needed to send the response back. */
+const pendingToolId = ref<string | null>(null);
 
 const dependencyName = computed(() => {
   if (!props.recommendation) return "";
@@ -80,30 +87,53 @@ const installCommand = computed(() => {
   }
 });
 
-import { computed } from "vue";
+/** Unsubscribe function for the prompt listener. */
+let unsubscribe: (() => void) | null = null;
+
+onMounted(() => {
+  unsubscribe = onDependencyPrompt((payload: DependencyPromptPayload) => {
+    pendingToolId.value = payload.toolId;
+    // The parent component should update visible/recommendation props
+    // when this event is received via a separate event emitted upward.
+    // For now, directly update the visible state and emit the payload up.
+    emit("update:visible", true);
+  });
+});
+
+onUnmounted(() => {
+  if (unsubscribe) {
+    unsubscribe();
+    unsubscribe = null;
+  }
+});
 
 async function approve(): Promise<void> {
-  if (!props.recommendation?.dependency_id) return;
+  if (!pendingToolId.value) return;
   loading.value = true;
   try {
-    const response = await installSystemDependency({
-      dependency_id: props.recommendation.dependency_id,
-      reason: props.recommendation.reason,
-      conversation_id: props.conversationId,
-      skill_name: props.skillName,
-    });
+    const response = await respondToDependencyPrompt(
+      pendingToolId.value,
+      true
+    );
     emit("result", {
       approved: true,
-      status: response.data?.install_status ?? "installation_failed",
+      status: response.ok ? "installed" : "installation_failed",
     });
   } catch {
     emit("result", { approved: true, status: "installation_failed" });
   } finally {
     loading.value = false;
+    pendingToolId.value = null;
+    emit("update:visible", false);
   }
 }
 
 function deny(): void {
+  if (pendingToolId.value) {
+    void respondToDependencyPrompt(pendingToolId.value, false);
+  }
+  pendingToolId.value = null;
   emit("result", { approved: false });
+  emit("update:visible", false);
 }
 </script>

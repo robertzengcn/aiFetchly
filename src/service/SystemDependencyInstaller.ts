@@ -64,6 +64,7 @@ function isValidPathString(pathStr: string): boolean {
 }
 
 export function refreshPath(): string {
+  // NOTE: This mutates process.env.PATH globally for the entire Electron main process.
   if (process.platform === "darwin" || process.platform === "linux") {
     try {
       const shell = process.env.SHELL || "/bin/bash";

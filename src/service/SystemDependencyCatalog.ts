@@ -35,6 +35,17 @@ export function loadCatalogFromConfig(raw: unknown): DependencyCatalog {
     throw new Error("Invalid catalog: missing version or dependencies");
   }
 
+  // Validate outer structure types before assertion
+  if (typeof (raw as Record<string, unknown>).version !== "number") {
+    throw new Error("Invalid catalog: version must be a number");
+  }
+  if (
+    typeof (raw as Record<string, unknown>).dependencies !== "object" ||
+    (raw as Record<string, unknown>).dependencies === null
+  ) {
+    throw new Error("Invalid catalog: dependencies must be a non-null object");
+  }
+
   const catalog = raw as DependencyCatalog;
 
   if (catalog.version !== 1) {

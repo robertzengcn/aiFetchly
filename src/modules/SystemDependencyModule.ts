@@ -68,19 +68,23 @@ export class SystemDependencyModule extends BaseModule {
 
     // Audit log when resolution succeeds and context is available
     if (result.resolved && context?.conversation_id && result.dependency_id) {
-      void this.auditLogger.logAction({
-        conversation_id: context.conversation_id,
-        skill_name: context.skill_name ?? "unknown",
-        dependency_id: result.dependency_id,
-        missing_binary: result.missing_binary ?? result.dependency_id,
-        suggested_by_ai: true,
-        user_decision: "approved", // resolve is the AI suggestion phase
-        installer_backend: null,
-        package_name: null,
-        execution_status: null,
-        execution_duration_ms: null,
-        stderr: null,
-      });
+      this.auditLogger
+        .logAction({
+          conversation_id: context.conversation_id,
+          skill_name: context.skill_name ?? "unknown",
+          dependency_id: result.dependency_id,
+          missing_binary: result.missing_binary ?? result.dependency_id,
+          suggested_by_ai: true,
+          user_decision: "suggested", // resolve is the AI suggestion phase
+          installer_backend: null,
+          package_name: null,
+          execution_status: null,
+          execution_duration_ms: null,
+          stderr: null,
+        })
+        .catch((err: unknown) => {
+          console.error("Failed to write resolve audit log:", err);
+        });
     }
 
     return result;
@@ -122,13 +126,13 @@ export class SystemDependencyModule extends BaseModule {
       stderr: result.stderr || null,
     });
 
-    void reason;
-
     return {
       install_status: result.status,
       dependency_id,
       probe: missingBinary,
-      details: result.details,
+      details: reason
+        ? `${result.details} (reason: ${reason})`
+        : result.details,
       should_retry: result.shouldRetry,
     };
   }
@@ -152,7 +156,7 @@ export class SystemDependencyModule extends BaseModule {
       dependency_id: e.dependency_id,
       missing_binary: e.missing_binary,
       suggested_by_ai: e.suggested_by_ai,
-      user_decision: e.user_decision as "approved" | "denied",
+      user_decision: e.user_decision as "approved" | "denied" | "suggested",
       installer_backend: e.installer_backend,
       package_name: e.package_name,
       execution_status: e.execution_status as

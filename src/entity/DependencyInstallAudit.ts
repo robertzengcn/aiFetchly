@@ -10,6 +10,7 @@ import AuditableEntity from "@/entity/Auditable.entity";
 @Entity("dependency_install_audit")
 @Index("idx_audit_conversation", ["conversation_id"])
 @Index("idx_audit_dependency", ["dependency_id"])
+@Index("idx_audit_created_at", ["createdAt"])
 export class DependencyInstallAuditEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
   id: number;

@@ -43,6 +43,7 @@ import {
   AI_CHAT_STREAM_CHUNK,
   AI_CHAT_STREAM_COMPLETE,
   AI_CHAT_RESUME_TOOL_AFTER_PERMISSION,
+  SYSTEM_DEPENDENCY_PROMPT_RESPONSE,
   AI_CHAT_HISTORY,
   AI_CHAT_CLEAR,
   AI_CHAT_CONVERSATIONS,
@@ -1399,6 +1400,66 @@ export function registerAiChatIpcHandlers(): void {
           data: null,
         };
         return errorResponse;
+      }
+    }
+  );
+
+  // --- System Dependency User Approval Response (FR-006) ---
+  // Renderer calls this after the user responds to DependencyInstallDialog.
+  ipcMain.handle(
+    SYSTEM_DEPENDENCY_PROMPT_RESPONSE,
+    async (
+      _event,
+      data: unknown
+    ): Promise<CommonMessage<{ ok: boolean; error?: string } | null>> => {
+      try {
+        const parsed = data
+          ? (JSON.parse(data as string) as {
+              toolId?: string;
+              approved?: boolean;
+            })
+          : {};
+        const toolId = parsed.toolId;
+        const approved = parsed.approved === true;
+
+        if (!toolId || typeof toolId !== "string") {
+          return {
+            status: false,
+            msg: "toolId is required",
+            data: null,
+          };
+        }
+
+        if (!currentStreamEventProcessor) {
+          return {
+            status: false,
+            msg: "No active chat stream",
+            data: {
+              ok: false,
+              error:
+                "No active chat stream to continue. Try sending your message again.",
+            },
+          };
+        }
+
+        await currentStreamEventProcessor.resumeAfterDependencyApproval(
+          toolId,
+          approved
+        );
+
+        return {
+          status: true,
+          msg: "OK",
+          data: { ok: true },
+        };
+      } catch (error) {
+        const msg =
+          error instanceof Error ? error.message : "Unknown error occurred";
+        return {
+          status: false,
+          msg,
+          data: { ok: false, error: msg },
+        };
       }
     }
   );

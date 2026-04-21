@@ -279,6 +279,11 @@ export const SYSTEM_DEPENDENCY_RESOLVE = "system-dependency:resolve";
 export const SYSTEM_DEPENDENCY_INSTALL = "system-dependency:install";
 export const SYSTEM_DEPENDENCY_GET_AUDIT_LOG =
   "system-dependency:get-audit-log";
+/** Main→Renderer: ask user to approve a dependency install (includes resolution result). */
+export const SYSTEM_DEPENDENCY_PROMPT = "system-dependency:prompt";
+/** Renderer→Main: user responded to the dependency install prompt. */
+export const SYSTEM_DEPENDENCY_PROMPT_RESPONSE =
+  "system-dependency:prompt-response";
 
 // Dashboard Channels
 export const DASHBOARD_SUMMARY = "dashboard:summary";
