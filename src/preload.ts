@@ -239,6 +239,10 @@ import {
   SKILL_LIST_INSTALLED,
   SKILL_TOGGLE,
   SKILL_UNINSTALL,
+  // System Dependency Channels
+  SYSTEM_DEPENDENCY_RESOLVE,
+  SYSTEM_DEPENDENCY_INSTALL,
+  SYSTEM_DEPENDENCY_GET_AUDIT_LOG,
 } from "@/config/channellist";
 
 // window.ipcRenderer = ipcRenderer
@@ -630,6 +634,10 @@ contextBridge.exposeInMainWorld("api", {
       SKILL_LIST_INSTALLED,
       SKILL_TOGGLE,
       SKILL_UNINSTALL,
+      // System Dependency Channels
+      SYSTEM_DEPENDENCY_RESOLVE,
+      SYSTEM_DEPENDENCY_INSTALL,
+      SYSTEM_DEPENDENCY_GET_AUDIT_LOG,
     ];
     if (validChannels.includes(channel)) {
       return ipcRenderer.invoke(channel, data);

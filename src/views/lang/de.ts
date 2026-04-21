@@ -1128,8 +1128,22 @@ export default {
     permission_resume_no_active_stream:
       "Kein aktiver Chat-Stream. Bitte Nachricht erneut senden.",
   },
+  systemDependency: {
+    dialog_title: "Systemabhängigkeit installieren",
+    security_note:
+      "Es werden nur vertrauenswürdige Pakete aus dem lokalen Katalog installiert.",
+    approve: "Installation genehmigen",
+    deny: "Ablehnen",
+    status_installed: "Abhängigkeit erfolgreich installiert",
+    status_already_installed: "Abhängigkeit ist bereits installiert",
+    status_permission_denied: "Installation wurde abgelehnt",
+    status_installer_not_found: "Paketmanager nicht gefunden",
+    status_unsupported_platform: "Auf dieser Plattform nicht unterstützt",
+    status_path_issue:
+      "Installiert, aber nicht im PATH. Versuchen Sie einen Neustart der App.",
+    status_installation_failed: "Installation fehlgeschlagen",
+  },
   schedule: {
-    create_new_schedule: "Neue Planung erstellen",
     create_description:
       "Automatisierte Aufgabenplanung mit Cron-Ausdrücken oder Abhängigkeiten einrichten",
     schedule_created_success:

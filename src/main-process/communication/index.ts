@@ -27,6 +27,7 @@ import { registerSearchResultIpcHandlers } from "@/main-process/communication/se
 import { registerWebSocketIpcHandlers } from "@/main-process/communication/websocket-ipc";
 import { registerContactExtractionHandlers } from "@/main-process/communication/contactExtraction-ipc";
 import { registerSkillsIpcHandlers } from "@/main-process/communication/skills-ipc";
+import { registerSystemDependencyIpcHandlers } from "@/main-process/communication/system-dependency-ipc";
 
 type GlobalIpcState = typeof globalThis & {
   __aifetchlyIpcHandlersRegistered?: boolean;
@@ -65,6 +66,7 @@ export function registerCommunicationIpcHandlers(win: BrowserWindow) {
     registerWebSocketIpcHandlers(win);
     registerContactExtractionHandlers();
     registerSkillsIpcHandlers();
+    registerSystemDependencyIpcHandlers();
     AsyncMsg();
   } catch (e) {
     console.log("registerCommunicationIpcHandlers error:");

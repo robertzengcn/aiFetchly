@@ -31,6 +31,8 @@ import {
   ClassifiedError,
   RecoveryStrategy,
 } from "./ErrorClassification";
+import { SystemDependencyRetryService } from "./SystemDependencyRetryService";
+import { SkillDiagnosticsService } from "./SkillDiagnosticsService";
 
 /**
  * Configuration constants for plan execution
@@ -454,6 +456,57 @@ export class StreamEventProcessor {
               ...(skillResult.result as Record<string, unknown>),
               success: false,
             };
+
+        // Check if the skill failed due to a missing system dependency
+        // and attempt self-healing retry if applicable
+        if (
+          toolResult.success === false &&
+          SkillRegistry.isRegistered(toolName)
+        ) {
+          const errorStr =
+            typeof toolResult.error === "string"
+              ? toolResult.error
+              : JSON.stringify(toolResult);
+          const diagnosis = SkillDiagnosticsService.diagnoseStderr(errorStr);
+
+          if (
+            diagnosis.cause === "missing_system_tool" &&
+            diagnosis.dependency_id
+          ) {
+            console.log(
+              `Detected missing system dependency "${diagnosis.dependency_id}" for tool ${toolName}, attempting retry`
+            );
+            const retryOutcome =
+              await SystemDependencyRetryService.attemptRetry({
+                toolName,
+                toolParams,
+                conversationId: this.state.streamConversationId,
+                toolCallId: toolId,
+                stderr: errorStr,
+              });
+
+            if (retryOutcome.retried && retryOutcome.retryResult) {
+              // Replace toolResult with retry result
+              toolResult = retryOutcome.retryResult.success
+                ? (retryOutcome.retryResult.result as Record<string, unknown>)
+                : {
+                    ...(retryOutcome.retryResult.result as Record<
+                      string,
+                      unknown
+                    >),
+                    success: false,
+                    _dependency_retry: true,
+                    _dependency_id: retryOutcome.dependencyId,
+                    _retry_message: retryOutcome.message,
+                  };
+              console.log(
+                `Dependency retry ${
+                  retryOutcome.retrySuccess ? "succeeded" : "failed"
+                } for ${toolName}`
+              );
+            }
+          }
+        }
       } else {
         // MCP tools and legacy tools still go through ToolExecutor
         toolResult = await ToolExecutor.execute(
