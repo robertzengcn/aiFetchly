@@ -274,6 +274,12 @@ export const SKILL_LIST_INSTALLED = "skill:list-installed";
 export const SKILL_TOGGLE = "skill:toggle";
 export const SKILL_UNINSTALL = "skill:uninstall";
 
+// System Dependency Channels
+export const SYSTEM_DEPENDENCY_RESOLVE = "system-dependency:resolve";
+export const SYSTEM_DEPENDENCY_INSTALL = "system-dependency:install";
+export const SYSTEM_DEPENDENCY_GET_AUDIT_LOG =
+  "system-dependency:get-audit-log";
+
 // Dashboard Channels
 export const DASHBOARD_SUMMARY = "dashboard:summary";
 export const DASHBOARD_TRENDS = "dashboard:trends";
