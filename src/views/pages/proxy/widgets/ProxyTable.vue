@@ -822,11 +822,12 @@ const handleFileUpload = () => {
         const csv = Papa.parse(text, { header: true });
 
         // Detect format
-        const hasColonSeparatedFormat =
+        const hasColonSeparatedFormat = Boolean(
             csv.meta?.fields?.length === 1 &&
             csv.data.length > 0 &&
             csv.data[0] &&
-            typeof csv.data[0]['host:port:protocols:user:pass'] === 'string';
+            typeof csv.data[0]['host:port:protocols:user:pass'] === 'string'
+        );
 
         parseCsvData(csv.data, hasColonSeparatedFormat);
     };
