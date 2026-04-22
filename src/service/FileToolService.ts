@@ -38,8 +38,8 @@ import type {
 export class FileToolService {
   private readonly guard: FilePathGuard;
 
-  constructor() {
-    this.guard = new FilePathGuard(getDefaultWorkspaceRoots());
+  constructor(roots?: readonly string[]) {
+    this.guard = new FilePathGuard(roots ?? getDefaultWorkspaceRoots());
   }
 
   /**
