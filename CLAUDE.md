@@ -599,6 +599,8 @@ Current branch (`sqlite-vec-merge`) is integrating sqlite-vec for vector similar
 - SQLite (TypeORM) for installed skills, documents/chunks; sqlite-vec for vector embeddings; Token service for permission grants (001-skill-system)
 - TypeScript 5.x (Electron main process + Vue 3 renderer) + Electron utility process API, `child_process.spawnSync`/`spawn`, existing `SkillDiagnosticsService`, `SkillExecutor`, `SkillPermissionService`, `StreamEventProcessor` (001-install-system-dependency)
 - SQLite via TypeORM (audit log entity), JSON file (local dependency catalog shipped with app) (001-install-system-dependency)
+- TypeScript 5.x + fast-glob, @vscode/ripgrep, write-file-atomic, isbinaryfile, picomatch, zod, diff (001-ai-file-tools)
+- No new database entities (uses existing ToolExecutionService for persistence) (001-ai-file-tools)
 
 ## Recent Changes
 - 001-ai-contact-extraction: Added TypeScript 5.x
