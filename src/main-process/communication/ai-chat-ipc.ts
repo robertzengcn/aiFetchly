@@ -1131,11 +1131,18 @@ export function registerAiChatIpcHandlers(): void {
           sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(errorChunk));
         }
       } finally {
+        const hasPendingToolCalls = processor.hasPendingToolCalls();
         const retainForSkillPermission =
           currentStreamEventProcessor === processor &&
           processor.hasPendingSkillPermission() &&
           !signal.aborted;
-        if (!retainForSkillPermission) {
+        const retainForPendingTools =
+          currentStreamEventProcessor === processor &&
+          hasPendingToolCalls &&
+          !signal.aborted;
+        const retainStreamBinding =
+          retainForSkillPermission || retainForPendingTools;
+        if (!retainStreamBinding) {
           currentStreamAbortController = null;
           if (currentStreamEventProcessor === processor) {
             currentStreamEventProcessor = null;
@@ -1164,7 +1171,7 @@ export function registerAiChatIpcHandlers(): void {
       ).sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(errorChunk));
     } finally {
       const p = currentStreamEventProcessor;
-      if (!p || !p.hasPendingSkillPermission()) {
+      if (!p || (!p.hasPendingSkillPermission() && !p.hasPendingToolCalls())) {
         currentStreamAbortController = null;
         currentStreamEventProcessor = null;
       }

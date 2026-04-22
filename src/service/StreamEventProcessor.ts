@@ -141,6 +141,11 @@ export class StreamEventProcessor {
     return this.pendingSkillPermissionByToolId.size > 0;
   }
 
+  /** True when local tool execution/continuation is still in flight. */
+  hasPendingToolCalls(): boolean {
+    return this.state.pendingToolCalls.size > 0;
+  }
+
   /**
    * Drop main-process references (abort controller + processor) once the
    * permission wait is over and no tool calls are in flight.

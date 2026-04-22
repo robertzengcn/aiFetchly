@@ -33,66 +33,70 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
-export function registerSystemDependencyIpcHandlers(): void {
-  ipcMain.handle(
-    SYSTEM_DEPENDENCY_RESOLVE,
-    async (
-      _event,
-      input: ResolveSystemDependencyInput & {
-        conversation_id?: string;
-        skill_name?: string;
-      }
-    ) => {
-      try {
-        const mod = getModule();
-        const { conversation_id, skill_name, ...resolveInput } = input;
-        return mod.resolve(resolveInput, { conversation_id, skill_name });
-      } catch (error) {
-        return {
-          resolved: false,
-          confidence: 0,
-          reason: `Resolver error: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-          requires_manual_review: true,
-        };
-      }
-    }
-  );
+/**
+ * ipcMain.handle listeners receive (event, ...invokeArgs). Spread `...args` puts the
+ * IpcMainInvokeEvent at index 0 and the renderer payload at index 1.
+ */
+function extractData<T>(args: unknown[]): T {
+  return args[1] as T;
+}
 
-  ipcMain.handle(
-    SYSTEM_DEPENDENCY_INSTALL,
-    async (_event, request: InstallSystemDependencyRequest) => {
-      try {
-        // Input validation at IPC boundary (H-2 fix)
-        if (
-          !isNonEmptyString(request?.dependency_id) ||
-          !isNonEmptyString(request?.conversation_id) ||
-          !isNonEmptyString(request?.skill_name)
-        ) {
-          return {
-            status: false,
-            msg: "Invalid request: dependency_id, conversation_id, and skill_name are required",
-            data: null,
-          };
+export function registerSystemDependencyIpcHandlers(): void {
+  ipcMain.handle(SYSTEM_DEPENDENCY_RESOLVE, async (...args: unknown[]) => {
+    try {
+      const input = extractData<
+        ResolveSystemDependencyInput & {
+          conversation_id?: string;
+          skill_name?: string;
         }
-        const mod = getModule();
-        const result = await mod.install(request);
-        return { status: true, msg: "Install completed", data: result };
-      } catch (error) {
+      >(args);
+      const mod = getModule();
+      const { conversation_id, skill_name, ...resolveInput } = input;
+      return mod.resolve(resolveInput, { conversation_id, skill_name });
+    } catch (error) {
+      return {
+        resolved: false,
+        confidence: 0,
+        reason: `Resolver error: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        requires_manual_review: true,
+      };
+    }
+  });
+
+  ipcMain.handle(SYSTEM_DEPENDENCY_INSTALL, async (...args: unknown[]) => {
+    try {
+      const request = extractData<InstallSystemDependencyRequest>(args);
+      // Input validation at IPC boundary (H-2 fix)
+      if (
+        !isNonEmptyString(request?.dependency_id) ||
+        !isNonEmptyString(request?.conversation_id) ||
+        !isNonEmptyString(request?.skill_name)
+      ) {
         return {
           status: false,
-          msg: error instanceof Error ? error.message : String(error),
+          msg: "Invalid request: dependency_id, conversation_id, and skill_name are required",
           data: null,
         };
       }
+      const mod = getModule();
+      const result = await mod.install(request);
+      return { status: true, msg: "Install completed", data: result };
+    } catch (error) {
+      return {
+        status: false,
+        msg: error instanceof Error ? error.message : String(error),
+        data: null,
+      };
     }
-  );
+  });
 
   ipcMain.handle(
     SYSTEM_DEPENDENCY_GET_AUDIT_LOG,
-    async (_event, params: GetAuditLogRequest) => {
+    async (...args: unknown[]) => {
       try {
+        const params = extractData<GetAuditLogRequest>(args);
         // Cap pagination limit (M-2 fix)
         const cappedParams: GetAuditLogRequest = {
           ...params,
