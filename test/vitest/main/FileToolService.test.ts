@@ -399,4 +399,228 @@ describe("FileToolService", () => {
       expect(result.error).toContain("Unknown file tool");
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // file_edit (T015 - US2)
+  // ---------------------------------------------------------------------------
+
+  describe("file_edit", () => {
+    it("replaces a single match", async () => {
+      const filePath = path.join(tmpDir, "edit.txt");
+      fs.writeFileSync(filePath, "hello world\nfoo bar");
+
+      const result = await service.execute("file_edit", {
+        path: "edit.txt",
+        old_string: "foo bar",
+        new_string: "baz qux",
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.replacements).toBe(1);
+
+      // Verify file content changed
+      const updated = fs.readFileSync(filePath, "utf-8");
+      expect(updated).toBe("hello world\nbaz qux");
+    });
+
+    it("replaces all occurrences with replace_all=true", async () => {
+      const filePath = path.join(tmpDir, "multi.txt");
+      fs.writeFileSync(filePath, "aaa\naaa\nbbb\naaa");
+
+      const result = await service.execute("file_edit", {
+        path: "multi.txt",
+        old_string: "aaa",
+        new_string: "ccc",
+        replace_all: true,
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.replacements).toBe(3);
+
+      const updated = fs.readFileSync(filePath, "utf-8");
+      expect(updated).toBe("ccc\nccc\nbbb\nccc");
+    });
+
+    it("returns error when no match found", async () => {
+      const filePath = path.join(tmpDir, "nomatch.txt");
+      fs.writeFileSync(filePath, "hello world");
+
+      const result = await service.execute("file_edit", {
+        path: "nomatch.txt",
+        old_string: "not here",
+        new_string: "replacement",
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("No match");
+      expect(result.replacements).toBe(0);
+
+      // File should be unchanged
+      expect(fs.readFileSync(filePath, "utf-8")).toBe("hello world");
+    });
+
+    it("returns error for multiple matches when replace_all=false", async () => {
+      const filePath = path.join(tmpDir, "dup.txt");
+      fs.writeFileSync(filePath, "dup\ndup\ndup");
+
+      const result = await service.execute("file_edit", {
+        path: "dup.txt",
+        old_string: "dup",
+        new_string: "unique",
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Multiple matches");
+      expect(result.replacements).toBe(0);
+    });
+
+    it("includes diff output in result", async () => {
+      const filePath = path.join(tmpDir, "diff.txt");
+      fs.writeFileSync(filePath, "old line");
+
+      const result = await service.execute("file_edit", {
+        path: "diff.txt",
+        old_string: "old line",
+        new_string: "new line",
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.diff).toBeDefined();
+      // Diff should contain + and - lines
+      const diff = result.diff as string;
+      expect(diff).toContain("+");
+      expect(diff).toContain("-");
+    });
+
+    it("rejects path traversal", async () => {
+      const result = await service.execute("file_edit", {
+        path: "../../etc/hosts",
+        old_string: "old",
+        new_string: "new",
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBeDefined();
+    });
+
+    it("returns error for non-existent file", async () => {
+      const result = await service.execute("file_edit", {
+        path: "missing.txt",
+        old_string: "old",
+        new_string: "new",
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("not found");
+    });
+
+    it("writes atomically (content should be consistent)", async () => {
+      const filePath = path.join(tmpDir, "atomic.txt");
+      const content = "line1\nline2\nline3";
+      fs.writeFileSync(filePath, content);
+
+      const result = await service.execute("file_edit", {
+        path: "atomic.txt",
+        old_string: "line2",
+        new_string: "replaced",
+      });
+
+      expect(result.success).toBe(true);
+      const updated = fs.readFileSync(filePath, "utf-8");
+      expect(updated).toBe("line1\nreplaced\nline3");
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // file_write (T019 - US3)
+  // ---------------------------------------------------------------------------
+
+  describe("file_write", () => {
+    it("creates a new file in create mode", async () => {
+      const result = await service.execute("file_write", {
+        path: "new.txt",
+        content: "hello world",
+        mode: "create",
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.mode).toBe("created");
+      expect(result.bytesWritten).toBeGreaterThan(0);
+
+      const content = fs.readFileSync(path.join(tmpDir, "new.txt"), "utf-8");
+      expect(content).toBe("hello world");
+    });
+
+    it("overwrites existing file in overwrite mode", async () => {
+      const filePath = path.join(tmpDir, "overwrite.txt");
+      fs.writeFileSync(filePath, "old content");
+
+      const result = await service.execute("file_write", {
+        path: "overwrite.txt",
+        content: "new content",
+        mode: "overwrite",
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.mode).toBe("overwritten");
+
+      const content = fs.readFileSync(filePath, "utf-8");
+      expect(content).toBe("new content");
+    });
+
+    it("fails to create when file already exists", async () => {
+      const filePath = path.join(tmpDir, "exists.txt");
+      fs.writeFileSync(filePath, "existing");
+
+      const result = await service.execute("file_write", {
+        path: "exists.txt",
+        content: "new content",
+        mode: "create",
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("already exists");
+      // Original should be unchanged
+      expect(fs.readFileSync(filePath, "utf-8")).toBe("existing");
+    });
+
+    it("auto-creates parent directories", async () => {
+      const result = await service.execute("file_write", {
+        path: "deep/nested/dir/file.txt",
+        content: "nested content",
+        mode: "create",
+      });
+
+      expect(result.success).toBe(true);
+
+      const content = fs.readFileSync(
+        path.join(tmpDir, "deep", "nested", "dir", "file.txt"),
+        "utf-8"
+      );
+      expect(content).toBe("nested content");
+    });
+
+    it("returns correct bytesWritten", async () => {
+      const content = "Hello, World!";
+      const result = await service.execute("file_write", {
+        path: "bytes.txt",
+        content,
+        mode: "create",
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.bytesWritten).toBe(Buffer.byteLength(content, "utf-8"));
+    });
+
+    it("rejects path traversal", async () => {
+      const result = await service.execute("file_write", {
+        path: "../../tmp/evil.txt",
+        content: "bad",
+        mode: "create",
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBeDefined();
+    });
+  });
 });
