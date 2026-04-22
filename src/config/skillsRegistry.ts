@@ -725,6 +725,93 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     },
   },
   {
+    name: "file_edit",
+    description:
+      "Perform a precise string replacement in an existing file within the allowed workspace. " +
+      "Requires the exact old_string to find and new_string to replace it with. " +
+      "Fails if old_string appears multiple times unless replace_all is true. " +
+      "User confirmation is required before any edit is applied.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description:
+            "Path to the file to edit (relative to workspace root or absolute within allowed roots).",
+        },
+        old_string: {
+          type: "string",
+          description:
+            "The exact string to find in the file. Must match exactly including whitespace.",
+        },
+        new_string: {
+          type: "string",
+          description: "The string to replace old_string with.",
+        },
+        replace_all: {
+          type: "boolean",
+          description:
+            "Replace all occurrences of old_string (default: false). When false, fails if multiple matches exist.",
+          default: false,
+        },
+      },
+      required: ["path", "old_string", "new_string"],
+    },
+    tier: "main",
+    requiresConfirmation: true,
+    permissionCategory: "filesystem",
+    source: "built-in",
+    execute: async (args, context) => {
+      const result = await ToolExecutor.execute(
+        "file_edit",
+        args,
+        context.conversationId
+      );
+      return { success: true, result };
+    },
+  },
+  {
+    name: "file_write",
+    description:
+      "Create a new file or overwrite an existing file within the allowed workspace. " +
+      "In 'create' mode, fails if the file already exists. In 'overwrite' mode, replaces the file. " +
+      "Parent directories are created automatically. User confirmation is required before any write.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description:
+            "Path to the file to write (relative to workspace root or absolute within allowed roots).",
+        },
+        content: {
+          type: "string",
+          description: "The content to write to the file.",
+        },
+        mode: {
+          type: "string",
+          enum: ["create", "overwrite"],
+          description:
+            "Write mode: 'create' fails if file exists, 'overwrite' replaces existing file (default: 'create').",
+          default: "create",
+        },
+      },
+      required: ["path", "content"],
+    },
+    tier: "main",
+    requiresConfirmation: true,
+    permissionCategory: "filesystem",
+    source: "built-in",
+    execute: async (args, context) => {
+      const result = await ToolExecutor.execute(
+        "file_write",
+        args,
+        context.conversationId
+      );
+      return { success: true, result };
+    },
+  },
+  {
     name: "skill_diagnose",
     description:
       "Classify stderr from a failed Python skill or environment setup (read-only). " +
