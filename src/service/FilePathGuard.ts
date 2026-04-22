@@ -97,7 +97,7 @@ export class FilePathGuard {
     if (!underRoot) {
       return {
         safe: false,
-        resolvedPath: resolved,
+        resolvedPath: "",
         error: "Path is outside the allowed workspace roots",
       };
     }
@@ -108,7 +108,7 @@ export class FilePathGuard {
       if (this.denyMatchers[i](relPath)) {
         return {
           safe: false,
-          resolvedPath: resolved,
+          resolvedPath: "",
           error: `Access denied by security policy: ${this.denyList[i].description}`,
         };
       }

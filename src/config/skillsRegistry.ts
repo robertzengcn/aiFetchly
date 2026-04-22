@@ -603,12 +603,11 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     permissionCategory: "pure",
     source: "built-in",
     execute: async (args, context) => {
-      const result = await ToolExecutor.execute(
+      return await ToolExecutor.execute(
         "file_read",
         args,
         context.conversationId
       );
-      return { success: true, result };
     },
   },
   {
@@ -649,12 +648,11 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     permissionCategory: "pure",
     source: "built-in",
     execute: async (args, context) => {
-      const result = await ToolExecutor.execute(
+      return await ToolExecutor.execute(
         "glob_files",
         args,
         context.conversationId
       );
-      return { success: true, result };
     },
   },
   {
@@ -680,6 +678,12 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
           description:
             "File glob pattern to filter which files to search (default: '**/*').",
           default: "**/*",
+        },
+        ignore: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Additional glob patterns to ignore (node_modules, .git, etc. are ignored by default).",
         },
         output_mode: {
           type: "string",
@@ -716,12 +720,11 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     permissionCategory: "pure",
     source: "built-in",
     execute: async (args, context) => {
-      const result = await ToolExecutor.execute(
+      return await ToolExecutor.execute(
         "grep_files",
         args,
         context.conversationId
       );
-      return { success: true, result };
     },
   },
   {
@@ -762,12 +765,11 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     permissionCategory: "filesystem",
     source: "built-in",
     execute: async (args, context) => {
-      const result = await ToolExecutor.execute(
+      return await ToolExecutor.execute(
         "file_edit",
         args,
         context.conversationId
       );
-      return { success: true, result };
     },
   },
   {
@@ -803,12 +805,11 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     permissionCategory: "filesystem",
     source: "built-in",
     execute: async (args, context) => {
-      const result = await ToolExecutor.execute(
+      return await ToolExecutor.execute(
         "file_write",
         args,
         context.conversationId
       );
-      return { success: true, result };
     },
   },
   {

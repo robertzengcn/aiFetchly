@@ -51,6 +51,7 @@ export interface GrepFilesParams {
   readonly pattern: string;
   readonly path?: string;
   readonly glob?: string;
+  readonly ignore?: readonly string[];
   readonly output_mode?: "content" | "files_with_matches" | "count";
   readonly context_before?: number;
   readonly context_after?: number;
@@ -136,6 +137,7 @@ export interface DenyListConfig {
 
 export interface FileToolSizeLimits {
   readonly maxReadBytes: number;
+  readonly maxWriteBytes: number;
   readonly maxGrepOutputBytes: number;
   readonly defaultHeadLimit: number;
 }

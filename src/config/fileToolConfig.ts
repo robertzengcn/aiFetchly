@@ -5,6 +5,7 @@
  * and rate-limit buckets so every file tool shares the same policy.
  */
 
+import * as os from "os";
 import type {
   DenyListConfig,
   FileToolRateLimitConfig,
@@ -32,6 +33,14 @@ export const DEFAULT_DENY_LIST: readonly DenyListConfig[] = [
     patterns: ["**/credentials*", "**/secrets*"],
     description: "Credential and secret files",
   },
+  {
+    patterns: ["**/*.sqlite", "**/*.sqlite3", "**/*.db"],
+    description: "Database files",
+  },
+  {
+    patterns: ["**/.ssh/**", "**/.gnupg/**"],
+    description: "SSH keys and GPG directories",
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -56,6 +65,7 @@ export const DEFAULT_IGNORE_PATTERNS: readonly string[] = [
 
 export const FILE_TOOL_SIZE_LIMITS: FileToolSizeLimits = {
   maxReadBytes: 1_000_000, // 1 MB
+  maxWriteBytes: 5_000_000, // 5 MB
   maxGrepOutputBytes: 500_000, // 500 KB
   defaultHeadLimit: 100,
 };
@@ -107,7 +117,9 @@ export function getDefaultWorkspaceRoots(): readonly string[] {
     const userData = app.getPath("userData");
     return [home, userData];
   } catch {
-    // Fallback for test environments where Electron `app` is unavailable
-    return [process.cwd()];
+    // Fallback for test environments where Electron `app` is unavailable.
+    // Use os.homedir() instead of process.cwd() to avoid accidentally
+    // exposing the entire filesystem from arbitrary working directories.
+    return [os.homedir()];
   }
 }
