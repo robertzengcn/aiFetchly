@@ -91,7 +91,9 @@ describe("FileToolService", () => {
 
       expect(result.success).toBe(true);
       expect(result.isBinary).toBe(true);
-      expect(result.binaryMetadata?.size).toBe(pngHeader.length);
+      expect(
+        (result.binaryMetadata as Record<string, unknown> | undefined)?.size
+      ).toBe(pngHeader.length);
     });
 
     it("returns error for non-existent file", async () => {

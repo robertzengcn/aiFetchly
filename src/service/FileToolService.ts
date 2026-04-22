@@ -51,15 +51,25 @@ export class FileToolService {
   ): Promise<Record<string, unknown>> {
     switch (toolName) {
       case "file_read":
-        return this.executeFileRead(args as FileReadParams);
+        return this.executeFileRead(
+          args as unknown as FileReadParams
+        ) as unknown as Record<string, unknown>;
       case "file_write":
-        return this.executeFileWrite(args as FileWriteParams);
+        return this.executeFileWrite(
+          args as unknown as FileWriteParams
+        ) as unknown as Record<string, unknown>;
       case "file_edit":
-        return this.executeFileEdit(args as FileEditParams);
+        return this.executeFileEdit(
+          args as unknown as FileEditParams
+        ) as unknown as Record<string, unknown>;
       case "glob_files":
-        return this.executeGlobFiles(args as GlobFilesParams);
+        return this.executeGlobFiles(
+          args as unknown as GlobFilesParams
+        ) as unknown as Record<string, unknown>;
       case "grep_files":
-        return this.executeGrepFiles(args as GrepFilesParams);
+        return this.executeGrepFiles(
+          args as unknown as GrepFilesParams
+        ) as unknown as Record<string, unknown>;
       default:
         return { success: false, error: `Unknown file tool: ${toolName}` };
     }
@@ -385,7 +395,7 @@ export class FileToolService {
     const globPattern = params.glob ?? "**/*";
     const files = fg.sync(globPattern, {
       cwd: searchPath,
-      ignore: DEFAULT_IGNORE_PATTERNS,
+      ignore: [...DEFAULT_IGNORE_PATTERNS],
       dot: false,
       onlyFiles: true,
     }) as string[];
@@ -429,17 +439,13 @@ export class FileToolService {
               file,
               line: i + 1,
               content: lines[i],
+              ...(contextBefore > 0 && {
+                contextBefore: lines.slice(Math.max(0, i - contextBefore), i),
+              }),
+              ...(contextAfter > 0 && {
+                contextAfter: lines.slice(i + 1, i + 1 + contextAfter),
+              }),
             };
-
-            if (contextBefore > 0) {
-              match.contextBefore = lines.slice(
-                Math.max(0, i - contextBefore),
-                i
-              );
-            }
-            if (contextAfter > 0) {
-              match.contextAfter = lines.slice(i + 1, i + 1 + contextAfter);
-            }
 
             results.push(match);
           }
