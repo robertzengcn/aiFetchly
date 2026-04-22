@@ -80,13 +80,13 @@
 
 > **NOTE: Write these tests FIRST, ensure they FAIL before implementation**
 
-- [ ] T015 [US2] Write file_edit unit tests in `test/vitest/main/FileToolService.test.ts` (single match replacement, replace_all mode, no match error, multiple match error when replace_all=false, diff output, path safety rejection, atomic write verification)
+- [x] T015 [US2] Write file_edit unit tests in `test/vitest/main/FileToolService.test.ts` (single match replacement, replace_all mode, no match error, multiple match error when replace_all=false, diff output, path safety rejection, atomic write verification)
 
 ### Implementation for User Story 2
 
-- [ ] T016 [US2] Implement `executeFileEdit` in `src/service/FileToolService.ts` (path validation, read current content, count matches, enforce single-match rule when replace_all=false, exact string replacement, atomic write via write-file-atomic, optional diff summary via diff library, return replacement count)
-- [ ] T017 [US2] Add `file_edit` skill entry to `BUILT_IN_SKILLS` in `src/config/skillsRegistry.ts` (tier: "main", requiresConfirmation: true, permissionCategory: "filesystem", source: "built-in", execute delegates to ToolExecutor)
-- [ ] T018 [US2] Add `file_edit` dispatch case in `src/service/ToolExecutor.ts` `executeInternal()` (switch case delegating to FileToolService.execute) and add fileWrite rate limit config to RATE_LIMIT_CONFIG
+- [x] T016 [US2] Implement `executeFileEdit` in `src/service/FileToolService.ts` (path validation, read current content, count matches, enforce single-match rule when replace_all=false, exact string replacement, atomic write via write-file-atomic, optional diff summary via diff library, return replacement count)
+- [x] T017 [US2] Add `file_edit` skill entry to `BUILT_IN_SKILLS` in `src/config/skillsRegistry.ts` (tier: "main", requiresConfirmation: true, permissionCategory: "filesystem", source: "built-in", execute delegates to ToolExecutor)
+- [x] T018 [US2] Add `file_edit` dispatch case in `src/service/ToolExecutor.ts` `executeInternal()` (switch case delegating to FileToolService.execute) and add fileWrite rate limit config to RATE_LIMIT_CONFIG
 
 **Checkpoint**: AI can edit files via `file_edit`. Permission prompt appears before edits. Edits are applied atomically. Non-unique and missing matches fail gracefully. US1 and US2 both work independently.
 
@@ -102,13 +102,13 @@
 
 > **NOTE: Write these tests FIRST, ensure they FAIL before implementation**
 
-- [ ] T019 [US3] Write file_write unit tests in `test/vitest/main/FileToolService.test.ts` (create mode success, overwrite mode success, create mode fails on existing file, parent directory auto-creation, atomic write verification, bytesWritten in result, path safety rejection)
+- [x] T019 [US3] Write file_write unit tests in `test/vitest/main/FileToolService.test.ts` (create mode success, overwrite mode success, create mode fails on existing file, parent directory auto-creation, atomic write verification, bytesWritten in result, path safety rejection)
 
 ### Implementation for User Story 3
 
-- [ ] T020 [US3] Implement `executeFileWrite` in `src/service/FileToolService.ts` (path validation, mode check: create vs overwrite, parent directory creation within allowed root only, atomic write via write-file-atomic, bytesWritten calculation, error on existing file in create mode)
-- [ ] T021 [US3] Add `file_write` skill entry to `BUILT_IN_SKILLS` in `src/config/skillsRegistry.ts` (tier: "main", requiresConfirmation: true, permissionCategory: "filesystem", source: "built-in", execute delegates to ToolExecutor)
-- [ ] T022 [US3] Add `file_write` dispatch case in `src/service/ToolExecutor.ts` `executeInternal()` (switch case delegating to FileToolService.execute, reuses fileWrite rate limit config)
+- [x] T020 [US3] Implement `executeFileWrite` in `src/service/FileToolService.ts` (path validation, mode check: create vs overwrite, parent directory creation within allowed root only, atomic write via write-file-atomic, bytesWritten calculation, error on existing file in create mode)
+- [x] T021 [US3] Add `file_write` skill entry to `BUILT_IN_SKILLS` in `src/config/skillsRegistry.ts` (tier: "main", requiresConfirmation: true, permissionCategory: "filesystem", source: "built-in", execute delegates to ToolExecutor)
+- [x] T022 [US3] Add `file_write` dispatch case in `src/service/ToolExecutor.ts` `executeInternal()` (switch case delegating to FileToolService.execute, reuses fileWrite rate limit config)
 
 **Checkpoint**: AI can create and overwrite files via `file_write`. Permission prompt appears before writes. Atomic write confirmed. US1, US2, and US3 all work independently.
 
