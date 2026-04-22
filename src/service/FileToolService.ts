@@ -117,6 +117,19 @@ export class FileToolService {
       };
     }
 
+    // H5 fix — reject files that exceed the read size limit
+    const maxReadBytes = FILE_TOOL_SIZE_LIMITS.maxReadBytes;
+    if (stat.size > maxReadBytes * 2) {
+      return {
+        success: false,
+        error: `File is too large to read (${stat.size} bytes). Maximum is ${
+          maxReadBytes * 2
+        } bytes.`,
+        truncated: false,
+        path: params.path,
+      };
+    }
+
     // Read text content
     const encoding = params.encoding ?? "utf-8";
     const rawContent = fs.readFileSync(filePath, {
@@ -132,20 +145,37 @@ export class FileToolService {
     const endIdx = Math.min(startIdx + limit, totalLines);
     const selectedLines = lines.slice(startIdx, endIdx);
 
-    // Size cap enforcement
+    // Size cap enforcement — truncate at line boundaries to avoid
+    // splitting multi-byte UTF-8 characters (C1 fix).
     const maxBytes = FILE_TOOL_SIZE_LIMITS.maxReadBytes;
-    let content = selectedLines
-      .map((line, idx) => `${startIdx + idx + 1}: ${line}`)
-      .join("\n");
+    const numberedLines = selectedLines.map(
+      (line, idx) => `${startIdx + idx + 1}: ${line}`
+    );
     let truncated = false;
 
-    if (Buffer.byteLength(content, encoding as BufferEncoding) > maxBytes) {
-      // Truncate to fit within size limit
-      const bytes = Buffer.from(content, encoding as BufferEncoding);
-      content = bytes.slice(0, maxBytes).toString(encoding as BufferEncoding);
+    let content: string;
+    if (
+      Buffer.byteLength(numberedLines.join("\n"), encoding as BufferEncoding) >
+      maxBytes
+    ) {
+      // Remove lines from the end until we fit within the byte limit
+      let fitLines = numberedLines.length;
+      while (fitLines > 0) {
+        const candidate = numberedLines.slice(0, fitLines).join("\n");
+        if (
+          Buffer.byteLength(candidate, encoding as BufferEncoding) <= maxBytes
+        ) {
+          break;
+        }
+        fitLines--;
+      }
+      content = numberedLines.slice(0, Math.max(1, fitLines)).join("\n");
       truncated = true;
-    } else if (endIdx < totalLines) {
-      truncated = true;
+    } else {
+      content = numberedLines.join("\n");
+      if (endIdx < totalLines) {
+        truncated = true;
+      }
     }
 
     return {
@@ -190,17 +220,12 @@ export class FileToolService {
       };
     }
 
-    // Create parent directories within allowed root only
+    // Create parent directories within allowed root only (C2 fix — use guard.validate)
     const dir = path.dirname(filePath);
     if (!fs.existsSync(dir)) {
-      // Verify the parent directory is within workspace root
-      const dirValidation = this.guard.validate(
-        path.relative(this.guard.getRoots()[0] ?? process.cwd(), dir) || "."
-      );
-      if (
-        !dirValidation.safe &&
-        !dir.startsWith(this.guard.getRoots()[0] ?? "")
-      ) {
+      // Validate the parent directory path is within workspace root
+      const dirValidation = this.guard.validate(dir + path.sep);
+      if (!dirValidation.safe) {
         return {
           success: false,
           error: "Parent directory is outside allowed workspace",
@@ -212,12 +237,26 @@ export class FileToolService {
       fs.mkdirSync(dir, { recursive: true });
     }
 
-    // Atomic write
+    // H1 fix — enforce write size limit
     const content = params.content;
+    const contentBytes = Buffer.byteLength(content, "utf-8");
+    if (contentBytes > FILE_TOOL_SIZE_LIMITS.maxWriteBytes) {
+      return {
+        success: false,
+        error: `Content exceeds maximum write size (${FILE_TOOL_SIZE_LIMITS.maxWriteBytes} bytes)`,
+        path: params.path,
+        bytesWritten: 0,
+        mode: "created",
+      };
+    }
+
+    // C3 fix — check overwrite BEFORE the atomic write, not after
+    const isOverwrite = mode === "overwrite" && fs.existsSync(filePath);
+
+    // Atomic write
     writeFileAtomic.sync(filePath, content);
 
-    const bytesWritten = Buffer.byteLength(content, "utf-8");
-    const isOverwrite = mode === "overwrite" && fs.existsSync(filePath);
+    const bytesWritten = contentBytes;
 
     return {
       success: true,
@@ -391,17 +430,21 @@ export class FileToolService {
       };
     }
 
-    // Find files to search using glob
+    // Find files to search using glob (M6 fix — include params.ignore)
     const globPattern = params.glob ?? "**/*";
+    const grepIgnore = [...DEFAULT_IGNORE_PATTERNS, ...(params.ignore ?? [])];
     const files = fg.sync(globPattern, {
       cwd: searchPath,
-      ignore: [...DEFAULT_IGNORE_PATTERNS],
+      ignore: grepIgnore,
       dot: false,
       onlyFiles: true,
     }) as string[];
 
     const contextBefore = params.context_before ?? 0;
     const contextAfter = params.context_after ?? 0;
+
+    // Maximum individual file size for grep (H2 fix — skip files > maxReadBytes)
+    const maxGrepFileBytes = FILE_TOOL_SIZE_LIMITS.maxReadBytes;
 
     // Node.js fallback grep implementation
     const results: GrepContentMatch[] = [];
@@ -413,15 +456,25 @@ export class FileToolService {
       if (totalMatches >= headLimit) break;
 
       const fullPath = path.join(searchPath, file);
+
+      // H2 fix — skip files that are too large to read safely
+      let stat: fs.Stats;
+      try {
+        stat = fs.statSync(fullPath);
+      } catch {
+        continue;
+      }
+      if (stat.size > maxGrepFileBytes) continue;
+
+      // H3 fix — use isbinaryFile for reliable binary detection
+      if (await isBinaryFile(fullPath).catch(() => false)) continue;
+
       let fileContent: string;
       try {
         fileContent = fs.readFileSync(fullPath, "utf-8");
       } catch {
-        continue; // Skip unreadable/binary files
+        continue; // Skip unreadable files
       }
-
-      // Quick binary check
-      if (fileContent.includes("\0")) continue;
 
       const lines = fileContent.split("\n");
       let fileCount = 0;

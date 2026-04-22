@@ -14,6 +14,7 @@ import { AiChatApi, BatchKeywordGenerationRequestItem } from "@/api/aiChatApi";
 import { extractContactFromUrls } from "@/main-process/communication/contactExtraction-ipc";
 import { DocumentService } from "@/service/DocumentService";
 import { FileToolService } from "@/service/FileToolService";
+import { FILE_TOOL_RATE_LIMITS } from "@/config/fileToolConfig";
 
 /**
  * Rate limiting configuration for tool execution
@@ -39,21 +40,9 @@ const RATE_LIMIT_CONFIG = {
     maxConcurrent: 3,
     cooldownMs: 800,
   },
-  fileRead: {
-    maxPerMinute: 30,
-    maxConcurrent: 5,
-    cooldownMs: 200,
-  },
-  fileSearch: {
-    maxPerMinute: 20,
-    maxConcurrent: 3,
-    cooldownMs: 500,
-  },
-  fileWrite: {
-    maxPerMinute: 10,
-    maxConcurrent: 1,
-    cooldownMs: 1000,
-  },
+  fileRead: FILE_TOOL_RATE_LIMITS.fileRead,
+  fileSearch: FILE_TOOL_RATE_LIMITS.fileSearch,
+  fileWrite: FILE_TOOL_RATE_LIMITS.fileWrite,
   default: {
     maxPerMinute: 30,
     maxConcurrent: 5,
@@ -1208,12 +1197,24 @@ export class ToolExecutor {
 
   /**
    * Execute a file tool by delegating to FileToolService.
+   * M2 fix — reuse a cached instance instead of creating per call.
    */
+  private static fileToolService: FileToolService | null = null;
+
+  private static getFileToolService(): FileToolService {
+    if (!ToolExecutor.fileToolService) {
+      ToolExecutor.fileToolService = new FileToolService();
+    }
+    return ToolExecutor.fileToolService;
+  }
+
   private static async executeFileTool(
     toolName: string,
     toolParams: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
-    const service = new FileToolService();
-    return await service.execute(toolName, toolParams);
+    return await ToolExecutor.getFileToolService().execute(
+      toolName,
+      toolParams
+    );
   }
 }
