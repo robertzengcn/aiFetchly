@@ -10,8 +10,6 @@ import type {
   FileToolRateLimitConfig,
   FileToolSizeLimits,
 } from "@/entityTypes/fileToolTypes";
-import * as path from "path";
-import { app } from "electron";
 
 // ---------------------------------------------------------------------------
 // Default deny-list patterns
@@ -19,7 +17,7 @@ import { app } from "electron";
 
 export const DEFAULT_DENY_LIST: readonly DenyListConfig[] = [
   {
-    patterns: [".git/**"],
+    patterns: [".git/**", "**/.git/**", "**/.git"],
     description: "Version control internals",
   },
   {
@@ -100,6 +98,11 @@ export const FILE_TOOL_RATE_LIMITS: {
  */
 export function getDefaultWorkspaceRoots(): readonly string[] {
   try {
+    // Dynamic import so tests (which lack Electron) still load this module.
+    // Electron is a built-in Node module in the main process, so require
+    // is synchronous and always available at runtime.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
+    const { app } = require("electron") as typeof import("electron");
     const home = app.getPath("home");
     const userData = app.getPath("userData");
     return [home, userData];
