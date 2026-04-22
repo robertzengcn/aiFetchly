@@ -54,15 +54,15 @@
 
 > **NOTE: Write these tests FIRST, ensure they FAIL before implementation**
 
-- [ ] T007 [P] [US1] Write file_read unit tests in `test/vitest/main/FileToolService.test.ts` (text content with line numbers, offset/limit, truncation flag, binary detection and metadata, file not found error, path safety rejection)
-- [ ] T008 [P] [US1] Write glob_files unit tests in `test/vitest/main/FileToolService.test.ts` (pattern matching, default ignore patterns, head_limit and truncation, cwd option, empty results)
-- [ ] T009 [P] [US1] Write grep_files unit tests in `test/vitest/main/FileToolService.test.ts` (content mode with line numbers, files_with_matches mode, count mode, context lines, case insensitive, invalid regex error, head_limit truncation, path safety rejection)
+- [x] T007 [P] [US1] Write file_read unit tests in `test/vitest/main/FileToolService.test.ts` (text content with line numbers, offset/limit, truncation flag, binary detection and metadata, file not found error, path safety rejection)
+- [x] T008 [P] [US1] Write glob_files unit tests in `test/vitest/main/FileToolService.test.ts` (pattern matching, default ignore patterns, head_limit and truncation, cwd option, empty results)
+- [x] T009 [P] [US1] Write grep_files unit tests in `test/vitest/main/FileToolService.test.ts` (content mode with line numbers, files_with_matches mode, count mode, context lines, case insensitive, invalid regex error, head_limit truncation, path safety rejection)
 
 ### Implementation for User Story 1
 
-- [ ] T010 [US1] Implement `executeFileRead` in `src/service/FileToolService.ts` (path validation via FilePathGuard, binary detection via isbinaryfile, line-oriented content read, offset/limit support, truncation flag, size cap enforcement)
-- [ ] T011 [US1] Implement `executeGlobFiles` in `src/service/FileToolService.ts` (path validation, fast-glob pattern matching, default ignore patterns from config, head_limit enforcement, truncation flag with total count)
-- [ ] T012 [US1] Implement `executeGrepFiles` in `src/service/FileToolService.ts` (path validation, ripgrep JSON output parsing, Node.js fallback when rg unavailable, output mode dispatch, context line support, case sensitivity flag, head_limit enforcement, truncation flag)
+- [x] T010 [US1] Implement `executeFileRead` in `src/service/FileToolService.ts` (path validation via FilePathGuard, binary detection via isbinaryfile, line-oriented content read, offset/limit support, truncation flag, size cap enforcement)
+- [x] T011 [US1] Implement `executeGlobFiles` in `src/service/FileToolService.ts` (path validation, fast-glob pattern matching, default ignore patterns from config, head_limit enforcement, truncation flag with total count)
+- [x] T012 [US1] Implement `executeGrepFiles` in `src/service/FileToolService.ts` (path validation, ripgrep JSON output parsing, Node.js fallback when rg unavailable, output mode dispatch, context line support, case sensitivity flag, head_limit enforcement, truncation flag)
 - [ ] T013 [US1] Add `file_read`, `glob_files`, `grep_files` skill entries to `BUILT_IN_SKILLS` in `src/config/skillsRegistry.ts` (tier: "main", requiresConfirmation: false, permissionCategory: "pure", source: "built-in", execute delegates to ToolExecutor)
 - [ ] T014 [US1] Add read tool dispatch cases in `src/service/ToolExecutor.ts` `executeInternal()` (switch cases for "file_read", "glob_files", "grep_files" delegating to FileToolService.execute) and add file-tool rate limit buckets (fileRead, fileSearch configs) to RATE_LIMIT_CONFIG
 

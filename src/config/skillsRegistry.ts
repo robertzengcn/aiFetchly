@@ -566,6 +566,165 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     },
   },
   {
+    name: "file_read",
+    description:
+      "Read the contents of a file within the allowed workspace. Returns text content with line numbers, " +
+      "or binary metadata if the file is not text. Supports offset/limit for reading specific line ranges. " +
+      "Files are truncated if they exceed the size limit.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description:
+            "Path to the file to read (relative to workspace root or absolute within allowed roots).",
+        },
+        offset: {
+          type: "number",
+          description:
+            "1-based line number to start reading from (default: 1).",
+          default: 1,
+        },
+        limit: {
+          type: "number",
+          description:
+            "Maximum number of lines to return (default: all lines).",
+        },
+        encoding: {
+          type: "string",
+          description: "File encoding (default: utf-8).",
+          default: "utf-8",
+        },
+      },
+      required: ["path"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "pure",
+    source: "built-in",
+    execute: async (args, context) => {
+      const result = await ToolExecutor.execute(
+        "file_read",
+        args,
+        context.conversationId
+      );
+      return { success: true, result };
+    },
+  },
+  {
+    name: "glob_files",
+    description:
+      "Find files matching a glob pattern within the allowed workspace. " +
+      "Returns matched file paths with support for ignore patterns and result limiting.",
+    parameters: {
+      type: "object",
+      properties: {
+        pattern: {
+          type: "string",
+          description:
+            "Glob pattern to match files (e.g., '**/*.ts', 'src/**/*.js').",
+        },
+        cwd: {
+          type: "string",
+          description:
+            "Base directory for the search (relative to workspace root). Defaults to workspace root.",
+        },
+        ignore: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Additional glob patterns to ignore (node_modules, .git, etc. are ignored by default).",
+        },
+        head_limit: {
+          type: "number",
+          description:
+            "Maximum number of results to return (default: 100). Set truncated=true if more exist.",
+          default: 100,
+        },
+      },
+      required: ["pattern"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "pure",
+    source: "built-in",
+    execute: async (args, context) => {
+      const result = await ToolExecutor.execute(
+        "glob_files",
+        args,
+        context.conversationId
+      );
+      return { success: true, result };
+    },
+  },
+  {
+    name: "grep_files",
+    description:
+      "Search file contents by regex pattern within the allowed workspace. " +
+      "Supports multiple output modes: content (matching lines), files_with_matches (file list), " +
+      "and count (match counts per file). Includes context line support.",
+    parameters: {
+      type: "object",
+      properties: {
+        pattern: {
+          type: "string",
+          description: "Regular expression pattern to search for.",
+        },
+        path: {
+          type: "string",
+          description:
+            "Directory to search in (relative to workspace root or absolute). Defaults to workspace root.",
+        },
+        glob: {
+          type: "string",
+          description:
+            "File glob pattern to filter which files to search (default: '**/*').",
+          default: "**/*",
+        },
+        output_mode: {
+          type: "string",
+          enum: ["content", "files_with_matches", "count"],
+          description:
+            "Output format: content (default) shows matching lines, files_with_matches shows file paths, count shows match counts.",
+          default: "content",
+        },
+        context_before: {
+          type: "number",
+          description: "Number of lines to show before each match.",
+          default: 0,
+        },
+        context_after: {
+          type: "number",
+          description: "Number of lines to show after each match.",
+          default: 0,
+        },
+        case_insensitive: {
+          type: "boolean",
+          description: "Whether to search case-insensitively (default: false).",
+          default: false,
+        },
+        head_limit: {
+          type: "number",
+          description: "Maximum number of results to return (default: 100).",
+          default: 100,
+        },
+      },
+      required: ["pattern"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "pure",
+    source: "built-in",
+    execute: async (args, context) => {
+      const result = await ToolExecutor.execute(
+        "grep_files",
+        args,
+        context.conversationId
+      );
+      return { success: true, result };
+    },
+  },
+  {
     name: "skill_diagnose",
     description:
       "Classify stderr from a failed Python skill or environment setup (read-only). " +

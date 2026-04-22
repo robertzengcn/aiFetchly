@@ -13,6 +13,7 @@ import { RateLimiter, RateLimitConfig } from "./RateLimiter";
 import { AiChatApi, BatchKeywordGenerationRequestItem } from "@/api/aiChatApi";
 import { extractContactFromUrls } from "@/main-process/communication/contactExtraction-ipc";
 import { DocumentService } from "@/service/DocumentService";
+import { FileToolService } from "@/service/FileToolService";
 
 /**
  * Rate limiting configuration for tool execution
@@ -37,6 +38,21 @@ const RATE_LIMIT_CONFIG = {
     maxPerMinute: 15,
     maxConcurrent: 3,
     cooldownMs: 800,
+  },
+  fileRead: {
+    maxPerMinute: 30,
+    maxConcurrent: 5,
+    cooldownMs: 200,
+  },
+  fileSearch: {
+    maxPerMinute: 20,
+    maxConcurrent: 3,
+    cooldownMs: 500,
+  },
+  fileWrite: {
+    maxPerMinute: 10,
+    maxConcurrent: 1,
+    cooldownMs: 1000,
   },
   default: {
     maxPerMinute: 30,
@@ -75,6 +91,12 @@ class RateLimiterManager {
       toolName.includes("yellowpages")
     ) {
       return RATE_LIMIT_CONFIG.yellowPages;
+    } else if (toolName === "file_read") {
+      return RATE_LIMIT_CONFIG.fileRead;
+    } else if (toolName === "glob_files" || toolName === "grep_files") {
+      return RATE_LIMIT_CONFIG.fileSearch;
+    } else if (toolName === "file_write" || toolName === "file_edit") {
+      return RATE_LIMIT_CONFIG.fileWrite;
     } else {
       return RATE_LIMIT_CONFIG.default;
     }
@@ -166,6 +188,13 @@ export class ToolExecutor {
           toolParams,
           conversationId
         );
+
+      case "file_read":
+      case "file_write":
+      case "file_edit":
+      case "glob_files":
+      case "grep_files":
+        return await this.executeFileTool(toolName, toolParams);
 
       default:
         return {
@@ -1169,8 +1198,22 @@ export class ToolExecutor {
     } catch (error) {
       return {
         success: false,
-        error: error instanceof Error ? error.message : "Failed to read attachment content",
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to read attachment content",
       };
     }
+  }
+
+  /**
+   * Execute a file tool by delegating to FileToolService.
+   */
+  private static async executeFileTool(
+    toolName: string,
+    toolParams: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    const service = new FileToolService();
+    return await service.execute(toolName, toolParams);
   }
 }
