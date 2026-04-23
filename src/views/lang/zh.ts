@@ -1082,6 +1082,13 @@ export default {
     permission_resume_failed: "已授权但无法继续执行该技能。",
     permission_resume_no_tool_id: "缺少工具调用信息，无法继续执行。",
     permission_resume_no_active_stream: "没有进行中的对话流，请重新发送消息。",
+    shell_approval_title: "Shell 命令执行",
+    shell_approval_description:
+      "AI 请求执行本地 Shell 命令。请在批准前仔细检查命令内容。",
+    shell_command_label: "命令",
+    shell_cwd_label: "工作目录",
+    shell_timeout_label: "超时时间",
+    shell_type_label: "Shell 类型",
   },
   systemDependency: {
     dialog_title: "安装系统依赖",

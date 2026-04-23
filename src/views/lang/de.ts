@@ -1127,6 +1127,13 @@ export default {
       "Tool-Aufrufinformationen fehlen; Ausführung nicht möglich.",
     permission_resume_no_active_stream:
       "Kein aktiver Chat-Stream. Bitte Nachricht erneut senden.",
+    shell_approval_title: "Shell-Befehlsausführung",
+    shell_approval_description:
+      "Die IA möchte einen lokalen Shell-Befehl ausführen. Prüfen Sie den Befehl vor der Genehmigung.",
+    shell_command_label: "Befehl",
+    shell_cwd_label: "Arbeitsverzeichnis",
+    shell_timeout_label: "Zeitlimit",
+    shell_type_label: "Shell",
   },
   systemDependency: {
     dialog_title: "Systemabhängigkeit installieren",

@@ -20,6 +20,8 @@ import { SkillEnvironmentManager } from "@/service/SkillEnvironmentManager";
 import { MCPToolService } from "@/service/MCPToolService";
 import { ToolExecutor } from "@/service/ToolExecutor";
 import { DocSkillScriptRunnerService } from "@/service/DocSkillScriptRunnerService";
+import { executeShellCommand } from "@/service/ShellToolService";
+import { ShellAuditLogger } from "@/service/ShellAuditLogger";
 
 // ---------------------------------------------------------------------------
 // Internal state
@@ -1002,6 +1004,73 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         };
       }
       return { success: true, result: { repaired: true, skillName } };
+    },
+  },
+  {
+    name: "shell_execute",
+    description:
+      "Execute a local shell command with explicit user confirmation and safety controls. " +
+      "Supports Bash (Linux/macOS) and PowerShell (Windows) with optional shell override. " +
+      "The exact command will be shown to the user for approval before execution.",
+    parameters: {
+      type: "object",
+      properties: {
+        command: {
+          type: "string",
+          description: "Command text to execute.",
+        },
+        cwd: {
+          type: "string",
+          description: "Optional working directory under workspace roots.",
+        },
+        shell: {
+          type: "string",
+          enum: ["auto", "bash", "powershell", "cmd"],
+          description:
+            "Shell interpreter to use. 'auto' selects Bash on Linux/macOS and PowerShell on Windows.",
+          default: "auto",
+        },
+        timeout_ms: {
+          type: "number",
+          description:
+            "Maximum execution time in milliseconds. Default 60000 (60s), max 600000 (10min).",
+          default: 60000,
+        },
+      },
+      required: ["command"],
+    },
+    tier: "main",
+    requiresConfirmation: true,
+    permissionCategory: "shell",
+    source: "built-in",
+    execute: async (args, context) => {
+      const shellResult = await executeShellCommand(
+        args,
+        context.conversationId
+      );
+
+      // Fire-and-forget audit logging
+      const auditLogger = new ShellAuditLogger();
+      auditLogger
+        .log({
+          conversationId: context.conversationId,
+          toolCallId: context.toolCallId,
+          commandRedacted: (args.command as string) ?? "",
+          cwd: (args.cwd as string) ?? "",
+          shell: (args.shell as string) ?? "auto",
+          success: shellResult.success,
+          exitCode: shellResult.exit_code,
+          timedOut: shellResult.timed_out,
+          durationMs: shellResult.duration_ms,
+        })
+        .catch(() => {
+          /* audit failure must not block result */
+        });
+
+      return {
+        success: shellResult.success,
+        result: { ...shellResult } as Record<string, unknown>,
+      };
     },
   },
 ];

@@ -1104,6 +1104,13 @@ export default {
       "ツール呼び出し情報がないため続行できません。",
     permission_resume_no_active_stream:
       "アクティブなチャットがありません。メッセージを再送信してください。",
+    shell_approval_title: "Shell コマンド実行",
+    shell_approval_description:
+      "AIがローカルShellコマンドの実行を要求しています。承認前にコマンドを慎重に確認してください。",
+    shell_command_label: "コマンド",
+    shell_cwd_label: "作業ディレクトリ",
+    shell_timeout_label: "タイムアウト",
+    shell_type_label: "Shell",
   },
   systemDependency: {
     dialog_title: "システム依存関係をインストール",

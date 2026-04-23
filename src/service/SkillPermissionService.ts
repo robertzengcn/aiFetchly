@@ -8,7 +8,6 @@
  */
 
 import { Token } from "@/modules/token";
-import type { SkillPermissionCategory } from "@/entityTypes/skillTypes";
 import { SkillRegistry } from "@/config/skillsRegistry";
 
 // ---------------------------------------------------------------------------
@@ -67,6 +66,12 @@ function checkPermission(skillName: string): PermissionCheckResult {
   // Pure skills never require confirmation
   if (skill.permissionCategory === "pure") {
     return { allowed: true, needsPrompt: false };
+  }
+
+  // Shell skills ALWAYS require a prompt per execution.
+  // No stored permission bypass — each command needs individual consent.
+  if (skill.permissionCategory === "shell") {
+    return { allowed: false, needsPrompt: true };
   }
 
   // Check stored permission
