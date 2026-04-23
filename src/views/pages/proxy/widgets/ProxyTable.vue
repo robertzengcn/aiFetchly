@@ -430,6 +430,7 @@ const headers: Array<any> = [
         sortable: false,
         key: 'checktime',
     },
+    // Filled from API after "Check Proxy": Google reachability (Puppeteer in main process), not the batch-upload preview check.
     {
         title: computed(_ => CapitalizeFirstLetter(t("proxy.google_pass"))),
         align: 'start',
@@ -494,7 +495,7 @@ const uploadAlertType = ref<'success' | 'error' | 'warning' | 'info'>('success')
 const startAutoRefresh = () => {
     refreshInterval = setInterval(function(){
         loadItems({ page: options.page, itemsPerPage: options.itemsPerPage, sortBy: "" });
-    }, 10000); // Refresh every 5 seconds
+    }, 10000); // Refresh every 10s while checks run
 }
 const stopAutoRefresh = () => {
   if (refreshInterval) {
