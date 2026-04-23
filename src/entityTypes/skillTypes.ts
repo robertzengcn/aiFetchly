@@ -38,12 +38,14 @@ export type SkillTier =
  * - `network`     — External HTTP calls. Prompts once per domain.
  * - `filesystem`  — Local file read/write. Always prompts.
  * - `automation`  — Puppeteer, social posting, scraping. Always prompts.
+ * - `shell`       — Local shell command execution. Always prompts, shows command preview.
  */
 export type SkillPermissionCategory =
   | "pure"
   | "network"
   | "filesystem"
-  | "automation";
+  | "automation"
+  | "shell";
 
 // ---------------------------------------------------------------------------
 // Skill source — Origin of the skill
