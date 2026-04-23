@@ -166,6 +166,17 @@ async function execute(
           error: "Permission required",
           needsPermissionPrompt: true,
           permissionCategory: skill.permissionCategory,
+          // Shell skills: include command preview for the permission prompt UI
+          ...(skill.permissionCategory === "shell"
+            ? {
+                shellPreview: {
+                  command: (args.command as string) ?? "",
+                  cwd: (args.cwd as string) ?? "",
+                  shell: (args.shell as string) ?? "auto",
+                  timeout_ms: (args.timeout_ms as number) ?? 60000,
+                },
+              }
+            : {}),
         },
         execution_time_ms: Date.now() - startTime,
       };

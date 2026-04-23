@@ -1127,6 +1127,13 @@ export default {
       "Missing tool call information; cannot continue execution.",
     permission_resume_no_active_stream:
       "No active chat stream. Try sending your message again.",
+    shell_approval_title: "Shell Command Execution",
+    shell_approval_description:
+      "The AI wants to execute a local shell command. Review the command carefully before approving.",
+    shell_command_label: "Command",
+    shell_cwd_label: "Working Directory",
+    shell_timeout_label: "Timeout",
+    shell_type_label: "Shell",
   },
   systemDependency: {
     dialog_title: "Install System Dependency",

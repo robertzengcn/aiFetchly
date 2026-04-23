@@ -144,6 +144,7 @@ class="message-bubble" :class="{
                 v-if="(message.metadata?.toolResult as Record<string, unknown>)?.needsPermissionPrompt"
                 :tool-name="String(message.metadata?.toolName || '')"
                 :permission-category="String((message.metadata?.toolResult as Record<string, unknown>)?.permissionCategory || '')"
+                :shell-preview="(message.metadata?.toolResult as Record<string, unknown>)?.shellPreview"
                 @grant="(payload) => handleSkillPermissionGrant(message, payload.persistent)"
                 @deny="handleSkillPermissionDeny(message)"
               />
@@ -774,7 +775,8 @@ const props = withDefaults(defineProps<Props>(), {
   visible: false
 });
 
-// Emits - eslint-disable-next-line @typescript-eslint/no-unused-vars
+// Emits
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const emit = defineEmits<{
   close: [];
 }>();
@@ -1901,6 +1903,7 @@ function resolveToolIdForPermissionMessage(message: ChatMessage): string | undef
  */
 async function handleSkillPermissionGrant(
   message: ChatMessage,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   _persistent: boolean
 ): Promise<void> {
   const toolId = resolveToolIdForPermissionMessage(message);

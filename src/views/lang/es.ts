@@ -1134,6 +1134,13 @@ export default {
       "Falta información de la llamada a la herramienta; no se puede continuar.",
     permission_resume_no_active_stream:
       "No hay una conversación activa. Vuelve a enviar el mensaje.",
+    shell_approval_title: "Ejecución de Comando Shell",
+    shell_approval_description:
+      "La IA solicita ejecutar un comando local. Revisa el comando antes de aprobar.",
+    shell_command_label: "Comando",
+    shell_cwd_label: "Directorio de trabajo",
+    shell_timeout_label: "Tiempo de espera",
+    shell_type_label: "Shell",
   },
   systemDependency: {
     dialog_title: "Instalar dependencia del sistema",

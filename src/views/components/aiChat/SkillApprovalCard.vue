@@ -2,7 +2,11 @@
   <div class="skill-approval-card">
     <div class="approval-header">
       <v-icon size="small" color="warning" class="mr-2">mdi-shield-alert</v-icon>
-      <span class="approval-title">{{ t('skills.approval_title') }}</span>
+      <span class="approval-title">{{
+        isShellCategory
+          ? t('skills.shell_approval_title')
+          : t('skills.approval_title')
+      }}</span>
     </div>
     <div class="approval-body">
       <div class="skill-info">
@@ -14,8 +18,31 @@
         </v-chip>
       </div>
       <p class="approval-description mt-2">
-        {{ t('skills.approval_description') }}
+        {{
+          isShellCategory
+            ? t('skills.shell_approval_description')
+            : t('skills.approval_description')
+        }}
       </p>
+      <!-- Shell command preview -->
+      <div v-if="isShellCategory && shellPreview" class="shell-preview mt-3">
+        <div class="shell-preview-row">
+          <span class="shell-preview-label">{{ t('skills.shell_command_label') }}:</span>
+          <code class="shell-preview-value shell-command-code">{{ shellPreview.command }}</code>
+        </div>
+        <div v-if="shellPreview.cwd" class="shell-preview-row">
+          <span class="shell-preview-label">{{ t('skills.shell_cwd_label') }}:</span>
+          <code class="shell-preview-value">{{ shellPreview.cwd }}</code>
+        </div>
+        <div class="shell-preview-row">
+          <span class="shell-preview-label">{{ t('skills.shell_type_label') }}:</span>
+          <code class="shell-preview-value">{{ shellPreview.shell }}</code>
+        </div>
+        <div class="shell-preview-row">
+          <span class="shell-preview-label">{{ t('skills.shell_timeout_label') }}:</span>
+          <code class="shell-preview-value">{{ formatTimeout(shellPreview.timeout_ms) }}</code>
+        </div>
+      </div>
     </div>
     <div class="approval-actions">
       <v-btn
@@ -36,7 +63,9 @@
       >
         {{ t('skills.approval_allow_once') }}
       </v-btn>
+      <!-- Shell skills do not support persistent grants -->
       <v-btn
+        v-if="!isShellCategory"
         size="small"
         variant="flat"
         color="primary"
@@ -55,9 +84,17 @@ import { useI18n } from "vue-i18n";
 
 const { t } = useI18n();
 
+interface ShellPreview {
+  command: string;
+  cwd?: string;
+  shell: string;
+  timeout_ms: number;
+}
+
 interface Props {
   toolName: string;
   permissionCategory?: string;
+  shellPreview?: ShellPreview;
 }
 
 const props = defineProps<Props>();
@@ -69,6 +106,8 @@ const emit = defineEmits<{
 
 const isProcessing = ref(false);
 
+const isShellCategory = computed(() => props.permissionCategory === "shell");
+
 const categoryColor = computed(() => {
   switch (props.permissionCategory) {
     case "network":
@@ -77,10 +116,19 @@ const categoryColor = computed(() => {
       return "purple";
     case "filesystem":
       return "brown";
+    case "shell":
+      return "red-darken-2";
     default:
       return "grey";
   }
 });
+
+function formatTimeout(ms: number): string {
+  if (ms >= 60000) {
+    return `${Math.round(ms / 1000)}s`;
+  }
+  return `${ms}ms`;
+}
 
 async function handleAllowOnce(): Promise<void> {
   isProcessing.value = true;
@@ -156,6 +204,38 @@ async function handleDeny(): Promise<void> {
   font-size: 0.85rem;
   color: rgba(var(--v-theme-on-surface), 0.7);
   margin-bottom: 0;
+}
+
+.shell-preview {
+  background: rgba(var(--v-theme-on-surface), 0.05);
+  border-radius: 6px;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.shell-preview-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 0.82rem;
+}
+
+.shell-preview-label {
+  color: rgba(var(--v-theme-on-surface), 0.6);
+  min-width: 100px;
+  flex-shrink: 0;
+}
+
+.shell-preview-value {
+  font-size: 0.82rem;
+  word-break: break-all;
+}
+
+.shell-command-code {
+  font-weight: 600;
+  color: rgb(var(--v-theme-error));
 }
 
 .approval-actions {

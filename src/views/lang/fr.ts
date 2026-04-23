@@ -1120,6 +1120,13 @@ export default {
       "Informations d'appel d'outil manquantes ; impossible de continuer.",
     permission_resume_no_active_stream:
       "Aucun flux de conversation actif. Renvoyez votre message.",
+    shell_approval_title: "Exécution de Commande Shell",
+    shell_approval_description:
+      "L'IA demande l'exécution d'une commande locale. Vérifiez la commande avant d'approuver.",
+    shell_command_label: "Commande",
+    shell_cwd_label: "Répertoire de travail",
+    shell_timeout_label: "Délai d'attente",
+    shell_type_label: "Shell",
   },
   systemDependency: {
     dialog_title: "Installer la dépendance système",
