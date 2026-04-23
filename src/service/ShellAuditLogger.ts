@@ -5,7 +5,7 @@
  * to the audit log via ShellAuditModel.
  */
 
-import { Token } from "@/config/usersetting";
+import { Token } from "@/modules/token";
 import { USERSDBPATH } from "@/config/usersetting";
 import { ShellAuditModel } from "@/model/ShellAudit.model";
 import { SHELL_REDACTION_PATTERNS } from "@/config/shellToolConfig";
@@ -68,7 +68,9 @@ export class ShellAuditLogger {
       // Log to console but do not throw.
       const message =
         error instanceof Error ? error.message : "Unknown audit log error";
-      console.error(`[ShellAuditLogger] Failed to write audit entry: ${message}`);
+      console.error(
+        `[ShellAuditLogger] Failed to write audit entry: ${message}`
+      );
     }
   }
 }

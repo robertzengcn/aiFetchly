@@ -144,7 +144,7 @@ class="message-bubble" :class="{
                 v-if="(message.metadata?.toolResult as Record<string, unknown>)?.needsPermissionPrompt"
                 :tool-name="String(message.metadata?.toolName || '')"
                 :permission-category="String((message.metadata?.toolResult as Record<string, unknown>)?.permissionCategory || '')"
-                :shell-preview="(message.metadata?.toolResult as Record<string, unknown>)?.shellPreview"
+                :shell-preview="((message.metadata?.toolResult as Record<string, unknown>)?.shellPreview ?? undefined) as any"
                 @grant="(payload) => handleSkillPermissionGrant(message, payload.persistent)"
                 @deny="handleSkillPermissionDeny(message)"
               />
