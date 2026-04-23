@@ -23,11 +23,11 @@ export const SHELL_MIN_TIMEOUT_MS = 1_000;
 // Output size caps
 // ---------------------------------------------------------------------------
 
-/** Maximum stdout size in bytes (256 KB). */
-export const SHELL_STDOUT_MAX_BYTES = 256 * 1024;
+/** Maximum stdout size in characters (256K chars). */
+export const SHELL_STDOUT_MAX_CHARS = 256 * 1024;
 
-/** Maximum stderr size in bytes (256 KB). */
-export const SHELL_STDERR_MAX_BYTES = 256 * 1024;
+/** Maximum stderr size in characters (256K chars). */
+export const SHELL_STDERR_MAX_CHARS = 256 * 1024;
 
 // ---------------------------------------------------------------------------
 // Command length limit
@@ -45,6 +45,12 @@ export const SHELL_MAX_COMMAND_LENGTH = 10_000;
  *
  * These are checked BEFORE any execution, regardless of user consent.
  * Patterns are matched against the full command string (case-insensitive).
+ *
+ * IMPORTANT: This denylist is a best-effort safety net for obvious accidents,
+ * NOT a security boundary. Since the command is interpreted by bash, indirection
+ * (variables, command substitution, eval, base64 pipes) can bypass these patterns.
+ * The user-facing permission prompt (showing the exact command) is the primary
+ * defense. Do NOT rely on this list for security-critical decisions.
  */
 export const SHELL_DENYLIST_PATTERNS: readonly DenylistEntry[] = [
   // Filesystem destruction
@@ -96,6 +102,22 @@ export const SHELL_DENYLIST_PATTERNS: readonly DenylistEntry[] = [
   {
     pattern: /\bdel\s+\/[sS]\s+\/[qQ]\s+[a-zA-Z]:\\/i,
     description: "Windows recursive silent delete",
+  },
+
+  // Privilege escalation
+  {
+    pattern: /\bsudo\b/,
+    description: "Privilege escalation via sudo",
+  },
+
+  // Indirection and eval (bypass vectors)
+  {
+    pattern: /\beval\s+/i,
+    description: "eval command (can bypass denylist via string construction)",
+  },
+  {
+    pattern: /\bexec\s+/i,
+    description: "exec command (process replacement bypass)",
   },
 ];
 
