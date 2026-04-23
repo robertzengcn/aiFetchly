@@ -599,8 +599,8 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       required: ["path"],
     },
     tier: "main",
-    requiresConfirmation: false,
-    permissionCategory: "pure",
+    requiresConfirmation: true,
+    permissionCategory: "filesystem",
     source: "built-in",
     execute: async (args, context) => {
       const result = await ToolExecutor.execute(
@@ -645,8 +645,8 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       required: ["pattern"],
     },
     tier: "main",
-    requiresConfirmation: false,
-    permissionCategory: "pure",
+    requiresConfirmation: true,
+    permissionCategory: "filesystem",
     source: "built-in",
     execute: async (args, context) => {
       const result = await ToolExecutor.execute(
@@ -718,8 +718,8 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       required: ["pattern"],
     },
     tier: "main",
-    requiresConfirmation: false,
-    permissionCategory: "pure",
+    requiresConfirmation: true,
+    permissionCategory: "filesystem",
     source: "built-in",
     execute: async (args, context) => {
       const result = await ToolExecutor.execute(
