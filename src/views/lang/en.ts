@@ -1128,6 +1128,21 @@ export default {
     permission_resume_no_active_stream:
       "No active chat stream. Try sending your message again.",
   },
+  systemDependency: {
+    dialog_title: "Install System Dependency",
+    security_note:
+      "Only trusted packages from the local catalog are installed.",
+    approve: "Approve Install",
+    deny: "Deny",
+    status_installed: "Dependency installed successfully",
+    status_already_installed: "Dependency is already installed",
+    status_permission_denied: "Installation was denied",
+    status_installer_not_found: "Package manager not found",
+    status_unsupported_platform: "Not supported on this platform",
+    status_path_issue:
+      "Installed but binary not on PATH. Try restarting the app.",
+    status_installation_failed: "Installation failed",
+  },
   schedule: {
     create_new_schedule: "Create New Schedule",
     create_description:

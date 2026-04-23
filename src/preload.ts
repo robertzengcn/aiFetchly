@@ -239,6 +239,12 @@ import {
   SKILL_LIST_INSTALLED,
   SKILL_TOGGLE,
   SKILL_UNINSTALL,
+  // System Dependency Channels
+  SYSTEM_DEPENDENCY_RESOLVE,
+  SYSTEM_DEPENDENCY_INSTALL,
+  SYSTEM_DEPENDENCY_GET_AUDIT_LOG,
+  SYSTEM_DEPENDENCY_PROMPT,
+  SYSTEM_DEPENDENCY_PROMPT_RESPONSE,
 } from "@/config/channellist";
 
 // window.ipcRenderer = ipcRenderer
@@ -345,6 +351,8 @@ contextBridge.exposeInMainWorld("api", {
       WEBSOCKET_EVENT,
       // Contact Extraction Progress Channel
       CONTACT_EXTRACTION_PROGRESS,
+      // System Dependency Prompt (main→renderer)
+      SYSTEM_DEPENDENCY_PROMPT,
     ];
     const isSocialTaskLogChannel = /^socialtask:log:/.test(channel);
 
@@ -399,6 +407,8 @@ contextBridge.exposeInMainWorld("api", {
       WEBSOCKET_EVENT,
       // Contact Extraction Progress Channel
       CONTACT_EXTRACTION_PROGRESS,
+      // System Dependency Prompt (main→renderer)
+      SYSTEM_DEPENDENCY_PROMPT,
     ];
     const isSocialTaskLogChannel = /^socialtask:log:/.test(channel);
 
@@ -630,6 +640,12 @@ contextBridge.exposeInMainWorld("api", {
       SKILL_LIST_INSTALLED,
       SKILL_TOGGLE,
       SKILL_UNINSTALL,
+      // System Dependency Channels
+      SYSTEM_DEPENDENCY_RESOLVE,
+      SYSTEM_DEPENDENCY_INSTALL,
+      SYSTEM_DEPENDENCY_GET_AUDIT_LOG,
+      SYSTEM_DEPENDENCY_PROMPT,
+      SYSTEM_DEPENDENCY_PROMPT_RESPONSE,
     ];
     if (validChannels.includes(channel)) {
       return ipcRenderer.invoke(channel, data);

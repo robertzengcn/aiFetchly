@@ -274,6 +274,17 @@ export const SKILL_LIST_INSTALLED = "skill:list-installed";
 export const SKILL_TOGGLE = "skill:toggle";
 export const SKILL_UNINSTALL = "skill:uninstall";
 
+// System Dependency Channels
+export const SYSTEM_DEPENDENCY_RESOLVE = "system-dependency:resolve";
+export const SYSTEM_DEPENDENCY_INSTALL = "system-dependency:install";
+export const SYSTEM_DEPENDENCY_GET_AUDIT_LOG =
+  "system-dependency:get-audit-log";
+/** Main→Renderer: ask user to approve a dependency install (includes resolution result). */
+export const SYSTEM_DEPENDENCY_PROMPT = "system-dependency:prompt";
+/** Renderer→Main: user responded to the dependency install prompt. */
+export const SYSTEM_DEPENDENCY_PROMPT_RESPONSE =
+  "system-dependency:prompt-response";
+
 // Dashboard Channels
 export const DASHBOARD_SUMMARY = "dashboard:summary";
 export const DASHBOARD_TRENDS = "dashboard:trends";

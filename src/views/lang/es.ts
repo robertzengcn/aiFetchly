@@ -1135,8 +1135,21 @@ export default {
     permission_resume_no_active_stream:
       "No hay una conversación activa. Vuelve a enviar el mensaje.",
   },
+  systemDependency: {
+    dialog_title: "Instalar dependencia del sistema",
+    security_note: "Solo se instalan paquetes de confianza del catálogo local.",
+    approve: "Aprobar instalación",
+    deny: "Denegar",
+    status_installed: "Dependencia instalada correctamente",
+    status_already_installed: "La dependencia ya está instalada",
+    status_permission_denied: "Instalación denegada",
+    status_installer_not_found: "Gestor de paquetes no encontrado",
+    status_unsupported_platform: "No compatible con esta plataforma",
+    status_path_issue:
+      "Instalado pero no en PATH. Intente reiniciar la aplicación.",
+    status_installation_failed: "Error en la instalación",
+  },
   schedule: {
-    create_new_schedule: "Crear nueva programación",
     create_description:
       "Configure la programación automatizada de tareas con expresiones cron o dependencias",
     schedule_created_success:

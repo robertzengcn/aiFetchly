@@ -117,6 +117,37 @@ src/
 - IPC handlers should sanitize all data passed between processes
 - Database operations must use TypeORM entities
 
+### Auto-Commit After Completing Functions - MANDATORY RULE
+**CRITICAL: After completing each function or logical unit of work, you MUST automatically stage and commit the changes to git.**
+
+#### Workflow
+
+1. **After completing a function**, immediately:
+   - Stage the changed files: `git add <specific-files>`
+   - Commit with a descriptive message following conventional commits format
+   - Do NOT wait for the user to ask — do it automatically
+
+2. **Commit message format**: `<type>: <description>`
+   - Types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf`, `ci`
+   - Description should explain *what* and *why*, not just *what changed*
+
+3. **What counts as a "completed function"**:
+   - A new function/method that is fully implemented
+   - A bug fix that resolves a specific issue
+   - A refactoring of an existing function
+   - A new test that covers a specific case
+   - A set of related changes that form one logical unit (e.g., entity + model + module for one feature)
+
+4. **What NOT to commit**:
+   - Incomplete or broken code
+   - Temporary debug code or console.log statements
+   - Files with compilation errors
+
+5. **Example**:
+   - Implement `SystemDependencyCatalog.getDependencies()` → stage and commit
+   - Implement `SystemDependencyRetryService.retry()` → stage and commit
+   - Add entity `DependencyInstallAudit` → stage and commit
+
 ### AI Feature IPC Handlers - MANDATORY RULE
 **When adding or modifying IPC handlers that serve AI functions (e.g. AI chat, keyword generation, AI tools):**
 - **Check AI enable first** at the start of the handler, before parsing request data or calling AI APIs.
@@ -566,6 +597,8 @@ Current branch (`sqlite-vec-merge`) is integrating sqlite-vec for vector similar
 - SQLite with TypeORM (local), Remote AI server (HTTP/SSE) (001-ai-email-template)
 - TypeScript 5.x + Electron, Vue 3, Vuetify, Pinia, TypeORM, better-sqlite3, Puppeteer, papaparse, xlsx, turndown (001-skill-system)
 - SQLite (TypeORM) for installed skills, documents/chunks; sqlite-vec for vector embeddings; Token service for permission grants (001-skill-system)
+- TypeScript 5.x (Electron main process + Vue 3 renderer) + Electron utility process API, `child_process.spawnSync`/`spawn`, existing `SkillDiagnosticsService`, `SkillExecutor`, `SkillPermissionService`, `StreamEventProcessor` (001-install-system-dependency)
+- SQLite via TypeORM (audit log entity), JSON file (local dependency catalog shipped with app) (001-install-system-dependency)
 
 ## Recent Changes
 - 001-ai-contact-extraction: Added TypeScript 5.x

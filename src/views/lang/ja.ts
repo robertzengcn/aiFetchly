@@ -1105,8 +1105,23 @@ export default {
     permission_resume_no_active_stream:
       "アクティブなチャットがありません。メッセージを再送信してください。",
   },
+  systemDependency: {
+    dialog_title: "システム依存関係をインストール",
+    security_note:
+      "ローカルカタログの信頼されたパッケージのみインストールされます。",
+    approve: "インストールを承認",
+    deny: "拒否",
+    status_installed: "依存関係のインストールに成功しました",
+    status_already_installed: "依存関係は既にインストールされています",
+    status_permission_denied: "インストールが拒否されました",
+    status_installer_not_found: "パッケージマネージャーが見つかりません",
+    status_unsupported_platform:
+      "このプラットフォームではサポートされていません",
+    status_path_issue:
+      "インストール済みですがPATHにありません。アプリの再起動をお試しください。",
+    status_installation_failed: "インストールに失敗しました",
+  },
   schedule: {
-    create_new_schedule: "新規スケジュールを作成",
     create_description:
       "Cron式または依存関係で自動タスクスケジューリングを設定",
     schedule_created_success:
