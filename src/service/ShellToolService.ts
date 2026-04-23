@@ -26,9 +26,7 @@ import {
   SHELL_DENYLIST_PATTERNS,
   SHELL_ENV_ALLOWLIST,
 } from "@/config/shellToolConfig";
-import {
-  ShellExecutionRequestSchema,
-} from "@/entityTypes/shellTypes";
+import { ShellExecutionRequestSchema } from "@/entityTypes/shellTypes";
 import type {
   ShellExecutionResult,
   ShellInterpreter,
@@ -70,7 +68,10 @@ export async function executeShellCommand(
   // 3. Resolve and validate cwd
   const cwdResult = resolveCwd(request.cwd);
   if (!cwdResult.valid) {
-    return makeErrorResult(cwdResult.error ?? "Invalid working directory", startTime);
+    return makeErrorResult(
+      cwdResult.error ?? "Invalid working directory",
+      startTime
+    );
   }
 
   // 4. Resolve timeout (clamp to allowed range)
@@ -83,7 +84,14 @@ export async function executeShellCommand(
   const env = scrubEnvironment();
 
   // 7. Execute with timeout and output caps
-  return runShell(interpreter, request.command, cwdResult.path, env, timeoutMs, startTime);
+  return runShell(
+    interpreter,
+    request.command,
+    cwdResult.path,
+    env,
+    timeoutMs,
+    startTime
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -140,7 +148,10 @@ function resolveCwd(cwd?: string): CwdResult {
 // ---------------------------------------------------------------------------
 
 function clampTimeout(timeoutMs: number): number {
-  return Math.min(SHELL_MAX_TIMEOUT_MS, Math.max(SHELL_MIN_TIMEOUT_MS, timeoutMs));
+  return Math.min(
+    SHELL_MAX_TIMEOUT_MS,
+    Math.max(SHELL_MIN_TIMEOUT_MS, timeoutMs)
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -173,9 +184,15 @@ function resolveInterpreter(shell: ShellInterpreter): InterpreterConfig {
 function findPowerShell(): InterpreterConfig {
   // Prefer pwsh (PowerShell Core) over Windows PowerShell
   if (process.platform === "win32") {
-    return { command: "powershell.exe", args: ["-NoProfile", "-NonInteractive", "-Command"] };
+    return {
+      command: "powershell.exe",
+      args: ["-NoProfile", "-NonInteractive", "-Command"],
+    };
   }
-  return { command: "pwsh", args: ["-NoProfile", "-NonInteractive", "-Command"] };
+  return {
+    command: "pwsh",
+    args: ["-NoProfile", "-NonInteractive", "-Command"],
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -283,8 +300,10 @@ async function runShell(
         duration_ms: durationMs,
         stdout_truncated: stdoutTruncated,
         stderr_truncated: stderrTruncated,
-        timed_out,
-        ...(timedOut ? { error: `Command timed out after ${timeoutMs}ms` } : {}),
+        timed_out: timedOut,
+        ...(timedOut
+          ? { error: `Command timed out after ${timeoutMs}ms` }
+          : {}),
       });
     });
   });
