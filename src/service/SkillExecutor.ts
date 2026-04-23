@@ -101,49 +101,66 @@ function auditLog(
 // Shell rate limiting (FR-031)
 // ---------------------------------------------------------------------------
 
-let shellActiveCount = 0;
-const shellTimestamps: number[] = [];
+class ShellRateLimiter {
+  private activeCount = 0;
+  private timestamps: number[] = [];
 
-function checkShellRateLimit():
-  | { allowed: true }
-  | { allowed: false; reason: string } {
-  const now = Date.now();
+  check(): { allowed: true } | { allowed: false; reason: string } {
+    const now = Date.now();
 
-  // Prune timestamps older than 1 minute
-  const oneMinuteAgo = now - 60_000;
-  while (shellTimestamps.length > 0 && shellTimestamps[0] < oneMinuteAgo) {
-    shellTimestamps.shift();
-  }
+    // Prune timestamps older than 1 minute
+    const oneMinuteAgo = now - 60_000;
+    while (this.timestamps.length > 0 && this.timestamps[0] < oneMinuteAgo) {
+      this.timestamps.shift();
+    }
 
-  // Check concurrent limit
-  if (shellActiveCount >= SHELL_RATE_LIMITS.maxConcurrent) {
-    return {
-      allowed: false,
-      reason: `Too many concurrent shell commands (max ${SHELL_RATE_LIMITS.maxConcurrent})`,
-    };
-  }
-
-  // Check per-minute limit
-  if (shellTimestamps.length >= SHELL_RATE_LIMITS.maxPerMinute) {
-    return {
-      allowed: false,
-      reason: `Shell command rate limit exceeded (max ${SHELL_RATE_LIMITS.maxPerMinute}/min)`,
-    };
-  }
-
-  // Check cooldown
-  if (shellTimestamps.length > 0) {
-    const lastRun = shellTimestamps[shellTimestamps.length - 1];
-    if (now - lastRun < SHELL_RATE_LIMITS.cooldownMs) {
+    // Check concurrent limit
+    if (this.activeCount >= SHELL_RATE_LIMITS.maxConcurrent) {
       return {
         allowed: false,
-        reason: `Shell command cooldown not elapsed (${SHELL_RATE_LIMITS.cooldownMs}ms)`,
+        reason: `Too many concurrent shell commands (max ${SHELL_RATE_LIMITS.maxConcurrent})`,
       };
     }
+
+    // Check per-minute limit
+    if (this.timestamps.length >= SHELL_RATE_LIMITS.maxPerMinute) {
+      return {
+        allowed: false,
+        reason: `Shell command rate limit exceeded (max ${SHELL_RATE_LIMITS.maxPerMinute}/min)`,
+      };
+    }
+
+    // Check cooldown
+    if (this.timestamps.length > 0) {
+      const lastRun = this.timestamps[this.timestamps.length - 1];
+      if (now - lastRun < SHELL_RATE_LIMITS.cooldownMs) {
+        return {
+          allowed: false,
+          reason: `Shell command cooldown not elapsed (${SHELL_RATE_LIMITS.cooldownMs}ms)`,
+        };
+      }
+    }
+
+    return { allowed: true };
   }
 
-  return { allowed: true };
+  acquire(): void {
+    this.activeCount++;
+    this.timestamps.push(Date.now());
+  }
+
+  release(): void {
+    this.activeCount = Math.max(0, this.activeCount - 1);
+  }
+
+  /** Reset state for testing. */
+  reset(): void {
+    this.activeCount = 0;
+    this.timestamps = [];
+  }
 }
+
+const shellRateLimiter = new ShellRateLimiter();
 
 // ---------------------------------------------------------------------------
 // Execution
@@ -245,7 +262,7 @@ async function execute(
 
   // 4. Shell rate limiting (only for shell_execute)
   if (skill.permissionCategory === "shell") {
-    const rateLimit = checkShellRateLimit();
+    const rateLimit = shellRateLimiter.check();
     if (!rateLimit.allowed) {
       const result: ToolExecutionResult = {
         tool_call_id: toolCallId,
@@ -257,8 +274,7 @@ async function execute(
       auditLog(name, args, false, result.execution_time_ms, rateLimit.reason);
       return result;
     }
-    shellActiveCount++;
-    shellTimestamps.push(Date.now());
+    shellRateLimiter.acquire();
   }
 
   // 5. Execute based on tier
@@ -286,7 +302,7 @@ async function execute(
     return result;
   } finally {
     if (skill.permissionCategory === "shell") {
-      shellActiveCount = Math.max(0, shellActiveCount - 1);
+      shellRateLimiter.release();
     }
   }
 }
@@ -346,4 +362,6 @@ export const SkillExecutor = {
   isKnown,
   /** Exposed for testing. */
   validateArgs,
+  /** Exposed for testing — rate limiter instance. */
+  rateLimiter: shellRateLimiter,
 } as const;

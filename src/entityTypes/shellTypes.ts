@@ -65,6 +65,12 @@ export interface ShellExecutionResult {
   readonly timed_out: boolean;
   /** Error message for pre-execution failures (denylist, cwd guard). */
   readonly error?: string;
+  /** Validated command text (only present when input passed zod validation). */
+  readonly validatedCommand?: string;
+  /** Validated cwd (only present when input passed zod validation). */
+  readonly validatedCwd?: string;
+  /** Validated shell interpreter (only present when input passed zod validation). */
+  readonly validatedShell?: string;
 }
 
 // ---------------------------------------------------------------------------

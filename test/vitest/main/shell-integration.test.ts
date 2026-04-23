@@ -39,7 +39,10 @@ describe("Shell integration — grant and execute flow", () => {
     expect(result.result).toHaveProperty("needsPermissionPrompt", true);
     expect(result.result).toHaveProperty("permissionCategory", "shell");
     expect(result.result).toHaveProperty("shellPreview");
-    expect(result.result.shellPreview).toHaveProperty("command", "echo integration-test");
+    expect(result.result.shellPreview).toHaveProperty(
+      "command",
+      "echo integration-test"
+    );
   });
 
   it("shell_execute is registered in the skill registry", () => {
@@ -62,11 +65,7 @@ describe("Shell integration — grant and execute flow", () => {
 describe("Shell integration — deny and error flow", () => {
   it("returns error for unknown tool", async () => {
     const context = makeContext();
-    const result = await SkillExecutor.execute(
-      "nonexistent_tool",
-      {},
-      context
-    );
+    const result = await SkillExecutor.execute("nonexistent_tool", {}, context);
 
     expect(result.success).toBe(false);
     expect(result.result).toHaveProperty("error");
@@ -77,7 +76,7 @@ describe("Shell integration — deny and error flow", () => {
     const context = makeContext();
     const result = await SkillExecutor.execute(
       "shell_execute",
-      {},  // Missing 'command' field
+      {}, // Missing 'command' field
       context
     );
 
@@ -112,5 +111,55 @@ describe("Shell integration — deny and error flow", () => {
 
     // Should return permission prompt first (validation happens in ShellToolService, not SkillExecutor)
     expect(result.success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Post-grant execution flow
+// ---------------------------------------------------------------------------
+
+describe("Shell integration — post-grant execution flow", () => {
+  it("executes command via skill execute handler directly", async () => {
+    const skill = SkillRegistry.getSkill("shell_execute");
+    expect(skill).toBeDefined();
+
+    const context = makeContext();
+    const result = await skill!.execute(
+      { command: "echo post-grant-test" },
+      context
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.result).toHaveProperty("stdout");
+    expect((result.result as Record<string, unknown>).stdout).toContain(
+      "post-grant-test"
+    );
+  });
+
+  it("returns validated fields after successful execution", async () => {
+    const skill = SkillRegistry.getSkill("shell_execute");
+    const context = makeContext();
+    const result = await skill!.execute(
+      { command: "echo validated", shell: "bash" },
+      context
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.result).toHaveProperty("validatedCommand", "echo validated");
+    expect(result.result).toHaveProperty("validatedShell", "bash");
+  });
+
+  it("returns error for denylisted command via execute handler", async () => {
+    const skill = SkillRegistry.getSkill("shell_execute");
+    const context = makeContext();
+    const result = await skill!.execute(
+      { command: "sudo apt-get remove --purge*" },
+      context
+    );
+
+    expect(result.success).toBe(false);
+    expect((result.result as Record<string, unknown>).error).toContain(
+      "safety policy"
+    );
   });
 });

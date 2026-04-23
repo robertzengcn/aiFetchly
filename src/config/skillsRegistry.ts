@@ -1049,15 +1049,16 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         context.conversationId
       );
 
-      // Fire-and-forget audit logging
+      // Fire-and-forget audit logging (use validated fields from result)
       const auditLogger = new ShellAuditLogger();
       auditLogger
         .log({
           conversationId: context.conversationId,
           toolCallId: context.toolCallId,
-          commandRedacted: (args.command as string) ?? "",
-          cwd: (args.cwd as string) ?? "",
-          shell: (args.shell as string) ?? "auto",
+          commandRedacted:
+            shellResult.validatedCommand ?? (args.command as string) ?? "",
+          cwd: shellResult.validatedCwd ?? (args.cwd as string) ?? "",
+          shell: shellResult.validatedShell ?? (args.shell as string) ?? "auto",
           success: shellResult.success,
           exitCode: shellResult.exit_code,
           timedOut: shellResult.timed_out,
