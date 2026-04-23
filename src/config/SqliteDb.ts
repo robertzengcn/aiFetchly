@@ -53,6 +53,7 @@ import { TaskEntity } from "@/entity/Task.entity";
 import { ContactInfoEntity } from "@/entity/ContactInfo.entity";
 import { InstalledSkillEntity } from "@/entity/InstalledSkill.entity";
 import { DependencyInstallAuditEntity } from "@/entity/DependencyInstallAudit";
+import { ShellAuditEntity } from "@/entity/ShellAudit.entity";
 // import sqlite3 from "sqlite3";
 import Database from "better-sqlite3";
 import { app } from "electron";
@@ -455,6 +456,7 @@ export class SqliteDb {
           ContactInfoEntity,
           InstalledSkillEntity,
           DependencyInstallAuditEntity,
+          ShellAuditEntity,
         ],
         synchronize: true,
         migrations: [],
