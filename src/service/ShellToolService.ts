@@ -21,8 +21,8 @@ import {
   SHELL_DEFAULT_TIMEOUT_MS,
   SHELL_MAX_TIMEOUT_MS,
   SHELL_MIN_TIMEOUT_MS,
-  SHELL_STDOUT_MAX_BYTES,
-  SHELL_STDERR_MAX_BYTES,
+  SHELL_STDOUT_MAX_CHARS,
+  SHELL_STDERR_MAX_CHARS,
   SHELL_DENYLIST_PATTERNS,
   SHELL_ENV_ALLOWLIST,
 } from "@/config/shellToolConfig";
@@ -227,27 +227,26 @@ async function runShell(
     let stdoutTruncated = false;
     let stderrTruncated = false;
     let timedOut = false;
-    let killed = false;
 
     const child = spawn(interpreter.command, [...interpreter.args, command], {
       cwd,
       env,
       shell: false,
+      detached: true,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
 
     const timer = setTimeout(() => {
       timedOut = true;
-      killed = true;
       killProcessTree(child.pid, cwd);
     }, timeoutMs);
 
     child.stdout.on("data", (chunk: Buffer) => {
       if (!stdoutTruncated) {
         const appended = stdout + chunk.toString("utf-8");
-        if (appended.length > SHELL_STDOUT_MAX_BYTES) {
-          stdout = appended.slice(0, SHELL_STDOUT_MAX_BYTES);
+        if (appended.length > SHELL_STDOUT_MAX_CHARS) {
+          stdout = appended.slice(0, SHELL_STDOUT_MAX_CHARS);
           stdoutTruncated = true;
         } else {
           stdout = appended;
@@ -258,8 +257,8 @@ async function runShell(
     child.stderr.on("data", (chunk: Buffer) => {
       if (!stderrTruncated) {
         const appended = stderr + chunk.toString("utf-8");
-        if (appended.length > SHELL_STDERR_MAX_BYTES) {
-          stderr = appended.slice(0, SHELL_STDERR_MAX_BYTES);
+        if (appended.length > SHELL_STDERR_MAX_CHARS) {
+          stderr = appended.slice(0, SHELL_STDERR_MAX_CHARS);
           stderrTruncated = true;
         } else {
           stderr = appended;
