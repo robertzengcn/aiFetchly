@@ -18,6 +18,7 @@ import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import { ToolExecutor } from "@/service/ToolExecutor";
 import { SkillPermissionService } from "@/service/SkillPermissionService";
+import { SHELL_RATE_LIMITS } from "@/config/shellToolConfig";
 
 // ---------------------------------------------------------------------------
 // Input sanitization (FR-003, FR-024)
@@ -94,6 +95,54 @@ function auditLog(
     timestamp: new Date().toISOString(),
   };
   console.log(`[SkillAudit] ${JSON.stringify(logEntry)}`);
+}
+
+// ---------------------------------------------------------------------------
+// Shell rate limiting (FR-031)
+// ---------------------------------------------------------------------------
+
+let shellActiveCount = 0;
+const shellTimestamps: number[] = [];
+
+function checkShellRateLimit():
+  | { allowed: true }
+  | { allowed: false; reason: string } {
+  const now = Date.now();
+
+  // Prune timestamps older than 1 minute
+  const oneMinuteAgo = now - 60_000;
+  while (shellTimestamps.length > 0 && shellTimestamps[0] < oneMinuteAgo) {
+    shellTimestamps.shift();
+  }
+
+  // Check concurrent limit
+  if (shellActiveCount >= SHELL_RATE_LIMITS.maxConcurrent) {
+    return {
+      allowed: false,
+      reason: `Too many concurrent shell commands (max ${SHELL_RATE_LIMITS.maxConcurrent})`,
+    };
+  }
+
+  // Check per-minute limit
+  if (shellTimestamps.length >= SHELL_RATE_LIMITS.maxPerMinute) {
+    return {
+      allowed: false,
+      reason: `Shell command rate limit exceeded (max ${SHELL_RATE_LIMITS.maxPerMinute}/min)`,
+    };
+  }
+
+  // Check cooldown
+  if (shellTimestamps.length > 0) {
+    const lastRun = shellTimestamps[shellTimestamps.length - 1];
+    if (now - lastRun < SHELL_RATE_LIMITS.cooldownMs) {
+      return {
+        allowed: false,
+        reason: `Shell command cooldown not elapsed (${SHELL_RATE_LIMITS.cooldownMs}ms)`,
+      };
+    }
+  }
+
+  return { allowed: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -194,7 +243,25 @@ async function execute(
     return result;
   }
 
-  // 4. Execute based on tier
+  // 4. Shell rate limiting (only for shell_execute)
+  if (skill.permissionCategory === "shell") {
+    const rateLimit = checkShellRateLimit();
+    if (!rateLimit.allowed) {
+      const result: ToolExecutionResult = {
+        tool_call_id: toolCallId,
+        tool_name: name,
+        success: false,
+        result: { error: rateLimit.reason },
+        execution_time_ms: Date.now() - startTime,
+      };
+      auditLog(name, args, false, result.execution_time_ms, rateLimit.reason);
+      return result;
+    }
+    shellActiveCount++;
+    shellTimestamps.push(Date.now());
+  }
+
+  // 5. Execute based on tier
   try {
     const execResult = await skill.execute(args, context);
     const result: ToolExecutionResult = {
@@ -217,6 +284,10 @@ async function execute(
     };
     auditLog(name, args, false, result.execution_time_ms, errorMessage);
     return result;
+  } finally {
+    if (skill.permissionCategory === "shell") {
+      shellActiveCount = Math.max(0, shellActiveCount - 1);
+    }
   }
 }
 
