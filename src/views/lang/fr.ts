@@ -1121,8 +1121,22 @@ export default {
     permission_resume_no_active_stream:
       "Aucun flux de conversation actif. Renvoyez votre message.",
   },
+  systemDependency: {
+    dialog_title: "Installer la dépendance système",
+    security_note:
+      "Seuls les paquets approuvés du catalogue local sont installés.",
+    approve: "Approuver l'installation",
+    deny: "Refuser",
+    status_installed: "Dépendance installée avec succès",
+    status_already_installed: "La dépendance est déjà installée",
+    status_permission_denied: "Installation refusée",
+    status_installer_not_found: "Gestionnaire de paquets introuvable",
+    status_unsupported_platform: "Non pris en charge sur cette plateforme",
+    status_path_issue:
+      "Installé mais non dans le PATH. Essayez de redémarrer l'application.",
+    status_installation_failed: "Échec de l'installation",
+  },
   schedule: {
-    create_new_schedule: "Create New Schedule",
     create_description:
       "Set up automated task scheduling with cron expressions or dependencies",
     schedule_created_success:

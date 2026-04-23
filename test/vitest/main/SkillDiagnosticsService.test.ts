@@ -89,4 +89,69 @@ describe("SkillDiagnosticsService", () => {
     const r = SkillDiagnosticsService.diagnoseStderr("  ", undefined);
     expect(r.cause).toBe("unknown");
   });
+
+  // --- T010: Enhanced structured diagnosis ---
+
+  test("PDFInfoNotInstalledError → missing_system_tool + dependency_id poppler", () => {
+    const r = SkillDiagnosticsService.diagnoseStderr(
+      "PDFInfoNotInstalledError: Unable to get page count.",
+      undefined
+    );
+    expect(r.cause).toBe("missing_system_tool");
+    expect(r.dependency_id).toBe("poppler");
+    expect(r.missing_binary).toBe("pdfinfo");
+  });
+
+  test("TesseractNotFoundError → missing_system_tool + dependency_id tesseract", () => {
+    const r = SkillDiagnosticsService.diagnoseStderr(
+      "TesseractNotFoundError: tesseract is not installed.",
+      undefined
+    );
+    expect(r.cause).toBe("missing_system_tool");
+    expect(r.dependency_id).toBe("tesseract");
+    expect(r.missing_binary).toBe("tesseract");
+  });
+
+  test("ffmpeg command not found → missing_system_tool + dependency_id ffmpeg", () => {
+    const r = SkillDiagnosticsService.diagnoseStderr(
+      "/bin/sh: ffmpeg: command not found",
+      undefined
+    );
+    expect(r.cause).toBe("missing_system_tool");
+    expect(r.dependency_id).toBe("ffmpeg");
+    expect(r.missing_binary).toBe("ffmpeg");
+  });
+
+  test("missing system dep with manifest → dependency_id from manifest", () => {
+    const manifest: SkillManifest = {
+      name: "pdf-skill",
+      version: "1.0.0",
+      description: "d",
+      runtime: "python",
+      entry: "run.py",
+      parameters: { type: "object", properties: {} },
+      python: {
+        version: ">=3.10",
+        requirements_file: "requirements.txt",
+        system: [{ name: "poppler", probe: "pdftoppm" }],
+      },
+    };
+    const r = SkillDiagnosticsService.diagnoseStderr(
+      "Missing system dependency: pdftoppm not found",
+      manifest
+    );
+    expect(r.cause).toBe("missing_system_tool");
+    expect(r.dependency_id).toBe("poppler");
+    expect(r.missing_binary).toBe("pdftoppm");
+  });
+
+  test("unrecognized error → no dependency_id (backward compat)", () => {
+    const r = SkillDiagnosticsService.diagnoseStderr(
+      "Something went wrong that we don't understand",
+      undefined
+    );
+    expect(r.cause).toBe("unknown");
+    expect(r.dependency_id).toBeUndefined();
+    expect(r.missing_binary).toBeUndefined();
+  });
 });
