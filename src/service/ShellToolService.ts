@@ -84,7 +84,7 @@ export async function executeShellCommand(
   const env = scrubEnvironment();
 
   // 7. Execute with timeout and output caps
-  return runShell(
+  const result = await runShell(
     interpreter,
     request.command,
     cwdResult.path,
@@ -92,6 +92,14 @@ export async function executeShellCommand(
     timeoutMs,
     startTime
   );
+
+  // Attach validated fields for audit logging
+  return {
+    ...result,
+    validatedCommand: request.command,
+    validatedCwd: cwdResult.path,
+    validatedShell: request.shell,
+  };
 }
 
 // ---------------------------------------------------------------------------
