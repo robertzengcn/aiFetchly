@@ -1128,6 +1128,7 @@ export default {
     approval_deny: "Denegar",
     approval_allow_once: "Permitir una vez",
     approval_always_allow: "Permitir siempre",
+    approval_always_allow_session: "Permitir siempre (esta sesión)",
     permission_resume_failed:
       "No se pudo ejecutar la habilidad tras conceder el permiso.",
     permission_resume_no_tool_id:

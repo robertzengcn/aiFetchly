@@ -68,8 +68,16 @@ function checkPermission(skillName: string): PermissionCheckResult {
     return { allowed: true, needsPrompt: false };
   }
 
-  // Shell skills ALWAYS require a prompt per execution.
-  // No stored permission bypass — each command needs individual consent.
+  // Check session-only grant first (set by "Always Allow" in current session).
+  // This must come before the shell always-prompt so that session-granted
+  // shell skills auto-approve within the same app session.
+  if (sessionGrants.has(skillName)) {
+    return { allowed: true, needsPrompt: false };
+  }
+
+  // Shell skills require a prompt per execution unless a session grant exists
+  // (checked above). Stored (persistent) permissions are intentionally NOT
+  // honoured for shell — each new app session must re-consent.
   if (skill.permissionCategory === "shell") {
     return { allowed: false, needsPrompt: true };
   }
@@ -88,11 +96,6 @@ function checkPermission(skillName: string): PermissionCheckResult {
       reason: "Permission denied by user",
       needsPrompt: false,
     };
-  }
-
-  // Check session-only grant (non-persistent)
-  if (sessionGrants.has(skillName)) {
-    return { allowed: true, needsPrompt: false };
   }
 
   // No stored decision → need to prompt

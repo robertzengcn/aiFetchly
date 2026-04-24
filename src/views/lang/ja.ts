@@ -1099,6 +1099,7 @@ export default {
     approval_deny: "拒否",
     approval_allow_once: "一度だけ許可",
     approval_always_allow: "常に許可",
+    approval_always_allow_session: "常に許可（このセッション）",
     permission_resume_failed: "許可後もスキルを実行できませんでした。",
     permission_resume_no_tool_id:
       "ツール呼び出し情報がないため続行できません。",

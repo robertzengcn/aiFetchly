@@ -1114,6 +1114,7 @@ export default {
     approval_deny: "Refuser",
     approval_allow_once: "Autoriser une fois",
     approval_always_allow: "Toujours autoriser",
+    approval_always_allow_session: "Toujours autoriser (cette session)",
     permission_resume_failed:
       "Impossible d'exécuter la compétence après l'autorisation.",
     permission_resume_no_tool_id:

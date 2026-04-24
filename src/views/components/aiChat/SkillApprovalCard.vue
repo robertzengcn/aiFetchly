@@ -63,16 +63,14 @@
       >
         {{ t('skills.approval_allow_once') }}
       </v-btn>
-      <!-- Shell skills do not support persistent grants -->
       <v-btn
-        v-if="!isShellCategory"
         size="small"
         variant="flat"
         color="primary"
         :loading="isProcessing"
         @click="handleAlwaysAllow"
       >
-        {{ t('skills.approval_always_allow') }}
+        {{ isShellCategory ? t('skills.approval_always_allow_session') : t('skills.approval_always_allow') }}
       </v-btn>
     </div>
   </div>
@@ -146,11 +144,13 @@ async function handleAllowOnce(): Promise<void> {
 async function handleAlwaysAllow(): Promise<void> {
   isProcessing.value = true;
   try {
+    // Shell "Always Allow" is session-only for safety; other categories persist.
+    const persistent = !isShellCategory.value;
     await window.api.invoke("skill:grant-permission", {
       skillName: props.toolName,
-      persistent: true,
+      persistent,
     });
-    emit("grant", { persistent: true });
+    emit("grant", { persistent });
   } finally {
     isProcessing.value = false;
   }
