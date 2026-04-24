@@ -126,6 +126,13 @@ export interface SkillExecutionContext {
 
   /** Arguments from the LLM's tool_call event. */
   readonly args?: Record<string, unknown>;
+
+  /**
+   * When true, the caller has already obtained user consent (e.g. via
+   * resume-after-permission-grant). SkillExecutor should skip the
+   * permission check and proceed directly to execution.
+   */
+  readonly skipPermissionCheck?: boolean;
 }
 
 // ---------------------------------------------------------------------------
