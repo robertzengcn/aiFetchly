@@ -192,6 +192,7 @@ export class StreamEventProcessor {
         const skillResult = await SkillExecutor.execute(toolName, toolParams, {
           conversationId: this.state.streamConversationId,
           toolCallId: toolId,
+          skipPermissionCheck: true,
         });
         toolResult = skillResult.success
           ? (skillResult.result as Record<string, unknown>)

@@ -218,46 +218,48 @@ async function execute(
     return result;
   }
 
-  // 3. Permission check (pure skills auto-allowed)
-  const permCheck = SkillPermissionService.checkPermission(name);
-  if (!permCheck.allowed) {
-    if (permCheck.needsPrompt) {
-      // Return a special result indicating permission is needed.
-      // StreamEventProcessor shows the UI prompt, defers sendToolResultToAI until the user grants.
+  // 3. Permission check (pure skills auto-allowed, or already granted by caller)
+  if (!context.skipPermissionCheck) {
+    const permCheck = SkillPermissionService.checkPermission(name);
+    if (!permCheck.allowed) {
+      if (permCheck.needsPrompt) {
+        // Return a special result indicating permission is needed.
+        // StreamEventProcessor shows the UI prompt, defers sendToolResultToAI until the user grants.
+        const result: ToolExecutionResult = {
+          tool_call_id: toolCallId,
+          tool_name: name,
+          success: false,
+          result: {
+            error: "Permission required",
+            needsPermissionPrompt: true,
+            permissionCategory: skill.permissionCategory,
+            // Shell skills: include command preview for the permission prompt UI
+            ...(skill.permissionCategory === "shell"
+              ? {
+                  shellPreview: {
+                    command: (args.command as string) ?? "",
+                    cwd: (args.cwd as string) ?? "",
+                    shell: (args.shell as string) ?? "auto",
+                    timeout_ms: (args.timeout_ms as number) ?? 60000,
+                  },
+                }
+              : {}),
+          },
+          execution_time_ms: Date.now() - startTime,
+        };
+        return result;
+      }
+      // Explicitly denied
       const result: ToolExecutionResult = {
         tool_call_id: toolCallId,
         tool_name: name,
         success: false,
-        result: {
-          error: "Permission required",
-          needsPermissionPrompt: true,
-          permissionCategory: skill.permissionCategory,
-          // Shell skills: include command preview for the permission prompt UI
-          ...(skill.permissionCategory === "shell"
-            ? {
-                shellPreview: {
-                  command: (args.command as string) ?? "",
-                  cwd: (args.cwd as string) ?? "",
-                  shell: (args.shell as string) ?? "auto",
-                  timeout_ms: (args.timeout_ms as number) ?? 60000,
-                },
-              }
-            : {}),
-        },
+        result: { error: permCheck.reason || "Permission denied" },
         execution_time_ms: Date.now() - startTime,
       };
+      auditLog(name, args, false, result.execution_time_ms, permCheck.reason);
       return result;
     }
-    // Explicitly denied
-    const result: ToolExecutionResult = {
-      tool_call_id: toolCallId,
-      tool_name: name,
-      success: false,
-      result: { error: permCheck.reason || "Permission denied" },
-      execution_time_ms: Date.now() - startTime,
-    };
-    auditLog(name, args, false, result.execution_time_ms, permCheck.reason);
-    return result;
   }
 
   // 4. Shell rate limiting (only for shell_execute)
