@@ -1121,6 +1121,7 @@ export default {
     approval_deny: "Deny",
     approval_allow_once: "Allow Once",
     approval_always_allow: "Always Allow",
+    approval_always_allow_session: "Always Allow (This Session)",
     permission_resume_failed:
       "Could not run the skill after permission was granted.",
     permission_resume_no_tool_id:

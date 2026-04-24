@@ -1121,6 +1121,7 @@ export default {
     approval_deny: "Ablehnen",
     approval_allow_once: "Einmal erlauben",
     approval_always_allow: "Immer erlauben",
+    approval_always_allow_session: "Immer erlauben (Diese Sitzung)",
     permission_resume_failed:
       "Die Fähigkeit konnte nach der Erlaubnis nicht ausgeführt werden.",
     permission_resume_no_tool_id:

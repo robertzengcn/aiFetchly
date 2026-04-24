@@ -1079,6 +1079,7 @@ export default {
     approval_deny: "拒绝",
     approval_allow_once: "允许一次",
     approval_always_allow: "始终允许",
+    approval_always_allow_session: "本次会话始终允许",
     permission_resume_failed: "已授权但无法继续执行该技能。",
     permission_resume_no_tool_id: "缺少工具调用信息，无法继续执行。",
     permission_resume_no_active_stream: "没有进行中的对话流，请重新发送消息。",
