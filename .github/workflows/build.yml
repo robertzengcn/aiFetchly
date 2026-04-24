@@ -20,7 +20,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20.19.3
+          node-version: 22.14.0
 
       # Python 3.12+ removed distutils; bundled node-gyp in electron-rebuild still imports it.
       # Pin 3.11 so gyp (used by sqlite3/bufferutil rebuild) runs. Same issue as macOS setuptools fix.
@@ -267,7 +267,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20.19.3
+          node-version: 22.14.0
       - name: Calculate version
         id: calculate_version
         run: |
