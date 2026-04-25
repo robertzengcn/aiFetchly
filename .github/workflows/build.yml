@@ -84,13 +84,13 @@ jobs:
           else
             echo "lzma-native deps directory not found"
           fi
-      - name: Rebuild sqlite3 for Electron
+      - name: Skip sqlite3 Electron rebuild
         shell: bash
         run: |
           set -euo pipefail
           echo "package.json rebuild-sqlite3 script:"
           node -e "console.log(require('./package.json').scripts['rebuild-sqlite3'])"
-          npm rebuild sqlite3 --build-from-source
+          yarn rebuild-sqlite3
 
       - name: Rebuild better-sqlite3 for Electron
         shell: bash
