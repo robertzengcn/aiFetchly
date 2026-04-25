@@ -90,7 +90,7 @@ jobs:
           set -euo pipefail
           echo "package.json rebuild-sqlite3 script:"
           node -e "console.log(require('./package.json').scripts['rebuild-sqlite3'])"
-          npm rebuild sqlite3 --build-from-source --runtime=electron --target=35.7.5 --dist-url=https://electronjs.org/headers
+          npm rebuild sqlite3 --build-from-source
 
       - name: Rebuild better-sqlite3 for Electron
         shell: bash
@@ -98,7 +98,7 @@ jobs:
           set -euo pipefail
           echo "package.json rebuild-better-sqlite script:"
           node -e "console.log(require('./package.json').scripts['rebuild-better-sqlite'])"
-          npm rebuild better-sqlite3 --build-from-source --runtime=electron --target=35.7.5 --dist-url=https://electronjs.org/headers
+          npm_config_runtime=electron npm_config_target=35.7.5 npm_config_disturl=https://electronjs.org/headers npm rebuild better-sqlite3 --build-from-source
       # - name: Rebuild canvas
       #   run: yarn rebuild-canvas
 
