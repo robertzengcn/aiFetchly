@@ -65,6 +65,7 @@ export default {
     download_template: "下载模板",
     drag_drop_file: "拖拽文件到此处或点击选择文件",
     search: "搜索",
+    replace: "替换",
   },
   route: {
     dashboard: "仪表板",

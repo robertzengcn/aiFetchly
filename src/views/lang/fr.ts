@@ -75,6 +75,7 @@ export default {
     drag_drop_file:
       "Glissez-déposez votre fichier ici ou cliquez pour sélectionner un fichier",
     search: "Rechercher",
+    replace: "Remplacer",
   },
   route: {
     dashboard: "Tableau de bord",
