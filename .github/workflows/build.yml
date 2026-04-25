@@ -84,13 +84,10 @@ jobs:
           else
             echo "lzma-native deps directory not found"
           fi
-      - name: Rebuild electron
-        # isolated-vm@6.1.2 cannot compile against Electron 35 V8 13.5 (upstream issue: laverdet/isolated-vm#528).
-        # Exclude it from rebuild; the module is also excluded in forge.config.js rebuildConfig.onlyModules.
-        run: yarn electron-rebuild --force --types prod,dev,optional --module-dir . --exclude-module isolated-vm
-      - name: Rebuild sqlite3
+      - name: Rebuild sqlite3 for Electron
         run: yarn rebuild-sqlite3
-      - name: Rebuild better sqlite
+
+      - name: Rebuild better-sqlite3 for Electron
         run: yarn rebuild-better-sqlite
       # - name: Rebuild canvas
       #   run: yarn rebuild-canvas
