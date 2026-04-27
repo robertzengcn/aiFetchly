@@ -20,6 +20,8 @@ declare module "vue3-drag-resize" {
 
 export interface IElectronAPI {
   userLogin: (data) => Promise<userResp>;
+  /** Real filesystem path for a File from `<input type="file">` (Electron preload only). */
+  getPathForFile: (file: File) => string;
   send: (channel: string, data: any) => void;
   sendBinary: (channel: string, data: any) => void;
   receive: (channel: string, func: (event, ...args) => void) => void;

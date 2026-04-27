@@ -243,6 +243,9 @@ export const AI_CHAT_STREAM = "ai-chat:stream";
 export const AI_CHAT_STREAM_STOP = "ai-chat:stream-stop";
 export const AI_CHAT_STREAM_CHUNK = "ai-chat:stream-chunk";
 export const AI_CHAT_STREAM_COMPLETE = "ai-chat:stream-complete";
+/** Resume a skill/tool call after the user granted permission in the chat UI. */
+export const AI_CHAT_RESUME_TOOL_AFTER_PERMISSION =
+  "ai-chat:resume-tool-after-permission";
 export const AI_CHAT_HISTORY = "ai-chat:history";
 export const AI_CHAT_CLEAR = "ai-chat:clear";
 export const AI_CHAT_CONVERSATIONS = "ai-chat:conversations";
@@ -257,6 +260,30 @@ export const MCP_TOOL_DISCOVER = "mcp:tool:discover";
 export const MCP_TOOL_TOGGLE_SERVER = "mcp:tool:toggle:server";
 export const MCP_TOOL_TOGGLE_TOOL = "mcp:tool:toggle:tool";
 export const MCP_TOOL_TEST_CONNECTION = "mcp:tool:test:connection";
+
+// Skill Management Channels
+export const SKILL_CHECK_PERMISSION = "skill:check-permission";
+export const SKILL_GRANT_PERMISSION = "skill:grant-permission";
+export const SKILL_DENY_PERMISSION = "skill:deny-permission";
+export const SKILL_REVOKE_PERMISSION = "skill:revoke-permission";
+export const SKILL_GET_PERMISSION_STATUS = "skill:get-permission-status";
+
+// Skill Import & Management Channels
+export const SKILL_IMPORT = "skill:import";
+export const SKILL_LIST_INSTALLED = "skill:list-installed";
+export const SKILL_TOGGLE = "skill:toggle";
+export const SKILL_UNINSTALL = "skill:uninstall";
+
+// System Dependency Channels
+export const SYSTEM_DEPENDENCY_RESOLVE = "system-dependency:resolve";
+export const SYSTEM_DEPENDENCY_INSTALL = "system-dependency:install";
+export const SYSTEM_DEPENDENCY_GET_AUDIT_LOG =
+  "system-dependency:get-audit-log";
+/** Main→Renderer: ask user to approve a dependency install (includes resolution result). */
+export const SYSTEM_DEPENDENCY_PROMPT = "system-dependency:prompt";
+/** Renderer→Main: user responded to the dependency install prompt. */
+export const SYSTEM_DEPENDENCY_PROMPT_RESPONSE =
+  "system-dependency:prompt-response";
 
 // Dashboard Channels
 export const DASHBOARD_SUMMARY = "dashboard:summary";

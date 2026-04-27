@@ -137,6 +137,8 @@ export default {
     email_service_edit: "E-Mail-Dienst bearbeiten",
     knowledge_library: "Wissensbibliothek",
     mcp_tools: "MCP-Tools",
+    skills: "Fähigkeiten",
+    skills_management: "Skills-Verwaltung",
     login: "Anmelden",
     not_found: "Nicht gefunden",
   },
@@ -161,6 +163,12 @@ export default {
     document_deleted_successfully: "Dokument erfolgreich gelöscht",
     found_results: "{count} Ergebnisse gefunden",
     upload_failed: "Hochladen fehlgeschlagen",
+    upload_failed_max_files:
+      "Maximal {max} Dateien erlaubt. Entfernen Sie zuerst vorhandene Dateien.",
+    upload_failed_file_too_large:
+      'Datei "{name}" überschreitet das {maxSize} Limit.',
+    upload_failed_unsupported_type:
+      'Dateityp von "{name}" wird nicht unterstützt. Erlaubt: Bilder, CSV, PDF, DOCX, XLS, XLSX.',
     error: "Fehler",
     document_management: "Dokumentenverwaltung",
     search_by_name: "Nach Name suchen",
@@ -1079,9 +1087,71 @@ export default {
     "external-system-group-description": "Externe Systemgruppen-Einstellung",
     mcp_tools: "MCP-Tools",
     manage_mcp_tools: "MCP-Tools verwalten",
+    manage_skills: "Fähigkeiten verwalten",
+  },
+  skills: {
+    title: "Fähigkeiten verwalten",
+    no_skill_installed: "Keine Fähigkeiten installiert",
+    no_skill_description:
+      "Importieren Sie Fähigkeitspakete, um die KI-Funktionen zu erweitern",
+    import_button: "Fähigkeit importieren",
+    import_dialog_title: "Fähigkeit aus Zip importieren",
+    import_success: "Fähigkeit erfolgreich importiert",
+    import_error: "Fehler beim Importieren der Fähigkeit",
+    uninstall_confirm:
+      "Sind Sie sicher, dass Sie diese Fähigkeit deinstallieren möchten?",
+    uninstall_success: "Fähigkeit deinstalliert",
+    uninstall_error: "Fehler beim Deinstallieren der Fähigkeit",
+    toggle_enable: "Aktivieren",
+    toggle_disable: "Deaktivieren",
+    toggle_success: "Fähigkeit aktualisiert",
+    toggle_error: "Fehler beim Aktualisieren der Fähigkeit",
+    built_in: "Integriert",
+    user_installed: "Benutzerinstalliert",
+    column_name: "Name",
+    column_source: "Quelle",
+    column_category: "Kategorie",
+    column_version: "Version",
+    column_status: "Status",
+    column_enabled: "Aktiviert",
+    column_disabled: "Deaktiviert",
+    approval_title: "Fähigkeits-Berechtigungsanfrage",
+    approval_description:
+      "Diese Fähigkeit benötigt Ihre Erlaubnis zur Ausführung. Sie kann auf externe Ressourcen zugreifen oder Aktionen in Ihrem Namen durchführen.",
+    approval_deny: "Ablehnen",
+    approval_allow_once: "Einmal erlauben",
+    approval_always_allow: "Immer erlauben",
+    approval_always_allow_session: "Immer erlauben (Diese Sitzung)",
+    permission_resume_failed:
+      "Die Fähigkeit konnte nach der Erlaubnis nicht ausgeführt werden.",
+    permission_resume_no_tool_id:
+      "Tool-Aufrufinformationen fehlen; Ausführung nicht möglich.",
+    permission_resume_no_active_stream:
+      "Kein aktiver Chat-Stream. Bitte Nachricht erneut senden.",
+    shell_approval_title: "Shell-Befehlsausführung",
+    shell_approval_description:
+      "Die IA möchte einen lokalen Shell-Befehl ausführen. Prüfen Sie den Befehl vor der Genehmigung.",
+    shell_command_label: "Befehl",
+    shell_cwd_label: "Arbeitsverzeichnis",
+    shell_timeout_label: "Zeitlimit",
+    shell_type_label: "Shell",
+  },
+  systemDependency: {
+    dialog_title: "Systemabhängigkeit installieren",
+    security_note:
+      "Es werden nur vertrauenswürdige Pakete aus dem lokalen Katalog installiert.",
+    approve: "Installation genehmigen",
+    deny: "Ablehnen",
+    status_installed: "Abhängigkeit erfolgreich installiert",
+    status_already_installed: "Abhängigkeit ist bereits installiert",
+    status_permission_denied: "Installation wurde abgelehnt",
+    status_installer_not_found: "Paketmanager nicht gefunden",
+    status_unsupported_platform: "Auf dieser Plattform nicht unterstützt",
+    status_path_issue:
+      "Installiert, aber nicht im PATH. Versuchen Sie einen Neustart der App.",
+    status_installation_failed: "Installation fehlgeschlagen",
   },
   schedule: {
-    create_new_schedule: "Neue Planung erstellen",
     create_description:
       "Automatisierte Aufgabenplanung mit Cron-Ausdrücken oder Abhängigkeiten einrichten",
     schedule_created_success:
