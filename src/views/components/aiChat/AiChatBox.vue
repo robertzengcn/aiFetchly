@@ -139,6 +139,16 @@ class="message-bubble" :class="{
 
             <!-- Tool Result Message -->
             <template v-else-if="message.messageType === MESSAGE_TYPE.TOOL_RESULT">
+              <!-- Skill Permission Approval Card -->
+              <SkillApprovalCard
+                v-if="(message.metadata?.toolResult as Record<string, unknown>)?.needsPermissionPrompt"
+                :tool-name="String(message.metadata?.toolName || '')"
+                :permission-category="String((message.metadata?.toolResult as Record<string, unknown>)?.permissionCategory || '')"
+                :shell-preview="((message.metadata?.toolResult as Record<string, unknown>)?.shellPreview ?? undefined) as any"
+                @grant="(payload) => handleSkillPermissionGrant(message, payload.persistent)"
+                @deny="handleSkillPermissionDeny(message)"
+              />
+              <template v-else>
               <div class="tool-result-header">
                 <v-icon size="small" :color="message.metadata?.success === false ? 'error' : 'success'" class="mr-1">
                   {{ message.metadata?.success === false ? 'mdi-alert-circle' : 'mdi-check-circle' }}
@@ -173,6 +183,7 @@ class="message-bubble" :class="{
                 <v-icon size="x-small" class="mr-1">mdi-clock-outline</v-icon>
                 {{ formatTimestamp(message.timestamp) }}
               </div>
+              </template>
             </template>
 
             <!-- Plan Created Message -->
@@ -541,8 +552,12 @@ class="message-bubble" :class="{
         variant="outlined"
         density="compact"
         hide-details
-        @keydown.enter.exact.prevent="handleSendMessage"
+        @keydown.enter="handleEnterKey"
         @keydown.shift.enter.prevent="inputMessage += '\n'"
+        @keydown.down="handleSlashArrowDown"
+        @keydown.up="handleSlashArrowUp"
+        @keydown.esc="handleSlashEscape"
+        @keydown.tab="handleSlashTab"
         :disabled="isLoading"
       >
         <template v-slot:append-inner>
@@ -571,6 +586,25 @@ class="message-bubble" :class="{
           </v-btn>
         </template>
       </v-textarea>
+
+      <div
+        v-if="showSlashMenu"
+        class="slash-command-menu"
+      >
+        <div v-if="filteredSlashCommands.length > 0">
+          <div
+            v-for="(cmd, index) in filteredSlashCommands"
+            :key="cmd.name"
+            class="slash-command-item"
+            :class="{ 'is-selected': index === selectedSlashIndex }"
+            @mousedown.prevent="inputMessage = cmd.usage; showSlashMenu = false"
+          >
+            <div class="slash-command-name">{{ cmd.name }}</div>
+            <div class="slash-command-description">{{ cmd.description }}</div>
+          </div>
+        </div>
+        <div v-else class="slash-command-empty">No commands found</div>
+      </div>
 
       <input
         ref="fileInputRef"
@@ -687,8 +721,10 @@ class="message-bubble" :class="{
 import { ref, computed, onMounted, nextTick, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { streamChatMessage, stopStreamingChat, getChatHistory, clearChatHistory, getConversations, ConversationMetadata } from '@/views/api/aiChat';
-import { ChatMessage, ChatStreamChunk, Plan, PlanStep, PlanStepStatus, MessageType, UploadedFilePayload, LLMImageAttachmentPayload } from '@/entityTypes/commonType';
+import { ChatMessage, ChatStreamChunk, Plan, PlanStep, PlanStepStatus, MessageType, UploadedFilePayload, LLMImageAttachmentPayload, CommonMessage } from '@/entityTypes/commonType';
+import { AI_CHAT_RESUME_TOOL_AFTER_PERMISSION } from '@/config/channellist';
 import MCPToolManager from './MCPToolManager.vue';
+import SkillApprovalCard from './SkillApprovalCard.vue';
 
 // Stream state enum for type safety
 // This ensures type safety for stream state management
@@ -711,6 +747,22 @@ const MESSAGE_TYPE = {
     PLAN_EXECUTE_RESUME: MessageType.PLAN_EXECUTE_RESUME
 } as const;
 
+type SlashCommandDefinition = {
+  name: '/skills';
+  description: string;
+  usage: string;
+  examples: readonly string[];
+};
+
+const AI_CHAT_SLASH_COMMANDS: readonly SlashCommandDefinition[] = [
+  {
+    name: '/skills',
+    description: 'List currently available AI skills/tools in this system.',
+    usage: '/skills',
+    examples: ['/skills'],
+  },
+] as const;
+
 // i18n setup
 const { t } = useI18n();
 
@@ -723,7 +775,8 @@ const props = withDefaults(defineProps<Props>(), {
   visible: false
 });
 
-// Emits - eslint-disable-next-line @typescript-eslint/no-unused-vars
+// Emits
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const emit = defineEmits<{
   close: [];
 }>();
@@ -754,13 +807,15 @@ const isLoadingConversations = ref(false);
 const copiedMessageId = ref<string | null>(null);
 const showMCPToolManager = ref(false);
 const activeStreamConversationId = ref<string | undefined>(undefined);
+const showSlashMenu = ref(false);
+const selectedSlashIndex = ref(0);
 
 const MAX_UPLOAD_FILES = 3;
 const MAX_UPLOAD_FILE_BYTES = 5 * 1024 * 1024; // 5MB
 const MAX_TOTAL_MESSAGE_CHARS = 95000; // must stay below aifetchserver AskStreamData.message max_length (100000)
 
-// For LLM-native attachments, use image inputs only.
-const fileAccept = 'image/*,.png,.jpg,.jpeg,.webp,.gif';
+// Allow images plus supported document files for chat uploads.
+const fileAccept = 'image/*,.png,.jpg,.jpeg,.webp,.gif,.csv,.pdf,.docx,.xlsx,.xls';
 
 // Resend message state
 const isResendingMessage = ref(false);
@@ -786,6 +841,14 @@ function createAssistantMessage(content = ''): ChatMessage {
   };
 }
 
+function isStreamableAssistantMessage(message: ChatMessage | undefined): boolean {
+  return Boolean(
+    message &&
+    message.role === 'assistant' &&
+    (!message.messageType || message.messageType === MESSAGE_TYPE.MESSAGE)
+  );
+}
+
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return '0 B';
   const units = ['B', 'KB', 'MB', 'GB'];
@@ -804,23 +867,53 @@ function isSupportedAttachmentFile(file: File): boolean {
   const mime = (file.type || '').toLowerCase();
   const nameLower = file.name.toLowerCase();
   if (mime.startsWith('image/')) return true;
+  if (
+    mime === 'text/csv' ||
+    mime === 'application/csv' ||
+    mime === 'application/pdf' ||
+    mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+    mime === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+    mime === 'application/vnd.ms-excel'
+  ) {
+    return true;
+  }
   return (
     nameLower.endsWith('.png') ||
     nameLower.endsWith('.jpg') ||
     nameLower.endsWith('.jpeg') ||
     nameLower.endsWith('.webp') ||
-    nameLower.endsWith('.gif')
+    nameLower.endsWith('.gif') ||
+    nameLower.endsWith('.csv') ||
+    nameLower.endsWith('.pdf') ||
+    nameLower.endsWith('.docx') ||
+    nameLower.endsWith('.xlsx') ||
+    nameLower.endsWith('.xls')
   );
 }
 
 function resolveAttachmentMimeType(file: File): string {
   const mime = (file.type || '').toLowerCase();
   if (mime.startsWith('image/')) return mime;
+  if (
+    mime === 'text/csv' ||
+    mime === 'application/csv' ||
+    mime === 'application/pdf' ||
+    mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+    mime === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+    mime === 'application/vnd.ms-excel'
+  ) {
+    return mime;
+  }
   const nameLower = file.name.toLowerCase();
   if (nameLower.endsWith('.png')) return 'image/png';
   if (nameLower.endsWith('.jpg') || nameLower.endsWith('.jpeg')) return 'image/jpeg';
   if (nameLower.endsWith('.webp')) return 'image/webp';
   if (nameLower.endsWith('.gif')) return 'image/gif';
+  if (nameLower.endsWith('.csv')) return 'text/csv';
+  if (nameLower.endsWith('.pdf')) return 'application/pdf';
+  if (nameLower.endsWith('.docx')) return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  if (nameLower.endsWith('.xlsx')) return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  if (nameLower.endsWith('.xls')) return 'application/vnd.ms-excel';
   return 'application/octet-stream';
 }
 
@@ -852,7 +945,7 @@ async function handleFileSelection(event: Event): Promise<void> {
   if (!fileList || fileList.length === 0) return;
 
   if (selectedUploadFiles.value.length >= MAX_UPLOAD_FILES) {
-    streamError.value = t('knowledge.upload_failed') || 'Upload failed';
+    streamError.value = t('knowledge.upload_failed_max_files', { max: MAX_UPLOAD_FILES }) || `Maximum ${MAX_UPLOAD_FILES} files allowed. Remove existing files first.`;
     target.value = '';
     return;
   }
@@ -862,14 +955,20 @@ async function handleFileSelection(event: Event): Promise<void> {
   const toConsider = files.slice(0, remainingSlots);
 
   const newFiles: File[] = [];
-  let hadInvalid = false;
+  const invalidReasons: string[] = [];
   for (const file of toConsider) {
     if (file.size > MAX_UPLOAD_FILE_BYTES) {
-      hadInvalid = true;
+      invalidReasons.push(
+        t('knowledge.upload_failed_file_too_large', { name: file.name, maxSize: formatBytes(MAX_UPLOAD_FILE_BYTES) })
+        || `File "${file.name}" exceeds the ${formatBytes(MAX_UPLOAD_FILE_BYTES)} size limit.`
+      );
       continue;
     }
     if (!isSupportedAttachmentFile(file)) {
-      hadInvalid = true;
+      invalidReasons.push(
+        t('knowledge.upload_failed_unsupported_type', { name: file.name })
+        || `File "${file.name}" type is not supported.`
+      );
       continue;
     }
     newFiles.push(file);
@@ -877,8 +976,8 @@ async function handleFileSelection(event: Event): Promise<void> {
 
   selectedUploadFiles.value = [...selectedUploadFiles.value, ...newFiles];
 
-  if (hadInvalid) {
-    streamError.value = t('knowledge.upload_failed') || 'Upload failed';
+  if (invalidReasons.length > 0) {
+    streamError.value = invalidReasons.join('\n');
   }
 
   // Allow selecting the same file again
@@ -917,6 +1016,23 @@ const allStepsCompleted = computed(() => {
          s.status === PlanStepStatus.FAILED ||
          s.status === PlanStepStatus.SKIPPED
   );
+});
+
+const slashQuery = computed(() => {
+  const trimmed = inputMessage.value.trimStart();
+  if (!trimmed.startsWith('/')) return '';
+  return trimmed.slice(1).trim().toLowerCase();
+});
+
+const filteredSlashCommands = computed<SlashCommandDefinition[]>(() => {
+  const query = slashQuery.value;
+  if (!query) {
+    return [...AI_CHAT_SLASH_COMMANDS];
+  }
+  return AI_CHAT_SLASH_COMMANDS.filter((cmd) => {
+    const normalizedName = cmd.name.slice(1).toLowerCase();
+    return normalizedName.includes(query);
+  });
 });
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -996,6 +1112,20 @@ watch(conversationId, (newId, oldId) => {
 watch(showConversationsDialog, (isOpen) => {
   if (isOpen) {
     loadConversations();
+  }
+});
+
+watch(inputMessage, (newValue) => {
+  const trimmed = newValue.trimStart();
+  const inSlashMode = trimmed.startsWith('/');
+  showSlashMenu.value = inSlashMode;
+  if (!inSlashMode) {
+    selectedSlashIndex.value = 0;
+    return;
+  }
+  const maxIndex = Math.max(filteredSlashCommands.value.length - 1, 0);
+  if (selectedSlashIndex.value > maxIndex) {
+    selectedSlashIndex.value = 0;
   }
 });
 
@@ -1268,10 +1398,9 @@ async function sendMessage(
             let lastIndex = messages.value.length - 1;
             const lastMessage = messages.value[lastIndex];
 
-            // If the last message is NOT an assistant message OR if it's a plan_execute_resume message,
-            // append a new assistant message so we can stream into it
-            // This handles cases where the last message is from 'user', 'system', 'tool', plan_execute_resume, or any other role
-            if (lastMessage.role !== 'assistant' || lastMessage.messageType === MESSAGE_TYPE.PLAN_EXECUTE_RESUME) {
+            // Stream tokens only into plain assistant text messages.
+            // Tool/plan/system assistant messages should never receive conversational tokens.
+            if (!isStreamableAssistantMessage(lastMessage)) {
               messages.value.push(createAssistantMessage());
               lastIndex = messages.value.length - 1; // Update to point at the new assistant message
             }
@@ -1320,15 +1449,55 @@ async function sendMessage(
             console.log('tool_result', chunk);
             // Hide tool execution indicator and show result
             isExecutingTool.value = false;
-            if (chunk.toolResult) {
-              toolResult.value = chunk.toolResult;
+            const hasContentPayload =
+              typeof chunk.content === 'string' && chunk.content.trim().length > 0;
+
+            if (chunk.replacesPermissionPromptForToolId) {
+              const rid = chunk.replacesPermissionPromptForToolId;
+              const existingIdx = messages.value.findIndex(
+                (m) =>
+                  m.messageType === MessageType.TOOL_RESULT &&
+                  m.metadata?.toolId === rid
+              );
+              if (existingIdx !== -1 && (chunk.toolResult || hasContentPayload)) {
+                const tr = (chunk.toolResult || {}) as Record<string, unknown>;
+                toolResult.value = tr;
+                showToolResult.value = false;
+                messages.value[existingIdx] = {
+                  ...messages.value[existingIdx],
+                  content:
+                    typeof chunk.content === 'string' && chunk.content.trim().length > 0
+                      ? chunk.content
+                      : JSON.stringify(chunk.toolResult ?? {}, null, 2),
+                  metadata: {
+                    ...messages.value[existingIdx].metadata,
+                    toolName: chunk.toolName ?? messages.value[existingIdx].metadata?.toolName,
+                    toolId: rid,
+                    toolResult: chunk.toolResult,
+                    success: tr.success !== false && !tr.error,
+                    executionTimeMs: tr.executionTimeMs as number | undefined,
+                    summary: tr.summary as string | undefined,
+                    error: tr.error as string | undefined,
+                  },
+                };
+                throttledScrollToBottom();
+              }
+              isTyping.value = true;
+              break;
+            }
+
+            if (chunk.toolResult || hasContentPayload) {
+              toolResult.value = (chunk.toolResult as Record<string, unknown>) || null;
               showToolResult.value = false;
 
               // Add tool result message to chat history
               const toolResultMessage: ChatMessage = {
                 id: `tool-result-${chunk.toolId || Date.now()}-${Date.now()}`,
                 role: 'assistant',
-                content: '',
+                content:
+                  typeof chunk.content === 'string' && chunk.content.trim().length > 0
+                    ? chunk.content
+                    : JSON.stringify(chunk.toolResult ?? {}, null, 2),
                 timestamp: new Date(),
                 conversationId: chunk.conversationId || conversationId.value,
                 messageType: MessageType.TOOL_RESULT,
@@ -1529,6 +1698,7 @@ async function sendMessage(
  */
 async function handleSendMessage() {
   const trimmed = inputMessage.value.trim();
+  if (showSlashMenu.value && trimmed.startsWith('/')) return;
   if (!trimmed && selectedUploadFiles.value.length === 0) return;
   if (isUploadingFiles.value) return;
 
@@ -1571,7 +1741,8 @@ async function handleSendMessage() {
       if (attachments.length > 0) {
         finalMessage = 'Please analyze attached file(s).';
       } else {
-        streamError.value = t('knowledge.upload_failed') || 'Upload failed';
+        streamError.value = t('knowledge.upload_failed_file_too_large', { name: selectedUploadFiles.value.map(f => f.name).join(', '), maxSize: formatBytes(MAX_UPLOAD_FILE_BYTES) })
+          || `All selected files exceed the ${formatBytes(MAX_UPLOAD_FILE_BYTES)} size limit or are unsupported.`;
         return;
       }
     }
@@ -1584,6 +1755,52 @@ async function handleSendMessage() {
   } finally {
     isUploadingFiles.value = false;
   }
+}
+
+function handleSlashArrowDown(event: KeyboardEvent): void {
+  if (!showSlashMenu.value || filteredSlashCommands.value.length === 0) return;
+  event.preventDefault();
+  selectedSlashIndex.value =
+    (selectedSlashIndex.value + 1) % filteredSlashCommands.value.length;
+}
+
+function handleSlashArrowUp(event: KeyboardEvent): void {
+  if (!showSlashMenu.value || filteredSlashCommands.value.length === 0) return;
+  event.preventDefault();
+  selectedSlashIndex.value =
+    (selectedSlashIndex.value - 1 + filteredSlashCommands.value.length) %
+    filteredSlashCommands.value.length;
+}
+
+function handleSlashEscape(event: KeyboardEvent): void {
+  if (!showSlashMenu.value) return;
+  event.preventDefault();
+  showSlashMenu.value = false;
+}
+
+function applySelectedSlashCommand(): void {
+  if (!showSlashMenu.value || filteredSlashCommands.value.length === 0) return;
+  const selected = filteredSlashCommands.value[selectedSlashIndex.value];
+  if (!selected) return;
+  inputMessage.value = selected.usage;
+  showSlashMenu.value = false;
+}
+
+function handleSlashTab(event: KeyboardEvent): void {
+  if (!showSlashMenu.value || filteredSlashCommands.value.length === 0) return;
+  event.preventDefault();
+  applySelectedSlashCommand();
+}
+
+function handleEnterKey(event: KeyboardEvent): void {
+  if (event.shiftKey) return;
+  if (!showSlashMenu.value || filteredSlashCommands.value.length === 0) {
+    event.preventDefault();
+    void handleSendMessage();
+    return;
+  }
+  event.preventDefault();
+  applySelectedSlashCommand();
 }
 
 /**
@@ -1648,6 +1865,141 @@ async function handleNewConversation() {
   scrollToBottom();
   if (inputField.value && inputField.value.focus) {
     inputField.value.focus();
+  }
+}
+
+/**
+ * Resolve OpenAI-style tool_call id for a permission row (metadata or nearest prior tool_call).
+ */
+function resolveToolIdForPermissionMessage(message: ChatMessage): string | undefined {
+  const direct = message.metadata?.toolId;
+  if (typeof direct === 'string' && direct.length > 0) {
+    return direct;
+  }
+  const toolName = message.metadata?.toolName;
+  if (typeof toolName !== 'string' || !toolName) {
+    return undefined;
+  }
+  const idx = messages.value.findIndex((m) => m.id === message.id);
+  if (idx <= 0) {
+    return undefined;
+  }
+  for (let i = idx - 1; i >= 0; i--) {
+    const m = messages.value[i];
+    if (
+      m.messageType === MessageType.TOOL_CALL &&
+      m.metadata?.toolName === toolName &&
+      typeof m.metadata?.toolId === 'string' &&
+      m.metadata.toolId.length > 0
+    ) {
+      return m.metadata.toolId;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Handle skill permission grant — user approved; main process re-runs the tool and continues the stream.
+ */
+async function handleSkillPermissionGrant(
+  message: ChatMessage,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _persistent: boolean
+): Promise<void> {
+  const toolId = resolveToolIdForPermissionMessage(message);
+  if (!toolId) {
+    const idx = messages.value.findIndex((m) => m.id === message.id);
+    if (idx !== -1) {
+      messages.value = [
+        ...messages.value.slice(0, idx),
+        {
+          ...messages.value[idx],
+          content:
+            t('skills.permission_resume_no_tool_id') ||
+            'Missing tool call information; cannot continue execution.',
+          metadata: {
+            ...messages.value[idx].metadata,
+            toolResult: undefined,
+            success: false,
+          },
+        },
+        ...messages.value.slice(idx + 1),
+      ];
+    }
+    return;
+  }
+
+  try {
+    const raw: unknown = await window.api.invoke(
+      AI_CHAT_RESUME_TOOL_AFTER_PERMISSION,
+      JSON.stringify({
+        toolId,
+        conversationId: message.conversationId || conversationId.value,
+      })
+    );
+    const res = raw as CommonMessage<{ ok: boolean; error?: string } | null>;
+    if (!res.status || !res.data?.ok) {
+      const errMsg =
+        res.data?.error ||
+        res.msg ||
+        t('skills.permission_resume_failed') ||
+        'Could not continue the skill after permission was granted.';
+      const errIdx = messages.value.findIndex((m) => m.id === message.id);
+      if (errIdx !== -1) {
+        messages.value = [
+          ...messages.value.slice(0, errIdx),
+          {
+            ...messages.value[errIdx],
+            content: errMsg,
+            metadata: {
+              ...messages.value[errIdx].metadata,
+              toolResult: { error: errMsg, success: false },
+              success: false,
+              error: errMsg,
+            },
+          },
+          ...messages.value.slice(errIdx + 1),
+        ];
+      }
+    }
+  } catch (error) {
+    const errMsg =
+      error instanceof Error ? error.message : String(error);
+    const errIdx = messages.value.findIndex((m) => m.id === message.id);
+    if (errIdx !== -1) {
+      messages.value = [
+        ...messages.value.slice(0, errIdx),
+        {
+          ...messages.value[errIdx],
+          content: errMsg,
+          metadata: {
+            ...messages.value[errIdx].metadata,
+            toolResult: { error: errMsg, success: false },
+            success: false,
+            error: errMsg,
+          },
+        },
+        ...messages.value.slice(errIdx + 1),
+      ];
+    }
+  }
+}
+
+/**
+ * Handle skill permission deny — user denied the skill execution.
+ */
+function handleSkillPermissionDeny(message: ChatMessage): void {
+  const idx = messages.value.findIndex((m) => m.id === message.id);
+  if (idx !== -1) {
+    messages.value = [
+      ...messages.value.slice(0, idx),
+      {
+        ...messages.value[idx],
+        content: 'Permission denied. The skill will not be executed.',
+        metadata: { ...messages.value[idx].metadata, toolResult: undefined, success: false },
+      },
+      ...messages.value.slice(idx + 1),
+    ];
   }
 }
 
@@ -2183,6 +2535,47 @@ onMounted(() => {
   padding: 12px 16px;
   border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
   background-color: rgb(var(--v-theme-surface));
+}
+
+.slash-command-menu {
+  margin-top: 8px;
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  border-radius: 8px;
+  background-color: rgb(var(--v-theme-surface));
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.slash-command-item {
+  padding: 8px 10px;
+  cursor: pointer;
+  border-bottom: 1px solid rgba(var(--v-border-color), 0.12);
+
+  &:last-child {
+    border-bottom: none;
+  }
+
+  &.is-selected {
+    background-color: rgba(var(--v-theme-primary), 0.08);
+  }
+}
+
+.slash-command-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: rgb(var(--v-theme-primary));
+}
+
+.slash-command-description {
+  font-size: 12px;
+  color: rgb(var(--v-theme-on-surface-variant));
+  margin-top: 2px;
+}
+
+.slash-command-empty {
+  padding: 10px;
+  font-size: 12px;
+  color: rgb(var(--v-theme-on-surface-variant));
 }
 
 /* Scrollbar styling */

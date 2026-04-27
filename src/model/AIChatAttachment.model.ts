@@ -10,6 +10,13 @@ export type UploadedFileForPersistence = {
   contentBase64: string;
 };
 
+export type StoredAttachmentFile = {
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  contentBlob: Buffer;
+};
+
 export class AIChatAttachmentModel extends BaseDb {
   public repository: Repository<AIChatAttachmentEntity>;
 
@@ -57,6 +64,54 @@ export class AIChatAttachmentModel extends BaseDb {
   async deleteByConversation(conversationId: string): Promise<number> {
     const result = await this.repository.delete({ conversationId });
     return result.affected || 0;
+  }
+
+  /**
+   * Get the most recent uploaded file bytes by conversation + file name.
+   */
+  async getLatestAttachmentByName(
+    conversationId: string,
+    fileName: string
+  ): Promise<StoredAttachmentFile | null> {
+    const entity = await this.repository.findOne({
+      where: { conversationId, fileName },
+      order: { id: "DESC" },
+    });
+
+    if (!entity) {
+      return null;
+    }
+
+    return {
+      fileName: entity.fileName,
+      mimeType: entity.mimeType,
+      sizeBytes: entity.sizeBytes,
+      contentBlob: entity.contentBlob,
+    };
+  }
+
+  /**
+   * Get the most recent uploaded file bytes by conversation + SHA256.
+   */
+  async getLatestAttachmentBySha256(
+    conversationId: string,
+    sha256: string
+  ): Promise<StoredAttachmentFile | null> {
+    const entity = await this.repository.findOne({
+      where: { conversationId, sha256 },
+      order: { id: "DESC" },
+    });
+
+    if (!entity) {
+      return null;
+    }
+
+    return {
+      fileName: entity.fileName,
+      mimeType: entity.mimeType,
+      sizeBytes: entity.sizeBytes,
+      contentBlob: entity.contentBlob,
+    };
   }
 
   async deleteAll(): Promise<void> {

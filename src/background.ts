@@ -11,6 +11,7 @@ const session = require("electron").session;
 // import { createProtocol } from 'vue-cli-plugin-electron-builder/lib'
 import installExtension, { VUEJS3_DEVTOOLS } from "electron-devtools-installer";
 import { registerCommunicationIpcHandlers } from "./main-process/communication/";
+import { SkillImportService } from "@/service/SkillImportService";
 import * as path from "path";
 import { Token } from "@/modules/token";
 import { MenuManager } from "@/main-process/menu/MenuManager";
@@ -259,14 +260,31 @@ function initialize() {
     }
   }
 
-  async function createWindow() {
-    // Check if window already exists and is not destroyed
+  /** Prevents concurrent createWindow() races (e.g. whenReady + activate) that double-register ipcMain handlers. */
+  let createWindowInFlight: Promise<void> | null = null;
+
+  async function createWindow(): Promise<void> {
     if (win && !(win as any).isDestroyed()) {
       console.log("Window already exists and is valid, focusing...");
       (win as any).focus();
       return;
     }
+    if (createWindowInFlight) {
+      await createWindowInFlight;
+      if (win && !(win as any).isDestroyed()) {
+        (win as any).focus();
+      }
+      return;
+    }
+    createWindowInFlight = createWindowBody();
+    try {
+      await createWindowInFlight;
+    } finally {
+      createWindowInFlight = null;
+    }
+  }
 
+  async function createWindowBody(): Promise<void> {
     // Create the browser window.
     win = new BrowserWindow({
       // Hide by default on Windows/Linux. (macOS uses the system menu bar.)
@@ -323,6 +341,11 @@ function initialize() {
       }
       //if (userdataPath){//register communication ipc handlers
       registerCommunicationIpcHandlers(win);
+
+      // Load persisted skills into runtime registry
+      SkillImportService.loadPersistedSkills().catch((err: unknown) => {
+        console.warn("[Startup] Failed to load persisted skills:", err);
+      });
       //}
     }
 

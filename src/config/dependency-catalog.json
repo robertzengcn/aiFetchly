@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "dependencies": {
+    "poppler": {
+      "probe": "pdfinfo",
+      "description": "PDF rendering library (provides pdfinfo, pdftotext, pdftoppm)",
+      "platforms": {
+        "darwin": { "manager": "brew", "package": "poppler" },
+        "linux": { "manager": "apt", "package": "poppler-utils" },
+        "win32": { "manager": "winget", "package": "GnuWin32.Poppler" }
+      }
+    },
+    "tesseract": {
+      "probe": "tesseract",
+      "description": "OCR engine for text recognition from images",
+      "platforms": {
+        "darwin": { "manager": "brew", "package": "tesseract" },
+        "linux": { "manager": "apt", "package": "tesseract-ocr" },
+        "win32": { "manager": "winget", "package": "UB-Mannheim.TesseractOCR" }
+      }
+    },
+    "ffmpeg": {
+      "probe": "ffmpeg",
+      "description": "Multimedia framework for audio/video processing",
+      "platforms": {
+        "darwin": { "manager": "brew", "package": "ffmpeg" },
+        "linux": { "manager": "apt", "package": "ffmpeg" },
+        "win32": { "manager": "winget", "package": "Gyan.FFmpeg" }
+      }
+    },
+    "imagemagick": {
+      "probe": "magick",
+      "description": "Image processing library (convert, resize, format conversion)",
+      "platforms": {
+        "darwin": { "manager": "brew", "package": "imagemagick" },
+        "linux": { "manager": "apt", "package": "imagemagick" },
+        "win32": { "manager": "winget", "package": "ImageMagick.ImageMagick" }
+      }
+    },
+    "wkhtmltopdf": {
+      "probe": "wkhtmltopdf",
+      "description": "HTML to PDF converter using WebKit rendering engine",
+      "platforms": {
+        "darwin": { "manager": "brew", "package": "wkhtmltopdf" },
+        "linux": { "manager": "apt", "package": "wkhtmltopdf" },
+        "win32": { "manager": "winget", "package": "wkhtmltopdf.wkhtmltopdf" }
+      }
+    }
+  }
+}
