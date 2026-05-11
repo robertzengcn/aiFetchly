@@ -75,6 +75,7 @@ export default {
     drag_drop_file:
       "Arrastre y suelte su archivo aquí o haga clic para seleccionar un archivo",
     search: "Buscar",
+    replace: "Reemplazar",
   },
   route: {
     dashboard: "Panel",
