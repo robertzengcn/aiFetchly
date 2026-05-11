@@ -321,62 +321,58 @@ export class BingScraper extends SearchScrape {
     async search_keyword(keyword: string) {
         //wait for full page loading
         // await delay(5000)
-        await this.page.waitForSelector('textarea[name="q"]', { timeout: this.STANDARD_TIMEOUT });
+        await this.page.waitForFunction(() => {
+            return (
+                document.querySelector('textarea[name="q"]') !== null ||
+                document.querySelector('input[name="q"]') !== null
+            );
+        }, { timeout: this.STANDARD_TIMEOUT });
         await this.page.waitForFunction(() => {
             return document.readyState === 'complete';
         }, { timeout: this.STANDARD_TIMEOUT });
         const textareaSearch = await this.page.$('textarea[name="q"]');
-        if (textareaSearch) {
+        const inputSearch = textareaSearch ? null : await this.page.$('input[name="q"]');
+        const searchControl = textareaSearch ?? inputSearch;
 
-            const rect = await textareaSearch.boundingBox();
-            await textareaSearch.focus();
-            if (rect) {
-                await this.page.mouse.move(rect.x + rect.width / 2, rect.y + rect.height / 2);
-                await this.page.mouse.click(rect.x + rect.width / 2, rect.y + rect.height / 2);
-                await this.page.keyboard.type(keyword, { delay: Math.random() * 100 + 250 });
-                await this.page.keyboard.press('Enter');
-
-                try {
-                    await this.page.waitForNavigation({ timeout: 5000 });
-                } catch {
-                    await this.page.evaluate(() => {
-                        const form = document.querySelector('form[action="/search"]') as HTMLFormElement;
-                        if (form) {
-                            console.log("form found and submit");
-                            form.submit();
-                        }
-                    });
-                }
-            } else {
-                const input = await this.page.$('input[name="q"]');
-                if (input) {
-                    // await this.set_input_value(`input[name="q"]`, keyword);
-                    await this.page.evaluate((element, value) => {
-                        element.value = value;
-                    }, input, keyword);
-                    // await this.page.waitForTimeout(50);
-                    await this.page.evaluate(async () => {
-                        await new Promise(function (resolve) {
-                            setTimeout(resolve, 3000)
-                        });
-                    });
-
-                    await input.focus();
-                    await this.page.keyboard.press("Enter");
-                } else {
-                    const recovery = await this.attemptAIRecovery('search_input', 'Bing search input not found', ['textarea[name="q"]', 'input[name="q"]'], { keyword });
-                    if (recovery.success) {
-                        return this.search_keyword(keyword);
-                    }
-                    throw new CustomError("input keyword button not found", 202408191127280);
-                }
-            }
-        } else {
-            const recovery = await this.attemptAIRecovery('search_input', 'Bing search input not found', ['textarea[name="q"]'], { keyword });
+        if (!searchControl) {
+            const recovery = await this.attemptAIRecovery('search_input', 'Bing search input not found', ['textarea[name="q"]', 'input[name="q"]'], { keyword });
             if (recovery.success) {
                 return this.search_keyword(keyword);
             }
             throw new CustomError("input keyword button not found", 202408191127280);
+        }
+
+        const rect = await searchControl.boundingBox();
+        await searchControl.focus();
+        if (rect) {
+            await this.page.mouse.move(rect.x + rect.width / 2, rect.y + rect.height / 2);
+            await this.page.mouse.click(rect.x + rect.width / 2, rect.y + rect.height / 2);
+            await this.page.keyboard.type(keyword, { delay: Math.random() * 100 + 250 });
+            await this.page.keyboard.press('Enter');
+
+            try {
+                await this.page.waitForNavigation({ timeout: 5000 });
+            } catch {
+                await this.page.evaluate(() => {
+                    const form = document.querySelector('form[action="/search"]') as HTMLFormElement;
+                    if (form) {
+                        console.log("form found and submit");
+                        form.submit();
+                    }
+                });
+            }
+        } else {
+            await this.page.evaluate((element, value) => {
+                (element as HTMLInputElement | HTMLTextAreaElement).value = value;
+            }, searchControl, keyword);
+            await this.page.evaluate(async () => {
+                await new Promise(function (resolve) {
+                    setTimeout(resolve, 3000)
+                });
+            });
+
+            await searchControl.focus();
+            await this.page.keyboard.press("Enter");
         }
     }
     //click next page
