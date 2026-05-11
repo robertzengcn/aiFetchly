@@ -75,6 +75,7 @@ export default {
     drag_drop_file:
       "Datei hierher ziehen oder klicken, um eine Datei auszuwählen",
     search: "Suchen",
+    replace: "Ersetzen",
   },
   route: {
     dashboard: "Dashboard",
