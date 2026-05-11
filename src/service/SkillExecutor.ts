@@ -35,6 +35,44 @@ const SENSITIVE_PATTERNS = [
   /\bsecret\s*[:=]\s*["']?\S{4,}/i, // secret=xxx (4+ chars)
 ] as const;
 
+/** Legacy names merged into scrape_urls_from_search_engine (old transcripts + permissions). */
+const LEGACY_SEARCH_SCRAPE_TOOL_NAMES = new Set<string>([
+  "scrape_urls_from_google",
+  "scrape_urls_from_bing",
+  "scrape_urls_from_yandex",
+  "scrape_urls_from_baidu",
+]);
+
+const LEGACY_SEARCH_ENGINE_ARG: Readonly<Record<string, string>> = {
+  scrape_urls_from_google: "google",
+  scrape_urls_from_bing: "bing",
+  scrape_urls_from_yandex: "yandex",
+  scrape_urls_from_baidu: "baidu",
+};
+
+function resolveSearchScrapeInvocation(
+  name: string,
+  args: Record<string, unknown>
+): {
+  skillName: string;
+  resolvedArgs: Record<string, unknown>;
+  permissionSkillName: string;
+} {
+  const engine = LEGACY_SEARCH_ENGINE_ARG[name];
+  if (engine !== undefined) {
+    return {
+      skillName: "scrape_urls_from_search_engine",
+      resolvedArgs: { ...args, search_engine: engine },
+      permissionSkillName: name,
+    };
+  }
+  return {
+    skillName: name,
+    resolvedArgs: args,
+    permissionSkillName: name,
+  };
+}
+
 /**
  * Validate and sanitize skill arguments.
  * Rejects arguments containing sensitive patterns.
@@ -185,8 +223,11 @@ async function execute(
   const startTime = Date.now();
   const toolCallId = context.toolCallId;
 
+  const { skillName, resolvedArgs, permissionSkillName } =
+    resolveSearchScrapeInvocation(name, args);
+
   // 1. Validate — skill must be registered
-  const skill = SkillRegistry.getSkill(name);
+  const skill = SkillRegistry.getSkill(skillName);
   if (!skill) {
     // Fall back to ToolExecutor for MCP tools (mcp_* prefix)
     if (name.startsWith("mcp_")) {
@@ -200,12 +241,18 @@ async function execute(
       result: { error: `Unknown tool: ${name}` },
       execution_time_ms: Date.now() - startTime,
     };
-    auditLog(name, args, false, result.execution_time_ms, "Unknown tool");
+    auditLog(
+      name,
+      resolvedArgs,
+      false,
+      result.execution_time_ms,
+      "Unknown tool"
+    );
     return result;
   }
 
   // 2. Sanitize input (FR-003)
-  const validation = validateArgs(args);
+  const validation = validateArgs(resolvedArgs);
   if (!validation.valid) {
     const result: ToolExecutionResult = {
       tool_call_id: toolCallId,
@@ -214,13 +261,20 @@ async function execute(
       result: { error: `Input validation failed: ${validation.reason}` },
       execution_time_ms: Date.now() - startTime,
     };
-    auditLog(name, args, false, result.execution_time_ms, validation.reason);
+    auditLog(
+      name,
+      resolvedArgs,
+      false,
+      result.execution_time_ms,
+      validation.reason
+    );
     return result;
   }
 
   // 3. Permission check (pure skills auto-allowed, or already granted by caller)
   if (!context.skipPermissionCheck) {
-    const permCheck = SkillPermissionService.checkPermission(name);
+    const permCheck =
+      SkillPermissionService.checkPermission(permissionSkillName);
     if (!permCheck.allowed) {
       if (permCheck.needsPrompt) {
         // Return a special result indicating permission is needed.
@@ -237,10 +291,10 @@ async function execute(
             ...(skill.permissionCategory === "shell"
               ? {
                   shellPreview: {
-                    command: (args.command as string) ?? "",
-                    cwd: (args.cwd as string) ?? "",
-                    shell: (args.shell as string) ?? "auto",
-                    timeout_ms: (args.timeout_ms as number) ?? 60000,
+                    command: (resolvedArgs.command as string) ?? "",
+                    cwd: (resolvedArgs.cwd as string) ?? "",
+                    shell: (resolvedArgs.shell as string) ?? "auto",
+                    timeout_ms: (resolvedArgs.timeout_ms as number) ?? 60000,
                   },
                 }
               : {}),
@@ -257,7 +311,13 @@ async function execute(
         result: { error: permCheck.reason || "Permission denied" },
         execution_time_ms: Date.now() - startTime,
       };
-      auditLog(name, args, false, result.execution_time_ms, permCheck.reason);
+      auditLog(
+        name,
+        resolvedArgs,
+        false,
+        result.execution_time_ms,
+        permCheck.reason
+      );
       return result;
     }
   }
@@ -273,7 +333,13 @@ async function execute(
         result: { error: rateLimit.reason },
         execution_time_ms: Date.now() - startTime,
       };
-      auditLog(name, args, false, result.execution_time_ms, rateLimit.reason);
+      auditLog(
+        name,
+        resolvedArgs,
+        false,
+        result.execution_time_ms,
+        rateLimit.reason
+      );
       return result;
     }
     shellRateLimiter.acquire();
@@ -281,7 +347,7 @@ async function execute(
 
   // 5. Execute based on tier
   try {
-    const execResult = await skill.execute(args, context);
+    const execResult = await skill.execute(resolvedArgs, context);
     const result: ToolExecutionResult = {
       tool_call_id: toolCallId,
       tool_name: name,
@@ -289,7 +355,7 @@ async function execute(
       result: execResult.result,
       execution_time_ms: Date.now() - startTime,
     };
-    auditLog(name, args, result.success, result.execution_time_ms);
+    auditLog(name, resolvedArgs, result.success, result.execution_time_ms);
     return result;
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -300,7 +366,7 @@ async function execute(
       result: { error: errorMessage },
       execution_time_ms: Date.now() - startTime,
     };
-    auditLog(name, args, false, result.execution_time_ms, errorMessage);
+    auditLog(name, resolvedArgs, false, result.execution_time_ms, errorMessage);
     return result;
   } finally {
     if (skill.permissionCategory === "shell") {
@@ -352,7 +418,11 @@ async function executeViaToolExecutor(
  * Check if a tool name is known (either in the registry or handled by ToolExecutor).
  */
 function isKnown(name: string): boolean {
-  return SkillRegistry.isRegistered(name) || name.startsWith("mcp_");
+  return (
+    SkillRegistry.isRegistered(name) ||
+    LEGACY_SEARCH_SCRAPE_TOOL_NAMES.has(name) ||
+    name.startsWith("mcp_")
+  );
 }
 
 // ---------------------------------------------------------------------------
