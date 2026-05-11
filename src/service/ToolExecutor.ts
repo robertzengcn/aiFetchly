@@ -143,6 +143,7 @@ export class ToolExecutor {
       case "scrape_urls_from_bing":
       case "scrape_urls_from_yandex":
       case "scrape_urls_from_baidu":
+      case "scrape_urls_from_search_engine":
         return await this.executeSearchEngineTool(toolName, toolParams);
 
       case "search_yellow_pages":
@@ -245,6 +246,48 @@ export class ToolExecutor {
   }
 
   /**
+   * Resolve display engine name for SearchModule (Google, Bing, Yandex, Baidu).
+   */
+  private static resolveSearchScrapeEngineName(
+    toolName: string,
+    toolParams: Record<string, unknown>
+  ): string {
+    const legacyByTool: Record<string, string> = {
+      scrape_urls_from_google: "Google",
+      scrape_urls_from_bing: "Bing",
+      scrape_urls_from_yandex: "Yandex",
+      scrape_urls_from_baidu: "Baidu",
+    };
+    const fromLegacy = legacyByTool[toolName];
+    if (fromLegacy !== undefined) {
+      return fromLegacy;
+    }
+    if (toolName === "scrape_urls_from_search_engine") {
+      const raw = toolParams.search_engine;
+      if (typeof raw !== "string" || !raw.trim()) {
+        throw new Error(
+          "search_engine is required (google | bing | yandex | baidu)"
+        );
+      }
+      const key = raw.trim().toLowerCase();
+      const byParam: Record<string, string> = {
+        google: "Google",
+        bing: "Bing",
+        yandex: "Yandex",
+        baidu: "Baidu",
+      };
+      const resolved = byParam[key];
+      if (!resolved) {
+        throw new Error(
+          `Invalid search_engine "${raw}". Use one of: google, bing, yandex, baidu`
+        );
+      }
+      return resolved;
+    }
+    throw new Error(`Unexpected search scrape tool: ${toolName}`);
+  }
+
+  /**
    * Execute search engine tool (Google, Bing, Yandex, Baidu)
    */
   private static async executeSearchEngineTool(
@@ -264,15 +307,7 @@ export class ToolExecutor {
       throw new Error("parameter of Query is required");
     }
 
-    // Map tool name to engine name
-    const engineName =
-      toolName === "scrape_urls_from_google"
-        ? "Google"
-        : toolName === "scrape_urls_from_bing"
-        ? "Bing"
-        : toolName === "scrape_urls_from_baidu"
-        ? "Baidu"
-        : "Yandex";
+    const engineName = this.resolveSearchScrapeEngineName(toolName, toolParams);
 
     // Calculate num_pages based on num_results (assuming ~10 results per page)
     const numPages = Math.ceil(numResults / 10);
