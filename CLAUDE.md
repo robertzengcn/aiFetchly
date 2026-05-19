@@ -592,6 +592,11 @@ Current branch (`sqlite-vec-merge`) is integrating sqlite-vec for vector similar
 - IPC calls must handle both success and error cases
 - **Worker processes cannot access database directly**: If you see errors like "Cannot read properties of undefined (reading 'getName')" in worker stderr, your worker is trying to access the database. Worker processes must communicate with main process via IPC for all CRUD operations.
 
+## Gstack
+
+- **Always use `/browse` from gstack for all web browsing** — never use `mcp__claude-in-chrome__*` tools.
+- Available gstack skills: `/office-hours`, `/plan-ceo-review`, `/plan-eng-review`, `/plan-design-review`, `/design-consultation`, `/design-shotgun`, `/design-html`, `/review`, `/ship`, `/land-and-deploy`, `/canary`, `/benchmark`, `/browse`, `/connect-chrome`, `/qa`, `/qa-only`, `/design-review`, `/setup-browser-cookies`, `/setup-deploy`, `/setup-gbrain`, `/retro`, `/investigate`, `/document-release`, `/document-generate`, `/codex`, `/cso`, `/autoplan`, `/plan-devex-review`, `/devex-review`, `/careful`, `/freeze`, `/guard`, `/unfreeze`, `/gstack-upgrade`, `/learn`.
+
 ## Active Technologies
 - TypeScript 5.x (001-ai-contact-extraction)
 - SQLite with TypeORM (local), Remote AI server (HTTP/SSE) (001-ai-email-template)
