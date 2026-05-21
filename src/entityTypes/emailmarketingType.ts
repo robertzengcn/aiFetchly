@@ -184,7 +184,7 @@ export type EmailItem = {
 export type Buckemailstruct = {
   EmailBtype: BuckEmailType; //email source type
   EmailtaskentityId?: number;
-  //EmailList:Array<EmailItem>
+  EmailList?: Array<EmailItem>;
   EmailTemplateslist: Array<number>;
   EmailFilterlist: Array<number>;
   EmailServicelist: Array<number>;

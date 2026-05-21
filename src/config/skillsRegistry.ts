@@ -22,6 +22,16 @@ import { ToolExecutor } from "@/service/ToolExecutor";
 import { DocSkillScriptRunnerService } from "@/service/DocSkillScriptRunnerService";
 import { executeShellCommand } from "@/service/ShellToolService";
 import { ShellAuditLogger } from "@/service/ShellAuditLogger";
+import {
+  getEmailServiceConfig,
+  getEmailSearchTaskEmails,
+  listEmailSearchTasks,
+  listEmailFilters,
+  listEmailServices,
+  listEmailTemplates,
+  previewBulkEmailSendTask,
+  startBulkEmailSendTask,
+} from "@/service/EmailMarketingAiTools";
 
 // ---------------------------------------------------------------------------
 // Internal state
@@ -897,6 +907,334 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         };
       }
       return { success: true, result: { repaired: true, skillName } };
+    },
+  },
+  {
+    name: "list_email_templates",
+    description:
+      "List available email marketing templates for AI-assisted campaign setup.",
+    parameters: {
+      type: "object",
+      properties: {
+        page: {
+          type: "number",
+          description: "Zero-based page number.",
+          default: 0,
+        },
+        size: {
+          type: "number",
+          description: "Page size, from 1 to 100.",
+          default: 20,
+        },
+        search: {
+          type: "string",
+          description: "Optional title or description search text.",
+        },
+      },
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await listEmailTemplates(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "list_email_filters",
+    description:
+      "List available email marketing filters and filter rules for campaign setup.",
+    parameters: {
+      type: "object",
+      properties: {
+        page: {
+          type: "number",
+          description: "Zero-based page number.",
+          default: 0,
+        },
+        size: {
+          type: "number",
+          description: "Page size, from 1 to 100.",
+          default: 20,
+        },
+        search: {
+          type: "string",
+          description: "Optional filter name or description search text.",
+        },
+      },
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await listEmailFilters(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "list_email_services",
+    description:
+      "List configured email sending services without exposing passwords.",
+    parameters: {
+      type: "object",
+      properties: {
+        page: {
+          type: "number",
+          description: "Zero-based page number.",
+          default: 0,
+        },
+        size: {
+          type: "number",
+          description: "Page size, from 1 to 100.",
+          default: 20,
+        },
+        search: {
+          type: "string",
+          description: "Optional service name or sender search text.",
+        },
+      },
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await listEmailServices(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "get_email_service_config",
+    description:
+      "Get a single email sending service configuration without exposing passwords.",
+    parameters: {
+      type: "object",
+      properties: {
+        service_id: {
+          type: "number",
+          description: "Email service ID to inspect.",
+        },
+      },
+      required: ["service_id"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await getEmailServiceConfig(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "list_email_search_tasks",
+    description:
+      "List email search tasks available as recipient sources for email campaigns.",
+    parameters: {
+      type: "object",
+      properties: {
+        page: {
+          type: "number",
+          description: "Zero-based page number.",
+          default: 0,
+        },
+        size: {
+          type: "number",
+          description: "Page size, from 1 to 100.",
+          default: 20,
+        },
+      },
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await listEmailSearchTasks(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "get_email_search_task_emails",
+    description:
+      "Get all extracted email recipients from an existing email search task.",
+    parameters: {
+      type: "object",
+      properties: {
+        email_search_task_id: {
+          type: "number",
+          description: "Email search task ID to read recipients from.",
+        },
+      },
+      required: ["email_search_task_id"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await getEmailSearchTaskEmails(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "preview_bulk_email_send_task",
+    description:
+      "Validate and preview a bulk email send task before asking for confirmation.",
+    parameters: {
+      type: "object",
+      properties: {
+        email_search_task_id: {
+          type: "number",
+          description:
+            "Existing email search task ID. Provide exactly one of this or emails.",
+        },
+        emails: {
+          type: "array",
+          description:
+            "Direct recipient emails. Provide exactly one of this or email_search_task_id.",
+          items: {
+            oneOf: [
+              {
+                type: "string",
+                format: "email",
+              },
+              {
+                type: "object",
+                properties: {
+                  address: { type: "string", format: "email" },
+                  title: { type: "string" },
+                  source: { type: "string" },
+                },
+                required: ["address"],
+              },
+            ],
+          },
+        },
+        template_ids: {
+          type: "array",
+          description: "Email template IDs to use.",
+          items: { type: "number" },
+        },
+        filter_ids: {
+          type: "array",
+          description: "Optional email filter IDs to apply.",
+          items: { type: "number" },
+          default: [],
+        },
+        service_ids: {
+          type: "array",
+          description: "Email service IDs to send with.",
+          items: { type: "number" },
+        },
+        not_duplicate: {
+          type: "boolean",
+          description: "Whether to remove duplicate recipients before sending.",
+          default: true,
+        },
+      },
+      required: ["template_ids", "service_ids"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await previewBulkEmailSendTask(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "start_bulk_email_send_task",
+    description:
+      "Create and start a bulk email send task. Requires confirmation because it sends email.",
+    parameters: {
+      type: "object",
+      properties: {
+        email_search_task_id: {
+          type: "number",
+          description:
+            "Existing email search task ID. Provide exactly one of this or emails.",
+        },
+        emails: {
+          type: "array",
+          description:
+            "Direct recipient emails. Provide exactly one of this or email_search_task_id.",
+          items: {
+            oneOf: [
+              {
+                type: "string",
+                format: "email",
+              },
+              {
+                type: "object",
+                properties: {
+                  address: { type: "string", format: "email" },
+                  title: { type: "string" },
+                  source: { type: "string" },
+                },
+                required: ["address"],
+              },
+            ],
+          },
+        },
+        template_ids: {
+          type: "array",
+          description: "Email template IDs to use.",
+          items: { type: "number" },
+        },
+        filter_ids: {
+          type: "array",
+          description: "Optional email filter IDs to apply.",
+          items: { type: "number" },
+          default: [],
+        },
+        service_ids: {
+          type: "array",
+          description: "Email service IDs to send with.",
+          items: { type: "number" },
+        },
+        not_duplicate: {
+          type: "boolean",
+          description: "Whether to remove duplicate recipients before sending.",
+          default: true,
+        },
+      },
+      required: ["template_ids", "service_ids"],
+    },
+    tier: "main",
+    requiresConfirmation: true,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await startBulkEmailSendTask(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
     },
   },
   {
