@@ -133,7 +133,7 @@ export async function resolveBulkRecipients(input: {
     throw new Error("Provide exactly one of email_search_task_id or emails");
   }
 
-  if (hasSearchTask) {
+  if (input.email_search_task_id !== undefined) {
     const { emails, module } = await getSearchTaskRecipients(
       input.email_search_task_id,
       input.searchTaskModule
