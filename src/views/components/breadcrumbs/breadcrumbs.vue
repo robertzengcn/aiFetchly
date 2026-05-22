@@ -19,7 +19,7 @@ import { useRoute } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 
 const $route = useRoute();
-const { t } = useI18n({ inheritLocale: true });
+const { t, locale } = useI18n({ inheritLocale: true });
 const routes = ref();
 const pageTitle = computed(() => {
     const title = $route.meta.title as string;
@@ -92,6 +92,7 @@ function translateRouteTitle(title: string | undefined): string {
 }
 init();
 watch($route, init);
+watch(locale, init);
 </script>
 <style lang="scss">
 .v-breadcrumbs__prepend {
