@@ -82,8 +82,8 @@ describe("SkillExecutor", () => {
 
       expect(result.success).toBe(true);
       expect(ToolExecutor.execute).toHaveBeenCalledWith(
-        "scrape_urls_from_google",
-        { query: "test" },
+        "scrape_urls_from_search_engine",
+        { query: "test", search_engine: "google" },
         "test-conv-123"
       );
     });
@@ -181,7 +181,13 @@ describe("SkillExecutor", () => {
   });
 
   describe("isKnown", () => {
-    test("should return true for registered built-in skill", () => {
+    test("should return true for unified search scrape skill", () => {
+      expect(SkillExecutor.isKnown("scrape_urls_from_search_engine")).toBe(
+        true
+      );
+    });
+
+    test("should return true for legacy search scrape aliases", () => {
       expect(SkillExecutor.isKnown("scrape_urls_from_google")).toBe(true);
     });
 

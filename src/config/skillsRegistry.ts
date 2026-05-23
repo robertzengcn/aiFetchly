@@ -36,53 +36,21 @@ const registry = new Map<string, SkillDefinition>();
 
 const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
-    name: "scrape_urls_from_google",
+    name: "scrape_urls_from_search_engine",
     description:
-      "scrape website, urls in google using a query string. Returns search results including titles, snippets, and URLs.this tool is not use for search information",
+      "Scrape search result URLs from a supported engine (Google, Bing, Yandex, or Baidu) using a query string. Returns titles, snippets, and URLs. This tool is for collecting URLs from a SERP, not for answering questions from page text.",
     parameters: {
       type: "object",
       properties: {
-        query: {
+        search_engine: {
           type: "string",
-          description: "The search query to send to Google",
-        },
-        num_results: {
-          type: "number",
-          description: "Number of search results to return (default: 10)",
-          default: 10,
-        },
-        show_browser: {
-          type: "boolean",
           description:
-            "Whether to show the browser window during scraping (default: false, headless)",
-          default: false,
+            "Which search engine to scrape: google, bing, yandex, or baidu",
+          enum: ["google", "bing", "yandex", "baidu"],
         },
-      },
-      required: ["query"],
-    },
-    tier: "main",
-    requiresConfirmation: false,
-    permissionCategory: "network",
-    source: "built-in",
-    execute: async (args, context) => {
-      const result = await ToolExecutor.execute(
-        "scrape_urls_from_google",
-        args,
-        context.conversationId
-      );
-      return { success: true, result };
-    },
-  },
-  {
-    name: "scrape_urls_from_bing",
-    description:
-      "scrape website, urls in bing using a query string. Returns search results including titles, descriptions, and URLs.this tool is not use for search information",
-    parameters: {
-      type: "object",
-      properties: {
         query: {
           type: "string",
-          description: "The search query to send to Bing",
+          description: "The search query to run on the selected engine",
         },
         num_results: {
           type: "number",
@@ -91,7 +59,8 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         },
         market: {
           type: "string",
-          description: "Market/region code (e.g., en-US, en-GB)",
+          description:
+            "Optional market/region for Bing (e.g. en-US, en-GB); ignored for other engines",
           default: "en-US",
         },
         show_browser: {
@@ -101,7 +70,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
           default: false,
         },
       },
-      required: ["query"],
+      required: ["search_engine", "query"],
     },
     tier: "main",
     requiresConfirmation: false,
@@ -109,83 +78,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     source: "built-in",
     execute: async (args, context) => {
       const result = await ToolExecutor.execute(
-        "scrape_urls_from_bing",
-        args,
-        context.conversationId
-      );
-      return { success: true, result };
-    },
-  },
-  {
-    name: "scrape_urls_from_yandex",
-    description:
-      "scrape website, urls in Yandex using a query string. Returns search results including titles, snippets, and URLs.this tool is not use for search information",
-    parameters: {
-      type: "object",
-      properties: {
-        query: {
-          type: "string",
-          description: "The search query to send to Yandex",
-        },
-        num_results: {
-          type: "number",
-          description: "Number of search results to return (default: 10)",
-          default: 10,
-        },
-        show_browser: {
-          type: "boolean",
-          description:
-            "Whether to show the browser window during scraping (default: false, headless)",
-          default: false,
-        },
-      },
-      required: ["query"],
-    },
-    tier: "main",
-    requiresConfirmation: false,
-    permissionCategory: "network",
-    source: "built-in",
-    execute: async (args, context) => {
-      const result = await ToolExecutor.execute(
-        "scrape_urls_from_yandex",
-        args,
-        context.conversationId
-      );
-      return { success: true, result };
-    },
-  },
-  {
-    name: "scrape_urls_from_baidu",
-    description:
-      "scrape website, urls in Baidu using a query string. Returns search results including titles, snippets, and URLs.this tool is not use for search information",
-    parameters: {
-      type: "object",
-      properties: {
-        query: {
-          type: "string",
-          description: "The search query to send to Baidu",
-        },
-        num_results: {
-          type: "number",
-          description: "Number of search results to return (default: 10)",
-          default: 10,
-        },
-        show_browser: {
-          type: "boolean",
-          description:
-            "Whether to show the browser window during scraping (default: false, headless)",
-          default: false,
-        },
-      },
-      required: ["query"],
-    },
-    tier: "main",
-    requiresConfirmation: false,
-    permissionCategory: "network",
-    source: "built-in",
-    execute: async (args, context) => {
-      const result = await ToolExecutor.execute(
-        "scrape_urls_from_baidu",
+        "scrape_urls_from_search_engine",
         args,
         context.conversationId
       );
@@ -433,7 +326,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "read_url_content",
     description:
-      "Fetch the full content of a web page by URL and return it as markdown. Use this to read page content after obtaining URLs from search tools (e.g. scrape_urls_from_google, scrape_urls_from_bing). Not for discovering URLs\u2014use search tools first to get URLs, then call this to read specific pages.",
+      "Fetch the full content of a web page by URL and return it as markdown. Use this to read page content after obtaining URLs from search tools (e.g. scrape_urls_from_search_engine). Not for discovering URLs\u2014use search tools first to get URLs, then call this to read specific pages.",
     parameters: {
       type: "object",
       properties: {

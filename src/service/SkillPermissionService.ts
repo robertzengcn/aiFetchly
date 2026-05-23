@@ -10,6 +10,56 @@
 import { Token } from "@/modules/token";
 import { SkillRegistry } from "@/config/skillsRegistry";
 
+/** Legacy search-scrape tool IDs (pre-unification); permissions may still be stored under these keys. */
+const LEGACY_SEARCH_SCRAPE_SKILL_NAMES: ReadonlySet<string> = new Set([
+  "scrape_urls_from_google",
+  "scrape_urls_from_bing",
+  "scrape_urls_from_yandex",
+  "scrape_urls_from_baidu",
+]);
+
+const UNIFIED_SEARCH_SCRAPE_SKILL = "scrape_urls_from_search_engine";
+
+/**
+ * Map a permission / invocation name to the registry skill used for category rules.
+ */
+function resolveRegistrySkillNameForPermission(skillName: string): string {
+  if (LEGACY_SEARCH_SCRAPE_SKILL_NAMES.has(skillName)) {
+    return UNIFIED_SEARCH_SCRAPE_SKILL;
+  }
+  return skillName;
+}
+
+/**
+ * Effective stored permission: honours the exact key, unified key for legacy aliases,
+ * and any legacy key when checking the unified skill (migration).
+ */
+function readSearchScrapePermissionToken(
+  token: Token,
+  skillName: string
+): string {
+  const direct = token.getValue(permissionKey(skillName));
+  if (direct === "granted" || direct === "denied") {
+    return direct;
+  }
+  if (skillName === UNIFIED_SEARCH_SCRAPE_SKILL) {
+    for (const legacy of LEGACY_SEARCH_SCRAPE_SKILL_NAMES) {
+      const v = token.getValue(permissionKey(legacy));
+      if (v === "granted" || v === "denied") {
+        return v;
+      }
+    }
+    return direct;
+  }
+  if (LEGACY_SEARCH_SCRAPE_SKILL_NAMES.has(skillName)) {
+    const unified = token.getValue(permissionKey(UNIFIED_SEARCH_SCRAPE_SKILL));
+    if (unified === "granted" || unified === "denied") {
+      return unified;
+    }
+  }
+  return direct;
+}
+
 // ---------------------------------------------------------------------------
 // Key helpers
 // ---------------------------------------------------------------------------
@@ -57,7 +107,8 @@ export interface PermissionCheckResult {
  *  4. Return result indicating whether to proceed or prompt
  */
 function checkPermission(skillName: string): PermissionCheckResult {
-  const skill = SkillRegistry.getSkill(skillName);
+  const registryName = resolveRegistrySkillNameForPermission(skillName);
+  const skill = SkillRegistry.getSkill(registryName);
 
   if (!skill) {
     return { allowed: false, reason: "Unknown skill", needsPrompt: false };
@@ -71,7 +122,10 @@ function checkPermission(skillName: string): PermissionCheckResult {
   // Check session-only grant first (set by "Always Allow" in current session).
   // This must come before the shell always-prompt so that session-granted
   // shell skills auto-approve within the same app session.
-  if (sessionGrants.has(skillName)) {
+  if (
+    sessionGrants.has(skillName) ||
+    (registryName !== skillName && sessionGrants.has(registryName))
+  ) {
     return { allowed: true, needsPrompt: false };
   }
 
@@ -84,7 +138,7 @@ function checkPermission(skillName: string): PermissionCheckResult {
 
   // Check stored permission
   const token = new Token();
-  const stored = token.getValue(permissionKey(skillName));
+  const stored = readSearchScrapePermissionToken(token, skillName);
 
   if (stored === "granted") {
     return { allowed: true, needsPrompt: false };
@@ -124,6 +178,14 @@ function grantPermission(skillName: string, persistent: boolean): void {
 function denyPermission(skillName: string): void {
   const token = new Token();
   token.setValue(permissionKey(skillName), "denied");
+  sessionGrants.delete(skillName);
+  if (LEGACY_SEARCH_SCRAPE_SKILL_NAMES.has(skillName)) {
+    sessionGrants.delete(UNIFIED_SEARCH_SCRAPE_SKILL);
+  } else if (skillName === UNIFIED_SEARCH_SCRAPE_SKILL) {
+    for (const leg of LEGACY_SEARCH_SCRAPE_SKILL_NAMES) {
+      sessionGrants.delete(leg);
+    }
+  }
 }
 
 /**
@@ -134,6 +196,13 @@ function revokePermission(skillName: string): void {
   const token = new Token();
   token.setValue(permissionKey(skillName), "");
   sessionGrants.delete(skillName);
+  if (LEGACY_SEARCH_SCRAPE_SKILL_NAMES.has(skillName)) {
+    sessionGrants.delete(UNIFIED_SEARCH_SCRAPE_SKILL);
+  } else if (skillName === UNIFIED_SEARCH_SCRAPE_SKILL) {
+    for (const leg of LEGACY_SEARCH_SCRAPE_SKILL_NAMES) {
+      sessionGrants.delete(leg);
+    }
+  }
 }
 
 /**

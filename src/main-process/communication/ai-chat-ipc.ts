@@ -7,7 +7,7 @@ import {
   BatchKeywordGenerationRequestItem,
   formatSkillsAsChatMarkdown,
 } from "@/api/aiChatApi";
-import { getAvailableToolFunctions } from "@/config/aiTools.config";
+// import { getAvailableToolFunctions } from "@/config/aiTools.config";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import {
   CommonMessage,
