@@ -15,6 +15,9 @@ import {
   GOOGLE_MAPS_SEARCH_START,
   GOOGLE_MAPS_SEARCH_CANCEL,
   GOOGLE_MAPS_SEARCH_RESULT,
+  GOOGLE_MAPS_HISTORY_LIST,
+  GOOGLE_MAPS_HISTORY_DETAIL,
+  GOOGLE_MAPS_HISTORY_DELETE,
 } from "@/config/channellist";
 import type {
   GoogleMapsSearchInput,
@@ -44,7 +47,9 @@ export function registerGoogleMapsHandlers(): void {
         };
       }
 
-      const requestId = `gm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const requestId = `gm-${Date.now()}-${Math.random()
+        .toString(36)
+        .slice(2, 8)}`;
       const module = new GoogleMapsModule();
       activeModules.set(requestId, module);
 
@@ -88,7 +93,9 @@ export function registerGoogleMapsHandlers(): void {
                 query: input.query,
                 location: input.location,
                 totalResults: 0,
-                summary: `Search failed: ${error instanceof Error ? error.message : String(error)}`,
+                summary: `Search failed: ${
+                  error instanceof Error ? error.message : String(error)
+                }`,
                 results: [],
               },
             });
@@ -121,6 +128,53 @@ export function registerGoogleMapsHandlers(): void {
       }
 
       return { status: true, msg: "Search cancelled", data: null };
+    }
+  );
+
+  // ── History list ────────────────────────────────────────────────────
+  ipcMain.handle(
+    GOOGLE_MAPS_HISTORY_LIST,
+    async (_event, data: Record<string, unknown>) => {
+      const limit = typeof data.limit === "number" ? data.limit : 50;
+      const offset = typeof data.offset === "number" ? data.offset : 0;
+      const module = new GoogleMapsModule();
+      const [records, total] = await module.getSearchHistory(limit, offset);
+      return { status: true, msg: "OK", data: { records, total } };
+    }
+  );
+
+  // ── History detail ──────────────────────────────────────────────────
+  ipcMain.handle(
+    GOOGLE_MAPS_HISTORY_DETAIL,
+    async (_event, data: Record<string, unknown>) => {
+      const id = typeof data.id === "number" ? data.id : 0;
+      if (!id) {
+        return { status: false, msg: "id is required", data: null };
+      }
+      const module = new GoogleMapsModule();
+      const record = await module.getSearchRecord(id);
+      if (!record) {
+        return { status: false, msg: "Record not found", data: null };
+      }
+      return { status: true, msg: "OK", data: record };
+    }
+  );
+
+  // ── History delete ──────────────────────────────────────────────────
+  ipcMain.handle(
+    GOOGLE_MAPS_HISTORY_DELETE,
+    async (_event, data: Record<string, unknown>) => {
+      const id = typeof data.id === "number" ? data.id : 0;
+      if (!id) {
+        return { status: false, msg: "id is required", data: null };
+      }
+      const module = new GoogleMapsModule();
+      const deleted = await module.deleteSearchRecord(id);
+      return {
+        status: true,
+        msg: deleted ? "Deleted" : "Not found",
+        data: null,
+      };
     }
   );
 }

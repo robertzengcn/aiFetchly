@@ -322,3 +322,6 @@ export const GOOGLE_MAPS_SEARCH_START = "google_maps:search_start";
 export const GOOGLE_MAPS_SEARCH_CANCEL = "google_maps:search_cancel";
 export const GOOGLE_MAPS_SEARCH_PROGRESS = "google_maps:search_progress";
 export const GOOGLE_MAPS_SEARCH_RESULT = "google_maps:search_result";
+export const GOOGLE_MAPS_HISTORY_LIST = "google_maps:history_list";
+export const GOOGLE_MAPS_HISTORY_DETAIL = "google_maps:history_detail";
+export const GOOGLE_MAPS_HISTORY_DELETE = "google_maps:history_delete";

@@ -5,11 +5,18 @@
  * searches and subscribe to result push events from the main process.
  */
 
-import { windowInvoke, windowReceive, windowRemoveAllListeners } from "@/views/utils/apirequest";
+import {
+  windowInvoke,
+  windowReceive,
+  windowRemoveAllListeners,
+} from "@/views/utils/apirequest";
 import {
   GOOGLE_MAPS_SEARCH_START,
   GOOGLE_MAPS_SEARCH_CANCEL,
   GOOGLE_MAPS_SEARCH_RESULT,
+  GOOGLE_MAPS_HISTORY_LIST,
+  GOOGLE_MAPS_HISTORY_DETAIL,
+  GOOGLE_MAPS_HISTORY_DELETE,
 } from "@/config/channellist";
 import type { GoogleMapsSearchResult } from "@/entityTypes/googleMapsTypes";
 
@@ -52,9 +59,7 @@ export async function startGoogleMapsSearch(params: {
 /**
  * Cancel an active Google Maps search.
  */
-export async function cancelGoogleMapsSearch(
-  requestId: string
-): Promise<void> {
+export async function cancelGoogleMapsSearch(requestId: string): Promise<void> {
   await windowInvoke(GOOGLE_MAPS_SEARCH_CANCEL, { requestId });
 }
 
@@ -72,4 +77,44 @@ export function onGoogleMapsResult(
   return () => {
     windowRemoveAllListeners(GOOGLE_MAPS_SEARCH_RESULT);
   };
+}
+
+// ---------------------------------------------------------------------------
+// History types
+// ---------------------------------------------------------------------------
+
+export interface GoogleMapsHistoryRecord {
+  id: number;
+  query: string;
+  location: string;
+  status: string;
+  totalResults: number;
+  summary: string;
+  results: string; // JSON string
+  createdAt?: Date;
+}
+
+// ---------------------------------------------------------------------------
+// History API functions
+// ---------------------------------------------------------------------------
+
+export async function getGoogleMapsHistory(
+  limit = 50,
+  offset = 0
+): Promise<{ records: GoogleMapsHistoryRecord[]; total: number }> {
+  const resp = await windowInvoke(GOOGLE_MAPS_HISTORY_LIST, { limit, offset });
+  if (!resp) throw new Error("Failed to load history");
+  return resp as { records: GoogleMapsHistoryRecord[]; total: number };
+}
+
+export async function getGoogleMapsHistoryDetail(
+  id: number
+): Promise<GoogleMapsHistoryRecord> {
+  const resp = await windowInvoke(GOOGLE_MAPS_HISTORY_DETAIL, { id });
+  if (!resp) throw new Error("Failed to load record");
+  return resp as GoogleMapsHistoryRecord;
+}
+
+export async function deleteGoogleMapsHistoryRecord(id: number): Promise<void> {
+  await windowInvoke(GOOGLE_MAPS_HISTORY_DELETE, { id });
 }
