@@ -74,6 +74,7 @@ export default {
     download_template: "Download Template",
     drag_drop_file: "Drag and drop your file here or click to select file",
     search: "Search",
+    replace: "Replace",
   },
   route: {
     dashboard: "Dashboard",
