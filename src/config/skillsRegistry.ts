@@ -1100,7 +1100,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "preview_bulk_email_send_task",
     description:
-      "Validate and preview a bulk email send task before asking for confirmation.",
+      "Validate and preview a bulk email send task before asking for confirmation. Provide either template_ids or email_content (subject + content), not both empty.",
     parameters: {
       type: "object",
       properties: {
@@ -1131,9 +1131,26 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
             ],
           },
         },
+        email_content: {
+          type: "object",
+          description:
+            "Inline email body when not using templates. Requires subject and content (HTML).",
+          properties: {
+            subject: {
+              type: "string",
+              description: "Email subject line.",
+            },
+            content: {
+              type: "string",
+              description: "Email HTML body.",
+            },
+          },
+          required: ["subject", "content"],
+        },
         template_ids: {
           type: "array",
-          description: "Email template IDs to use.",
+          description:
+            "Optional email template IDs. Omit when using email_content.",
           items: { type: "number" },
         },
         filter_ids: {
@@ -1153,7 +1170,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
           default: true,
         },
       },
-      required: ["template_ids", "service_ids"],
+      required: ["service_ids"],
     },
     tier: "main",
     requiresConfirmation: false,
@@ -1170,7 +1187,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "start_bulk_email_send_task",
     description:
-      "Create and start a bulk email send task. Requires confirmation because it sends email.",
+      "Create and start a bulk email send task. Requires confirmation because it sends email. Provide either template_ids or email_content (subject + content), not both empty.",
     parameters: {
       type: "object",
       properties: {
@@ -1201,9 +1218,26 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
             ],
           },
         },
+        email_content: {
+          type: "object",
+          description:
+            "Inline email body when not using templates. Requires subject and content (HTML).",
+          properties: {
+            subject: {
+              type: "string",
+              description: "Email subject line.",
+            },
+            content: {
+              type: "string",
+              description: "Email HTML body.",
+            },
+          },
+          required: ["subject", "content"],
+        },
         template_ids: {
           type: "array",
-          description: "Email template IDs to use.",
+          description:
+            "Optional email template IDs. Omit when using email_content.",
           items: { type: "number" },
         },
         filter_ids: {
@@ -1223,7 +1257,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
           default: true,
         },
       },
-      required: ["template_ids", "service_ids"],
+      required: ["service_ids"],
     },
     tier: "main",
     requiresConfirmation: true,
