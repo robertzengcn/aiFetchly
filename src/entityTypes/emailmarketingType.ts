@@ -1,6 +1,7 @@
 import { EmailsearchTaskEntityDisplay } from "@/entityTypes/emailextraction-type";
 import { BuckEmailType } from "@/model/buckEmailTaskdb";
 import { EmailTemplateVariable } from "@/config/emailTemplateVariables";
+import { BuckemailTaskEntity } from "@/entity/BuckemailTask.entity";
 
 /**
  * AI Email Template tone options
@@ -175,7 +176,40 @@ export type EmailMarketingsubdata = {
   EmailFilterlist: Array<number>;
   EmailServicelist: Array<number>;
   NotDuplicate: boolean;
+  /** Inline subject/body when template_ids are omitted (bulk send) */
+  email_subject?: string;
+  email_html_content?: string;
 };
+
+/** Legacy alias: bulk send start payload uses the same shape as {@link Buckemailstruct} */
+export type BuckemailTaskStartInput = Buckemailstruct;
+
+/** Maps IPC/API bulk start input to DB task entity (snake_case fields). */
+export function mapBuckemailTaskStartInputToEntity(
+  input: BuckemailTaskStartInput
+): BuckemailTaskEntity {
+  const entity = new BuckemailTaskEntity();
+  entity.type = input.EmailBtype;
+  entity.emailtaskentityId = input.EmailtaskentityId ?? 0;
+  entity.email_list_json = JSON.stringify(input.EmailList ?? []);
+  entity.email_subject = input.email_subject?.trim() ?? null;
+  entity.email_html_content = input.email_html_content?.trim() ?? null;
+  entity.notduplicate = input.NotDuplicate ? 1 : 0;
+  entity.record_time = "";
+  entity.log_file = "";
+  entity.error_file = "";
+  entity.status = 0;
+  return entity;
+}
+
+export interface EmailSearchTaskEmailsResult {
+  emails: EmailItem[];
+}
+
+export interface ListEmailSearchTasksResult {
+  tasks: EmailsearchTaskEntityDisplay[];
+}
+
 export type EmailItem = {
   title?: string;
   address: string;
@@ -189,18 +223,41 @@ export type Buckemailstruct = {
   EmailFilterlist: Array<number>;
   EmailServicelist: Array<number>;
   NotDuplicate: boolean;
+  /** Inline subject/body when template_ids are omitted */
+  email_subject?: string;
+  email_html_content?: string;
+  /** @deprecated Use email_subject */
+  EmailSubject?: string;
+  /** @deprecated Use email_html_content */
+  EmailHtmlContent?: string;
 };
 export type Buckemailremotedata = {
   Receiverlist: Array<EmailItem>;
   Emailtemplist: Array<EmailTemplateRespdata>;
   Emailfilterlist: Array<EmailFilterdata>;
   Emailservicelist: Array<EmailServiceEntitydata>;
+  email_subject?: string;
+  email_html_content?: string;
 };
 // export type BuckemailPreparedata={
 //     Emailtemplist: Array<EmailTemplateRespdata>
 //     Emailfilterlist: Array<EmailFilterdata>
 //     Emailservicelist: Array<EmailServiceEntitydata>
 // }
+/** Preview result for bulk send (top-level subject/body, not nested email_content). */
+export interface BulkEmailPreviewResult {
+  email_subject?: string;
+  email_html_content?: string;
+  /** @deprecated Use email_content.subject */
+  email_content?: { subject: string; content: string };
+}
+
+/** Result after starting a bulk email task. */
+export interface BulkEmailStartResult extends BulkEmailPreviewResult {
+  email_task_entity_id?: number;
+  recipient_count: number;
+}
+
 export type EmailSendResult = {
   receiver: string;
   status: boolean;

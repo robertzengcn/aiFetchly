@@ -1,6 +1,12 @@
 import { ZodError } from "zod";
 import { BuckEmailType } from "@/model/buckEmailTaskdb";
-import { EmailItem, Buckemailstruct } from "@/entityTypes/emailmarketingType";
+import { EmailItem } from "@/entityTypes/emailmarketingType";
+import {
+  Buckemailstruct,
+  BulkEmailPreviewResult,
+  BulkEmailStartResult,
+  mapBuckemailTaskStartInputToEntity,
+} from "@/entityTypes/emailmarketingType";
 import { EmailFilterModule } from "@/modules/EmailFilterModule";
 import { EmailFilterDetailModule } from "@/modules/EmailFilterDetailModule";
 import { EmailSearchTaskModule } from "@/modules/EmailSearchTaskModule";
@@ -8,8 +14,6 @@ import { EmailServiceModule } from "@/modules/emailServiceModule";
 import { EmailTemplateModule } from "@/modules/EmailTemplateModule";
 import { BuckEmailTaskModule } from "@/modules/buckEmailTaskModule";
 import {
-  BulkEmailPreviewResult,
-  BulkEmailStartResult,
   DIRECT_EMAIL_SOURCE,
   EmailSearchTaskSummary,
   EmailServiceConfigSummary,
@@ -18,16 +22,14 @@ import {
   EmailMarketingFilterSummary,
   EmailMarketingListResult,
   EmailMarketingTemplateSummary,
-  EmailSearchTaskEmailsResult,
-  ListEmailSearchTasksResult,
   SanitizedEmailService,
+  AiListEmailSearchTasksResult,
+  AiEmailSearchTaskEmailsResult,
   bulkEmailTaskInputSchema,
   emailMarketingPaginationSchema,
   getEmailServiceConfigInputSchema,
   getEmailSearchTaskEmailsInputSchema,
 } from "@/entityTypes/emailMarketingAiTypes";
-
-export { DIRECT_EMAIL_SOURCE };
 
 function formatError(error: unknown): string {
   if (error instanceof Error) {
@@ -116,6 +118,55 @@ async function getSearchTaskRecipients(
   return { emails, module };
 }
 
+interface ParsedBulkEmailTaskInput {
+  email_search_task_id?: number;
+  emails?: EmailMarketingDirectEmailInput[];
+  template_ids: number[];
+  filter_ids: number[];
+  service_ids: number[];
+  not_duplicate: boolean;
+  email_subject?: string;
+  email_html_content?: string;
+  uses_templates: boolean;
+  uses_inline_content: boolean;
+}
+
+function parseBulkEmailTaskInput(args: unknown): ParsedBulkEmailTaskInput {
+  const parsed = bulkEmailTaskInputSchema.parse(args);
+  const hasSearchTask = parsed.email_search_task_id !== undefined;
+  const hasDirectEmails =
+    parsed.emails !== undefined && parsed.emails.length > 0;
+
+  if (hasSearchTask === hasDirectEmails) {
+    throw new Error("Provide exactly one of email_search_task_id or emails");
+  }
+
+  const templateIds = parsed.template_ids ?? [];
+  const subject = parsed.email_subject?.trim();
+  const html = parsed.email_html_content?.trim();
+  const usesTemplates = templateIds.length > 0;
+  const usesInlineContent = Boolean(subject && html);
+
+  if (!usesTemplates && !usesInlineContent) {
+    throw new Error(
+      "Provide either template_ids or email_subject and email_html_content"
+    );
+  }
+
+  return {
+    email_search_task_id: parsed.email_search_task_id,
+    emails: parsed.emails,
+    template_ids: templateIds,
+    filter_ids: parsed.filter_ids ?? [],
+    service_ids: parsed.service_ids,
+    not_duplicate: parsed.not_duplicate,
+    email_subject: usesInlineContent ? subject : undefined,
+    email_html_content: usesInlineContent ? html : undefined,
+    uses_templates: usesTemplates,
+    uses_inline_content: usesInlineContent,
+  };
+}
+
 export async function resolveBulkRecipients(input: {
   email_search_task_id?: number;
   emails?: EmailMarketingDirectEmailInput[];
@@ -140,19 +191,64 @@ export async function resolveBulkRecipients(input: {
     );
     return {
       recipientSource: "email_search_task",
-      recipients: emails,
+      recipients: emails.map((email) => toEmailItem(email)),
       searchTaskModule: module,
     };
   }
 
   const directEmails = (input.emails ?? []).map((email) =>
-    normalizeDirectEmail(email)
+    toEmailItem(normalizeDirectEmail(email))
   );
 
   return {
     recipientSource: "direct",
     recipients: dedupeEmailList(directEmails, input.not_duplicate),
   };
+}
+
+function toEmailItem(email: EmailMarketingDirectEmailInput): EmailItem {
+  if (typeof email === "string") {
+    return {
+      address: email.trim(),
+      source: DIRECT_EMAIL_SOURCE,
+    };
+  }
+  return {
+    title: email.title,
+    address: email.address,
+    source: email.source ?? DIRECT_EMAIL_SOURCE,
+  };
+}
+
+function toEmailItemFromSearchResult(
+  item: string | { address: string; source?: string; title?: string }
+): EmailItem {
+  if (typeof item === "string") {
+    return { title: item, address: item, source: DIRECT_EMAIL_SOURCE };
+  }
+  const title =
+    "title" in item && typeof item.title === "string"
+      ? item.title
+      : item.address;
+  return {
+    title,
+    address: item.address,
+    source: item.source ?? DIRECT_EMAIL_SOURCE,
+  };
+}
+
+function isEmailServiceEntity(item: unknown): item is {
+  id: number;
+  name: string;
+  from: string;
+  host: string;
+  port: string;
+  ssl: number;
+  status: number;
+} {
+  return (
+    typeof item === "object" && item !== null && "id" in item && "name" in item
+  );
 }
 
 function sanitizeEmailService(service: {
@@ -167,9 +263,9 @@ function sanitizeEmailService(service: {
   return {
     id: service.id,
     name: service.name,
-    from: service.from,
-    host: service.host,
-    port: service.port,
+    address: service.from,
+    source: service.host,
+    port: String(service.port),
     ssl: service.ssl,
     status: service.status,
   };
@@ -178,20 +274,29 @@ function sanitizeEmailService(service: {
 function makeBuckEmailTaskInput(input: {
   email_search_task_id?: number;
   emails?: EmailItem[];
-  template_ids: number[];
-  filter_ids: number[];
-  service_ids: number[];
-  not_duplicate: boolean;
+  template_ids?: number[];
+  filter_ids?: number[];
+  service_ids?: number[];
+  not_duplicate?: boolean;
+  email_subject?: string;
+  email_html_content?: string;
 }): Buckemailstruct {
-  return {
+  const taskInput: Buckemailstruct = {
     EmailBtype: BuckEmailType.EXTRACTEMAIL,
     EmailtaskentityId: input.email_search_task_id,
     EmailList: input.emails,
-    EmailTemplateslist: input.template_ids,
-    EmailFilterlist: input.filter_ids,
-    EmailServicelist: input.service_ids,
-    NotDuplicate: input.not_duplicate,
+    EmailTemplateslist: input.template_ids ?? [],
+    EmailFilterlist: input.filter_ids ?? [],
+    EmailServicelist: input.service_ids ?? [],
+    NotDuplicate: input.not_duplicate ?? false,
   };
+  if (input.email_subject !== undefined) {
+    taskInput.email_subject = input.email_subject;
+  }
+  if (input.email_html_content !== undefined) {
+    taskInput.email_html_content = input.email_html_content;
+  }
+  return taskInput;
 }
 
 export async function listEmailTemplates(
@@ -339,7 +444,7 @@ export async function getEmailServiceConfig(
 
 export async function getEmailSearchTaskEmails(
   args: unknown
-): Promise<EmailMarketingAiToolResult<EmailSearchTaskEmailsResult>> {
+): Promise<EmailMarketingAiToolResult<AiEmailSearchTaskEmailsResult>> {
   try {
     const input = getEmailSearchTaskEmailsInputSchema.parse(args);
     const { emails } = await getSearchTaskRecipients(
@@ -350,7 +455,7 @@ export async function getEmailSearchTaskEmails(
       success: true,
       email_search_task_id: input.email_search_task_id,
       total: emails.length,
-      emails,
+      emails: emails as EmailItem[],
     };
   } catch (error) {
     return error instanceof ZodError
@@ -361,7 +466,7 @@ export async function getEmailSearchTaskEmails(
 
 export async function listEmailSearchTasks(
   args: unknown
-): Promise<EmailMarketingAiToolResult<ListEmailSearchTasksResult>> {
+): Promise<EmailMarketingAiToolResult<AiListEmailSearchTasksResult>> {
   try {
     const input = emailMarketingPaginationSchema.parse(args);
     const module = new EmailSearchTaskModule();
@@ -393,6 +498,8 @@ export async function listEmailSearchTasks(
   }
 }
 
+export { DIRECT_EMAIL_SOURCE } from "@/entityTypes/emailMarketingAiTypes";
+
 export async function previewBulkEmailSendTask(
   args: unknown
 ): Promise<EmailMarketingAiToolResult<BulkEmailPreviewResult>> {
@@ -408,6 +515,13 @@ export async function previewBulkEmailSendTask(
       filter_ids: input.filter_ids,
       service_ids: input.service_ids,
       not_duplicate: input.not_duplicate,
+      ...(input.email_subject !== undefined &&
+      input.email_html_content !== undefined
+        ? {
+            email_subject: input.email_subject,
+            email_html_content: input.email_html_content,
+          }
+        : {}),
     };
   } catch (error) {
     return error instanceof ZodError
@@ -427,7 +541,6 @@ export async function startBulkEmailSendTask(
 
     const taskInput = makeBuckEmailTaskInput({
       ...input,
-      // For search-task sends, emails are loaded later by prepareData() using
       // emailtaskentityId, so we pass undefined here to avoid storing a
       // redundant copy in email_list_json. For direct sends, the EmailList is
       // serialized to email_list_json so prepareData() can load it without a
@@ -437,7 +550,8 @@ export async function startBulkEmailSendTask(
           ? recipients.recipients
           : undefined,
     });
-    const taskId = await module.startBuckEmailTask(taskInput);
+    const entity = mapBuckemailTaskStartInputToEntity(taskInput);
+    const taskId = await module.startBuckEmailTask(entity);
 
     return {
       success: true,
@@ -448,6 +562,13 @@ export async function startBulkEmailSendTask(
       filter_ids: input.filter_ids,
       service_ids: input.service_ids,
       not_duplicate: input.not_duplicate,
+      ...(input.email_subject !== undefined &&
+      input.email_html_content !== undefined
+        ? {
+            email_subject: input.email_subject,
+            email_html_content: input.email_html_content,
+          }
+        : {}),
     };
   } catch (error) {
     return error instanceof ZodError
