@@ -26,9 +26,21 @@ import type { GoogleMapsSearchRecordEntity } from "@/entity/GoogleMapsSearchReco
 // Types
 // ---------------------------------------------------------------------------
 
+/**
+ * Minimal interface for the subset of Electron.UtilityProcess
+ * methods used by this module (fork, on, send, kill).
+ */
+interface UtilityProcessWorker {
+  on(event: "message", listener: (message: unknown) => void): this;
+  on(event: "error", listener: (error: Error) => void): this;
+  on(event: "exit", listener: (code: number) => void): this;
+  send(message: unknown): void;
+  kill(): void;
+}
+
 /** Tracks an active search session. */
 interface ActiveSearch {
-  worker: Electron.UtilityProcess;
+  worker: UtilityProcessWorker;
   resolve: (result: GoogleMapsSearchResult) => void;
   reject: (error: Error) => void;
   timeoutTimer: ReturnType<typeof setTimeout>;
@@ -65,7 +77,7 @@ export class GoogleMapsModule extends BaseModule {
       const requestId = uuidv4();
       const workerPath = this.getWorkerPath();
 
-      let worker: Electron.UtilityProcess;
+      let worker: UtilityProcessWorker;
       try {
         worker = utilityProcess.fork(workerPath, [], {
           stdio: "pipe",
@@ -76,7 +88,7 @@ export class GoogleMapsModule extends BaseModule {
             ELECTRON_APP_NAME: app.getName(),
             ELECTRON_USER_DATA_PATH: app.getPath("userData"),
           },
-        });
+        }) as unknown as UtilityProcessWorker;
       } catch (err) {
         reject(
           new Error(
@@ -102,14 +114,15 @@ export class GoogleMapsModule extends BaseModule {
       };
       this.activeSearches.set(requestId, search);
 
-      worker.on("message", (msg: Record<string, unknown>) => {
-        if (msg.type === "progress" && msg.requestId === requestId) {
+      worker.on("message", (msg: unknown) => {
+        const data = msg as Record<string, unknown>;
+        if (data.type === "progress" && data.requestId === requestId) {
           if (search.progressCallback) {
-            search.progressCallback(msg as unknown as GoogleMapsProgressEvent);
+            search.progressCallback(msg as GoogleMapsProgressEvent);
           }
           return;
         }
-        if (msg.type === "result" && msg.requestId === requestId) {
+        if (data.type === "result" && data.requestId === requestId) {
           // Skip if already handled (e.g. cancelled)
           if (!this.activeSearches.has(requestId)) return;
 
@@ -123,15 +136,15 @@ export class GoogleMapsModule extends BaseModule {
           }
 
           const result: GoogleMapsSearchResult =
-            msg.success && msg.data
-              ? (msg.data as GoogleMapsSearchResult)
+            data.success && data.data
+              ? (data.data as GoogleMapsSearchResult)
               : {
                   success: false,
                   query: input.query,
                   location: input.location,
                   totalResults: 0,
                   summary: `Search failed: ${
-                    (msg.error as string) ?? "Unknown error"
+                    (data.error as string) ?? "Unknown error"
                   }`,
                   results: [],
                 };
