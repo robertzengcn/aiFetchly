@@ -1454,5 +1454,11 @@ export default {
     error_search_failed: "搜索失败：{error}",
     view_on_maps: "在 Google 地图中查看",
     reviews_count: "{count} 条评论",
+    history_tab: "历史记录",
+    history_empty: "暂无搜索历史",
+    col_date: "日期",
+    col_actions: "操作",
+    view_results: "查看",
+    delete_btn: "删除",
   },
 };

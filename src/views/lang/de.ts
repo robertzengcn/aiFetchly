@@ -1512,5 +1512,11 @@ export default {
     error_search_failed: "Suche fehlgeschlagen: {error}",
     view_on_maps: "Auf Google Maps anzeigen",
     reviews_count: "{count} Bewertungen",
+    history_tab: "Verlauf",
+    history_empty: "Noch kein Suchverlauf",
+    col_date: "Datum",
+    col_actions: "Aktionen",
+    view_results: "Anzeigen",
+    delete_btn: "Löschen",
   },
 };

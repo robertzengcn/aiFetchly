@@ -1480,5 +1480,11 @@ export default {
     error_search_failed: "検索に失敗しました：{error}",
     view_on_maps: "Google Maps で表示",
     reviews_count: "{count} 件のレビュー",
+    history_tab: "履歴",
+    history_empty: "検索履歴はありません",
+    col_date: "日付",
+    col_actions: "操作",
+    view_results: "表示",
+    delete_btn: "削除",
   },
 };
