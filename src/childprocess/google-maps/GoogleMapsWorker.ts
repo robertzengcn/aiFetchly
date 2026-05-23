@@ -585,10 +585,10 @@ process.on("message", (msg: WorkerMessage) => {
 // Cleanup on termination
 // ---------------------------------------------------------------------------
 
-process.on("SIGTERM", () => {
+process.on("SIGTERM", async () => {
   isCancelled = true;
   if (browser) {
-    browser.close().catch(() => {});
+    await browser.close().catch(() => {});
   }
   process.exit(0);
 });

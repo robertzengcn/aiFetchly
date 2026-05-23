@@ -200,7 +200,7 @@
                 v-if="item.maps_url"
                 :href="item.maps_url"
                 target="_blank"
-                rel="noopener"
+                rel="noopener noreferrer"
                 class="text-decoration-none font-weight-medium"
               >
                 {{ item.name }}
@@ -229,7 +229,7 @@
                 v-if="item.website"
                 :href="item.website"
                 target="_blank"
-                rel="noopener"
+                rel="noopener noreferrer"
                 class="text-decoration-none"
               >
                 {{ truncateUrl(item.website) }}
@@ -249,7 +249,7 @@
                       <v-btn
                         :href="item.maps_url"
                         target="_blank"
-                        rel="noopener"
+                        rel="noopener noreferrer"
                         size="small"
                         color="primary"
                         variant="text"
@@ -500,7 +500,12 @@ async function loadHistoryResults(id: number): Promise<void> {
   try {
     const record = await getGoogleMapsHistoryDetail(id);
     if (record.results) {
-      results.value = JSON.parse(record.results) as GoogleMapsBusinessResult[];
+      try {
+        results.value = JSON.parse(record.results) as GoogleMapsBusinessResult[];
+      } catch {
+        console.error("Failed to parse history results");
+        results.value = [];
+      }
       lastQuery.value = record.query;
       lastLocation.value = record.location;
       searchState.value = "completed";
@@ -540,12 +545,12 @@ function exportCSV(): void {
     maps_url: r.maps_url ?? "",
   }));
   const csv = Papa.unparse(data);
-  downloadFile(csv, `google-maps-${lastQuery.value}-${lastLocation.value}.csv`, "text/csv");
+  downloadFile(csv, `google-maps-${sanitizeFilename(lastQuery.value)}-${sanitizeFilename(lastLocation.value)}.csv`, "text/csv");
 }
 
 function exportJSON(): void {
   const json = JSON.stringify(results.value, null, 2);
-  downloadFile(json, `google-maps-${lastQuery.value}-${lastLocation.value}.json`, "application/json");
+  downloadFile(json, `google-maps-${sanitizeFilename(lastQuery.value)}-${sanitizeFilename(lastLocation.value)}.json`, "application/json");
 }
 
 function downloadFile(content: string, filename: string, mimeType: string): void {
@@ -561,6 +566,10 @@ function downloadFile(content: string, filename: string, mimeType: string): void
 function truncateUrl(url: string, maxLen = 30): string {
   if (url.length <= maxLen) return url;
   return url.slice(0, maxLen) + "...";
+}
+
+function sanitizeFilename(input: string): string {
+  return input.replace(/[^a-zA-Z0-9 _-]/g, "_").slice(0, 50);
 }
 
 // ── Cleanup ────────────────────────────────────────────────────────────
