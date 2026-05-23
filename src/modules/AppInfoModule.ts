@@ -1,12 +1,8 @@
 import * as path from 'path';
 import * as fs from 'fs';
+import type { AppInfo } from '@/entityTypes/appInfo-type';
 
-export interface AppInfo {
-  name: string;
-  version: string;
-  description: string;
-  author: string;
-}
+export type { AppInfo };
 
 export class AppInfoModule {
   private appInfo: AppInfo;

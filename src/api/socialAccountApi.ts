@@ -85,7 +85,7 @@ export class SocialAccountApi{
         soc: SocialAccountDetailData
       ): Promise<SavesocialaccountResp> {
         // const FormData = require('form-data');
-        let data = new FormData();
+        const data = new FormData();
         if (soc.id) {
           data.append("id", soc.id.toString());
         }

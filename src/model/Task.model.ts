@@ -6,8 +6,10 @@ import { TaskCreateRequest, TaskUpdateRequest } from '@/entityTypes/task-type'
 export class TaskModel extends BaseDb {
   private repository: Repository<TaskEntity>
 
-  constructor() {
-    super('tasks.db')
+  constructor(dbpath?: string) {
+    // Use provided dbpath or empty string (will be set by BaseDb from Token)
+    super(dbpath || '')
+    // Get repository from the shared SqliteDb connection
     this.repository = this.sqliteDb.connection.getRepository(TaskEntity)
   }
 

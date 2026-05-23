@@ -1,6 +1,8 @@
 import { BaseModule } from "@/modules/baseModule";
 import { AIChatMessageModel } from "@/model/AIChatMessage.model";
 import { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
+import { MessageType } from "@/entityTypes/commonType";
+import { AIChatAttachmentModule } from "@/modules/AIChatAttachmentModule";
 
 export interface SaveMessageOptions {
     messageId: string;
@@ -11,14 +13,17 @@ export interface SaveMessageOptions {
     model?: string;
     tokensUsed?: number;
     metadata?: any;
+    messageType?: MessageType;
 }
 
 export class AIChatModule extends BaseModule {
     private chatMessageModel: AIChatMessageModel;
+    private attachmentModule: AIChatAttachmentModule;
 
     constructor() {
         super();
         this.chatMessageModel = new AIChatMessageModel(this.dbpath);
+        this.attachmentModule = new AIChatAttachmentModule();
     }
 
     /**
@@ -34,6 +39,7 @@ export class AIChatModule extends BaseModule {
         message.model = options.model;
         message.tokensUsed = options.tokensUsed;
         message.metadata = options.metadata ? JSON.stringify(options.metadata) : undefined;
+        message.messageType = options.messageType || MessageType.MESSAGE;
 
         const messageId = await this.chatMessageModel.saveMessage(message);
         const savedMessage = await this.chatMessageModel.getMessageById(messageId);
@@ -67,6 +73,8 @@ export class AIChatModule extends BaseModule {
      * Clear conversation history
      */
     async clearConversation(conversationId: string): Promise<number> {
+        // Delete attachment bytes first to keep storage consistent.
+        await this.attachmentModule.deleteByConversation(conversationId);
         return await this.chatMessageModel.deleteConversation(conversationId);
     }
 
@@ -74,6 +82,8 @@ export class AIChatModule extends BaseModule {
      * Clear all chat history
      */
     async clearAllHistory(): Promise<number> {
+        // Delete all attachment bytes first.
+        await this.attachmentModule.deleteAll();
         return await this.chatMessageModel.deleteAllMessages();
     }
 
@@ -98,7 +108,7 @@ export class AIChatModule extends BaseModule {
     /**
      * Get latest messages
      */
-    async getLatestMessages(limit: number = 10): Promise<AIChatMessageEntity[]> {
+    async getLatestMessages(limit = 10): Promise<AIChatMessageEntity[]> {
         return await this.chatMessageModel.getLatestMessages(limit);
     }
 

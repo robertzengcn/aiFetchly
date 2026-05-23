@@ -14,13 +14,14 @@ import { EmailSearchResultDetailEntity } from "@/entity/EmailSearchResultDetail.
 import { EmailsearchTaskEntity, EmailsearchTaskStatus } from "@/model/emailsearchTaskdb";
 import { EmailsearchUrlEntity } from "@/model/emailsearchUrldb";
 import {EmailsControldata} from "@/entityTypes/emailextraction-type"
+import { AggregatedCount } from "@/entityTypes/dashboardType";
 import {WriteLog,getApplogspath,getRandomValues, readLogFile} from "@/modules/lib/function"
 import * as path from 'path';
 import * as fs from 'fs';
 import { MessageChannelMain } from 'electron';
 import { Token } from '@/modules/token';
 import { USERLOGPATH, USEREMAIL } from '@/config/usersetting';
-import { utilityProcess } from 'electron';
+import { utilityProcess, app } from 'electron';
 import { ProcessMessage } from '@/entityTypes/processMessage-type';
 import { v4 as uuidv4 } from 'uuid';
 import { twocaptchagroup, twocaptcha_enabled, twocaptchatoken } from '@/config/settinggroupInit';
@@ -110,7 +111,9 @@ export class EmailSearchTaskModule extends BaseModule{
         const child = utilityProcess.fork(childPath, [],{stdio:"pipe",execArgv:["--inspect"],env:{
             ...process.env,
             NODE_OPTIONS: "",
-             TWOCAPTCHA_TOKEN: twoCaptchaTokenvalue
+            TWOCAPTCHA_TOKEN: twoCaptchaTokenvalue,
+            ELECTRON_APP_NAME: app.getName(),
+            ELECTRON_USER_DATA_PATH: app.getPath("userData"),
         }} )
         // console.log(path.join(__dirname, 'utilityCode.js'))
         let logpath=tokenService.getValue(USERLOGPATH)
@@ -131,7 +134,6 @@ export class EmailSearchTaskModule extends BaseModule{
         })
         
         child.stdout?.on('data', (data) => {
-            console.log(`Received data chunk ${data}`)
             WriteLog(runLogfile,data)
            // child.kill()
         })
@@ -143,7 +145,6 @@ export class EmailSearchTaskModule extends BaseModule{
             if(!ingoreStr.some((value)=>data.includes(value))){
                     
             // seModel.saveTaskerrorlog(taskId,data)
-            console.log(`Received error chunk ${data}`)
             WriteLog(errorLogfile,data)
             //this.emailSeachTaskModule.updateTaskStatus(taskId,EmailsearchTaskStatus.Error)
             //child.kill()
@@ -159,17 +160,29 @@ export class EmailSearchTaskModule extends BaseModule{
                 this.updateTaskStatus(taskId,TaskStatus.Complete)
             }
         })
-        child.on('message', (message) => {
-            console.log("get message from child")
-            console.log('Message from child:', JSON.parse(message));
-            const childdata=JSON.parse(message) as ProcessMessage<EmailResult>
-            if(childdata.action=="saveres"){
-                if(childdata.data){
-                //save result
-                this.saveSearchResult(taskId,childdata.data)
-                
+        child.on('message', (message: unknown) => {
+            try {
+                const msg = message as { data?: string };
+                if (!msg || !msg.data || typeof msg.data !== 'string') {
+                    console.error('Invalid message from child process:', message);
+                    return;
                 }
-                //child.kill()
+                console.log("get message from child")
+                const childdata = JSON.parse(msg.data) as ProcessMessage<EmailResult>;
+                console.log('Message from child:', childdata);
+                if(childdata.action=="saveres"){
+                    if(childdata.data){
+                    //save result
+                    this.saveSearchResult(taskId,childdata.data)
+                    
+                    }
+                    //child.kill()
+                }
+            } catch (error) {
+                console.error('Failed to parse message from child process:', error);
+                if (error instanceof Error) {
+                    console.error('Error details:', error.message);
+                }
             }
         });
     }
@@ -205,6 +218,83 @@ export class EmailSearchTaskModule extends BaseModule{
         //     this.emailsearchUrldb.create(urltask)
         // })
         return Number(taskId)
+    }
+
+    /**
+     * Create and execute a search task from a URL list
+     * 
+     * This method creates a new email search task with the provided URLs and configuration,
+     * then immediately starts executing the search task.
+     * 
+     * @param urls - Array of URLs to search for emails
+     * @param options - Optional configuration parameters
+     * @param options.type - Email extraction type (default: ManualInputUrl)
+     * @param options.concurrency - Number of concurrent requests (default: 1)
+     * @param options.pagelength - Page length limit (default: 0)
+     * @param options.notShowBrowser - Whether to hide browser (default: false)
+     * @param options.proxys - Array of proxy entities (optional)
+     * @param options.processTimeout - Process timeout in seconds (default: 30)
+     * @param options.maxPageNumber - Maximum number of pages to crawl (default: 0)
+     * @param options.searchResultId - Search result ID (optional)
+     * @returns Promise resolving to the created task ID
+     * @throws {Error} When URLs array is empty or invalid
+     * 
+     * @example
+     * ```typescript
+     * const taskId = await emailSearchTaskModule.createAndExecuteTask(
+     *   ['https://example.com', 'https://test.com'],
+     *   {
+     *     concurrency: 2,
+     *     notShowBrowser: true,
+     *     processTimeout: 60
+     *   }
+     * );
+     * ```
+     */
+    public async createAndExecuteTask(
+        urls: string[],
+        options?: {
+            type?: EmailExtractionTypes;
+            concurrency?: number;
+            pagelength?: number;
+            notShowBrowser?: boolean;
+            proxys?: ProxyEntity[];
+            processTimeout?: number;
+            maxPageNumber?: number;
+            searchResultId?: number;
+        }
+    ): Promise<number> {
+        // Validate URLs
+        if (!urls || urls.length === 0) {
+            throw new Error('URL list cannot be empty');
+        }
+
+        // Filter out empty or invalid URLs
+        const validUrls = urls.filter(url => url && url.trim().length > 0);
+        if (validUrls.length === 0) {
+            throw new Error('No valid URLs provided');
+        }
+
+        // Create EmailsControldata with defaults
+        const taskData: EmailsControldata = {
+            validUrls: validUrls,
+            type: options?.type ?? EmailExtractionTypes.ManualInputUrl,
+            concurrency: options?.concurrency ?? 1,
+            pagelength: options?.pagelength ?? 0,
+            notShowBrowser: options?.notShowBrowser ?? false,
+            proxys: options?.proxys,
+            processTimeout: options?.processTimeout ?? 30,
+            maxPageNumber: options?.maxPageNumber ?? 0,
+            searchResultId: options?.searchResultId
+        };
+
+        // Create the task
+        const taskId = await this.saveSearchtask(taskData);
+
+        // Execute the search task
+        await this.searchEmail(taskId);
+
+        return taskId;
     }
 
     //update task runtime log and error log path
@@ -278,8 +368,38 @@ export class EmailSearchTaskModule extends BaseModule{
             if (!value.title) {
                 value.title = ""
             }
-            if (!value.record_time) {
-                value.record_time = ""
+            // if (!value.record_time) {
+            //     value.record_time = ""
+            // }
+
+            const item: EmailResultDisplay = {
+                id: value.id,
+                url: value.url,
+                pageTitle: value.title,
+                emails: emailsArr,
+                recordTime: value.createdAt ? this.formatDateTime(value.createdAt) : ""
+            }
+            result.push(item)
+        }
+
+        return result
+    }
+    //get all task results for export (no pagination)
+    public async getAllTaskResults(taskId: number): Promise<EmailResultDisplay[]> {
+        console.log("get all task results for export, task id is" + taskId)
+        const res = await this.emailsearchresultdb.getAllResultsByTaskId(taskId)
+        const result: EmailResultDisplay[] = []
+        for (const value of res) {
+            if (!value.id) {
+                value.id = 0
+            }
+            const emails = await this.emailsearchResultDetaildb.getItemsByResultId(value.id)
+            const emailsArr: string[] = []
+            for (const email of emails) {
+                emailsArr.push(email.email)
+            }
+            if (!value.title) {
+                value.title = ""
             }
 
             const item: EmailResultDisplay = {
@@ -287,7 +407,7 @@ export class EmailSearchTaskModule extends BaseModule{
                 url: value.url,
                 pageTitle: value.title,
                 emails: emailsArr,
-                recordTime: value.record_time
+                recordTime: value.createdAt ? this.formatDateTime(value.createdAt) : ""
             }
             result.push(item)
         }
@@ -297,6 +417,16 @@ export class EmailSearchTaskModule extends BaseModule{
     //get task detail count
     public async getTaskResultCount(taskId: number): Promise<number> {
         return await this.emailsearchresultdb.getTaskResultCount(taskId)
+    }
+    public async countAllResults(): Promise<number> {
+        return this.emailsearchresultdb.countAll();
+    }
+    public async countResultsByDateRange(startDate: Date, endDate: Date): Promise<number> {
+        return this.emailsearchresultdb.countByDateRange(startDate, endDate);
+    }
+    public async aggregateResultsByDateRange(startDate: Date, endDate: Date, granularity: 'day' | 'week' | 'month'): Promise<AggregatedCount[]> {
+        const rows = await this.emailsearchresultdb.aggregateByDateRange(startDate, endDate, granularity);
+        return rows.map(row => ({ date: row.date, count: row.count }));
     }
     //get all email in email search task
     public async getAllEmails(taskId: number): Promise<EmailItem[]> {
@@ -415,6 +545,27 @@ export class EmailSearchTaskModule extends BaseModule{
 
         // Delete main task
         await this.emailsearchTaskdb.deleteTask(taskId)
+    }
+
+    /**
+     * Formats a Date object to "MM/DD/YYYY, HH:MM:SS AM/PM" format
+     * @param date - The date to format
+     * @returns Formatted date string
+     */
+    private formatDateTime(date: Date): string {
+        const month = (date.getMonth() + 1).toString().padStart(2, '0')
+        const day = date.getDate().toString().padStart(2, '0')
+        const year = date.getFullYear()
+        
+        let hours = date.getHours()
+        const minutes = date.getMinutes().toString().padStart(2, '0')
+        const seconds = date.getSeconds().toString().padStart(2, '0')
+        const ampm = hours >= 12 ? 'PM' : 'AM'
+        hours = hours % 12
+        hours = hours ? hours : 12 // the hour '0' should be '12'
+        const hoursStr = hours.toString().padStart(2, '0')
+        
+        return `${month}/${day}/${year}, ${hoursStr}:${minutes}:${seconds} ${ampm}`
     }
 
 }

@@ -1,5 +1,6 @@
 import * as fs from 'fs'
 import * as path from 'path'
+import * as readline from 'readline'
 import { PlatformConfig, PlatformSelectors, PlatformSettings, PlatformMetadata, PlatformFeature } from '@/modules/interface/IPlatformConfig'
 import { BaseModule } from '@/modules/baseModule'
 
@@ -52,7 +53,6 @@ export class PlatformTemplateGenerator extends BaseModule {
    * Prompt user for platform details
    */
   private async promptForPlatformDetails(): Promise<any> {
-    const readline = require('readline')
     const rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout
@@ -188,7 +188,6 @@ export class PlatformTemplateGenerator extends BaseModule {
     // Check if file already exists
     if (fs.existsSync(filePath)) {
       console.log(`⚠️  Warning: File ${fileName} already exists.`)
-      const readline = require('readline')
       const rl = readline.createInterface({
         input: process.stdin,
         output: process.stdout

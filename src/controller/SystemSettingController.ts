@@ -1,5 +1,5 @@
 // import {SystemSettingGroup} from '@/model/SystemSettingGroup.model'; 
-import { SystemSettingGroupDisplay,SetttingUpdate,SystemSettingDisplay } from '@/entityTypes/systemsettingType';
+import { SystemSettingGroupDisplay, SystemSettingDisplay } from '@/entityTypes/systemsettingType';
 
 import { SystemSettingGroupModule } from "@/modules/SystemSettingGroupModule"
 import { SystemSettingModule } from "@/modules/SystemSettingModule"
@@ -15,6 +15,16 @@ export class SystemSettingController {
         this.systemSettingModule = new SystemSettingModule()
         this.systemSettingGroupModule = new SystemSettingGroupModule()
         this.systemSettingOptionModule = new SystemSettingOptionModule()
+    }
+
+    /**
+     * Ensure database connection is initialized before use
+     */
+    public async ensureConnection(): Promise<void> {
+        // Ensure all modules have their database connections initialized
+        await this.systemSettingModule.ensureConnection();
+        await this.systemSettingGroupModule.ensureConnection();
+        await this.systemSettingOptionModule.ensureConnection();
     }
     public async selectAllSystemSettings(): Promise<SystemSettingGroupDisplay[]> {
         const grouplist = await this.systemSettingGroupModule.listall()
@@ -91,7 +101,7 @@ export class SystemSettingController {
     public async updateLanguagePreference(language: string): Promise<boolean> {
         try {
             // Validate language code
-            const validLanguages = ['en', 'zh'];
+            const validLanguages = ['en', 'zh', 'es', 'fr', 'de', 'ja'];
             if (!validLanguages.includes(language)) {
                 console.error('Invalid language code:', language);
                 return false;

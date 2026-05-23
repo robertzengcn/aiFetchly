@@ -7,6 +7,53 @@ import { TimeoutError, InterceptResolutionAction } from 'puppeteer';
 import useProxy from "@lem0-packages/puppeteer-page-proxy"
 import { convertProxyServertourl } from "@/modules/lib/function"
 
+const BING_REDIRECT_HOST = 'www.bing.com';
+
+/**
+ * Try to resolve the final URL from a Bing redirect URL (e.g. /ck/a?...&u=...).
+ * Bing often encodes the destination in the `u` query param (base64). Returns null if not a bing redirect or parsing fails.
+ */
+function resolveBingRedirectUrl(bingUrl: string): string | null {
+    try {
+        const parsed = new URL(bingUrl);
+        if (!parsed.hostname?.toLowerCase().includes('bing.com')) {
+            return null;
+        }
+        const uParam = parsed.searchParams.get('u');
+        if (!uParam) {
+            return null;
+        }
+        // Try base64 decode (Bing often encodes the destination URL)
+        try {
+            // Common format: "a1" + base64(realUrl) — decode the part after the 2-char prefix
+            if (uParam.length > 2) {
+                const afterPrefix = uParam.slice(2);
+                const decodedFromPrefix = Buffer.from(afterPrefix, 'base64').toString('utf-8');
+                if (decodedFromPrefix.startsWith('http://') || decodedFromPrefix.startsWith('https://')) {
+                    return decodedFromPrefix;
+                }
+            }
+            // Alternative: whole param is base64(realUrl)
+            const decoded = Buffer.from(uParam, 'base64').toString('utf-8');
+            if (decoded.startsWith('http://') || decoded.startsWith('https://')) {
+                return decoded;
+            }
+        } catch {
+            // not valid base64, ignore
+        }
+        // u might be the raw URL (percent-encoded)
+        if (uParam.startsWith('http%3A') || uParam.startsWith('https%3A')) {
+            return decodeURIComponent(uParam);
+        }
+        if (uParam.startsWith('http://') || uParam.startsWith('https://')) {
+            return uParam;
+        }
+        return null;
+    } catch {
+        return null;
+    }
+}
+
 
 // export type googlePlaces = {
 //     heading: string;
@@ -90,12 +137,16 @@ export class BingScraper extends SearchScrape {
             }
             ))
         for (const seval of searchRes) {
-            if (seval.link?.includes('www.bing.com')) {
-                // const response = await fetch(link, { method: 'GET' });
-                // if(response.status==200){
-                //     link=response.url
-                // }
+            if (seval.link?.includes(BING_REDIRECT_HOST)) {
+                // Prefer resolving from URL params (no extra page load)
+                const resolvedFromUrl = resolveBingRedirectUrl(seval.link);
+                if (resolvedFromUrl) {
+                    seval.link = resolvedFromUrl;
+                    result.results.push(seval);
+                    continue;
+                }
 
+                // Fallback: follow redirect by navigating
                 const browser = await this.page.browser();
                 try {
                     const newPage = await browser.newPage();
@@ -192,13 +243,75 @@ export class BingScraper extends SearchScrape {
     async load_start_page(): Promise<boolean | void> {
         const startUrl = 'https://www.bing.com';//ncr means no country redirect
 
-
         this.logger.info('Using startUrl: ' + startUrl);
 
-        this.last_response = await this.page.goto(startUrl, {
-            waitUntil: "networkidle2",
-            timeout: 60000
-        });
+        try {
+            this.last_response = await this.page.goto(startUrl, {
+                waitUntil: "networkidle2",
+                timeout: this.STANDARD_TIMEOUT
+            });
+        } catch (error) {
+            // Check if page is actually ready despite timeout error
+            // This handles cases where networkidle2 never completes due to continuous background requests
+            // but the page is actually loaded and functional
+            if (error instanceof TimeoutError) {
+                try {
+                    const pageReadyState = await this.page.evaluate(() => document.readyState);
+                    const searchBoxElement = await this.page.$('textarea[name="q"]');
+                    const searchBoxExists = searchBoxElement !== null;
+                    
+                    // If page is actually ready and functional, continue despite the timeout
+                    if (pageReadyState === 'complete' && searchBoxExists) {
+                        this.logger.warn('Navigation timeout occurred but page appears to be loaded and functional');
+                    } else {
+                        const recovery = await this.attemptAIRecovery('load_start_page', (error as Error).message, ['textarea[name="q"]']);
+                        if (recovery.success) {
+                            return this.load_start_page();
+                        }
+                        throw error;
+                    }
+                } catch (checkError) {
+                    const recovery = await this.attemptAIRecovery('load_start_page', (error as Error).message, ['textarea[name="q"]']);
+                    if (recovery.success) {
+                        return this.load_start_page();
+                    }
+                    throw error;
+                }
+            } else {
+                const recovery = await this.attemptAIRecovery('load_start_page', (error as Error).message, []);
+                if (recovery.success) {
+                    return this.load_start_page();
+                }
+                throw error;
+            }
+        }
+        
+        // Wait for page to be fully loaded
+        try {
+            await this.page.waitForFunction(() => {
+                return document.readyState === 'complete';
+            }, { timeout: this.STANDARD_TIMEOUT });
+        } catch (waitError) {
+            // If readyState is already complete, continue anyway
+            const currentReadyState = await this.page.evaluate(() => document.readyState);
+            if (currentReadyState !== 'complete') {
+                throw waitError;
+            }
+        }
+
+        // Check for and click cookie consent button if present
+        try {
+            const cookieButton = await this.page.$('#bnp_btn_accept');
+            if (cookieButton) {
+                this.logger.info('Found cookie consent button, clicking it');
+                await cookieButton.click();
+                // Wait a bit for the cookie banner to disappear
+                await new Promise(resolve => setTimeout(resolve, 500));
+            }
+        } catch (error) {
+            // Cookie button not found or already dismissed - this is fine
+            this.logger.debug('Cookie consent button not found or already dismissed');
+        }
 
         // await this.page.waitForSelector('textarea[name="q"]', { timeout: this.STANDARD_TIMEOUT });
 
@@ -251,36 +364,83 @@ export class BingScraper extends SearchScrape {
                     await input.focus();
                     await this.page.keyboard.press("Enter");
                 } else {
-                    throw new CustomError("input keyword button not found", 202408191127280)
+                    const recovery = await this.attemptAIRecovery('search_input', 'Bing search input not found', ['textarea[name="q"]', 'input[name="q"]'], { keyword });
+                    if (recovery.success) {
+                        return this.search_keyword(keyword);
+                    }
+                    throw new CustomError("input keyword button not found", 202408191127280);
                 }
             }
+        } else {
+            const recovery = await this.attemptAIRecovery('search_input', 'Bing search input not found', ['textarea[name="q"]'], { keyword });
+            if (recovery.success) {
+                return this.search_keyword(keyword);
+            }
+            throw new CustomError("input keyword button not found", 202408191127280);
         }
     }
     //click next page
     async next_page(): Promise<boolean | void> {
-        const next_page_link = await this.page.$('.sb_pagN');
-        if (!next_page_link) {
-            //return false;
-            const targetElement = await this.page.$('[aria-label="Next page"]')
-            if (targetElement) {
-                await targetElement.scrollIntoView();
-                targetElement.click();
-                return true
-            } else {
-                const targetElements = await this.page.$('[title="Next page"]');
-                if (targetElements) {
-                    await targetElements.scrollIntoView();
-                    await targetElements.click();
-                    return true;
+        this.logger.info('Attempting to navigate to next page');
+        
+        // Scroll to bottom of page first to ensure pagination controls are loaded
+        await this.page.evaluate(() => {
+            window.scrollTo(0, document.body.scrollHeight);
+        });
+        
+        // Wait a bit for any lazy-loaded content to appear
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+        // List of possible selectors for the next page button
+        const nextPageSelectors = [
+            '.sb_pagN',
+            '[aria-label="Next page"]',
+            '[title="Next page"]',
+            '.pgn_next',
+            'a[aria-label="Next page"]',
+            'button[aria-label="Next page"]',
+            '.b_pag a[href*="page"]:last-child',
+            '#b_content .b_pag a:last-child'
+        ];
+        
+        // Try each selector until we find a valid next page button
+        for (const selector of nextPageSelectors) {
+            try {
+                const nextPageElement = await this.page.$(selector);
+                if (nextPageElement) {
+                    // Check if the element is visible and enabled
+                    const elementInfo = await this.page.evaluate((el) => {
+                        const htmlEl = el as HTMLElement;
+                        const rect = htmlEl.getBoundingClientRect();
+                        const style = window.getComputedStyle(htmlEl);
+                        return {
+                            isVisible: rect.width > 0 && rect.height > 0 && 
+                                      style.display !== 'none' && 
+                                      style.visibility !== 'hidden' &&
+                                      style.opacity !== '0',
+                            isEnabled: !htmlEl.hasAttribute('disabled') && 
+                                      !htmlEl.classList.contains('disabled') &&
+                                      htmlEl.offsetParent !== null,
+                            hasHref: htmlEl.tagName === 'A' ? (htmlEl as HTMLAnchorElement).href !== '' : true
+                        };
+                    }, nextPageElement);
+                    
+                    if (elementInfo.isVisible && elementInfo.isEnabled && elementInfo.hasHref) {
+                        this.logger.info(`Found next page button with selector: ${selector}`);
+                        await nextPageElement.scrollIntoView();
+                        await new Promise(resolve => setTimeout(resolve, 200));
+                        await nextPageElement.click();
+                        return true;
+                    }
                 }
+            } catch (error) {
+                // Continue to next selector if current one fails
+                this.logger.debug(`Selector ${selector} not found or not clickable, trying next`);
+                continue;
             }
-
-        } else {
-            await next_page_link.click();
-            return true;
         }
-
-
+        
+        this.logger.warn('Next page button not found with any of the known selectors');
         return false;
     }
 

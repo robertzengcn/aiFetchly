@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
-const { PlatformTestingFramework } = require('../modules/PlatformTestingFramework')
-const { PlatformRegistry } = require('../modules/PlatformRegistry')
-const fs = require('fs')
-const path = require('path')
+import { PlatformTestingFramework } from '../modules/PlatformTestingFramework';
+import { PlatformRegistry } from '../modules/PlatformRegistry';
+import * as fs from 'fs';
+import * as path from 'path';
 
 /**
  * CLI script for testing platform configurations

@@ -1,6 +1,7 @@
 import path from "path";
 import { execSync, exec } from 'child_process';
-import { Notification, app, BrowserWindow } from 'electron'
+import { app, BrowserWindow } from 'electron'
+import { Notification } from 'electron'
 // import * as yaml from 'js-yaml';
 import * as fs from 'fs';
 // import { CommonDialogMsg } from "@/entityTypes/commonType";
@@ -817,7 +818,7 @@ export async function closePuppeteer(page?: Page, browser?: Browser): Promise<vo
               const pages = await browser.pages();
               await Promise.all(pages.map(async p => {
                   if (!p.isClosed()) {
-                      await p.close().catch(() => {});
+                      await p.close().catch(() => undefined);
                   }
               }));
               
@@ -954,7 +955,7 @@ export function getChromeExcutepath():string|undefined{
 export function getFirefoxExcutepath(): string | undefined {
   const platform = os.platform();
   switch(platform) {
-    case "darwin": // macOS
+    case "darwin": { // macOS
       const macPaths = [
         '/Applications/Firefox.app/Contents/MacOS/firefox',
         '/Applications/Firefox Developer Edition.app/Contents/MacOS/firefox',
@@ -966,8 +967,9 @@ export function getFirefoxExcutepath(): string | undefined {
         }
       }
       return undefined;
+    }
 
-    case "win32": // Windows
+    case "win32": { // Windows
       const winPaths = [
         'C:\\Program Files\\Mozilla Firefox\\firefox.exe',
         'C:\\Program Files (x86)\\Mozilla Firefox\\firefox.exe',
@@ -979,8 +981,9 @@ export function getFirefoxExcutepath(): string | undefined {
         }
       }
       return undefined;
+    }
 
-    case "linux": // Linux
+    case "linux": { // Linux
       const linuxPaths = [
         '/usr/bin/firefox',
         '/usr/bin/firefox-esr',
@@ -993,6 +996,7 @@ export function getFirefoxExcutepath(): string | undefined {
         }
       }
       return undefined;
+    }
 
     default:
       return undefined;
@@ -1011,8 +1015,9 @@ export function sendSystemMessage(message: { status: boolean; data: { title: str
         // Send message to all renderer processes
         const windows = BrowserWindow.getAllWindows();
         windows.forEach((window) => {
-            if (window.webContents && !window.webContents.isDestroyed()) {
-                window.webContents.send(SYSTEM_MESSAGE, JSON.stringify(message));
+            const bw = window as BrowserWindow;
+            if (bw && !(bw as any).isDestroyed?.() && (bw as any).webContents) {
+                (bw as any).webContents.send(SYSTEM_MESSAGE, JSON.stringify(message));
             }
         });
     } catch (error) {

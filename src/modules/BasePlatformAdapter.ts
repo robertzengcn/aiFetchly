@@ -147,6 +147,82 @@ export class BasePlatformAdapter implements IBasePlatformAdapter {
     }
 
     /**
+     * Split selector string by comma to handle multiple selectors
+     * For example: 'input[name="area"], select[name="prefecture"]' becomes ['input[name="area"]', 'select[name="prefecture"]']
+     *
+     * @param selector - Selector string that may contain comma-separated selectors
+     * @returns Array of individual selectors
+     */
+    protected splitSelectors(selector: string): string[] {
+        if (!selector || typeof selector !== 'string') {
+            return [];
+        }
+        return selector
+            .split(',')
+            .map(s => s.trim())
+            .filter(s => s.length > 0);
+    }
+
+    /**
+     * Try multiple selectors in order and return the first matching element
+     * This handles comma-separated selectors like 'input[name="area"], select[name="prefecture"]'
+     *
+     * @param page - Puppeteer Page instance
+     * @param selector - Selector string that may contain comma-separated selectors
+     * @returns First matching element or null
+     */
+    protected async trySelectors(page: Page, selector: string): Promise<Element | null> {
+        const selectors = this.splitSelectors(selector);
+
+        for (const sel of selectors) {
+            try {
+                const element = await page.evaluate((s) => {
+                    return document.querySelector(s);
+                }, sel);
+
+                if (element) {
+                    return element;
+                }
+            } catch (error) {
+                // Invalid selector, continue to next
+                continue;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Try multiple selectors in order and return all matching elements from the first successful selector
+     * This handles comma-separated selectors like 'div.result, .search-result'
+     *
+     * @param page - Puppeteer Page instance
+     * @param selector - Selector string that may contain comma-separated selectors
+     * @returns Array of matching elements from the first successful selector
+     */
+    protected async trySelectorsAll(page: Page, selector: string): Promise<Element[]> {
+        const selectors = this.splitSelectors(selector);
+
+        for (const sel of selectors) {
+            try {
+                const elements = await page.evaluate((s) => {
+                    const els = document.querySelectorAll(s);
+                    return Array.from(els);
+                }, sel);
+
+                if (elements && elements.length > 0) {
+                    return elements;
+                }
+            } catch (error) {
+                // Invalid selector, continue to next
+                continue;
+            }
+        }
+
+        return [];
+    }
+
+    /**
      * Extract email from detail page using platform-specific logic
      * Default implementation returns undefined - can be overridden by subclasses
      * This method should handle complex email extraction patterns like data attributes
@@ -195,7 +271,7 @@ export class BasePlatformAdapter implements IBasePlatformAdapter {
     /**
      * Build search URL for the platform
      */
-    buildSearchUrl(keywords: string[], location: string, pageNum: number = 1): string {
+    buildSearchUrl(keywords: string[], location: string, pageNum = 1): string {
         const searchTerms = keywords.join(' ');
         const baseUrl = this._config.base_url;
         

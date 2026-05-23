@@ -1,0 +1,11 @@
+{
+  "version": "1.0",
+  "granularity": "coarse",
+  "execution": "parallel",
+  "git_tracking": true,
+  "research": true,
+  "plan_check": true,
+  "verifier": true,
+  "mode": "guided",
+  "created": "2026-04-23"
+}

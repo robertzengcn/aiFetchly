@@ -61,12 +61,12 @@ export interface IVectorDatabase {
      * @param vectors - Array of vectors to add
      * @param chunkIds - Array of chunk IDs corresponding to vectors
      */
-    addVectors(vectors: number[], chunkIds: number[]): Promise<void>;
+    addVectors(vectors: number[], chunkIds: number): Promise<void>;
 
     /**
      * Search for similar vectors
      */
-    search(queryVector: number[], k: number): Promise<VectorSearchResult>;
+    search(queryVector: number[], k: number, distance?: number): Promise<VectorSearchResult>;
 
     /**
      * Get index statistics
@@ -123,6 +123,12 @@ export interface IVectorDatabase {
      * @param documentId - Document ID to delete index for
      */
     deleteDocumentIndex(documentId: number): Promise<void>;
+
+    /**
+     * Delete vectors by chunk IDs from the vector database
+     * @param chunkIds - Array of chunk IDs to delete
+     */
+    deleteVectorsByChunkIds?(chunkIds: number[]): Promise<void>;
 
     /**
      * Check if a document-specific index exists

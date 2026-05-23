@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*" 
+           Name="aiFetchly" 
+           Language="1033" 
+           Version="1.0.0" 
+           Manufacturer="Robert Zeng" 
+           UpgradeCode="PUT-GUID-HERE">
+    
+    <Package InstallerVersion="200" 
+             Compressed="yes" 
+             InstallScope="perUser" 
+             Description="aiFetchly Application" 
+             Comments="aiFetchly Installer" />
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+    <InstallExecuteSequence>
+      <Custom Action="CopyUninstaller" After="InstallFiles">NOT Installed</Custom>
+    </InstallExecuteSequence>
+
+    <MediaTemplate />
+
+    <Feature Id="ProductFeature" Title="aiFetchly" Level="1">
+      <ComponentGroupRef Id="ProductComponents" />
+      <ComponentRef Id="UninstallerComponent" />
+    </Feature>
+
+    <!-- Custom Action to Copy Uninstaller -->
+    <CustomAction Id="CopyUninstaller"
+                  ExeCommand="[SystemFolder]cmd.exe /c copy &quot;[INSTALLDIR]uninstall.exe&quot; &quot;[INSTALLDIR]uninstall.exe&quot;"
+                  Directory="TARGETDIR"
+                  Execute="deferred"
+                  Return="check" />
+
+    <!-- Uninstaller Component -->
+    <Component Id="UninstallerComponent" Directory="INSTALLDIR">
+      <File Id="UninstallerExe" 
+            Source="$(var.SourceDir)installer-scripts\uninstall.exe" 
+            KeyPath="yes" />
+    </Component>
+
+    <!-- Directory Structure -->
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="LocalAppDataFolder">
+        <Directory Id="INSTALLDIR" Name="aiFetchly">
+          <!-- Application files will be added here by Electron Forge -->
+        </Directory>
+      </Directory>
+    </Directory>
+
+    <!-- UI Configuration -->
+    <UIRef Id="WixUI_Minimal" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.SourceDir)LICENSE" />
+    
+    <!-- Registry Entries -->
+    <RegistryKey Root="HKCU" Key="Software\aiFetchly">
+      <RegistryValue Name="InstallLocation" Type="string" Value="[INSTALLDIR]" />
+    </RegistryKey>
+
+    <!-- Uninstall Registry Entry -->
+    <RegistryKey Root="HKCU" Key="Software\Microsoft\Windows\CurrentVersion\Uninstall\aiFetchly">
+      <RegistryValue Name="DisplayName" Type="string" Value="aiFetchly" />
+      <RegistryValue Name="DisplayVersion" Type="string" Value="[ProductVersion]" />
+      <RegistryValue Name="Publisher" Type="string" Value="Robert Zeng" />
+      <RegistryValue Name="UninstallString" Type="string" Value="[INSTALLDIR]uninstall.exe" />
+      <RegistryValue Name="InstallLocation" Type="string" Value="[INSTALLDIR]" />
+    </RegistryKey>
+
+  </Product>
+</Wix>

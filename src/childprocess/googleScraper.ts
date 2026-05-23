@@ -46,6 +46,14 @@ export class GoogleScraper extends SearchScrape {
     constructor(options: ScrapeOptions) {
         super(options);
     }
+
+    protected override getSearchSelectorsForAi(): Record<string, string> {
+        const r: Record<string, string> = {};
+        this.searchSelectors.forEach((sel, i) => {
+            r[`search_input_${i}`] = sel;
+        });
+        return r;
+    }
     // async searchData(data: ClusterSearchData): Promise<void> {
     //     // logger("search data in google")
     //     if(data.page){
@@ -205,44 +213,7 @@ export class GoogleScraper extends SearchScrape {
                     console.log(`Browser console: ${msg.text()}`);
                 });
                 // Found results with alternative selector
-                const searchRes = await this.page.$$eval(selector, elements =>
-                    elements.map(el => {
-                        console.log(`el element with selector: ${el}`);
-                        const selectors = [
-                            { link: 'a', title: 'h3', snippet: '.VwiC3b span, .st', visible: 'cite' },
-                            { link: 'a', title: 'h3', snippet: '.kCrYT span', visible: '.sCuL3' },
-                            { link: 'a', title: '.v7jaNc', snippet: '.VwiC3b span', visible: '.ob9lvb' },
-                            { link: '.yuRUbf a', title: '.yuRUbf a h3', snippet: '.VwiC3b span', visible: '.yuRUbf cite' },
-                            { link: '.g a', title: '.g h3', snippet: '.st', visible: '.g cite' }
-                        ];
-
-                        let link = '', title = '', snippet = '', visible_link = '';
-
-                        for (const selector of selectors) {
-                            const linkEl = el.querySelector(selector.link);
-                            const titleEl = el.querySelector(selector.title);
-                            const snippetEl = el.querySelector(selector.snippet);
-                            const visibleEl = el.querySelector(selector.visible);
-
-                            if (linkEl && titleEl) {
-                                console.log(`linkEl: ${linkEl}`);
-                                console.log(`titleEl: ${titleEl}`);
-                                link = linkEl.getAttribute('href') || '';
-                                title = titleEl.textContent || '';
-                                snippet = snippetEl?.textContent || '';
-                                visible_link = visibleEl?.textContent || '';
-                                break;
-                            }
-                        }
-
-                        return {
-                            link: link ? link : '',
-                            title: title ? title : '',
-                            snippet: snippet,
-                            visible_link: visible_link
-                        };
-                    })
-                );
+                const searchRes = await this.parseSearchResults(selector);
                 this.page.removeAllListeners('console');
                 this.logger.info(`Found ${searchRes.length} results with alternative selector: ${selector}`);
                 for (const resValue of searchRes) {
@@ -253,6 +224,39 @@ export class GoogleScraper extends SearchScrape {
             }
         }
         if(!findelement){
+            // Try AI recovery before throwing error
+            const recoveryResult = await this.tryAIRecovery(
+                'parse_results',
+                'No search results found with standard selectors',
+                alternativeSelectors
+            );
+
+            if (recoveryResult.success) {
+                // Retry parsing after recovery actions
+                const networkIdleTimeout = this.config.ai_recovery?.networkIdleTimeoutMs || 30000;
+                const recoveryDelay = this.config.ai_recovery?.recoveryDelayMs || 2000;
+
+                await this.page.waitForNetworkIdle({ timeout: networkIdleTimeout }).catch(() => {
+                    this.logger.warn('Timeout waiting for network idle after recovery');
+                });
+                await new Promise(resolve => setTimeout(resolve, recoveryDelay));
+
+                // Try parsing again with the first selector
+                for (const selector of alternativeSelectors) {
+                    const results = await this.page.$(selector);
+                    if (results) {
+                        const searchRes = await this.parseSearchResults(selector);
+
+                        for (const resValue of searchRes) {
+                            result.results.push(resValue);
+                        }
+
+                        this.logger.info('AI recovery successful, found results after recovery');
+                        return result;
+                    }
+                }
+            }
+
             throw new CustomError("No search results found,may be element not found in the list page", 202405301120304);
         }
         //  }else{
@@ -347,6 +351,25 @@ export class GoogleScraper extends SearchScrape {
             timeout: 60000
         });
 
+        // Wait for page to be fully loaded
+        await this.page.waitForFunction(() => {
+            return document.readyState === 'complete';
+        }, { timeout: this.STANDARD_TIMEOUT });
+
+        // Check for and click cookie consent button if present (Bing-style cookie banner)
+        try {
+            const cookieButton = await this.page.$('#bnp_btn_accept');
+            if (cookieButton) {
+                this.logger.info('Found cookie consent button, clicking it');
+                await cookieButton.click();
+                // Wait a bit for the cookie banner to disappear
+                await new Promise(resolve => setTimeout(resolve, 500));
+            }
+        } catch (error) {
+            // Cookie button not found or already dismissed - this is fine
+            this.logger.debug('Cookie consent button not found or already dismissed');
+        }
+
         // Wait for user to take action
         // this.logger.info('Waiting for user to take action...');
 
@@ -409,60 +432,102 @@ export class GoogleScraper extends SearchScrape {
             try {
                 const input = await this.page.$(selector);
                 if (input) {
-                    // Get input element position
-                    const inputBox = await input.boundingBox();
-                    if (!inputBox) {
-                        throw new Error('Could not get input box position');
-                    }
-
-                    // Generate random coordinates within the input box
-                    const randomX = inputBox.x + Math.random() * inputBox.width;
-                    const randomY = inputBox.y + Math.random() * inputBox.height;
-
-                    // Move mouse with random speed
-                    const steps = 10 + Math.floor(Math.random() * 20); // Random number of steps
-                    const stepDelay = 50 + Math.random() * 100; // Random delay between steps
-
-                    for (let i = 0; i < steps; i++) {
-                        const progress = i / steps;
-                        const currentX = randomX * progress;
-                        const currentY = randomY * progress;
-
-                        await this.page.mouse.move(currentX, currentY);
-                        //await this.page.waitForTimeout(stepDelay);
-                        await new Promise(resolve => setTimeout(resolve, stepDelay));
-                    }
-
-                    // Final click with random delay
-                    //await this.page.waitForTimeout(100 + Math.random() * 200);
-                    await new Promise(resolve => setTimeout(resolve, 100 + Math.random() * 200));
-                    await this.page.mouse.click(randomX, randomY);
-                    // Type each character with random delays to simulate human typing
-                    for (const char of keyword) {
-                        await this.page.keyboard.type(char, {
-                            delay: 50 + Math.random() * 150 // Random delay between 50-200ms per character
-                        });
-                        // Add occasional longer pauses between words
-                        if (char === ' ') {
-                            await new Promise(resolve => setTimeout(resolve, 200 + Math.random() * 300));
-                        }
-                    }
-                    //await this.set_input_value(selector, keyword);
+                    // Check if the element is a textarea
+                    const tagName = await this.page.evaluate((el) => el.tagName.toLowerCase(), input);
                     
-                    await this.page.evaluate(async () => {
-                        await new Promise(function (resolve) {
-                            setTimeout(resolve, 1000)
+                    if (tagName === 'textarea') {
+                        // Handle textarea: focus, type, press Enter, wait for navigation
+                        await input.focus();
+                        await this.page.keyboard.type(keyword, { delay: Math.random() * 100 + 50 });
+                        await this.page.keyboard.press('Enter');
+                        
+                        // Wait for navigation
+                        try {
+                            await this.page.waitForNavigation({ timeout: 5000 });
+                        } catch {
+                            // If navigation doesn't happen, find the form and submit it
+                            await input.evaluate((el) => {
+                                const form = el.closest('form') as HTMLFormElement;
+                                if (form) {
+                                    console.log("Form found and submitting");
+                                    form.submit();
+                                }
+                            });
+                        }
+                        return;
+                    } else {
+                        // Handle input elements with the original mouse movement approach
+                        // Get input element position
+                        const inputBox = await input.boundingBox();
+                        if (!inputBox) {
+                            throw new Error('Could not get input box position');
+                        }
+
+                        // Generate random coordinates within the input box
+                        const randomX = inputBox.x + Math.random() * inputBox.width;
+                        const randomY = inputBox.y + Math.random() * inputBox.height;
+
+                        // Move mouse with random speed
+                        const steps = 10 + Math.floor(Math.random() * 20); // Random number of steps
+                        const stepDelay = 50 + Math.random() * 100; // Random delay between steps
+
+                        for (let i = 0; i < steps; i++) {
+                            const progress = i / steps;
+                            const currentX = randomX * progress;
+                            const currentY = randomY * progress;
+
+                            await this.page.mouse.move(currentX, currentY);
+                            await new Promise(resolve => setTimeout(resolve, stepDelay));
+                        }
+
+                        // Final click with random delay
+                        await new Promise(resolve => setTimeout(resolve, 100 + Math.random() * 200));
+                        await this.page.mouse.click(randomX, randomY);
+                        // Type each character with random delays to simulate human typing
+                        for (const char of keyword) {
+                            await this.page.keyboard.type(char, {
+                                delay: 50 + Math.random() * 150 // Random delay between 50-200ms per character
+                            });
+                            // Add occasional longer pauses between words
+                            if (char === ' ') {
+                                await new Promise(resolve => setTimeout(resolve, 200 + Math.random() * 300));
+                            }
+                        }
+                        
+                        await this.page.evaluate(async () => {
+                            await new Promise(function (resolve) {
+                                setTimeout(resolve, 1000)
+                            });
                         });
-                    });
-                    await input.focus();
-                    await this.page.keyboard.press("Enter");
-                    return;
+                        await input.focus();
+                        await this.page.keyboard.press("Enter");
+                        return;
+                    }
+                }else{
+                    throw new CustomError("input keyword button not found", 202405301120303)
                 }
             } catch (error) {
                 continue;
             }
         }
-        throw new CustomError("input keyword button not found", 202405301120303)
+
+        // All selectors failed - try AI recovery
+        const recoveryResult = await this.tryAIRecovery(
+            'search_input',
+            'No search input found with standard selectors',
+            this.searchSelectors,
+            { keyword }
+        );
+
+        if (recoveryResult.success) {
+            // Now type the keyword using the recovered input
+            await this.page.keyboard.type(keyword, { delay: 50 + Math.random() * 100 });
+            await this.page.keyboard.press('Enter');
+            this.logger.info('AI recovery successful!');
+            return;
+        }
+
+        throw new CustomError("No search input found", 202405301120304);
     }
     //click next page
     async next_page(): Promise<boolean | void> {
@@ -491,13 +556,86 @@ export class GoogleScraper extends SearchScrape {
             }
         }
 
-        // } else {
-        //     await next_page_link.click();
-        //     return true;
-        // }
+        // All selectors failed - try AI recovery
+        const recoveryResult = await this.tryAIRecovery(
+            'next_page',
+            'Next page button not found with standard selectors',
+            nextPageSelectors
+        );
 
+        if (recoveryResult.success) {
+            // Wait for navigation after recovery actions
+            try {
+                await this.page.waitForNavigation({ timeout: 10000 });
+                this.logger.info('AI recovery successful, navigated to next page');
+                return true;
+            } catch (navError) {
+                this.logger.warn('Navigation timeout after AI recovery');
+                // Still return true as actions were executed
+                return true;
+            }
+        }
 
         return false;
+    }
+
+    /**
+     * AI recovery via base observe-execute loop. Used at failure points (load, search, parse).
+     */
+    private async tryAIRecovery(
+        operation: string,
+        errorMessage: string,
+        attemptedSelectors: string[],
+        context?: Record<string, unknown>
+    ): Promise<{ success: boolean; error?: string }> {
+        this.logger.info(`Attempting AI recovery for operation: ${operation}`);
+        return this.attemptAIRecovery(operation, errorMessage, attemptedSelectors, context);
+    }
+
+    /**
+     * Parse search results from a given selector
+     * Extracts link, title, snippet, and visible_link from search result elements
+     * @param selector - CSS selector to find search result elements
+     * @returns Array of parsed search results
+     */
+    private async parseSearchResults(selector: string): Promise<SearchResult[]> {
+        const searchRes = await this.page.$$eval(selector, elements =>
+            elements.map(el => {
+                const selectors = [
+                    { link: 'a', title: 'h3', snippet: '.VwiC3b span, .st', visible: 'cite' },
+                    { link: 'a', title: 'h3', snippet: '.kCrYT span', visible: '.sCuL3' },
+                    { link: 'a', title: '.v7jaNc', snippet: '.VwiC3b span', visible: '.ob9lvb' },
+                    { link: '.yuRUbf a', title: '.yuRUbf a h3', snippet: '.VwiC3b span', visible: '.yuRUbf cite' },
+                    { link: '.g a', title: '.g h3', snippet: '.st', visible: '.g cite' }
+                ];
+
+                let link = '', title = '', snippet = '', visible_link = '';
+
+                for (const sel of selectors) {
+                    const linkEl = el.querySelector(sel.link);
+                    const titleEl = el.querySelector(sel.title);
+                    const snippetEl = el.querySelector(sel.snippet);
+                    const visibleEl = el.querySelector(sel.visible);
+
+                    if (linkEl && titleEl) {
+                        link = linkEl.getAttribute('href') || '';
+                        title = titleEl.textContent || '';
+                        snippet = snippetEl?.textContent || '';
+                        visible_link = visibleEl?.textContent || '';
+                        break;
+                    }
+                }
+
+                return {
+                    link: link ? link : '',
+                    title: title ? title : '',
+                    snippet: snippet,
+                    visible_link: visible_link
+                };
+            })
+        );
+
+        return searchRes;
     }
 
     async wait_for_results() {

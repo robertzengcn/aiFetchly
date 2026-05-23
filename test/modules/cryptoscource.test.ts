@@ -1,5 +1,5 @@
 'use strict';
-import {CryptoSource} from '../../src/modules/cryptosource'
+import {CryptoSource} from '@/modules/cryptosource'
 const expect = require('expect.js');
 describe('Module CryptoSource', function(){
     const crytocource=new CryptoSource()

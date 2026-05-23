@@ -2,6 +2,7 @@ import { ISearchResultApi } from "./interface/ISearchResultApi";
 import { SearchResultModel } from "@/model/SearchResult.model";
 import { SearchResEntity } from "@/entityTypes/scrapeType";
 import { BaseModule } from "./baseModule";
+import { AggregatedCount } from "@/entityTypes/dashboardType";
 
 export class SearchResultModule extends BaseModule implements ISearchResultApi {
     private searchResultModel: SearchResultModel;
@@ -13,10 +14,12 @@ export class SearchResultModule extends BaseModule implements ISearchResultApi {
 
     /**
      * Save a search result
+     * @param data Search result entity data
+     * @param taskId The task ID this result belongs to
      */
-    async saveResult(data: SearchResEntity): Promise<number> {
+    async saveResult(data: SearchResEntity, taskId: number): Promise<number> {
         try {
-            return await this.searchResultModel.saveResult(data);
+            return await this.searchResultModel.saveResult(data, taskId);
         } catch (error) {
             console.error("Failed to save search result:", error);
             throw new Error(error instanceof Error ? error.message : "Failed to save search result");
@@ -55,10 +58,38 @@ export class SearchResultModule extends BaseModule implements ISearchResultApi {
         }
     }
 
+    async countAll(): Promise<number> {
+        try {
+            return await this.searchResultModel.countAll();
+        } catch (error) {
+            console.error("Failed to count search results:", error);
+            throw new Error(error instanceof Error ? error.message : "Failed to count search results");
+        }
+    }
+
+    async countByDateRange(startDate: Date, endDate: Date): Promise<number> {
+        try {
+            return await this.searchResultModel.countByDateRange(startDate, endDate);
+        } catch (error) {
+            console.error("Failed to count search results by date range:", error);
+            throw new Error(error instanceof Error ? error.message : "Failed to count search results by date range");
+        }
+    }
+
+    async aggregateByDateRange(startDate: Date, endDate: Date, granularity: 'day' | 'week' | 'month'): Promise<AggregatedCount[]> {
+        try {
+            const rows = await this.searchResultModel.aggregateByDateRange(startDate, endDate, granularity);
+            return rows.map(row => ({ date: row.date, count: row.count }));
+        } catch (error) {
+            console.error("Failed to aggregate search results by date range:", error);
+            throw new Error(error instanceof Error ? error.message : "Failed to aggregate search results by date range");
+        }
+    }
+
     /**
      * Get search results by specific task ID with pagination
      */
-    async getSearchResultsByTaskId(taskId: number, page: number = 0, size: number = 10): Promise<{ results: SearchResEntity[], total: number }> {
+    async getSearchResultsByTaskId(taskId: number, page = 0, size = 10): Promise<{ results: SearchResEntity[], total: number }> {
         try {
             if (!taskId || taskId <= 0) {
                 return { results: [], total: 0 };
@@ -104,8 +135,8 @@ export class SearchResultModule extends BaseModule implements ISearchResultApi {
      */
     async getSearchResultsWithFilter(
         taskIds: number[],
-        page: number = 0,
-        size: number = 10,
+        page = 0,
+        size = 10,
         searchTerm?: string
     ): Promise<{ results: SearchResEntity[], total: number }> {
         try {
@@ -145,6 +176,21 @@ export class SearchResultModule extends BaseModule implements ISearchResultApi {
     }
 
     /**
+     * Get search results breakdown by search engine
+     * @param startDate Start date for filtering results
+     * @param endDate End date for filtering results
+     * @returns Array of engine counts with engine_id
+     */
+    async getBreakdownByEngine(startDate: Date, endDate: Date): Promise<Array<{ engineId: number; count: number }>> {
+        try {
+            return await this.searchResultModel.getBreakdownByEngine(startDate, endDate);
+        } catch (error) {
+            console.error("Failed to get breakdown by engine:", error);
+            throw new Error(error instanceof Error ? error.message : "Failed to get breakdown by engine");
+        }
+    }
+
+    /**
      * Delete search results by task ID
      */
     async deleteSearchResultsByTaskId(taskId: number): Promise<number> {
@@ -168,6 +214,90 @@ export class SearchResultModule extends BaseModule implements ISearchResultApi {
         } catch (error) {
             console.error("Failed to delete search results by task ID:", error);
             throw new Error(error instanceof Error ? error.message : "Failed to delete search results by task ID");
+        }
+    }
+
+    /**
+     * Update AI analysis for a search result
+     * @param resultId The search result ID to update
+     * @param analysisData The AI analysis data to save
+     */
+    async updateAiAnalysis(resultId: number, analysisData: {
+        industry: string;
+        match_score: number;
+        reasoning: string;
+        client_business: string;
+    }): Promise<void> {
+        try {
+            if (!resultId || resultId <= 0) {
+                throw new Error('Invalid result ID');
+            }
+
+            const success = await this.searchResultModel.updateAiAnalysis(resultId, analysisData);
+            if (!success) {
+                throw new Error('Failed to update AI analysis');
+            }
+        } catch (error) {
+            console.error('Failed to update AI analysis:', error);
+            throw new Error(error instanceof Error ? error.message : 'Failed to update AI analysis');
+        }
+    }
+
+    /**
+     * Update AI analysis status for a search result
+     * @param resultId The search result ID to update
+     * @param status The status to set ('pending', 'analyzing', 'completed', 'failed')
+     */
+    async updateAiAnalysisStatus(resultId: number, status: string): Promise<void> {
+        try {
+            if (!resultId || resultId <= 0) {
+                throw new Error('Invalid result ID');
+            }
+
+            const success = await this.searchResultModel.updateAiAnalysisStatus(resultId, status);
+            if (!success) {
+                throw new Error('Failed to update AI analysis status');
+            }
+        } catch (error) {
+            console.error('Failed to update AI analysis status:', error);
+            throw new Error(error instanceof Error ? error.message : 'Failed to update AI analysis status');
+        }
+    }
+
+    /**
+     * Update AI analysis status for multiple search results
+     * @param resultIds Array of search result IDs to update
+     * @param status The status to set
+     * @returns Number of updated records
+     */
+    async updateAiAnalysisStatusBatch(resultIds: number[], status: string): Promise<number> {
+        try {
+            if (!resultIds || resultIds.length === 0) {
+                return 0;
+            }
+
+            return await this.searchResultModel.updateAiAnalysisStatusBatch(resultIds, status);
+        } catch (error) {
+            console.error('Failed to update AI analysis status batch:', error);
+            throw new Error(error instanceof Error ? error.message : 'Failed to update AI analysis status batch');
+        }
+    }
+
+    /**
+     * Get search results by IDs
+     * @param resultIds Array of search result IDs
+     * @returns Array of search result entities
+     */
+    async getSearchResultsByIds(resultIds: number[]): Promise<SearchResEntity[]> {
+        try {
+            if (!resultIds || resultIds.length === 0) {
+                return [];
+            }
+
+            return await this.searchResultModel.getSearchResultsByIds(resultIds);
+        } catch (error) {
+            console.error('Failed to get search results by IDs:', error);
+            throw new Error(error instanceof Error ? error.message : 'Failed to get search results by IDs');
         }
     }
 } 

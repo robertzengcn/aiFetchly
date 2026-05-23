@@ -16,7 +16,7 @@ import { WriteLog, getApplogspath, getRandomValues, getRecorddatetime } from "@/
 import { v4 as uuidv4 } from 'uuid';
 import * as path from 'path';
 import * as fs from 'fs';
-import { utilityProcess, MessageChannelMain } from "electron";
+import { utilityProcess, MessageChannelMain, app } from "electron";
 import { ProcessMessage } from "@/entityTypes/processMessage-type"
 import { EmailSendResult } from "@/entityTypes/emailmarketingType"
 import { SendStatus } from "@/model/emailMarketingSendLog.model"
@@ -221,7 +221,9 @@ export class BuckEmailTaskModule extends BaseModule {
             execArgv: ["puppeteer-cluster:*"],
             env: {
                 ...process.env,
-                NODE_OPTIONS: ""
+                NODE_OPTIONS: "",
+                ELECTRON_APP_NAME: app.getName(),
+                ELECTRON_USER_DATA_PATH: app.getPath("userData"),
             }
         })
 
@@ -234,7 +236,6 @@ export class BuckEmailTaskModule extends BaseModule {
         })
 
         child.stdout?.on('data', (data) => {
-            console.log(`Received data chunk ${data}`)
             WriteLog(runLogfile, data)
             // child.kill()
         })
@@ -243,7 +244,6 @@ export class BuckEmailTaskModule extends BaseModule {
             if (!ingoreStr.some((value) => data.includes(value))) {
 
                 // seModel.saveTaskerrorlog(taskId,data)
-                console.log(`Received error chunk ${data}`)
                 WriteLog(errorLogfile, data)
                 // this.emailSeachTaskModule.updateTaskStatus(taskId,EmailsearchTaskStatus.Error)
                 //child.kill()
@@ -260,11 +260,17 @@ export class BuckEmailTaskModule extends BaseModule {
             }
 
         })
-        child.on('message', (message) => {
-            console.log("get message from child")
-            console.log('Message from child:', JSON.parse(message));
-            // const childdata=JSON.parse(message) as ProcessMessage<EmailResult>
-            const childdata = JSON.parse(message) as ProcessMessage<EmailSendResult>
+        child.on('message', (message: unknown) => {
+            try {
+                const msg = message as { data?: string };
+                if (!msg || !msg.data || typeof msg.data !== 'string') {
+                    console.error('Invalid message from child process:', message);
+                    return;
+                }
+                console.log("get message from child")
+                // const childdata=JSON.parse(message.data) as ProcessMessage<EmailResult>
+                const childdata = JSON.parse(msg.data) as ProcessMessage<EmailSendResult>;
+                console.log('Message from child:', childdata);
             switch (childdata.action) {
                 case 'EmailSendSuccess': {
                     // const emailMarketLog: EmailMarketingSendLogEntity = {
@@ -274,13 +280,17 @@ export class BuckEmailTaskModule extends BaseModule {
                     //     title: message.data.title,
                     //     content: message.data.content,
                     // }
+                    if (!childdata.data) {
+                        console.error('EmailSendSuccess: childdata.data is undefined');
+                        break;
+                    }
                     const emailMarketLog = new EmailMarketingSendLogEntity()
                     emailMarketLog.task_id = taskId
                     emailMarketLog.status = SendStatus.Success
-                    emailMarketLog.receiver = message.data.receiver
-                    emailMarketLog.title = message.data.title
-                    emailMarketLog.content = message.data.content
-                    emailMarketLog.log = message.data.info ? message.data.info : ""
+                    emailMarketLog.receiver = childdata.data.receiver
+                    emailMarketLog.title = childdata.data.title
+                    emailMarketLog.content = childdata.data.content
+                    emailMarketLog.log = childdata.data.info ? childdata.data.info : ""
                     //update send log
                     this.emailMarketingSendlogModule.createItem(emailMarketLog)
                 }
@@ -294,13 +304,17 @@ export class BuckEmailTaskModule extends BaseModule {
                     //     content: message.data.content,
                     //     log: message.data.info
                     // }
+                    if (!childdata.data) {
+                        console.error('EmailSendFailure: childdata.data is undefined');
+                        break;
+                    }
                     const emailMarketLog = new EmailMarketingSendLogEntity()
                     emailMarketLog.task_id = taskId
                     emailMarketLog.status = SendStatus.Failure
-                    emailMarketLog.receiver = message.data.receiver
-                    emailMarketLog.title = message.data.title
-                    emailMarketLog.content = message.data.content
-                    emailMarketLog.log = message.data.info ? message.data.info : ""
+                    emailMarketLog.receiver = childdata.data.receiver
+                    emailMarketLog.title = childdata.data.title
+                    emailMarketLog.content = childdata.data.content
+                    emailMarketLog.log = childdata.data.info ? childdata.data.info : ""
                     //update send log
                     this.emailMarketingSendlogModule.createItem(emailMarketLog)
                 }
@@ -309,6 +323,12 @@ export class BuckEmailTaskModule extends BaseModule {
                     this.updateTaskStatus(taskId, TaskStatus.Complete)
                 }
                     break;
+            }
+            } catch (error) {
+                console.error('Failed to parse message from child process:', error);
+                if (error instanceof Error) {
+                    console.error('Error details:', error.message);
+                }
             }
         });
         return taskId

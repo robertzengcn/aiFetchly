@@ -119,6 +119,7 @@ globs: **/*.{js,jsx,ts,tsx,html,css,scss,mjs,cjs}
 Use singletons sparingly. If used, implement carefully to avoid unexpected side effects.
 - **Recommended Approaches:**
 - **Inter-Process Communication (IPC):** Use `ipcRenderer` and `ipcMain` for communication between the main and renderer processes.  Sanitize all data passed via IPC.
+- **AI feature IPC handlers:** When the frontend requests an AI function (e.g. AI chat, keyword generation, AI tools), **check AI enable first** in the IPC method. Use `Token` and `USER_AI_ENABLED`; if not enabled, return an error response immediately and do not call AI APIs or process the request.
 - **Native Modules:** Consider using native modules for performance-critical tasks or access to platform-specific APIs.
 - **Remote Module:** Avoid using the remote module, as it can introduce security vulnerabilities and performance issues. Use IPC instead.
 - **Anti-patterns:**
@@ -174,21 +175,59 @@ Use singletons sparingly. If used, implement carefully to avoid unexpected side 
 - **Handle `new-window` events:** Validate and sanitize all URLs before allowing a new window to be opened from a renderer process.
 
 - **Testing Approaches**
+- **Test Directory Structure:**
+- All test files should be placed in the `test/` directory at the project root.
+- Follow this structure:
+```
+test/
+├── modules/              # Mocha tests for module functionality
+│   ├── *.test.ts        # Module unit tests (e.g., token.test.ts, youtubeupload.test.ts)
+├── vitest/              # Vitest tests for different processes
+│   ├── main/            # Main process unit tests
+│   │   ├── *.test.ts    # Main process tests (e.g., httpclient.test.ts, userlogin.test.ts)
+│   ├── utilitycode/     # Utility code tests
+│   │   ├── *.test.ts    # Utility function tests
+│   └── taskCode/        # Task code tests
+│       └── *.test.ts    # Task-related tests
+├── rag/                 # RAG-specific tests
+│   ├── *.test.ts        # RAG module tests
+│   └── integration/     # RAG integration tests
+└── output/              # Test output directory
+```
 - **Unit Testing:**
 - Write unit tests to verify the functionality of individual components or modules.
-- Use a testing framework like Jest or Mocha.
+- Use **Mocha** for module tests (CommonJS style): Place in `test/modules/*.test.ts`
+- Use **Vitest** for main process and utility code tests: Place in `test/vitest/*/*.test.ts`
+- Use `.test.ts` file extension for all test files.
+- Mirror the source code structure in test directories when possible (e.g., `src/modules/` → `test/modules/`).
 - **Integration Testing:**
 - Write integration tests to verify the interaction between different components or modules.
-- Use a testing framework like Cypress or Puppeteer.
+- Use a testing framework like Cypress or Puppeteer for browser-based integration tests.
+- Place integration tests in appropriate subdirectories (e.g., `test/rag/integration/`).
 - **End-to-End Testing:**
 - Write end-to-end tests to verify the overall functionality of the application.
 - Use a testing framework like Cypress or Puppeteer.
 - **Test Organization:**
 - Organize tests into separate files or directories based on functionality.
 - Use descriptive test names to clearly identify the purpose of each test.
+- Group related tests using `describe` blocks (Mocha) or `test` suites (Vitest).
+- Place controller tests in `test/modules/` (mirroring `src/controller/` structure).
+- Place service tests in `test/modules/` (mirroring `src/service/` structure).
+- Place IPC handler tests in `test/vitest/main/` (mirroring `src/main-process/` structure).
+- **Test Naming Conventions:**
+- Test files: Use `*.test.ts` extension (e.g., `httpclient.test.ts`, `token.test.ts`).
+- Test suites: Use descriptive names matching the source file or functionality being tested.
+- Test cases: Use descriptive names explaining what is being tested (e.g., `'set-token'`, `'test-send'`).
 - **Mocking and Stubbing:**
 - Use mocking and stubbing to isolate components or modules during testing.
 - Use a mocking library like Jest or Sinon.
+- Mock IPC handlers when testing renderer process code.
+- Mock database operations when testing business logic.
+- **Running Tests:**
+- Run all tests: `yarn test` (runs all Mocha tests in `test/**/*.ts`).
+- Run specific test files: `yarn test <test-file-path>`.
+- Run Vitest tests: `yarn testmain` (main process), `yarn vitest-puppeteer` (utility code).
+- Use DEBUG flags for detailed logging: `DEBUG='module:*' yarn test`.
 
 - **Common Pitfalls and Gotchas**
 - **Frequent Mistakes:**
