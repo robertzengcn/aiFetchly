@@ -15,6 +15,10 @@ import { extractContactFromUrls } from "@/main-process/communication/contactExtr
 import { DocumentService } from "@/service/DocumentService";
 import { FileToolService } from "@/service/FileToolService";
 import { FILE_TOOL_RATE_LIMITS } from "@/config/fileToolConfig";
+import {
+  GOOGLE_MAPS_DEFAULT_MAX_RESULTS,
+  GOOGLE_MAPS_HARD_CAP,
+} from "@/entityTypes/googleMapsTypes";
 
 /**
  * Rate limiting configuration for tool execution
@@ -172,6 +176,9 @@ export class ToolExecutor {
 
       case "extract_contact_info":
         return await this.executeContactExtraction(toolParams);
+
+      case "search_google_maps_businesses":
+        return await this.executeGoogleMapsSearch(toolParams);
 
       case "read_attachment_content":
         return await this.executeReadAttachmentContent(
@@ -1174,6 +1181,51 @@ export class ToolExecutor {
         socialLinks: r.data?.socialLinks,
         error: r.error,
       })),
+    };
+  }
+
+  /**
+   * Execute Google Maps business search.
+   * Phase 1 stub — returns "not yet implemented" until GoogleMapsModule is added in Phase 2.
+   */
+  private static async executeGoogleMapsSearch(
+    toolParams: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    const query = typeof toolParams.query === "string" ? toolParams.query : "";
+    const location =
+      typeof toolParams.location === "string" ? toolParams.location : "";
+    const maxResults =
+      typeof toolParams.max_results === "number"
+        ? toolParams.max_results
+        : GOOGLE_MAPS_DEFAULT_MAX_RESULTS;
+
+    if (!query.trim()) {
+      return {
+        success: false,
+        error: "query is required and must not be blank",
+      };
+    }
+
+    if (!location.trim()) {
+      return {
+        success: false,
+        error: "location is required and must not be blank",
+      };
+    }
+
+    const clampedMaxResults = Math.min(
+      Math.max(1, maxResults),
+      GOOGLE_MAPS_HARD_CAP
+    );
+
+    // Phase 1 stub — GoogleMapsModule will be implemented in Phase 2
+    return {
+      success: false,
+      error:
+        "Google Maps scraping is not yet implemented. This skill is registered but the scraping module has not been built.",
+      query,
+      location,
+      max_results: clampedMaxResults,
     };
   }
 
