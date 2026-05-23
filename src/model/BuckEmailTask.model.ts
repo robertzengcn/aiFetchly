@@ -1,7 +1,7 @@
 import { BaseDb } from "@/model/Basedb";
 import { Repository } from "typeorm";
 import { BuckemailTaskEntity } from "@/entity/BuckemailTask.entity";
-import { BuckemailEntity, BuckEmailType } from "./buckEmailTaskdb";
+import { BuckEmailType } from "./buckEmailTaskdb";
 import { TaskStatus } from "@/entityTypes/commonType";
 import { SortBy } from "@/entityTypes/commonType";
 import { getRecorddatetime, getStatusName } from "@/modules/lib/function";
@@ -34,7 +34,7 @@ export class BuckEmailTaskModel extends BaseDb {
     return entity;
   }
 
-  async update(id: number, task: BuckemailEntity): Promise<void> {
+  async update(id: number, task: BuckemailTaskEntity): Promise<void> {
     const entity = await this.repository.findOne({ where: { id } });
     if (!entity) return;
 
@@ -45,6 +45,8 @@ export class BuckEmailTaskModel extends BaseDb {
     entity.error_file = task.error_file;
     entity.emailtaskentityId = task.emailtaskentityId || 0;
     entity.email_list_json = task.email_list_json || null;
+    entity.email_subject = task.email_subject ?? null;
+    entity.email_html_content = task.email_html_content ?? null;
     entity.notduplicate = task.notduplicate || 0;
 
     await this.repository.save(entity);
@@ -89,7 +91,7 @@ export class BuckEmailTaskModel extends BaseDb {
     page: number,
     size: number,
     sort?: SortBy
-  ): Promise<BuckemailEntity[]> {
+  ): Promise<BuckemailTaskEntity[]> {
     let queryBuilder = this.repository.createQueryBuilder("task");
 
     if (sort?.key && sort?.order) {
@@ -116,17 +118,7 @@ export class BuckEmailTaskModel extends BaseDb {
     queryBuilder = queryBuilder.skip(page).take(size);
     const entities = await queryBuilder.getMany();
 
-    return entities.map((entity) => ({
-      id: entity.id,
-      type: entity.type,
-      record_time: entity.record_time,
-      log_file: entity.log_file,
-      error_file: entity.error_file,
-      emailtaskentityId: entity.emailtaskentityId,
-      email_list_json: entity.email_list_json,
-      notduplicate: entity.notduplicate,
-      status: entity.status,
-    }));
+    return entities;
   }
 
   async countBuckEmailTask(): Promise<number> {

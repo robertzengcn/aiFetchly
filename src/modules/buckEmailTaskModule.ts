@@ -1,13 +1,14 @@
 import { Token } from "@/modules/token";
 import { USERSDBPATH } from "@/config/usersetting";
-import { BuckemailEntity, BuckEmailType } from "@/model/buckEmailTaskdb";
+import { BuckemailTaskEntity } from "@/entity/BuckemailTask.entity";
+import { BuckEmailType } from "@/model/buckEmailTaskdb";
 import { BuckEmailTaskModel } from "@/model/BuckEmailTask.model";
 import { TaskStatus } from "@/entityTypes/commonType";
 import { SortBy } from "@/entityTypes/commonType";
 import { BaseModule } from "@/modules/baseModule";
-import { BuckemailTaskEntity } from "@/entity/BuckemailTask.entity";
-import { Buckemailstruct, EmailItem } from "@/entityTypes/emailmarketingType";
+import { EmailItem } from "@/entityTypes/emailmarketingType";
 import {
+  Buckemailstruct,
   EmailTemplateRespdata,
   EmailFilterdata,
   EmailServiceEntitydata,
@@ -165,11 +166,11 @@ export class BuckEmailTaskModule extends BaseModule {
       emailList = this.parseEmailListJson(buckemailTaskEntity.email_list_json);
     }
 
-    if (emailList.length == 0) {
+    if (emailList.length === 0) {
       throw new Error("email list is empty");
     }
 
-    //get email template list
+    //get email template list (optional when using inline email_content)
     const emailTemplateList =
       await this.emailTemplateTaskRelationModule.getEmailTemplatesByBuckemailTaskId(
         taskId
@@ -213,7 +214,7 @@ export class BuckEmailTaskModule extends BaseModule {
       }
     }
 
-    const notDuplicate = buckemailTaskEntity.notduplicate == 1 ? true : false;
+    const notDuplicate = buckemailTaskEntity.notduplicate === 1;
     //check if need to remove duplicate email receiver
     if (notDuplicate) {
       emailList = dedupeEmailList(emailList, true);
@@ -225,76 +226,163 @@ export class BuckEmailTaskModule extends BaseModule {
       Emailfilterlist: emailfilterlist,
       Emailservicelist: emailservicelist,
     };
+
+    if (buckemailTaskEntity?.email_subject?.trim()) {
+      data.email_subject = buckemailTaskEntity.email_subject.trim();
+    }
+    if (buckemailTaskEntity?.email_html_content?.trim()) {
+      data.email_html_content = buckemailTaskEntity.email_html_content.trim();
+    }
+
     return data;
   }
+
+  private async loadTemplateEmail(
+    remotedata: Buckemailremotedata,
+    taskId: number
+  ): Promise<EmailTemplateRespdata> {
+    if (remotedata.Emailtemplist.length > 0) {
+      const templateId =
+        remotedata.Emailtemplist[
+          Math.floor(Math.random() * remotedata.Emailtemplist.length)
+        ].TplId;
+      const res = await this.emailtemAPI.readTemplate(String(templateId));
+      if (!res.data) {
+        throw new Error(`Email template ${templateId} not found`);
+      }
+      return res.data;
+    }
+
+    const subject = remotedata.email_subject?.trim() ?? "";
+    const content = remotedata.email_html_content?.trim() ?? "";
+
+    if (!subject || !content) {
+      const buckemailTaskEntity = await this.read(taskId);
+      const fallbackSubject = buckemailTaskEntity?.email_subject?.trim() ?? "";
+      const fallbackContent =
+        buckemailTaskEntity?.email_html_content?.trim() ?? "";
+      if (!fallbackSubject || !fallbackContent) {
+        throw new Error(
+          "Bulk email send requires templates or email_content with subject and content"
+        );
+      }
+      return {
+        TplId: 0,
+        TplTitle: fallbackSubject,
+        TplContent: fallbackContent,
+        TplDescription: "",
+      };
+    }
+
+    return {
+      TplId: 0,
+      TplTitle: subject,
+      TplContent: content,
+      TplDescription: "",
+    };
+  }
   //start buck email task
-  public async startBuckEmailTask(param: Buckemailstruct): Promise<number> {
-    const taskId = await this.createBuckEmailTask(param);
+  public async startBuckEmailTask(param: BuckemailTaskEntity): Promise<number> {
+    const taskId = await this.createBuckEmailTaskFromEntity(param);
     return await this.buckEmailsend(taskId);
   }
-  //create buck email task
+
+  //create buck email task from entity (direct DB entity)
+  private async createBuckEmailTaskFromEntity(
+    param: BuckemailTaskEntity
+  ): Promise<number> {
+    const buckentity = new BuckemailTaskEntity();
+    buckentity.type = param.type;
+    buckentity.status = TaskStatus.Notstart;
+    buckentity.emailtaskentityId = param.emailtaskentityId ?? 0;
+    buckentity.email_list_json = param.email_list_json ?? null;
+    if (
+      param.email_subject !== null &&
+      param.email_subject !== undefined &&
+      param.email_subject.trim().length > 0
+    ) {
+      buckentity.email_subject = param.email_subject.trim();
+    }
+    if (
+      param.email_html_content !== null &&
+      param.email_html_content !== undefined &&
+      param.email_html_content.trim().length > 0
+    ) {
+      buckentity.email_html_content = param.email_html_content.trim();
+    }
+    buckentity.notduplicate = param.notduplicate ? 1 : 0;
+    buckentity.record_time = getRecorddatetime();
+    buckentity.log_file = "";
+
+    const taskId = await this.create(buckentity);
+
+    return taskId;
+  }
+
+  //create buck email task from struct (IPC/AI tool input)
   public async createBuckEmailTask(param: Buckemailstruct): Promise<number> {
     const buckentity = new BuckemailTaskEntity();
     buckentity.type = param.EmailBtype;
     buckentity.status = TaskStatus.Notstart;
-    buckentity.emailtaskentityId = param.EmailtaskentityId || 0;
+    buckentity.emailtaskentityId = param.EmailtaskentityId ?? 0;
     buckentity.email_list_json = this.serializeEmailList(param.EmailList);
+    if (
+      param.email_subject !== undefined &&
+      param.email_subject.trim().length > 0
+    ) {
+      buckentity.email_subject = param.email_subject.trim();
+    }
+    if (
+      param.email_html_content !== undefined &&
+      param.email_html_content.trim().length > 0
+    ) {
+      buckentity.email_html_content = param.email_html_content.trim();
+    }
     buckentity.notduplicate = param.NotDuplicate ? 1 : 0;
     buckentity.record_time = getRecorddatetime();
     buckentity.log_file = "";
 
     const taskId = await this.create(buckentity);
 
-    //save email template list to local db
-    for (let i = 0; i < param.EmailTemplateslist.length; i++) {
-      const relation = new EmailTemplateTaskRelationEntity();
-      relation.emailTemplateId = param.EmailTemplateslist[i];
-      relation.buckemailTaskId = taskId;
-      relation.status = 1;
-      await this.emailTemplateTaskRelationModule.create(relation);
+    if (param.EmailTemplateslist) {
+      for (const templateId of param.EmailTemplateslist) {
+        const relation = new EmailTemplateTaskRelationEntity();
+        relation.emailTemplateId = templateId;
+        relation.buckemailTaskId = taskId;
+        relation.status = 1;
+        await this.emailTemplateTaskRelationModule.create(relation);
+      }
     }
 
-    //save email filter list to local db
-    for (let i = 0; i < param.EmailFilterlist.length; i++) {
-      const relation = new EmailFilterTaskRelationEntity();
-      relation.emailFilterId = param.EmailFilterlist[i];
-      relation.buckemailTaskId = taskId;
-      relation.status = 1;
-      await this.emailFilterTaskRelationModule.create(relation);
+    if (param.EmailFilterlist) {
+      for (let i = 0; i < param.EmailFilterlist.length; i++) {
+        const relation = new EmailFilterTaskRelationEntity();
+        relation.emailFilterId = param.EmailFilterlist[i];
+        relation.buckemailTaskId = taskId;
+        relation.status = 1;
+        await this.emailFilterTaskRelationModule.create(relation);
+      }
     }
-    //save email service list to local db
-    for (let i = 0; i < param.EmailServicelist.length; i++) {
-      const relation = new EmailServiceTaskRelationEntity();
-      relation.emailServiceId = param.EmailServicelist[i];
-      relation.buckemailTaskId = taskId;
-      relation.status = 1;
-      await this.emailServiceTaskRelationModule.createEmailServiceTaskRelation(
-        relation
-      );
+
+    if (param.EmailServicelist) {
+      for (let i = 0; i < param.EmailServicelist.length; i++) {
+        const relation = new EmailServiceTaskRelationEntity();
+        relation.emailServiceId = param.EmailServicelist[i];
+        relation.buckemailTaskId = taskId;
+        relation.status = 1;
+        await this.emailServiceTaskRelationModule.createEmailServiceTaskRelation(
+          relation
+        );
+      }
     }
 
     return taskId;
-    // switch (param.EmailBtype) {
-    //     case 1: {
-    //         if (!param.EmailtaskentityId || param.EmailtaskentityId == 0) {
-    //             throw new Error("email task entity id is empty")
-
-    //         }
-    //         const emailsearModuel = new EmailSearchTaskModule()
-    //         const emailList = await emailsearModuel.getAllEmails(param.EmailtaskentityId)
-    //         if (emailList.length == 0) {
-    //             throw new Error("email list is empty")
-    //         }
-
-    //     }
-    // }
   }
 
   //send email
   public async buckEmailsend(taskId: number): Promise<number> {
     //console.log(param)
     const data = await this.prepareData(taskId);
-    console.log(data);
     const tokenService = new Token();
     // console.log(path.join(__dirname, 'utilityCode.js'))
     let logpath = tokenService.getValue(USERLOGPATH);
@@ -310,15 +398,6 @@ export class BuckEmailTaskModule extends BaseModule {
       "emailsend_" + "_" + uuid + ".error.log"
     );
     const runLogfile = path.join(logpath, "emailsend_" + uuid + ".runtime.log");
-    //create buck email task
-    // const entity: BuckemailEntity = {
-    //     type: param.EmailBtype,
-    //     status: TaskStatus.Processing,
-    //     log_file: errorLogfile,
-    //     error_file: runLogfile
-    // }
-    // //create task
-    // const taskId = await this.create(entity)
 
     const childPath = path.join(__dirname, "taskCode.js");
     if (!fs.existsSync(childPath)) {
@@ -473,7 +552,7 @@ export class BuckEmailTaskModule extends BaseModule {
    * @param id The task ID
    * @param task The buck email task entity to update
    */
-  async update(id: number, task: BuckemailEntity): Promise<void> {
+  async update(id: number, task: BuckemailTaskEntity): Promise<void> {
     return await this.buckEmailTaskModel.update(id, task);
   }
   /**
@@ -519,8 +598,13 @@ export class BuckEmailTaskModule extends BaseModule {
     page: number,
     size: number,
     sort?: SortBy
-  ): Promise<BuckemailEntity[]> {
-    return await this.buckEmailTaskModel.listBuckEmailtask(page, size, sort);
+  ): Promise<BuckemailTaskEntity[]> {
+    const rows = await this.buckEmailTaskModel.listBuckEmailtask(
+      page,
+      size,
+      sort
+    );
+    return rows as BuckemailTaskEntity[];
   }
   /**
    * Get total number of buck email tasks
