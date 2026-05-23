@@ -39,7 +39,8 @@ export function registerGoogleMapsHandlers(): void {
   // ── Start a search ──────────────────────────────────────────────────
   ipcMain.handle(
     GOOGLE_MAPS_SEARCH_START,
-    async (event: IpcMainInvokeEvent, data: Record<string, unknown>) => {
+    async (event: IpcMainInvokeEvent, ...args: unknown[]) => {
+      const data = (args[0] ?? {}) as Record<string, unknown>;
       const query = typeof data.query === "string" ? data.query : "";
       const location = typeof data.location === "string" ? data.location : "";
 
@@ -120,7 +121,8 @@ export function registerGoogleMapsHandlers(): void {
   // ── Cancel a search ─────────────────────────────────────────────────
   ipcMain.handle(
     GOOGLE_MAPS_SEARCH_CANCEL,
-    async (_event, data: Record<string, unknown>) => {
+    async (_event, ...args: unknown[]) => {
+      const data = (args[0] ?? {}) as Record<string, unknown>;
       const requestId =
         typeof data.requestId === "string" ? data.requestId : "";
       if (!requestId) {
@@ -149,7 +151,8 @@ export function registerGoogleMapsHandlers(): void {
   // ── History list ────────────────────────────────────────────────────
   ipcMain.handle(
     GOOGLE_MAPS_HISTORY_LIST,
-    async (_event, data: Record<string, unknown>) => {
+    async (_event, ...args: unknown[]) => {
+      const data = (args[0] ?? {}) as Record<string, unknown>;
       const rawLimit = typeof data.limit === "number" ? data.limit : 50;
       const rawOffset = typeof data.offset === "number" ? data.offset : 0;
       const limit = Math.min(Math.max(1, rawLimit), 100);
@@ -163,7 +166,8 @@ export function registerGoogleMapsHandlers(): void {
   // ── History detail ──────────────────────────────────────────────────
   ipcMain.handle(
     GOOGLE_MAPS_HISTORY_DETAIL,
-    async (_event, data: Record<string, unknown>) => {
+    async (_event, ...args: unknown[]) => {
+      const data = (args[0] ?? {}) as Record<string, unknown>;
       const id = typeof data.id === "number" ? data.id : 0;
       if (!id) {
         return { status: false, msg: "id is required", data: null };
@@ -180,7 +184,8 @@ export function registerGoogleMapsHandlers(): void {
   // ── History delete ──────────────────────────────────────────────────
   ipcMain.handle(
     GOOGLE_MAPS_HISTORY_DELETE,
-    async (_event, data: Record<string, unknown>) => {
+    async (_event, ...args: unknown[]) => {
+      const data = (args[0] ?? {}) as Record<string, unknown>;
       const id = typeof data.id === "number" ? data.id : 0;
       if (!id) {
         return { status: false, msg: "id is required", data: null };
