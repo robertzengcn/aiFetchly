@@ -23,6 +23,12 @@ jobs:
         with:
           node-version: 20.18.3
 
+      # Python 3.12+ removed distutils; bundled node-gyp in electron-rebuild still imports it.
+      - name: Set up Python for node-gyp
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
       - name: Calculate version
         id: calculate_version
         run: |
@@ -49,7 +55,6 @@ jobs:
         run: |
           touch .env
           echo "NODE_ENV=test" >> .env
-          echo "VITE_REMOTEADD=${{ secrets.VITE_REMOTEADD_TEST }}" >> .env
           echo "VITE_LOGIN_URL=${{ secrets.VITE_LOGIN_URL_TEST }}" >> .env
           echo "UPDATESERVER=${{ secrets.UPDATESERVER }}" >> .env
           cat .env
@@ -91,8 +96,26 @@ jobs:
     steps:
       - name: Set up C++20 environment
         run: |
-          echo "CXXFLAGS=-std=c++20" >> $GITHUB_ENV
-          echo "npm_config_cxxflags=-std=c++20" >> $GITHUB_ENV
+          ARCH="$(uname -m)"
+          echo "Detected host architecture: ${ARCH}"
+          if [ "$ARCH" = "arm64" ]; then
+            TARGET_ARCH="arm64"
+            ARCH_FLAGS="-arch arm64"
+            HOMEBREW_PREFIX="/opt/homebrew"
+          else
+            TARGET_ARCH="x86_64"
+            ARCH_FLAGS="-arch x86_64"
+            HOMEBREW_PREFIX="/usr/local"
+          fi
+          echo "Using target architecture: ${TARGET_ARCH}"
+          echo "ARCH_FLAGS=${ARCH_FLAGS}" >> $GITHUB_ENV
+          echo "TARGET_ARCH=${TARGET_ARCH}" >> $GITHUB_ENV
+          echo "HOMEBREW_PREFIX=${HOMEBREW_PREFIX}" >> $GITHUB_ENV
+          echo "CXXFLAGS=-std=c++20 ${ARCH_FLAGS}" >> $GITHUB_ENV
+          echo "CFLAGS=-std=c11 ${ARCH_FLAGS}" >> $GITHUB_ENV
+          echo "CXX=clang++" >> $GITHUB_ENV
+          echo "CC=clang" >> $GITHUB_ENV
+          echo "LDFLAGS=-std=c++20 ${ARCH_FLAGS}" >> $GITHUB_ENV
 
       - name: Select available Xcode version
         run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
@@ -105,23 +128,29 @@ jobs:
         with:
           node-version: 20.18.3
 
+      # Python 3.12+ removed distutils; bundled node-gyp in electron-rebuild still imports it.
+      - name: Set up Python for node-gyp
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
       - name: Calculate version
         id: calculate_version
         run: |
           # Extract current version from package.json
           CURRENT_VERSION=$(node -e "console.log(require('./package.json').version)")
           echo "Current version: $CURRENT_VERSION"
-          
+
           # Generate build number based on GitHub run number
           BUILD_NUMBER=${{ github.run_number }}
-          
+
           # Create new version with build number
           NEW_VERSION="${CURRENT_VERSION%.*}.$BUILD_NUMBER"
           echo "New version: $NEW_VERSION"
-          
+
           # Update package.json with new version
           node -e "const pkg = require('./package.json'); pkg.version = '$NEW_VERSION'; require('fs').writeFileSync('./package.json', JSON.stringify(pkg, null, 2))"
-          
+
           # Set as output variables
           echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
           echo "artifact_name=electron-app-macos-v$NEW_VERSION" >> $GITHUB_OUTPUT
@@ -131,7 +160,6 @@ jobs:
         run: |
           touch .env
           echo "NODE_ENV=test" >> .env
-          echo "VITE_REMOTEADD=${{ secrets.VITE_REMOTEADD_TEST }}" >> .env
           echo "VITE_LOGIN_URL=${{ secrets.VITE_LOGIN_URL_TEST }}" >> .env
           echo "UPDATESERVER=${{ secrets.UPDATESERVER }}" >> .env
           cat .env
@@ -139,26 +167,39 @@ jobs:
       - name: Install setuptools
         run: brew install python-setuptools
 
+      - name: Install system dependencies for native modules
+        run: brew install xz pkg-config
+
       - name: Install dependencies
         run: yarn install
 
-      - name: Download Electron headers
-        run: npx electron-rebuild --force --types prod,dev,optional --module-dir .
+      - name: Rebuild native modules with C++20
+        run: |
+          # Ensure C++20 is used for all native module builds
+          export CFLAGS="-std=c11 ${ARCH_FLAGS}"
+          export CXXFLAGS="-std=c++20 ${ARCH_FLAGS}"
+          export LDFLAGS="-std=c++20 ${ARCH_FLAGS}"
+          export npm_config_target="35.7.5"
+          export npm_config_disturl="https://electronjs.org/headers"
 
-      - name: Rebuild native modules
-        run: npx electron-rebuild
+          # Rebuild with proper C++20 support
+          npx electron-rebuild --force --arch="${TARGET_ARCH}" --types prod,dev,optional --module-dir . || {
+            echo "Full rebuild failed, trying selective rebuild..."
+            npx electron-rebuild --force --arch="${TARGET_ARCH}" -w better-sqlite3,sqlite3,bufferutil,utf-8-validate || echo "Selective rebuild failed"
+          }
 
       - name: Rebuild sqlite3
-        run: yarn rebuild-sqlite3
+        run: CXXFLAGS="-std=c++20" CFLAGS="-std=c11" yarn rebuild-sqlite3
 
       - name: Rebuild better sqlite
-        run: yarn rebuild-better-sqlite
-
-      - name: yarn electron-rebuild
-        run: yarn electron-rebuild
+        run: CXXFLAGS="-std=c++20" CFLAGS="-std=c11" yarn rebuild-better-sqlite
 
       - name: Build application
-        run: yarn make-mac:test
+        run: |
+          # Increase Node.js heap size to prevent out-of-memory errors during build
+          export NODE_OPTIONS="--max-old-space-size=4096"
+          echo "Building with increased heap size (4GB)"
+          yarn make-mac:test
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4

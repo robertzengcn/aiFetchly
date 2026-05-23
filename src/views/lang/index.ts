@@ -4,6 +4,10 @@ import { getLanguagePreference } from '@/views/api/language'
 // User defined lang
 import enLocale from './en'
 import zhLocale from './zh'
+import esLocale from './es'
+import frLocale from './fr'
+import deLocale from './de'
+import jaLocale from './ja'
 
 const messages = {
     en: {
@@ -11,6 +15,18 @@ const messages = {
     },
     zh: {
       ...zhLocale
+    },
+    es: {
+      ...esLocale
+    },
+    fr: {
+      ...frLocale
+    },
+    de: {
+      ...deLocale
+    },
+    ja: {
+      ...jaLocale
     },
 }
 // Synchronous version for module initialization

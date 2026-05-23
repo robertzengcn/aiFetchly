@@ -1,0 +1,114 @@
+# Unit Test Implementation Status
+
+This document tracks the implementation status of unit tests for the Electron project.
+
+## Test Infrastructure ✅
+
+- `test/utils/electron-mocks.ts` - Electron API mocks (BrowserWindow, ipcMain, ipcRenderer)
+- `test/utils/entity-mocks.ts` - Entity factory functions
+- `test/utils/model-mocks.ts` - Model mock implementations
+- `test/utils/fixtures.ts` - Test data fixtures
+
+## Service Tests Status
+
+**Location**: `test/vitest/main/service/`
+
+### Completed ✅
+1. `RateLimiter.test.ts` ✅
+2. `ValidationUtils.test.ts` ✅
+3. `ErrorClassification.test.ts` ✅
+4. `ChunkingService.test.ts` ✅
+5. `HtmlConversionService.test.ts` ✅
+6. `VectorSearchService.test.ts` ✅
+7. `VectorStoreService.test.ts` ✅
+8. `QueryProcessor.test.ts` ✅
+9. `ResponseGenerator.test.ts` ✅
+10. `StreamEventProcessor.test.ts` ✅
+11. `ToolExecutor.test.ts` ✅
+12. `ToolExecutionService.test.ts` ✅
+13. `MCPToolService.test.ts` ✅
+14. `WebsiteAnalysisService.test.ts` ✅
+
+**Note**: DocumentService already has a test in `test/rag/DocumentService.test.ts`
+
+## Controller Tests Status
+
+**Location**: `test/modules/`
+
+### Completed ✅
+1. `taskController.test.ts` ✅
+2. `campaignController.test.ts` ✅
+3. `userController.test.ts` ✅
+4. `scheduleController.test.ts` ✅
+5. `dashboardController.test.ts` ✅
+6. `searchController.test.ts` ✅
+7. `ragSearchController.test.ts` ✅
+8. `emailextractionController.test.ts` ✅
+9. `emailMarketingController.test.ts` ✅
+10. `socialtask-controller.test.ts` ✅
+11. `socialaccount-controller.test.ts` ✅
+12. `proxy-controller.test.ts` ✅
+13. `systemSettingController.test.ts` ✅
+14. `translateController.test.ts` ✅
+15. `yellowPagesController.test.ts` ✅
+16. `buckemailController.test.ts` ✅
+17. `extramoduleController.test.ts` ✅
+
+## IPC Handler Tests Status
+
+**Location**: `test/vitest/main/ipc/`
+
+### Completed ✅
+1. `task-ipc.test.ts` ✅
+2. `campaign-ipc.test.ts` ✅
+3. `userIpc.test.ts` ✅
+4. `scheduleIpc.test.ts` ✅
+5. `dashboard-ipc.test.ts` ✅
+6. `search-ipc.test.ts` ✅
+7. `rag-ipc.test.ts` ✅
+8. `emailextraction-ipc.test.ts` ✅
+9. `emailMarketingIpc.test.ts` ✅
+10. `socialaccount-ipc.test.ts` ✅
+11. `socialtask-ipc.test.ts` ✅
+12. `proxy-ipc.test.ts` ✅
+13. `systemSettingIpc.test.ts` ✅
+14. `language-ipc.test.ts` ✅
+15. `mcp-tool-ipc.test.ts` ✅
+16. `ai-chat-ipc.test.ts` ✅
+17. `buckEmail-ipc.test.ts` ✅
+18. `extramodule-ipc.test.ts` ✅
+19. `yellowPagesIpc.test.ts` ✅
+20. `platform-ipc.test.ts` ✅
+21. `sessionRecording-ipc.test.ts` ✅
+22. `search-result-ipc.test.ts` ✅
+
+## Test Patterns Established
+
+### Service Tests (Vitest)
+- Use `describe` and `test` from vitest
+- Use `expect` from vitest
+- Test all public methods
+- Test error cases and edge cases
+- Mock dependencies as needed
+
+### Controller Tests (Mocha)
+- Use `describe` and `it` from mocha
+- Use `expect` from chai
+- Mock Model layer
+- Test CRUD operations
+- Test data transformations
+- Test error handling
+
+### IPC Handler Tests (Vitest)
+- Mock Electron APIs (ipcMain, BrowserWindow)
+- Test handler registration
+- Test request/response handling
+- Test error propagation
+- Mock controller dependencies
+
+## Notes
+
+- Some controllers may need dependency injection refactoring for full unit testability (they currently create models internally)
+- IPC handler tests require Electron mocks
+- Service tests are generally easier to test in isolation
+- Use test utilities from `test/utils/` for common patterns

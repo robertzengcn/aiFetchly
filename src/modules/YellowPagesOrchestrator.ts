@@ -37,8 +37,8 @@ export class YellowPagesOrchestrator extends BaseModule implements ITaskManager 
     private initModule: YellowPagesInitModule;
     private healthCheck: YellowPagesHealthCheck;
     
-    private isInitialized: boolean = false;
-    private isShuttingDown: boolean = false;
+    private isInitialized= false;
+    private isShuttingDown= false;
 
     constructor() {
         super();

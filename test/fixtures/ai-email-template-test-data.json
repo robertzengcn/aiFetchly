@@ -1,0 +1,49 @@
+{
+  "description": "Test prompts for AI Email Template Generation (templatedetail.vue popup). Prompt must be 10-500 chars.",
+  "supportedTones": ["formal", "casual", "friendly", "professional"],
+  "supportedTypes": ["cold_outreach", "follow_up", "newsletter", "promotion", "custom"],
+  "prompts": [
+    {
+      "id": 1,
+      "useCase": "Cold outreach (B2B)",
+      "prompt": "Write a short cold email to introduce our B2B SaaS product to potential customers. Mention a free trial and one key benefit. Keep it under 150 words.",
+      "tone": "professional",
+      "templateType": "cold_outreach"
+    },
+    {
+      "id": 2,
+      "useCase": "Follow-up",
+      "prompt": "Draft a friendly follow-up email to someone who didn't reply to my first message. Remind them briefly what I offered and ask if they have 5 minutes for a call this week.",
+      "tone": "friendly",
+      "templateType": "follow_up"
+    },
+    {
+      "id": 3,
+      "useCase": "Newsletter",
+      "prompt": "Create a monthly product update newsletter. Include a greeting, 3 bullet points of new features, and a clear call-to-action to try the product.",
+      "tone": "professional",
+      "templateType": "newsletter"
+    },
+    {
+      "id": 4,
+      "useCase": "Promotion",
+      "prompt": "Write a promotional email for a 20% discount on our annual plan. Create urgency with a 7-day deadline and add a clear button-style call to action.",
+      "tone": "casual",
+      "templateType": "promotion"
+    },
+    {
+      "id": 5,
+      "useCase": "Custom / formal",
+      "prompt": "Compose a formal thank-you email to a partner after a successful project. Acknowledge their contribution and suggest a future collaboration.",
+      "tone": "formal",
+      "templateType": "custom"
+    },
+    {
+      "id": 6,
+      "useCase": "With variables",
+      "prompt": "Create a brief welcome email for new users. Use placeholders for sender name, receiver email, and signup date. Tone should be warm and encouraging.",
+      "tone": "friendly",
+      "templateType": "custom"
+    }
+  ]
+}

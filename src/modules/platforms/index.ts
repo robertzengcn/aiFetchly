@@ -1,19 +1,24 @@
 // Export all platform adapters
-export { ExampleHybridAdapter } from './ExampleHybridAdapter';
-export { ComAdapter192 } from './192ComAdapter';
+export { ExampleHybridAdapter } from "./ExampleHybridAdapter";
+export { ComAdapter192 } from "./192ComAdapter";
+export { JapaneseYellowPagesAdapter } from "./JapaneseYellowPagesAdapter";
 // export { YellComAdapter } from './YellComAdapter';
-export { YellowPagesComAdapter } from './YellowPagesComAdapter';
-export { YelpComAdapter } from './YelpComAdapter';
-export { YellowPagesCaAdapter } from './YellowPagesCaAdapter';
-export { ExampleClassBasedAdapter } from './ExampleClassBasedAdapter';
-export { Adapter11880 } from './11880Adapter';
-export { AdapterGelbeseiten } from './GelbeseitenAdapter';
-export { PagesJaunesAdapter } from './PagesJaunesAdapter';
-export { PagineGialleItAdapter } from './PagineGialleItAdapter';
+export { YellowPagesComAdapter } from "./YellowPagesComAdapter";
+export { YelpComAdapter } from "./YelpComAdapter";
+export { YellowPagesCaAdapter } from "./YellowPagesCaAdapter";
+export { ExampleClassBasedAdapter } from "./ExampleClassBasedAdapter";
+export { Adapter11880 } from "./11880Adapter";
+export { AdapterGelbeseiten } from "./GelbeseitenAdapter";
+export { PagesJaunesAdapter } from "./PagesJaunesAdapter";
+export { PagineGialleItAdapter } from "./PagineGialleItAdapter";
+export { ITownPageAdapter } from "./ITownPageAdapter";
+export { USonarYellowPageAdapter } from "./USonarYellowPageAdapter";
+export { KoreaLocalPagesAdapter } from "./KoreaLocalPagesAdapter";
+export { YellowPagesComSgAdapter } from "./YellowPagesComSgAdapter";
 
 // Export the factory
-export { PlatformAdapterFactory } from './PlatformAdapterFactory';
+export { PlatformAdapterFactory } from "./PlatformAdapterFactory";
 
 // Export types
-export type { BasePlatformAdapter } from '@/modules/BasePlatformAdapter';
-export type { PlatformConfig } from '@/modules/interface/IPlatformConfig';
+export type { BasePlatformAdapter } from "@/modules/BasePlatformAdapter";
+export type { PlatformConfig } from "@/modules/interface/IPlatformConfig";

@@ -3,32 +3,42 @@
 declare function getVersion(version: string): void;
 declare const createObjectURL: any;
 declare const frontendVersion: string;
-export type userResp={
-    status: boolean,
-    msg: string,
-    data?: jwtUser,
-}
+export type userResp = {
+  status: boolean;
+  msg: string;
+  data?: jwtUser;
+};
 
-declare module 'vue3-drag-resize' {
-    const content: {
-        isActive: boolean;
-        h: number;
-        w: number;
-    };
-    export = content;
+declare module "vue3-drag-resize" {
+  const content: {
+    isActive: boolean;
+    h: number;
+    w: number;
+  };
+  export = content;
 }
 
 export interface IElectronAPI {
-    userLogin: (data) => Promise<userResp>,
-    send: (channel: string, data: any) => void
-    sendBinary: (channel: string, data: any) => void
-    receive: (channel: string, func: (event, ...args) => void) => void
-    invoke: (channel: string, data?: any) => Promise<any>
-  }
-  
+  userLogin: (data) => Promise<userResp>;
+  /** Real filesystem path for a File from `<input type="file">` (Electron preload only). */
+  getPathForFile: (file: File) => string;
+  send: (channel: string, data: any) => void;
+  sendBinary: (channel: string, data: any) => void;
+  receive: (channel: string, func: (event, ...args) => void) => void;
+  removeListener: (channel: string, func: (...args) => void) => void;
+  removeAllListeners: (channel: string) => void;
+  invoke: (channel: string, data?: any) => Promise<any>;
+}
+
 declare global {
-    interface Window {
-      electronAPI: IElectronAPI
-      api: IElectronAPI
-    }
+  interface Window {
+    electronAPI: IElectronAPI;
+    api: IElectronAPI;
   }
+}
+
+declare namespace NodeJS {
+  export interface ProcessEnv {
+    WORKER_TYPE?: string;
+  }
+}

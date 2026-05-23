@@ -30,32 +30,12 @@ import {WriteLog,getChromeExcutepath,getFirefoxExcutepath,getRecorddatetime} fro
 import { USERLOGPATH, USEREMAIL } from '@/config/usersetting';
 import { v4 as uuidv4 } from 'uuid';
 import { SocialAccountModule } from './socialAccountModule';
+import { AIRecoveryHandler } from './AIRecoveryHandler';
+import { YellowPagesAiSupportHandler } from './YellowPagesAiSupportHandler';
+import type { AiSupportRequestMessage } from '@/modules/interface/BackgroundProcessMessages';
+import type { TaskDetailsForEdit, SearchTaskUpdateData, SearchTaskStatusValue } from '@/entityTypes/searchControlType';
 
-export type TaskDetailsForEdit = {
-    id: number;
-    engine: number;
-    engineName?: string;
-    keywords: Array<string>;
-    num_pages: number;
-    concurrency: number;
-    notShowBrowser: boolean;
-    localBrowser: string;
-    proxys: Array<{host: string, port: number, user: string, pass: string}>;
-    accounts: Array<number>;
-    status: SearchTaskStatus;
-    record_time: string;
-}
-
-export type SearchTaskUpdateData = {
-    engine?: string;
-    keywords?: string[];
-    num_pages?: number;
-    concurrency?: number;
-    notShowBrowser?: boolean;
-    localBrowser?: string;
-    proxys?: Array<{host: string, port: number, user?: string, pass?: string}>;
-    accounts?: number[];
-}
+export type { TaskDetailsForEdit, SearchTaskUpdateData };
 
 export class SearchModule extends BaseModule {
     // private dbpath: string
@@ -67,6 +47,7 @@ export class SearchModule extends BaseModule {
     private accountCookiesModule: AccountCookiesModule
     private systemSettingGroupModule: SystemSettingGroupModule
     private socialAccountModule: SocialAccountModule
+    private aiRecoveryHandler: AIRecoveryHandler
     constructor() {
         // const tokenService = new Token()
         // const dbpath = tokenService.getValue(USERSDBPATH)
@@ -83,6 +64,13 @@ export class SearchModule extends BaseModule {
         this.accountCookiesModule = new AccountCookiesModule()
         this.systemSettingGroupModule = new SystemSettingGroupModule()
         this.socialAccountModule = new SocialAccountModule()
+        // Initialize AI recovery handler with default config
+        // TODO: Load config from system settings or task configuration
+        this.aiRecoveryHandler = new AIRecoveryHandler({
+            model: 'gpt-4o-mini',
+            rateLimitWindow: 60000,
+            rateLimitMax: 10
+        })
     }
 
     /**
@@ -246,7 +234,7 @@ export class SearchModule extends BaseModule {
         }
        }
     }
-    let localBrowserexcutepath:string=""
+    let localBrowserexcutepath=""
     if(data.localBrowser&&data.localBrowser.length>0){
         const external_system_group=await this.systemSettingGroupModule.getGroupItembyName(external_system)
         if(external_system_group){
@@ -293,9 +281,18 @@ export class SearchModule extends BaseModule {
             LOCAL_BROWSER_EXCUTE_PATH: localBrowserexcutepath,
             //USEDATADIR: userDataDir
         }} )
-        child.on("spawn", () => {
+        child.on("spawn", async () => {
             console.log("child process satart, pid is"+child.pid)
             this.updateTaskStatus(taskId,SearchTaskStatus.Processing)
+            // Store PID in database
+            if (child.pid) {
+                this.updateTaskPID(taskId, child.pid).catch(err => {
+                    console.error(`Failed to update PID for task ${taskId}:`, err);
+                });
+                // Register process with SearchController
+                const searchController = (await import('@/controller/SearchController')).SearchController.getInstance();
+                searchController.registerProcess(taskId, child);
+            }
             child.postMessage(JSON.stringify({action:"searchscraper",data:data}),[port1])
            // this.searhModel.updateTaskLog(taskId,runLogfile,errorLogfile)
         })
@@ -317,7 +314,16 @@ export class SearchModule extends BaseModule {
             }
             
         })
-        child.on("exit", (code) => {
+        child.on("exit", async (code) => {
+            // Clear PID and unregister process
+            try {
+                await this.updateTaskPID(taskId, null);
+                const searchController = (await import('@/controller/SearchController')).SearchController.getInstance();
+                searchController.unregisterProcess(taskId);
+            } catch (error) {
+                console.error(`Failed to clear PID for task ${taskId}:`, error);
+            }
+            
             if (code !== 0) {
                 console.error(`Child process exited with code ${code}`);
                 this.updateTaskStatus(taskId,SearchTaskStatus.Error)
@@ -326,15 +332,100 @@ export class SearchModule extends BaseModule {
                 console.log('Child process exited successfully');
             }
         })
-        child.on('message', (message) => {
-            console.log("get message from child")
-            console.log('Message from child:', JSON.parse(message));
-            const childdata=JSON.parse(message)
-            if(childdata.action=="savesearchresult"){
-                //save result
-                this.saveSearchResult(childdata.data,taskId)
-                this.updateTaskStatus(taskId,SearchTaskStatus.Complete)
-                child.kill()
+        child.on('message', (message: unknown) => {
+            try {
+                let childdata: { action?: string; data?: unknown };
+                
+                // Electron utility process messages can come in different formats:
+                // 1. As a string directly: "JSON string"
+                // 2. As an object with data property: { data: "JSON string" }
+                // 3. As a parsed object directly: { action: "...", data: ... }
+                
+                let parsedMessage: unknown = message;
+                
+                // First, handle if message is a string (JSON stringified)
+                if (typeof message === 'string') {
+                    try {
+                        parsedMessage = JSON.parse(message);
+                    } catch (parseError) {
+                        console.error('Invalid message from child process (failed to parse string):', message);
+                        return;
+                    }
+                }
+                
+                // Now handle the parsed message
+                const msg = parsedMessage as { data?: string | unknown; action?: string; type?: string };
+                
+                if (msg && typeof msg === 'object' && msg !== null) {
+                    if (msg.type === 'AI_SUPPORT_REQUEST') {
+                        const aiSupportHandler = new YellowPagesAiSupportHandler();
+                        aiSupportHandler
+                            .handleAiSupportRequest(msg as AiSupportRequestMessage, child)
+                            .catch((err) => {
+                                console.error('AI support request failed:', err);
+                            });
+                        return;
+                    }
+                    // Check if it's already a parsed object with action property (direct format)
+                    if ('action' in msg && typeof msg.action === 'string') {
+                        childdata = msg as { action: string; data: unknown };
+                    } 
+                    // Check if it's wrapped format with data as string (Electron utility process format)
+                    else if ('data' in msg && typeof msg.data === 'string' && !('action' in msg)) {
+                        try {
+                            childdata = JSON.parse(msg.data);
+                        } catch (parseError) {
+                            console.error('Invalid message from child process (failed to parse data):', message);
+                            return;
+                        }
+                    } else {
+                        console.error('Invalid message from child process:', JSON.stringify(message));
+                        return;
+                    }
+                } else {
+                    console.error('Invalid message from child process (not an object):', message);
+                    return;
+                }
+                
+                console.log("get message from child")
+                console.log('Message from child:', childdata);
+                if(childdata.action=="savesearchresult"){
+                    //save individual result immediately
+                    // Handle both single result and array (for backward compatibility)
+                    const resultData = Array.isArray(childdata.data) 
+                        ? childdata.data as ResultParseItemType[]
+                        : [childdata.data as ResultParseItemType];
+                    // Save result immediately without waiting for completion
+                    this.saveSearchResult(resultData, taskId).catch(err => {
+                        console.error(`Failed to save search result for task ${taskId}:`, err);
+                    });
+                } else if(childdata.action=="searchcomplete"){
+                    // All results have been sent, mark task as complete
+                    this.updateTaskStatus(taskId,SearchTaskStatus.Complete)
+                    child.kill()
+                } else if(childdata.action=="searcherror"){
+                    // Handle search error
+                    const errorData = childdata.data as {error?: string} | null;
+                    const errorMessage = errorData?.error || "Unknown error occurred during search";
+                    console.error(`Search error for task ${taskId}:`, errorMessage);
+                    this.updateTaskStatus(taskId,SearchTaskStatus.Error)
+                    child.kill()
+                } else if(childdata.action=="updateaccountcookies"){
+                    // Handle cookies update from child process
+                    const cookiesData = childdata.data as {accountId: number; cookies: Array<CookiesType>} | null;
+                    if (cookiesData && cookiesData.accountId && cookiesData.cookies) {
+                        console.log(`Updating cookies for account ${cookiesData.accountId}`);
+                        this.updateAccountCookies(cookiesData.accountId, cookiesData.cookies).catch(err => {
+                            console.error(`Failed to update cookies for account ${cookiesData.accountId}:`, err);
+                        });
+                    }
+                }
+                // Search flow uses AI_SUPPORT_REQUEST (observe_execute) only; requestAIRecovery branch removed.
+            } catch (error) {
+                console.error('Failed to parse message from child process:', error);
+                if (error instanceof Error) {
+                    console.error('Error details:', error.message);
+                }
             }
         });
     }
@@ -447,7 +538,7 @@ export class SearchModule extends BaseModule {
         return enginerName
     }
     //convert search engine name to platform ID (for social accounts)
-    // Google -> 4, Bing -> 5
+    // Google -> 4, Bing -> 5, Yandex -> 6
     private convertSEtoPlatformId(engineName: string): number | undefined {
         const lowerCaseName = engineName.toLowerCase();
         switch (lowerCaseName) {
@@ -455,6 +546,8 @@ export class SearchModule extends BaseModule {
                 return 4;
             case "bing":
                 return 5;
+            case "yandex":
+                return 6;
             default:
                 return undefined;
         }
@@ -493,7 +586,7 @@ export class SearchModule extends BaseModule {
                                 snippet: sitem.snippet,
                                 visible_link: sitem.visible_link,
                             }
-                            const res = await this.serResultModel.saveResult(reEntity)
+                            const res = await this.serResultModel.saveResult(reEntity, taskId)
                             console.log(`save result is: ${res}`);
                             linkearr.push(sitem.link)
                         }
@@ -515,14 +608,28 @@ export class SearchModule extends BaseModule {
         this.taskdbModel.updateTaskLog(taskId, errorLog)
     }
     //return data for search list 
-    public async listSearchtask(page: number, size: number, sortBy?: SortBy): Promise<SearchtaskEntityNum> {
+    public async listSearchtask(page: number, size: number, sortBy?: SortBy, search?: string): Promise<SearchtaskEntityNum> {
         // const tokenService = new Token()
         // const dbpath = await tokenService.getValue(USERSDBPATH)
         // if (!dbpath) {
         //     throw new Error("user path not exist")
         // }
         //const taskdbModel=new SearchTaskdb(this.dbpath)
-        const tasklist = await this.taskdbModel.listTask(page, size, sortBy)
+        
+        // If search is provided, get all tasks first, then filter and paginate
+        // Otherwise, use normal pagination
+        let tasklist;
+        const allTasks: Array<SearchtaskItem> = [];
+        
+        if (search && search.trim().length > 0) {
+            // Get all tasks for filtering
+            const totalCount = await this.taskdbModel.getTaskTotal();
+            tasklist = await this.taskdbModel.listTask(0, totalCount, sortBy);
+        } else {
+            // Normal pagination
+            tasklist = await this.taskdbModel.listTask(page, size, sortBy);
+        }
+        
         // const searchKeydb=new SearchKeyworddb(this.dbpath)
         const taskdata: Array<SearchtaskItem> = []
 
@@ -537,17 +644,40 @@ export class SearchModule extends BaseModule {
                 enginer_name: this.convertNumtoSE(Math.round(item.enginer_id)),
                 status: this.taskdbModel.taskStatusToString(item.status),
                 keywords: keywords,
-                record_time: item.record_time
+                record_time: item.record_time,
+                pid: item.pid ?? undefined
             }
             data.keywordline = data.keywords.join(',')
 
             taskdata.push(data)
         }
-        //check number
-        const number = await this.taskdbModel.getTaskTotal()
+        
+        // Apply search filter if provided
+        let filteredTasks = taskdata;
+        let total: number;
+        
+        if (search && search.trim().length > 0) {
+            const searchLower = search.toLowerCase().trim();
+            filteredTasks = taskdata.filter(task => 
+                task.id.toString().includes(searchLower) ||
+                task.enginer_name?.toLowerCase().includes(searchLower) ||
+                task.keywordline?.toLowerCase().includes(searchLower) ||
+                task.status?.toLowerCase().includes(searchLower) ||
+                task.record_time?.toLowerCase().includes(searchLower)
+            );
+            total = filteredTasks.length;
+            
+            // Apply pagination to filtered results
+            const startIndex = page * size;
+            const endIndex = startIndex + size;
+            filteredTasks = filteredTasks.slice(startIndex, endIndex);
+        } else {
+            total = await this.taskdbModel.getTaskTotal();
+        }
+        
         const data: SearchtaskEntityNum = {
-            total: number,
-            records: taskdata
+            total: total,
+            records: filteredTasks
         }
         return data
     }
@@ -557,8 +687,26 @@ export class SearchModule extends BaseModule {
     }
 
     //get search result list by task id
-    public async listSearchResult(taskId: number, page: number, size: number): Promise<Array<SearchResEntity>> {
+    public async listSearchResult(taskId: number, page: number, size: number, search?: string): Promise<Array<SearchResEntity>> {
         const keyarr = await this.getKeywrodsbyTask(taskId)
+        
+        // If search term is provided, use SearchResultModule's filtering capability
+        if (search && search.trim().length > 0) {
+            // Get all results and filter them
+            const allResults = await this.serResultModel.listSearchresult(keyarr, 0, 10000)
+            const searchLower = search.toLowerCase().trim()
+            const filteredResults = allResults.filter(result => 
+                result.title?.toLowerCase().includes(searchLower) ||
+                result.snippet?.toLowerCase().includes(searchLower) ||
+                result.link?.toLowerCase().includes(searchLower) ||
+                result.visible_link?.toLowerCase().includes(searchLower)
+            )
+            // Apply pagination
+            const startIndex = page * size
+            const endIndex = startIndex + size
+            return filteredResults.slice(startIndex, endIndex)
+        }
+        
         return await this.serResultModel.listSearchresult(keyarr, page, size)
     }
 
@@ -782,6 +930,34 @@ export class SearchModule extends BaseModule {
     }
 
     /**
+     * Get task ID by PID
+     * @param pid The process ID
+     * @returns The task ID or null if not found
+     */
+    public async getTaskIdByPID(pid: number): Promise<number | null> {
+        const task = await this.taskdbModel.getTaskEntityByPID(pid);
+        return task ? task.id : null;
+    }
+
+    /**
+     * Get task PID
+     * @param taskId The task ID
+     * @returns The process ID or null if not set
+     */
+    public async getTaskPID(taskId: number): Promise<number | null> {
+        return await this.taskdbModel.getTaskPID(taskId);
+    }
+
+    /**
+     * Update task PID
+     * @param taskId The task ID
+     * @param pid The process ID (or null to clear)
+     */
+    public async updateTaskPID(taskId: number, pid: number | null): Promise<void> {
+        await this.taskdbModel.updateTaskPID(taskId, pid);
+    }
+
+    /**
      * Get task details for editing
      * @param taskId The task ID
      * @returns Task details suitable for editing
@@ -812,9 +988,42 @@ export class SearchModule extends BaseModule {
                 pass: item.pass
             })),
             accounts: accounts.map(item => item.account_id),
-            status: taskEntity.status,
+            status: taskEntity.status as SearchTaskStatusValue,
             record_time: taskEntity.record_time
         };
+    }
+
+    /**
+     * Update account cookies in the database
+     * @param accountId The account ID to update cookies for
+     * @param cookies The updated cookies array
+     */
+    public async updateAccountCookies(accountId: number, cookies: Array<CookiesType>): Promise<void> {
+        try {
+            // Get existing cookies entity for this account
+            const existingCookies = await this.accountCookiesModule.getAccountCookies(accountId);
+            
+            if (existingCookies) {
+                // Update existing cookies
+                existingCookies.cookies = JSON.stringify(cookies);
+                existingCookies.record_time = getRecorddatetime();
+                await this.accountCookiesModule.saveAccountCookies(existingCookies);
+                console.log(`Successfully updated cookies for account ${accountId}`);
+            } else {
+                // Create new cookies entry if it doesn't exist
+                const { AccountCookiesEntity } = await import('@/entity/AccountCookies.entity');
+                const newCookies = new AccountCookiesEntity();
+                newCookies.account_id = accountId;
+                newCookies.cookies = JSON.stringify(cookies);
+                newCookies.record_time = getRecorddatetime();
+                newCookies.partition_path = this.accountCookiesModule.genPartitionPath();
+                await this.accountCookiesModule.saveAccountCookies(newCookies);
+                console.log(`Successfully created new cookies entry for account ${accountId}`);
+            }
+        } catch (error) {
+            console.error(`Failed to update cookies for account ${accountId}:`, error);
+            throw error;
+        }
     }
 
 

@@ -12,4 +12,7 @@ export class ProxyCheckEntity extends AuditableEntity {
     
     @Column("integer", { nullable: true })
     status: number;
+    
+    @Column("integer", { nullable: true })
+    google_pass: number | null;
 }

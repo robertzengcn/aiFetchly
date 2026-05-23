@@ -55,10 +55,10 @@ export function registerScheduleIpcHandlers(): void {
     console.log("Schedule IPC handlers registered");
     
     // Schedule Management
-    ipcMain.handle(SCHEDULE_CREATE, async (event, data): Promise<CommonMessage<number | null>> => {
+    ipcMain.handle(SCHEDULE_CREATE, async (event, data: unknown): Promise<CommonMessage<number | null>> => {
         try {
             const scheduleCtrl = new ScheduleController();
-            const scheduleData = JSON.parse(data) as ScheduleCreateRequest;
+            const scheduleData = JSON.parse(data as string) as ScheduleCreateRequest;
             const scheduleId = await scheduleCtrl.createSchedule(scheduleData);
             
             const response: CommonMessage<number> = {
@@ -78,10 +78,10 @@ export function registerScheduleIpcHandlers(): void {
         }
     });
 
-    ipcMain.handle(SCHEDULE_UPDATE, async (event, data): Promise<CommonMessage<void>> => {
+    ipcMain.handle(SCHEDULE_UPDATE, async (event, data: unknown): Promise<CommonMessage<void>> => {
         try {
             const scheduleCtrl = new ScheduleController();
-            const { id, ...scheduleData } = JSON.parse(data) as { id: number } & ScheduleUpdateRequest;
+            const { id, ...scheduleData } = JSON.parse(data as string) as { id: number } & ScheduleUpdateRequest;
             await scheduleCtrl.updateSchedule(id, scheduleData);
             
             const response: CommonMessage<void> = {
@@ -102,7 +102,7 @@ export function registerScheduleIpcHandlers(): void {
     ipcMain.handle(SCHEDULE_DELETE, async (event, data): Promise<CommonMessage<void>> => {
         try {
             const scheduleCtrl = new ScheduleController();
-            const { id } = JSON.parse(data) as { id: number };
+            const { id } = JSON.parse(data as string) as { id: number };
             await scheduleCtrl.deleteSchedule(id);
             
             const response: CommonMessage<void> = {
@@ -123,7 +123,7 @@ export function registerScheduleIpcHandlers(): void {
     ipcMain.handle(SCHEDULE_ENABLE, async (event, data): Promise<CommonMessage<void>> => {
         try {
             const scheduleCtrl = new ScheduleController();
-            const { id } = JSON.parse(data) as { id: number };
+            const { id } = JSON.parse(data as string) as { id: number };
             await scheduleCtrl.enableSchedule(id);
             
             const response: CommonMessage<void> = {
@@ -144,7 +144,7 @@ export function registerScheduleIpcHandlers(): void {
     ipcMain.handle(SCHEDULE_DISABLE, async (event, data): Promise<CommonMessage<void>> => {
         try {
             const scheduleCtrl = new ScheduleController();
-            const { id } = JSON.parse(data) as { id: number };
+            const { id } = JSON.parse(data as string) as { id: number };
             await scheduleCtrl.disableSchedule(id);
             
             const response: CommonMessage<void> = {
@@ -165,7 +165,7 @@ export function registerScheduleIpcHandlers(): void {
     ipcMain.handle(SCHEDULE_PAUSE, async (event, data): Promise<CommonMessage<void>> => {
         try {
             const scheduleCtrl = new ScheduleController();
-            const { id } = JSON.parse(data) as { id: number };
+            const { id } = JSON.parse(data as string) as { id: number };
             await scheduleCtrl.pauseSchedule(id);
             
             const response: CommonMessage<void> = {
@@ -186,7 +186,7 @@ export function registerScheduleIpcHandlers(): void {
     ipcMain.handle(SCHEDULE_RESUME, async (event, data): Promise<CommonMessage<void>> => {
         try {
             const scheduleCtrl = new ScheduleController();
-            const { id } = JSON.parse(data) as { id: number };
+            const { id } = JSON.parse(data as string) as { id: number };
             await scheduleCtrl.resumeSchedule(id);
             
             const response: CommonMessage<void> = {
@@ -207,7 +207,7 @@ export function registerScheduleIpcHandlers(): void {
     ipcMain.handle(SCHEDULE_RUN_NOW, async (event, data): Promise<CommonMessage<void>> => {
         try {
             const scheduleCtrl = new ScheduleController();
-            const { id } = JSON.parse(data) as { id: number };
+            const { id } = JSON.parse(data as string) as { id: number };
             await scheduleCtrl.runScheduleNow(id);
             
             const response: CommonMessage<void> = {
@@ -228,7 +228,7 @@ export function registerScheduleIpcHandlers(): void {
     ipcMain.handle(SCHEDULE_LIST, async (event, data): Promise<CommonMessage<ScheduleListResponse | null>> => {
         try {
             const scheduleCtrl = new ScheduleController();
-            const { page = 0, size = 10, sort, filters } = JSON.parse(data) as {
+            const { page = 0, size = 10, sort, filters } = JSON.parse(data as string) as {
                 page?: number;
                 size?: number;
                 sort?: any;
@@ -257,7 +257,7 @@ export function registerScheduleIpcHandlers(): void {
     ipcMain.handle(SCHEDULE_DETAIL, async (event, data): Promise<CommonMessage<ScheduleDetailResponse | null>> => {
         try {
             const scheduleCtrl = new ScheduleController();
-            const { id } = JSON.parse(data) as { id: number };
+            const { id } = JSON.parse(data as string) as { id: number };
             const result = await scheduleCtrl.getScheduleById(id);
             
             const response: CommonMessage<ScheduleDetailResponse> = {
@@ -280,7 +280,7 @@ export function registerScheduleIpcHandlers(): void {
     ipcMain.handle(SCHEDULE_BY_TASK_TYPE, async (event, data): Promise<CommonMessage<any[] | null>> => {
         try {
             const scheduleCtrl = new ScheduleController();
-            const { taskType } = JSON.parse(data) as { taskType: TaskType };
+            const { taskType } = JSON.parse(data as string) as { taskType: TaskType };
             const result = await scheduleCtrl.getSchedulesByTaskType(taskType);
             
             const response: CommonMessage<any[]> = {
@@ -303,7 +303,7 @@ export function registerScheduleIpcHandlers(): void {
     ipcMain.handle(SCHEDULE_SEARCH, async (event, data): Promise<CommonMessage<ScheduleListResponse | null>> => {
         try {
             const scheduleCtrl = new ScheduleController();
-            const searchRequest = JSON.parse(data) as ScheduleSearchRequest;
+            const searchRequest = JSON.parse(data as string) as ScheduleSearchRequest;
             const result = await scheduleCtrl.getScheduleList(
                 searchRequest.page || 0,
                 searchRequest.size || 10,
@@ -331,7 +331,7 @@ export function registerScheduleIpcHandlers(): void {
     ipcMain.handle(EXECUTION_HISTORY, async (event, data): Promise<CommonMessage<ExecutionHistoryResponse | null>> => {
         try {
             const scheduleCtrl = new ScheduleController();
-            const { scheduleId, page = 0, size = 10 } = JSON.parse(data) as {
+            const { scheduleId, page = 0, size = 10 } = JSON.parse(data as string) as {
                 scheduleId: number;
                 page?: number;
                 size?: number;
@@ -358,7 +358,7 @@ export function registerScheduleIpcHandlers(): void {
     ipcMain.handle(EXECUTION_STATISTICS, async (event, data): Promise<CommonMessage<ExecutionStatistics | null>> => {
         try {
             const scheduleCtrl = new ScheduleController();
-            const { scheduleId } = JSON.parse(data) as { scheduleId: number };
+            const { scheduleId } = JSON.parse(data as string) as { scheduleId: number };
             const result = await scheduleCtrl.getExecutionStatistics(scheduleId);
             
             const response: CommonMessage<ExecutionStatistics | null> = {
@@ -381,7 +381,7 @@ export function registerScheduleIpcHandlers(): void {
     ipcMain.handle(EXECUTION_RECENT, async (event, data): Promise<CommonMessage<any[] | null>> => {
         try {
             const scheduleCtrl = new ScheduleController();
-            const { limit = 10 } = JSON.parse(data) as { limit?: number };
+            const { limit = 10 } = JSON.parse(data as string) as { limit?: number };
             const result = await scheduleCtrl.getRecentExecutions(limit);
             
             const response: CommonMessage<any[]> = {
@@ -405,7 +405,7 @@ export function registerScheduleIpcHandlers(): void {
     ipcMain.handle(DEPENDENCY_ADD, async (event, data): Promise<CommonMessage<number|null>> => {
         try {
             const scheduleCtrl = new ScheduleController();
-            const { parentId, childId, ...dependencyData } = JSON.parse(data) as {
+            const { parentId, childId, ...dependencyData } = JSON.parse(data as string) as {
                 parentId: number;
                 childId: number;
             } & DependencyCreateRequest;
@@ -431,7 +431,7 @@ export function registerScheduleIpcHandlers(): void {
     ipcMain.handle(DEPENDENCY_REMOVE, async (event, data): Promise<CommonMessage<void>> => {
         try {
             const scheduleCtrl = new ScheduleController();
-            const { parentId, childId } = JSON.parse(data) as { parentId: number; childId: number };
+            const { parentId, childId } = JSON.parse(data as string) as { parentId: number; childId: number };
             await scheduleCtrl.removeDependency(parentId, childId);
             
             const response: CommonMessage<void> = {
@@ -452,7 +452,7 @@ export function registerScheduleIpcHandlers(): void {
     ipcMain.handle(DEPENDENCY_GRAPH, async (event, data): Promise<CommonMessage<DependencyGraphResponse|null>> => {
         try {
             const scheduleCtrl = new ScheduleController();
-            const { scheduleId } = JSON.parse(data) as { scheduleId: number };
+            const { scheduleId } = JSON.parse(data as string) as { scheduleId: number };
             const result = await scheduleCtrl.getDependencyGraph(scheduleId);
             
             const response: CommonMessage<DependencyGraphResponse|null> = {
@@ -475,7 +475,7 @@ export function registerScheduleIpcHandlers(): void {
     ipcMain.handle(DEPENDENCY_VALIDATE, async (event, data): Promise<CommonMessage<DependencyValidationResponse|null>> => {
         try {
             const scheduleCtrl = new ScheduleController();
-            const { scheduleId } = JSON.parse(data) as { scheduleId: number };
+            const { scheduleId } = JSON.parse(data as string) as { scheduleId: number };
             const result = await scheduleCtrl.validateDependencies(scheduleId);
             
             // Convert DependencyValidationResult to DependencyValidationResponse
@@ -589,7 +589,7 @@ export function registerScheduleIpcHandlers(): void {
     // Utility Functions
     ipcMain.handle(CRON_VALIDATE, async (event, data): Promise<CommonMessage<CronValidationResult|null>> => {
         try {
-            const { expression } = JSON.parse(data) as { expression: string };
+            const { expression } = JSON.parse(data as string) as { expression: string };
             // This would need to be implemented in the ScheduleManager or a utility class
             // For now, we'll return a basic validation result
             const isValid = /^(\*|([0-9]|1[0-9]|2[0-9]|3[0-9]|4[0-9]|5[0-9])|\*\/([0-9]|1[0-9]|2[0-9]|3[0-9]|4[0-9]|5[0-9])) (\*|([0-9]|1[0-9]|2[0-3])|\*\/([0-9]|1[0-9]|2[0-3])) (\*|([1-9]|1[0-9]|2[0-9]|3[0-1])|\*\/([1-9]|1[0-9]|2[0-9]|3[0-1])) (\*|([1-9]|1[0-2])|\*\/([1-9]|1[0-2])) (\*|([0-6])|\*\/([0-6]))$/.test(expression);
@@ -620,7 +620,7 @@ export function registerScheduleIpcHandlers(): void {
 
     ipcMain.handle(CRON_NEXT_RUN_TIME, async (event, data): Promise<CommonMessage<Date|null>> => {
         try {
-            const { expression } = JSON.parse(data) as { expression: string };
+            const { expression } = JSON.parse(data as string) as { expression: string };
             const scheduleCtrl = new ScheduleController();
             const nextRunTime = scheduleCtrl.calculateNextRunTime(expression);
             
@@ -672,7 +672,7 @@ export function registerScheduleIpcHandlers(): void {
     ipcMain.handle(SCHEDULE_IMPORT, async (event, data): Promise<CommonMessage<ScheduleImportResult|null>> => {
         try {
             // Placeholder implementation
-            const importRequest = JSON.parse(data) as ScheduleImportRequest;
+            const importRequest = JSON.parse(data as string) as ScheduleImportRequest;
             const result: ScheduleImportResult = {
                 success: true,
                 importedSchedules: 0,

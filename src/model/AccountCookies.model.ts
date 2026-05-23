@@ -4,49 +4,64 @@ import { AccountCookiesEntity } from "@/entity/AccountCookies.entity";
 import { getRecorddatetime } from "@/modules/lib/function";
 
 export class AccountCookiesModel extends BaseDb {
-    private repository: Repository<AccountCookiesEntity>;
+  private repository: Repository<AccountCookiesEntity>;
 
-    constructor(filepath: string) {
-        super(filepath);
-        this.repository = this.sqliteDb.connection.getRepository(AccountCookiesEntity);
+  constructor(filepath: string) {
+    super(filepath);
+    this.repository =
+      this.sqliteDb.connection.getRepository(AccountCookiesEntity);
+  }
+
+  /**
+   * Save account cookies
+   */
+  async saveAccountCookies(
+    accountcookies: AccountCookiesEntity
+  ): Promise<number> {
+    if (!accountcookies.account_id) {
+      throw new Error(`account id empty`);
     }
 
-    /**
-     * Save account cookies
-     */
-    async saveAccountCookies(accountcookies: AccountCookiesEntity): Promise<number> {
-        if (!accountcookies.account_id) {
-            throw new Error(`account id empty`);
+    const recordtime = getRecorddatetime();
+    const now = new Date();
+    const existingCookies = await this.getAccountCookies(
+      accountcookies.account_id
+    );
+
+    if (existingCookies) {
+      // Use repository.update() so updatedAt is explicitly in the UPDATE SET (avoids save() omitting inherited columns)
+      await this.repository.update(
+        { id: existingCookies.id },
+        {
+          cookies: accountcookies.cookies,
+          partition_path: accountcookies.partition_path,
+          record_time: recordtime,
+          updatedAt: now,
         }
-
-        const recordtime = getRecorddatetime();
-        const existingCookies = await this.getAccountCookies(accountcookies.account_id);
-
-        if (existingCookies) {
-            existingCookies.cookies = accountcookies.cookies;
-            existingCookies.partition_path = accountcookies.partition_path;
-            existingCookies.record_time = recordtime;
-            await this.repository.save(existingCookies);
-            return existingCookies.id;
-        } else {
-            accountcookies.record_time = recordtime;
-            const savedCookies = await this.repository.save(accountcookies);
-            return savedCookies.id;
-        }
+      );
+      return existingCookies.id;
+    } else {
+      accountcookies.record_time = recordtime;
+      accountcookies.updatedAt = now;
+      const savedCookies = await this.repository.save(accountcookies);
+      return savedCookies.id;
     }
+  }
 
-    /**
-     * Get account cookies by account ID
-     */
-    async getAccountCookies(accountid: number): Promise<AccountCookiesEntity | null> {
-        return this.repository.findOne({ where: { account_id: accountid } });
-    }
+  /**
+   * Get account cookies by account ID
+   */
+  async getAccountCookies(
+    accountid: number
+  ): Promise<AccountCookiesEntity | null> {
+    return this.repository.findOne({ where: { account_id: accountid } });
+  }
 
-    /**
-     * Delete account cookies by account ID
-     */
-    async deleteAccountCookies(accountid: number): Promise<number> {
-        const result = await this.repository.delete({ account_id: accountid });
-        return result.affected || 0;
-    }
-} 
+  /**
+   * Delete account cookies by account ID
+   */
+  async deleteAccountCookies(accountid: number): Promise<number> {
+    const result = await this.repository.delete({ account_id: accountid });
+    return result.affected || 0;
+  }
+}

@@ -1,231 +1,318 @@
-export const EXTRAMODULECHANNE_LIST='extramodule:list'
-export const EXTRAMODULECHANNE_INSTALL='extramodule:install'
-export const EXTRAMODULECHANNE_UNINSTALL='extramodule:uninstall'
-export const EXTRAMODULECHANNE_MESSAGE='extramodule:message'
-export const OPENDIRECTORY='open:directory'
-export const VIDEODOWNLOAD='video:download'
-export const VIDEODOWNLOAD_MESSAGE='video:download:message'
-export const VIDEODOWNLOAD_ITEM_MESSAGE='video:download:message'
+export const EXTRAMODULECHANNE_LIST = "extramodule:list";
+export const EXTRAMODULECHANNE_INSTALL = "extramodule:install";
+export const EXTRAMODULECHANNE_UNINSTALL = "extramodule:uninstall";
+export const EXTRAMODULECHANNE_MESSAGE = "extramodule:message";
+export const OPENDIRECTORY = "open:directory";
+export const VIDEODOWNLOAD = "video:download";
+export const VIDEODOWNLOAD_MESSAGE = "video:download:message";
+export const VIDEODOWNLOAD_ITEM_MESSAGE = "video:download:message";
 //export const SYSTEM_MESSAGE='system:message'
-export const VIDEODOWNLOAD_LIST='video:download:list'
-export const VIDEODOWNLOAD_TASK_LIST='video:download:task:list'
-export const SOCIALPLATFORM_LIST='socialplatform:list'
-export const SEARCHSCRAPERAPI='search:scraper'
-export const LISTSESARCHRESUT='list:searchresult'
-export const SEARCHEVENT='search:event'
-export const TASKSEARCHRESULTLIST='search:result:list'
-export const SAVESEARCHERRORLOG='search:save_error_log'
-export const CHECKALLPROXY='check:proxy'
-export const CHECKALLPROXYMESSAGE='check:proxy:message'
-export const PROXYLIST='proxy:list'
-export const PROXYDETAIL='proxy:detail'
-export const PROXYSAVE='proxy:save'
-export const PROXYCHECK='proxy:check'
-export const PROXYIMPORT='proxy:import'
-export const PROXYDELETE='proxy:delete'
-export const REMOVEFAILUREPROXY='remove:failureproxy'
-export const REMOVEFAILUREPROXY_MESSAGE='remove:failureproxy:message'
-export const EMAILEXTRACTIONAPI='email:extraction:api'
-export const EMAILEXTRACTIONMESSAGE='email:extraction:message'
-export const LISTEMAILSEARCHTASK='list:emailsearchtask'
-export const EMAILSEARCHTASKRESULT='email:search:task:result'
-export const EMAILSEARCHTASK_ERROR_LOG_DOWNLOAD='email:search:task:error:log:download'
+export const VIDEODOWNLOAD_LIST = "video:download:list";
+export const VIDEODOWNLOAD_TASK_LIST = "video:download:task:list";
+export const SOCIALPLATFORM_LIST = "socialplatform:list";
+export const SEARCHSCRAPERAPI = "search:scraper";
+export const LISTSESARCHRESUT = "list:searchresult";
+export const SEARCHEVENT = "search:event";
+export const TASKSEARCHRESULTLIST = "search:result:list";
+export const SAVESEARCHERRORLOG = "search:save_error_log";
+export const CHECKALLPROXY = "check:proxy";
+export const CHECKALLPROXYMESSAGE = "check:proxy:message";
+export const PROXYLIST = "proxy:list";
+export const PROXYDETAIL = "proxy:detail";
+export const PROXYSAVE = "proxy:save";
+export const PROXYCHECK = "proxy:check";
+export const PROXYIMPORT = "proxy:import";
+export const PROXYDELETE = "proxy:delete";
+export const REMOVEFAILUREPROXY = "remove:failureproxy";
+export const REMOVEFAILUREPROXY_MESSAGE = "remove:failureproxy:message";
+export const EMAILEXTRACTIONAPI = "email:extraction:api";
+export const EMAILEXTRACTIONMESSAGE = "email:extraction:message";
+export const LISTEMAILSEARCHTASK = "list:emailsearchtask";
+export const EMAILSEARCHTASKRESULT = "email:search:task:result";
+export const EMAILSEARCHTASK_ERROR_LOG_DOWNLOAD =
+  "email:search:task:error:log:download";
 
 // Email Extraction Task Edit Channels
-export const GETEMAILSEARCHTASK='email:search:task:get'
-export const UPDATEEMAILSEARCHTASK='email:search:task:update'
-export const DELETEEMAILSEARCHTASK='email:search:task:delete'
+export const GETEMAILSEARCHTASK = "email:search:task:get";
+export const UPDATEEMAILSEARCHTASK = "email:search:task:update";
+export const DELETEEMAILSEARCHTASK = "email:search:task:delete";
+export const EMAILEXTRACTION_RESULT_EXPORT = "email:extraction:result:export";
 
-export const EMAILMARKETINGTEMPLIST='email:marketing:template:list'
-export const EMAILMARKETINGTEMPDETAIL='email:marketing:template:detail'
-export const EMAILMARKETINGTEMPUPDATE='email:marketing:template:update'
-export const EMAILMARKETINGTEMPREMOVE='email:marketing:template:remove'
-export const EMAILMARKETINGTEMPPREVIEW='email:marketing:template:preview'
-export const EMAILMARKETINGFILTERLIST='email:marketing:filter:list'
-export const EMAILMARKETFILTERDETAIL='email:marketing:filter:detail'
-export const EMAILMARKETFILTERUPDATE='email:marketing:filter:update'
-export const EMAILFILTERDELETE='email:filter:delete'
+export const EMAILMARKETINGTEMPLIST = "email:marketing:template:list";
+export const EMAILMARKETINGTEMPDETAIL = "email:marketing:template:detail";
+export const EMAILMARKETINGTEMPUPDATE = "email:marketing:template:update";
+export const EMAILMARKETINGTEMPREMOVE = "email:marketing:template:remove";
+export const EMAILMARKETINGTEMPPREVIEW = "email:marketing:template:preview";
+export const EMAILMARKETINGFILTERLIST = "email:marketing:filter:list";
+export const EMAILMARKETFILTERDETAIL = "email:marketing:filter:detail";
+export const EMAILMARKETFILTERUPDATE = "email:marketing:filter:update";
+export const EMAILFILTERDELETE = "email:filter:delete";
 //email service
-export const EMAILSERVICEUPDATE='email:service:update'
-export const EMAILSERVICEDETAIL='email:service:detail'
-export const EMAILSERVICELIST='email:service:list'
-export const EMAILSERVICEDELETE='email:service:delete'
+export const EMAILSERVICEUPDATE = "email:service:update";
+export const EMAILSERVICEDETAIL = "email:service:detail";
+export const EMAILSERVICELIST = "email:service:list";
+export const EMAILSERVICEDELETE = "email:service:delete";
 
 //email template
-export const EMAILTEMPLATE_LIST='email:template:list'
-export const EMAILTEMPLATE_DETAIL='email:template:detail'
-export const EMAILTEMPLATE_CREATE='email:template:create'
-export const EMAILTEMPLATE_UPDATE='email:template:update'
-export const EMAILTEMPLATE_DELETE='email:template:delete'
-export const EMAILTEMPLATE_BY_TASK='email:template:by:task'
+export const EMAILTEMPLATE_LIST = "email:template:list";
+export const EMAILTEMPLATE_DETAIL = "email:template:detail";
+export const EMAILTEMPLATE_CREATE = "email:template:create";
+export const EMAILTEMPLATE_UPDATE = "email:template:update";
+export const EMAILTEMPLATE_DELETE = "email:template:delete";
+export const EMAILTEMPLATE_BY_TASK = "email:template:by:task";
 
 //buck email send
-export const BUCKEMAILSEND='buck:email:send'
-export const BUCKEMAILSENDMESSAGE='buck:email:send:message'
-export const BUCKEMAILTASKLIST='buck:email:task:list'
+export const BUCKEMAILSEND = "buck:email:send";
+export const BUCKEMAILSENDMESSAGE = "buck:email:send:message";
+export const BUCKEMAILTASKLIST = "buck:email:task:list";
 
-export const SENDTESTEMAIL='send:test:email'
-export const RECEIVESENDTESTEMAILMESSAGE='receive:send:test:email:message'
-export const BUCKEMAILTASKSENDLOG='buck:email:task:sendlog'
-export const SOCIALACCOUNTlIST="socialaccount:list"
-export const SOCIALACCOUNTDETAIL="socialaccount:detail"
-export const SOCIALACCOUNTSAVE="socialaccount:save"
-export const SOCIALACCOUNTDELETE="socialaccount:delete"
-export const SOCIAL_ACCOUNT_LOGIN="socialaccount:login"
-export const SOCIAL_ACCOUNT_LOGIN_MESSSAGE="socialaccount:login:msg"
-export const SOCIAL_ACCOUNT_LOGIN_UPLOADCOOKIES="socialaccount:upload:cookies"
-export const SOCIAL_ACCOUNT_CLEAN_COOKIES="socialaccount:clean:cookies"
-export const SOCIAL_ACCOUNT_SHOW_PLATFORMPAGE="socialaccount:show:platformpage"
-export const VIDEODOWNLOADTASK_RETRY='video:downloadtask:retry'
-export const VIDEODOWNLOADITEM_RETRY='video:downloaditem:retry'
-export const VIDEODOWNLOADITEM_EXPLORER='video:downloaditem:explorer'
-export const VIDEODOWNLOADITEM_DELETE='video:downloaditem:delete'
-export const VIDEODOWN_TASK_ERROR_LOG='video:download:error:log'
-export const VIDEODOWNLOAD_ERROR_LOG_DOWNLOAD='video:download:error:log:download'
-export const VIDEODOWN_TASK_ERROR_LOG_QUERY='video:download:task:error:log:query'
-export const VIDEO_CAPTION_GENERATE='video:caption:generate'
-export const VIDEO_CAPTION_GENERATE_MESSAGE='video:caption:generate:message'
-export const EXTRAMODULE_UPGRADE='extramodule:upgrade'
-export const EXTRAMODULE_UPGRAD_MESSAGE='extramodule:upgrade:message'
-export const VIDEOTASKDOWNLOAD_RETRY_MESSAGE='videotask:download:retry:message'
-export const VIDEODOWNLOAD_LOG_QUERY='video:download:log:query'
-export const VIDEODOWNLOAD_DETAIL_QUERY='video:download:detail:query'
-export const VIDEODOWNLOAD_OPEN_CAPTIONFILE='video:download:open:captionfile'
-export const SYSTEM_SETTING_LIST='system_setting:list'
-export const VIDEO_INFORMATION_TRANSLATE='video:information:translate'
-export const VIDEO_VOICE_TRANSLATE='video:voice:translate'
-export const SYSTEM_SETTING_UPDATE='system_setting:update'
-export const QUERY_USER_INFO='user:info'
-export const OPENLOGINPAGE='open:page'
-export const GET_LOGIN_URL='user:get_login_url'
-export const USER_LOGIN='user:Login'
-export const NATIVATECOMMAND='navigate:command'
-export const VIDEO_PUBLISH='video:publish'
-export const VIDEO_PUBLISH_RECORD_MESSAGE='video:publish:record:message'
-export const VIDEO_PUBLISH_RECORD_DELETE='video:publish:record:delete'
-export const VIDEO_PUBLISH_RECORD_LIST='video:publish:record:list'
-export const SYSTEM_MESSAGE='system:message'
-export const RETRYSEARCHTASK='search:retry_task'
-export const CHOOSEFILEDIALOG='choose:file:dialog'
+export const SENDTESTEMAIL = "send:test:email";
+export const RECEIVESENDTESTEMAILMESSAGE = "receive:send:test:email:message";
+export const BUCKEMAILTASKSENDLOG = "buck:email:task:sendlog";
+export const SOCIALACCOUNTlIST = "socialaccount:list";
+export const SOCIALACCOUNTDETAIL = "socialaccount:detail";
+export const SOCIALACCOUNTSAVE = "socialaccount:save";
+export const SOCIALACCOUNTDELETE = "socialaccount:delete";
+export const SOCIAL_ACCOUNT_LOGIN = "socialaccount:login";
+export const SOCIAL_ACCOUNT_LOGIN_MESSSAGE = "socialaccount:login:msg";
+export const SOCIAL_ACCOUNT_LOGIN_UPLOADCOOKIES =
+  "socialaccount:upload:cookies";
+export const SOCIAL_ACCOUNT_CLEAN_COOKIES = "socialaccount:clean:cookies";
+export const SOCIAL_ACCOUNT_SHOW_PLATFORMPAGE =
+  "socialaccount:show:platformpage";
+export const VIDEODOWNLOADTASK_RETRY = "video:downloadtask:retry";
+export const VIDEODOWNLOADITEM_RETRY = "video:downloaditem:retry";
+export const VIDEODOWNLOADITEM_EXPLORER = "video:downloaditem:explorer";
+export const VIDEODOWNLOADITEM_DELETE = "video:downloaditem:delete";
+export const VIDEODOWN_TASK_ERROR_LOG = "video:download:error:log";
+export const VIDEODOWNLOAD_ERROR_LOG_DOWNLOAD =
+  "video:download:error:log:download";
+export const VIDEODOWN_TASK_ERROR_LOG_QUERY =
+  "video:download:task:error:log:query";
+export const VIDEO_CAPTION_GENERATE = "video:caption:generate";
+export const VIDEO_CAPTION_GENERATE_MESSAGE = "video:caption:generate:message";
+export const EXTRAMODULE_UPGRADE = "extramodule:upgrade";
+export const EXTRAMODULE_UPGRAD_MESSAGE = "extramodule:upgrade:message";
+export const VIDEOTASKDOWNLOAD_RETRY_MESSAGE =
+  "videotask:download:retry:message";
+export const VIDEODOWNLOAD_LOG_QUERY = "video:download:log:query";
+export const VIDEODOWNLOAD_DETAIL_QUERY = "video:download:detail:query";
+export const VIDEODOWNLOAD_OPEN_CAPTIONFILE = "video:download:open:captionfile";
+export const SYSTEM_SETTING_LIST = "system_setting:list";
+export const VIDEO_INFORMATION_TRANSLATE = "video:information:translate";
+export const VIDEO_VOICE_TRANSLATE = "video:voice:translate";
+export const SYSTEM_SETTING_UPDATE = "system_setting:update";
+export const QUERY_USER_INFO = "user:info";
+export const OPENLOGINPAGE = "open:page";
+export const GET_LOGIN_URL = "user:get_login_url";
+export const USER_LOGIN = "user:Login";
+export const NATIVATECOMMAND = "navigate:command";
+export const LOGIN_STATUS = "login:status";
+export const VIDEO_PUBLISH = "video:publish";
+export const VIDEO_PUBLISH_RECORD_MESSAGE = "video:publish:record:message";
+export const VIDEO_PUBLISH_RECORD_DELETE = "video:publish:record:delete";
+export const VIDEO_PUBLISH_RECORD_LIST = "video:publish:record:list";
+export const SYSTEM_MESSAGE = "system:message";
+export const RETRYSEARCHTASK = "search:retry_task";
+export const CHOOSEFILEDIALOG = "choose:file:dialog";
 
 // Search Task Edit Channels
-export const GET_SEARCH_TASK_DETAILS='search:task:get_details'
-export const UPDATE_SEARCH_TASK='search:task:update'
-export const SEARCH_TASK_UPDATE_EVENT='search:task:update:event'
-export const CREATE_SEARCH_TASK_ONLY='search:task:create_only'
+export const GET_SEARCH_TASK_DETAILS = "search:task:get_details";
+export const UPDATE_SEARCH_TASK = "search:task:update";
+export const SEARCH_TASK_UPDATE_EVENT = "search:task:update:event";
+export const CREATE_SEARCH_TASK_ONLY = "search:task:create_only";
+export const EXPORT_SEARCH_RESULTS = "search:result:export";
+export const KILL_SEARCH_PROCESS = "search:kill_process";
 
 // Schedule Management Channels
-export const SCHEDULE_CREATE = 'schedule:create'
-export const SCHEDULE_UPDATE = 'schedule:update'
-export const SCHEDULE_DELETE = 'schedule:delete'
-export const SCHEDULE_ENABLE = 'schedule:enable'
-export const SCHEDULE_DISABLE = 'schedule:disable'
-export const SCHEDULE_PAUSE = 'schedule:pause'
-export const SCHEDULE_RESUME = 'schedule:resume'
-export const SCHEDULE_RUN_NOW = 'schedule:run_now'
-export const SCHEDULE_LIST = 'schedule:list'
-export const SCHEDULE_DETAIL = 'schedule:detail'
-export const SCHEDULE_BY_TASK_TYPE = 'schedule:by_task_type'
-export const SCHEDULE_SEARCH = 'schedule:search'
-export const SCHEDULE_EXPORT = 'schedule:export'
-export const SCHEDULE_IMPORT = 'schedule:import'
+export const SCHEDULE_CREATE = "schedule:create";
+export const SCHEDULE_UPDATE = "schedule:update";
+export const SCHEDULE_DELETE = "schedule:delete";
+export const SCHEDULE_ENABLE = "schedule:enable";
+export const SCHEDULE_DISABLE = "schedule:disable";
+export const SCHEDULE_PAUSE = "schedule:pause";
+export const SCHEDULE_RESUME = "schedule:resume";
+export const SCHEDULE_RUN_NOW = "schedule:run_now";
+export const SCHEDULE_LIST = "schedule:list";
+export const SCHEDULE_DETAIL = "schedule:detail";
+export const SCHEDULE_BY_TASK_TYPE = "schedule:by_task_type";
+export const SCHEDULE_SEARCH = "schedule:search";
+export const SCHEDULE_EXPORT = "schedule:export";
+export const SCHEDULE_IMPORT = "schedule:import";
 
 // Execution Management Channels
-export const EXECUTION_HISTORY = 'schedule:execution:history'
-export const EXECUTION_STATISTICS = 'schedule:execution:statistics'
-export const EXECUTION_RECENT = 'schedule:execution:recent'
+export const EXECUTION_HISTORY = "schedule:execution:history";
+export const EXECUTION_STATISTICS = "schedule:execution:statistics";
+export const EXECUTION_RECENT = "schedule:execution:recent";
 
 // Dependency Management Channels
-export const DEPENDENCY_ADD = 'schedule:dependency:add'
-export const DEPENDENCY_REMOVE = 'schedule:dependency:remove'
-export const DEPENDENCY_GRAPH = 'schedule:dependency:graph'
-export const DEPENDENCY_VALIDATE = 'schedule:dependency:validate'
+export const DEPENDENCY_ADD = "schedule:dependency:add";
+export const DEPENDENCY_REMOVE = "schedule:dependency:remove";
+export const DEPENDENCY_GRAPH = "schedule:dependency:graph";
+export const DEPENDENCY_VALIDATE = "schedule:dependency:validate";
 
 // Scheduler Management Channels
-export const SCHEDULER_STATUS = 'scheduler:status'
-export const SCHEDULER_START = 'scheduler:start'
-export const SCHEDULER_STOP = 'scheduler:stop'
-export const SCHEDULER_RELOAD = 'scheduler:reload'
+export const SCHEDULER_STATUS = "scheduler:status";
+export const SCHEDULER_START = "scheduler:start";
+export const SCHEDULER_STOP = "scheduler:stop";
+export const SCHEDULER_RELOAD = "scheduler:reload";
 
 // Utility Channels
-export const CRON_VALIDATE = 'cron:validate'
-export const CRON_NEXT_RUN_TIME = 'cron:next_run_time'
-export const USER_CHECK_LOGIN='user:checklogin'
-export const USER_SIGNOUT='user:signout'
+export const CRON_VALIDATE = "cron:validate";
+export const CRON_NEXT_RUN_TIME = "cron:next_run_time";
+export const USER_CHECK_LOGIN = "user:checklogin";
+export const USER_SIGNOUT = "user:signout";
 
 // App Information Channels
-export const GET_APP_INFO='app:info'
+export const GET_APP_INFO = "app:info";
 
 // Platform Management Channels
-export const PLATFORM_LIST = 'platform:list'
-export const PLATFORM_DETAIL = 'platform:detail'
-export const PLATFORM_CREATE = 'platform:create'
-export const PLATFORM_UPDATE = 'platform:update'
-export const PLATFORM_DELETE = 'platform:delete'
-export const PLATFORM_VALIDATE = 'platform:validate'
-export const PLATFORM_STATISTICS = 'platform:statistics'
-export const PLATFORM_TOGGLE = 'platform:toggle'
+export const PLATFORM_LIST = "platform:list";
+export const PLATFORM_DETAIL = "platform:detail";
+export const PLATFORM_CREATE = "platform:create";
+export const PLATFORM_UPDATE = "platform:update";
+export const PLATFORM_DELETE = "platform:delete";
+export const PLATFORM_VALIDATE = "platform:validate";
+export const PLATFORM_STATISTICS = "platform:statistics";
+export const PLATFORM_TOGGLE = "platform:toggle";
 
 // Yellow Pages Management Channels
-export const YELLOW_PAGES_CREATE = 'yellow_pages:create'
-export const YELLOW_PAGES_UPDATE = 'yellow_pages:update'
-export const YELLOW_PAGES_DELETE = 'yellow_pages:delete'
-export const YELLOW_PAGES_START = 'yellow_pages:start'
-export const YELLOW_PAGES_STOP = 'yellow_pages:stop'
-export const YELLOW_PAGES_PAUSE = 'yellow_pages:pause'
-export const YELLOW_PAGES_RESUME = 'yellow_pages:resume'
-export const YELLOW_PAGES_LIST = 'yellow_pages:list'
-export const YELLOW_PAGES_DETAIL = 'yellow_pages:detail'
-export const YELLOW_PAGES_PROGRESS = 'yellow_pages:progress'
-export const YELLOW_PAGES_RESULTS = 'yellow_pages:results'
-export const YELLOW_PAGES_EXPORT = 'yellow_pages:export'
-export const YELLOW_PAGES_BULK = 'yellow_pages:bulk'
-export const YELLOW_PAGES_HEALTH = 'yellow_pages:health'
-export const YELLOW_PAGES_PLATFORMS = 'yellow_pages:platforms'
-export const YELLOW_PAGES_STATISTICS = 'yellow_pages:statistics'
-export const YELLOW_PAGES_KILL_PROCESS = 'yellow_pages:kill_process'
-export const YELLOW_PAGES_CHECK_ORPHANED_PROCESSES = 'yellow_pages:check_orphaned_processes'
-export const YELLOW_PAGES_HANDLE_PREVIOUS_SESSION = 'yellow_pages:handle_previous_session'
+export const YELLOW_PAGES_CREATE = "yellow_pages:create";
+export const YELLOW_PAGES_UPDATE = "yellow_pages:update";
+export const YELLOW_PAGES_DELETE = "yellow_pages:delete";
+export const YELLOW_PAGES_START = "yellow_pages:start";
+export const YELLOW_PAGES_STOP = "yellow_pages:stop";
+export const YELLOW_PAGES_PAUSE = "yellow_pages:pause";
+export const YELLOW_PAGES_RESUME = "yellow_pages:resume";
+export const YELLOW_PAGES_LIST = "yellow_pages:list";
+export const YELLOW_PAGES_DETAIL = "yellow_pages:detail";
+export const YELLOW_PAGES_PROGRESS = "yellow_pages:progress";
+export const YELLOW_PAGES_RESULTS = "yellow_pages:results";
+export const YELLOW_PAGES_EXPORT = "yellow_pages:export";
+export const YELLOW_PAGES_BULK = "yellow_pages:bulk";
+export const YELLOW_PAGES_HEALTH = "yellow_pages:health";
+export const YELLOW_PAGES_PLATFORMS = "yellow_pages:platforms";
+export const YELLOW_PAGES_STATISTICS = "yellow_pages:statistics";
+export const YELLOW_PAGES_KILL_PROCESS = "yellow_pages:kill_process";
+export const YELLOW_PAGES_CHECK_ORPHANED_PROCESSES =
+  "yellow_pages:check_orphaned_processes";
+export const YELLOW_PAGES_HANDLE_PREVIOUS_SESSION =
+  "yellow_pages:handle_previous_session";
 
 // Language Preference Channels
-export const LANGUAGE_PREFERENCE_GET = 'language:preference:get'
-export const LANGUAGE_PREFERENCE_UPDATE = 'language:preference:update'
+export const LANGUAGE_PREFERENCE_GET = "language:preference:get";
+export const LANGUAGE_PREFERENCE_UPDATE = "language:preference:update";
+
+// Website Analysis Channels
+export const ANALYZE_WEBSITE = "search:analyze-website";
+export const ANALYZE_WEBSITE_PROGRESS = "search:analyze-website:progress";
 
 // RAG (Retrieval-Augmented Generation) Channels
-export const RAG_INITIALIZE = 'rag:initialize'
-export const RAG_QUERY = 'rag:query'
-export const RAG_UPLOAD_DOCUMENT = 'rag:upload-document'
-export const RAG_GET_STATS = 'rag:get-stats'
-export const RAG_TEST_PIPELINE = 'rag:test-pipeline'
-export const RAG_GET_DOCUMENTS = 'rag:get-documents'
-export const RAG_GET_DOCUMENT = 'rag:get-document'
-export const RAG_UPDATE_DOCUMENT = 'rag:update-document'
-export const RAG_DELETE_DOCUMENT = 'rag:delete-document'
-export const RAG_GET_DOCUMENT_STATS = 'rag:get-document-stats'
-export const RAG_SEARCH = 'rag:search'
-export const RAG_GET_SUGGESTIONS = 'rag:get-suggestions'
-export const RAG_GET_SEARCH_ANALYTICS = 'rag:get-search-analytics'
-export const RAG_UPDATE_EMBEDDING_MODEL = 'rag:update-embedding-model'
-export const RAG_GET_AVAILABLE_MODELS = 'rag:get-available-models'
-export const RAG_TEST_EMBEDDING_SERVICE = 'rag:test-embedding-service'
-export const RAG_CLEAR_CACHE = 'rag:clear-cache'
-export const RAG_CLEANUP = 'rag:cleanup'
-export const RAG_CHUNK_AND_EMBED_DOCUMENT = 'rag:chunk-and-embed-document'
-export const RAG_DOWNLOAD_DOCUMENT = 'rag:download-document'
-export const RAG_GET_DOCUMENT_ERROR_LOG = 'rag:get-document-error-log'
+export const RAG_INITIALIZE = "rag:initialize";
+export const RAG_QUERY = "rag:query";
+export const RAG_UPLOAD_DOCUMENT = "rag:upload-document";
+export const RAG_GET_STATS = "rag:get-stats";
+export const RAG_TEST_PIPELINE = "rag:test-pipeline";
+export const RAG_GET_DOCUMENTS = "rag:get-documents";
+export const RAG_GET_DOCUMENT = "rag:get-document";
+export const RAG_UPDATE_DOCUMENT = "rag:update-document";
+export const RAG_DELETE_DOCUMENT = "rag:delete-document";
+export const RAG_GET_DOCUMENT_STATS = "rag:get-document-stats";
+export const RAG_SEARCH = "rag:search";
+export const RAG_GET_SUGGESTIONS = "rag:get-suggestions";
+export const RAG_GET_SEARCH_ANALYTICS = "rag:get-search-analytics";
+export const RAG_UPDATE_EMBEDDING_MODEL = "rag:update-embedding-model";
+export const RAG_GET_AVAILABLE_MODELS = "rag:get-available-models";
+export const RAG_TEST_EMBEDDING_SERVICE = "rag:test-embedding-service";
+export const RAG_CLEAR_CACHE = "rag:clear-cache";
+export const RAG_CLEANUP = "rag:cleanup";
+export const RAG_CHUNK_AND_EMBED_DOCUMENT = "rag:chunk-and-embed-document";
+export const RAG_DOWNLOAD_DOCUMENT = "rag:download-document";
+export const RAG_GET_DOCUMENT_ERROR_LOG = "rag:get-document-error-log";
 
 // File Dialog Channels
-export const SHOW_OPEN_DIALOG = 'show-open-dialog'
-export const GET_FILE_STATS = 'get-file-stats'
-export const SAVE_TEMP_FILE = 'save-temp-file'
-export const SAVE_TEMP_FILE_PROGRESS = 'save-temp-file:progress'
-export const SAVE_TEMP_FILE_COMPLETE = 'save-temp-file:complete'
+export const SHOW_OPEN_DIALOG = "show-open-dialog";
+export const GET_FILE_STATS = "get-file-stats";
+export const SAVE_TEMP_FILE = "save-temp-file";
+export const SAVE_TEMP_FILE_PROGRESS = "save-temp-file:progress";
+export const SAVE_TEMP_FILE_COMPLETE = "save-temp-file:complete";
 
 // AI Chat Channels
-export const AI_CHAT_MESSAGE = 'ai-chat:message'
-export const AI_CHAT_STREAM = 'ai-chat:stream'
-export const AI_CHAT_STREAM_CHUNK = 'ai-chat:stream-chunk'
-export const AI_CHAT_STREAM_COMPLETE = 'ai-chat:stream-complete'
-export const AI_CHAT_HISTORY = 'ai-chat:history'
-export const AI_CHAT_CLEAR = 'ai-chat:clear'
-export const AI_CHAT_CONVERSATIONS = 'ai-chat:conversations'
+export const AI_CHAT_MESSAGE = "ai-chat:message";
+export const AI_CHAT_STREAM = "ai-chat:stream";
+export const AI_CHAT_STREAM_STOP = "ai-chat:stream-stop";
+export const AI_CHAT_STREAM_CHUNK = "ai-chat:stream-chunk";
+export const AI_CHAT_STREAM_COMPLETE = "ai-chat:stream-complete";
+/** Resume a skill/tool call after the user granted permission in the chat UI. */
+export const AI_CHAT_RESUME_TOOL_AFTER_PERMISSION =
+  "ai-chat:resume-tool-after-permission";
+export const AI_CHAT_HISTORY = "ai-chat:history";
+export const AI_CHAT_CLEAR = "ai-chat:clear";
+export const AI_CHAT_CONVERSATIONS = "ai-chat:conversations";
+export const AI_KEYWORDS_GENERATE = "ai-keywords:generate";
+
+// MCP Tool Management Channels
+export const MCP_TOOL_LIST = "mcp:tool:list";
+export const MCP_TOOL_ADD = "mcp:tool:add";
+export const MCP_TOOL_UPDATE = "mcp:tool:update";
+export const MCP_TOOL_DELETE = "mcp:tool:delete";
+export const MCP_TOOL_DISCOVER = "mcp:tool:discover";
+export const MCP_TOOL_TOGGLE_SERVER = "mcp:tool:toggle:server";
+export const MCP_TOOL_TOGGLE_TOOL = "mcp:tool:toggle:tool";
+export const MCP_TOOL_TEST_CONNECTION = "mcp:tool:test:connection";
+
+// Skill Management Channels
+export const SKILL_CHECK_PERMISSION = "skill:check-permission";
+export const SKILL_GRANT_PERMISSION = "skill:grant-permission";
+export const SKILL_DENY_PERMISSION = "skill:deny-permission";
+export const SKILL_REVOKE_PERMISSION = "skill:revoke-permission";
+export const SKILL_GET_PERMISSION_STATUS = "skill:get-permission-status";
+
+// Skill Import & Management Channels
+export const SKILL_IMPORT = "skill:import";
+export const SKILL_LIST_INSTALLED = "skill:list-installed";
+export const SKILL_TOGGLE = "skill:toggle";
+export const SKILL_UNINSTALL = "skill:uninstall";
+
+// System Dependency Channels
+export const SYSTEM_DEPENDENCY_RESOLVE = "system-dependency:resolve";
+export const SYSTEM_DEPENDENCY_INSTALL = "system-dependency:install";
+export const SYSTEM_DEPENDENCY_GET_AUDIT_LOG =
+  "system-dependency:get-audit-log";
+/** Main→Renderer: ask user to approve a dependency install (includes resolution result). */
+export const SYSTEM_DEPENDENCY_PROMPT = "system-dependency:prompt";
+/** Renderer→Main: user responded to the dependency install prompt. */
+export const SYSTEM_DEPENDENCY_PROMPT_RESPONSE =
+  "system-dependency:prompt-response";
+
+// Dashboard Channels
+export const DASHBOARD_SUMMARY = "dashboard:summary";
+export const DASHBOARD_TRENDS = "dashboard:trends";
+export const DASHBOARD_SEARCH_ENGINES = "dashboard:search_engines";
+export const DASHBOARD_EMAIL_STATUS = "dashboard:email_status";
+
+// WebSocket Channels
+export const WEBSOCKET_EVENT = "websocket:event";
+export const WEBSOCKET_CONNECT = "websocket:connect";
+export const WEBSOCKET_DISCONNECT = "websocket:disconnect";
+export const WEBSOCKET_RECONNECT = "websocket:reconnect";
+export const WEBSOCKET_STATUS = "websocket:status";
+export const WEBSOCKET_SEND = "websocket:send";
+
+// Contact Extraction Channels
+export const START_CONTACT_EXTRACTION = "start-contact-extraction";
+export const CONTACT_EXTRACTION_PROGRESS = "contact-extraction-progress";
+export const GET_CONTACT_INFO = "get-contact-info";
+export const RETRY_CONTACT_EXTRACTION = "retry-contact-extraction";
+
+// AI Email Template Generation Channels
+export const AI_EMAIL_TEMPLATE_GENERATE_STREAM =
+  "ai-email-template:generate-stream";
+export const AI_EMAIL_TEMPLATE_GENERATE_CHUNK =
+  "ai-email-template:generate-chunk";
+export const AI_EMAIL_TEMPLATE_GENERATE_COMPLETE =
+  "ai-email-template:generate-complete";
+export const AI_EMAIL_TEMPLATE_ERROR = "ai-email-template:error";
+export const AI_EMAIL_TEMPLATE_STOP = "ai-email-template:stop";
+export const AI_EMAIL_TEMPLATE_VALIDATE = "ai-email-template:validate";
+export const AI_EMAIL_TEMPLATE_GENERATE = "ai-email-template:generate";

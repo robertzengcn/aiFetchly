@@ -15,12 +15,20 @@ jobs:
  
     steps:      
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: 20.19.3
+
+      # Python 3.12+ removed distutils; bundled node-gyp in electron-rebuild still imports it.
+      # Pin 3.11 so gyp (used by sqlite3/bufferutil rebuild) runs. Same issue as macOS setuptools fix.
+      - name: Set up Python for node-gyp
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
       - name: Calculate version
         id: calculate_version
         run: |
@@ -42,26 +50,50 @@ jobs:
           echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
         shell: bash
 
-      - name: Create .env file
+      # Use bash so .env is UTF-8 (PowerShell redirects can confuse dotenv). Forge loads .env then .env.${NODE_ENV}.
+      - name: Write .env for test build
+        shell: bash
         run: |
-          touch .env
-          echo "NODE_ENV=test" >> .env
-          cat .env    
-      - name: Create .env file 
-        run: |
-          touch .env
-          echo "VITE_REMOTEADD=${{ secrets.VITE_REMOTEADD_TEST }}" >> .env 
-          echo "VITE_LOGIN_URL=${{ secrets.VITE_LOGIN_URL_TEST }}" >> .env
-          echo "UPDATESERVER=${{ secrets.UPDATESERVER }}" >> .env
-          cat .env       
+          set -euo pipefail
+          if [ -z "${{ secrets.VITE_LOGIN_URL_TEST }}" ]; then
+            echo "::error::secrets.VITE_LOGIN_URL_TEST is empty. Add it in repo Settings > Secrets, or fork PRs cannot use secrets."
+            exit 1
+          fi
+          {
+            echo "NODE_ENV=test"
+            echo "VITE_LOGIN_URL=${{ secrets.VITE_LOGIN_URL_TEST }}"
+            echo "UPDATESERVER=${{ secrets.UPDATESERVER }}"
+          } > .env
+          cp .env .env.test
+          if ! grep -qE '^VITE_LOGIN_URL=.' .env; then
+            echo "::error::.env has empty VITE_LOGIN_URL after write"
+            exit 1
+          fi
+          echo "OK: .env and .env.test written (VITE_LOGIN_URL non-empty)"
       - name: Install dependencies
         run: yarn install
+      # - name: Run postinstall script
+      #   run: yarn postinstall
+      - name: Debug - Verify lzma-native assets
+        shell: bash
+        run: |
+          if [ -d node_modules/lzma-native/deps ]; then
+            echo "Found lzma-native deps directory"
+            ls -la node_modules/lzma-native/deps
+            ls -la node_modules/lzma-native/deps | grep xz- || true
+          else
+            echo "lzma-native deps directory not found"
+          fi
       - name: Rebuild electron
-        run: yarn electron-rebuild --force --types prod,dev,optional --module-dir .         
+        # isolated-vm@6.1.2 cannot compile against Electron 35 V8 13.5 (upstream issue: laverdet/isolated-vm#528).
+        # Exclude it from rebuild; the module is also excluded in forge.config.js rebuildConfig.onlyModules.
+        run: yarn electron-rebuild --force --types prod,dev,optional --module-dir . --excluded-modules isolated-vm
       - name: Rebuild sqlite3
         run: yarn rebuild-sqlite3
       - name: Rebuild better sqlite
         run: yarn rebuild-better-sqlite
+      # - name: Rebuild canvas
+      #   run: yarn rebuild-canvas
 
       # NEW: Build standalone uninstaller
       - name: Build standalone uninstaller
@@ -95,7 +127,6 @@ jobs:
           cd installer-scripts
           
           # Install dependencies for uninstaller including pkg
-          # yarn install --no-lockfile
           yarn add pkg
           
           # Build the uninstaller executable
@@ -110,8 +141,20 @@ jobs:
             exit 1
           }
           
+          # Copy uninstaller to project root for easier access
+          Copy-Item "uninstall.exe" "../uninstall.exe"
+          
           # Go back to project root
           cd ..
+          
+          # Verify uninstaller is in project root
+          if (Test-Path "uninstall.exe") {
+            echo "✅ Uninstaller copied to project root"
+            Get-ChildItem "uninstall.exe" | Format-Table Name, Length, LastWriteTime
+          } else {
+            echo "❌ Failed to copy uninstaller to project root"
+            exit 1
+          }
         shell: pwsh
 
       - name: Install WiX Toolset
@@ -124,6 +167,9 @@ jobs:
       - name: Build application
         run: |
           echo "Current working directory: $(pwd)"
+          # Increase Node.js heap size to prevent out-of-memory errors during build
+          export NODE_OPTIONS="--max-old-space-size=4096"
+          echo "Building with increased heap size (4GB)"
           yarn make-win:test
         shell: bash
 
@@ -137,7 +183,22 @@ jobs:
           
           # Check if uninstaller was included in the installer
           echo "Checking installer contents..."
-          # This would depend on how WiX includes the uninstaller
+          
+          # Check for uninstaller in the project root
+          if (Test-Path "uninstall.exe") {
+            echo "✅ Uninstaller found in project root"
+            Get-ChildItem "uninstall.exe" | Format-Table Name, Length, LastWriteTime
+          } else {
+            echo "❌ Uninstaller not found in project root"
+          }
+          
+          # Check for uninstaller in installer-scripts directory
+          if (Test-Path "installer-scripts/uninstall.exe") {
+            echo "✅ Uninstaller found in installer-scripts directory"
+            Get-ChildItem "installer-scripts/uninstall.exe" | Format-Table Name, Length, LastWriteTime
+          } else {
+            echo "❌ Uninstaller not found in installer-scripts directory"
+          }
         shell: pwsh
 
       - name: Upload artifact
@@ -159,13 +220,32 @@ jobs:
     steps:
       - name: Set up C++20 environment
         run: |
-          echo "CXXFLAGS=-std=c++20" >> $GITHUB_ENV
-          echo "CFLAGS=-std=c11" >> $GITHUB_ENV
+          ARCH="$(uname -m)"
+          echo "Detected host architecture: ${ARCH}"
+          if [ "$ARCH" = "arm64" ]; then
+            TARGET_ARCH="arm64"
+            ARCH_FLAGS="-arch arm64"
+            HOMEBREW_PREFIX="/opt/homebrew"
+          else
+            TARGET_ARCH="x86_64"
+            ARCH_FLAGS="-arch x86_64"
+            HOMEBREW_PREFIX="/usr/local"
+          fi
+          echo "Using target architecture: ${TARGET_ARCH}"
+          echo "ARCH_FLAGS=${ARCH_FLAGS}" >> $GITHUB_ENV
+          echo "TARGET_ARCH=${TARGET_ARCH}" >> $GITHUB_ENV
+          echo "HOMEBREW_PREFIX=${HOMEBREW_PREFIX}" >> $GITHUB_ENV
+          echo "CXXFLAGS=-std=c++20 ${ARCH_FLAGS}" >> $GITHUB_ENV
+          echo "CFLAGS=-std=c11 ${ARCH_FLAGS}" >> $GITHUB_ENV
           echo "CXX=clang++" >> $GITHUB_ENV
           echo "CC=clang" >> $GITHUB_ENV
-          echo "LDFLAGS=-std=c++20" >> $GITHUB_ENV
+          echo "LDFLAGS=-std=c++20 ${ARCH_FLAGS}" >> $GITHUB_ENV
           echo "npm_config_target_platform=darwin" >> $GITHUB_ENV
-          echo "npm_config_target_arch=x64" >> $GITHUB_ENV
+          echo "npm_config_arch=${TARGET_ARCH}" >> $GITHUB_ENV
+          echo "npm_config_target_arch=${TARGET_ARCH}" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig" >> $GITHUB_ENV
+          echo "LIBLZMA_CFLAGS=-I${HOMEBREW_PREFIX}/include" >> $GITHUB_ENV
+          echo "LIBLZMA_LIBS=-L${HOMEBREW_PREFIX}/lib -llzma" >> $GITHUB_ENV
 
       # Make sure to use a recent Xcode version
       - name: List available Xcode versions
@@ -182,10 +262,10 @@ jobs:
           clang++ -E -x c++ - -o - <<< '#include <version>' | grep -i "c++" || echo "C++ version info not available"
 
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: 20.19.3
       - name: Calculate version
@@ -209,26 +289,77 @@ jobs:
           echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
         shell: bash
 
-      - name: Create .env file
+      - name: Write .env for test build
+        shell: bash
         run: |
-            touch .env
-            echo "NODE_ENV=test" >> .env
-            cat .env               
-      - name: Create .env file 
-        run: |
-            touch .env  
-            echo VITE_REMOTEADD=${{ secrets.VITE_REMOTEADD_TEST }} >> .env
-            echo "VITE_LOGIN_URL=${{ secrets.VITE_LOGIN_URL_TEST }}" >> .env
-            echo "UPDATESERVER=${{ secrets.UPDATESERVER }}" >> .env
-            cat .env
+          set -euo pipefail
+          if [ -z "${{ secrets.VITE_LOGIN_URL_TEST }}" ]; then
+            echo "::error::secrets.VITE_LOGIN_URL_TEST is empty. Add it in repo Settings > Secrets, or fork PRs cannot use secrets."
+            exit 1
+          fi
+          {
+            echo "NODE_ENV=test"
+            echo "VITE_LOGIN_URL=${{ secrets.VITE_LOGIN_URL_TEST }}"
+            echo "UPDATESERVER=${{ secrets.UPDATESERVER }}"
+          } > .env
+          cp .env .env.test
+          if ! grep -qE '^VITE_LOGIN_URL=.' .env; then
+            echo "::error::.env has empty VITE_LOGIN_URL after write"
+            exit 1
+          fi
+          echo "OK: .env and .env.test written (VITE_LOGIN_URL non-empty)"
       - name: Install setuptools
         run: |
-            brew install python-setuptools           
-              
+            brew install python-setuptools                 
+      - name: Install system dependencies for native modules
+        run: |
+            brew install xz pkg-config
+            echo "Installed xz (liblzma) and pkg-config"         
+      - name: Verify liblzma installation
+        run: |
+            echo "=== Verifying liblzma installation ==="
+            which xz || echo "xz not found in PATH"
+            pkg-config --exists liblzma && echo "✅ liblzma found via pkg-config" || echo "❌ liblzma not found via pkg-config"
+            pkg-config --modversion liblzma || echo "Could not get liblzma version"
+            pkg-config --cflags liblzma || echo "Could not get liblzma CFLAGS"
+            pkg-config --libs liblzma || echo "Could not get liblzma LIBS"
+            HOMEBREW_PREFIX="${HOMEBREW_PREFIX:-/opt/homebrew}"
+            ls -la ${HOMEBREW_PREFIX}/lib/liblzma* || ls -la /usr/local/lib/liblzma* || echo "liblzma libraries not found"
+            ls -la ${HOMEBREW_PREFIX}/include/lzma* || ls -la /usr/local/include/lzma* || echo "liblzma headers not found"
+      - name: Set Homebrew Paths for Native Modules
+        run: |
+          echo "CFLAGS=-I/opt/homebrew/include" >> $GITHUB_ENV
+          echo "LDFLAGS=-L/opt/homebrew/lib" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig" >> $GITHUB_ENV        
       - name: Install dependencies
         run: yarn install
+      # - name: Run postinstall script
+      #   run: yarn postinstall
       - name: Install DMG maker
         run: yarn add --dev @electron-forge/maker-dmg
+      - name: Verify required assets exist
+        run: |
+          echo "=== Verifying required macOS build assets ==="
+          ls -la src/assets/images/icon.icns && echo "✅ icon.icns found" || echo "❌ icon.icns NOT found"
+
+          # Create DMG background if missing
+          if [ ! -f "src/assets/images/dmg-background.png" ]; then
+            echo "⚠️ dmg-background.png not found, creating default background..."
+            # Create a simple 540x380 gray background for DMG
+            mkdir -p src/assets/images
+            # Use ImageMagick or a simple approach to create a PNG
+            # Since we don't have ImageMagick, we'll copy icon.png as fallback
+            if [ -f "src/assets/images/icon.png" ]; then
+              cp src/assets/images/icon.png src/assets/images/dmg-background.png
+              echo "✅ Created dmg-background.png from icon.png (fallback)"
+            else
+              echo "❌ No suitable image for DMG background"
+            fi
+          else
+            echo "✅ dmg-background.png found"
+          fi
+
+          ls -la src/assets/images/icon.png && echo "✅ icon.png found" || echo "❌ icon.png NOT found"
       - name: Clean previous builds
         run: |
           rm -rf node_modules/.cache
@@ -249,6 +380,10 @@ jobs:
           echo "LDFLAGS: $LDFLAGS"
           echo "npm_config_target_platform: $npm_config_target_platform"
           echo "npm_config_target_arch: $npm_config_target_arch"
+          echo "npm_config_arch: $npm_config_arch"
+          echo "TARGET_ARCH: $TARGET_ARCH"
+          echo "ARCH_FLAGS: $ARCH_FLAGS"
+          echo "HOMEBREW_PREFIX: $HOMEBREW_PREFIX"
           echo "Platform: $(uname -s)"
           echo "Architecture: $(uname -m)"
       - name: Update native modules to latest versions
@@ -258,45 +393,81 @@ jobs:
       - name: Set C++20 environment for build
         run: |
           echo "=== Setting C++20 environment ==="
-          export CXXFLAGS="-std=c++20"
-          export CFLAGS="-std=c11"
+          ARCH_FLAGS="${ARCH_FLAGS:-}"
+          TARGET_ARCH="${TARGET_ARCH:-$(uname -m)}"
+          HOMEBREW_PREFIX="${HOMEBREW_PREFIX:-/opt/homebrew}"
+          export CXXFLAGS="-std=c++20 ${ARCH_FLAGS}"
+          export CFLAGS="-std=c11 ${ARCH_FLAGS}"
           export CXX="clang++"
           export CC="clang"
-          export LDFLAGS="-std=c++20"
+          export LDFLAGS="-std=c++20 ${ARCH_FLAGS}"
           export npm_config_target_platform="darwin"
-          export npm_config_target_arch="x64"
+          export npm_config_arch="${TARGET_ARCH}"
+          export npm_config_target_arch="${TARGET_ARCH}"
+          export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig"
+          export LIBLZMA_CFLAGS="-I${HOMEBREW_PREFIX}/include"
+          export LIBLZMA_LIBS="-L${HOMEBREW_PREFIX}/lib -llzma"
           echo "Environment variables set:"
           echo "CXXFLAGS: $CXXFLAGS"
           echo "CFLAGS: $CFLAGS"
           echo "CXX: $CXX"
           echo "CC: $CC"
+          echo "PKG_CONFIG_PATH: $PKG_CONFIG_PATH"
+          echo "LIBLZMA_CFLAGS: $LIBLZMA_CFLAGS"
+          echo "LIBLZMA_LIBS: $LIBLZMA_LIBS"
+          echo "ARCH_FLAGS: $ARCH_FLAGS"
           echo "npm_config_target_platform: $npm_config_target_platform"
+          echo "npm_config_arch: $npm_config_arch"
           echo "npm_config_target_arch: $npm_config_target_arch"
-      - name: Download Electron headers
+      - name: Rebuild Native Modules for Electron
         run: |
-          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" npx electron-rebuild --force --types prod,dev,optional --module-dir .
-      - name: Rebuild native modules
-        run: |
-          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" npx electron-rebuild
+          # Export all flags so the 'make' subprocess inherits them
+          export CFLAGS="-std=c11 -arch arm64 -I/opt/homebrew/include"
+          export CXXFLAGS="-std=c++20 -arch arm64 -I/opt/homebrew/include"
+          export LDFLAGS="-L/opt/homebrew/lib -arch arm64 -std=c++20"
+
+          # This helps find the .pc files
+          export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig"
+
+          # Critical: Ensure node-gyp uses C++20 standard
+          export npm_config_target="35.7.5"
+          export npm_config_disturl="https://electronjs.org/headers"
+
+          # Now run the rebuild with explicit C++20 support.
+          # isolated-vm@6.1.2 cannot compile against Electron 35 V8 13.5 (upstream issue: laverdet/isolated-vm#528).
+          npx electron-rebuild --force --arch="${TARGET_ARCH}" --types prod,dev,optional --module-dir . --excluded-modules isolated-vm || {
+            echo "Standard rebuild failed, trying with alternative flags..."
+            # Try skipping problematic modules
+            npx electron-rebuild --force --arch="${TARGET_ARCH}" -w better-sqlite3,sqlite3,bufferutil,utf-8-validate || echo "Selective rebuild also failed"
+          }
+        env:
+          # Ensure this is set for the step
+          TARGET_ARCH: arm64
       - name: Rebuild sqlite3
         run: |
           CXXFLAGS="-std=c++20" CFLAGS="-std=c11" yarn rebuild-sqlite3
       - name: Rebuild better sqlite
         run: |
           CXXFLAGS="-std=c++20" CFLAGS="-std=c11" yarn rebuild-better-sqlite    
+      # - name: Rebuild canvas
+      #   run: |
+      #     CXXFLAGS="-std=c++20" CFLAGS="-std=c11" yarn rebuild-canvas
       - name: yarn electron-rebuild
         run: |
-          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" yarn electron-rebuild
+          TARGET_ARCH="${TARGET_ARCH:-$(uname -m)}"
+          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" yarn electron-rebuild --arch="${TARGET_ARCH}" --excluded-modules isolated-vm
       - name: Rebuild with verbose output
         run: |
           echo "=== Rebuilding with verbose output ==="
-          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" DEBUG=* npx electron-rebuild --force --verbose || echo "Verbose rebuild failed, continuing..."
+          TARGET_ARCH="${TARGET_ARCH:-$(uname -m)}"
+          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" DEBUG=* npx electron-rebuild --force --arch="${TARGET_ARCH}" --verbose --excluded-modules isolated-vm || echo "Verbose rebuild failed, continuing..."
       - name: Rebuild C modules specifically
         run: |
           echo "=== Rebuilding C modules specifically ==="
           # Rebuild bufferutil and utf-8-validate which are C modules
-          CFLAGS="-std=c11" yarn electron-rebuild -f -w bufferutil || echo "bufferutil rebuild failed"
-          CFLAGS="-std=c11" yarn electron-rebuild -f -w utf-8-validate || echo "utf-8-validate rebuild failed"
+          TARGET_ARCH="${TARGET_ARCH:-$(uname -m)}"
+          CFLAGS="-std=c11" yarn electron-rebuild --arch="${TARGET_ARCH}" -f -w bufferutil --excluded-modules isolated-vm || echo "bufferutil rebuild failed"
+          CFLAGS="-std=c11" yarn electron-rebuild --arch="${TARGET_ARCH}" -f -w utf-8-validate --excluded-modules isolated-vm || echo "utf-8-validate rebuild failed"
       - name: Debug - Check native modules
         run: |
           echo "=== Checking native modules ==="
@@ -313,27 +484,136 @@ jobs:
       - name: Build application
         run: |
           echo "Current working directory: $(pwd)"
-          yarn make-mac:test
+          echo "=== Starting macOS build process ==="
+
+          # Set environment variables to ensure build output goes to expected location
+          export NODE_ENV=test
+
+          # Increase Node.js heap size to prevent out-of-memory errors during build
+          # The renderer build (Vite + Vue) requires significant memory
+          export NODE_OPTIONS="--max-old-space-size=4096"
+
+          echo "Node.js heap size set to 4GB"
+          echo "NODE_OPTIONS: $NODE_OPTIONS"
+
+          # Clean any previous build artifacts
+          rm -rf out/ || true
+
+          # Try to build with electron-forge make (creates both DMG and ZIP)
+          echo "Running: yarn make-mac:test"
+          yarn make-mac:test 2>&1 | tee build.log
+
+          BUILD_EXIT_CODE=${PIPESTATUS[0]}
+          echo "=== Build process completed ==="
+          echo "Build exit code: ${BUILD_EXIT_CODE}"
+
+          # If build failed, show the error from the log
+          if [ ${BUILD_EXIT_CODE} -ne 0 ]; then
+            echo "❌ Build command failed with exit code ${BUILD_EXIT_CODE}"
+            echo "=== Checking build log for errors ==="
+            grep -i "error\|fail\|cannot" build.log | tail -20 || echo "No obvious error messages found"
+            echo ""
+            echo "=== Last 100 lines of build log ==="
+            tail -100 build.log
+          fi
+
+          # Check if build produced any output
+          if [ -d "out" ]; then
+            echo "✅ Build created 'out' directory"
+            echo "=== Contents of 'out' directory ==="
+            ls -laR out/ | head -100 || true
+            echo ""
+            echo "=== Searching for all build artifacts ==="
+            find out -type f 2>/dev/null | head -50 || echo "No files found"
+            echo ""
+            echo "=== Checking for specific file types ==="
+            echo "DMG files:"
+            find out -type f -name "*.dmg" 2>/dev/null || echo "  No DMG files found"
+            echo "ZIP files:"
+            find out -type f -name "*.zip" 2>/dev/null || echo "  No ZIP files found"
+            echo "APP bundles:"
+            find out -type d -name "*.app" 2>/dev/null || echo "  No APP bundles found"
+
+            # If no DMG/ZIP but APP exists, try to run makers explicitly
+            if find out -type d -name "*.app" 2>/dev/null | grep -q .; then
+              if ! find out -type f \( -name "*.dmg" -o -name "*.zip" \) 2>/dev/null | grep -q .; then
+                echo ""
+                echo "⚠️ APP bundle found but no distributables (DMG/ZIP)"
+                echo "Checking build log for maker errors..."
+                echo "=== Last 50 lines of build log ==="
+                tail -50 build.log
+
+                echo ""
+                echo "Attempting to run makers explicitly with --skip-package..."
+
+                # Try running makers using electron-forge make with --skip-package
+                # This skips packaging and only runs the makers
+                yarn electron-forge make --skip-package 2>&1 | tee -a build.log || echo "Makers failed again"
+
+                echo "=== After running makers explicitly ==="
+                find out -type f \( -name "*.dmg" -o -name "*.zip" \) 2>/dev/null || echo "Still no distributables"
+
+                # Last resort: Try to create DMG manually using hdiutil
+                if [ -d "out/aiFetchly-darwin-arm64/aiFetchly.app" ]; then
+                  echo ""
+                  echo "Last resort: Creating DMG manually using hdiutil..."
+                  mkdir -p out/make
+                  hdiutil create -volname "aiFetchly" -srcfolder "out/aiFetchly-darwin-arm64/aiFetchly.app" -ov -format UDZO "out/make/aiFetchly.dmg" || echo "Manual DMG creation failed"
+                fi
+              fi
+            fi
+          else
+            echo "❌ Build failed - no 'out' directory created"
+            echo "=== Last 100 lines of build log ==="
+            tail -100 build.log
+            exit 1
+          fi
+
+          # Exit with the actual build exit code
+          exit ${BUILD_EXIT_CODE}
       - name: Fallback build if main build fails
         if: failure()
         run: |
           echo "=== Trying fallback build approach ==="
-          # Try building without some problematic native modules
+
+          # Increase Node.js heap size for fallback builds as well
+          export NODE_OPTIONS="--max-old-space-size=4096"
+
+          # Try to use electron-forge package instead of make
+          echo "Attempting package-only build..."
           yarn package || echo "Package command failed"
-          # Try building with different flags
-          CXXFLAGS="-std=c++17" CFLAGS="-std=c11" yarn make-mac:test || echo "Fallback build also failed"
+
+          # Try to create only ZIP if DMG fails
+          echo "Attempting ZIP-only build..."
+          yarn make --platform=darwin --arch="${TARGET_ARCH}" || echo "ZIP build failed"
   
-      - name: Debug - List out directory contents
+      - name: Verify electron-forge makers
         run: |
-          echo "=== Contents of out directory ==="
-          ls -la out/
-          echo "=== Contents of out/make directory ==="
-          ls -la out/make/ || echo "out/make directory does not exist"
-          echo "=== Contents of out directory recursively ==="
-          find out/ -type f -name "*.dmg" -o -name "*.zip" -o -name "*.app" || echo "No DMG, ZIP, or APP files found"
-  
+          echo "=== Checking available electron-forge makers ==="
+          echo "Makers in node_modules:"
+          ls -la node_modules/@electron-forge/ | grep maker || echo "No makers found"
+          echo ""
+          echo "Checking if @electron-forge/maker-dmg is installed:"
+          npm list @electron-forge/maker-dmg 2>&1 || echo "Not installed"
+          echo ""
+          echo "Checking if @electron-forge/maker-zip is installed:"
+          npm list @electron-forge/maker-zip 2>&1 || echo "Not installed"
+          echo ""
+          echo " forge.config.js makers config:"
+          grep -A 30 "makers:" forge.config.js || echo "No makers config found"
+
+      - name: Upload build log for debugging
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-build-log-v${{ steps.calculate_version.outputs.version }}
+          path: build.log
+          if-no-files-found: ignore
+
       - name: Upload artifact
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: electron-app-macos-v${{ steps.calculate_version.outputs.version }}
-          path: out/make
+          path: out/
+          if-no-files-found: error

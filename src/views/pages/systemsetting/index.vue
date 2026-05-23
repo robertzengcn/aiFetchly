@@ -6,8 +6,30 @@
         <v-card>
           <v-card-title>{{ t('system_settings.title') }}</v-card-title>
           <v-card-text>
-            <v-treeview :items="groupItems" color="warning" activatable open-all item-value="id" item-title="name"
+            <v-treeview
+:items="groupItems" color="warning" activatable open-all item-value="id" item-title="name"
               item-children="children" v-model:activated="activeGroups" />
+            <v-divider class="my-4"></v-divider>
+            <v-btn
+              color="primary"
+              variant="outlined"
+              block
+              @click="navigateToMCP"
+              class="mb-2"
+            >
+              <v-icon left>mdi-toolbox</v-icon>
+              {{ t('system_settings.manage_mcp_tools') }}
+            </v-btn>
+            <v-btn
+              color="primary"
+              variant="outlined"
+              block
+              @click="navigateToSkills"
+              class="mb-2"
+            >
+              <v-icon left>mdi-view-dashboard</v-icon>
+              {{ t('system_settings.manage_skills') }}
+            </v-btn>
           </v-card-text>
         </v-card>
       </v-col>
@@ -21,7 +43,8 @@
           <v-card-text v-if="selectedGroup">
               <p>{{ t('system_settings.' + selectedGroup.description) }}</p>
             <v-list>
-              <v-list-item v-for="setting in settinglist" :key="setting.id"
+              <v-list-item
+v-for="setting in settinglist" :key="setting.id"
               :class="{ 'highlighted-item': setting.id === selectItemid }"
               >
                 <v-list-item-content>
@@ -35,22 +58,24 @@
                 <v-list-item>
                   <!-- Determine the input component based on setting.type -->
                   <div v-if="setting.type === 'input'" class="mt-3">
-                    <v-text-field density="compact" :value="setting.value" variant="outlined" single-line class="shrink"
+                    <v-text-field
+density="compact" :value="setting.value" variant="outlined" single-line class="shrink"
                       style="width: 100%;" type="text"
                       :loading="loadingSettings[setting.id]"
-                      @update:modelValue="updateSetting(setting.id, $event)"
+                      @update:model-value="updateSetting(setting.id, $event)"
                       >
                     </v-text-field>
                     <v-divider></v-divider>
                   </div>
 
                   <div v-else-if="setting.type === 'select'">
-                    <v-select :items="setting.options || []" 
+                    <v-select
+:items="setting.options || []" 
                     :value="setting.value" 
                     variant="outlined" 
                     density="compact"
                     :loading="loadingSettings[setting.id]"
-                      @update:modelValue="updateSetting(setting.id, $event)"
+                      @update:model-value="updateSetting(setting.id, $event)"
                       >
                     </v-select>
                     <v-divider></v-divider>
@@ -71,10 +96,12 @@
                   </div>
 
                   <div v-else-if="setting.type === 'radio'">
-                    <v-radio-group :model-value="setting.value"
-                      @update:modelValue="updateSetting(setting.id, $event)"
+                    <v-radio-group
+:model-value="setting.value"
+                      @update:model-value="updateSetting(setting.id, $event)"
                     >
-                      <v-radio v-for="(opt, idx) in setting.options || []" :key="idx" :label="opt.optionLabel"  
+                      <v-radio
+v-for="(opt, idx) in setting.options || []" :key="idx" :label="opt.optionLabel"  
                       :value="opt.optionValue" />
                     </v-radio-group>
                     <v-divider></v-divider>
@@ -90,7 +117,7 @@
                     <v-switch
                       :model-value="setting.value === '1'"
                       :loading="loadingSettings[setting.id]"
-                      @update:modelValue="updateSetting(setting.id, $event ? '1' : '0')"
+                      @update:model-value="updateSetting(setting.id, $event ? '1' : '0')"
                       color="primary"
                       hide-details
                     ></v-switch>
@@ -100,9 +127,10 @@
 
                   <!-- Default to text input if the type is unrecognized -->
                   <div v-else>
-                    <v-text-field :value="setting.value" variant="outlined" density="compact"
+                    <v-text-field
+:value="setting.value" variant="outlined" density="compact"
                      :loading="loadingSettings[setting.id]"
-                     @update:modelValue="updateSetting(setting.id, $event)"></v-text-field>
+                     @update:model-value="updateSetting(setting.id, $event)"></v-text-field>
                       <v-divider></v-divider>
                   </div>
                 </v-list-item>
@@ -124,12 +152,14 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { useRouter } from 'vue-router';
 import { SystemSettingDisplay, SystemSettingGroupDisplay, OptionSettingDisplay } from "@/entityTypes/systemsettingType";
 import { getSystemSettinglist, updateSystemSetting, updateSystemSettingWithValidation } from "@/views/api/systemsetting";
 import { updateLanguagePreference } from '@/views/api/language';
 import { language_preference } from '@/config/settinggroupInit';
 // i18n setup
 const { t, locale } = useI18n();
+const router = useRouter();
 import { chooseFileDialog } from "@/views/api/common"
 
 // Store references for settings, groups, and tree state
@@ -327,6 +357,14 @@ async function openFileDialog(settingId: number) {
   }catch(error){
     console.error('Failed to open file dialog:', error);
   }
+}
+
+function navigateToMCP() {
+  router.push({ name: 'system_setting_mcp' });
+}
+
+function navigateToSkills() {
+  router.push({ name: 'system_setting_skills' });
 }
 
 onMounted(() => {
