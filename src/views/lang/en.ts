@@ -1515,5 +1515,11 @@ export default {
     error_search_failed: "Search failed: {error}",
     view_on_maps: "View on Google Maps",
     reviews_count: "{count} reviews",
+    history_tab: "History",
+    history_empty: "No search history yet",
+    col_date: "Date",
+    col_actions: "Actions",
+    view_results: "View",
+    delete_btn: "Delete",
   },
 };
