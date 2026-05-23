@@ -19,6 +19,7 @@ import {
   GOOGLE_MAPS_DEFAULT_MAX_RESULTS,
   GOOGLE_MAPS_HARD_CAP,
 } from "@/entityTypes/googleMapsTypes";
+import { GoogleMapsModule } from "@/modules/GoogleMapsModule";
 
 /**
  * Rate limiting configuration for tool execution
@@ -1185,8 +1186,7 @@ export class ToolExecutor {
   }
 
   /**
-   * Execute Google Maps business search.
-   * Phase 1 stub — returns "not yet implemented" until GoogleMapsModule is added in Phase 2.
+   * Execute Google Maps business search using GoogleMapsModule.
    */
   private static async executeGoogleMapsSearch(
     toolParams: Record<string, unknown>
@@ -1218,15 +1218,36 @@ export class ToolExecutor {
       GOOGLE_MAPS_HARD_CAP
     );
 
-    // Phase 1 stub — GoogleMapsModule will be implemented in Phase 2
-    return {
-      success: false,
-      error:
-        "Google Maps scraping is not yet implemented. This skill is registered but the scraping module has not been built.",
-      query,
-      location,
-      max_results: clampedMaxResults,
-    };
+    try {
+      const module = new GoogleMapsModule();
+      const result = await module.executeSearch({
+        query: query.trim(),
+        location: location.trim(),
+        max_results: clampedMaxResults,
+        include_website:
+          typeof toolParams.include_website === "boolean"
+            ? toolParams.include_website
+            : true,
+        include_reviews:
+          typeof toolParams.include_reviews === "boolean"
+            ? toolParams.include_reviews
+            : false,
+        show_browser:
+          typeof toolParams.show_browser === "boolean"
+            ? toolParams.show_browser
+            : false,
+      });
+
+      return result as unknown as Record<string, unknown>;
+    } catch (error) {
+      return {
+        success: false,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Unknown error executing Google Maps search",
+      };
+    }
   }
 
   /**

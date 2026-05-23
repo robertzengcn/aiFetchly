@@ -180,7 +180,7 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
     // Launch browser
     sendProgress(requestId, "launching", 0, maxResults, "Launching browser...");
     browser = await launch({
-      headless: !showBrowser ? "new" : false,
+      headless: !showBrowser,
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
@@ -200,17 +200,13 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
 
     // Navigate to Google Maps search
     sendProgress(requestId, "loading", 0, maxResults, "Loading Google Maps...");
-    const searchUrl = `https://www.google.com/maps/search/${encodeURIComponent(query)}+${encodeURIComponent(location)}`;
+    const searchUrl = `https://www.google.com/maps/search/${encodeURIComponent(
+      query
+    )}+${encodeURIComponent(location)}`;
     await page.goto(searchUrl, { waitUntil: "networkidle2", timeout: 30000 });
 
     // Wait for results feed to load
-    sendProgress(
-      requestId,
-      "loading",
-      0,
-      maxResults,
-      "Waiting for results..."
-    );
+    sendProgress(requestId, "loading", 0, maxResults, "Waiting for results...");
 
     try {
       await page.waitForSelector('[role="feed"]', { timeout: 15000 });
@@ -244,7 +240,10 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
     let noNewCardsCount = 0;
     const maxNoNewCards = 3;
 
-    while (collectedCards.length < maxResults && noNewCardsCount < maxNoNewCards) {
+    while (
+      collectedCards.length < maxResults &&
+      noNewCardsCount < maxNoNewCards
+    ) {
       if (isCancelled) {
         sendProgress(
           requestId,
@@ -356,21 +355,21 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
         }
 
         // Go back to results list
-        await page.goBack({ waitUntil: "networkidle2", timeout: 10000 }).catch(
-          async () => {
+        await page
+          .goBack({ waitUntil: "networkidle2", timeout: 10000 })
+          .catch(async () => {
             // If goBack fails, re-navigate
             await page.goto(searchUrl, {
               waitUntil: "networkidle2",
               timeout: 30000,
             });
-          }
-        );
+          });
         await randomDelay(800, 1500);
 
         // Wait for feed again
-        await page.waitForSelector('[role="feed"]', { timeout: 10000 }).catch(
-          () => {}
-        );
+        await page
+          .waitForSelector('[role="feed"]', { timeout: 10000 })
+          .catch(() => {});
       } catch (err) {
         console.error(`Error extracting card ${i}:`, err);
         // Continue to next card
@@ -407,8 +406,7 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
 
     send({ type: "result", requestId, success: true, data: result });
   } catch (err) {
-    const errorMessage =
-      err instanceof Error ? err.message : String(err);
+    const errorMessage = err instanceof Error ? err.message : String(err);
     send({
       type: "result",
       requestId,
@@ -430,11 +428,7 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
 async function extractBusinessData(
   page: Page
 ): Promise<GoogleMapsBusinessResult> {
-  const name = await extractText(
-    page,
-    'h1[class*="fontHeadline"]',
-    "h1"
-  );
+  const name = await extractText(page, 'h1[class*="fontHeadline"]', "h1");
 
   const ratingText = await extractAriaLabel(
     page,
@@ -471,19 +465,16 @@ async function extractBusinessData(
     page,
     'button[data-item-id*="phone"]'
   );
-  const phoneText = await extractText(
-    page,
-    'button[data-item-id*="phone"]'
-  );
+  const phoneText = await extractText(page, 'button[data-item-id*="phone"]');
   const phone = phoneAria ?? phoneText;
 
   let website: string | undefined;
   try {
-    const websiteEl = await page.$(
-      'a[data-item-id*="authority"]'
-    );
+    const websiteEl = await page.$('a[data-item-id*="authority"]');
     if (websiteEl) {
-      website = await websiteEl.evaluate((e) => e.getAttribute("href") ?? undefined);
+      website = await websiteEl.evaluate(
+        (e) => e.getAttribute("href") ?? undefined
+      );
       await websiteEl.dispose();
     }
   } catch {
@@ -546,18 +537,16 @@ function buildSummary(
     return `No businesses found for "${query}" in "${location}".`;
   }
 
-  const lines = results
-    .slice(0, 10)
-    .map((r, i) => {
-      const parts = [`${i + 1}. **${r.name}**`];
-      if (r.category) parts.push(`(${r.category})`);
-      if (r.rating) parts.push(`- Rating: ${r.rating}`);
-      if (r.review_count) parts.push(`(${r.review_count} reviews)`);
-      if (r.address) parts.push(`- ${r.address}`);
-      if (r.phone) parts.push(`- Tel: ${r.phone}`);
-      if (r.website) parts.push(`- Website: ${r.website}`);
-      return parts.join(" ");
-    });
+  const lines = results.slice(0, 10).map((r, i) => {
+    const parts = [`${i + 1}. **${r.name}**`];
+    if (r.category) parts.push(`(${r.category})`);
+    if (r.rating) parts.push(`- Rating: ${r.rating}`);
+    if (r.review_count) parts.push(`(${r.review_count} reviews)`);
+    if (r.address) parts.push(`- ${r.address}`);
+    if (r.phone) parts.push(`- Tel: ${r.phone}`);
+    if (r.website) parts.push(`- Website: ${r.website}`);
+    return parts.join(" ");
+  });
 
   const header = `Found ${results.length} businesses for "${query}" in "${location}":\n\n`;
   const footer =
@@ -579,7 +568,9 @@ process.on("message", (msg: WorkerMessage) => {
         type: "result",
         requestId: msg.requestId,
         success: false,
-        error: `Worker crashed: ${err instanceof Error ? err.message : String(err)}`,
+        error: `Worker crashed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
       });
     });
   } else if (msg.type === "cancel") {
