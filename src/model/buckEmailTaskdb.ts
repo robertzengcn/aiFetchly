@@ -27,8 +27,8 @@ export class BuckEmailTaskdb {
   }
   create(task: BuckemailEntity): number {
     const stmt = this.db.prepare(`
-            INSERT INTO ${this.buckemailTaskTable} (type, status, record_time, log_file, error_file, emailtaskentityId, email_list_json, notduplicate)
-            VALUES (@type, @status, @record_time, @log_file, @error_file, @emailtaskentityId, @email_list_json, @notduplicate)
+            INSERT INTO ${this.buckemailTaskTable} (type, status, record_time, log_file, error_file, emailtaskentityId, email_list_json, email_subject, email_html_content, notduplicate)
+            VALUES (@type, @status, @record_time, @log_file, @error_file, @emailtaskentityId, @email_list_json, @emailSubject, @emailHtmlContent, @notduplicate)
         `);
     const info = stmt.run({
       type: task.type,
@@ -54,7 +54,8 @@ export class BuckEmailTaskdb {
     const stmt = this.db.prepare(`
             UPDATE ${this.buckemailTaskTable}
             SET type = @type, record_time = @record_time, status = @status, log_file = @log_file, error_file = @error_file,
-                emailtaskentityId = @emailtaskentityId, email_list_json = @email_list_json, notduplicate = @notduplicate
+                emailtaskentityId = @emailtaskentityId, email_list_json = @email_list_json,
+                email_subject = @emailSubject, email_html_content = @emailHtmlContent, notduplicate = @notduplicate
             WHERE id = @id
         `);
     stmt.run({

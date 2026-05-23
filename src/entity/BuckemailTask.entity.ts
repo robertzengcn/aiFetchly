@@ -17,6 +17,13 @@ export class BuckemailTaskEntity extends AuditableEntity {
   @Column({ type: "text", nullable: true, default: null })
   email_list_json: string | null;
 
+  /** Fixed subject when sending without templates (HTML body) */
+  @Column({ type: "text", nullable: true, default: null })
+  email_subject: string | null;
+
+  @Column({ type: "text", nullable: true, default: null })
+  email_html_content: string | null;
+
   @Column({ type: "integer", nullable: true })
   notduplicate: number;
 
