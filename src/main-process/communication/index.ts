@@ -28,6 +28,7 @@ import { registerWebSocketIpcHandlers } from "@/main-process/communication/webso
 import { registerContactExtractionHandlers } from "@/main-process/communication/contactExtraction-ipc";
 import { registerSkillsIpcHandlers } from "@/main-process/communication/skills-ipc";
 import { registerSystemDependencyIpcHandlers } from "@/main-process/communication/system-dependency-ipc";
+import { registerGoogleMapsHandlers } from "@/main-process/communication/googleMaps-ipc";
 
 type GlobalIpcState = typeof globalThis & {
   __aifetchlyIpcHandlersRegistered?: boolean;
@@ -67,6 +68,7 @@ export function registerCommunicationIpcHandlers(win: BrowserWindow) {
     registerContactExtractionHandlers();
     registerSkillsIpcHandlers();
     registerSystemDependencyIpcHandlers();
+    registerGoogleMapsHandlers();
     AsyncMsg();
   } catch (e) {
     console.log("registerCommunicationIpcHandlers error:");

@@ -316,3 +316,9 @@ export const AI_EMAIL_TEMPLATE_ERROR = "ai-email-template:error";
 export const AI_EMAIL_TEMPLATE_STOP = "ai-email-template:stop";
 export const AI_EMAIL_TEMPLATE_VALIDATE = "ai-email-template:validate";
 export const AI_EMAIL_TEMPLATE_GENERATE = "ai-email-template:generate";
+
+// Google Maps Scraper Channels
+export const GOOGLE_MAPS_SEARCH_START = "google_maps:search_start";
+export const GOOGLE_MAPS_SEARCH_CANCEL = "google_maps:search_cancel";
+export const GOOGLE_MAPS_SEARCH_PROGRESS = "google_maps:search_progress";
+export const GOOGLE_MAPS_SEARCH_RESULT = "google_maps:search_result";
