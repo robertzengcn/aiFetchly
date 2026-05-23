@@ -1,13 +1,13 @@
 /**
  * Google Maps Module — orchestration layer shared by AI skill and UI page.
  *
- * Spawns a child process worker (GoogleMapsWorker) to perform Puppeteer-based
+ * Spawns a utility process worker (GoogleMapsWorker) to perform Puppeteer-based
  * Google Maps scraping. Manages worker lifecycle, timeouts, and cancellation.
  *
- * Extends BaseModule for future persistence (Phase 4).
+ * Extends BaseModule for persistence.
  */
 
-import { fork, type ChildProcess } from "child_process";
+import { utilityProcess, app } from "electron";
 import path from "path";
 import { v4 as uuidv4 } from "uuid";
 import { BaseModule } from "@/modules/baseModule";
@@ -28,7 +28,7 @@ import type { GoogleMapsSearchRecordEntity } from "@/entity/GoogleMapsSearchReco
 
 /** Tracks an active search session. */
 interface ActiveSearch {
-  worker: ChildProcess;
+  worker: Electron.UtilityProcess;
   resolve: (result: GoogleMapsSearchResult) => void;
   reject: (error: Error) => void;
   timeoutTimer: ReturnType<typeof setTimeout>;
@@ -65,10 +65,17 @@ export class GoogleMapsModule extends BaseModule {
       const requestId = uuidv4();
       const workerPath = this.getWorkerPath();
 
-      let worker: ChildProcess;
+      let worker: Electron.UtilityProcess;
       try {
-        worker = fork(workerPath, [], {
-          stdio: ["inherit", "inherit", "inherit", "ipc"],
+        worker = utilityProcess.fork(workerPath, [], {
+          stdio: "pipe",
+          execArgv: ["puppeteer-cluster:*"],
+          env: {
+            ...process.env,
+            NODE_OPTIONS: "",
+            ELECTRON_APP_NAME: app.getName(),
+            ELECTRON_USER_DATA_PATH: app.getPath("userData"),
+          },
         });
       } catch (err) {
         reject(
@@ -82,8 +89,8 @@ export class GoogleMapsModule extends BaseModule {
       }
 
       const timeoutTimer = setTimeout(() => {
-        worker.kill();
         this.activeSearches.delete(requestId);
+        worker.kill();
         reject(new Error("Google Maps search timed out after 10 minutes"));
       }, GoogleMapsModule.DEFAULT_TIMEOUT_MS);
 
@@ -236,6 +243,6 @@ export class GoogleMapsModule extends BaseModule {
    * In production, the worker is built to the output directory.
    */
   private getWorkerPath(): string {
-    return path.join(__dirname, "google-maps", "GoogleMapsWorker.js");
+    return path.join(__dirname, "GoogleMapsWorker.js");
   }
 }
