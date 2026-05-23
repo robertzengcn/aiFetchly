@@ -15,6 +15,11 @@ import { extractContactFromUrls } from "@/main-process/communication/contactExtr
 import { DocumentService } from "@/service/DocumentService";
 import { FileToolService } from "@/service/FileToolService";
 import { FILE_TOOL_RATE_LIMITS } from "@/config/fileToolConfig";
+import {
+  GOOGLE_MAPS_DEFAULT_MAX_RESULTS,
+  GOOGLE_MAPS_HARD_CAP,
+} from "@/entityTypes/googleMapsTypes";
+import { GoogleMapsModule } from "@/modules/GoogleMapsModule";
 
 /**
  * Rate limiting configuration for tool execution
@@ -172,6 +177,9 @@ export class ToolExecutor {
 
       case "extract_contact_info":
         return await this.executeContactExtraction(toolParams);
+
+      case "search_google_maps_businesses":
+        return await this.executeGoogleMapsSearch(toolParams);
 
       case "read_attachment_content":
         return await this.executeReadAttachmentContent(
@@ -1175,6 +1183,71 @@ export class ToolExecutor {
         error: r.error,
       })),
     };
+  }
+
+  /**
+   * Execute Google Maps business search using GoogleMapsModule.
+   */
+  private static async executeGoogleMapsSearch(
+    toolParams: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    const query = typeof toolParams.query === "string" ? toolParams.query : "";
+    const location =
+      typeof toolParams.location === "string" ? toolParams.location : "";
+    const maxResults =
+      typeof toolParams.max_results === "number"
+        ? toolParams.max_results
+        : GOOGLE_MAPS_DEFAULT_MAX_RESULTS;
+
+    if (!query.trim()) {
+      return {
+        success: false,
+        error: "query is required and must not be blank",
+      };
+    }
+
+    if (!location.trim()) {
+      return {
+        success: false,
+        error: "location is required and must not be blank",
+      };
+    }
+
+    const clampedMaxResults = Math.min(
+      Math.max(1, maxResults),
+      GOOGLE_MAPS_HARD_CAP
+    );
+
+    try {
+      const module = new GoogleMapsModule();
+      const result = await module.executeSearch({
+        query: query.trim(),
+        location: location.trim(),
+        max_results: clampedMaxResults,
+        include_website:
+          typeof toolParams.include_website === "boolean"
+            ? toolParams.include_website
+            : true,
+        include_reviews:
+          typeof toolParams.include_reviews === "boolean"
+            ? toolParams.include_reviews
+            : false,
+        show_browser:
+          typeof toolParams.show_browser === "boolean"
+            ? toolParams.show_browser
+            : false,
+      });
+
+      return result as unknown as Record<string, unknown>;
+    } catch (error) {
+      return {
+        success: false,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Unknown error executing Google Maps search",
+      };
+    }
   }
 
   /**

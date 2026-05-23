@@ -576,6 +576,28 @@ export const constantRoutes: RouteRecordRaw[] = [
     ],
   },
   {
+    path: "/google-maps-scraper",
+    name: "Google_Maps_Scraper",
+    meta: {
+      visible: true,
+      title: "route.google_maps_scraper",
+      icon: "mdi-map-marker-radius",
+    },
+    component: Layout,
+    children: [
+      {
+        path: "",
+        component: () => import("@/views/pages/google-maps-scraper/index.vue"),
+        name: "GoogleMapsScraper",
+        meta: {
+          visible: true,
+          title: "route.google_maps_scraper",
+          icon: "mdi-map-marker-radius",
+        },
+      },
+    ],
+  },
+  {
     path: "/knowledge",
     name: "Knowledge_Library",
     meta: {

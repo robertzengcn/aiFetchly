@@ -182,6 +182,63 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     },
   },
   {
+    name: "search_google_maps_businesses",
+    description:
+      "Search Google Maps for local businesses by keyword and location. Returns structured business data including name, rating, review count, category, address, phone, website, and Google Maps URL. Use this for finding local businesses, lead generation, and market research.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description:
+            "Business keyword or category to search for (e.g., 'dentist', 'Italian restaurant', 'plumber')",
+        },
+        location: {
+          type: "string",
+          description:
+            "Target location for the search (e.g., 'New York', 'London, UK', '90210')",
+        },
+        max_results: {
+          type: "number",
+          description:
+            "Maximum number of business results to return (default: 20, max: 50)",
+          default: 20,
+        },
+        include_website: {
+          type: "boolean",
+          description:
+            "Whether to extract website URLs from business listings (default: true)",
+          default: true,
+        },
+        include_reviews: {
+          type: "boolean",
+          description:
+            "Whether to include review count in results (default: false)",
+          default: false,
+        },
+        show_browser: {
+          type: "boolean",
+          description:
+            "Whether to show the browser window during scraping for debugging (default: false)",
+          default: false,
+        },
+      },
+      required: ["query", "location"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args, context) => {
+      const result = await ToolExecutor.execute(
+        "search_google_maps_businesses",
+        args,
+        context.conversationId
+      );
+      return { success: true, result };
+    },
+  },
+  {
     name: "get_available_yellow_pages_platforms",
     description:
       "A function that returns the live, up-to-date, authenticated list of Yellow Pages platforms integrated with the system's current APIs, including their latest API version and supported country codes.",
