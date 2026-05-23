@@ -103,7 +103,16 @@ export class GoogleMapsModule extends BaseModule {
       this.activeSearches.set(requestId, search);
 
       worker.on("message", (msg: Record<string, unknown>) => {
+        if (msg.type === "progress" && msg.requestId === requestId) {
+          if (search.progressCallback) {
+            search.progressCallback(msg as unknown as GoogleMapsProgressEvent);
+          }
+          return;
+        }
         if (msg.type === "result" && msg.requestId === requestId) {
+          // Skip if already handled (e.g. cancelled)
+          if (!this.activeSearches.has(requestId)) return;
+
           clearTimeout(timeoutTimer);
           this.activeSearches.delete(requestId);
 
@@ -180,7 +189,12 @@ export class GoogleMapsModule extends BaseModule {
     const search = this.activeSearches.get(requestId);
     if (!search) return;
 
+    // Delete from map first to prevent double resolve/reject
+    this.activeSearches.delete(requestId);
     clearTimeout(search.timeoutTimer);
+
+    // Reject the promise so the caller knows it was cancelled
+    search.reject(new Error("Search cancelled by user"));
 
     try {
       search.worker.send({ type: "cancel", requestId });
@@ -188,14 +202,13 @@ export class GoogleMapsModule extends BaseModule {
       // Worker may already be dead
     }
 
-    // Give worker 2 seconds to handle cancellation gracefully
+    // Give worker 2 seconds to handle cancellation gracefully, then kill
     setTimeout(() => {
       try {
         search.worker.kill();
       } catch {
         // Already dead
       }
-      this.activeSearches.delete(requestId);
     }, 2000);
   }
 
