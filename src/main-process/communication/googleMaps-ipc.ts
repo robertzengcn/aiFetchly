@@ -9,7 +9,8 @@
  * Cancel: cancels an active search by requestId
  */
 
-import { ipcMain, BrowserWindow } from "electron";
+import { ipcMain, type IpcMainInvokeEvent } from "electron";
+import { v4 as uuidv4 } from "uuid";
 import { GoogleMapsModule } from "@/modules/GoogleMapsModule";
 import {
   GOOGLE_MAPS_SEARCH_START,
@@ -27,6 +28,9 @@ import type {
 /** Tracks active search sessions so they can be cancelled. */
 const activeModules = new Map<string, GoogleMapsModule>();
 
+/** Maximum concurrent Google Maps searches. */
+const MAX_CONCURRENT_SEARCHES = 3;
+
 /**
  * Register all Google Maps scraper IPC handlers.
  * Must be called once during app initialization.
@@ -35,7 +39,7 @@ export function registerGoogleMapsHandlers(): void {
   // ── Start a search ──────────────────────────────────────────────────
   ipcMain.handle(
     GOOGLE_MAPS_SEARCH_START,
-    async (_event, data: Record<string, unknown>) => {
+    async (event: IpcMainInvokeEvent, data: Record<string, unknown>) => {
       const query = typeof data.query === "string" ? data.query : "";
       const location = typeof data.location === "string" ? data.location : "";
 
@@ -47,15 +51,22 @@ export function registerGoogleMapsHandlers(): void {
         };
       }
 
-      const requestId = `gm-${Date.now()}-${Math.random()
-        .toString(36)
-        .slice(2, 8)}`;
+      // Enforce concurrent search limit
+      if (activeModules.size >= MAX_CONCURRENT_SEARCHES) {
+        return {
+          status: false,
+          msg: "Too many concurrent searches. Please wait for one to finish.",
+          data: null,
+        };
+      }
+
+      const requestId = uuidv4();
       const module = new GoogleMapsModule();
       activeModules.set(requestId, module);
 
       const input: GoogleMapsSearchInput = {
-        query: query.trim(),
-        location: location.trim(),
+        query: query.trim().slice(0, 255),
+        location: location.trim().slice(0, 255),
         max_results:
           typeof data.max_results === "number" ? data.max_results : 20,
         include_website:
@@ -70,32 +81,30 @@ export function registerGoogleMapsHandlers(): void {
           typeof data.show_browser === "boolean" ? data.show_browser : false,
       };
 
+      const senderWebContents = event.sender;
+
       // Execute search asynchronously; push result via webContents.send
       module
         .executeSearch(input)
         .then((result: GoogleMapsSearchResult) => {
-          const win = BrowserWindow.getAllWindows()[0];
-          if (win && !win.isDestroyed()) {
-            win.webContents.send(GOOGLE_MAPS_SEARCH_RESULT, {
+          if (!senderWebContents.isDestroyed()) {
+            senderWebContents.send(GOOGLE_MAPS_SEARCH_RESULT, {
               requestId,
               result,
             });
           }
           activeModules.delete(requestId);
         })
-        .catch((error: unknown) => {
-          const win = BrowserWindow.getAllWindows()[0];
-          if (win && !win.isDestroyed()) {
-            win.webContents.send(GOOGLE_MAPS_SEARCH_RESULT, {
+        .catch((_error: unknown) => {
+          if (!senderWebContents.isDestroyed()) {
+            senderWebContents.send(GOOGLE_MAPS_SEARCH_RESULT, {
               requestId,
               result: {
                 success: false,
                 query: input.query,
                 location: input.location,
                 totalResults: 0,
-                summary: `Search failed: ${
-                  error instanceof Error ? error.message : String(error)
-                }`,
+                summary: "Search failed. Please try again.",
                 results: [],
               },
             });
@@ -125,9 +134,10 @@ export function registerGoogleMapsHandlers(): void {
       if (activeModule) {
         await activeModule.cancelSearch(requestId);
         activeModules.delete(requestId);
+        return { status: true, msg: "Search cancelled", data: null };
       }
 
-      return { status: true, msg: "Search cancelled", data: null };
+      return { status: false, msg: "No active search found for this requestId", data: null };
     }
   );
 
@@ -135,8 +145,10 @@ export function registerGoogleMapsHandlers(): void {
   ipcMain.handle(
     GOOGLE_MAPS_HISTORY_LIST,
     async (_event, data: Record<string, unknown>) => {
-      const limit = typeof data.limit === "number" ? data.limit : 50;
-      const offset = typeof data.offset === "number" ? data.offset : 0;
+      const rawLimit = typeof data.limit === "number" ? data.limit : 50;
+      const rawOffset = typeof data.offset === "number" ? data.offset : 0;
+      const limit = Math.min(Math.max(1, rawLimit), 100);
+      const offset = Math.max(0, rawOffset);
       const module = new GoogleMapsModule();
       const [records, total] = await module.getSearchHistory(limit, offset);
       return { status: true, msg: "OK", data: { records, total } };
@@ -170,11 +182,10 @@ export function registerGoogleMapsHandlers(): void {
       }
       const module = new GoogleMapsModule();
       const deleted = await module.deleteSearchRecord(id);
-      return {
-        status: true,
-        msg: deleted ? "Deleted" : "Not found",
-        data: null,
-      };
+      if (!deleted) {
+        return { status: false, msg: "Record not found", data: null };
+      }
+      return { status: true, msg: "Deleted", data: null };
     }
   );
 }
