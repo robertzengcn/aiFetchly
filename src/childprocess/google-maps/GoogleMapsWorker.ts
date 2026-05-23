@@ -286,23 +286,19 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
       await sleep(1500);
     }
 
+    // Get all card elements
+    const cardHandles = await page.$$('div[role="feed"] > div > div[jsaction]');
+
+    const limit = Math.min(cardHandles.length, maxResults);
+
     // Now extract data from each card by clicking into detail view
     sendProgress(
       requestId,
       "extracting",
       0,
       maxResults,
-      `Extracting ${Math.min(cardCount(), maxResults)} businesses...`
+      `Extracting ${limit} businesses...`
     );
-
-    // Get all card elements
-    const cardHandles = await page.$$('div[role="feed"] > div > div[jsaction]');
-
-    function cardCount(): number {
-      return cardHandles.length;
-    }
-
-    const limit = Math.min(cardHandles.length, maxResults);
 
     for (let i = 0; i < limit; i++) {
       if (isCancelled) {
