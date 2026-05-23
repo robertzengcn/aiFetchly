@@ -54,6 +54,7 @@ import { ContactInfoEntity } from "@/entity/ContactInfo.entity";
 import { InstalledSkillEntity } from "@/entity/InstalledSkill.entity";
 import { DependencyInstallAuditEntity } from "@/entity/DependencyInstallAudit";
 import { ShellAuditEntity } from "@/entity/ShellAudit.entity";
+import { GoogleMapsSearchRecordEntity } from "@/entity/GoogleMapsSearchRecord.entity";
 // import sqlite3 from "sqlite3";
 import Database from "better-sqlite3";
 import { app } from "electron";
@@ -457,6 +458,7 @@ export class SqliteDb {
           InstalledSkillEntity,
           DependencyInstallAuditEntity,
           ShellAuditEntity,
+          GoogleMapsSearchRecordEntity,
         ],
         synchronize: true,
         migrations: [],

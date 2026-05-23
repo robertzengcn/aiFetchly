@@ -14,10 +14,13 @@ import { BaseModule } from "@/modules/baseModule";
 import {
   type GoogleMapsSearchInput,
   type GoogleMapsSearchResult,
+  type GoogleMapsBusinessResult,
   type GoogleMapsProgressEvent,
   GOOGLE_MAPS_DEFAULT_MAX_RESULTS,
   GOOGLE_MAPS_HARD_CAP,
 } from "@/entityTypes/googleMapsTypes";
+import { GoogleMapsSearchRecordModel } from "@/model/GoogleMapsSearchRecord.model";
+import type { GoogleMapsSearchRecordEntity } from "@/entity/GoogleMapsSearchRecord.entity";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -38,7 +41,13 @@ interface ActiveSearch {
 
 export class GoogleMapsModule extends BaseModule {
   private activeSearches = new Map<string, ActiveSearch>();
+  private recordModel: GoogleMapsSearchRecordModel;
   private static readonly DEFAULT_TIMEOUT_MS = 600000; // 10 minutes
+
+  constructor() {
+    super();
+    this.recordModel = new GoogleMapsSearchRecordModel(this.dbpath);
+  }
 
   /**
    * Execute a Google Maps search synchronously (blocks until complete or timeout).
@@ -64,7 +73,9 @@ export class GoogleMapsModule extends BaseModule {
       } catch (err) {
         reject(
           new Error(
-            `Failed to spawn Google Maps worker: ${err instanceof Error ? err.message : String(err)}`
+            `Failed to spawn Google Maps worker: ${
+              err instanceof Error ? err.message : String(err)
+            }`
           )
         );
         return;
@@ -95,18 +106,35 @@ export class GoogleMapsModule extends BaseModule {
             // Worker may already be dead
           }
 
-          if (msg.success && msg.data) {
-            resolve(msg.data as GoogleMapsSearchResult);
-          } else {
-            resolve({
-              success: false,
-              query: input.query,
-              location: input.location,
-              totalResults: 0,
-              summary: `Search failed: ${(msg.error as string) ?? "Unknown error"}`,
-              results: [],
-            });
-          }
+          const result: GoogleMapsSearchResult =
+            msg.success && msg.data
+              ? (msg.data as GoogleMapsSearchResult)
+              : {
+                  success: false,
+                  query: input.query,
+                  location: input.location,
+                  totalResults: 0,
+                  summary: `Search failed: ${
+                    (msg.error as string) ?? "Unknown error"
+                  }`,
+                  results: [],
+                };
+
+          this.saveSearchResult(
+            result.query,
+            result.location,
+            result.success ? "completed" : "failed",
+            result.totalResults,
+            result.summary,
+            result.results
+          ).catch((saveErr: unknown) => {
+            console.error(
+              "[GoogleMaps] Failed to save search result:",
+              saveErr
+            );
+          });
+
+          resolve(result);
         }
       });
 
@@ -120,9 +148,7 @@ export class GoogleMapsModule extends BaseModule {
         if (this.activeSearches.has(requestId)) {
           clearTimeout(timeoutTimer);
           this.activeSearches.delete(requestId);
-          reject(
-            new Error(`Worker exited unexpectedly with code ${code}`)
-          );
+          reject(new Error(`Worker exited unexpectedly with code ${code}`));
         }
       });
 
@@ -166,15 +192,50 @@ export class GoogleMapsModule extends BaseModule {
     }, 2000);
   }
 
+  async saveSearchResult(
+    query: string,
+    location: string,
+    status: string,
+    totalResults: number,
+    summary: string,
+    results: GoogleMapsBusinessResult[]
+  ): Promise<GoogleMapsSearchRecordEntity> {
+    await this.ensureConnection();
+    return await this.recordModel.create({
+      query,
+      location,
+      status,
+      totalResults,
+      summary,
+      results: JSON.stringify(results),
+    });
+  }
+
+  async getSearchHistory(
+    limit = 50,
+    offset = 0
+  ): Promise<[GoogleMapsSearchRecordEntity[], number]> {
+    await this.ensureConnection();
+    return await this.recordModel.findAll(limit, offset);
+  }
+
+  async getSearchRecord(
+    id: number
+  ): Promise<GoogleMapsSearchRecordEntity | null> {
+    await this.ensureConnection();
+    return await this.recordModel.findById(id);
+  }
+
+  async deleteSearchRecord(id: number): Promise<boolean> {
+    await this.ensureConnection();
+    return await this.recordModel.deleteById(id);
+  }
+
   /**
    * Get the path to the Google Maps worker entry point.
    * In production, the worker is built to the output directory.
    */
   private getWorkerPath(): string {
-    return path.join(
-      __dirname,
-      "google-maps",
-      "GoogleMapsWorker.js"
-    );
+    return path.join(__dirname, "google-maps", "GoogleMapsWorker.js");
   }
 }
