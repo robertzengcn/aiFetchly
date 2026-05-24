@@ -1486,5 +1486,8 @@ export default {
     col_actions: "操作",
     view_results: "表示",
     delete_btn: "削除",
+    account_label: "Google アカウント",
+    account_hint: "Cookieを使用するアカウントを選択",
+    account_none: "アカウントなし（匿名）",
   },
 };

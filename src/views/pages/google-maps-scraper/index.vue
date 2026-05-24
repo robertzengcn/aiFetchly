@@ -115,6 +115,25 @@
                   hide-details
                 />
               </v-col>
+              <v-col cols="12" md="3">
+                <v-select
+                  v-model="selectedAccountId"
+                  :items="googleAccounts"
+                  item-title="user"
+                  item-value="id"
+                  :label="t('googleMaps.account_label') || 'Google Account'"
+                  :hint="t('googleMaps.account_hint') || 'Select an account to use its cookies'"
+                  persistent-hint
+                  :disabled="searchState === 'running'"
+                  clearable
+                  variant="outlined"
+                  density="compact"
+                >
+                  <template #selection="{ item }">
+                    {{ item.user }}
+                  </template>
+                </v-select>
+              </v-col>
             </v-row>
           </v-card-text>
         </v-card>
@@ -339,7 +358,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onUnmounted } from "vue";
+import { ref, computed, onMounted, onUnmounted } from "vue";
 import { useI18n } from "vue-i18n";
 import Papa from "papaparse";
 import {
@@ -352,7 +371,9 @@ import {
   type GoogleMapsResultEvent,
   type GoogleMapsHistoryRecord,
 } from "@/views/api/googleMaps";
+import { getSocialAccountlist } from "@/views/api/socialaccount";
 import type { GoogleMapsBusinessResult } from "@/entityTypes/googleMapsTypes";
+import type { SocialAccountListData } from "@/entityTypes/socialaccount-type";
 
 const { t } = useI18n();
 
@@ -366,6 +387,10 @@ const maxResults = ref(20);
 const includeWebsite = ref(true);
 const includeReviews = ref(false);
 const showBrowser = ref(false);
+
+// ── Account state ────────────────────────────────────────────────────────
+const googleAccounts = ref<SocialAccountListData[]>([]);
+const selectedAccountId = ref<number | null>(null);
 
 // ── Search state ────────────────────────────────────────────────────────
 type SearchState = "idle" | "running" | "completed" | "cancelled" | "failed";
@@ -437,6 +462,19 @@ function setupResultListener(): void {
 }
 
 // ── Handlers ────────────────────────────────────────────────────────────
+async function loadGoogleAccounts(): Promise<void> {
+  try {
+    const result = await getSocialAccountlist({
+      page: 1,
+      size: 100,
+      where: "social_type_id=4",
+    });
+    googleAccounts.value = result.data ?? [];
+  } catch (err) {
+    console.error("Failed to load Google accounts:", err);
+  }
+}
+
 async function handleStartSearch(): Promise<void> {
   if (!query.value.trim() || !location.value.trim()) return;
 
@@ -456,6 +494,7 @@ async function handleStartSearch(): Promise<void> {
       include_website: includeWebsite.value,
       include_reviews: includeReviews.value,
       show_browser: showBrowser.value,
+      account_id: selectedAccountId.value ?? undefined,
     });
     requestId.value = resp.requestId;
     setupResultListener();
@@ -571,6 +610,11 @@ function truncateUrl(url: string, maxLen = 30): string {
 function sanitizeFilename(input: string): string {
   return input.replace(/[^a-zA-Z0-9 _-]/g, "_").slice(0, 50);
 }
+
+// ── Init ───────────────────────────────────────────────────────────────
+onMounted(() => {
+  loadGoogleAccounts();
+});
 
 // ── Cleanup ────────────────────────────────────────────────────────────
 onUnmounted(() => {

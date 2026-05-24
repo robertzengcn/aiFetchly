@@ -29,6 +29,7 @@ interface StartMessage {
   includeWebsite: boolean;
   includeReviews: boolean;
   showBrowser: boolean;
+  cookies?: unknown[];
 }
 
 interface CancelMessage {
@@ -88,6 +89,33 @@ function sleep(ms: number): Promise<void> {
 
 function randomDelay(minMs: number, maxMs: number): Promise<void> {
   return sleep(minMs + Math.random() * (maxMs - minMs));
+}
+
+/** Apply cookies to the page before navigation (same pattern as YellowPagesScraper). */
+async function applyCookies(page: Page, cookies: unknown[]): Promise<void> {
+  if (!Array.isArray(cookies) || cookies.length === 0) return;
+
+  for (const raw of cookies) {
+    try {
+      const cookie = raw as Record<string, unknown>;
+      const cookieData = {
+        name: String(cookie.name),
+        value: String(cookie.value),
+        domain: cookie.domain ? String(cookie.domain) : undefined,
+        path: (cookie.path as string) || "/",
+        expires: cookie.expirationDate
+          ? (cookie.expirationDate as number) * 1000
+          : undefined,
+        httpOnly: (cookie.httpOnly as boolean) || false,
+        secure: (cookie.secure as boolean) || false,
+        sameSite: cookie.sameSite as "Strict" | "Lax" | "None" | undefined,
+      };
+      await page.setCookie(cookieData);
+    } catch (err) {
+      console.error(`Failed to set cookie:`, err);
+    }
+  }
+  console.log(`Applied ${cookies.length} cookies`);
 }
 
 // ---------------------------------------------------------------------------
@@ -197,6 +225,11 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
         "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     );
+
+    // Apply cookies if provided (from a logged-in Google account)
+    if (msg.cookies && msg.cookies.length > 0) {
+      await applyCookies(page, msg.cookies);
+    }
 
     // Navigate to Google Maps search
     sendProgress(requestId, "loading", 0, maxResults, "Loading Google Maps...");

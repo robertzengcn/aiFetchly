@@ -1460,5 +1460,8 @@ export default {
     col_actions: "操作",
     view_results: "查看",
     delete_btn: "删除",
+    account_label: "Google 账号",
+    account_hint: "选择一个账号以使用其 Cookie",
+    account_none: "无账号（匿名）",
   },
 };
