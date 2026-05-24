@@ -813,22 +813,23 @@ export class StreamEventProcessor {
       })();
     }
 
-    // Remove tool from pending set if this is a server-managed result.
     // For locally executed tools, the continuation stream may emit a TOOL_RESULT
-    // acknowledgement before TOKEN/DONE; clearing pending here can trigger
-    // deferred completion too early and hide later assistant tokens.
+    // acknowledgement before TOKEN/DONE. The renderer already received the result
+    // from the local execution path, so skip sending a duplicate chunk.
+    if (toolId && this.localExecutingToolIds.has(toolId)) {
+      console.log(
+        `Skipping duplicate server TOOL_RESULT for locally executed tool (ID: ${toolId})`
+      );
+      return;
+    }
+
+    // Remove tool from pending set if this is a server-managed result.
     if (toolId && this.state.pendingToolCalls.has(toolId)) {
-      if (this.localExecutingToolIds.has(toolId)) {
-        console.log(
-          `Ignoring server TOOL_RESULT pending-clear for local tool (ID: ${toolId})`
-        );
-      } else {
-        this.state.pendingToolCalls.delete(toolId);
-        console.log(
-          `Tool result received from server (ID: ${toolId}), pending: ${this.state.pendingToolCalls.size}`
-        );
-        this.sendDeferredCompletionIfReady();
-      }
+      this.state.pendingToolCalls.delete(toolId);
+      console.log(
+        `Tool result received from server (ID: ${toolId}), pending: ${this.state.pendingToolCalls.size}`
+      );
+      this.sendDeferredCompletionIfReady();
     }
 
     const chunk: ChatStreamChunk = {

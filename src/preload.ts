@@ -245,6 +245,13 @@ import {
   SYSTEM_DEPENDENCY_GET_AUDIT_LOG,
   SYSTEM_DEPENDENCY_PROMPT,
   SYSTEM_DEPENDENCY_PROMPT_RESPONSE,
+  // Google Maps Scraper Channels
+  GOOGLE_MAPS_SEARCH_START,
+  GOOGLE_MAPS_SEARCH_CANCEL,
+  GOOGLE_MAPS_SEARCH_RESULT,
+  GOOGLE_MAPS_HISTORY_LIST,
+  GOOGLE_MAPS_HISTORY_DETAIL,
+  GOOGLE_MAPS_HISTORY_DELETE,
 } from "@/config/channellist";
 
 // window.ipcRenderer = ipcRenderer
@@ -353,6 +360,8 @@ contextBridge.exposeInMainWorld("api", {
       CONTACT_EXTRACTION_PROGRESS,
       // System Dependency Prompt (main→renderer)
       SYSTEM_DEPENDENCY_PROMPT,
+      // Google Maps Scraper Channels
+      GOOGLE_MAPS_SEARCH_RESULT,
     ];
     const isSocialTaskLogChannel = /^socialtask:log:/.test(channel);
 
@@ -409,6 +418,8 @@ contextBridge.exposeInMainWorld("api", {
       CONTACT_EXTRACTION_PROGRESS,
       // System Dependency Prompt (main→renderer)
       SYSTEM_DEPENDENCY_PROMPT,
+      // Google Maps Scraper Channels
+      GOOGLE_MAPS_SEARCH_RESULT,
     ];
     const isSocialTaskLogChannel = /^socialtask:log:/.test(channel);
 
@@ -429,6 +440,7 @@ contextBridge.exposeInMainWorld("api", {
       AI_EMAIL_TEMPLATE_GENERATE_COMPLETE,
       AI_EMAIL_TEMPLATE_ERROR,
       CONTACT_EXTRACTION_PROGRESS,
+      GOOGLE_MAPS_SEARCH_RESULT,
     ];
     if (validChannels.includes(channel)) {
       ipcRenderer.removeAllListeners(channel);
@@ -646,6 +658,12 @@ contextBridge.exposeInMainWorld("api", {
       SYSTEM_DEPENDENCY_GET_AUDIT_LOG,
       SYSTEM_DEPENDENCY_PROMPT,
       SYSTEM_DEPENDENCY_PROMPT_RESPONSE,
+      // Google Maps Scraper Channels
+      GOOGLE_MAPS_SEARCH_START,
+      GOOGLE_MAPS_SEARCH_CANCEL,
+      GOOGLE_MAPS_HISTORY_LIST,
+      GOOGLE_MAPS_HISTORY_DETAIL,
+      GOOGLE_MAPS_HISTORY_DELETE,
     ];
     if (validChannels.includes(channel)) {
       return ipcRenderer.invoke(channel, data);
