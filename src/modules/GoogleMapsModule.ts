@@ -66,7 +66,8 @@ export class GoogleMapsModule extends BaseModule {
    * Used by ToolExecutor for AI skill invocation.
    */
   async executeSearch(
-    input: GoogleMapsSearchInput
+    input: GoogleMapsSearchInput,
+    cookies?: unknown[]
   ): Promise<GoogleMapsSearchResult> {
     const maxResults = Math.min(
       Math.max(1, input.max_results ?? GOOGLE_MAPS_DEFAULT_MAX_RESULTS),
@@ -191,6 +192,7 @@ export class GoogleMapsModule extends BaseModule {
         includeWebsite: input.include_website ?? true,
         includeReviews: input.include_reviews ?? false,
         showBrowser: input.show_browser ?? false,
+        cookies,
       });
     });
   }

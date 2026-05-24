@@ -12,6 +12,7 @@
 import { ipcMain, type IpcMainInvokeEvent } from "electron";
 import { v4 as uuidv4 } from "uuid";
 import { GoogleMapsModule } from "@/modules/GoogleMapsModule";
+import { AccountCookiesModule } from "@/modules/accountCookiesModule";
 import {
   GOOGLE_MAPS_SEARCH_START,
   GOOGLE_MAPS_SEARCH_CANCEL,
@@ -82,11 +83,32 @@ export function registerGoogleMapsHandlers(): void {
           typeof data.show_browser === "boolean" ? data.show_browser : false,
       };
 
+      // Resolve cookies if account_id is provided
+      let cookies: unknown[] | undefined;
+      const accountId =
+        typeof data.account_id === "number" ? data.account_id : undefined;
+      if (accountId) {
+        try {
+          const cookiesModule = new AccountCookiesModule();
+          const cookieRecord = await cookiesModule.getAccountCookies(accountId);
+          if (cookieRecord?.cookies) {
+            const parsed = JSON.parse(cookieRecord.cookies);
+            cookies = Array.isArray(parsed) ? parsed : undefined;
+          }
+        } catch (err) {
+          console.warn(
+            "[GoogleMaps] Failed to load cookies for account",
+            accountId,
+            err
+          );
+        }
+      }
+
       const senderWebContents = event.sender;
 
       // Execute search asynchronously; push result via webContents.send
       module
-        .executeSearch(input)
+        .executeSearch(input, cookies)
         .then((result: GoogleMapsSearchResult) => {
           if (!senderWebContents.isDestroyed()) {
             senderWebContents.send(GOOGLE_MAPS_SEARCH_RESULT, {
@@ -152,14 +174,25 @@ export function registerGoogleMapsHandlers(): void {
   ipcMain.handle(
     GOOGLE_MAPS_HISTORY_LIST,
     async (_event, ...args: unknown[]) => {
-      const data = (args[0] ?? {}) as Record<string, unknown>;
-      const rawLimit = typeof data.limit === "number" ? data.limit : 50;
-      const rawOffset = typeof data.offset === "number" ? data.offset : 0;
-      const limit = Math.min(Math.max(1, rawLimit), 100);
-      const offset = Math.max(0, rawOffset);
-      const module = new GoogleMapsModule();
-      const [records, total] = await module.getSearchHistory(limit, offset);
-      return { status: true, msg: "OK", data: { records, total } };
+      try {
+        const data = (args[0] ?? {}) as Record<string, unknown>;
+        const rawLimit = typeof data.limit === "number" ? data.limit : 50;
+        const rawOffset = typeof data.offset === "number" ? data.offset : 0;
+        const limit = Math.min(Math.max(1, rawLimit), 100);
+        const offset = Math.max(0, rawOffset);
+        const module = new GoogleMapsModule();
+        const [records, total] = await module.getSearchHistory(limit, offset);
+        return { status: true, msg: "OK", data: { records, total } };
+      } catch (err) {
+        console.error("[GoogleMaps] History list error:", err);
+        return {
+          status: false,
+          msg: `Failed to load history: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+          data: null,
+        };
+      }
     }
   );
 
@@ -167,17 +200,28 @@ export function registerGoogleMapsHandlers(): void {
   ipcMain.handle(
     GOOGLE_MAPS_HISTORY_DETAIL,
     async (_event, ...args: unknown[]) => {
-      const data = (args[0] ?? {}) as Record<string, unknown>;
-      const id = typeof data.id === "number" ? data.id : 0;
-      if (!id) {
-        return { status: false, msg: "id is required", data: null };
+      try {
+        const data = (args[0] ?? {}) as Record<string, unknown>;
+        const id = typeof data.id === "number" ? data.id : 0;
+        if (!id) {
+          return { status: false, msg: "id is required", data: null };
+        }
+        const module = new GoogleMapsModule();
+        const record = await module.getSearchRecord(id);
+        if (!record) {
+          return { status: false, msg: "Record not found", data: null };
+        }
+        return { status: true, msg: "OK", data: record };
+      } catch (err) {
+        console.error("[GoogleMaps] History detail error:", err);
+        return {
+          status: false,
+          msg: `Failed to load record: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+          data: null,
+        };
       }
-      const module = new GoogleMapsModule();
-      const record = await module.getSearchRecord(id);
-      if (!record) {
-        return { status: false, msg: "Record not found", data: null };
-      }
-      return { status: true, msg: "OK", data: record };
     }
   );
 
@@ -185,17 +229,28 @@ export function registerGoogleMapsHandlers(): void {
   ipcMain.handle(
     GOOGLE_MAPS_HISTORY_DELETE,
     async (_event, ...args: unknown[]) => {
-      const data = (args[0] ?? {}) as Record<string, unknown>;
-      const id = typeof data.id === "number" ? data.id : 0;
-      if (!id) {
-        return { status: false, msg: "id is required", data: null };
+      try {
+        const data = (args[0] ?? {}) as Record<string, unknown>;
+        const id = typeof data.id === "number" ? data.id : 0;
+        if (!id) {
+          return { status: false, msg: "id is required", data: null };
+        }
+        const module = new GoogleMapsModule();
+        const deleted = await module.deleteSearchRecord(id);
+        if (!deleted) {
+          return { status: false, msg: "Record not found", data: null };
+        }
+        return { status: true, msg: "Deleted", data: null };
+      } catch (err) {
+        console.error("[GoogleMaps] History delete error:", err);
+        return {
+          status: false,
+          msg: `Failed to delete record: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+          data: null,
+        };
       }
-      const module = new GoogleMapsModule();
-      const deleted = await module.deleteSearchRecord(id);
-      if (!deleted) {
-        return { status: false, msg: "Record not found", data: null };
-      }
-      return { status: true, msg: "Deleted", data: null };
     }
   );
 }

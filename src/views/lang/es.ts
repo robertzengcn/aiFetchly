@@ -1522,5 +1522,8 @@ export default {
     col_actions: "Acciones",
     view_results: "Ver",
     delete_btn: "Eliminar",
+    account_label: "Cuenta de Google",
+    account_hint: "Selecciona una cuenta para usar sus cookies",
+    account_none: "Sin cuenta (anónimo)",
   },
 };
