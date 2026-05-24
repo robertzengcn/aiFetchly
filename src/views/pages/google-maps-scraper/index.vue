@@ -130,7 +130,7 @@
                   density="compact"
                 >
                   <template #selection="{ item }">
-                    {{ item.user }}
+                    {{ item.title }}
                   </template>
                 </v-select>
               </v-col>
