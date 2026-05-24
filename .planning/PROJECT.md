@@ -1,27 +1,25 @@
-# Google Maps Business Scraper for aiFetchly
+# AiFetchly — AI-Powered Marketing Automation
 
 ## What This Is
 
-A built-in Google Maps scraping capability for aiFetchly that extracts structured business data by keyword and location. Users can trigger scraping through AI chat (built-in skill) or a dedicated UI page — both powered by a shared `GoogleMapsModule` and Puppeteer-based child process worker.
+An Electron desktop application (Vue 3 + TypeScript) that combines AI-powered chat, web scraping, social media automation, and email marketing for digital marketers and lead generation teams.
 
 ## Core Value
 
-Users can find local businesses on Google Maps and get structured data (name, phone, website, rating, address) for marketing and lead generation — whether they ask AI or use the UI directly.
+Users can discover, contact, and market to prospects across platforms using AI-assisted workflows — from finding businesses on Google Maps to generating and sending personalized email campaigns.
 
-## Current Milestone: v1.0 Google Maps Business Scraper
+## Current Milestone: v1.1 AI Chat File Operation Recording
 
-**Goal:** Add a built-in Google Maps scraping capability that extracts structured business data by keyword and location, with both AI skill and manual UI entry points.
+**Goal:** Record every file CRUD operation performed by AI chat skills and display those records in near real-time inside the AI chat box, giving users visibility into what the AI changed.
 
 **Target features:**
-- Shared GoogleMapsModule powering both AI skill and UI page
-- AI built-in skill `search_google_maps_businesses`
-- Manual UI page for running Google Maps scraping without AI chat
-- Puppeteer-based child process worker for scraping
-- IPC handlers for UI execution, progress, and cancellation
-- Structured results display with name, category, rating, address, phone, website, etc.
-- Export in CSV and JSON formats
-- Save scraped results to local history (new entity + model)
-- All 6-language translations for UI text
+- Shared TypeScript types for file operation records
+- FileOperationTracker service emitting records via IPC
+- ToolExecutor integration intercepting file_write, file_edit, and delete tool calls
+- New IPC channel for file operation events
+- Frontend API wrappers for subscribing to file operation events
+- AI chat UI component update to display operation badges
+- All 6-language translations for operation UI text
 
 ## Requirements
 
@@ -37,35 +35,30 @@ Users can find local businesses on Google Maps and get structured data (name, ph
 - IPC handler pattern established (contactExtraction-ipc, etc.)
 - Vue 3 + Vuetify UI page pattern established
 - i18n with 6 languages (en, zh, es, fr, de, ja)
+- Google Maps Business Scraper — full feature with AI skill, UI page, and persistence (v1.0)
 
 ### Active
 
 <!-- Current scope. Building toward these. -->
 
-- [ ] Create shared TypeScript types for Google Maps search input/output/progress
-- [ ] Register `search_google_maps_businesses` as a built-in skill in skillsRegistry
-- [ ] Add ToolExecutor dispatch for Google Maps skill with validation and rate limiting
-- [ ] Implement GoogleMapsModule as orchestration layer shared by AI and UI
-- [ ] Implement Puppeteer-based child process worker for Google Maps scraping
-- [ ] Add IPC handlers for UI execution, progress monitoring, and cancellation
-- [ ] Add frontend API wrapper for Google Maps IPC calls
-- [ ] Add Vue UI page with search form, progress display, and results table
-- [ ] Add navigation entry for Google Maps scraper page
-- [ ] Save scraped results to local history (entity + model + module)
-- [ ] Export results in CSV and JSON formats
-- [ ] Add translations for all 6 supported languages
+- [ ] Create shared TypeScript types for file operation records (type, path, timestamp, success, conversation/skill context)
+- [ ] Create FileOperationTracker service that emits records to renderer via IPC
+- [ ] Add AI_FILE_OPERATION IPC channel to channellist
+- [ ] Integrate ToolExecutor to emit records for file_write, file_edit, and delete tool calls
+- [ ] Add frontend API wrappers in aiChat.ts for subscribing to file operation events
+- [ ] Update AI chat Vue component to display file operation badges in the chat box
+- [ ] Add translations for all 6 supported languages (file operation UI text)
 
 ### Out of Scope
 
 <!-- Explicit boundaries. Includes reasoning to prevent re-adding. -->
 
-- Google Places API integration — deferred entirely; browser scraping is v1 path
-- Campaign import — direct import of scraped results into campaigns deferred to later milestone
-- Marketplace/plugin installation for this capability — not a plugin, it's built-in
-- Generic arbitrary browser automation exposed to AI — scraping is scoped to Google Maps only
-- Automatic email sending to scraped contacts — separate feature, not part of scraping
-- Scraping review text at scale — v1 focuses on business listing data only
-- Higher hard cap for UI (100+) — same 50 cap for both AI and UI in v1
+- Database persistence of operation records — in-memory only in v1.1, defer to future milestone
+- Full rollback/undo system — complex, not needed in first version
+- Recording manual user file edits — only AI skill operations tracked
+- Recording read-only operations (file_read, glob_files, grep_files) — no mutation, no record needed
+- Dynamic imports or untyped `any` values — maintain type safety
+- "View diff" for edit operations — deferred to future milestone
 
 ## Context
 
@@ -75,23 +68,24 @@ aiFetchly is an Electron desktop app (Vue 3 + TypeScript) with an AI chat interf
 - **SkillExecutor.ts**: Validates input, checks permissions, executes, and audits
 - **ToolExecutor.ts**: Dispatches skill execution with validation and rate limiting
 - **StreamEventProcessor**: Routes AI tool calls through the skill pipeline
-- **Child process pattern**: Workers in `src/childprocess/` perform browser automation, communicate results to main process via IPC
+- **FileToolService.ts**: Handles file read/write/edit/glob/grep operations for AI tools
+- **Child process pattern**: Workers in `src/childprocess/` perform browser automation
 - **IPC pattern**: Handlers in `src/main-process/communication/` use Modules (never direct DB access)
 - **Three-layer DB**: Entity → Model → Module; IPC handlers never access DB directly
 - **Worker constraint**: Workers never access TypeORM, SqliteDb, or app database paths
 - **i18n**: 6 languages supported via `src/views/lang/{en,zh,es,fr,de,ja}.ts`
 
-Permission categories: `pure`, `network`, `filesystem`, `automation`. Google Maps skill uses `automation`.
+Permission categories: `pure`, `network`, `filesystem`, `automation`.
+
+For file operation recording, the interception point is `ToolExecutor.executeFileTool()` — the path that dispatches AI file tools to `FileToolService`. After each write-like operation completes, a `FileOperationRecord` will be emitted to the renderer via the new `AI_FILE_OPERATION` IPC channel.
 
 ## Constraints
 
-- **Tech stack**: TypeScript 5.x, Electron main process, Vue 3 + Vuetify frontend, Puppeteer for scraping
-- **Worker placement**: All worker code in `src/childprocess/google-maps/`
-- **Database access**: Workers never access DB; main process handles persistence via Model/Module
-- **IPC architecture**: Handlers call Modules, never direct DB access
-- **Hard cap**: 50 results max for both AI and UI entry points
-- **Concurrency**: Default 1 for scraping; delay between detail panel visits
-- **Export**: CSV and JSON only in v1
+- **Tech stack**: TypeScript 5.x, Electron main process, Vue 3 + Vuetify frontend
+- **No database persistence in v1.1**: In-memory records only; records lost on app restart
+- **No direct DB writes in IPC handlers**: Follow Model/Module architecture if persistence added later
+- **Tracking never breaks skill execution**: FileOperationTracker.emit() failures must be caught silently
+- **Read-only operations not tracked**: file_read, glob_files, grep_files are excluded
 - **Translations**: All 6 languages required for any user-facing text
 
 ## Key Decisions
@@ -100,6 +94,11 @@ Permission categories: `pure`, `network`, `filesystem`, `automation`. Google Map
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
+| Interception at ToolExecutor level | Central dispatch point for all AI tool calls; single place to emit records | — Pending |
+| No database persistence in v1.1 | Reduces complexity; in-memory tracking sufficient for initial UX validation | — Pending |
+| FileOperationTracker as static service | Matches existing service patterns (RateLimiterManager); easy to call from ToolExecutor | — Pending |
+| Read-only operations excluded | No mutation = no user confusion; reduces noise in the operation feed | — Pending |
+| Emit on both success and failure | Users need to know when AI attempted but failed to change a file | — Pending |
 | Shared GoogleMapsModule for AI and UI | One orchestration layer, two entry points. Avoids duplication, ensures consistent behavior | — Pending |
 | `automation` permission category (not new category) | Google Maps scraping fits existing automation risk profile; no new permission flow needed | — Pending |
 | Puppeteer browser scraping only in v1 | Fastest to integrate with existing patterns; Places API can be added later | — Pending |
@@ -126,4 +125,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-23 after milestone v1.0 initialization*
+*Last updated: 2026-05-25 after milestone v1.1 initialization*
