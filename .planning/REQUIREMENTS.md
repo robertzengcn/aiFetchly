@@ -1,10 +1,191 @@
-# Requirements: v1.0 Google Maps Business Scraper
+# Requirements: v1.1 AI Chat File Operation Recording
 
-**Milestone:** v1.0 | **Status:** Draft | **Date:** 2026-05-23
+**Milestone:** v1.1 | **Status:** Draft | **Date:** 2026-05-25
 
 ---
 
-## FR-1: Shared TypeScript Type Contracts
+## Types and Infrastructure
+
+### TYPE-01: FileOperationRecord Shared Types
+
+- [ ] **TYPE-01**: Define `FileOperationType` union type: `"create" | "overwrite" | "edit"`
+- [ ] **TYPE-02**: Define `FileOperationRecord` interface with fields: id, type, filePath, timestamp (number), success, conversationId, skillName, toolCallId (optional), linesChanged (optional), sizeBytes (optional), error (optional)
+- [ ] **TYPE-03**: All fields on `FileOperationRecord` are `readonly` (immutable pattern)
+
+**File:** `src/entityTypes/fileOperationTypes.ts`
+
+### TYPE-04: FileOperationTracker Service
+
+- [ ] **TRAK-01**: Create static `FileOperationTracker` class with `setWebContents(webContents)` and `emit(record)` methods
+- [ ] **TRAK-02**: `emit()` wraps IPC send in try/catch — failures never propagate to caller
+- [ ] **TRAK-03**: `emit()` checks `webContents` is not destroyed before sending
+- [ ] **TRAK-04**: Tracker holds an in-memory `Map<conversationId, FileOperationRecord[]>` capped at 500 records per conversation
+- [ ] **TRAK-05**: Auto-generates unique `id` (UUID or crypto) and `timestamp` (Date.now()) for each record
+
+**File:** `src/service/FileOperationTracker.ts`
+
+## Backend Integration
+
+### IPC Channel
+
+- [ ] **IPC-01**: Add `AI_FILE_OPERATION` channel constant (`"ai-chat:file-operation"`) to `src/config/channellist.ts`
+
+### ToolExecutor Integration
+
+- [ ] **EXEC-01**: Thread `conversationId` parameter through to `executeFileTool()` (currently not passed)
+- [ ] **EXEC-02**: After `FileToolService.execute()` returns for `file_write`, detect if file existed before to determine `create` vs `overwrite`
+- [ ] **EXEC-03**: After `FileToolService.execute()` returns for `file_edit`, emit `FileOperationRecord` with type `"edit"` and `linesChanged` from result
+- [ ] **EXEC-04**: Emit record on both success and failure branches — failed operations include error message
+- [ ] **EXEC-05**: Read-only tools (`file_read`, `glob_files`, `grep_files`) do NOT emit records
+- [ ] **EXEC-06**: Original tool result and error behavior preserved — tracking is additive only
+
+**File:** `src/service/ToolExecutor.ts` (modify `executeFileTool`)
+
+### Preload Whitelist
+
+- [ ] **PREL-01**: Add `AI_FILE_OPERATION` to all 4 whitelist arrays in `src/preload.ts`: receive, removeListener, removeAllListeners (and send if needed)
+
+**File:** `src/preload.ts`
+
+### Background Initialization
+
+- [ ] **INIT-01**: Call `FileOperationTracker.setWebContents(mainWindow.webContents)` after window creation in `src/background.ts`
+- [ ] **INIT-02**: Clear/reset tracker webContents reference when window is closed or recreated
+
+**File:** `src/background.ts`
+
+## Frontend UI
+
+### Subscription API
+
+- [ ] **SUB-01**: Add `subscribeToFileOperations(handler)` wrapper using `windowReceive(AI_FILE_OPERATION, handler)` in `src/views/api/aiChat.ts`
+- [ ] **SUB-02**: Add `unsubscribeFromFileOperations()` wrapper using `windowRemoveAllListeners(AI_FILE_OPERATION)`
+- [ ] **SUB-03**: Handler receives typed `FileOperationRecord` (no `any` casts)
+
+**File:** `src/views/api/aiChat.ts`
+
+### In-Chat Operation Badges
+
+- [ ] **BADGE-01**: Display color-coded inline badges in AiChatBox.vue for each file operation record
+- [ ] **BADGE-02**: Badge shows: operation type icon (create/overwrite/edit), file path (basename), success/failure indicator
+- [ ] **BADGE-03**: Failed operations show error message in badge
+- [ ] **BADGE-04**: Operation type colors: green for create, yellow for overwrite, blue for edit, red for failed
+- [ ] **BADGE-05**: Records are correlated to the correct assistant message via `conversationId`
+
+**File:** `src/views/components/aiChat/AiChatBox.vue` (or relevant chat component)
+
+### Expandable Diff Preview
+
+- [ ] **DIFF-01**: Edit operation badges include a collapsible diff section showing unified diff lines
+- [ ] **DIFF-02**: Diff lines are color-coded: green for additions, red for deletions
+- [ ] **DIFF-03**: Diff data sourced from `FileEditResult.diff` already computed by `FileToolService`
+
+### Click-to-Open File
+
+- [ ] **OPEN-01**: Clicking an operation badge opens the file in the system default editor
+- [ ] **OPEN-02**: Uses `shell.openPath(filePath)` via a new IPC handler or existing pattern
+- [ ] **OPEN-03**: Badge has cursor pointer and hover state to indicate clickability
+
+## Internationalization
+
+### Translations
+
+- [ ] **I18N-01**: Add `fileOperations` namespace to `src/views/lang/en.ts` with all keys: operation labels, status text, error messages, tooltip text
+- [ ] **I18N-02**: Add matching translations to `src/views/lang/zh.ts`
+- [ ] **I18N-03**: Add matching translations to `src/views/lang/es.ts`
+- [ ] **I18N-04**: Add matching translations to `src/views/lang/fr.ts`
+- [ ] **I18N-05**: Add matching translations to `src/views/lang/de.ts`
+- [ ] **I18N-06**: Add matching translations to `src/views/lang/ja.ts`
+- [ ] **I18N-07**: All user-facing text uses `t('fileOperations.key')` with English fallback pattern
+
+**Files:** `src/views/lang/{en,zh,es,fr,de,ja}.ts`
+
+---
+
+## Future Requirements (Deferred)
+
+### Database Persistence
+
+- **PERS-01**: Persist FileOperationRecord to SQLite via Entity/Model/Module architecture
+- **PERS-02**: Add history view showing past sessions' file operations
+- **PERS-03**: Add filters by operation type, date range, success state
+
+### Grouped Operation Display
+
+- **GRP-01**: Group consecutive file operations under a collapsible "N file operations" summary
+- **GRP-02**: Show operation count per assistant message
+
+### Delete Tracking
+
+- **DEL-01**: Track `file_delete` operations when a delete tool is added to FileToolService
+
+---
+
+## Out of Scope
+
+| Feature | Reason |
+|---------|--------|
+| Database persistence | In-memory only for v1.1; reduces complexity. Add if users demand history |
+| Full rollback/undo system | Requires content snapshots and reverse-apply engine; massive scope creep |
+| Recording read-only operations | file_read, glob_files, grep_files are not mutations; recording them adds noise |
+| Separate operation history panel | Inline badges in chat are the right UX; separate panel splits attention |
+| Rate limiting record emission | Upstream rate limiter in ToolExecutor already prevents floods |
+| `file_delete` tracking | No `file_delete` tool exists yet; defer until tool is added |
+
+---
+
+## Traceability
+
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| TYPE-01 | Phase 5 | Pending |
+| TYPE-02 | Phase 5 | Pending |
+| TYPE-03 | Phase 5 | Pending |
+| TRAK-01 | Phase 5 | Pending |
+| TRAK-02 | Phase 5 | Pending |
+| TRAK-03 | Phase 5 | Pending |
+| TRAK-04 | Phase 5 | Pending |
+| TRAK-05 | Phase 5 | Pending |
+| IPC-01 | Phase 5 | Pending |
+| EXEC-01 | Phase 6 | Pending |
+| EXEC-02 | Phase 6 | Pending |
+| EXEC-03 | Phase 6 | Pending |
+| EXEC-04 | Phase 6 | Pending |
+| EXEC-05 | Phase 6 | Pending |
+| EXEC-06 | Phase 6 | Pending |
+| PREL-01 | Phase 6 | Pending |
+| INIT-01 | Phase 6 | Pending |
+| INIT-02 | Phase 6 | Pending |
+| SUB-01 | Phase 7 | Pending |
+| SUB-02 | Phase 7 | Pending |
+| SUB-03 | Phase 7 | Pending |
+| BADGE-01 | Phase 7 | Pending |
+| BADGE-02 | Phase 7 | Pending |
+| BADGE-03 | Phase 7 | Pending |
+| BADGE-04 | Phase 7 | Pending |
+| BADGE-05 | Phase 7 | Pending |
+| DIFF-01 | Phase 7 | Pending |
+| DIFF-02 | Phase 7 | Pending |
+| DIFF-03 | Phase 7 | Pending |
+| OPEN-01 | Phase 7 | Pending |
+| OPEN-02 | Phase 7 | Pending |
+| OPEN-03 | Phase 7 | Pending |
+| I18N-01 | Phase 8 | Pending |
+| I18N-02 | Phase 8 | Pending |
+| I18N-03 | Phase 8 | Pending |
+| I18N-04 | Phase 8 | Pending |
+| I18N-05 | Phase 8 | Pending |
+| I18N-06 | Phase 8 | Pending |
+| I18N-07 | Phase 8 | Pending |
+
+**Coverage:**
+- v1.1 requirements: 37 total
+- Mapped to phases: 37
+- Unmapped: 0 ✓
+
+---
+*Requirements defined: 2026-05-25*
+*Last updated: 2026-05-25 after initial definition*
 
 **Priority:** P0 | **Phase:** 1
 
