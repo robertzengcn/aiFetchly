@@ -179,8 +179,8 @@
 | I18N-07 | Phase 8 | Pending |
 
 **Coverage:**
-- v1.1 requirements: 37 total
-- Mapped to phases: 37
+- v1.1 requirements: 39 total
+- Mapped to phases: 39
 - Unmapped: 0 ✓
 
 ---
