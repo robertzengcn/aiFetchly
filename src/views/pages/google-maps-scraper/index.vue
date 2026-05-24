@@ -467,7 +467,7 @@ async function loadGoogleAccounts(): Promise<void> {
     const result = await getSocialAccountlist({
       page: 1,
       size: 100,
-      where: "social_type_id=4",
+      where: "Google",
     });
     googleAccounts.value = result.data ?? [];
   } catch (err) {
