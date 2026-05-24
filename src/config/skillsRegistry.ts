@@ -29,7 +29,6 @@ import {
   listEmailFilters,
   listEmailServices,
   listEmailTemplates,
-  previewBulkEmailSendTask,
   startBulkEmailSendTask,
 } from "@/service/EmailMarketingAiTools";
 
@@ -1155,96 +1154,9 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     },
   },
   {
-    name: "preview_bulk_email_send_task",
-    description:
-      "Validate and preview a bulk email send task before asking for confirmation. Provide either template_ids or email_content (subject + content), not both empty.",
-    parameters: {
-      type: "object",
-      properties: {
-        email_search_task_id: {
-          type: "number",
-          description:
-            "Existing email search task ID. Provide exactly one of this or emails.",
-        },
-        emails: {
-          type: "array",
-          description:
-            "Direct recipient emails. Provide exactly one of this or email_search_task_id.",
-          items: {
-            oneOf: [
-              {
-                type: "string",
-                format: "email",
-              },
-              {
-                type: "object",
-                properties: {
-                  address: { type: "string", format: "email" },
-                  title: { type: "string" },
-                  source: { type: "string" },
-                },
-                required: ["address"],
-              },
-            ],
-          },
-        },
-        email_content: {
-          type: "object",
-          description:
-            "Inline email body when not using templates. Requires subject and content (HTML).",
-          properties: {
-            subject: {
-              type: "string",
-              description: "Email subject line.",
-            },
-            content: {
-              type: "string",
-              description: "Email HTML body.",
-            },
-          },
-          required: ["subject", "content"],
-        },
-        template_ids: {
-          type: "array",
-          description:
-            "Optional email template IDs. Omit when using email_content.",
-          items: { type: "number" },
-        },
-        filter_ids: {
-          type: "array",
-          description: "Optional email filter IDs to apply.",
-          items: { type: "number" },
-          default: [],
-        },
-        service_ids: {
-          type: "array",
-          description: "Email service IDs to send with.",
-          items: { type: "number" },
-        },
-        not_duplicate: {
-          type: "boolean",
-          description: "Whether to remove duplicate recipients before sending.",
-          default: true,
-        },
-      },
-      required: ["service_ids"],
-    },
-    tier: "main",
-    requiresConfirmation: false,
-    permissionCategory: "automation",
-    source: "built-in",
-    execute: async (args) => {
-      const result = await previewBulkEmailSendTask(args);
-      return {
-        success: result.success,
-        result: result as unknown as Record<string, unknown>,
-      };
-    },
-  },
-  {
     name: "start_bulk_email_send_task",
     description:
-      "Create and start a bulk email send task. Requires confirmation because it sends email. Provide either template_ids or email_content (subject + content), not both empty.",
+      "Create and start a bulk email send task. Requires confirmation because it sends email. Provide either template_ids or email_subject and email_html_content, not both empty.",
     parameters: {
       type: "object",
       properties: {
@@ -1275,26 +1187,19 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
             ],
           },
         },
-        email_content: {
-          type: "object",
+        email_subject: {
+          type: "string",
           description:
-            "Inline email body when not using templates. Requires subject and content (HTML).",
-          properties: {
-            subject: {
-              type: "string",
-              description: "Email subject line.",
-            },
-            content: {
-              type: "string",
-              description: "Email HTML body.",
-            },
-          },
-          required: ["subject", "content"],
+            "Email subject line (required when not using templates).",
+        },
+        email_html_content: {
+          type: "string",
+          description: "Email HTML body (required when not using templates).",
         },
         template_ids: {
           type: "array",
           description:
-            "Optional email template IDs. Omit when using email_content.",
+            "Optional email template IDs. Omit when using email_subject and email_html_content.",
           items: { type: "number" },
         },
         filter_ids: {

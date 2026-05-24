@@ -385,25 +385,6 @@ class="message-bubble" :class="{
         </div>
       </div>
 
-      <!-- Tool Result Display -->
-      <div v-if="showToolResult && toolResult" class="message-wrapper assistant">
-        <div class="message-content">
-          <div class="message-avatar">
-            <v-icon color="purple">mdi-robot</v-icon>
-          </div>
-          <div class="message-bubble tool-result">
-            <div class="tool-result-header">
-              <v-icon size="small" color="success" class="mr-1">mdi-check-circle</v-icon>
-              <span><strong>Tool Result</strong></span>
-            </div>
-            <details>
-              <summary>View Result</summary>
-              <pre>{{ JSON.stringify(toolResult, null, 2) }}</pre>
-            </details>
-          </div>
-        </div>
-      </div>
-
       <!-- Plan Execution Display -->
       <div v-if="currentPlan && isPlanExecuting" class="message-wrapper assistant plan-execution">
         <div class="message-content">
@@ -1487,32 +1468,40 @@ async function sendMessage(
             }
 
             if (chunk.toolResult || hasContentPayload) {
-              toolResult.value = (chunk.toolResult as Record<string, unknown>) || null;
-              showToolResult.value = false;
+              // Deduplicate: skip if a TOOL_RESULT for this toolId already exists
+              const alreadyExists = chunk.toolId
+                ? messages.value.some(
+                    (m) =>
+                      m.messageType === MessageType.TOOL_RESULT &&
+                      m.metadata?.toolId === chunk.toolId
+                  )
+                : false;
 
-              // Add tool result message to chat history
-              const toolResultMessage: ChatMessage = {
-                id: `tool-result-${chunk.toolId || Date.now()}-${Date.now()}`,
-                role: 'assistant',
-                content:
-                  typeof chunk.content === 'string' && chunk.content.trim().length > 0
-                    ? chunk.content
-                    : JSON.stringify(chunk.toolResult ?? {}, null, 2),
-                timestamp: new Date(),
-                conversationId: chunk.conversationId || conversationId.value,
-                messageType: MessageType.TOOL_RESULT,
-                metadata: {
-                  toolName: chunk.toolName,
-                  toolId: chunk.toolId,
-                  toolResult: chunk.toolResult,
-                  success: (chunk.toolResult as { success?: boolean })?.success !== false,
-                  executionTimeMs: (chunk.toolResult as { executionTimeMs?: number })?.executionTimeMs,
-                  summary: (chunk.toolResult as { summary?: string })?.summary,
-                  error: (chunk.toolResult as { error?: string })?.error
-                }
-              };
-              messages.value.push(toolResultMessage);
-              throttledScrollToBottom();
+              if (!alreadyExists) {
+                // Add tool result message to chat history
+                const toolResultMessage: ChatMessage = {
+                  id: `tool-result-${chunk.toolId || Date.now()}-${Date.now()}`,
+                  role: 'assistant',
+                  content:
+                    typeof chunk.content === 'string' && chunk.content.trim().length > 0
+                      ? chunk.content
+                      : JSON.stringify(chunk.toolResult ?? {}, null, 2),
+                  timestamp: new Date(),
+                  conversationId: chunk.conversationId || conversationId.value,
+                  messageType: MessageType.TOOL_RESULT,
+                  metadata: {
+                    toolName: chunk.toolName,
+                    toolId: chunk.toolId,
+                    toolResult: chunk.toolResult,
+                    success: (chunk.toolResult as { success?: boolean })?.success !== false,
+                    executionTimeMs: (chunk.toolResult as { executionTimeMs?: number })?.executionTimeMs,
+                    summary: (chunk.toolResult as { summary?: string })?.summary,
+                    error: (chunk.toolResult as { error?: string })?.error
+                  }
+                };
+                messages.value.push(toolResultMessage);
+                throttledScrollToBottom();
+              }
             }
             isTyping.value = true; // Resume typing indicator
             break;
