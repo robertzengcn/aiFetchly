@@ -121,8 +121,9 @@ export function registerGoogleMapsHandlers(): void {
           }
           activeModules.delete(requestId);
         })
-        .catch(() => {
-          // error intentionally not exposed to renderer
+        .catch((err: unknown) => {
+          const errorMessage = err instanceof Error ? err.message : String(err);
+          console.error("[GoogleMaps] Search failed:", errorMessage);
           if (!senderWebContents.isDestroyed()) {
             senderWebContents.send(GOOGLE_MAPS_SEARCH_RESULT, {
               requestId,
@@ -131,7 +132,7 @@ export function registerGoogleMapsHandlers(): void {
                 query: input.query,
                 location: input.location,
                 totalResults: 0,
-                summary: "Search failed. Please try again.",
+                summary: `Search failed: ${errorMessage}`,
                 results: [],
               },
             });

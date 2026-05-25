@@ -169,6 +169,7 @@ export class GoogleMapsModule extends BaseModule {
       });
 
       worker.on("error", (err) => {
+        console.error("[GoogleMaps] Worker process error:", err.message);
         clearTimeout(timeoutTimer);
         this.activeSearches.delete(requestId);
         reject(new Error(`Worker error: ${err.message}`));
@@ -176,6 +177,9 @@ export class GoogleMapsModule extends BaseModule {
 
       worker.on("exit", (code) => {
         if (this.activeSearches.has(requestId)) {
+          console.error(
+            `[GoogleMaps] Worker exited unexpectedly with code ${code}`
+          );
           clearTimeout(timeoutTimer);
           this.activeSearches.delete(requestId);
           reject(new Error(`Worker exited unexpectedly with code ${code}`));
