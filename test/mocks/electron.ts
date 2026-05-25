@@ -4,15 +4,15 @@
  */
 
 export const app = {
-  getName: () => 'aiFetchly',
+  getName: () => "aiFetchly",
   getPath: (name: string) => {
     const paths: Record<string, string> = {
-      home: '/tmp/test/home',
-      appData: '/tmp/test/appdata',
-      userData: '/tmp/test/userdata',
-      temp: '/tmp/test/temp',
+      home: "/tmp/test/home",
+      appData: "/tmp/test/appdata",
+      userData: "/tmp/test/userdata",
+      temp: "/tmp/test/temp",
     };
-    return paths[name] || '/tmp/test';
+    return paths[name] || "/tmp/test";
   },
 };
 
@@ -84,7 +84,10 @@ export const ipcRenderer = {
   once: (_channel: string, _handler: (...args: unknown[]) => unknown) => {
     // Mock implementation
   },
-  removeListener: (_channel: string, _handler: (...args: unknown[]) => unknown) => {
+  removeListener: (
+    _channel: string,
+    _handler: (...args: unknown[]) => unknown
+  ) => {
     // Mock implementation
   },
   removeAllListeners: (_channel?: string) => {
@@ -93,6 +96,12 @@ export const ipcRenderer = {
 };
 
 /** Matches Electron `webUtils`; runtime preload resolves real `electron` from node_modules. */
+/** Mock WebContents for services that need to send IPC to renderer. */
+export interface WebContents {
+  send(_channel: string, ..._args: unknown[]): void;
+  isDestroyed(): boolean;
+}
+
 export const webUtils = {
   getPathForFile(_file: File): string {
     return "";
