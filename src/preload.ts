@@ -253,6 +253,7 @@ import {
   GOOGLE_MAPS_HISTORY_LIST,
   GOOGLE_MAPS_HISTORY_DETAIL,
   GOOGLE_MAPS_HISTORY_DELETE,
+  AI_FILE_OPEN,
 } from "@/config/channellist";
 
 // window.ipcRenderer = ipcRenderer
@@ -668,6 +669,8 @@ contextBridge.exposeInMainWorld("api", {
       GOOGLE_MAPS_HISTORY_LIST,
       GOOGLE_MAPS_HISTORY_DETAIL,
       GOOGLE_MAPS_HISTORY_DELETE,
+      // AI File Operation Channels
+      AI_FILE_OPEN,
     ];
     if (validChannels.includes(channel)) {
       return ipcRenderer.invoke(channel, data);

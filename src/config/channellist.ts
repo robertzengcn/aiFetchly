@@ -251,6 +251,8 @@ export const AI_CHAT_CLEAR = "ai-chat:clear";
 export const AI_CHAT_CONVERSATIONS = "ai-chat:conversations";
 /** Main->Renderer: file operation record emitted after AI chat file_write/file_edit */
 export const AI_FILE_OPERATION = "ai-chat:file-operation";
+/** Renderer->Main: open a file in the system default application */
+export const AI_FILE_OPEN = "ai-chat:file-open";
 export const AI_KEYWORDS_GENERATE = "ai-keywords:generate";
 
 // MCP Tool Management Channels
