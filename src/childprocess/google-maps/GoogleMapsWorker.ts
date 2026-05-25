@@ -272,10 +272,14 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
     const collectedCards: GoogleMapsBusinessResult[] = [];
     let noNewCardsCount = 0;
     const maxNoNewCards = 3;
+    let previousCardCount = 0;
+    const scrollStartTime = Date.now();
+    const maxScrollTimeMs = 60_000; // Hard timeout: 60s max for scrolling
 
     while (
-      collectedCards.length < maxResults &&
-      noNewCardsCount < maxNoNewCards
+      previousCardCount < maxResults &&
+      noNewCardsCount < maxNoNewCards &&
+      Date.now() - scrollStartTime < maxScrollTimeMs
     ) {
       if (isCancelled) {
         sendProgress(
@@ -302,8 +306,9 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
         return cards.length;
       });
 
-      if (cardCount > collectedCards.length) {
+      if (cardCount > previousCardCount) {
         noNewCardsCount = 0;
+        previousCardCount = cardCount;
       } else {
         noNewCardsCount++;
       }
