@@ -487,6 +487,7 @@ async function handleStartSearch(): Promise<void> {
   lastLocation.value = location.value.trim();
 
   try {
+    setupResultListener();
     const resp = await startGoogleMapsSearch({
       query: query.value.trim(),
       location: location.value.trim(),
@@ -497,7 +498,6 @@ async function handleStartSearch(): Promise<void> {
       account_id: selectedAccountId.value ?? undefined,
     });
     requestId.value = resp.requestId;
-    setupResultListener();
   } catch (err) {
     searchState.value = "failed";
     error.value =
