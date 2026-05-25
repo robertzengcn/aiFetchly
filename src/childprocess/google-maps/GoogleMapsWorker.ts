@@ -276,6 +276,10 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
     const scrollStartTime = Date.now();
     const maxScrollTimeMs = 60_000; // Hard timeout: 60s max for scrolling
 
+    console.log(
+      `[DEBUG] Starting scroll loop — maxResults=${maxResults}, maxNoNewCards=${maxNoNewCards}, maxScrollTime=${maxScrollTimeMs}ms`
+    );
+
     while (
       previousCardCount < maxResults &&
       noNewCardsCount < maxNoNewCards &&
@@ -306,11 +310,19 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
         return cards.length;
       });
 
+      const elapsed = Date.now() - scrollStartTime;
+      console.log(
+        `[DEBUG] Scroll loop — cardCount=${cardCount}, previousCardCount=${previousCardCount}, noNewCardsCount=${noNewCardsCount}, elapsed=${elapsed}ms`
+      );
+
       if (cardCount > previousCardCount) {
         noNewCardsCount = 0;
         previousCardCount = cardCount;
       } else {
         noNewCardsCount++;
+        console.log(
+          `[DEBUG] No new cards (${noNewCardsCount}/${maxNoNewCards})`
+        );
       }
 
       // Scroll the feed container to load more
@@ -324,10 +336,22 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
       await sleep(1500);
     }
 
-    // Get all card elements
-    const cardHandles = await page.$$('div[role="feed"] > div > div[jsaction]');
+    const scrollExitReason =
+      previousCardCount >= maxResults
+        ? `reached maxResults (${previousCardCount} >= ${maxResults})`
+        : noNewCardsCount >= maxNoNewCards
+        ? `no new cards after ${maxNoNewCards} scrolls`
+        : `scroll timeout (${Date.now() - scrollStartTime}ms)`;
+    console.log(
+      `[DEBUG] Scroll loop ended — reason: ${scrollExitReason}, total cards on page: ${previousCardCount}`
+    );
 
+    // Get all card elements — capture fresh handles after scrolling is done
+    const cardHandles = await page.$$('div[role="feed"] > div > div[jsaction]');
     const limit = Math.min(cardHandles.length, maxResults);
+    console.log(
+      `[DEBUG] cardHandles.length=${cardHandles.length}, limit=${limit}`
+    );
 
     // Now extract data from each card by clicking into detail view
     sendProgress(
@@ -364,10 +388,54 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
         `Extracting business ${i + 1} of ${limit}...`
       );
 
+      console.log(`[DEBUG] === Extracting card ${i + 1}/${limit} ===`);
+
       try {
-        // Click card to open detail panel
-        const card = cardHandles[i];
-        await card.click();
+        // Re-query fresh card handles each iteration (DOM changes after goBack)
+        const freshCards = await page.$$(
+          'div[role="feed"] > div > div[jsaction]'
+        );
+        console.log(`[DEBUG] Fresh card handles on page: ${freshCards.length}`);
+
+        if (i >= freshCards.length) {
+          console.log(
+            `[DEBUG] Card index ${i} out of range (only ${freshCards.length} cards). Re-navigating to search URL.`
+          );
+          await page.goto(searchUrl, {
+            waitUntil: "networkidle2",
+            timeout: 30000,
+          });
+          await page
+            .waitForSelector('[role="feed"]', { timeout: 15000 })
+            .catch(() => {
+              console.log(`[DEBUG] Feed not found after re-navigate`);
+            });
+          // Scroll down to where we were
+          for (let s = 0; s < Math.ceil((i + 1) / 10); s++) {
+            await page.evaluate(() => {
+              const feed = document.querySelector('[role="feed"]');
+              if (feed) feed.scrollTop = feed.scrollHeight;
+            });
+            await sleep(1000);
+          }
+          const retryCards = await page.$$(
+            'div[role="feed"] > div > div[jsaction]'
+          );
+          console.log(
+            `[DEBUG] After re-navigate and scroll: ${retryCards.length} cards`
+          );
+          if (i >= retryCards.length) {
+            console.log(`[DEBUG] Still can't find card ${i}. Skipping.`);
+            continue;
+          }
+          await retryCards[i].click();
+        } else {
+          await freshCards[i].click();
+        }
+
+        console.log(
+          `[DEBUG] Clicked card ${i + 1}, waiting for detail panel...`
+        );
         await randomDelay(1000, 2000);
 
         // Wait for detail panel
@@ -375,24 +443,36 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
           await page.waitForSelector('h1[class*="fontHeadline"]', {
             timeout: 10000,
           });
+          console.log(`[DEBUG] Detail panel h1.fontHeadline found`);
         } catch {
           // Fallback: wait for any h1
+          console.log(
+            `[DEBUG] h1.fontHeadline not found, trying fallback h1...`
+          );
           await page.waitForSelector("h1", { timeout: 5000 });
+          console.log(`[DEBUG] Fallback h1 found`);
         }
 
         await randomDelay(500, 1000);
 
         // Extract business data
         const business = await extractBusinessData(page);
+        console.log(
+          `[DEBUG] Extracted: name="${business.name}", phone="${
+            business.phone ?? "N/A"
+          }", website="${business.website ?? "N/A"}"`
+        );
         if (business.name) {
           collectedCards.push(business);
         }
 
         // Go back to results list
+        console.log(`[DEBUG] Navigating back to results list...`);
         await page
           .goBack({ waitUntil: "networkidle2", timeout: 10000 })
           .catch(async () => {
             // If goBack fails, re-navigate
+            console.log(`[DEBUG] goBack failed, re-navigating to searchUrl`);
             await page.goto(searchUrl, {
               waitUntil: "networkidle2",
               timeout: 30000,
@@ -404,10 +484,16 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
         await page
           .waitForSelector('[role="feed"]', { timeout: 10000 })
           .catch(() => {
-            /* feed may not re-appear after navigation */
+            console.log(`[DEBUG] Feed did not re-appear after goBack`);
           });
+        console.log(
+          `[DEBUG] Back on results page, collectedCards so far: ${collectedCards.length}`
+        );
       } catch (err) {
-        console.error(`Error extracting card ${i}:`, err);
+        console.error(
+          `[DEBUG] Error extracting card ${i + 1}:`,
+          err instanceof Error ? err.message : err
+        );
         // Continue to next card
         await page
           .goto(searchUrl, { waitUntil: "networkidle2", timeout: 30000 })
@@ -417,6 +503,10 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
         await sleep(2000);
       }
     }
+
+    console.log(
+      `[DEBUG] Extraction complete. collectedCards=${collectedCards.length}, deduplicating...`
+    );
 
     // Deduplicate results
     const finalResults = deduplicate(collectedCards);
