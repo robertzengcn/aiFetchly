@@ -551,7 +551,9 @@ export async function startBulkEmailSendTask(
           : undefined,
     });
     const entity = mapBuckemailTaskStartInputToEntity(taskInput);
-    const taskId = await module.startBuckEmailTask(entity);
+    const taskId = await module.startBuckEmailTask(entity, {
+      waitForExit: true,
+    });
 
     return {
       success: true,
