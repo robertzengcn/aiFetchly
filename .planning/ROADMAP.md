@@ -32,7 +32,7 @@
 
 **Milestone Goal:** Record every file mutation performed by AI chat skills and display those records as inline badges in the AI chat box, giving users real-time visibility into what the AI changed.
 
-- [ ] **Phase 5: Types and Tracker Foundation** - Shared types, tracker service, IPC channel constant
+- [x] **Phase 5: Types and Tracker Foundation** - Shared types, tracker service, IPC channel constant
 - [ ] **Phase 6: Backend Integration** - ToolExecutor interception, preload whitelist, background init
 - [ ] **Phase 7: Frontend Badges and UI** - Subscription API, in-chat badges, diff preview, click-to-open
 - [ ] **Phase 8: Translations and Polish** - 6-language i18n for all file operation UI text
@@ -52,7 +52,7 @@
 **Plans:** 1 plan
 
 Plans:
-- [ ] 05-01-PLAN.md -- Create FileOperationRecord types, AI_FILE_OPERATION channel constant, FileOperationTracker service with tests
+- [x] 05-01-PLAN.md -- Create FileOperationRecord types, AI_FILE_OPERATION channel constant, FileOperationTracker service with tests
 
 ### Phase 6: Backend Integration
 **Goal**: Every file_write and file_edit executed by the AI automatically emits a FileOperationRecord through the IPC channel, with zero impact on existing tool behavior.
@@ -101,7 +101,7 @@ Phases execute in numeric order: 5 -> 6 -> 7 -> 8
 | 2. Module and Worker Implementation | v1.0 | 2/2 | Complete | 2026-05-23 |
 | 3. UI Page and Integration | v1.0 | 2/2 | Complete | 2026-05-23 |
 | 4. Persistence, Export, and Validation | v1.0 | 1/1 | Complete | 2026-05-23 |
-| 5. Types and Tracker Foundation | v1.1 | 0/1 | Not started | - |
+| 5. Types and Tracker Foundation | v1.1 | 1/1 | Complete | 2026-05-25 |
 | 6. Backend Integration | v1.1 | 0/? | Not started | - |
 | 7. Frontend Badges and UI | v1.1 | 0/? | Not started | - |
 | 8. Translations and Polish | v1.1 | 0/? | Not started | - |
