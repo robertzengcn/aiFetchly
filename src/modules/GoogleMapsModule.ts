@@ -9,6 +9,7 @@
 
 import { utilityProcess, app } from "electron";
 import path from "path";
+import fs from "fs";
 import { v4 as uuidv4 } from "uuid";
 import { BaseModule } from "@/modules/baseModule";
 import {
@@ -80,6 +81,9 @@ export class GoogleMapsModule extends BaseModule {
 
       let worker: UtilityProcessWorker;
       try {
+        if (!fs.existsSync(workerPath)) {
+          throw new Error(`Worker file not found at path: ${workerPath}`);
+        }
         worker = utilityProcess.fork(workerPath, [], {
           stdio: "pipe",
           execArgv: ["puppeteer-cluster:*"],
