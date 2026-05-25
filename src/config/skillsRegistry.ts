@@ -238,6 +238,74 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     },
   },
   {
+    name: "search_yandex_maps_businesses",
+    description:
+      "Search Yandex Maps for local businesses by keyword and location. Returns structured business data including name, rating, review count, category, address, phone, website, and Yandex Maps URL. Supports Russian and CIS markets. Use this for finding businesses in Russia and surrounding regions, lead generation, and market research.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description:
+            "Business keyword or category to search for (e.g., 'dentist', 'Italian restaurant', 'plumber')",
+        },
+        location: {
+          type: "string",
+          description:
+            "Target location for the search (e.g., 'Moscow', 'Saint Petersburg', 'Novosibirsk')",
+        },
+        max_results: {
+          type: "number",
+          description:
+            "Maximum number of business results to return (default: 20, max: 50)",
+          default: 20,
+        },
+        include_website: {
+          type: "boolean",
+          description:
+            "Whether to extract website URLs from business listings (default: true)",
+          default: true,
+        },
+        include_reviews: {
+          type: "boolean",
+          description:
+            "Whether to include review count in results (default: false)",
+          default: false,
+        },
+        language: {
+          type: "string",
+          description:
+            'Language for Yandex Maps UI and results (e.g., "ru", "en", "tr"). Defaults to "ru"',
+          default: "ru",
+        },
+        region: {
+          type: "string",
+          description:
+            'Region code for search context (e.g., "ru", "kz", "by"). Optional',
+        },
+        show_browser: {
+          type: "boolean",
+          description:
+            "Whether to show the browser window during scraping for debugging (default: false)",
+          default: false,
+        },
+      },
+      required: ["query", "location"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args, context) => {
+      const result = await ToolExecutor.execute(
+        "search_yandex_maps_businesses",
+        args,
+        context.conversationId
+      );
+      return { success: true, result };
+    },
+  },
+  {
     name: "get_available_yellow_pages_platforms",
     description:
       "A function that returns the live, up-to-date, authenticated list of Yellow Pages platforms integrated with the system's current APIs, including their latest API version and supported country codes.",
