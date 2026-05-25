@@ -111,6 +111,7 @@ export type GoogleMapsProgressStatus =
   | "idle"
   | "validating"
   | "launching"
+  | "navigating"
   | "loading"
   | "extracting"
   | "completed"

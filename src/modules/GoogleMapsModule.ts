@@ -1,13 +1,14 @@
 /**
  * Google Maps Module — orchestration layer shared by AI skill and UI page.
  *
- * Spawns a utility process worker (GoogleMapsWorker) to perform Puppeteer-based
+ * Spawns a child process worker (GoogleMapsWorker) with IPC to perform Puppeteer-based
  * Google Maps scraping. Manages worker lifecycle, timeouts, and cancellation.
  *
  * Extends BaseModule for persistence.
  */
 
-import { utilityProcess, app } from "electron";
+import { app } from "electron";
+import { spawn, type ChildProcess } from "child_process";
 import path from "path";
 import fs from "fs";
 import { v4 as uuidv4 } from "uuid";
@@ -17,6 +18,7 @@ import {
   type GoogleMapsSearchResult,
   type GoogleMapsBusinessResult,
   type GoogleMapsProgressEvent,
+  type GoogleMapsProgressStatus,
   GOOGLE_MAPS_DEFAULT_MAX_RESULTS,
   GOOGLE_MAPS_HARD_CAP,
 } from "@/entityTypes/googleMapsTypes";
@@ -27,21 +29,78 @@ import type { GoogleMapsSearchRecordEntity } from "@/entity/GoogleMapsSearchReco
 // Types
 // ---------------------------------------------------------------------------
 
-/**
- * Minimal interface for the subset of Electron.UtilityProcess
- * methods used by this module (fork, on, send, kill).
- */
-interface UtilityProcessWorker {
-  on(event: "message", listener: (message: unknown) => void): this;
-  on(event: "error", listener: (error: Error) => void): this;
-  on(event: "exit", listener: (code: number) => void): this;
-  send(message: unknown): void;
-  kill(): void;
+function parseWorkerMessage(raw: unknown): Record<string, unknown> | null {
+  if (raw === null || raw === undefined) {
+    return null;
+  }
+  if (typeof raw === "string") {
+    try {
+      return JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      return null;
+    }
+  }
+  return raw as Record<string, unknown>;
 }
+
+const GOOGLE_MAPS_PROGRESS_STATUSES: ReadonlySet<string> = new Set([
+  "idle",
+  "validating",
+  "launching",
+  "navigating",
+  "loading",
+  "extracting",
+  "completed",
+  "cancelled",
+  "failed",
+  "timed_out",
+]);
+
+function parseGoogleMapsProgressEvent(
+  data: Record<string, unknown>
+): GoogleMapsProgressEvent | null {
+  if (typeof data.requestId !== "string") {
+    return null;
+  }
+  if (
+    typeof data.status !== "string" ||
+    !GOOGLE_MAPS_PROGRESS_STATUSES.has(data.status)
+  ) {
+    return null;
+  }
+  if (typeof data.current !== "number" || typeof data.total !== "number") {
+    return null;
+  }
+  if (typeof data.message !== "string") {
+    return null;
+  }
+  return {
+    requestId: data.requestId,
+    status: data.status as GoogleMapsProgressStatus,
+    current: data.current,
+    total: data.total,
+    message: data.message,
+  };
+}
+
+/** Messages sent to the Google Maps child process over IPC. */
+type WorkerOutboundPayload =
+  | {
+      type: "start";
+      requestId: string;
+      query: string;
+      location: string;
+      maxResults: number;
+      includeWebsite: boolean;
+      includeReviews: boolean;
+      showBrowser: boolean;
+      cookies?: unknown[];
+    }
+  | { type: "cancel"; requestId: string };
 
 /** Tracks an active search session. */
 interface ActiveSearch {
-  worker: UtilityProcessWorker;
+  worker: ChildProcess;
   resolve: (result: GoogleMapsSearchResult) => void;
   reject: (error: Error) => void;
   timeoutTimer: ReturnType<typeof setTimeout>;
@@ -77,23 +136,27 @@ export class GoogleMapsModule extends BaseModule {
 
     return new Promise((resolve, reject) => {
       const requestId = uuidv4();
-      const workerPath = this.getWorkerPath();
 
-      let worker: UtilityProcessWorker;
+      let worker: ChildProcess;
       try {
-        if (!fs.existsSync(workerPath)) {
-          throw new Error(`Worker file not found at path: ${workerPath}`);
+        const resolvedWorkerPath = this.resolveWorkerPath();
+        if (!fs.existsSync(resolvedWorkerPath)) {
+          throw new Error(
+            `Google Maps worker not found at ${resolvedWorkerPath}. ` +
+              `Run \`yarn make\` or restart \`yarn dev\` to build dist/childprocess/google-maps/GoogleMapsWorker.js.`
+          );
         }
-        worker = utilityProcess.fork(workerPath, [], {
-          stdio: "pipe",
-          execArgv: ["puppeteer-cluster:*"],
+        // child_process.spawn + ipc stdio (utilityProcess.fork rejects piped stdin with ipc)
+        worker = spawn(process.execPath, [resolvedWorkerPath], {
+          stdio: ["pipe", "pipe", "pipe", "ipc"],
           env: {
             ...process.env,
             NODE_OPTIONS: "",
+            ELECTRON_RUN_AS_NODE: "1",
             ELECTRON_APP_NAME: app.getName(),
             ELECTRON_USER_DATA_PATH: app.getPath("userData"),
           },
-        }) as unknown as UtilityProcessWorker;
+        });
       } catch (err) {
         reject(
           new Error(
@@ -119,11 +182,13 @@ export class GoogleMapsModule extends BaseModule {
       };
       this.activeSearches.set(requestId, search);
 
-      worker.on("message", (msg: unknown) => {
-        const data = msg as Record<string, unknown>;
+      worker.on("message", (raw: unknown) => {
+        const data = parseWorkerMessage(raw);
+        if (!data) return;
         if (data.type === "progress" && data.requestId === requestId) {
-          if (search.progressCallback) {
-            search.progressCallback(msg as GoogleMapsProgressEvent);
+          const progress = parseGoogleMapsProgressEvent(data);
+          if (search.progressCallback && progress) {
+            search.progressCallback(progress);
           }
           return;
         }
@@ -191,7 +256,7 @@ export class GoogleMapsModule extends BaseModule {
       });
 
       // Send start command to worker
-      worker.send({
+      this.sendToWorker(worker, {
         type: "start",
         requestId,
         query: input.query.trim(),
@@ -220,7 +285,7 @@ export class GoogleMapsModule extends BaseModule {
     search.reject(new Error("Search cancelled by user"));
 
     try {
-      search.worker.send({ type: "cancel", requestId });
+      this.sendToWorker(search.worker, { type: "cancel", requestId });
     } catch {
       // Worker may already be dead
     }
@@ -275,10 +340,39 @@ export class GoogleMapsModule extends BaseModule {
   }
 
   /**
-   * Get the path to the Google Maps worker entry point.
-   * In production, the worker is built to the output directory.
+   * Resolve the Google Maps worker entry script (built by Forge / vite.googleMapsWorker).
    */
-  private getWorkerPath(): string {
-    return path.join(__dirname, "GoogleMapsWorker.js");
+  private resolveWorkerPath(): string {
+    const candidates = [
+      path.join(__dirname, "../childprocess/google-maps/GoogleMapsWorker.js"),
+      path.join(
+        process.cwd(),
+        "dist/childprocess/google-maps/GoogleMapsWorker.js"
+      ),
+      path.join(__dirname, "GoogleMapsWorker.js"),
+    ];
+
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+
+    throw new Error(
+      `Google Maps worker file not found. Tried: ${candidates.join(", ")}`
+    );
+  }
+
+  private sendToWorker(
+    worker: ChildProcess,
+    payload: WorkerOutboundPayload
+  ): void {
+    if (typeof worker.send === "function") {
+      worker.send(payload);
+      return;
+    }
+    throw new Error(
+      "Google Maps worker IPC is unavailable. Restart the app after `yarn make` so the worker is built."
+    );
   }
 }
