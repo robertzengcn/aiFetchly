@@ -105,6 +105,14 @@ interface ActiveSearch {
   progressCallback?: (event: YandexMapsProgressEvent) => void;
 }
 
+/** Options for customizing executeSearch behavior (used by IPC handler). */
+export interface YandexMapsExecuteOptions {
+  /** External request ID to use instead of generating one internally. */
+  externalRequestId?: string;
+  /** Callback invoked on each progress event from the worker. */
+  onProgress?: (event: YandexMapsProgressEvent) => void;
+}
+
 // ---------------------------------------------------------------------------
 // YandexMapsModule
 // ---------------------------------------------------------------------------
@@ -122,7 +130,8 @@ export class YandexMapsModule extends BaseModule {
    * Used by ToolExecutor for AI skill invocation.
    */
   async executeSearch(
-    input: YandexMapsSearchInput
+    input: YandexMapsSearchInput,
+    options?: YandexMapsExecuteOptions
   ): Promise<YandexMapsSearchResult> {
     const maxResults = Math.min(
       Math.max(1, input.max_results ?? YANDEX_MAPS_DEFAULT_MAX_RESULTS),
@@ -130,7 +139,7 @@ export class YandexMapsModule extends BaseModule {
     );
 
     return new Promise((resolve, reject) => {
-      const requestId = uuidv4();
+      const requestId = options?.externalRequestId ?? uuidv4();
 
       let worker: ChildProcess;
       try {
@@ -174,6 +183,7 @@ export class YandexMapsModule extends BaseModule {
         resolve,
         reject,
         timeoutTimer,
+        progressCallback: options?.onProgress,
       };
       this.activeSearches.set(requestId, search);
 
