@@ -223,7 +223,39 @@ export class EmailMarketingController {
       return param.id;
     }
 
+    const existingByName = await this.emailServiceModule.findEmailServiceByName(
+      param.name
+    );
+    if (existingByName?.id && existingByName.id > 0) {
+      await this.emailServiceModule.updateEmailService(existingByName.id, entity);
+      return existingByName.id;
+    }
+
+    const existingByHost = await this.emailServiceModule.findEmailServicesByHost(
+      param.host
+    );
+    const existingBySender = existingByHost.find(
+      (service) => service.from === param.from
+    );
+    if (existingBySender?.id && existingBySender.id > 0) {
+      await this.emailServiceModule.updateEmailService(existingBySender.id, entity);
+      return existingBySender.id;
+    }
+
     return await this.emailServiceModule.createEmailService(entity);
+  }
+  //update email service
+  public async updateEmailService(
+    id: number,
+    entity: EmailServiceEntity
+  ): Promise<void> {
+    return await this.emailServiceModule.updateEmailService(id, entity);
+  }
+  //find email service by name
+  public async findEmailServiceByName(
+    name: string
+  ): Promise<EmailServiceEntity | undefined> {
+    return await this.emailServiceModule.findEmailServiceByName(name);
   }
   //delete email service
   public async deleteEmailService(id: number): Promise<void> {
