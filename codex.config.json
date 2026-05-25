@@ -1,0 +1,38 @@
+{
+  "project": {
+    "name": "aiFetchly",
+    "type": "electron-vue-typescript",
+    "summary": "AI-powered marketing automation desktop app with scraping, email marketing, RAG, and worker-process automation."
+  },
+  "commands": {
+    "dev": "yarn dev",
+    "start": "yarn start",
+    "build": "yarn build",
+    "test": "yarn test",
+    "typecheck": "yarn tsc-result",
+    "package": "yarn make"
+  },
+  "paths": {
+    "source": "src",
+    "renderer": "src/views",
+    "mainProcess": "src/main-process",
+    "workers": "src/childprocess",
+    "tests": "test",
+    "specs": "specs",
+    "docs": "doc"
+  },
+  "ignore": [
+    "node_modules",
+    "dist",
+    "out",
+    ".vite",
+    "logs",
+    "*.timestamp-*.mjs"
+  ],
+  "guidance": [
+    "Prefer existing TypeScript, Vue, Electron Forge, Vite, TypeORM, and module/controller patterns.",
+    "Place child and worker process entry points under src/childprocess.",
+    "For AI IPC handlers, check USER_AI_ENABLED before parsing request data or calling AI APIs.",
+    "Use focused tests for touched modules; run yarn tsc-result for broad TypeScript validation when practical."
+  ]
+}
