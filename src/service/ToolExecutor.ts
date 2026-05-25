@@ -24,6 +24,7 @@ import {
   YANDEX_MAPS_HARD_CAP,
 } from "@/entityTypes/yandexMapsTypes";
 import { GoogleMapsModule } from "@/modules/GoogleMapsModule";
+import { YandexMapsModule } from "@/modules/YandexMapsModule";
 import { FileOperationTracker } from "@/service/FileOperationTracker";
 import type { FileOperationRecord } from "@/entityTypes/fileOperationTypes";
 
@@ -1271,8 +1272,8 @@ export class ToolExecutor {
 
   /**
    * Execute Yandex Maps business search.
-   * Phase 9: Input validation and hard cap enforcement only.
-   * Phase 10 will wire to YandexMapsModule for actual scraping.
+   * Dispatches to YandexMapsModule which spawns a child process worker
+   * for Puppeteer-based Yandex Maps scraping.
    */
   private static async executeYandexMapsSearch(
     toolParams: Record<string, unknown>
@@ -1304,12 +1305,42 @@ export class ToolExecutor {
       YANDEX_MAPS_HARD_CAP
     );
 
-    // Phase 10 will replace this with real YandexMapsModule call
-    void clampedMaxResults; // used in Phase 10
-    return {
-      success: false,
-      error: "Yandex Maps scraping not yet implemented (Phase 10)",
-    };
+    try {
+      const module = new YandexMapsModule();
+      const result = await module.executeSearch({
+        query: query.trim(),
+        location: location.trim(),
+        max_results: clampedMaxResults,
+        include_website:
+          typeof toolParams.include_website === "boolean"
+            ? toolParams.include_website
+            : true,
+        include_reviews:
+          typeof toolParams.include_reviews === "boolean"
+            ? toolParams.include_reviews
+            : false,
+        show_browser:
+          typeof toolParams.show_browser === "boolean"
+            ? toolParams.show_browser
+            : false,
+        language:
+          typeof toolParams.language === "string"
+            ? toolParams.language
+            : undefined,
+        region:
+          typeof toolParams.region === "string" ? toolParams.region : undefined,
+      });
+
+      return result as unknown as Record<string, unknown>;
+    } catch (error) {
+      return {
+        success: false,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Unknown error executing Yandex Maps search",
+      };
+    }
   }
 
   /**
