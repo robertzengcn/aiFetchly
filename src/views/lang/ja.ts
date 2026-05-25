@@ -1490,4 +1490,9 @@ export default {
     account_hint: "Cookieを使用するアカウントを選択",
     account_none: "アカウントなし（匿名）",
   },
+  fileOperations: {
+    show_full_diff: "すべての差分を表示 ({count} 行)",
+    collapse_diff: "差分を折りたたむ",
+    open_file_tooltip: "ファイルを開く",
+  },
 };
