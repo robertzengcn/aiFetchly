@@ -52,6 +52,9 @@
 **Plans:** 1 plan
 
 Plans:
+- [ ] 08-01-PLAN.md -- Add fileOperations i18n namespace to all 6 language files and replace hardcoded strings in FileOperationBadge.vue
+
+Plans:
 - [x] 05-01-PLAN.md -- Create FileOperationRecord types, AI_FILE_OPERATION channel constant, FileOperationTracker service with tests
 
 ### Phase 6: Backend Integration
@@ -95,7 +98,10 @@ Plans:
   1. English translation keys exist under `fileOperations` namespace in en.ts covering all operation labels, status text, error messages, and tooltip text
   2. Matching translations exist in all 5 other language files (zh, es, fr, de, ja) with the same key structure
   3. All user-facing text in the file operation badges uses `t('fileOperations.key')` with English fallback
-**Plans:** TBD
+**Plans:** 1 plan
+
+Plans:
+- [ ] 08-01-PLAN.md -- Add fileOperations i18n namespace to all 6 language files and replace hardcoded strings in FileOperationBadge.vue
 **UI hint**: yes
 
 ## Backlog
