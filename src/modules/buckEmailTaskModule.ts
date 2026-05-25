@@ -143,6 +143,17 @@ export class BuckEmailTaskModule extends BaseModule {
     return validItems;
   }
 
+  private formatEmailSendFailureLog(result: EmailSendResult): string {
+    const lines = [
+      "Email send failure",
+      `Receiver: ${result.receiver}`,
+      `Title: ${result.title}`,
+      `Error: ${result.info ?? ""}`,
+    ];
+
+    return lines.join("\n");
+  }
+
   //convert local number array to list
   public async prepareData(taskId: number): Promise<Buckemailremotedata> {
     const emailtemplist: EmailTemplateRespdata[] = [];
@@ -282,9 +293,12 @@ export class BuckEmailTaskModule extends BaseModule {
     };
   }
   //start buck email task
-  public async startBuckEmailTask(param: BuckemailTaskEntity): Promise<number> {
+  public async startBuckEmailTask(
+    param: BuckemailTaskEntity,
+    options?: { waitForExit?: boolean }
+  ): Promise<number> {
     const taskId = await this.createBuckEmailTaskFromEntity(param);
-    return await this.buckEmailsend(taskId);
+    return await this.buckEmailsend(taskId, options);
   }
 
   //create buck email task from entity (direct DB entity)
@@ -380,7 +394,10 @@ export class BuckEmailTaskModule extends BaseModule {
   }
 
   //send email
-  public async buckEmailsend(taskId: number): Promise<number> {
+  public async buckEmailsend(
+    taskId: number,
+    options?: { waitForExit?: boolean }
+  ): Promise<number> {
     //console.log(param)
     const data = await this.prepareData(taskId);
     const tokenService = new Token();
@@ -440,16 +457,57 @@ export class BuckEmailTaskModule extends BaseModule {
         //child.kill()
       }
     });
+    const waitForExit = options?.waitForExit === true;
+    let settled = false;
+    let resolveWait: ((taskId: number) => void) | undefined;
+    let rejectWait: ((error: Error) => void) | undefined;
+
+    const settleSuccess = () => {
+      if (!waitForExit || settled) {
+        return;
+      }
+      settled = true;
+      resolveWait?.(taskId);
+    };
+
+    const settleFailure = (error: Error) => {
+      if (!waitForExit || settled) {
+        return;
+      }
+      settled = true;
+      rejectWait?.(error);
+    };
+
+    const waitPromise = waitForExit
+      ? new Promise<number>((resolve, reject) => {
+          resolveWait = resolve;
+          rejectWait = reject;
+        })
+      : undefined;
+
+    child.on("error", (error) => {
+      console.error("Child process failed:", error);
+      WriteLog(errorLogfile, `Child process failed: ${error.message}`);
+      this.updateTaskErrorFile(taskId, errorLogfile);
+      this.updateTaskStatus(taskId, TaskStatus.Error);
+      settleFailure(error);
+    });
+
     child.on("exit", (code) => {
       if (code !== 0) {
-        console.error(`Child process exited with code ${code}`);
+        const message = `Child process exited with code ${code}`;
+        console.error(message);
+        WriteLog(errorLogfile, message);
+        this.updateTaskErrorFile(taskId, errorLogfile);
         this.updateTaskStatus(taskId, TaskStatus.Error);
+        settleFailure(new Error(`${message}; task_id=${taskId}`));
       } else {
         console.log("Child process exited successfully");
         this.updateTaskStatus(taskId, TaskStatus.Complete);
+        settleSuccess();
       }
     });
-    child.on("message", (message: unknown) => {
+    child.on("message", async (message: unknown) => {
       try {
         const msg = message as { data?: string };
         if (!msg || !msg.data || typeof msg.data !== "string") {
@@ -512,6 +570,11 @@ export class BuckEmailTaskModule extends BaseModule {
               emailMarketLog.log = childdata.data.info
                 ? childdata.data.info
                 : "";
+              WriteLog(
+                errorLogfile,
+                this.formatEmailSendFailureLog(childdata.data)
+              );
+              await this.updateTaskErrorFile(taskId, errorLogfile);
               //update send log
               this.emailMarketingSendlogModule.createItem(emailMarketLog);
             }
@@ -529,7 +592,11 @@ export class BuckEmailTaskModule extends BaseModule {
         }
       }
     });
-    return taskId;
+    if (!waitForExit) {
+      return taskId;
+    }
+
+    return await waitPromise!;
   }
   /**
    * Create a new buck email task
@@ -578,6 +645,14 @@ export class BuckEmailTaskModule extends BaseModule {
       runtimeLog,
       errorLog
     );
+  }
+  /**
+   * Update task error file path
+   * @param id The task ID
+   * @param errorLog The error log file path
+   */
+  async updateTaskErrorFile(id: number, errorLog: string): Promise<void> {
+    return await this.buckEmailTaskModel.updateTaskErrorFile(id, errorLog);
   }
   /**
    * Update task status

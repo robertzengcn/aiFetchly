@@ -79,6 +79,14 @@ export class BuckEmailTaskModel extends BaseDb {
     await this.repository.save(entity);
   }
 
+  async updateTaskErrorFile(id: number, errorLog: string): Promise<void> {
+    const entity = await this.repository.findOne({ where: { id } });
+    if (!entity) return;
+
+    entity.error_file = errorLog;
+    await this.repository.save(entity);
+  }
+
   async updateTaskStatus(id: number, status: TaskStatus): Promise<void> {
     const entity = await this.repository.findOne({ where: { id } });
     if (!entity) return;
