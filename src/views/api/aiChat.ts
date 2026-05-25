@@ -12,6 +12,7 @@ import {
   LLMImageAttachmentPayload,
   UploadedFilePayload,
 } from "@/entityTypes/commonType";
+import type { FileOperationRecord } from "@/entityTypes/fileOperationTypes";
 import {
   AI_CHAT_MESSAGE,
   AI_CHAT_STREAM,
@@ -21,6 +22,7 @@ import {
   AI_CHAT_HISTORY,
   AI_CHAT_CLEAR,
   AI_CHAT_CONVERSATIONS,
+  AI_FILE_OPERATION,
 } from "@/config/channellist";
 
 /**
@@ -331,4 +333,24 @@ export async function getConversations(): Promise<
         error instanceof Error ? error.message : "Unknown error occurred",
     };
   }
+}
+
+/**
+ * Subscribe to file operation events from the main process.
+ * Records are sent as FileOperationRecord objects (NOT JSON strings).
+ */
+export function subscribeToFileOperations(
+  handler: (record: FileOperationRecord) => void
+): void {
+  windowReceive(AI_FILE_OPERATION, (record: FileOperationRecord) => {
+    handler(record);
+  });
+}
+
+/**
+ * Unsubscribe from file operation events by removing all listeners.
+ * Must be called in onUnmounted to prevent memory leaks.
+ */
+export function unsubscribeFromFileOperations(): void {
+  windowRemoveAllListeners(AI_FILE_OPERATION);
 }
