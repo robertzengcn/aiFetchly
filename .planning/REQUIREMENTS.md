@@ -65,30 +65,30 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| TYPE-01 | — | Pending |
-| TYPE-02 | — | Pending |
-| TYPE-03 | — | Pending |
-| TYPE-04 | — | Pending |
-| TYPE-05 | — | Pending |
-| SKILL-01 | — | Pending |
-| SKILL-02 | — | Pending |
-| MOD-01 | — | Pending |
-| MOD-02 | — | Pending |
-| MOD-03 | — | Pending |
-| MOD-04 | — | Pending |
-| MOD-05 | — | Pending |
-| UI-01 | — | Pending |
-| UI-02 | — | Pending |
-| UI-03 | — | Pending |
-| UI-04 | — | Pending |
-| UI-05 | — | Pending |
-| UI-06 | — | Pending |
+| TYPE-01 | Phase 9 | Pending |
+| TYPE-02 | Phase 9 | Pending |
+| TYPE-03 | Phase 9 | Pending |
+| TYPE-04 | Phase 9 | Pending |
+| TYPE-05 | Phase 9 | Pending |
+| SKILL-01 | Phase 9 | Pending |
+| SKILL-02 | Phase 9 | Pending |
+| MOD-01 | Phase 10 | Pending |
+| MOD-02 | Phase 10 | Pending |
+| MOD-03 | Phase 10 | Pending |
+| MOD-04 | Phase 10 | Pending |
+| MOD-05 | Phase 10 | Pending |
+| UI-01 | Phase 11 | Pending |
+| UI-02 | Phase 11 | Pending |
+| UI-03 | Phase 11 | Pending |
+| UI-04 | Phase 11 | Pending |
+| UI-06 | Phase 11 | Pending |
+| UI-05 | Phase 12 | Pending |
 
 **Coverage:**
-- v1.2 requirements: 20 total
-- Mapped to phases: 0
-- Unmapped: 20 ⚠️
+- v1.2 requirements: 18 total
+- Mapped to phases: 18
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-05-25*
-*Last updated: 2026-05-25 after initial definition*
+*Last updated: 2026-05-26 after roadmap creation (phases 9-12)*
