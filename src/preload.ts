@@ -253,6 +253,11 @@ import {
   GOOGLE_MAPS_HISTORY_LIST,
   GOOGLE_MAPS_HISTORY_DETAIL,
   GOOGLE_MAPS_HISTORY_DELETE,
+  // Yandex Maps Scraper Channels
+  YANDEX_MAPS_SEARCH_START,
+  YANDEX_MAPS_SEARCH_CANCEL,
+  YANDEX_MAPS_SEARCH_PROGRESS,
+  YANDEX_MAPS_SEARCH_RESULT,
   AI_FILE_OPEN,
 } from "@/config/channellist";
 
@@ -365,6 +370,9 @@ contextBridge.exposeInMainWorld("api", {
       SYSTEM_DEPENDENCY_PROMPT,
       // Google Maps Scraper Channels
       GOOGLE_MAPS_SEARCH_RESULT,
+      // Yandex Maps Scraper Channels
+      YANDEX_MAPS_SEARCH_RESULT,
+      YANDEX_MAPS_SEARCH_PROGRESS,
     ];
     const isSocialTaskLogChannel = /^socialtask:log:/.test(channel);
 
@@ -424,6 +432,9 @@ contextBridge.exposeInMainWorld("api", {
       SYSTEM_DEPENDENCY_PROMPT,
       // Google Maps Scraper Channels
       GOOGLE_MAPS_SEARCH_RESULT,
+      // Yandex Maps Scraper Channels
+      YANDEX_MAPS_SEARCH_RESULT,
+      YANDEX_MAPS_SEARCH_PROGRESS,
     ];
     const isSocialTaskLogChannel = /^socialtask:log:/.test(channel);
 
@@ -446,6 +457,9 @@ contextBridge.exposeInMainWorld("api", {
       AI_EMAIL_TEMPLATE_ERROR,
       CONTACT_EXTRACTION_PROGRESS,
       GOOGLE_MAPS_SEARCH_RESULT,
+      // Yandex Maps Scraper Channels
+      YANDEX_MAPS_SEARCH_RESULT,
+      YANDEX_MAPS_SEARCH_PROGRESS,
     ];
     if (validChannels.includes(channel)) {
       ipcRenderer.removeAllListeners(channel);
@@ -669,6 +683,9 @@ contextBridge.exposeInMainWorld("api", {
       GOOGLE_MAPS_HISTORY_LIST,
       GOOGLE_MAPS_HISTORY_DETAIL,
       GOOGLE_MAPS_HISTORY_DELETE,
+      // Yandex Maps Scraper Channels
+      YANDEX_MAPS_SEARCH_START,
+      YANDEX_MAPS_SEARCH_CANCEL,
       // AI File Operation Channels
       AI_FILE_OPEN,
     ];
