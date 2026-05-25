@@ -60,7 +60,11 @@
   3. Progress event types cover all scraping states (idle, validating, launching, loading, extracting, completed, cancelled, failed, captcha, timeout) and error codes cover captcha, timeout, no results, network failure, layout change, cancelled
   4. `search_yandex_maps_businesses` appears in the skillsRegistry with `automation` permission category and valid JSON Schema parameters
   5. ToolExecutor dispatches the skill with input validation, enforces rate limiting, and rejects requests exceeding the 50-result hard cap
-**Plans**: TBD
+**Plans**: 2 plans
+
+Plans:
+- [ ] 09-01-PLAN.md -- Type contracts (input/output/progress/error types and constants)
+- [ ] 09-02-PLAN.md -- Skill registration and ToolExecutor dispatch with validation and rate limiting
 
 ### Phase 10: Module and Worker Implementation
 **Goal**: YandexMapsModule orchestrates a Puppeteer child process worker that scrapes Yandex Maps business listings, reports progress, handles cancellation/timeout, detects captcha states, and returns deduplicated results with Cyrillic text preserved.
@@ -124,7 +128,7 @@ Phases execute in numeric order: 9 -> 10 -> 11 -> 12
 | 6. Backend Integration | v1.1 | 2/2 | Complete | 2026-05-25 |
 | 7. Frontend Badges and UI | v1.1 | 2/2 | Complete | 2026-05-25 |
 | 8. Translations and Polish | v1.1 | 1/1 | Complete | 2026-05-25 |
-| 9. Type Contracts and Skill Registration | v1.2 | 0/? | Not started | - |
+| 9. Type Contracts and Skill Registration | v1.2 | 0/2 | Planned | - |
 | 10. Module and Worker Implementation | v1.2 | 0/? | Not started | - |
 | 11. UI Page and Integration | v1.2 | 0/? | Not started | - |
 | 12. Translations and Validation | v1.2 | 0/? | Not started | - |
