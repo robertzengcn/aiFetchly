@@ -12,6 +12,7 @@ const session = require("electron").session;
 import installExtension, { VUEJS3_DEVTOOLS } from "electron-devtools-installer";
 import { registerCommunicationIpcHandlers } from "./main-process/communication/";
 import { SkillImportService } from "@/service/SkillImportService";
+import { FileOperationTracker } from "@/service/FileOperationTracker";
 import * as path from "path";
 import { Token } from "@/modules/token";
 import { MenuManager } from "@/main-process/menu/MenuManager";
@@ -342,6 +343,9 @@ function initialize() {
       //if (userdataPath){//register communication ipc handlers
       registerCommunicationIpcHandlers(win);
 
+      // INIT-01: Wire FileOperationTracker to the window's webContents
+      FileOperationTracker.setWebContents(win.webContents);
+
       // Load persisted skills into runtime registry
       SkillImportService.loadPersistedSkills().catch((err: unknown) => {
         console.warn("[Startup] Failed to load persisted skills:", err);
@@ -352,6 +356,8 @@ function initialize() {
     // Add event listener for window destruction
     (win as any).on("closed", () => {
       console.log("Window closed event triggered");
+      // INIT-02: Clear tracker webContents reference when window closes
+      FileOperationTracker.clear();
       win = null;
     });
     // In this example, only windows with the `about:blank` url will be created.
