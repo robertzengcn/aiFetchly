@@ -1,13 +1,23 @@
 "use strict";
-import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
+import {
+  describe,
+  test,
+  expect,
+  vi,
+  beforeEach,
+  afterEach,
+  type MockInstance,
+} from "vitest";
 import { ToolExecutor } from "@/service/ToolExecutor";
 import { FileOperationTracker } from "@/service/FileOperationTracker";
+import type { FileOperationRecord } from "@/entityTypes/fileOperationTypes";
 
 // Mock FileToolService to avoid real file operations
 const mockFileToolExecute = vi.fn();
 
 // Spy on FileOperationTracker.emit
-let emitSpy: ReturnType<typeof vi.spyOn>;
+type EmitRecord = Omit<FileOperationRecord, "id" | "timestamp">;
+let emitSpy: MockInstance<[record: EmitRecord], void>;
 
 beforeEach(() => {
   // Reset all mocks before each test
