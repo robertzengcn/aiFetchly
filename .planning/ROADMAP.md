@@ -63,6 +63,10 @@
 **Plans**: 2 plans
 
 Plans:
+- [ ] 11-01-PLAN.md -- IPC handlers, channel constants, preload whitelist, module progress callback adaptation
+- [ ] 11-02-PLAN.md -- Frontend API wrapper, Vue UI page with form/progress/results/export, navigation route
+
+Plans:
 - [x] 09-01-PLAN.md -- Type contracts (input/output/progress/error types and constants)
 - [ ] 09-02-PLAN.md -- Skill registration and ToolExecutor dispatch with validation and rate limiting
 
@@ -93,7 +97,11 @@ Plans:
   3. User can fill a form with query, location, max_results, and toggles (include_website, include_reviews, show_browser), submit it, and see real-time progress updates during scraping
   4. Completed search results appear in a table showing business name, rating, category, address, phone, and website, with working copy and export buttons (CSV and JSON)
   5. Yandex Maps scraper page is accessible from the application navigation menu
-**Plans**: TBD
+**Plans**: 2 plans
+
+Plans:
+- [ ] 11-01-PLAN.md -- IPC handlers, channel constants, preload whitelist, module progress callback adaptation
+- [ ] 11-02-PLAN.md -- Frontend API wrapper, Vue UI page with form/progress/results/export, navigation route
 **UI hint**: yes
 
 ### Phase 12: Translations and Validation
@@ -104,7 +112,11 @@ Plans:
   1. English translation keys exist under a `yandexMaps` namespace in en.ts covering all form labels, button text, progress states, error messages, column headers, and export labels
   2. Matching translations exist in all 5 other language files (zh, es, fr, de, ja) with the same key structure
   3. All user-facing text in the Yandex Maps UI uses `t('yandexMaps.key')` with English fallback
-**Plans**: TBD
+**Plans**: 2 plans
+
+Plans:
+- [ ] 11-01-PLAN.md -- IPC handlers, channel constants, preload whitelist, module progress callback adaptation
+- [ ] 11-02-PLAN.md -- Frontend API wrapper, Vue UI page with form/progress/results/export, navigation route
 **UI hint**: yes
 
 ## Backlog
