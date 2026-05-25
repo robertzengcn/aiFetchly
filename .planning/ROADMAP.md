@@ -76,7 +76,12 @@ Plans:
   3. Progress events are emitted at each scraping stage (validating, launching, loading, extracting) and the worker responds to cancellation signals from the main process
   4. When Yandex presents a captcha or access challenge, the worker detects it and returns a typed error with captcha error code instead of hanging or producing garbage data
   5. Returned results are normalized (trimmed whitespace, consistent field casing) and deduplicated by yandex_id, with Cyrillic text preserved without corruption
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+- [ ] 10-01-PLAN.md -- YandexMapsModule orchestration layer and build infrastructure (forge config, vite config)
+- [ ] 10-02-PLAN.md -- YandexMapsWorker child process with Puppeteer scraping loop, captcha detection, progress, deduplication
+- [ ] 10-03-PLAN.md -- Wire ToolExecutor to real YandexMapsModule, replace Phase 9 stub
 
 ### Phase 11: UI Page and Integration
 **Goal**: Users can search for Yandex Maps businesses through a manual UI page, see real-time scraping progress, view results in a table, and copy or export them.
@@ -129,6 +134,6 @@ Phases execute in numeric order: 9 -> 10 -> 11 -> 12
 | 7. Frontend Badges and UI | v1.1 | 2/2 | Complete | 2026-05-25 |
 | 8. Translations and Polish | v1.1 | 1/1 | Complete | 2026-05-25 |
 | 9. Type Contracts and Skill Registration | v1.2 | 1/2 | In progress | - |
-| 10. Module and Worker Implementation | v1.2 | 0/? | Not started | - |
+| 10. Module and Worker Implementation | v1.2 | 0/3 | Not started | - |
 | 11. UI Page and Integration | v1.2 | 0/? | Not started | - |
 | 12. Translations and Validation | v1.2 | 0/? | Not started | - |
