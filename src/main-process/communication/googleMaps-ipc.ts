@@ -13,6 +13,8 @@ import { ipcMain, type IpcMainInvokeEvent } from "electron";
 import { v4 as uuidv4 } from "uuid";
 import { GoogleMapsModule } from "@/modules/GoogleMapsModule";
 import { AccountCookiesModule } from "@/modules/accountCookiesModule";
+import { ProxyModel } from "@/model/Proxy.model";
+import type { YellowPagesTaskProxyConfig } from "@/entityTypes/yellowPagesTaskProxyType";
 import {
   GOOGLE_MAPS_SEARCH_START,
   GOOGLE_MAPS_SEARCH_CANCEL,
@@ -107,11 +109,40 @@ export function registerGoogleMapsHandlers(): void {
         }
       }
 
+      // Resolve proxy configs if proxy_ids are provided
+      let proxies: YellowPagesTaskProxyConfig[] | undefined;
+      const proxyIds = Array.isArray(data.proxy_ids)
+        ? (data.proxy_ids as number[])
+        : undefined;
+      if (proxyIds && proxyIds.length > 0) {
+        try {
+          const proxyModel = new ProxyModel(module["dbpath"]);
+          const resolved: YellowPagesTaskProxyConfig[] = [];
+          for (const pid of proxyIds) {
+            const entity = await proxyModel.getProxyById(pid);
+            if (entity) {
+              resolved.push({
+                host: entity.host,
+                port: parseInt(entity.port, 10),
+                protocol: entity.protocol ?? "http",
+                username: entity.user || undefined,
+                password: entity.pass || undefined,
+              });
+            }
+          }
+          if (resolved.length > 0) {
+            proxies = resolved;
+          }
+        } catch (err) {
+          console.warn("[GoogleMaps] Failed to load proxies:", err);
+        }
+      }
+
       const senderWebContents = event.sender;
 
       // Execute search asynchronously; push result via webContents.send
       module
-        .executeSearch(input, cookies)
+        .executeSearch(input, cookies, proxies)
         .then((result: GoogleMapsSearchResult) => {
           if (!senderWebContents.isDestroyed()) {
             senderWebContents.send(GOOGLE_MAPS_SEARCH_RESULT, {

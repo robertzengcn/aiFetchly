@@ -49,6 +49,7 @@ export async function startGoogleMapsSearch(params: {
   include_reviews?: boolean;
   show_browser?: boolean;
   account_id?: number;
+  proxy_ids?: number[];
 }): Promise<GoogleMapsSearchStartResponse> {
   const resp = await windowInvoke(GOOGLE_MAPS_SEARCH_START, params);
   if (!resp) {

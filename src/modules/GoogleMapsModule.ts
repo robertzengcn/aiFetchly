@@ -23,6 +23,7 @@ import {
   GOOGLE_MAPS_HARD_CAP,
 } from "@/entityTypes/googleMapsTypes";
 import { GoogleMapsSearchRecordModel } from "@/model/GoogleMapsSearchRecord.model";
+import type { YellowPagesTaskProxyConfig } from "@/entityTypes/yellowPagesTaskProxyType";
 import type { GoogleMapsSearchRecordEntity } from "@/entity/GoogleMapsSearchRecord.entity";
 
 // ---------------------------------------------------------------------------
@@ -95,6 +96,7 @@ type WorkerOutboundPayload =
       includeReviews: boolean;
       showBrowser: boolean;
       cookies?: unknown[];
+      proxies?: YellowPagesTaskProxyConfig[];
     }
   | { type: "cancel"; requestId: string };
 
@@ -127,7 +129,8 @@ export class GoogleMapsModule extends BaseModule {
    */
   async executeSearch(
     input: GoogleMapsSearchInput,
-    cookies?: unknown[]
+    cookies?: unknown[],
+    proxies?: YellowPagesTaskProxyConfig[]
   ): Promise<GoogleMapsSearchResult> {
     const maxResults = Math.min(
       Math.max(1, input.max_results ?? GOOGLE_MAPS_DEFAULT_MAX_RESULTS),
@@ -266,6 +269,7 @@ export class GoogleMapsModule extends BaseModule {
         includeReviews: input.include_reviews ?? false,
         showBrowser: input.show_browser ?? false,
         cookies,
+        proxies,
       });
     });
   }

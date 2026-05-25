@@ -32,6 +32,9 @@ export interface GoogleMapsSearchInput {
 
   /** Whether to show the browser window during scraping for debugging. Defaults to false. */
   show_browser?: boolean;
+
+  /** IDs of proxies to rotate through during scraping. Optional. */
+  proxy_ids?: number[];
 }
 
 // ---------------------------------------------------------------------------

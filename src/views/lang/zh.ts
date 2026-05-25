@@ -1463,6 +1463,9 @@ export default {
     account_label: "Google 账号",
     account_hint: "选择一个账号以使用其 Cookie",
     account_none: "无账号（匿名）",
+    proxy_label: "代理",
+    proxy_hint: "在每个卡片提取时轮换选定的代理",
+    proxy_placeholder: "选择代理...",
   },
   fileOperations: {
     show_full_diff: "显示完整差异 ({count} 行)",

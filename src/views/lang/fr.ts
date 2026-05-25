@@ -1520,6 +1520,9 @@ export default {
     account_label: "Compte Google",
     account_hint: "Sélectionnez un compte pour utiliser ses cookies",
     account_none: "Sans compte (anonyme)",
+    proxy_label: "Proxies",
+    proxy_hint: "Rotation des proxies sélectionnés pour chaque fiche",
+    proxy_placeholder: "Sélectionner des proxies...",
   },
   fileOperations: {
     show_full_diff: "Afficher le diff complet ({count} lignes)",
