@@ -45,7 +45,7 @@
 
 - [ ] **Phase 9: Type Contracts and Skill Registration** - Typed contracts for Yandex Maps input/output/progress/error, plus AI skill registration and dispatch
 - [ ] **Phase 10: Module and Worker Implementation** - YandexMapsModule orchestration layer and Puppeteer child process worker
-- [ ] **Phase 11: UI Page and Integration** - IPC handlers, frontend API, manual UI page with form/progress/results/export, navigation route
+- [ ] **Phase 11: UI Page and Integration** - IPC handlers, frontend API, manual UI page with form/progress/results/export, navigation route (1/2 complete)
 - [ ] **Phase 12: Translations and Validation** - 6-language i18n for all Yandex Maps UI text
 
 ## Phase Details
@@ -100,7 +100,7 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 11-01-PLAN.md -- IPC handlers, channel constants, preload whitelist, module progress callback adaptation
+- [x] 11-01-PLAN.md -- IPC handlers, channel constants, preload whitelist, module progress callback adaptation
 - [ ] 11-02-PLAN.md -- Frontend API wrapper, Vue UI page with form/progress/results/export, navigation route
 **UI hint**: yes
 
@@ -147,5 +147,5 @@ Phases execute in numeric order: 9 -> 10 -> 11 -> 12
 | 8. Translations and Polish | v1.1 | 1/1 | Complete | 2026-05-25 |
 | 9. Type Contracts and Skill Registration | v1.2 | 1/2 | In progress | - |
 | 10. Module and Worker Implementation | v1.2 | 0/3 | Not started | - |
-| 11. UI Page and Integration | v1.2 | 0/? | Not started | - |
+| 11. UI Page and Integration | v1.2 | 1/2 | In progress | - |
 | 12. Translations and Validation | v1.2 | 0/? | Not started | - |
