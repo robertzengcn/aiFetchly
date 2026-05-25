@@ -134,6 +134,24 @@
                   </template>
                 </v-select>
               </v-col>
+              <v-col cols="12" md="3">
+                <v-select
+                  v-model="selectedProxyIds"
+                  :items="proxyItems"
+                  item-title="label"
+                  item-value="id"
+                  :label="t('googleMaps.proxy_label') || 'Proxies'"
+                  :placeholder="t('googleMaps.proxy_placeholder') || 'Select proxies...'"
+                  :hint="t('googleMaps.proxy_hint') || 'Rotate through selected proxies per card'"
+                  persistent-hint
+                  multiple
+                  chips
+                  clearable
+                  :disabled="searchState === 'running'"
+                  variant="outlined"
+                  density="compact"
+                />
+              </v-col>
             </v-row>
           </v-card-text>
         </v-card>
@@ -372,6 +390,7 @@ import {
   type GoogleMapsHistoryRecord,
 } from "@/views/api/googleMaps";
 import { getSocialAccountlist } from "@/views/api/socialaccount";
+import { getProxyList } from "@/views/api/proxy";
 import type { GoogleMapsBusinessResult } from "@/entityTypes/googleMapsTypes";
 import type { SocialAccountListData } from "@/entityTypes/socialaccount-type";
 
@@ -391,6 +410,10 @@ const showBrowser = ref(false);
 // ── Account state ────────────────────────────────────────────────────────
 const googleAccounts = ref<SocialAccountListData[]>([]);
 const selectedAccountId = ref<number | null>(null);
+
+// ── Proxy state ──────────────────────────────────────────────────────────
+const proxyItems = ref<Array<{ id: number; label: string }>>([]);
+const selectedProxyIds = ref<number[]>([]);
 
 // ── Search state ────────────────────────────────────────────────────────
 type SearchState = "idle" | "running" | "completed" | "cancelled" | "failed";
@@ -475,6 +498,18 @@ async function loadGoogleAccounts(): Promise<void> {
   }
 }
 
+async function loadProxyList(): Promise<void> {
+  try {
+    const result = await getProxyList({ page: 1, size: 500, search: "" });
+    proxyItems.value = (result.data ?? []).map((p) => ({
+      id: p.id ?? 0,
+      label: `${p.host}:${p.port}${p.protocol ? " (" + p.protocol + ")" : ""}`,
+    }));
+  } catch (err) {
+    console.error("Failed to load proxy list:", err);
+  }
+}
+
 async function handleStartSearch(): Promise<void> {
   if (!query.value.trim() || !location.value.trim()) return;
 
@@ -496,6 +531,7 @@ async function handleStartSearch(): Promise<void> {
       include_reviews: includeReviews.value,
       show_browser: showBrowser.value,
       account_id: selectedAccountId.value ?? undefined,
+      proxy_ids: selectedProxyIds.value.length > 0 ? selectedProxyIds.value : undefined,
     });
     requestId.value = resp.requestId;
   } catch (err) {
@@ -614,6 +650,7 @@ function sanitizeFilename(input: string): string {
 // ── Init ───────────────────────────────────────────────────────────────
 onMounted(() => {
   loadGoogleAccounts();
+  loadProxyList();
 });
 
 // ── Cleanup ────────────────────────────────────────────────────────────

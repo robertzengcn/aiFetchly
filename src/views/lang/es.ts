@@ -1525,6 +1525,9 @@ export default {
     account_label: "Cuenta de Google",
     account_hint: "Selecciona una cuenta para usar sus cookies",
     account_none: "Sin cuenta (anónimo)",
+    proxy_label: "Proxies",
+    proxy_hint: "Rotar entre los proxies seleccionados por cada tarjeta",
+    proxy_placeholder: "Seleccionar proxies...",
   },
   fileOperations: {
     show_full_diff: "Mostrar diff completo ({count} líneas)",

@@ -1489,6 +1489,9 @@ export default {
     account_label: "Google アカウント",
     account_hint: "Cookieを使用するアカウントを選択",
     account_none: "アカウントなし（匿名）",
+    proxy_label: "プロキシ",
+    proxy_hint: "カードごとに選択したプロキシをローテーション",
+    proxy_placeholder: "プロキシを選択...",
   },
   fileOperations: {
     show_full_diff: "すべての差分を表示 ({count} 行)",
