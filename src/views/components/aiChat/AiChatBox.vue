@@ -347,6 +347,10 @@ class="message-bubble" :class="{
               </div>
               <!-- eslint-disable-next-line vue/no-v-html -->
               <div class="message-text" v-html="formatMessage(message.content)"></div>
+              <FileOperationBadge
+                v-if="message.role === 'assistant'"
+                :records="getFileOpsForMessage(message.id)"
+              />
               <div class="message-timestamp" :title="formatFullTimestamp(message.timestamp)">
                 <v-icon size="x-small" class="mr-1">mdi-clock-outline</v-icon>
                 {{ formatTimestamp(message.timestamp) }}
@@ -699,13 +703,15 @@ class="message-bubble" :class="{
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, nextTick, watch } from 'vue';
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { streamChatMessage, stopStreamingChat, getChatHistory, clearChatHistory, getConversations, ConversationMetadata } from '@/views/api/aiChat';
+import { streamChatMessage, stopStreamingChat, getChatHistory, clearChatHistory, getConversations, ConversationMetadata, subscribeToFileOperations, unsubscribeFromFileOperations } from '@/views/api/aiChat';
 import { ChatMessage, ChatStreamChunk, Plan, PlanStep, PlanStepStatus, MessageType, UploadedFilePayload, LLMImageAttachmentPayload, CommonMessage } from '@/entityTypes/commonType';
 import { AI_CHAT_RESUME_TOOL_AFTER_PERMISSION } from '@/config/channellist';
 import MCPToolManager from './MCPToolManager.vue';
 import SkillApprovalCard from './SkillApprovalCard.vue';
+import FileOperationBadge from './FileOperationBadge.vue';
+import type { FileOperationRecord } from '@/entityTypes/fileOperationTypes';
 
 // Stream state enum for type safety
 // This ensures type safety for stream state management
@@ -790,6 +796,20 @@ const showMCPToolManager = ref(false);
 const activeStreamConversationId = ref<string | undefined>(undefined);
 const showSlashMenu = ref(false);
 const selectedSlashIndex = ref(0);
+
+// File operation badge state: conversationId → records
+const fileOps = ref<Map<string, readonly FileOperationRecord[]>>(new Map());
+
+function getFileOpsForMessage(messageId: string): readonly FileOperationRecord[] {
+  if (!conversationId.value) return [];
+  const ops = fileOps.value.get(conversationId.value);
+  if (!ops) return [];
+  // Only show ops for the most recent assistant message
+  const lastAssistantIdx = visibleMessages.value.findLastIndex(m => m.role === 'assistant');
+  const msgIdx = visibleMessages.value.findIndex(m => m.id === messageId);
+  if (msgIdx !== lastAssistantIdx) return [];
+  return ops;
+}
 
 const MAX_UPLOAD_FILES = 3;
 const MAX_UPLOAD_FILE_BYTES = 5 * 1024 * 1024; // 5MB
@@ -1060,6 +1080,20 @@ function isValidStreamChunk(chunk: ChatStreamChunk, activeId: string | undefined
 onMounted(async () => {
   await loadChatHistory();
   scrollToBottom();
+
+  // Subscribe to file operation events
+  subscribeToFileOperations((record: FileOperationRecord) => {
+    const convId = record.conversationId;
+    const current = fileOps.value.get(convId) ?? [];
+    const next = new Map(fileOps.value);
+    next.set(convId, [...current, record]);
+    fileOps.value = next;
+  });
+});
+
+// Clean up file operation subscription
+onUnmounted(() => {
+  unsubscribeFromFileOperations();
 });
 
 /**
