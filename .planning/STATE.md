@@ -1,22 +1,22 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.1
-milestone_name: AI Chat File Operation Recording
-status: phase_8_complete
-last_updated: "2026-05-25T17:30:00.000Z"
+milestone: v1.2
+milestone_name: Yandex Maps Business Scraper
+status: planning
+last_updated: "2026-05-25T23:00:00.000Z"
 last_activity: 2026-05-25
 progress:
-  total_phases: 4
-  completed_phases: 4
-  total_plans: 8
-  completed_plans: 6
-  percent: 100
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
 
 **Project:** AiFetchly -- AI-Powered Marketing Automation
-**Branch:** aiemailtool
+**Branch:** worktree-yandex-maps-scraper
 **Initialized:** 2026-05-25
 
 ## Project Reference
@@ -24,25 +24,21 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-25)
 
 **Core value:** Users can discover, contact, and market to prospects across platforms using AI-assisted workflows.
-**Current focus:** Phase 7 -- Frontend Badges and UI (next)
+**Current focus:** Defining requirements for v1.2 Yandex Maps Business Scraper
 
 ## Milestone Progress
 
 | Phase | Name | Status | Plans | Progress |
 |-------|------|--------|-------|----------|
-| 5 | Types and Tracker Foundation | Complete | 1/1 | 100% |
-| 6 | Backend Integration | Complete | 2/2 | 100% |
-| 7 | Frontend Badges and UI | Complete | 2/2 | 100% |
-| 8 | Translations and Polish | Complete | 1/1 | 100% |
 
-Progress: ██████████ 100%
+Progress: ░░░░░░░░░░ 0%
 
 ## Current Position
 
-Phase: 8 of 8 (Translations and Polish) -- COMPLETE
-Plan: 1 of 1 in current phase
-Status: Complete (2 commits)
-Last activity: 2026-05-25 -- Phase 8 executed (1 plan, 2 commits)
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-05-25 — Milestone v1.2 started
 
 ## Accumulated Context
 
@@ -53,8 +49,13 @@ Last activity: 2026-05-25 -- Phase 8 executed (1 plan, 2 commits)
 - [v1.1 planning]: Zero new npm dependencies -- all capabilities already in codebase
 - [v1.1 planning]: Emit on both success and failure -- users need visibility into failed mutations
 - [v1.1 planning]: In-memory only (no DB) for v1.1 -- reduce complexity, defer persistence
+- [v1.2 planning]: Shared YandexMapsModule for AI and UI -- mirrors Google Maps pattern
+- [v1.2 planning]: Separate from Yandex web search scraper -- different page structure, anti-bot profile
+- [v1.2 planning]: `automation` permission category -- same as Google Maps
+- [v1.2 planning]: No database persistence in v1.2 -- results returned directly
+- [v1.2 planning]: Same hard cap (50) for AI and UI -- consistent limits
+
 - [05-01]: Expose getRecords(conversationId) on tracker for Phase 7 frontend use
-- [05-01]: Use vitest.service.config.mjs for isolated service test runs
 - [06-01]: conversationId threaded to executeFileTool via executeInternal call site
 - [06-01]: result.mode ("created"|"overwritten") maps to FileOperationType ("create"|"overwrite")
 - [06-01]: result.replacements maps to linesChanged for file_edit
@@ -91,10 +92,11 @@ None yet.
 | Feature | Full rollback/undo system | v2+ | 2026-05-25 |
 | Feature | Grouped operation display | v2+ | 2026-05-25 |
 | Feature | file_delete tracking | v2+ | 2026-05-25 |
+| Feature | Official Yandex Business API integration | v2+ | 2026-05-25 |
+| Feature | Database persistence of Yandex Maps results | v2+ | 2026-05-25 |
 
 ## Session Continuity
 
 Last session: 2026-05-25
-Stopped at: Phase 8 complete -- ALL PHASES DONE
-Resume file: .planning/phases/08-translations-and-polish/08-01-SUMMARY.md
-Worktree: .claude/worktrees/file-operation-recording (branch: feat/file-operation-recording)
+Stopped at: Milestone v1.2 initialized -- defining requirements
+Worktree: .claude/worktrees/yandex-maps-scraper (branch: worktree-yandex-maps-scraper)
