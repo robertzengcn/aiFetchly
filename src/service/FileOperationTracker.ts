@@ -38,9 +38,7 @@ export class FileOperationTracker {
    * Caller provides all other fields.
    * Failures are caught -- tracking must never break tool execution (D-06).
    */
-  static emit(
-    record: Omit<FileOperationRecord, "id" | "timestamp">
-  ): void {
+  static emit(record: Omit<FileOperationRecord, "id" | "timestamp">): void {
     try {
       const fullRecord: FileOperationRecord = {
         ...record,
@@ -48,24 +46,21 @@ export class FileOperationTracker {
         timestamp: Date.now(),
       };
 
-      // Store in memory with cap (D-04)
+      // Store in memory with cap (D-04) — immutable pattern
       const conversationId = record.conversationId;
       const existing = FileOperationTracker.records.get(conversationId) ?? [];
-      existing.push(fullRecord);
-      if (existing.length > MAX_RECORDS_PER_CONVERSATION) {
-        existing.shift(); // Evict oldest
+      const updated = [...existing, fullRecord];
+      if (updated.length > MAX_RECORDS_PER_CONVERSATION) {
+        updated.shift(); // Evict oldest
       }
-      FileOperationTracker.records.set(conversationId, existing);
+      FileOperationTracker.records.set(conversationId, updated);
 
       // Send to renderer if webContents is alive (D-07)
       if (
         FileOperationTracker.webContents &&
         !FileOperationTracker.webContents.isDestroyed()
       ) {
-        FileOperationTracker.webContents.send(
-          AI_FILE_OPERATION,
-          fullRecord
-        );
+        FileOperationTracker.webContents.send(AI_FILE_OPERATION, fullRecord);
       }
     } catch {
       // Intentionally silent -- tracking must never break tool execution (D-06)
@@ -78,6 +73,6 @@ export class FileOperationTracker {
    * Useful for Phase 7 frontend badge rendering.
    */
   static getRecords(conversationId: string): readonly FileOperationRecord[] {
-    return FileOperationTracker.records.get(conversationId) ?? [];
+    return [...(FileOperationTracker.records.get(conversationId) ?? [])];
   }
 }
