@@ -820,6 +820,10 @@ export class StreamEventProcessor {
       console.log(
         `Skipping duplicate server TOOL_RESULT for locally executed tool (ID: ${toolId})`
       );
+      this.state.pendingToolCalls.delete(toolId);
+      this.localExecutingToolIds.delete(toolId);
+      this.sendDeferredCompletionIfReady();
+      this.tryReleaseRetainedMainProcessStreamBinding();
       return;
     }
 
