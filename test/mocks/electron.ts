@@ -17,6 +17,15 @@ export const app = {
 };
 
 export class BrowserWindow {
+  readonly webContents: WebContents = {
+    send(_channel: string, ..._args: unknown[]): void {
+      // Mock implementation
+    },
+    isDestroyed(): boolean {
+      return false;
+    },
+  };
+
   constructor(_options?: unknown) {
     // Mock constructor
   }
