@@ -63,7 +63,7 @@
 **Plans**: 2 plans
 
 Plans:
-- [ ] 09-01-PLAN.md -- Type contracts (input/output/progress/error types and constants)
+- [x] 09-01-PLAN.md -- Type contracts (input/output/progress/error types and constants)
 - [ ] 09-02-PLAN.md -- Skill registration and ToolExecutor dispatch with validation and rate limiting
 
 ### Phase 10: Module and Worker Implementation
@@ -128,7 +128,7 @@ Phases execute in numeric order: 9 -> 10 -> 11 -> 12
 | 6. Backend Integration | v1.1 | 2/2 | Complete | 2026-05-25 |
 | 7. Frontend Badges and UI | v1.1 | 2/2 | Complete | 2026-05-25 |
 | 8. Translations and Polish | v1.1 | 1/1 | Complete | 2026-05-25 |
-| 9. Type Contracts and Skill Registration | v1.2 | 0/2 | Planned | - |
+| 9. Type Contracts and Skill Registration | v1.2 | 1/2 | In progress | - |
 | 10. Module and Worker Implementation | v1.2 | 0/? | Not started | - |
 | 11. UI Page and Integration | v1.2 | 0/? | Not started | - |
 | 12. Translations and Validation | v1.2 | 0/? | Not started | - |
