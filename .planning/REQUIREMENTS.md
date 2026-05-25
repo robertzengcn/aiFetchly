@@ -8,19 +8,19 @@
 
 ### TYPE-01: FileOperationRecord Shared Types
 
-- [ ] **TYPE-01**: Define `FileOperationType` union type: `"create" | "overwrite" | "edit"`
-- [ ] **TYPE-02**: Define `FileOperationRecord` interface with fields: id, type, filePath, timestamp (number), success, conversationId, skillName, toolCallId (optional), linesChanged (optional), sizeBytes (optional), error (optional)
-- [ ] **TYPE-03**: All fields on `FileOperationRecord` are `readonly` (immutable pattern)
+- [x] **TYPE-01**: Define `FileOperationType` union type: `"create" | "overwrite" | "edit"`
+- [x] **TYPE-02**: Define `FileOperationRecord` interface with fields: id, type, filePath, timestamp (number), success, conversationId, skillName, toolCallId (optional), linesChanged (optional), sizeBytes (optional), error (optional)
+- [x] **TYPE-03**: All fields on `FileOperationRecord` are `readonly` (immutable pattern)
 
 **File:** `src/entityTypes/fileOperationTypes.ts`
 
 ### TYPE-04: FileOperationTracker Service
 
-- [ ] **TRAK-01**: Create static `FileOperationTracker` class with `setWebContents(webContents)` and `emit(record)` methods
-- [ ] **TRAK-02**: `emit()` wraps IPC send in try/catch — failures never propagate to caller
-- [ ] **TRAK-03**: `emit()` checks `webContents` is not destroyed before sending
-- [ ] **TRAK-04**: Tracker holds an in-memory `Map<conversationId, FileOperationRecord[]>` capped at 500 records per conversation
-- [ ] **TRAK-05**: Auto-generates unique `id` (UUID or crypto) and `timestamp` (Date.now()) for each record
+- [x] **TRAK-01**: Create static `FileOperationTracker` class with `setWebContents(webContents)` and `emit(record)` methods
+- [x] **TRAK-02**: `emit()` wraps IPC send in try/catch — failures never propagate to caller
+- [x] **TRAK-03**: `emit()` checks `webContents` is not destroyed before sending
+- [x] **TRAK-04**: Tracker holds an in-memory `Map<conversationId, FileOperationRecord[]>` capped at 500 records per conversation
+- [x] **TRAK-05**: Auto-generates unique `id` (UUID or crypto) and `timestamp` (Date.now()) for each record
 
 **File:** `src/service/FileOperationTracker.ts`
 
@@ -28,7 +28,7 @@
 
 ### IPC Channel
 
-- [ ] **IPC-01**: Add `AI_FILE_OPERATION` channel constant (`"ai-chat:file-operation"`) to `src/config/channellist.ts`
+- [x] **IPC-01**: Add `AI_FILE_OPERATION` channel constant (`"ai-chat:file-operation"`) to `src/config/channellist.ts`
 
 ### ToolExecutor Integration
 
@@ -138,15 +138,15 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| TYPE-01 | Phase 5 | Pending |
-| TYPE-02 | Phase 5 | Pending |
-| TYPE-03 | Phase 5 | Pending |
-| TRAK-01 | Phase 5 | Pending |
-| TRAK-02 | Phase 5 | Pending |
-| TRAK-03 | Phase 5 | Pending |
-| TRAK-04 | Phase 5 | Pending |
-| TRAK-05 | Phase 5 | Pending |
-| IPC-01 | Phase 5 | Pending |
+| TYPE-01 | Phase 5 | Complete |
+| TYPE-02 | Phase 5 | Complete |
+| TYPE-03 | Phase 5 | Complete |
+| TRAK-01 | Phase 5 | Complete |
+| TRAK-02 | Phase 5 | Complete |
+| TRAK-03 | Phase 5 | Complete |
+| TRAK-04 | Phase 5 | Complete |
+| TRAK-05 | Phase 5 | Complete |
+| IPC-01 | Phase 5 | Complete |
 | EXEC-01 | Phase 6 | Pending |
 | EXEC-02 | Phase 6 | Pending |
 | EXEC-03 | Phase 6 | Pending |

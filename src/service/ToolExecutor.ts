@@ -20,6 +20,8 @@ import {
   GOOGLE_MAPS_HARD_CAP,
 } from "@/entityTypes/googleMapsTypes";
 import { GoogleMapsModule } from "@/modules/GoogleMapsModule";
+import { FileOperationTracker } from "@/service/FileOperationTracker";
+import type { FileOperationRecord } from "@/entityTypes/fileOperationTypes";
 
 /**
  * Rate limiting configuration for tool execution
@@ -192,7 +194,7 @@ export class ToolExecutor {
       case "file_edit":
       case "glob_files":
       case "grep_files":
-        return await this.executeFileTool(toolName, toolParams);
+        return await this.executeFileTool(toolName, toolParams, conversationId);
 
       default:
         return {
@@ -1318,11 +1320,58 @@ export class ToolExecutor {
 
   private static async executeFileTool(
     toolName: string,
-    toolParams: Record<string, unknown>
+    toolParams: Record<string, unknown>,
+    conversationId: string
   ): Promise<Record<string, unknown>> {
-    return await ToolExecutor.getFileToolService().execute(
-      toolName,
-      toolParams
-    );
+    try {
+      const result = await ToolExecutor.getFileToolService().execute(
+        toolName,
+        toolParams
+      );
+
+      // EXEC-05: Only emit records for mutation tools
+      if (toolName === "file_write" || toolName === "file_edit") {
+        const filePath =
+          (result.path as string) ?? (toolParams.path as string) ?? "";
+        const record: Omit<FileOperationRecord, "id" | "timestamp"> = {
+          type:
+            toolName === "file_write"
+              ? result.mode === "created"
+                ? "create"
+                : "overwrite"
+              : "edit",
+          filePath,
+          success: true,
+          conversationId,
+          skillName: toolName,
+          ...(toolName === "file_edit" && {
+            linesChanged: result.replacements as number,
+          }),
+          ...(toolName === "file_write" && {
+            sizeBytes: result.bytesWritten as number,
+          }),
+        };
+        FileOperationTracker.emit(record);
+      }
+
+      return result;
+    } catch (error: unknown) {
+      // EXEC-04: Emit failure record for mutation tools
+      if (toolName === "file_write" || toolName === "file_edit") {
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
+        const filePath = (toolParams.path as string) ?? "";
+        FileOperationTracker.emit({
+          type: toolName === "file_write" ? "overwrite" : "edit",
+          filePath,
+          success: false,
+          conversationId,
+          skillName: toolName,
+          error: errorMessage,
+        });
+      }
+      // EXEC-06: Re-throw -- tracking must not swallow errors
+      throw error;
+    }
   }
 }
