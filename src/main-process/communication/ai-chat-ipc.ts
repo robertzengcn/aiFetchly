@@ -1,4 +1,4 @@
-import { ipcMain } from "electron";
+import { ipcMain, shell } from "electron";
 import {
   AiChatApi,
   ChatRequest,
@@ -48,6 +48,7 @@ import {
   AI_CHAT_CLEAR,
   AI_CHAT_CONVERSATIONS,
   AI_KEYWORDS_GENERATE,
+  AI_FILE_OPEN,
 } from "@/config/channellist";
 // import { Token } from '@/modules/token';
 // import { USERID } from '@/config/usersetting';
@@ -1470,4 +1471,27 @@ export function registerAiChatIpcHandlers(): void {
       }
     }
   );
+
+  // Open file in system default application
+  ipcMain.handle(AI_FILE_OPEN, async (_event, data: unknown) => {
+    try {
+      const parsed = JSON.parse(data as string) as { filePath: unknown };
+      const filePath = parsed.filePath;
+      if (!filePath || typeof filePath !== "string") {
+        return { status: false, msg: "Invalid file path", data: null };
+      }
+      if (!filePath.startsWith("/") && !filePath.match(/^[A-Za-z]:\\/)) {
+        return { status: false, msg: "File path must be absolute", data: null };
+      }
+      if (filePath.includes("..")) {
+        return { status: false, msg: "Path traversal not allowed", data: null };
+      }
+      await shell.openPath(filePath);
+      return { status: true, msg: "OK", data: null };
+    } catch (error: unknown) {
+      const msg =
+        error instanceof Error ? error.message : "Failed to open file";
+      return { status: false, msg, data: null };
+    }
+  });
 }
