@@ -1365,6 +1365,8 @@ export class ToolExecutor {
           error instanceof Error ? error.message : String(error);
         const filePath = (toolParams.path as string) ?? "";
         FileOperationTracker.emit({
+          // Note: On failure we can't know if file_write intended "create" vs "overwrite".
+          // Defaulting to "overwrite" is reasonable since the file likely exists already.
           type: toolName === "file_write" ? "overwrite" : "edit",
           filePath,
           success: false,
