@@ -1346,6 +1346,9 @@ export class ToolExecutor {
           skillName: toolName,
           ...(toolName === "file_edit" && {
             linesChanged: result.replacements as number,
+            diff: (
+              result as unknown as import("@/entityTypes/fileToolTypes").FileEditResult
+            ).diff,
           }),
           ...(toolName === "file_write" && {
             sizeBytes: result.bytesWritten as number,
