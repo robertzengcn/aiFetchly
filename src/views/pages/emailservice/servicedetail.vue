@@ -2,41 +2,47 @@
   <v-sheet class="mx-auto" rounded>
 
     <v-form ref="form" v-model="validForm" @submit.prevent="onSubmit" class="ml-2 mr-2">
-      <v-alert v-model="alert" border="start" variant="tonal" closable close-label="Close Alert" title="Information"
+      <v-alert
+v-model="alert" border="start" variant="tonal" closable close-label="Close Alert" title="Information"
         :color="alertcolor">
         {{ alertContent }}
       </v-alert>
 
       <v-row>
         <v-col cols="12" md="12">
-          <v-text-field v-model="name" :label="t('emailservice.name')" type="input"
+          <v-text-field
+v-model="name" :label="t('emailservice.name')" type="input"
             :hint="t('emailservice.name_hint')" :readonly="loading" clearable required
             :rules="[rules.required]"></v-text-field>
         </v-col>
       </v-row>
       <v-row>
         <v-col cols="12" md="12">
-          <v-text-field v-model="from" :label="t('emailservice.from')" type="email"
+          <v-text-field
+v-model="from" :label="t('emailservice.from')" type="email"
             :hint="t('emailservice.from_hint')" :readonly="loading" clearable required
             :rules="[rules.email]"></v-text-field>
         </v-col>
       </v-row>
       <v-row>
         <v-col cols="12" md="12">
-          <v-text-field v-model="password" :label="t('emailservice.password')" :type="show ? 'text' : 'password'"
+          <v-text-field
+v-model="password" :label="t('emailservice.password')" :type="show ? 'text' : 'password'"
             @click:append="show = !show" :hint="t('emailservice.password')" :readonly="loading" clearable required
             :append-icon="show ? 'mdi-eye' : 'mdi-eye-off'"></v-text-field>
         </v-col>
       </v-row>
       <v-row>
         <v-col cols="12" md="12">
-          <v-text-field v-model="host" :label="t('emailservice.host')" type="input"
+          <v-text-field
+v-model="host" :label="t('emailservice.host')" type="input"
             :hint="t('emailservice.host_hint')" :readonly="loading" clearable required></v-text-field>
         </v-col>
       </v-row>
       <v-row>
         <v-col cols="12" md="12">
-          <v-number-input :reverse="false" controlVariant="default" label="port" :hint="t('emailservice.port_hint')"
+          <v-number-input
+:reverse="false" control-variant="default" label="port" :hint="t('emailservice.port_hint')"
             :min="1" :max="65535" v-model="port" :readonly="loading" clearable></v-number-input>
 
         </v-col>
@@ -73,7 +79,8 @@
 
         </v-row>
       </div>
-      <v-alert v-model="alert" border="start" variant="tonal" closable close-label="Close Alert" title="Information"
+      <v-alert
+v-model="alert" border="start" variant="tonal" closable close-label="Close Alert" title="Information"
         :color="alertcolor">
         {{ alertContent }}
       </v-alert>
@@ -87,20 +94,23 @@
           <v-container fluid>
             <v-row>
               <v-col cols="12" md="12">
-                <v-text-field v-model="testemailReceiver" :label="t('emailservice.test_email_receiver')" type="input"
+                <v-text-field
+v-model="testemailReceiver" :label="t('emailservice.test_email_receiver')" type="input"
                   :hint="t('emailservice.test_email_receiver_hint')" :readonly="loading" clearable required
                   :rules="[rules.required, rules.email]"></v-text-field>
               </v-col>
             </v-row>
             <v-row>
               <v-col cols="12" md="12">
-                <v-text-field v-model="testemailTitle" :label="t('emailservice.test_email_title')" type="input"
+                <v-text-field
+v-model="testemailTitle" :label="t('emailservice.test_email_title')" type="input"
                   :hint="t('emailservice.test_email_title_hint')" :readonly="loading" clearable required
                   :rules="[rules.required]"></v-text-field>
               </v-col>
             </v-row>
             <v-row>
-              <v-textarea :label="t('emailservice.test_email_content_hint')" v-model="testemailContent"
+              <v-textarea
+:label="t('emailservice.test_email_content_hint')" v-model="testemailContent"
                 name="input-7-1" variant="filled" auto-grow :rules="[rules.required]"></v-textarea>
             </v-row>
           </v-container>
@@ -120,9 +130,10 @@
       </v-card>
     </v-form>
   </v-dialog>
-  <ErrorDialog :showDialog="showDialog" :alertext="alertdiatext" :alertitle="alertdiatitle"
+  <ErrorDialog
+:show-dialog="showDialog" :alertext="alertdiatext" :alertitle="alertdiatitle"
     @dialogclose="showDialog = false" />
-  <LoadingDialog :loadDialogshow="loadDialogshow" :loadingtitle="CapitalizeFirstLetter(t('common.loading'))" />
+  <LoadingDialog :load-dialogshow="loadDialogshow" :loadingtitle="CapitalizeFirstLetter(t('common.loading'))" />
 </template>
 <script setup lang="ts">
 import { ref, onMounted, watch } from "vue";
@@ -191,16 +202,19 @@ const testemailTitle = ref<string>("")
 const testemailContent = ref<string>("")
 
 const initialize = async () => {
-  if ($route.params.id) {
-    Id.value = parseInt($route.params.id.toString());
+  const routeId = Number($route.params.id);
+  if (Number.isInteger(routeId) && routeId > 0) {
+    Id.value = routeId;
   }
 
   if (Id.value > 0) {
     isEdit.value = true;
-    FakeAPI.fetch(parseInt(Id.value.toString())).then((res) => {
+    FakeAPI.fetch(Id.value).then((res) => {
       console.log(res)
       if (res) {
-
+        if (res.id && res.id > 0) {
+          Id.value = res.id;
+        }
         from.value = res.from;
         password.value = res.password;
         host.value = res.host;
@@ -253,8 +267,8 @@ async function onSubmit() {
     };
 
 
-    if ($route.params.id) {
-      soacc.id = parseInt($route.params.id.toString());
+    if (isEdit.value && Id.value > 0) {
+      soacc.id = Id.value;
     }
     console.log(soacc);
     await createupdateEmailService(soacc)
@@ -266,7 +280,6 @@ async function onSubmit() {
             alertcolor.value = "success";
             alertContent.value = CapitalizeFirstLetter(t("common.save_success"));
             soacc.id = res.id;
-            $route.params.id = res.id.toString();
             isEdit.value = true;
             Id.value = res.id;
           } else {
