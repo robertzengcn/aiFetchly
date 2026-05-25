@@ -64,7 +64,11 @@ Plans:
   3. Failed file operations still emit records containing the error message
   4. Read-only tools (file_read, glob_files, grep_files) produce no records
   5. Existing tool execution behavior (return values, error handling, streaming) is unchanged
-**Plans:** TBD
+**Plans:** 2 plans
+
+Plans:
+- [ ] 06-01-PLAN.md -- Thread conversationId through ToolExecutor, map result.mode to FileOperationType, emit records
+- [ ] 06-02-PLAN.md -- Add AI_FILE_OPERATION to preload whitelist, init tracker webContents in background
 
 ### Phase 7: Frontend Badges and UI
 **Goal**: Users see color-coded inline badges in the AI chat for every file mutation, can expand diffs for edits, and can click badges to open files.
@@ -76,7 +80,11 @@ Plans:
   3. Failed operation badges display the error message
   4. Edit operation badges have an expandable section showing unified diff lines (green additions, red deletions)
   5. Clicking a badge opens the file in the system default editor
-**Plans:** TBD
+**Plans:** 2 plans
+
+Plans:
+- [ ] 07-01-PLAN.md -- Extend FileOperationRecord with diff, add AI_FILE_OPEN IPC, create subscription API
+- [ ] 07-02-PLAN.md -- Create FileOperationBadge component, wire into AiChatBox with subscription and cleanup
 **UI hint**: yes
 
 ### Phase 8: Translations and Polish
@@ -90,6 +98,17 @@ Plans:
 **Plans:** TBD
 **UI hint**: yes
 
+## Backlog
+
+### Phase 999.1: Follow-up — Phase 6 incomplete plans (BACKLOG)
+
+**Goal:** Resolve plans that ran without producing summaries during Phase 6 execution
+**Source phase:** 6
+**Deferred at:** 2026-05-25 during /gsd-next advancement to Phase 8
+**Plans:**
+- [ ] 06-01: Thread conversationId through ToolExecutor (ran, no SUMMARY.md)
+- [ ] 06-02: Add AI_FILE_OPERATION to preload whitelist, init tracker (ran, no SUMMARY.md)
+
 ## Progress
 
 **Execution Order:**
@@ -102,6 +121,6 @@ Phases execute in numeric order: 5 -> 6 -> 7 -> 8
 | 3. UI Page and Integration | v1.0 | 2/2 | Complete | 2026-05-23 |
 | 4. Persistence, Export, and Validation | v1.0 | 1/1 | Complete | 2026-05-23 |
 | 5. Types and Tracker Foundation | v1.1 | 1/1 | Complete | 2026-05-25 |
-| 6. Backend Integration | v1.1 | 0/? | Not started | - |
-| 7. Frontend Badges and UI | v1.1 | 0/? | Not started | - |
+| 6. Backend Integration | v1.1 | 0/2 | Not started | - |
+| 7. Frontend Badges and UI | v1.1 | 0/2 | Not started | - |
 | 8. Translations and Polish | v1.1 | 0/? | Not started | - |
