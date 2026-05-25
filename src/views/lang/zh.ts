@@ -1464,4 +1464,9 @@ export default {
     account_hint: "选择一个账号以使用其 Cookie",
     account_none: "无账号（匿名）",
   },
+  fileOperations: {
+    show_full_diff: "显示完整差异 ({count} 行)",
+    collapse_diff: "收起差异",
+    open_file_tooltip: "打开文件",
+  },
 };

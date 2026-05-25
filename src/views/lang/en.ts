@@ -1525,4 +1525,9 @@ export default {
     account_hint: "Select an account to use its cookies",
     account_none: "No account (anonymous)",
   },
+  fileOperations: {
+    show_full_diff: "Show full diff ({count} lines)",
+    collapse_diff: "Collapse diff",
+    open_file_tooltip: "Open file",
+  },
 };

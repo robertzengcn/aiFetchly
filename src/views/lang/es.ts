@@ -1526,4 +1526,9 @@ export default {
     account_hint: "Selecciona una cuenta para usar sus cookies",
     account_none: "Sin cuenta (anónimo)",
   },
+  fileOperations: {
+    show_full_diff: "Mostrar diff completo ({count} líneas)",
+    collapse_diff: "Colapsar diff",
+    open_file_tooltip: "Abrir archivo",
+  },
 };
