@@ -2,8 +2,8 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: AI Chat File Operation Recording
-status: phase_7_complete
-last_updated: "2026-05-25T16:30:00.000Z"
+status: phase_8_context
+last_updated: "2026-05-25T17:00:00.000Z"
 last_activity: 2026-05-25
 progress:
   total_phases: 4
@@ -39,10 +39,10 @@ Progress: ███████░░░ 75%
 
 ## Current Position
 
-Phase: 7 of 8 (Frontend Badges and UI) -- COMPLETE
-Plan: 2 of 2 in current phase
-Status: Complete (5 commits across 2 plans)
-Last activity: 2026-05-25 -- Phase 7 executed (2 plans, 5 commits)
+Phase: 8 of 8 (Translations and Polish)
+Plan: 0 of ? in current phase
+Status: Context gathered, ready to plan
+Last activity: 2026-05-25 -- Phase 8 context gathered (3 decisions)
 
 ## Accumulated Context
 
@@ -66,6 +66,9 @@ Last activity: 2026-05-25 -- Phase 7 executed (2 plans, 5 commits)
 - [07-03]: Extend FileOperationRecord with diff?: string field, thread result.diff in ToolExecutor emit
 - [07-04]: Real-time IPC subscription with reactive Map<conversationId, FileOperationRecord[]>
 - [07-05]: New AI_FILE_OPEN IPC channel for shell.openPath(), add to preload invoke whitelist
+- [08-01]: Minimal translation scope — ~3-4 keys for hardcoded strings only (Show full diff, Collapse diff, chip tooltip)
+- [08-02]: Backend error messages shown as-is, no translation
+- [08-03]: Operation type labels stay icon-only, no translated text on badges
 
 ### Pending Todos
 
@@ -92,6 +95,6 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-05-25
-Stopped at: Phase 7 complete, Phase 8 (Translations and Polish) next
-Resume file: .planning/phases/07-frontend-badges-and-ui/07-02-SUMMARY.md
+Stopped at: Phase 8 context gathered, ready to plan
+Resume file: .planning/phases/08-translations-and-polish/08-CONTEXT.md
 Worktree: .claude/worktrees/file-operation-recording (branch: feat/file-operation-recording)
