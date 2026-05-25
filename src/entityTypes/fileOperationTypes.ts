@@ -37,4 +37,6 @@ export interface FileOperationRecord {
   readonly sizeBytes?: number;
   /** Optional: error message if success is false */
   readonly error?: string;
+  /** Optional: unified diff for edit operations (D-03) */
+  readonly diff?: string;
 }
