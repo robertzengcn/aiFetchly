@@ -35,6 +35,12 @@ describe("SkillRegistry", () => {
     test("should return false for MCP-prefixed tool", () => {
       expect(SkillRegistry.isRegistered("mcp_some_tool")).toBe(false);
     });
+
+    test("should return true for search_yandex_maps_businesses", () => {
+      expect(SkillRegistry.isRegistered("search_yandex_maps_businesses")).toBe(
+        true
+      );
+    });
   });
 
   describe("getSkill", () => {
@@ -62,6 +68,14 @@ describe("SkillRegistry", () => {
       const skill = SkillRegistry.getSkill("scrape_urls_from_search_engine");
       expect(skill!.permissionCategory).toBe("network");
     });
+
+    test("should return Yandex Maps skill with automation permission", () => {
+      const skill = SkillRegistry.getSkill("search_yandex_maps_businesses");
+      expect(skill).not.toBeNull();
+      expect(skill!.permissionCategory).toBe("automation");
+      expect(skill!.tier).toBe("main");
+      expect(skill!.source).toBe("built-in");
+    });
   });
 
   describe("getAllToolFunctions", () => {
@@ -81,6 +95,7 @@ describe("SkillRegistry", () => {
       expect(names).toContain("extract_emails_from_urls");
       expect(names).toContain("generate_keywords");
       expect(names).toContain("extract_contact_info");
+      expect(names).toContain("search_yandex_maps_businesses");
     });
 
     test("should return ToolFunction with correct shape", async () => {
