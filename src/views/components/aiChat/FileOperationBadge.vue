@@ -3,12 +3,15 @@ import { ref } from "vue";
 import type { FileOperationRecord } from "@/entityTypes/fileOperationTypes";
 import { AI_FILE_OPEN } from "@/config/channellist";
 import { windowInvoke } from "@/views/utils/apirequest";
+import { useI18n } from "vue-i18n";
 
 interface Props {
   records: readonly FileOperationRecord[];
 }
 
 defineProps<Props>();
+
+const { t } = useI18n();
 
 const expandedDiffs = ref<Set<string>>(new Set());
 const showFullDiff = ref<Set<string>>(new Set());
@@ -111,6 +114,7 @@ function getDiffLineClass(line: string): string {
         variant="tonal"
         density="compact"
         class="cursor-pointer"
+        :title="t('fileOperations.open_file_tooltip') || 'Open file'"
         @click="openFile(record.filePath)"
       >
         <v-icon start size="x-small">{{ getIcon(record) }}</v-icon>
@@ -139,14 +143,14 @@ function getDiffLineClass(line: string): string {
           class="diff-expand"
           @click.stop="toggleFullDiff(record.id)"
         >
-          Show full diff ({{ getDiffLines(record.diff).length }} lines)
+          {{ t('fileOperations.show_full_diff', { count: getDiffLines(record.diff).length }) || 'Show full diff' }}
         </div>
         <div
           v-else-if="showFullDiff.has(record.id)"
           class="diff-expand"
           @click.stop="toggleFullDiff(record.id)"
         >
-          Collapse diff
+          {{ t('fileOperations.collapse_diff') || 'Collapse diff' }}
         </div>
       </div>
     </div>
