@@ -277,19 +277,31 @@ export class YandexMapsModule extends BaseModule {
     search.reject(new Error("Search cancelled by user"));
 
     try {
+      // Send cancel signal so worker can close browser and exit gracefully
       this.sendToWorker(search.worker, { type: "cancel", requestId });
     } catch {
       // Worker may already be dead
     }
 
-    // Give worker 2 seconds to handle cancellation gracefully, then kill
-    setTimeout(() => {
-      try {
-        search.worker.kill();
-      } catch {
-        // Already dead
+    // Use SIGTERM (catchable) so the worker's SIGTERM handler can close
+    // the Puppeteer Chrome process. Then force-kill if it doesn't exit.
+    try {
+      const workerPid = search.worker.pid;
+      search.worker.kill("SIGTERM");
+
+      if (workerPid) {
+        setTimeout(() => {
+          try {
+            process.kill(workerPid, 0); // check if alive
+            process.kill(workerPid, "SIGKILL");
+          } catch {
+            // Already dead — good
+          }
+        }, 3000).unref();
       }
-    }, 2000);
+    } catch {
+      // Already dead
+    }
   }
 
   /**
