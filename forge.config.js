@@ -406,6 +406,10 @@ module.exports = {
             entry: "src/childprocess/google-maps/GoogleMapsWorker.ts",
             config: "vite.googleMapsWorker.config.mjs",
           },
+          {
+            entry: "src/childprocess/yandex-maps/YandexMapsWorker.ts",
+            config: "vite.yandexMapsWorker.config.mjs",
+          },
           // {
           //   entry: 'src/buckEmail.ts',
           //   config: 'vite.buckEmail.config.mjs'

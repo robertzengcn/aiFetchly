@@ -598,6 +598,28 @@ export const constantRoutes: RouteRecordRaw[] = [
     ],
   },
   {
+    path: "/yandex-maps-scraper",
+    name: "Yandex_Maps_Scraper",
+    meta: {
+      visible: true,
+      title: "route.yandex_maps_scraper",
+      icon: "mdi-map-search-outline",
+    },
+    component: Layout,
+    children: [
+      {
+        path: "",
+        component: () => import("@/views/pages/yandex-maps-scraper/index.vue"),
+        name: "YandexMapsScraper",
+        meta: {
+          visible: true,
+          title: "route.yandex_maps_scraper",
+          icon: "mdi-map-search-outline",
+        },
+      },
+    ],
+  },
+  {
     path: "/knowledge",
     name: "Knowledge_Library",
     meta: {

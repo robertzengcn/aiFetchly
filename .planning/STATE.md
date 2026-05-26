@@ -1,74 +1,67 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.1
-milestone_name: AI Chat File Operation Recording
-status: phase_8_complete
-last_updated: "2026-05-25T17:30:00.000Z"
-last_activity: 2026-05-25
+milestone: v1.2
+milestone_name: Yandex Maps Business Scraper
+status: executing
+last_updated: "2026-05-25T23:14:15Z"
+last_activity: 2026-05-26
 progress:
   total_phases: 4
-  completed_phases: 4
-  total_plans: 8
-  completed_plans: 6
-  percent: 100
+  completed_phases: 0
+  total_plans: 2
+  completed_plans: 1
+  percent: 50
 ---
 
 # Project State
 
 **Project:** AiFetchly -- AI-Powered Marketing Automation
-**Branch:** aiemailtool
+**Branch:** aiemailtool (worktree: yandex-maps-scraper)
 **Initialized:** 2026-05-25
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-05-25)
+See: .planning/PROJECT.md (updated 2026-05-26)
 
 **Core value:** Users can discover, contact, and market to prospects across platforms using AI-assisted workflows.
-**Current focus:** Phase 7 -- Frontend Badges and UI (next)
+**Current focus:** Phase 11 -- UI Page and Integration
 
 ## Milestone Progress
 
 | Phase | Name | Status | Plans | Progress |
 |-------|------|--------|-------|----------|
-| 5 | Types and Tracker Foundation | Complete | 1/1 | 100% |
-| 6 | Backend Integration | Complete | 2/2 | 100% |
-| 7 | Frontend Badges and UI | Complete | 2/2 | 100% |
-| 8 | Translations and Polish | Complete | 1/1 | 100% |
+| 9 | Type Contracts and Skill Registration | Complete | 2/2 | 100% |
+| 10 | Module and Worker Implementation | Complete | 3/3 | 100% |
+| 11 | UI Page and Integration | In progress | 1/2 | 50% |
+| 12 | Translations and Validation | Not started | TBD | - |
 
-Progress: ██████████ 100%
+Progress: █████░░░░░ 50%
 
 ## Current Position
 
-Phase: 8 of 8 (Translations and Polish) -- COMPLETE
-Plan: 1 of 1 in current phase
-Status: Complete (2 commits)
-Last activity: 2026-05-25 -- Phase 8 executed (1 plan, 2 commits)
+Phase: 11 of 12 (UI Page and Integration)
+Plan: 01 of 02 (completed)
+Status: Executing -- 11-01 complete, ready for 11-02
+Last activity: 2026-05-26 -- Completed 11-01 Backend IPC Wiring (UI-01)
 
 ## Accumulated Context
 
 ### Decisions
 
-- [v1.1 planning]: Interception at ToolExecutor.executeFileTool() -- single dispatch point for all AI file tool calls
-- [v1.1 planning]: FileOperationTracker as static service with webContents reference -- matches existing patterns
-- [v1.1 planning]: Zero new npm dependencies -- all capabilities already in codebase
-- [v1.1 planning]: Emit on both success and failure -- users need visibility into failed mutations
-- [v1.1 planning]: In-memory only (no DB) for v1.1 -- reduce complexity, defer persistence
-- [05-01]: Expose getRecords(conversationId) on tracker for Phase 7 frontend use
-- [05-01]: Use vitest.service.config.mjs for isolated service test runs
-- [06-01]: conversationId threaded to executeFileTool via executeInternal call site
-- [06-01]: result.mode ("created"|"overwritten") maps to FileOperationType ("create"|"overwrite")
-- [06-01]: result.replacements maps to linesChanged for file_edit
-- [06-02]: AI_FILE_OPERATION added to 3 preload arrays (receive, removeListener, removeAllListeners)
-- [06-02]: FileOperationTracker.setWebContents called after registerCommunicationIpcHandlers
-- [06-02]: FileOperationTracker.clear called in win.on("closed") handler
-- [07-01]: Badges as separate FileOperationBadge Vue component after message-text div (not in v-html)
-- [07-02]: Horizontal chip row layout for multiple badges per message
-- [07-03]: Extend FileOperationRecord with diff?: string field, thread result.diff in ToolExecutor emit
-- [07-04]: Real-time IPC subscription with reactive Map<conversationId, FileOperationRecord[]>
-- [07-05]: New AI_FILE_OPEN IPC channel for shell.openPath(), add to preload invoke whitelist
-- [08-01]: Minimal translation scope — ~3-4 keys for hardcoded strings only (Show full diff, Collapse diff, chip tooltip)
-- [08-02]: Backend error messages shown as-is, no translation
-- [08-03]: Operation type labels stay icon-only, no translated text on badges
+- [v1.2 roadmap]: 4 phases (9-12) following Google Maps pattern -- Type/Skill, Module/Worker, UI, Translations
+- [v1.2 roadmap]: Coarse granularity applied -- tight grouping, critical path only
+- [v1.2 planning]: Shared YandexMapsModule for AI and UI -- mirrors Google Maps pattern
+- [v1.2 planning]: Separate from Yandex web search scraper -- different page structure, anti-bot profile
+- [v1.2 planning]: `automation` permission category -- same as Google Maps
+- [v1.2 planning]: No database persistence in v1.2 -- results returned directly
+- [v1.2 planning]: Same hard cap (50) for AI and UI -- consistent limits
+- [09-01 types]: YandexMapsProgressStatus adds captcha, removes navigating (Yandex loads results on-page)
+- [09-01 types]: YandexMapsErrorCode adds CAPTCHA, NETWORK_FAILURE, LAYOUT_CHANGE (Yandex-specific failure modes)
+- [09-01 types]: YandexMapsSearchInput adds language/region, removes proxy_ids
+- [09-01 types]: YandexMapsBusinessResult uses yandex_id instead of place_id
+- [11-01 ipc]: Mirrored Google Maps IPC pattern without cookie/proxy/history code
+- [11-01 ipc]: Wired progress callback via webContents.send (Google Maps IPC does not use its progress channel yet)
+- [11-01 ipc]: Backward-compatible YandexMapsExecuteOptions on executeSearch for external requestId and progress callback
 
 ### Pending Todos
 
@@ -76,25 +69,20 @@ None yet.
 
 ### Blockers/Concerns
 
-- AiChatBox.vue is 1800+ lines -- template changes need careful insertion point planning (Phase 7 research flag)
-
-### Resolved Concerns
-
-- ~~conversationId not currently threaded to executeFileTool()~~ -- Fixed in Phase 6 (06-01)
-- ~~preload.ts has 4 whitelist arrays that ALL need updating~~ -- Fixed in Phase 6 (06-02, only 3 arrays needed)
+- Yandex Maps page structure selectors must be verified during Phase 10 planning (DOM layout differs from Google Maps)
+- AiChatBox.vue is 1800+ lines -- any AI skill integration must plan insertion carefully
 
 ## Deferred Items
 
 | Category | Item | Status | Deferred At |
 |----------|------|--------|-------------|
-| Feature | Database persistence of operation records | v2+ | 2026-05-25 |
-| Feature | Full rollback/undo system | v2+ | 2026-05-25 |
-| Feature | Grouped operation display | v2+ | 2026-05-25 |
-| Feature | file_delete tracking | v2+ | 2026-05-25 |
+| Feature | Database persistence of Yandex Maps results | v2+ | 2026-05-26 |
+| Feature | Official Yandex Business API integration | v2+ | 2026-05-26 |
+| Feature | Bulk review text scraping | v2+ | 2026-05-26 |
+| Feature | Campaign handoff for scraped results | v2+ | 2026-05-26 |
 
 ## Session Continuity
 
-Last session: 2026-05-25
-Stopped at: Phase 8 complete -- ALL PHASES DONE
-Resume file: .planning/phases/08-translations-and-polish/08-01-SUMMARY.md
-Worktree: .claude/worktrees/file-operation-recording (branch: feat/file-operation-recording)
+Last session: 2026-05-26
+Stopped at: Completed 11-01 Backend IPC Wiring -- ready for 11-02 Vue UI Page
+Worktree: .claude/worktrees/yandex-maps-scraper (branch: aiemailtool)
