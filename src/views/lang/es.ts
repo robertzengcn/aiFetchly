@@ -123,6 +123,7 @@ export default {
     edit_yellow_pages_task: "Editar tarea",
     yellow_pages_task_detail: "Detalle de tarea",
     yellow_pages_results: "Resultados de tarea",
+    yandex_maps_scraper: "Extractor de Yandex Maps",
     email_marketing: "Marketing por correo",
     bulk_email_task_list: "Lista de tareas de envío masivo",
     email_send_log: "Registro de envíos",
