@@ -11,7 +11,7 @@ import { AccountCookiesModule } from "@/modules/accountCookiesModule";
 export class SocialAccount {
   private socialAccountModule: SocialAccountModule;
   private accountCookiesModule: AccountCookiesModule;
-  
+
   constructor() {
     this.socialAccountModule = new SocialAccountModule();
     this.accountCookiesModule = new AccountCookiesModule();
@@ -21,9 +21,14 @@ export class SocialAccount {
     page: number,
     size: number,
     search: string,
-    platform?:number,
+    platform?: number
   ): Promise<SocialAccountResponse> {
-    return await this.socialAccountModule.getSocialAccountList(page, size, search, platform);
+    return await this.socialAccountModule.getSocialAccountList(
+      page,
+      size,
+      search,
+      platform
+    );
   }
   //get social account detail from local database
   public async getAccountdetail(
@@ -39,10 +44,12 @@ export class SocialAccount {
   }
 
   //delete social account from local database
-  public async deleteAccount(id: number): Promise<{ status: boolean; msg: string }> {
+  public async deleteAccount(
+    id: number
+  ): Promise<{ status: boolean; msg: string }> {
     return await this.socialAccountModule.deleteAccount(id);
   }
-  public convertPlatform(name:string):number{
+  public convertPlatform(name: string): number {
     //convert name to lower case
     const lowerCaseName = name.toLowerCase();
     switch (lowerCaseName) {
@@ -50,11 +57,13 @@ export class SocialAccount {
         return 1;
       case "youtube":
         return 2;
-      case "google":  
+      case "google":
       case "google.com":
         return 4;
       case "bilibili":
-        return 3;  
+        return 3;
+      case "yandex":
+        return 14;
       default:
         throw new Error(`Unknown platform name: ${name}`);
     }
