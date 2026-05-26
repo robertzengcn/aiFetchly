@@ -94,6 +94,8 @@ type WorkerOutboundPayload =
       showBrowser: boolean;
       language?: string;
       region?: string;
+      cookies?: unknown[];
+      proxies?: YellowPagesTaskProxyConfig[];
     }
   | { type: "cancel"; requestId: string };
 
