@@ -2,12 +2,12 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Yandex Maps Business Scraper
-status: executing
-last_updated: "2026-05-25T23:14:15Z"
+status: milestone_complete
+last_updated: "2026-05-26T10:30:00.000Z"
 last_activity: 2026-05-26
 progress:
   total_phases: 4
-  completed_phases: 0
+  completed_phases: 4
   total_plans: 2
   completed_plans: 1
   percent: 50

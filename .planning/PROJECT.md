@@ -38,20 +38,13 @@ Users can discover, contact, and market to prospects across platforms using AI-a
 - i18n with 6 languages (en, zh, es, fr, de, ja)
 - Google Maps Business Scraper — full feature with AI skill, UI page, and persistence (v1.0)
 - File Operation Recording — tracker, ToolExecutor integration, frontend badges, translations (v1.1)
+- Yandex Maps Business Scraper — AI skill, Puppeteer worker, UI page, 6-language i18n (v1.2)
 
 ### Active
 
 <!-- Current scope. Building toward these. -->
 
-- [ ] Create shared TypeScript type contracts for Yandex Maps (input, output, progress, error types)
-- [ ] Register `search_yandex_maps_businesses` as a built-in skill in skillsRegistry
-- [ ] Add ToolExecutor dispatch with validation, rate limiting, and result caps
-- [ ] Implement YandexMapsModule orchestration layer (shared by AI and UI entry points)
-- [ ] Build Puppeteer child process worker for Yandex Maps scraping
-- [ ] Add IPC handlers for UI execution (start, monitor, cancel, results)
-- [ ] Add frontend API wrappers for Yandex Maps IPC
-- [ ] Build manual UI page with form, progress display, results table, and export
-- [ ] Add translations for all 6 supported languages (Yandex Maps UI text)
+_No active requirements — awaiting next milestone._
 
 ### Out of Scope
 
@@ -117,10 +110,10 @@ For Yandex Maps scraping, the architecture mirrors the Google Maps scraper patte
 | Save results to local history | Users expect to recover results later; entity + model + module pattern | ✓ Good |
 | CSV + JSON export only | Covers most marketing workflow needs; XLSX deferred | ✓ Good |
 | Worker never accesses database | Follows established architecture; main process handles all persistence | ✓ Good |
-| Shared YandexMapsModule for AI and UI | Mirrors Google Maps pattern; one orchestration layer, two entry points | — Pending |
-| Separate from Yandex web search scraper | Different page structure, result model, anti-bot profile; reuse would add complexity | — Pending |
-| `automation` permission for Yandex Maps skill | Same category as Google Maps; consistent permission model | — Pending |
-| No persistence in v1.2 | Results returned directly; reduces scope; persistence deferred | — Pending |
+| Shared YandexMapsModule for AI and UI | Mirrors Google Maps pattern; one orchestration layer, two entry points | ✓ Good |
+| Separate from Yandex web search scraper | Different page structure, result model, anti-bot profile; reuse would add complexity | ✓ Good |
+| `automation` permission for Yandex Maps skill | Same category as Google Maps; consistent permission model | ✓ Good |
+| No persistence in v1.2 | Results returned directly; reduces scope; persistence deferred | ✓ Good |
 
 ## Evolution
 
@@ -140,4 +133,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-25 after milestone v1.2 initialization*
+*Last updated: 2026-05-26 after milestone v1.2 completion*
