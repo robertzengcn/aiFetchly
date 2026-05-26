@@ -123,6 +123,7 @@ export default {
     edit_yellow_pages_task: "タスクを編集",
     yellow_pages_task_detail: "タスク詳細",
     yellow_pages_results: "タスク結果",
+    yandex_maps_scraper: "Yandex Maps スクレイパー",
     email_marketing: "メールマーケティング",
     bulk_email_task_list: "一括メールタスク一覧",
     email_send_log: "送信ログ",

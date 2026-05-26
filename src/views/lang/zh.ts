@@ -113,6 +113,7 @@ export default {
     edit_yellow_pages_task: "编辑任务",
     yellow_pages_task_detail: "任务详情",
     yellow_pages_results: "任务结果",
+    yandex_maps_scraper: "Yandex Maps 抓取器",
     email_marketing: "邮件营销",
     bulk_email_task_list: "批量邮件任务列表",
     email_send_log: "邮件发送日志",
