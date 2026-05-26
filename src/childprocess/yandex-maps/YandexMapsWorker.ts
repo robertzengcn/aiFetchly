@@ -10,11 +10,13 @@
  */
 
 import { launch, type Browser, type Page } from "puppeteer";
+import useProxy from "@lem0-packages/puppeteer-page-proxy";
 import type {
   YandexMapsSearchResult,
   YandexMapsBusinessResult,
   YandexMapsProgressStatus,
 } from "@/entityTypes/yandexMapsTypes";
+import type { YellowPagesTaskProxyConfig } from "@/entityTypes/yellowPagesTaskProxyType";
 
 // ---------------------------------------------------------------------------
 // Message types (internal)
@@ -31,6 +33,8 @@ interface StartMessage {
   showBrowser: boolean;
   language?: string;
   region?: string;
+  cookies?: unknown[];
+  proxies?: YellowPagesTaskProxyConfig[];
 }
 
 interface CancelMessage {
@@ -90,6 +94,44 @@ function sleep(ms: number): Promise<void> {
 
 function randomDelay(minMs: number, maxMs: number): Promise<void> {
   return sleep(minMs + Math.random() * (maxMs - minMs));
+}
+
+/** Build a proxy URL string from config for useProxy. */
+function proxyToUrl(cfg: YellowPagesTaskProxyConfig): string {
+  const proto = (cfg.protocol || "http").toLowerCase();
+  if (cfg.username && cfg.password) {
+    const u = encodeURIComponent(cfg.username);
+    const p = encodeURIComponent(cfg.password);
+    return `${proto}://${u}:${p}@${cfg.host}:${cfg.port}`;
+  }
+  return `${proto}://${cfg.host}:${cfg.port}`;
+}
+
+/** Apply cookies to the page before navigation. */
+async function applyCookies(page: Page, cookies: unknown[]): Promise<void> {
+  if (!Array.isArray(cookies) || cookies.length === 0) return;
+
+  for (const raw of cookies) {
+    try {
+      const cookie = raw as Record<string, unknown>;
+      const cookieData = {
+        name: String(cookie.name),
+        value: String(cookie.value),
+        domain: cookie.domain ? String(cookie.domain) : undefined,
+        path: (cookie.path as string) || "/",
+        expires: cookie.expirationDate
+          ? (cookie.expirationDate as number) * 1000
+          : undefined,
+        httpOnly: (cookie.httpOnly as boolean) || false,
+        secure: (cookie.secure as boolean) || false,
+        sameSite: cookie.sameSite as "Strict" | "Lax" | "None" | undefined,
+      };
+      await page.setCookie(cookieData);
+    } catch (err) {
+      console.error("[YandexMapsWorker] Failed to set cookie:", err);
+    }
+  }
+  console.log(`[YandexMapsWorker] Applied ${cookies.length} cookies`);
 }
 
 // ---------------------------------------------------------------------------
@@ -319,6 +361,29 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
         "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     );
 
+    // Apply cookies if provided (from a logged-in account)
+    if (msg.cookies && msg.cookies.length > 0) {
+      await applyCookies(page, msg.cookies);
+    }
+
+    // Set up proxy rotation via request interception
+    const proxies = msg.proxies;
+    let currentProxyUrl = "";
+    if (proxies && proxies.length > 0) {
+      currentProxyUrl = proxyToUrl(proxies[0]);
+      await page.setRequestInterception(true);
+      page.on("request", (request) => {
+        useProxy(request, currentProxyUrl).catch(() => {
+          if (!request.isInterceptResolutionHandled()) {
+            request.abort();
+          }
+        });
+      });
+      console.log(
+        `[YandexMapsWorker] Proxy rotation enabled with ${proxies.length} proxy(ies). Initial: ${proxies[0].host}:${proxies[0].port}`
+      );
+    }
+
     // Construct search URL based on language preference
     const domain =
       language && language !== "ru"
@@ -527,6 +592,17 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
       );
 
       console.log(`[DEBUG] === Extracting card ${i + 1}/${limit} ===`);
+
+      // Rotate proxy for this card (round-robin)
+      if (proxies && proxies.length > 0 && i > 0) {
+        const rotated = proxies[i % proxies.length];
+        currentProxyUrl = proxyToUrl(rotated);
+        console.log(
+          `[DEBUG] Rotated to proxy ${i % proxies.length}: ${rotated.host}:${
+            rotated.port
+          }`
+        );
+      }
 
       try {
         // Re-query fresh card handles each iteration (DOM changes after goBack)

@@ -52,6 +52,8 @@ export async function startYandexMapsSearch(params: {
   show_browser?: boolean;
   language?: string;
   region?: string;
+  account_id?: number;
+  proxy_ids?: number[];
 }): Promise<YandexMapsSearchStartResponse> {
   const resp = await windowInvoke(YANDEX_MAPS_SEARCH_START, params);
   if (!resp) {

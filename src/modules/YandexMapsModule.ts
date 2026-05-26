@@ -21,6 +21,7 @@ import {
   YANDEX_MAPS_DEFAULT_MAX_RESULTS,
   YANDEX_MAPS_HARD_CAP,
 } from "@/entityTypes/yandexMapsTypes";
+import type { YellowPagesTaskProxyConfig } from "@/entityTypes/yellowPagesTaskProxyType";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -111,6 +112,10 @@ export interface YandexMapsExecuteOptions {
   externalRequestId?: string;
   /** Callback invoked on each progress event from the worker. */
   onProgress?: (event: YandexMapsProgressEvent) => void;
+  /** Optional browser cookies for authenticated scraping. */
+  cookies?: unknown[];
+  /** Optional proxy configs for IP rotation. */
+  proxies?: YellowPagesTaskProxyConfig[];
 }
 
 // ---------------------------------------------------------------------------
@@ -258,6 +263,8 @@ export class YandexMapsModule extends BaseModule {
         showBrowser: input.show_browser ?? false,
         language: input.language,
         region: input.region,
+        cookies: options?.cookies,
+        proxies: options?.proxies,
       });
     });
   }

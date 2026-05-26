@@ -1580,6 +1580,11 @@ export default {
     error_required: "Query and location are required",
     error_search_failed: "Search failed: {error}",
     view_on_maps: "View on Yandex Maps",
+    account_label: "Yandex Account",
+    account_hint: "Select an account to use its cookies",
+    proxy_label: "Proxies",
+    proxy_hint: "Rotate through selected proxies per card",
+    proxy_placeholder: "Select proxies...",
   },
   fileOperations: {
     show_full_diff: "Show full diff ({count} lines)",
