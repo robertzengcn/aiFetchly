@@ -142,7 +142,7 @@ export function registerGoogleMapsHandlers(): void {
 
       // Execute search asynchronously; push result via webContents.send
       module
-        .executeSearch(input, cookies, proxies)
+        .executeSearch(input, cookies, proxies, requestId)
         .then((result: GoogleMapsSearchResult) => {
           if (!senderWebContents.isDestroyed()) {
             senderWebContents.send(GOOGLE_MAPS_SEARCH_RESULT, {
