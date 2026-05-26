@@ -126,11 +126,19 @@ export class GoogleMapsModule extends BaseModule {
   /**
    * Execute a Google Maps search synchronously (blocks until complete or timeout).
    * Used by ToolExecutor for AI skill invocation.
+   *
+   * @param input Search parameters
+   * @param cookies Optional browser cookies
+   * @param proxies Optional proxy configurations
+   * @param externalRequestId Optional request ID from caller (e.g. IPC handler).
+   *        When provided, this ID is used for activeSearches so cancelSearch()
+   *        can find and kill the worker. When omitted, a new UUID is generated.
    */
   async executeSearch(
     input: GoogleMapsSearchInput,
     cookies?: unknown[],
-    proxies?: YellowPagesTaskProxyConfig[]
+    proxies?: YellowPagesTaskProxyConfig[],
+    externalRequestId?: string
   ): Promise<GoogleMapsSearchResult> {
     const maxResults = Math.min(
       Math.max(1, input.max_results ?? GOOGLE_MAPS_DEFAULT_MAX_RESULTS),
@@ -138,7 +146,7 @@ export class GoogleMapsModule extends BaseModule {
     );
 
     return new Promise((resolve, reject) => {
-      const requestId = uuidv4();
+      const requestId = externalRequestId ?? uuidv4();
 
       let worker: ChildProcess;
       try {
@@ -289,19 +297,33 @@ export class GoogleMapsModule extends BaseModule {
     search.reject(new Error("Search cancelled by user"));
 
     try {
+      // Send cancel signal so worker can close browser and exit gracefully
       this.sendToWorker(search.worker, { type: "cancel", requestId });
     } catch {
       // Worker may already be dead
     }
 
-    // Give worker 2 seconds to handle cancellation gracefully, then kill
-    setTimeout(() => {
-      try {
-        search.worker.kill();
-      } catch {
-        // Already dead
+    // Use SIGTERM (catchable) so the worker's SIGTERM handler can close
+    // the Puppeteer Chrome process. SIGKILL is uncatchable and would
+    // orphan the Chrome child process.
+    try {
+      const workerPid = search.worker.pid;
+      search.worker.kill("SIGTERM");
+
+      // Force-kill fallback if the worker doesn't exit within 3 seconds
+      if (workerPid) {
+        setTimeout(() => {
+          try {
+            process.kill(workerPid, 0); // check if alive
+            process.kill(workerPid, "SIGKILL");
+          } catch {
+            // Already dead — good
+          }
+        }, 3000).unref();
       }
-    }, 2000);
+    } catch {
+      // Already dead
+    }
   }
 
   async saveSearchResult(
