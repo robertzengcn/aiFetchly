@@ -1518,6 +1518,11 @@ export default {
     error_required: "关键字和位置为必填项",
     error_search_failed: "搜索失败：{error}",
     view_on_maps: "在 Yandex 地图中查看",
+    account_label: "Yandex 账号",
+    account_hint: "选择账号以使用其 cookies",
+    proxy_label: "代理",
+    proxy_hint: "在每张卡片之间轮换代理",
+    proxy_placeholder: "选择代理...",
   },
   fileOperations: {
     show_full_diff: "显示完整差异 ({count} 行)",

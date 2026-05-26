@@ -139,6 +139,47 @@
             />
           </v-col>
         </v-row>
+
+        <!-- Account and Proxy row -->
+        <v-row class="mt-2">
+          <v-col cols="12" md="3">
+            <v-select
+              v-model="selectedAccountId"
+              :items="yandexAccounts"
+              item-title="user"
+              item-value="id"
+              :label="t('yandexMaps.account_label') || 'Yandex Account'"
+              :hint="t('yandexMaps.account_hint') || 'Select an account to use its cookies'"
+              persistent-hint
+              :disabled="searchState === 'running'"
+              clearable
+              variant="outlined"
+              density="compact"
+            >
+              <template #selection="{ item }">
+                {{ item.title }}
+              </template>
+            </v-select>
+          </v-col>
+          <v-col cols="12" md="3">
+            <v-select
+              v-model="selectedProxyIds"
+              :items="proxyItems"
+              item-title="label"
+              item-value="id"
+              :label="t('yandexMaps.proxy_label') || 'Proxies'"
+              :placeholder="t('yandexMaps.proxy_placeholder') || 'Select proxies...'"
+              :hint="t('yandexMaps.proxy_hint') || 'Rotate through selected proxies per card'"
+              persistent-hint
+              multiple
+              chips
+              clearable
+              :disabled="searchState === 'running'"
+              variant="outlined"
+              density="compact"
+            />
+          </v-col>
+        </v-row>
       </v-card-text>
     </v-card>
 
@@ -296,7 +337,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onUnmounted } from "vue";
+import { ref, computed, onMounted, onUnmounted } from "vue";
 import { useI18n } from "vue-i18n";
 import Papa from "papaparse";
 import {
@@ -306,10 +347,13 @@ import {
   onYandexMapsResult,
   type YandexMapsResultEvent,
 } from "@/views/api/yandexMaps";
+import { getSocialAccountlist } from "@/views/api/socialaccount";
+import { getProxyList } from "@/views/api/proxy";
 import type {
   YandexMapsBusinessResult,
   YandexMapsProgressEvent,
 } from "@/entityTypes/yandexMapsTypes";
+import type { SocialAccountListData } from "@/entityTypes/socialaccount-type";
 
 const { t } = useI18n();
 
@@ -322,6 +366,14 @@ const includeReviews = ref(false);
 const showBrowser = ref(false);
 const language = ref("");
 const region = ref("");
+
+// ── Account state ────────────────────────────────────────────────────────
+const yandexAccounts = ref<SocialAccountListData[]>([]);
+const selectedAccountId = ref<number | null>(null);
+
+// ── Proxy state ──────────────────────────────────────────────────────────
+const proxyItems = ref<Array<{ id: number; label: string }>>([]);
+const selectedProxyIds = ref<number[]>([]);
 
 // ── Search state ────────────────────────────────────────────────────────
 type SearchState = "idle" | "running" | "completed" | "cancelled" | "failed";
@@ -398,6 +450,31 @@ function setupResultListener(): void {
 }
 
 // ── Handlers ────────────────────────────────────────────────────────────
+async function loadYandexAccounts(): Promise<void> {
+  try {
+    const result = await getSocialAccountlist({
+      page: 1,
+      size: 100,
+      where: "Yandex",
+    });
+    yandexAccounts.value = result.data ?? [];
+  } catch (err) {
+    console.error("Failed to load Yandex accounts:", err);
+  }
+}
+
+async function loadProxyList(): Promise<void> {
+  try {
+    const result = await getProxyList({ page: 1, size: 500, search: "" });
+    proxyItems.value = (result.data ?? []).map((p) => ({
+      id: p.id ?? 0,
+      label: `${p.host}:${p.port}${p.protocol ? " (" + p.protocol + ")" : ""}`,
+    }));
+  } catch (err) {
+    console.error("Failed to load proxy list:", err);
+  }
+}
+
 async function handleStartSearch(): Promise<void> {
   if (!query.value.trim() || !location.value.trim()) return;
 
@@ -421,6 +498,8 @@ async function handleStartSearch(): Promise<void> {
       show_browser: showBrowser.value,
       language: language.value.trim() || undefined,
       region: region.value.trim() || undefined,
+      account_id: selectedAccountId.value ?? undefined,
+      proxy_ids: selectedProxyIds.value.length > 0 ? selectedProxyIds.value : undefined,
     });
     requestId.value = resp.requestId;
   } catch (err) {
@@ -510,6 +589,12 @@ function truncateUrl(url: string, maxLen = 30): string {
 function sanitizeFilename(input: string): string {
   return input.replace(/[^a-zA-Z0-9 _-]/g, "_").slice(0, 50);
 }
+
+// ── Init ───────────────────────────────────────────────────────────────
+onMounted(() => {
+  loadYandexAccounts();
+  loadProxyList();
+});
 
 // ── Cleanup ────────────────────────────────────────────────────────────
 onUnmounted(() => {

@@ -1577,6 +1577,11 @@ export default {
     error_required: "Schlagwort und Standort sind erforderlich",
     error_search_failed: "Suche fehlgeschlagen: {error}",
     view_on_maps: "Auf Yandex Maps anzeigen",
+    account_label: "Yandex-Konto",
+    account_hint: "Wählen Sie ein Konto aus, um dessen Cookies zu verwenden",
+    proxy_label: "Proxies",
+    proxy_hint: "Proxies pro Eintrag rotieren lassen",
+    proxy_placeholder: "Proxies auswählen...",
   },
   fileOperations: {
     show_full_diff: "Vollständigen Diff anzeigen ({count} Zeilen)",

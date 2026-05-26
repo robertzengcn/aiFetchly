@@ -1545,6 +1545,11 @@ export default {
     error_required: "キーワードと場所は必須です",
     error_search_failed: "検索に失敗しました：{error}",
     view_on_maps: "Yandex マップで表示",
+    account_label: "Yandex アカウント",
+    account_hint: "Cookieを使用するアカウントを選択",
+    proxy_label: "プロキシ",
+    proxy_hint: "カードごとにプロキシをローテーション",
+    proxy_placeholder: "プロキシを選択...",
   },
   fileOperations: {
     show_full_diff: "すべての差分を表示 ({count} 行)",
