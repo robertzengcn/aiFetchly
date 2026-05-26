@@ -166,23 +166,20 @@ function platformCopyPlugin() {
             // Copy platform-specific files
             if (process.platform === 'linux') {
                 console.log('Copying Linux templates...');
-                // Copy Linux templates
-                fs.copyFileSync(
-                    'node_modules/protocol-registry/src/linux/templates/desktop.ejs',
-                    '.vite/build/templates/desktop.ejs'
-                );
-                fs.copyFileSync(
-                    'node_modules/protocol-registry/src/linux/templates/script.ejs',
-                    '.vite/build/templates/script.ejs'
-                );
-                fs.copyFileSync(
-                    'node_modules/protocol-registry/src/linux/index.js',
-                    '.vite/build/index.js'
-                );
-                fs.copyFileSync(
-                    'node_modules/protocol-registry/src/linux/postinstall.js',
-                    '.vite/build/postinstall.js'
-                );
+                // Copy Linux templates (guarded for worktree environments where node_modules may be sparse)
+                const linuxFiles = [
+                    ['node_modules/protocol-registry/src/linux/templates/desktop.ejs', '.vite/build/templates/desktop.ejs'],
+                    ['node_modules/protocol-registry/src/linux/templates/script.ejs', '.vite/build/templates/script.ejs'],
+                    ['node_modules/protocol-registry/src/linux/index.js', '.vite/build/index.js'],
+                    ['node_modules/protocol-registry/src/linux/postinstall.js', '.vite/build/postinstall.js'],
+                ];
+                for (const [src, dest] of linuxFiles) {
+                    if (fs.existsSync(src)) {
+                        fs.copyFileSync(src, dest);
+                    } else {
+                        console.warn(`Skipping copy: ${src} not found`);
+                    }
+                }
             } else if (process.platform === 'darwin') {
                 console.log('Copying macOS templates...');
                 // Copy macOS templates
