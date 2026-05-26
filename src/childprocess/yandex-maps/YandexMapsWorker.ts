@@ -171,7 +171,9 @@ function deduplicate(
 }
 
 /** Normalize all string fields: trim whitespace. */
-function normalizeResult(result: YandexMapsBusinessResult): YandexMapsBusinessResult {
+function normalizeResult(
+  result: YandexMapsBusinessResult
+): YandexMapsBusinessResult {
   return {
     name: result.name?.trim() ?? "",
     rating: result.rating?.trim() || undefined,
@@ -194,19 +196,40 @@ function normalizeResult(result: YandexMapsBusinessResult): YandexMapsBusinessRe
 
 /**
  * Check whether the current page is a captcha / bot detection challenge.
- * Returns true if captcha indicators are found in the page title or HTML content.
+ * Returns true if actual CAPTCHA form elements are found on the page.
  */
 async function detectCaptcha(page: Page): Promise<boolean> {
   try {
-    const title = await page.title();
-    const html = await page.content();
-    return (
-      html.indexOf("captcha") !== -1 ||
-      html.indexOf("robot") !== -1 ||
-      title.indexOf("captcha") !== -1 ||
-      html.indexOf("unusual traffic") !== -1 ||
-      html.indexOf("bot detection") !== -1
-    );
+    // Check for visible CAPTCHA DOM elements (iframes, form fields, images)
+    const hasCaptchaElement = await page.evaluate(() => {
+      // reCAPTCHA / hCaptcha / Yandex SmartCaptcha iframes
+      const captchaIframes = document.querySelectorAll(
+        'iframe[src*="captcha"], iframe[src*="recaptcha"], iframe[src*="hcaptcha"], iframe[src*="smartcaptcha"]'
+      );
+      if (captchaIframes.length > 0) return true;
+
+      // Yandex-specific CAPTCHA elements (form fields, images, containers)
+      const captchaElements = document.querySelectorAll(
+        'div[class*="captcha"], form[action*="captcha"], img[src*="captcha"], input[name*="captcha"], div[id*="captcha"]'
+      );
+      if (captchaElements.length > 0) return true;
+
+      return false;
+    });
+
+    if (hasCaptchaElement) return true;
+
+    // Check page title for CAPTCHA indicators (case-insensitive)
+    const title = (await page.title()).toLowerCase();
+    if (
+      title.includes("captcha") ||
+      title.includes("verification") ||
+      title.includes("verify you are human")
+    ) {
+      return true;
+    }
+
+    return false;
   } catch {
     return false;
   }
@@ -223,7 +246,7 @@ async function detectCaptcha(page: Page): Promise<boolean> {
 const RESULT_LIST_SELECTORS = [
   'div[class*="search-business-list"]',
   'div[class*="search-list"]',
-  'div.search-list',
+  "div.search-list",
   'div[class*="business-snippet"]',
 ];
 
@@ -252,19 +275,18 @@ const DETAIL_PANEL_SELECTORS = [
 // ---------------------------------------------------------------------------
 
 async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
-  const {
-    requestId,
-    query,
-    location,
-    maxResults,
-    showBrowser,
-    language,
-  } = msg;
+  const { requestId, query, location, maxResults, showBrowser, language } = msg;
   isCancelled = false;
 
   try {
     // Stage: validating
-    sendProgress(requestId, "validating", 0, maxResults, "Validating search parameters...");
+    sendProgress(
+      requestId,
+      "validating",
+      0,
+      maxResults,
+      "Validating search parameters..."
+    );
 
     if (!query || !location) {
       send({
@@ -307,13 +329,7 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
     )}`;
 
     // Stage: loading
-    sendProgress(
-      requestId,
-      "loading",
-      0,
-      maxResults,
-      "Loading Yandex Maps..."
-    );
+    sendProgress(requestId, "loading", 0, maxResults, "Loading Yandex Maps...");
 
     await page.goto(searchUrl, {
       waitUntil: "networkidle2",
@@ -363,10 +379,9 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
     if (!resultListSelector) {
       // Try a broader fallback: any container with multiple card-like elements
       try {
-        await page.waitForSelector(
-          CARD_SELECTORS.join(", "),
-          { timeout: 5000 }
-        );
+        await page.waitForSelector(CARD_SELECTORS.join(", "), {
+          timeout: 5000,
+        });
         console.log(
           `[DEBUG] No result list container found, but card elements detected directly.`
         );
@@ -516,9 +531,7 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
       try {
         // Re-query fresh card handles each iteration (DOM changes after goBack)
         const freshCards = await page.$$(CARD_SELECTORS.join(", "));
-        console.log(
-          `[DEBUG] Fresh card handles on page: ${freshCards.length}`
-        );
+        console.log(`[DEBUG] Fresh card handles on page: ${freshCards.length}`);
 
         if (i >= freshCards.length) {
           console.log(
@@ -552,9 +565,7 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
           await page
             .waitForSelector(CARD_SELECTORS.join(", "), { timeout: 15000 })
             .catch(() => {
-              console.log(
-                `[DEBUG] Cards not found after re-navigate`
-              );
+              console.log(`[DEBUG] Cards not found after re-navigate`);
             });
 
           // Scroll down to where we were
@@ -573,16 +584,12 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
             await sleep(1000);
           }
 
-          const retryCards = await page.$$(
-            CARD_SELECTORS.join(", ")
-          );
+          const retryCards = await page.$$(CARD_SELECTORS.join(", "));
           console.log(
             `[DEBUG] After re-navigate and scroll: ${retryCards.length} cards`
           );
           if (i >= retryCards.length) {
-            console.log(
-              `[DEBUG] Still can't find card ${i}. Skipping.`
-            );
+            console.log(`[DEBUG] Still can't find card ${i}. Skipping.`);
             continue;
           }
           await retryCards[i].click();
@@ -600,9 +607,7 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
         for (const panelSel of DETAIL_PANEL_SELECTORS) {
           try {
             await page.waitForSelector(panelSel, { timeout: 5000 });
-            console.log(
-              `[DEBUG] Detail panel matched selector: ${panelSel}`
-            );
+            console.log(`[DEBUG] Detail panel matched selector: ${panelSel}`);
             detailPanelFound = true;
             break;
           } catch {
@@ -663,9 +668,7 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
           .goBack({ waitUntil: "networkidle2", timeout: 10000 })
           .catch(async () => {
             // If goBack fails, re-navigate
-            console.log(
-              `[DEBUG] goBack failed, re-navigating to searchUrl`
-            );
+            console.log(`[DEBUG] goBack failed, re-navigating to searchUrl`);
             await page.goto(searchUrl, {
               waitUntil: "networkidle2",
               timeout: 30000,
@@ -696,9 +699,7 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
         await page
           .waitForSelector(CARD_SELECTORS.join(", "), { timeout: 10000 })
           .catch(() => {
-            console.log(
-              `[DEBUG] Cards did not re-appear after goBack`
-            );
+            console.log(`[DEBUG] Cards did not re-appear after goBack`);
           });
         console.log(
           `[DEBUG] Back on results page, collectedCards so far: ${collectedCards.length}`
@@ -783,9 +784,7 @@ async function extractBusinessData(
     '[class*="title"]',
     '[class*="place-name"]'
   );
-  console.log(
-    `[DEBUG] extractBusinessData name: matched="${name ?? "none"}"`
-  );
+  console.log(`[DEBUG] extractBusinessData name: matched="${name ?? "none"}"`);
 
   // Rating: look for star rating elements
   const ratingText = await extractAriaLabel(
@@ -796,7 +795,9 @@ async function extractBusinessData(
   );
   const rating = ratingText?.match(/[\d.]+/)?.[0];
   console.log(
-    `[DEBUG] extractBusinessData rating: raw="${ratingText ?? "none"}", parsed="${rating ?? "none"}"`
+    `[DEBUG] extractBusinessData rating: raw="${
+      ratingText ?? "none"
+    }", parsed="${rating ?? "none"}"`
   );
 
   // Review count
@@ -809,7 +810,9 @@ async function extractBusinessData(
   );
   const reviewCount = parseNumber(reviewText);
   console.log(
-    `[DEBUG] extractBusinessData review_count: raw="${reviewText ?? "none"}", parsed=${reviewCount ?? "none"}`
+    `[DEBUG] extractBusinessData review_count: raw="${
+      reviewText ?? "none"
+    }", parsed=${reviewCount ?? "none"}`
   );
 
   // Category / rubric
@@ -844,12 +847,9 @@ async function extractBusinessData(
     '[class*="business-phone"]',
     'span[class*="phone"]'
   );
-  const phoneHref = await extractAttribute(
-    page,
-    "href",
-    'a[href^="tel:"]'
-  );
-  const phone = phoneText ?? (phoneHref ? phoneHref.replace("tel:", "") : undefined);
+  const phoneHref = await extractAttribute(page, "href", 'a[href^="tel:"]');
+  const phone =
+    phoneText ?? (phoneHref ? phoneHref.replace("tel:", "") : undefined);
   console.log(
     `[DEBUG] extractBusinessData phone: matched="${phone ?? "none"}"`
   );
@@ -905,7 +905,7 @@ async function extractBusinessData(
       "data-id",
       '[class*="business-card"]',
       '[class*="place-card"]',
-      '[data-id]'
+      "[data-id]"
     );
   }
   console.log(
@@ -923,7 +923,9 @@ async function extractBusinessData(
     if (isNaN(longitude)) longitude = undefined;
   }
   console.log(
-    `[DEBUG] extractBusinessData coords: lat=${latitude ?? "none"}, lng=${longitude ?? "none"}`
+    `[DEBUG] extractBusinessData coords: lat=${latitude ?? "none"}, lng=${
+      longitude ?? "none"
+    }`
   );
 
   return {
@@ -995,12 +997,20 @@ process.on("message", (msg: WorkerMessage) => {
   } else if (msg.type === "cancel") {
     isCancelled = true;
     sendProgress(msg.requestId, "cancelled", 0, 0, "Search cancelled");
-    send({
-      type: "result",
-      requestId: msg.requestId,
-      success: false,
-      error: "Search cancelled by user",
-    });
+    // Close browser and exit immediately to kill the Chrome process tree
+    if (browser) {
+      browser
+        .close()
+        .catch((err: unknown) => {
+          console.error(
+            "[YandexMapsWorker] Error closing browser during cancel:",
+            err
+          );
+        })
+        .then(() => process.exit(0));
+    } else {
+      process.exit(0);
+    }
   }
 });
 
