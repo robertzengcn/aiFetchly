@@ -749,12 +749,20 @@ process.on("message", (msg: WorkerMessage) => {
   } else if (msg.type === "cancel") {
     isCancelled = true;
     sendProgress(msg.requestId, "cancelled", 0, 0, "Search cancelled");
-    send({
-      type: "result",
-      requestId: msg.requestId,
-      success: false,
-      error: "Search cancelled by user",
-    });
+    // Close browser and exit immediately to kill the Chrome process tree
+    if (browser) {
+      browser
+        .close()
+        .catch((err: unknown) => {
+          console.error(
+            "[GoogleMapsWorker] Error closing browser during cancel:",
+            err
+          );
+        })
+        .then(() => process.exit(0));
+    } else {
+      process.exit(0);
+    }
   }
 });
 
