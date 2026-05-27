@@ -132,6 +132,7 @@ export default {
     skills: "技能",
     skills_management: "技能管理",
     google_maps_scraper: "Google 地图抓取器",
+    map_scraper: "地图抓取器",
     login: "登录",
     not_found: "未找到",
   },

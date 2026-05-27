@@ -142,6 +142,7 @@ export default {
     skills: "Habilidades",
     skills_management: "Gestión de Habilidades",
     google_maps_scraper: "Buscador de Google Maps",
+    map_scraper: "Buscador de Mapas",
     login: "Iniciar sesión",
     not_found: "No encontrado",
   },

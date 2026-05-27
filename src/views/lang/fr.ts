@@ -142,6 +142,7 @@ export default {
     skills: "Compétences",
     skills_management: "Gestion des Compétences",
     google_maps_scraper: "Scraper Google Maps",
+    map_scraper: "Scraper de Cartes",
     login: "Connexion",
     not_found: "Introuvable",
   },
