@@ -1451,28 +1451,27 @@ async function sendMessage(
             // Hide typing indicator once content starts arriving
             // isTyping.value = false;
 
-            // Append token content and display immediately
-            // Insert a newline before bold headers (e.g. "**Step 2/2**:") so they start on a new line
-            if (chunk.content.startsWith('**') && assistantContent.length > 0) {
-              assistantContent += '\n' + chunk.content;
-            } else {
-              assistantContent += chunk.content;
-            }
-
-            // Explanation:
-            // This block ensures that the assistant's message is updated reactively with context being streamed in.
-            // 1. Find the last message in messages.value.
-            // 2. If it's a user message, add a new empty assistant message (for streaming).
-            // 3. Update the latest assistant message's content with the current accumulated streamed content.
-
+            // Check if we need a new assistant message before accumulating the token.
+            // This must happen BEFORE appending to assistantContent so we can reset it
+            // and avoid duplicating content from before tool calls.
             let lastIndex = messages.value.length - 1;
             const lastMessage = messages.value[lastIndex];
 
             // Stream tokens only into plain assistant text messages.
             // Tool/plan/system assistant messages should never receive conversational tokens.
             if (!isStreamableAssistantMessage(lastMessage)) {
+              // Starting a new content segment after tool/plan messages.
+              // Reset accumulator to avoid duplicating content from before the tool call.
+              assistantContent = '';
               messages.value.push(createAssistantMessage());
-              lastIndex = messages.value.length - 1; // Update to point at the new assistant message
+              lastIndex = messages.value.length - 1;
+            }
+
+            // Append token content and display immediately
+            if (chunk.content.startsWith('**') && assistantContent.length > 0) {
+              assistantContent += '\n' + chunk.content;
+            } else {
+              assistantContent += chunk.content;
             }
 
             // Update the assistant message's content so Vue can reactively show tokens as they stream in
