@@ -584,6 +584,7 @@ export class BuckEmailTaskModule extends BaseModule {
           case "sendEmailEnd":
             {
               this.updateTaskStatus(taskId, TaskStatus.Complete);
+              settleSuccess();
             }
             break;
         }
