@@ -114,6 +114,20 @@ class="message-bubble" :class="{
               <div class="tool-call-header">
                 <v-icon size="small" color="purple" class="mr-1">mdi-toolbox</v-icon>
                 <span><strong>Tool Call</strong></span>
+                <v-progress-circular
+                  v-if="isToolCallPending(message.metadata?.toolId as string | undefined)"
+                  indeterminate
+                  size="16"
+                  width="2"
+                  color="purple"
+                  class="ml-2 tool-loading-spinner"
+                />
+                <v-icon
+                  v-else
+                  size="small"
+                  color="success"
+                  class="ml-1"
+                >mdi-check-circle</v-icon>
               </div>
               <div class="tool-call-content">
                 <div v-if="message.metadata?.toolName" class="tool-name">
@@ -785,6 +799,32 @@ const useRAGContext = ref(false);
 const isExecutingTool = ref(false);
 const currentToolName = ref('');
 const currentToolParams = ref<Record<string, unknown>>({});
+
+// Track which tool calls are still pending (no result received yet)
+const pendingToolIds = computed<Set<string>>(() => {
+  const resultToolIds = new Set<string>();
+  const callToolIds = new Set<string>();
+  for (const msg of messages.value) {
+    if (msg.messageType === MessageType.TOOL_RESULT && msg.metadata?.toolId) {
+      resultToolIds.add(msg.metadata.toolId as string);
+    }
+    if (msg.messageType === MessageType.TOOL_CALL && msg.metadata?.toolId) {
+      callToolIds.add(msg.metadata.toolId as string);
+    }
+  }
+  const pending = new Set<string>();
+  for (const id of callToolIds) {
+    if (!resultToolIds.has(id)) {
+      pending.add(id);
+    }
+  }
+  return pending;
+});
+
+function isToolCallPending(toolId: string | undefined): boolean {
+  if (!toolId) return isExecutingTool.value;
+  return pendingToolIds.value.has(toolId);
+}
 const toolResult = ref<Record<string, unknown> | null>(null);
 const showToolResult = ref(false);
 const streamError = ref<string | null>(null);
@@ -1063,15 +1103,29 @@ function isValidStreamChunk(chunk: ChatStreamChunk, activeId: string | undefined
     return true;
   }
 
-  if (!activeId) return false;
-
   const chunkId = chunk.conversationId;
 
-  // If chunk has no conversationId, only accept if we're in pending state
-  if (!chunkId) return activeId === StreamState.PENDING;
+  // If we have an active stream ID, validate against it
+  if (activeId) {
+    // If chunk has no conversationId, only accept if we're in pending state
+    if (!chunkId) return activeId === StreamState.PENDING;
 
-  // Accept exact matches or pending->actual ID transitions
-  return chunkId === activeId || (chunkId === StreamState.PENDING && activeId !== StreamState.PENDING);
+    // Accept exact matches or pending->actual ID transitions
+    return chunkId === activeId || (chunkId === StreamState.PENDING && activeId !== StreamState.PENDING);
+  }
+
+  // Fallback: if no active stream tracking but chunk matches our current conversationId,
+  // accept it. This handles the race where complete callback fires before all chunks are processed.
+  if (chunkId && conversationId.value && chunkId === conversationId.value) {
+    return true;
+  }
+
+  // Also accept if we're in a loading state (stream active) and chunk has a conversationId
+  if (isLoading.value && chunkId) {
+    return true;
+  }
+
+  return false;
 }
 
 /**
@@ -1114,9 +1168,10 @@ watch(() => props.visible, (newVal) => {
 
 /**
  * Watch for conversationId changes to reload history
+ * Skip during active streaming to avoid overwriting in-flight messages
  */
 watch(conversationId, (newId, oldId) => {
-  if (newId && newId !== oldId && newId !== StreamState.PENDING) {
+  if (newId && newId !== oldId && newId !== StreamState.PENDING && !isLoading.value) {
     loadChatHistory();
   }
 });
@@ -1648,9 +1703,9 @@ async function sendMessage(
       (completedConversationId) => {
         // Stream complete - only handle cleanup, content is already updated
         // No need to update content again since we've been updating it as tokens arrived
-        
+
         // Only reset states if this is still the active stream
-        if (activeStreamConversationId.value === streamConversationId || 
+        if (activeStreamConversationId.value === streamConversationId ||
             activeStreamConversationId.value === completedConversationId) {
           // Reset all states
           isTyping.value = false;
@@ -1659,12 +1714,17 @@ async function sendMessage(
           // showToolResult.value = false;
           scrollToBottom();
         }
-        
-        // Clear active stream tracking if this was the active stream
-        if (activeStreamConversationId.value === streamConversationId || 
-            activeStreamConversationId.value === completedConversationId) {
-          activeStreamConversationId.value = undefined;
-        }
+
+        // Defer clearing activeStreamConversationId to the next macrotask.
+        // This ensures any CHUNK events that were queued before the COMPLETE
+        // event are still validated correctly, preventing "Ignoring chunk:
+        // no active stream expected" errors.
+        const capturedId = activeStreamConversationId.value;
+        setTimeout(() => {
+          if (activeStreamConversationId.value === capturedId) {
+            activeStreamConversationId.value = undefined;
+          }
+        }, 0);
       },
       streamConversationId,
       undefined, // model
@@ -2677,6 +2737,15 @@ onMounted(() => {
   margin-bottom: 8px;
   color: rgb(156, 39, 176);
   font-weight: 600;
+
+  .tool-loading-spinner {
+    animation: tool-spin 1s linear infinite;
+  }
+}
+
+@keyframes tool-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 .tool-call-content {
