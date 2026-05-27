@@ -142,6 +142,7 @@ export default {
     skills: "スキル",
     skills_management: "スキル管理",
     google_maps_scraper: "Google Maps スクレイパー",
+    map_scraper: "マップスクレイパー",
     login: "ログイン",
     not_found: "見つかりません",
   },

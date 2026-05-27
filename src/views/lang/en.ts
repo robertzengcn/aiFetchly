@@ -143,6 +143,7 @@ export default {
     login: "Login",
     not_found: "Not Found",
     google_maps_scraper: "Google Maps Scraper",
+    map_scraper: "Map Scraper",
   },
   knowledge: {
     upload_document: "Upload Document",
