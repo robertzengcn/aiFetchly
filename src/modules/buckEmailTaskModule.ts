@@ -30,6 +30,7 @@ import * as fs from "fs";
 import { utilityProcess, MessageChannelMain, app } from "electron";
 import { ProcessMessage } from "@/entityTypes/processMessage-type";
 import { EmailSendResult } from "@/entityTypes/emailmarketingType";
+import { parseChildMessage } from "@/utils/childProcessMessage";
 import { SendStatus } from "@/model/emailMarketingSendLog.model";
 import { EmailMarketingSendLogEntity } from "@/entity/EmailMarketingSendLog.entity";
 import { EmailMarketingSendLogModule } from "@/modules/emailMarketingSendLogModule";
@@ -509,59 +510,15 @@ export class BuckEmailTaskModule extends BaseModule {
     });
     child.on("message", async (message: unknown) => {
       try {
-        let childdata: ProcessMessage<EmailSendResult>;
-
-        // Electron utility process messages can come in different formats:
-        // 1. As a string directly: "JSON string"
-        // 2. As an object with data property: { data: "JSON string" }
-        // 3. As a parsed object directly: { action: "...", data: ... }
-        let parsedMessage: unknown = message;
-
-        if (typeof message === "string") {
-          try {
-            parsedMessage = JSON.parse(message);
-          } catch (parseError) {
-            console.error(
-              "Invalid message from child process (failed to parse string):",
-              message
-            );
-            return;
-          }
-        }
-
-        const msg = parsedMessage as {
-          data?: string | unknown;
-          action?: string;
-        };
-
-        if (msg && typeof msg === "object" && msg !== null) {
-          // Check if it's already a parsed object with action property (direct format)
-          if ("action" in msg && typeof msg.action === "string") {
-            childdata = msg as ProcessMessage<EmailSendResult>;
-          }
-          // Check if it's wrapped format with data as string (Electron utility process format)
-          else if (
-            "data" in msg &&
-            typeof msg.data === "string" &&
-            !("action" in msg)
-          ) {
-            childdata = JSON.parse(
-              msg.data as string
-            ) as ProcessMessage<EmailSendResult>;
-          } else {
-            console.error(
-              "Invalid message from child process:",
-              JSON.stringify(message)
-            );
-            return;
-          }
-        } else {
+        const result = parseChildMessage<EmailSendResult>(message);
+        if (result.kind === "error") {
           console.error(
-            "Invalid message from child process:",
-            JSON.stringify(message)
+            `Invalid message from child process (${result.reason}):`,
+            message
           );
           return;
         }
+        const childdata = result.data;
 
         console.log("get message from child");
         console.log("Message from child:", childdata);
