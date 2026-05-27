@@ -1627,7 +1627,9 @@ async function sendMessage(
 
           case 'conversation_end':
             console.log('conversation_end', chunk);
-            // Conversation ended - check if last assistant message is empty and remove it if so
+            // Conversation ended — reset typing indicator
+            isTyping.value = false;
+            // Check if last assistant message is empty and remove it if so
             {
               const lastIndex = messages.value.length - 1;
               if (lastIndex >= 0 && 
@@ -1700,17 +1702,16 @@ async function sendMessage(
         }
       },
       (completedConversationId) => {
-        // Stream complete - only handle cleanup, content is already updated
-        // No need to update content again since we've been updating it as tokens arrived
+        // Stream complete - reset UI states unconditionally.
+        // isTyping must always be cleared to prevent the typing indicator
+        // from persisting after the conversation ends.
+        isTyping.value = false;
+        isExecutingTool.value = false;
 
-        // Only reset states if this is still the active stream
+        // Only reset loading state if this is still the active stream
         if (activeStreamConversationId.value === streamConversationId ||
             activeStreamConversationId.value === completedConversationId) {
-          // Reset all states
-          isTyping.value = false;
           isLoading.value = false;
-          isExecutingTool.value = false;
-          // showToolResult.value = false;
           scrollToBottom();
         }
 
