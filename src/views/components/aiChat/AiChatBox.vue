@@ -2249,6 +2249,7 @@ function handlePlanExecutePause(chunk: ChatStreamChunk): void {
 function handlePlanExecuteResume(chunk: ChatStreamChunk): void {
   try {
     isPlanPaused.value = false;
+    isTyping.value = true;
 
     if (currentPlan.value) {
       currentPlan.value.status = 'in_progress';
