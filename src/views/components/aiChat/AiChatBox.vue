@@ -1702,17 +1702,18 @@ async function sendMessage(
         }
       },
       (completedConversationId) => {
-        // Only reset states if this belongs to the active stream.
-        // Use isLoading as the primary guard — it's only true during an
-        // active stream and only reset here, so it's more reliable than
-        // conversation ID matching.
-        if (!isLoading.value) return;
+        // Always reset typing/tool indicators when the stream completes —
+        // these are display-only states that must never persist after a
+        // COMPLETE event regardless of any guard logic above.
+        isTyping.value = false;
+        isExecutingTool.value = false;
 
-        if (activeStreamConversationId.value === streamConversationId ||
-            activeStreamConversationId.value === completedConversationId) {
-          isTyping.value = false;
+        // Only reset isLoading (which gates new streams) when the
+        // conversation ID matches the active stream.
+        if (isLoading.value &&
+            (activeStreamConversationId.value === streamConversationId ||
+             activeStreamConversationId.value === completedConversationId)) {
           isLoading.value = false;
-          isExecutingTool.value = false;
           scrollToBottom();
         }
 
