@@ -1702,23 +1702,23 @@ async function sendMessage(
         }
       },
       (completedConversationId) => {
-        // Stream complete - reset UI states unconditionally.
-        // isTyping must always be cleared to prevent the typing indicator
-        // from persisting after the conversation ends.
-        isTyping.value = false;
-        isExecutingTool.value = false;
+        // Only reset states if this belongs to the active stream.
+        // Use isLoading as the primary guard — it's only true during an
+        // active stream and only reset here, so it's more reliable than
+        // conversation ID matching.
+        if (!isLoading.value) return;
 
-        // Only reset loading state if this is still the active stream
         if (activeStreamConversationId.value === streamConversationId ||
             activeStreamConversationId.value === completedConversationId) {
+          isTyping.value = false;
           isLoading.value = false;
+          isExecutingTool.value = false;
           scrollToBottom();
         }
 
         // Defer clearing activeStreamConversationId to the next macrotask.
         // This ensures any CHUNK events that were queued before the COMPLETE
-        // event are still validated correctly, preventing "Ignoring chunk:
-        // no active stream expected" errors.
+        // event are still validated correctly.
         const capturedId = activeStreamConversationId.value;
         setTimeout(() => {
           if (activeStreamConversationId.value === capturedId) {
