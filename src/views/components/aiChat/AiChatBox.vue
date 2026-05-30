@@ -361,10 +361,6 @@ class="message-bubble" :class="{
               </div>
               <!-- eslint-disable-next-line vue/no-v-html -->
               <div class="message-text" v-html="formatMessage(message.content)"></div>
-              <FileOperationBadge
-                v-if="message.role === 'assistant'"
-                :records="getFileOpsForMessage(message.id)"
-              />
               <div class="message-timestamp" :title="formatFullTimestamp(message.timestamp)">
                 <v-icon size="x-small" class="mr-1">mdi-clock-outline</v-icon>
                 {{ formatTimestamp(message.timestamp) }}
@@ -538,6 +534,32 @@ class="message-bubble" :class="{
     >
       <v-icon>mdi-chevron-down</v-icon>
     </v-btn>
+
+    <!-- File Operations Summary Panel -->
+    <div v-if="currentFileOps.length > 0" class="file-ops-panel">
+      <div class="file-ops-header" @click="showFileOpsPanel = !showFileOpsPanel">
+        <v-icon size="small" class="mr-1" color="primary">mdi-file-document-edit-outline</v-icon>
+        <span class="file-ops-summary">
+          {{ currentFileOps.length }} {{ currentFileOps.length === 1 ? 'file change' : 'file changes' }}
+        </span>
+        <span class="file-ops-counts">
+          <v-chip v-if="currentFileOps.filter(r => r.type === 'create').length" size="x-small" variant="tonal" color="success" class="ml-1">
+            +{{ currentFileOps.filter(r => r.type === 'create').length }}
+          </v-chip>
+          <v-chip v-if="currentFileOps.filter(r => r.type === 'edit').length" size="x-small" variant="tonal" color="info" class="ml-1">
+            ~{{ currentFileOps.filter(r => r.type === 'edit').length }}
+          </v-chip>
+          <v-chip v-if="currentFileOps.filter(r => r.type === 'overwrite').length" size="x-small" variant="tonal" color="warning" class="ml-1">
+            ~{{ currentFileOps.filter(r => r.type === 'overwrite').length }}
+          </v-chip>
+        </span>
+        <v-spacer />
+        <v-icon size="small">{{ showFileOpsPanel ? 'mdi-chevron-up' : 'mdi-chevron-down' }}</v-icon>
+      </div>
+      <div v-if="showFileOpsPanel" class="file-ops-body">
+        <FileOperationBadge :records="currentFileOps" />
+      </div>
+    </div>
 
     <!-- Chat Input -->
     <div class="chat-input">
@@ -840,16 +862,14 @@ const selectedSlashIndex = ref(0);
 // File operation badge state: conversationId → records
 const fileOps = ref<Map<string, readonly FileOperationRecord[]>>(new Map());
 
-function getFileOpsForMessage(messageId: string): readonly FileOperationRecord[] {
+// Computed: all file operations for the current conversation
+const currentFileOps = computed<readonly FileOperationRecord[]>(() => {
   if (!conversationId.value) return [];
-  const ops = fileOps.value.get(conversationId.value);
-  if (!ops) return [];
-  // Only show ops for the most recent assistant message
-  const lastAssistantIdx = visibleMessages.value.findLastIndex(m => m.role === 'assistant');
-  const msgIdx = visibleMessages.value.findIndex(m => m.id === messageId);
-  if (msgIdx !== lastAssistantIdx) return [];
-  return ops;
-}
+  return fileOps.value.get(conversationId.value) ?? [];
+});
+
+// Toggle for the file operations panel above input
+const showFileOpsPanel = ref(true);
 
 const MAX_UPLOAD_FILES = 3;
 const MAX_UPLOAD_FILE_BYTES = 5 * 1024 * 1024; // 5MB
@@ -3344,6 +3364,42 @@ onMounted(() => {
   color: rgb(var(--v-theme-on-surface-variant));
   font-size: 11px;
   flex-shrink: 0;
+}
+
+/* File Operations Summary Panel */
+.file-ops-panel {
+  border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  background-color: rgb(var(--v-theme-surface));
+  padding: 0;
+}
+
+.file-ops-header {
+  display: flex;
+  align-items: center;
+  padding: 8px 16px;
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 0.15s ease;
+
+  &:hover {
+    background-color: rgba(var(--v-theme-on-surface), 0.04);
+  }
+}
+
+.file-ops-summary {
+  font-size: 13px;
+  font-weight: 500;
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.file-ops-counts {
+  display: flex;
+  align-items: center;
+}
+
+.file-ops-body {
+  padding: 4px 16px 10px;
+  border-top: 1px solid rgba(var(--v-border-color), 0.08);
 }
 </style>
 
