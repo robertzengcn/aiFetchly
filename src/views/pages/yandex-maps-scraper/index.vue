@@ -13,6 +13,15 @@
       </v-col>
     </v-row>
 
+    <!-- Tabs -->
+    <v-tabs v-model="activeTab" class="mb-4">
+      <v-tab value="search">{{ t('yandexMaps.search_tab') || 'Search' }}</v-tab>
+      <v-tab value="history" @click="loadHistory">{{ t('yandexMaps.history_tab') || 'History' }}</v-tab>
+    </v-tabs>
+
+    <v-window v-model="activeTab">
+      <v-window-item value="search">
+
     <!-- Search Form -->
     <v-card class="mb-4">
       <v-card-text>
@@ -333,6 +342,67 @@
         </p>
       </v-card-text>
     </v-card>
+      </v-window-item>
+
+      <!-- ═══ History Tab ═══ -->
+      <v-window-item value="history">
+        <v-card>
+          <v-card-title class="d-flex align-center">
+            {{ t('yandexMaps.history_tab') || 'History' }}
+            <v-spacer />
+            <v-btn
+              icon="mdi-refresh"
+              variant="text"
+              size="small"
+              :loading="historyLoading"
+              @click="loadHistory"
+            />
+          </v-card-title>
+          <v-data-table
+            v-if="historyRecords.length > 0"
+            :items="historyRecords"
+            :headers="historyHeaders"
+            :items-per-page="20"
+            hover
+            density="compact"
+            class="elevation-1"
+          >
+            <template #item.createdAt="{ item }">
+              {{ formatDate(item.createdAt) }}
+            </template>
+            <template #item.totalResults="{ item }">
+              {{ item.totalResults }}
+            </template>
+            <template #item.actions="{ item }">
+              <v-btn
+                size="small"
+                variant="text"
+                color="primary"
+                prepend-icon="mdi-eye"
+                @click="loadHistoryResults(item.id)"
+              >
+                {{ t('yandexMaps.view_results') || 'View' }}
+              </v-btn>
+              <v-btn
+                size="small"
+                variant="text"
+                color="error"
+                prepend-icon="mdi-delete"
+                @click="deleteRecord(item.id)"
+              >
+                {{ t('yandexMaps.delete_btn') || 'Delete' }}
+              </v-btn>
+            </template>
+          </v-data-table>
+          <v-card-text v-else-if="!historyLoading" class="text-center py-8">
+            <v-icon size="64" color="grey">mdi-history</v-icon>
+            <p class="text-h6 mt-4 text-medium-emphasis">
+              {{ t('yandexMaps.history_empty') || 'No search history yet' }}
+            </p>
+          </v-card-text>
+        </v-card>
+      </v-window-item>
+    </v-window>
   </v-container>
 </template>
 
@@ -345,7 +415,11 @@ import {
   cancelYandexMapsSearch,
   onYandexMapsProgress,
   onYandexMapsResult,
+  getYandexMapsHistory,
+  getYandexMapsHistoryDetail,
+  deleteYandexMapsHistoryRecord,
   type YandexMapsResultEvent,
+  type YandexMapsHistoryRecord,
 } from "@/views/api/yandexMaps";
 import { getSocialAccountlist } from "@/views/api/socialaccount";
 import { getProxyList } from "@/views/api/proxy";
@@ -356,6 +430,9 @@ import type {
 import type { SocialAccountListData } from "@/entityTypes/socialaccount-type";
 
 const { t } = useI18n();
+
+// ── Tab state ──────────────────────────────────────────────────────────
+const activeTab = ref<"search" | "history">("search");
 
 // ── Form state ──────────────────────────────────────────────────────────
 const query = ref("");
@@ -396,6 +473,10 @@ const progressPercent = computed(() =>
     : 0
 );
 
+// ── History state ───────────────────────────────────────────────────────
+const historyRecords = ref<YandexMapsHistoryRecord[]>([]);
+const historyLoading = ref(false);
+
 // ── Can start search ────────────────────────────────────────────────────
 const canStartSearch = computed(
   () => query.value.trim().length > 0 && location.value.trim().length > 0 && searchState.value !== "running"
@@ -410,6 +491,14 @@ const tableHeaders = computed(() => [
   { title: t("yandexMaps.col_address") || "Address", key: "address", sortable: true },
   { title: t("yandexMaps.col_phone") || "Phone", key: "phone" },
   { title: t("yandexMaps.col_website") || "Website", key: "website" },
+]);
+
+const historyHeaders = computed(() => [
+  { title: t("yandexMaps.col_name") || "Query", key: "query", sortable: true },
+  { title: t("yandexMaps.col_address") || "Location", key: "location", sortable: true },
+  { title: t("yandexMaps.col_reviews") || "Results", key: "totalResults", sortable: true },
+  { title: t("yandexMaps.col_date") || "Date", key: "createdAt", sortable: true },
+  { title: t("yandexMaps.col_actions") || "Actions", key: "actions", sortable: false },
 ]);
 
 // ── Event subscriptions ─────────────────────────────────────────────────
@@ -532,6 +621,54 @@ function cleanupListeners(): void {
     unsubscribeProgress();
     unsubscribeProgress = null;
   }
+}
+
+// ── History ─────────────────────────────────────────────────────────────
+async function loadHistory(): Promise<void> {
+  historyLoading.value = true;
+  try {
+    const data = await getYandexMapsHistory(50, 0);
+    historyRecords.value = data.records;
+  } catch (err) {
+    console.error("Failed to load history:", err);
+  } finally {
+    historyLoading.value = false;
+  }
+}
+
+async function loadHistoryResults(id: number): Promise<void> {
+  try {
+    const record = await getYandexMapsHistoryDetail(id);
+    if (record.results) {
+      try {
+        results.value = JSON.parse(record.results) as YandexMapsBusinessResult[];
+      } catch {
+        console.error("Failed to parse history results");
+        results.value = [];
+      }
+      lastQuery.value = record.query;
+      lastLocation.value = record.location;
+      searchState.value = "completed";
+      activeTab.value = "search";
+    }
+  } catch (err) {
+    console.error("Failed to load history record:", err);
+  }
+}
+
+async function deleteRecord(id: number): Promise<void> {
+  try {
+    await deleteYandexMapsHistoryRecord(id);
+    historyRecords.value = historyRecords.value.filter((r) => r.id !== id);
+  } catch (err) {
+    console.error("Failed to delete record:", err);
+  }
+}
+
+function formatDate(date: Date | string | undefined): string {
+  if (!date) return "—";
+  const d = typeof date === "string" ? new Date(date) : date;
+  return d.toLocaleDateString() + " " + d.toLocaleTimeString();
 }
 
 // ── Export ──────────────────────────────────────────────────────────────

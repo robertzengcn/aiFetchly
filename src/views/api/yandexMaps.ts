@@ -15,6 +15,9 @@ import {
   YANDEX_MAPS_SEARCH_CANCEL,
   YANDEX_MAPS_SEARCH_PROGRESS,
   YANDEX_MAPS_SEARCH_RESULT,
+  YANDEX_MAPS_HISTORY_LIST,
+  YANDEX_MAPS_HISTORY_DETAIL,
+  YANDEX_MAPS_HISTORY_DELETE,
 } from "@/config/channellist";
 import type {
   YandexMapsSearchResult,
@@ -99,4 +102,44 @@ export function onYandexMapsResult(
   return () => {
     windowRemoveAllListeners(YANDEX_MAPS_SEARCH_RESULT);
   };
+}
+
+// ---------------------------------------------------------------------------
+// History types
+// ---------------------------------------------------------------------------
+
+export interface YandexMapsHistoryRecord {
+  id: number;
+  query: string;
+  location: string;
+  status: string;
+  totalResults: number;
+  summary: string;
+  results: string; // JSON string
+  createdAt?: Date;
+}
+
+// ---------------------------------------------------------------------------
+// History API functions
+// ---------------------------------------------------------------------------
+
+export async function getYandexMapsHistory(
+  limit = 50,
+  offset = 0
+): Promise<{ records: YandexMapsHistoryRecord[]; total: number }> {
+  const resp = await windowInvoke(YANDEX_MAPS_HISTORY_LIST, { limit, offset });
+  if (!resp) throw new Error("Failed to load history");
+  return resp as { records: YandexMapsHistoryRecord[]; total: number };
+}
+
+export async function getYandexMapsHistoryDetail(
+  id: number
+): Promise<YandexMapsHistoryRecord> {
+  const resp = await windowInvoke(YANDEX_MAPS_HISTORY_DETAIL, { id });
+  if (!resp) throw new Error("Failed to load record");
+  return resp as YandexMapsHistoryRecord;
+}
+
+export async function deleteYandexMapsHistoryRecord(id: number): Promise<void> {
+  await windowInvoke(YANDEX_MAPS_HISTORY_DELETE, { id });
 }

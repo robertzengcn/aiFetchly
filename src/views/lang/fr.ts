@@ -1582,6 +1582,13 @@ export default {
     proxy_label: "Proxies",
     proxy_hint: "Alterner entre les proxies sélectionnés par fiche",
     proxy_placeholder: "Sélectionner des proxies...",
+    search_tab: "Rechercher",
+    history_tab: "Historique",
+    history_empty: "Aucun historique de recherche",
+    col_date: "Date",
+    col_actions: "Actions",
+    view_results: "Voir",
+    delete_btn: "Supprimer",
   },
   fileOperations: {
     show_full_diff: "Afficher le diff complet ({count} lignes)",

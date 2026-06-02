@@ -1551,6 +1551,13 @@ export default {
     proxy_label: "プロキシ",
     proxy_hint: "カードごとにプロキシをローテーション",
     proxy_placeholder: "プロキシを選択...",
+    search_tab: "検索",
+    history_tab: "履歴",
+    history_empty: "検索履歴がありません",
+    col_date: "日付",
+    col_actions: "操作",
+    view_results: "表示",
+    delete_btn: "削除",
   },
   fileOperations: {
     show_full_diff: "すべての差分を表示 ({count} 行)",

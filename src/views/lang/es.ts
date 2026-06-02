@@ -1588,6 +1588,13 @@ export default {
     proxy_label: "Proxies",
     proxy_hint: "Rotar entre los proxies seleccionados por tarjeta",
     proxy_placeholder: "Seleccionar proxies...",
+    search_tab: "Buscar",
+    history_tab: "Historial",
+    history_empty: "Sin historial de búsqueda",
+    col_date: "Fecha",
+    col_actions: "Acciones",
+    view_results: "Ver",
+    delete_btn: "Eliminar",
   },
   fileOperations: {
     show_full_diff: "Mostrar diff completo ({count} líneas)",
