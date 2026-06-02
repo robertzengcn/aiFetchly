@@ -335,3 +335,6 @@ export const YANDEX_MAPS_SEARCH_START = "yandex_maps:search_start";
 export const YANDEX_MAPS_SEARCH_CANCEL = "yandex_maps:search_cancel";
 export const YANDEX_MAPS_SEARCH_PROGRESS = "yandex_maps:search_progress";
 export const YANDEX_MAPS_SEARCH_RESULT = "yandex_maps:search_result";
+export const YANDEX_MAPS_HISTORY_LIST = "yandex_maps:history_list";
+export const YANDEX_MAPS_HISTORY_DETAIL = "yandex_maps:history_detail";
+export const YANDEX_MAPS_HISTORY_DELETE = "yandex_maps:history_delete";

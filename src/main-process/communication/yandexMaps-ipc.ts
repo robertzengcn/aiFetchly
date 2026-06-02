@@ -23,6 +23,9 @@ import {
   YANDEX_MAPS_SEARCH_CANCEL,
   YANDEX_MAPS_SEARCH_PROGRESS,
   YANDEX_MAPS_SEARCH_RESULT,
+  YANDEX_MAPS_HISTORY_LIST,
+  YANDEX_MAPS_HISTORY_DETAIL,
+  YANDEX_MAPS_HISTORY_DELETE,
 } from "@/config/channellist";
 import type {
   YandexMapsSearchInput,
@@ -229,6 +232,99 @@ export function registerYandexMapsHandlers(): void {
         msg: "No active search found for this requestId",
         data: null,
       };
+    }
+  );
+
+  // ── History list ────────────────────────────────────────────────────
+  ipcMain.handle(
+    YANDEX_MAPS_HISTORY_LIST,
+    async (_event, ...args: unknown[]) => {
+      try {
+        const raw = args[0];
+        const data = (
+          typeof raw === "string" ? JSON.parse(raw) : raw ?? {}
+        ) as Record<string, unknown>;
+        const rawLimit = typeof data.limit === "number" ? data.limit : 50;
+        const rawOffset = typeof data.offset === "number" ? data.offset : 0;
+        const limit = Math.min(Math.max(1, rawLimit), 100);
+        const offset = Math.max(0, rawOffset);
+        const module = new YandexMapsModule();
+        const [records, total] = await module.getSearchHistory(limit, offset);
+        return { status: true, msg: "OK", data: { records, total } };
+      } catch (err) {
+        console.error("[YandexMaps] History list error:", err);
+        return {
+          status: false,
+          msg: `Failed to load history: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+          data: null,
+        };
+      }
+    }
+  );
+
+  // ── History detail ──────────────────────────────────────────────────
+  ipcMain.handle(
+    YANDEX_MAPS_HISTORY_DETAIL,
+    async (_event, ...args: unknown[]) => {
+      try {
+        const raw = args[0];
+        const data = (
+          typeof raw === "string" ? JSON.parse(raw) : raw ?? {}
+        ) as Record<string, unknown>;
+        const id = typeof data.id === "number" ? data.id : 0;
+        if (!id) {
+          return { status: false, msg: "id is required", data: null };
+        }
+        const module = new YandexMapsModule();
+        const record = await module.getSearchRecord(id);
+        if (!record) {
+          return { status: false, msg: "Record not found", data: null };
+        }
+        return { status: true, msg: "OK", data: record };
+      } catch (err) {
+        console.error("[YandexMaps] History detail error:", err);
+        return {
+          status: false,
+          msg: `Failed to load record: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+          data: null,
+        };
+      }
+    }
+  );
+
+  // ── History delete ──────────────────────────────────────────────────
+  ipcMain.handle(
+    YANDEX_MAPS_HISTORY_DELETE,
+    async (_event, ...args: unknown[]) => {
+      try {
+        const raw = args[0];
+        const data = (
+          typeof raw === "string" ? JSON.parse(raw) : raw ?? {}
+        ) as Record<string, unknown>;
+        const id = typeof data.id === "number" ? data.id : 0;
+        if (!id) {
+          return { status: false, msg: "id is required", data: null };
+        }
+        const module = new YandexMapsModule();
+        const deleted = await module.deleteSearchRecord(id);
+        if (!deleted) {
+          return { status: false, msg: "Record not found", data: null };
+        }
+        return { status: true, msg: "Deleted", data: null };
+      } catch (err) {
+        console.error("[YandexMaps] History delete error:", err);
+        return {
+          status: false,
+          msg: `Failed to delete record: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+          data: null,
+        };
+      }
     }
   );
 }

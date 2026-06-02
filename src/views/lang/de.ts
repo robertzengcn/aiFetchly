@@ -1583,6 +1583,13 @@ export default {
     proxy_label: "Proxies",
     proxy_hint: "Proxies pro Eintrag rotieren lassen",
     proxy_placeholder: "Proxies auswählen...",
+    search_tab: "Suche",
+    history_tab: "Verlauf",
+    history_empty: "Noch kein Suchverlauf",
+    col_date: "Datum",
+    col_actions: "Aktionen",
+    view_results: "Anzeigen",
+    delete_btn: "Löschen",
   },
   fileOperations: {
     show_full_diff: "Vollständigen Diff anzeigen ({count} Zeilen)",

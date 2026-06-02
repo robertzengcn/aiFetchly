@@ -1524,6 +1524,13 @@ export default {
     proxy_label: "代理",
     proxy_hint: "在每张卡片之间轮换代理",
     proxy_placeholder: "选择代理...",
+    search_tab: "搜索",
+    history_tab: "历史记录",
+    history_empty: "暂无搜索历史",
+    col_date: "日期",
+    col_actions: "操作",
+    view_results: "查看",
+    delete_btn: "删除",
   },
   fileOperations: {
     show_full_diff: "显示完整差异 ({count} 行)",

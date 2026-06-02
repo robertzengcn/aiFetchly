@@ -18,10 +18,13 @@ import {
   type YandexMapsSearchResult,
   type YandexMapsProgressEvent,
   type YandexMapsProgressStatus,
+  type YandexMapsBusinessResult,
   YANDEX_MAPS_DEFAULT_MAX_RESULTS,
   YANDEX_MAPS_HARD_CAP,
 } from "@/entityTypes/yandexMapsTypes";
 import type { YellowPagesTaskProxyConfig } from "@/entityTypes/yellowPagesTaskProxyType";
+import { YandexMapsSearchRecordModel } from "@/model/YandexMapsSearchRecord.model";
+import type { YandexMapsSearchRecordEntity } from "@/entity/YandexMapsSearchRecord.entity";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -126,10 +129,12 @@ export interface YandexMapsExecuteOptions {
 
 export class YandexMapsModule extends BaseModule {
   private activeSearches = new Map<string, ActiveSearch>();
+  private recordModel: YandexMapsSearchRecordModel;
   private static readonly DEFAULT_TIMEOUT_MS = 600000; // 10 minutes
 
   constructor() {
     super();
+    this.recordModel = new YandexMapsSearchRecordModel(this.dbpath);
   }
 
   /**
@@ -231,6 +236,20 @@ export class YandexMapsModule extends BaseModule {
                   results: [],
                 };
 
+          this.saveSearchResult(
+            result.query,
+            result.location,
+            result.success ? "completed" : "failed",
+            result.totalResults,
+            result.summary,
+            result.results
+          ).catch((saveErr: unknown) => {
+            console.error(
+              "[YandexMaps] Failed to save search result:",
+              saveErr
+            );
+          });
+
           resolve(result);
         }
       });
@@ -311,6 +330,45 @@ export class YandexMapsModule extends BaseModule {
     } catch {
       // Already dead
     }
+  }
+
+  async saveSearchResult(
+    query: string,
+    location: string,
+    status: string,
+    totalResults: number,
+    summary: string,
+    results: YandexMapsBusinessResult[]
+  ): Promise<YandexMapsSearchRecordEntity> {
+    await this.ensureConnection();
+    return await this.recordModel.create({
+      query,
+      location,
+      status,
+      totalResults,
+      summary,
+      results: JSON.stringify(results),
+    });
+  }
+
+  async getSearchHistory(
+    limit = 50,
+    offset = 0
+  ): Promise<[YandexMapsSearchRecordEntity[], number]> {
+    await this.ensureConnection();
+    return await this.recordModel.findAll(limit, offset);
+  }
+
+  async getSearchRecord(
+    id: number
+  ): Promise<YandexMapsSearchRecordEntity | null> {
+    await this.ensureConnection();
+    return await this.recordModel.findById(id);
+  }
+
+  async deleteSearchRecord(id: number): Promise<boolean> {
+    await this.ensureConnection();
+    return await this.recordModel.deleteById(id);
   }
 
   /**
