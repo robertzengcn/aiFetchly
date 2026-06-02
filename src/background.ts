@@ -35,6 +35,7 @@ import { NativateDatatype } from "@/entityTypes/commonType";
 import { ScheduleManager } from "@/modules/ScheduleManager";
 import { runafterbootup } from "@/modules/bootuprun";
 import { YellowPagesController } from "./controller/YellowPagesController";
+import { SearchController } from "./controller/SearchController";
 import {
   initializeWebSocketConnection,
   cleanupWebSocketConnection,
@@ -1018,6 +1019,12 @@ async function handleDeepLink(url: string) {
             // Reset SqliteDb instance to use new path
             const newDbInstance = await SqliteDb.resetInstance(newDbPath);
             log.info("SqliteDb reset to new path after login:", newDbPath);
+
+            // Reset controller singletons so they re-create modules/models
+            // with the new SqliteDb instance on next use
+            SearchController.resetInstance();
+            YellowPagesController.resetInstance();
+            log.info("Controller singletons reset after SqliteDb path change");
 
             // Ensure the new connection is initialized with retry logic for database locks
             if (!newDbInstance.connection.isInitialized) {
