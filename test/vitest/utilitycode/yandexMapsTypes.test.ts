@@ -54,15 +54,15 @@ describe("yandexMapsTypes", () => {
       expect(input.show_browser).toBeUndefined();
     });
 
-    // @ts-expect-error -- missing required `query` field
     test("compile-time rejects input without required query field", () => {
+      // @ts-expect-error -- missing required `query` field
       const _bad: YandexMapsSearchInput = {
         location: "Moscow",
       };
     });
 
-    // @ts-expect-error -- missing required `location` field
     test("compile-time rejects input without required location field", () => {
+      // @ts-expect-error -- missing required `location` field
       const _bad: YandexMapsSearchInput = {
         query: "dentist",
       };
@@ -122,8 +122,8 @@ describe("yandexMapsTypes", () => {
       expect(result.longitude).toBeUndefined();
     });
 
-    // @ts-expect-error -- missing required `name` field
     test("compile-time rejects result without required name field", () => {
+      // @ts-expect-error -- missing required `name` field
       const _bad: YandexMapsBusinessResult = {
         rating: "4.0",
       };
@@ -221,8 +221,8 @@ describe("yandexMapsTypes", () => {
       expect(allStatuses).not.toContain("navigating");
     });
 
-    // @ts-expect-error -- invalid status string should not compile
     test("compile-time rejects invalid status string", () => {
+      // @ts-expect-error -- invalid status string should not compile
       const _bad: YandexMapsProgressStatus = "invalid_status";
     });
   });
@@ -301,8 +301,8 @@ describe("yandexMapsTypes", () => {
       expect(layout).toBe("LAYOUT_CHANGE");
     });
 
-    // @ts-expect-error -- invalid error code should not compile
     test("compile-time rejects invalid error code string", () => {
+      // @ts-expect-error -- invalid error code should not compile
       const _bad: YandexMapsErrorCode = "INVALID_ERROR";
     });
   });
@@ -352,7 +352,9 @@ describe("yandexMapsTypes", () => {
     });
 
     test("hard cap is greater than default max results", () => {
-      expect(YANDEX_MAPS_HARD_CAP).toBeGreaterThan(YANDEX_MAPS_DEFAULT_MAX_RESULTS);
+      expect(YANDEX_MAPS_HARD_CAP).toBeGreaterThan(
+        YANDEX_MAPS_DEFAULT_MAX_RESULTS
+      );
     });
   });
 });
