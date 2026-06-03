@@ -934,18 +934,16 @@ async function handleDeepLink(url: string) {
         log.info("Refresh token saved successfully");
 
         // Calculate and store refresh token expiry time
-        if (refreshExpiresIn) {
-          const refreshExpiryTime =
-            Date.now() + parseInt(refreshExpiresIn) * 1000;
-          tokenService.setValue(
-            REFRESHTOKENEXPIRY,
-            refreshExpiryTime.toString()
-          );
-          log.info(
-            "Refresh token expiry time saved:",
-            new Date(refreshExpiryTime).toISOString()
-          );
-        }
+        // Default to 30 days if not provided by server
+        const effectiveRefreshExpiresIn = refreshExpiresIn
+          ? parseInt(refreshExpiresIn)
+          : 2592000; // 30 days in seconds
+        const refreshExpiryTime = Date.now() + effectiveRefreshExpiresIn * 1000;
+        tokenService.setValue(REFRESHTOKENEXPIRY, refreshExpiryTime.toString());
+        log.info(
+          "Refresh token expiry time saved:",
+          new Date(refreshExpiryTime).toISOString()
+        );
       } else {
         log.warn("No refresh token found in deep link URL");
       }
