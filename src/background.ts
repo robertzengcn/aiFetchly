@@ -36,6 +36,7 @@ import { NativateDatatype } from "@/entityTypes/commonType";
 import { ScheduleManager } from "@/modules/ScheduleManager";
 import { runafterbootup } from "@/modules/bootuprun";
 import { YellowPagesController } from "./controller/YellowPagesController";
+import { SearchController } from "./controller/SearchController";
 import {
   initializeWebSocketConnection,
   cleanupWebSocketConnection,
@@ -939,18 +940,16 @@ async function handleDeepLink(url: string) {
         log.info("Refresh token saved successfully");
 
         // Calculate and store refresh token expiry time
-        if (refreshExpiresIn) {
-          const refreshExpiryTime =
-            Date.now() + parseInt(refreshExpiresIn) * 1000;
-          tokenService.setValue(
-            REFRESHTOKENEXPIRY,
-            refreshExpiryTime.toString()
-          );
-          log.info(
-            "Refresh token expiry time saved:",
-            new Date(refreshExpiryTime).toISOString()
-          );
-        }
+        // Default to 30 days if not provided by server
+        const effectiveRefreshExpiresIn = refreshExpiresIn
+          ? parseInt(refreshExpiresIn)
+          : 2592000; // 30 days in seconds
+        const refreshExpiryTime = Date.now() + effectiveRefreshExpiresIn * 1000;
+        tokenService.setValue(REFRESHTOKENEXPIRY, refreshExpiryTime.toString());
+        log.info(
+          "Refresh token expiry time saved:",
+          new Date(refreshExpiryTime).toISOString()
+        );
       } else {
         log.warn("No refresh token found in deep link URL");
       }
@@ -1024,6 +1023,12 @@ async function handleDeepLink(url: string) {
             // Reset SqliteDb instance to use new path
             const newDbInstance = await SqliteDb.resetInstance(newDbPath);
             log.info("SqliteDb reset to new path after login:", newDbPath);
+
+            // Reset controller singletons so they re-create modules/models
+            // with the new SqliteDb instance on next use
+            SearchController.resetInstance();
+            YellowPagesController.resetInstance();
+            log.info("Controller singletons reset after SqliteDb path change");
 
             // Ensure the new connection is initialized with retry logic for database locks
             if (!newDbInstance.connection.isInitialized) {
