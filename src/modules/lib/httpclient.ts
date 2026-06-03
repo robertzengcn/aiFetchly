@@ -193,13 +193,21 @@ export class HttpClient {
 
       // Check if refresh token exists
       // (tokenModel/refreshToken loaded for debug logging above)
+      console.log(
+        "[HttpClient] Refresh token check:",
+        refreshToken ? `found (length=${refreshToken.length})` : "missing",
+        "| endpoint:",
+        endpoint
+      );
 
       if (refreshToken && refreshToken.trim().length > 0) {
         // Try to refresh token and retry request
         return this._refreshTokenAndRetry(endpoint, options, isRetry);
       } else {
         // No refresh token available, sign out user
-        console.warn("No refresh token available, signing out user");
+        console.warn(
+          "[HttpClient] No refresh token available, signing out user"
+        );
         try {
           const userModel = new User();
           await userModel.removeToken();
