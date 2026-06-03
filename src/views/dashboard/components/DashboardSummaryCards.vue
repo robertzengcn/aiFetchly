@@ -136,7 +136,7 @@
           </div>
           <div v-else class="card-content">
             <div class="d-flex align-center mb-2">
-              <v-icon color="info" size="32" class="mr-2">mdi-email-send</v-icon>
+              <v-icon color="info" size="32" class="mr-2">mdi-send</v-icon>
               <div class="text-subtitle-2 text-medium-emphasis">{{ translations.emailsSent }}</div>
             </div>
             <div class="text-h4 font-weight-bold info--text mb-2">
@@ -155,7 +155,7 @@
               </span>
               <span class="text-medium-emphasis text-body-2 ml-1">{{ translations.vsPreviousPeriod }}</span>
             </div>
-            <div class="text-caption text-medium-emphasis">
+            <div v-if="(data?.emailsSent?.periodCount ?? 0) > 0" class="text-caption text-medium-emphasis">
               {{ translations.successRate }}: {{ formatPercentage(data?.emailsSent?.successRate ?? 0) }}
             </div>
           </div>
