@@ -678,8 +678,10 @@ export default {
     keyword: "Keyword",
     search_enginer_name: "search enginer",
     input_keywords_hint: "input keywords, per one per line",
-    market_insight_placeholder: "请输入您需要进行市场洞察的公开网络源或行业关键词...",
-    public_information_notice: "注：本功能仅用于公开网页信息的自动化结构化整理，请确保您的检索行为符合目标网站的 Robots 协议。",
+    market_insight_placeholder:
+      "Enter a public web source or industry keyword for market insight...",
+    public_information_notice:
+      "Note: This feature only structures information from public web pages. Please ensure your research activity complies with the target site's robots policy.",
     show_in_Browser: "show in browser",
     use_hint:
       "Input public sources or industry keywords for market insight organization",

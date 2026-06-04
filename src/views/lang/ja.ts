@@ -665,13 +665,15 @@ export default {
     keyword: "キーワード",
     search_enginer_name: "検索エンジン",
     input_keywords_hint: "キーワードを入力（1行に1つ）",
-    market_insight_placeholder: "请输入您需要进行市场洞察的公开网络源或行业关键词...",
-    public_information_notice: "注：本功能仅用于公开网页信息的自动化结构化整理，请确保您的检索行为符合目标网站的 Robots 协议。",
+    market_insight_placeholder:
+      "市場インサイトに使用する公開Webソースまたは業界キーワードを入力してください...",
+    public_information_notice:
+      "注: この機能は公開Webページの情報を構造化するためのものです。調査操作が対象サイトのrobotsポリシーに準拠していることを確認してください。",
     show_in_Browser: "ブラウザに表示",
     use_hint:
-      "Input public sources or industry keywords for market insight organization",
+      "市場インサイト整理に使用する公開ソースまたは業界キーワードを入力してください",
     concurrent_quantity: "同時実行数",
-    scraper_failed: "Market insight organization failed",
+    scraper_failed: "市場インサイトの整理に失敗しました",
     search_enginer_empty: "検索エンジンが空です",
     keywords_empty: "キーワードが空です",
     page_number: "ページ番号",
@@ -682,7 +684,7 @@ export default {
     use_local_browser: "ローカルブラウザを使用",
     choose_local_browser: "ローカルブラウザを選択",
     use_search_enginer_account: "検索エンジンアカウントを使用",
-    edit_task: "Edit Market Insight Task",
+    edit_task: "市場インサイトタスクを編集",
     task_updated_successfully: "タスクの更新に成功しました",
     task_cannot_be_edited:
       "タスクを編集できません。「未開始」「エラー」「処理中」「完了」状態のタスクのみ変更可能です。",
@@ -705,7 +707,7 @@ export default {
     no_keywords_generated: "キーワードが生成されませんでした",
     enable_ai_recovery: "AI回復を有効化",
     enable_ai_recovery_hint:
-      "When enabled, AI will help recover from data alignment errors by analyzing page structure and suggesting alternative actions",
+      "有効にすると、AI がページ構造を分析して代替操作を提案し、データ整合エラーからの復旧を支援します",
   },
   searchtask: {
     id: "タスクID",
