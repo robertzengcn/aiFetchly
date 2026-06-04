@@ -1,0 +1,845 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AiFetchly Search Engine Scraping Tutorial</title>
+    <style>
+      :root {
+        --canvas: #f7f8fc;
+        --surface: #ffffff;
+        --surface-muted: #eef0f5;
+        --text: #23242a;
+        --muted: #6e7480;
+        --primary: #6366f1;
+        --primary-soft: #c7c9ff;
+        --success-bg: #ddf7e6;
+        --success: #2ea568;
+        --warning: #f4b942;
+        --line: #e2e5ed;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--canvas);
+        color: var(--text);
+        font-family: Inter, "Helvetica Neue", Arial, sans-serif;
+      }
+
+      #aifetchly-search-tutorial {
+        position: relative;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background:
+          linear-gradient(90deg, rgba(99, 102, 241, 0.08) 1px, transparent 1px),
+          linear-gradient(0deg, rgba(99, 102, 241, 0.06) 1px, transparent 1px),
+          var(--canvas);
+        background-size: 80px 80px;
+      }
+
+      .scene {
+        position: absolute;
+        inset: 0;
+        opacity: 0;
+        pointer-events: none;
+      }
+
+      .scene-content {
+        width: 100%;
+        height: 100%;
+        padding: 72px 92px;
+        display: flex;
+        flex-direction: column;
+        gap: 28px;
+      }
+
+      .brand-row,
+      .topbar,
+      .step-row,
+      .task-toolbar,
+      .result-actions {
+        display: flex;
+        align-items: center;
+      }
+
+      .brand-row {
+        gap: 18px;
+      }
+
+      .logo {
+        width: 76px;
+        height: 76px;
+        border-radius: 18px;
+        box-shadow: 0 18px 50px rgba(35, 36, 42, 0.12);
+      }
+
+      .brand-title {
+        font-size: 34px;
+        font-weight: 800;
+        line-height: 1;
+      }
+
+      .brand-subtitle {
+        color: var(--muted);
+        font-size: 21px;
+        font-weight: 500;
+        margin-top: 8px;
+      }
+
+      .hero {
+        flex: 1;
+        display: grid;
+        grid-template-columns: 0.82fr 1.18fr;
+        gap: 64px;
+        align-items: center;
+      }
+
+      h1,
+      h2 {
+        margin: 0;
+        letter-spacing: 0;
+      }
+
+      h1 {
+        font-size: 94px;
+        line-height: 0.98;
+        font-weight: 900;
+        max-width: 760px;
+      }
+
+      h2 {
+        font-size: 62px;
+        line-height: 1.05;
+        font-weight: 850;
+      }
+
+      .lead {
+        color: var(--muted);
+        font-size: 32px;
+        line-height: 1.35;
+        max-width: 740px;
+        margin-top: 28px;
+      }
+
+      .caption {
+        position: absolute;
+        left: 92px;
+        right: 92px;
+        bottom: 46px;
+        min-height: 74px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 18px 36px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.92);
+        color: var(--text);
+        font-size: 30px;
+        font-weight: 650;
+        line-height: 1.25;
+        box-shadow: 0 18px 50px rgba(35, 36, 42, 0.08);
+      }
+
+      .app-frame {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        box-shadow: 0 28px 90px rgba(35, 36, 42, 0.14);
+        overflow: hidden;
+      }
+
+      .app-shell {
+        height: 680px;
+        display: grid;
+        grid-template-columns: 310px 1fr;
+      }
+
+      .window-bar {
+        height: 42px;
+        background: #2b302e;
+        color: rgba(255, 255, 255, 0.62);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 17px;
+        font-weight: 700;
+      }
+
+      .sidebar {
+        background: #ffffff;
+        border-right: 1px solid var(--line);
+        padding: 34px 28px;
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+      }
+
+      .side-brand {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        min-height: 92px;
+        padding-bottom: 24px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .side-logo {
+        width: 54px;
+        height: 54px;
+        border-radius: 13px;
+        background: linear-gradient(135deg, #49b6ff, #6366f1);
+        position: relative;
+      }
+
+      .side-logo::before {
+        content: "";
+        position: absolute;
+        left: 13px;
+        top: 16px;
+        width: 28px;
+        height: 20px;
+        border-radius: 6px;
+        background: #f4b942;
+        box-shadow: 0 -8px 0 -4px #23242a;
+      }
+
+      .side-logo::after {
+        content: "";
+        position: absolute;
+        left: 20px;
+        top: 22px;
+        width: 4px;
+        height: 4px;
+        border-radius: 50%;
+        background: #23242a;
+        box-shadow: 10px 0 0 #23242a;
+      }
+
+      .nav-item {
+        height: 64px;
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding: 0 18px;
+        border-radius: 7px;
+        color: var(--text);
+        font-size: 22px;
+        font-weight: 720;
+      }
+
+      .nav-item.muted {
+        color: var(--muted);
+        font-weight: 620;
+      }
+
+      .nav-item.active {
+        background: #eeeeef;
+      }
+
+      .nav-icon {
+        width: 28px;
+        height: 28px;
+        border: 3px solid currentColor;
+        border-radius: 50%;
+        position: relative;
+      }
+
+      .nav-icon.search::after {
+        content: "";
+        position: absolute;
+        width: 14px;
+        height: 4px;
+        right: -10px;
+        bottom: -5px;
+        transform: rotate(45deg);
+        background: currentColor;
+        border-radius: 4px;
+      }
+
+      .main-panel {
+        padding: 34px 48px;
+        overflow: hidden;
+      }
+
+      .topbar {
+        justify-content: space-between;
+        margin-bottom: 32px;
+      }
+
+      .crumbs {
+        color: var(--muted);
+        font-size: 22px;
+        font-weight: 700;
+      }
+
+      .user {
+        color: var(--text);
+        font-size: 19px;
+        font-weight: 800;
+      }
+
+      .panel-title {
+        font-size: 30px;
+        font-weight: 840;
+        margin-bottom: 22px;
+      }
+
+      .helper {
+        font-size: 22px;
+        line-height: 1.45;
+        color: var(--text);
+        margin-bottom: 20px;
+      }
+
+      .field {
+        border: 1px solid var(--line);
+        background: #f3f3f4;
+        border-radius: 6px;
+        color: #8a8f99;
+        padding: 22px 24px;
+        font-size: 24px;
+      }
+
+      .textarea {
+        height: 176px;
+      }
+
+      .field-row {
+        display: grid;
+        grid-template-columns: 1fr 160px 180px;
+        gap: 20px;
+      }
+
+      .button-row {
+        display: flex;
+        gap: 20px;
+        align-items: center;
+        margin: 26px 0;
+      }
+
+      .btn {
+        height: 62px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 6px;
+        padding: 0 28px;
+        font-size: 20px;
+        font-weight: 850;
+        letter-spacing: 0;
+        color: white;
+        background: var(--primary);
+        box-shadow: 0 12px 26px rgba(99, 102, 241, 0.26);
+      }
+
+      .btn.soft {
+        background: var(--primary-soft);
+        color: white;
+        box-shadow: none;
+      }
+
+      .btn.secondary {
+        background: var(--surface-muted);
+        color: var(--text);
+        box-shadow: none;
+      }
+
+      .toggle-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 18px 24px;
+      }
+
+      .toggle-line {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 20px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 19px 22px;
+        background: white;
+        font-size: 21px;
+        font-weight: 720;
+      }
+
+      .seg {
+        display: flex;
+        border-radius: 999px;
+        overflow: hidden;
+        background: var(--surface-muted);
+        padding: 4px;
+      }
+
+      .seg span {
+        width: 56px;
+        height: 34px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 999px;
+        font-size: 16px;
+        font-weight: 850;
+        color: var(--muted);
+      }
+
+      .seg span.on {
+        background: var(--success-bg);
+        color: var(--success);
+      }
+
+      .callout-ring {
+        position: absolute;
+        border: 5px solid var(--primary);
+        border-radius: 10px;
+        box-shadow: 0 0 0 12px rgba(99, 102, 241, 0.13);
+        opacity: 0;
+        pointer-events: none;
+      }
+
+      .cursor-dot {
+        position: absolute;
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        background: var(--primary);
+        border: 7px solid white;
+        box-shadow: 0 14px 30px rgba(35, 36, 42, 0.22);
+        opacity: 0;
+      }
+
+      .flow-list {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 22px;
+      }
+
+      .flow-card,
+      .metric-card,
+      .tip-card {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 28px;
+        box-shadow: 0 18px 45px rgba(35, 36, 42, 0.08);
+      }
+
+      .flow-card .num {
+        width: 50px;
+        height: 50px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 50%;
+        background: var(--primary);
+        color: white;
+        font-weight: 900;
+        font-size: 23px;
+        margin-bottom: 22px;
+      }
+
+      .flow-card h3,
+      .tip-card h3 {
+        margin: 0 0 12px;
+        font-size: 27px;
+        line-height: 1.12;
+      }
+
+      .flow-card p,
+      .tip-card p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 22px;
+        line-height: 1.35;
+      }
+
+      .table {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        overflow: hidden;
+        background: white;
+      }
+
+      .table-row {
+        display: grid;
+        grid-template-columns: 90px 1.3fr 1fr 1fr 1fr 1.2fr;
+        min-height: 68px;
+        align-items: center;
+        border-bottom: 1px solid var(--line);
+        font-size: 21px;
+      }
+
+      .table-row:last-child {
+        border-bottom: 0;
+      }
+
+      .table-row.header {
+        background: #fafbfe;
+        color: var(--text);
+        font-weight: 850;
+      }
+
+      .table-row span {
+        padding: 0 22px;
+      }
+
+      .status {
+        justify-self: start;
+        border-radius: 999px;
+        padding: 9px 16px;
+        background: var(--success-bg);
+        color: var(--success);
+        font-size: 18px;
+        font-weight: 850;
+      }
+
+      .status.warn {
+        background: #fff3d4;
+        color: #9a6a00;
+      }
+
+      .result-layout {
+        display: grid;
+        grid-template-columns: 1.15fr 0.85fr;
+        gap: 32px;
+        align-items: stretch;
+      }
+
+      .metric-stack {
+        display: grid;
+        gap: 22px;
+      }
+
+      .metric-value {
+        font-size: 66px;
+        font-weight: 900;
+        color: var(--primary);
+        line-height: 1;
+      }
+
+      .metric-label {
+        color: var(--muted);
+        font-size: 22px;
+        margin-top: 10px;
+        font-weight: 700;
+      }
+
+      .pill-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 14px;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        border-radius: 999px;
+        background: var(--surface-muted);
+        color: var(--text);
+        padding: 12px 18px;
+        font-size: 19px;
+        font-weight: 800;
+      }
+
+      .pill.good {
+        background: var(--success-bg);
+        color: var(--success);
+      }
+
+      .tips-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 28px;
+      }
+
+      .decor-word {
+        position: absolute;
+        color: rgba(99, 102, 241, 0.07);
+        font-size: 160px;
+        font-weight: 900;
+        letter-spacing: 0;
+        pointer-events: none;
+      }
+
+      .decor-word.one {
+        right: 64px;
+        top: 64px;
+      }
+
+      .decor-word.two {
+        left: 84px;
+        bottom: 130px;
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      data-composition-id="aifetchly-search-tutorial"
+      id="aifetchly-search-tutorial"
+      data-start="0"
+      data-duration="41"
+      data-track-index="0"
+      data-width="1920"
+      data-height="1080"
+    >
+      <div class="decor-word one" data-layout-ignore>SEARCH</div>
+      <div class="decor-word two" data-layout-ignore>LEADS</div>
+
+      <section id="scene-intro" class="scene">
+        <div class="scene-content">
+          <div class="brand-row">
+            <img class="logo" src="assets/aifetchly-logo.png" alt="AiFetchly logo" />
+            <div>
+              <div class="brand-title">AiFetchly</div>
+              <div class="brand-subtitle">AI Marketing Agent</div>
+            </div>
+          </div>
+          <div class="hero">
+            <div>
+              <h1>Search Engine Scraping</h1>
+              <p class="lead">Collect search results, qualify leads with AI, extract contact info, and export outreach-ready data.</p>
+            </div>
+            <div class="flow-list">
+              <div class="flow-card"><div class="num">1</div><h3>Create task</h3><p>Keywords, engine, page, concurrency.</p></div>
+              <div class="flow-card"><div class="num">2</div><h3>Run safely</h3><p>Proxies, local browser, accounts, AI recovery.</p></div>
+              <div class="flow-card"><div class="num">3</div><h3>Analyze</h3><p>Score leads and classify industries.</p></div>
+              <div class="flow-card"><div class="num">4</div><h3>Export</h3><p>CSV with links, scores, email, phone, address.</p></div>
+            </div>
+          </div>
+        </div>
+        <div class="caption">Welcome to AiFetchly Search Engine Scraping. This walkthrough shows how to turn search results into qualified leads.</div>
+      </section>
+
+      <section id="scene-nav" class="scene">
+        <div class="scene-content">
+          <h2>Open Search, Then Search Scraper</h2>
+          <div class="app-frame">
+            <div class="window-bar">Search Scraper - AiFetchly</div>
+            <div class="app-shell">
+              <aside class="sidebar">
+                <div class="side-brand">
+                  <div class="side-logo" aria-label="AiFetchly logo"></div>
+                  <div><div class="brand-title" style="font-size: 28px;">AiFetchly</div><div class="brand-subtitle" style="font-size: 17px;">AI Marketing Agent</div></div>
+                </div>
+                <div class="nav-item muted">Dashboard</div>
+                <div class="nav-item muted">Social Account</div>
+                <div class="nav-item muted">Proxy</div>
+                <div class="nav-item active"><span class="nav-icon search"></span>Search</div>
+                <div class="nav-item active" style="margin-left: 38px;">Search Scraper</div>
+                <div class="nav-item" style="margin-left: 38px;">Search Task List</div>
+              </aside>
+              <main class="main-panel">
+                <div class="topbar"><div class="crumbs">/ Search / Search Scraper</div><div class="user">TEST17@TEST.COM</div></div>
+                <div class="panel-title">Search Scraper</div>
+                <p class="helper">Input the keyword you want to search in follow textarea, the system will use required search engine to scrape the keyword</p>
+                <div class="field textarea">input keywords, per one per line</div>
+                <div class="button-row"><div class="btn soft">GENERATE RELATED KEYWORDS (AI)</div></div>
+                <div class="field">search enginer</div>
+              </main>
+            </div>
+          </div>
+        </div>
+        <div class="callout-ring" style="left: 153px; top: 678px; width: 276px; height: 76px;"></div>
+        <div class="cursor-dot" style="left: 386px; top: 700px;"></div>
+        <div class="caption">Start in the left navigation. Open Search, then choose Search Scraper.</div>
+      </section>
+
+      <section id="scene-config" class="scene">
+        <div class="scene-content">
+          <h2>Build the Search Task</h2>
+          <div class="app-frame">
+            <div class="window-bar">Search Scraper - AiFetchly</div>
+            <div class="main-panel" style="height: 680px;">
+              <div class="panel-title">Search Scraper</div>
+              <p class="helper">Enter specific keywords, one per line. Use AI expansion when you want broader coverage.</p>
+              <div class="field textarea">marketing automation agencies<br />b2b lead generation consultants<br />email outreach software companies</div>
+              <div class="button-row">
+                <div class="btn soft">GENERATE RELATED KEYWORDS (AI)</div>
+                <div class="pill good">Duplicates removed automatically</div>
+              </div>
+              <div class="field-row">
+                <div class="field">Google</div>
+                <div class="field">Page 1</div>
+                <div class="field">Concurrent 3</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="callout-ring" style="left: 155px; top: 326px; width: 1608px; height: 178px;"></div>
+        <div class="cursor-dot" style="left: 1602px; top: 553px;"></div>
+        <div class="caption">Add one keyword per line, then choose Google, Bing, or Yandex. Start from page 1 for a fresh task.</div>
+      </section>
+
+      <section id="scene-options" class="scene">
+        <div class="scene-content">
+          <h2>Use Reliability Options Before Scaling</h2>
+          <div class="app-frame">
+            <div class="main-panel" style="height: 680px;">
+              <div class="toggle-grid">
+                <div class="toggle-line"><span>Choose Proxy</span><div class="btn secondary">CHOOSE PROXY</div></div>
+                <div class="toggle-line"><span>Use local browser</span><div class="seg"><span>NO</span><span class="on">YES</span></div></div>
+                <div class="toggle-line"><span>Use search engine account</span><div class="seg"><span>NO</span><span class="on">YES</span></div></div>
+                <div class="toggle-line"><span>Show in browser</span><div class="seg"><span class="on">NO</span><span>YES</span></div></div>
+                <div class="toggle-line"><span>Enable AI Recovery</span><div class="seg"><span>NO</span><span class="on">YES</span></div></div>
+                <div class="toggle-line"><span>Concurrency</span><div class="pill">1-3 first</div></div>
+              </div>
+              <div class="button-row" style="margin-top: 38px;">
+                <div class="btn">SUBMIT</div>
+                <div class="btn secondary">SAVE ONLY</div>
+                <div class="btn secondary">RETURN</div>
+              </div>
+              <div class="pill-row">
+                <div class="pill good">Yandex requires local browser</div>
+                <div class="pill">Use proxies for higher volume</div>
+                <div class="pill">Enable AI Recovery for difficult engines</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="callout-ring" style="left: 133px; top: 234px; width: 1654px; height: 407px;"></div>
+        <div class="caption">Before running at scale, configure proxies, local browser, accounts, browser visibility, and AI Recovery.</div>
+      </section>
+
+      <section id="scene-tasklist" class="scene">
+        <div class="scene-content">
+          <h2>Run, Monitor, and Recover Tasks</h2>
+          <div class="app-frame">
+            <div class="main-panel" style="height: 680px;">
+              <div class="task-toolbar">
+                <div class="field" style="width: 430px;">Search tasks</div>
+                <div style="flex: 1;"></div>
+                <div class="btn">CREATE SEARCH TASK</div>
+              </div>
+              <div class="table" style="margin-top: 30px;">
+                <div class="table-row header"><span>ID</span><span>Keywords</span><span>Engine</span><span>Status</span><span>Record Time</span><span>Actions</span></div>
+                <div class="table-row"><span>18</span><span>marketing automation</span><span>Google</span><span class="status">Processing</span><span>Today</span><span>View / Kill</span></div>
+                <div class="table-row"><span>17</span><span>local agencies</span><span>Bing</span><span class="status">Complete</span><span>Yesterday</span><span>View Results</span></div>
+                <div class="table-row"><span>16</span><span>cybersecurity vendors</span><span>Google</span><span class="status warn">Error</span><span>Yesterday</span><span>Retry / Logs</span></div>
+              </div>
+              <div class="pill-row" style="margin-top: 28px;">
+                <div class="pill">Run</div><div class="pill">Retry</div><div class="pill">Edit</div><div class="pill">Kill Process</div><div class="pill good">View Results</div><div class="pill">Download Logs</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="caption">Use Search Task List to monitor status, retry failures, edit settings, stop running jobs, and open results.</div>
+      </section>
+
+      <section id="scene-results" class="scene">
+        <div class="scene-content">
+          <h2>Turn Results into Qualified Leads</h2>
+          <div class="result-layout">
+            <div class="app-frame">
+              <div class="main-panel" style="height: 650px;">
+                <div class="result-actions" style="gap: 16px; margin-bottom: 24px;">
+                  <div class="btn">AI ANALYZE</div>
+                  <div class="btn">AI EXTRACT CONTACT INFO</div>
+                  <div class="btn secondary">EXTRACT EMAILS</div>
+                  <div class="btn secondary">EXPORT CSV</div>
+                </div>
+                <div class="table">
+                  <div class="table-row header"><span>ID</span><span>Title</span><span>Keyword</span><span>Industry</span><span>Score</span><span>Email</span></div>
+                  <div class="table-row"><span>1</span><span>GrowthOps Agency</span><span>b2b leads</span><span>SaaS</span><span class="status">86%</span><span>hello@...</span></div>
+                  <div class="table-row"><span>2</span><span>Retail CRM Partner</span><span>marketing</span><span>Retail</span><span class="status">74%</span><span>sales@...</span></div>
+                  <div class="table-row"><span>3</span><span>Directory Listing</span><span>automation</span><span>Unknown</span><span class="status warn">42%</span><span>Pending</span></div>
+                </div>
+              </div>
+            </div>
+            <div class="metric-stack">
+              <div class="metric-card"><div class="metric-value">70%+</div><div class="metric-label">Prioritize high-probability leads for outreach.</div></div>
+              <div class="metric-card"><div class="metric-value">AI</div><div class="metric-label">Classifies industry, explains fit, and extracts contacts.</div></div>
+              <div class="metric-card"><div class="metric-value">CSV</div><div class="metric-label">Export links, scores, reasoning, email, phone, and address.</div></div>
+            </div>
+          </div>
+        </div>
+        <div class="caption">Select result rows, run AI analysis, extract contact info, and export the best leads for your campaign.</div>
+      </section>
+
+      <section id="scene-best" class="scene">
+        <div class="scene-content">
+          <h2>Best Practices for Reliable Scraping</h2>
+          <div class="tips-grid" style="margin-top: 34px;">
+            <div class="tip-card"><h3>Start small</h3><p>Begin with 5-10 keywords and concurrency 1-3. Scale only after results look healthy.</p></div>
+            <div class="tip-card"><h3>Use proxies</h3><p>Rotate proxies for larger jobs and reduce concurrency if blocks or captchas appear.</p></div>
+            <div class="tip-card"><h3>Use local browser</h3><p>Required for Yandex and recommended for Google at scale or stricter anti-bot flows.</p></div>
+            <div class="tip-card"><h3>Use accounts</h3><p>Google and Yandex accounts improve access for larger authenticated scraping tasks.</p></div>
+            <div class="tip-card"><h3>Enable AI Recovery</h3><p>Let AI inspect errors and suggest recovery actions during difficult runs.</p></div>
+            <div class="tip-card"><h3>Focus outreach</h3><p>Analyze first, extract contacts second, and prioritize leads scoring 70% or higher.</p></div>
+          </div>
+        </div>
+        <div class="caption">Small batches, good proxies, local browser, and AI scoring make Search Engine Scraping more reliable and more useful.</div>
+      </section>
+
+      <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+      <script>
+        window.__timelines = window.__timelines || {};
+        const tl = gsap.timeline({ paused: true });
+        const scenes = [
+          "#scene-intro",
+          "#scene-nav",
+          "#scene-config",
+          "#scene-options",
+          "#scene-tasklist",
+          "#scene-results",
+          "#scene-best"
+        ];
+
+        function getTargets(selectors) {
+          return selectors.reduce((items, item) => items.concat(gsap.utils.toArray(item)), []);
+        }
+
+        function addFrom(selectors, vars, position) {
+          const targets = getTargets(selectors);
+          if (targets.length) {
+            tl.from(targets, vars, position);
+          }
+        }
+
+        function addTo(selectors, vars, position) {
+          const targets = getTargets(selectors);
+          if (targets.length) {
+            tl.to(targets, vars, position);
+          }
+        }
+
+        function addFromTo(selectors, fromVars, toVars, position) {
+          const targets = getTargets(selectors);
+          if (targets.length) {
+            tl.fromTo(targets, fromVars, toVars, position);
+          }
+        }
+
+        function showScene(selector, start, duration) {
+          tl.set(selector, { opacity: 1 }, start);
+          addFrom([selector + " h1", selector + " h2"], { y: 42, opacity: 0, duration: 0.55, ease: "power3.out" }, start + 0.12);
+          addFrom([selector + " .lead", selector + " .helper"], { y: 26, opacity: 0, duration: 0.5, ease: "power2.out" }, start + 0.28);
+          addFrom([selector + " .app-frame", selector + " .flow-card", selector + " .metric-card", selector + " .tip-card"], { y: 40, opacity: 0, scale: 0.985, duration: 0.58, stagger: 0.06, ease: "power3.out" }, start + 0.36);
+          addFrom([selector + " .caption"], { y: 24, opacity: 0, duration: 0.4, ease: "power2.out" }, start + 0.55);
+          addTo([selector + " .callout-ring"], { opacity: 1, duration: 0.3, ease: "power2.out" }, start + 1.0);
+          addFromTo([selector + " .cursor-dot"], { opacity: 0, scale: 0.6 }, { opacity: 1, scale: 1, duration: 0.32, ease: "back.out(1.8)" }, start + 1.18);
+          addTo([selector + " .cursor-dot"], { x: 16, y: 12, duration: 0.8, ease: "power1.inOut" }, start + 1.55);
+          addTo([selector + " .callout-ring"], { scale: 1.012, duration: 0.6, yoyo: true, repeat: 3, ease: "power1.inOut" }, start + 1.4);
+          tl.to(selector, { opacity: 0, duration: 0.45, ease: "power2.in" }, start + duration - 0.45);
+        }
+
+        let at = 0;
+        const durations = [5.2, 5.8, 6.3, 6.2, 5.8, 6.2, 5.5];
+        scenes.forEach((scene, index) => {
+          showScene(scene, at, durations[index]);
+          at += durations[index];
+        });
+
+        tl.to(".decor-word.one", { x: -34, y: 18, opacity: 0.78, duration: at, ease: "none" }, 0);
+        tl.to(".decor-word.two", { x: 28, y: -18, opacity: 0.7, duration: at, ease: "none" }, 0);
+
+        window.__timelines["aifetchly-search-tutorial"] = tl;
+      </script>
+    </div>
+  </body>
+</html>
