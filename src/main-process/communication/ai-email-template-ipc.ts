@@ -69,6 +69,49 @@ function stripTrailingSentinelJson(content: string): string {
 }
 
 /**
+ * Normalize one streaming token payload into plain text content.
+ * Ignores OpenAI-style bookkeeping JSON chunks that contain no text.
+ */
+export function normalizeEmailTemplateStreamChunk(raw: string): string {
+  if (!raw.trim().startsWith("{")) {
+    return raw;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown> & {
+      choices?: Array<{
+        delta?: { content?: string; text?: string };
+        finish_reason?: string | null;
+      }>;
+      content?: string;
+    };
+    const firstChoice = parsed.choices?.[0];
+    const deltaContent =
+      typeof firstChoice?.delta?.content === "string"
+        ? firstChoice.delta.content
+        : undefined;
+    const deltaText =
+      typeof firstChoice?.delta?.text === "string"
+        ? firstChoice.delta.text
+        : undefined;
+    const topLevelContent =
+      typeof parsed.content === "string" ? parsed.content : undefined;
+    const isFinishSentinel = !!firstChoice?.finish_reason;
+
+    if (deltaContent !== undefined) return deltaContent;
+    if (deltaText !== undefined) return deltaText;
+    if (topLevelContent !== undefined) return topLevelContent;
+    if (isFinishSentinel) return "";
+
+    // JSON chunk with no text payload (role / empty-delta chunk)
+    return "";
+  } catch {
+    // Preserve backwards compatibility for unexpected non-JSON payloads.
+    return raw;
+  }
+}
+
+/**
  * Register AI email template IPC handlers.
  * Uses AiChatApi.streamEmailTemplateGeneration (dedicated email API in aiChatApi.ts), not generic chat.
  */
@@ -164,48 +207,9 @@ export function registerAIEmailTemplateHandlers(): void {
               streamEvent.event === "token" &&
               typeof streamEvent.data.content === "string"
             ) {
-              const raw = streamEvent.data.content;
-              let chunk = raw;
-              // Extract text from OpenAI-style chunk when content is JSON (e.g. {"choices":[{"delta":{"content":"..."}}]})
-              if (raw.trim().startsWith("{")) {
-                try {
-                  const parsed = JSON.parse(raw) as Record<string, unknown> & {
-                    choices?: Array<{
-                      delta?: { content?: string; text?: string };
-                      finish_reason?: string;
-                    }>;
-                    content?: string;
-                  };
-                  const firstChoice = parsed.choices?.[0];
-                  const deltaContent =
-                    typeof firstChoice?.delta?.content === "string"
-                      ? firstChoice.delta.content
-                      : undefined;
-                  const deltaText =
-                    typeof firstChoice?.delta?.text === "string"
-                      ? firstChoice.delta.text
-                      : undefined;
-                  const topLevelContent =
-                    typeof parsed.content === "string"
-                      ? parsed.content
-                      : undefined;
-                  const isFinishSentinel = !!firstChoice?.finish_reason;
-
-                  if (typeof deltaContent === "string") {
-                    chunk = deltaContent;
-                  } else if (deltaText !== undefined) {
-                    chunk = deltaText;
-                  } else if (topLevelContent !== undefined) {
-                    chunk = topLevelContent;
-                  } else if (isFinishSentinel) {
-                    // Do not append sentinel JSON (e.g. {"choices":[{"delta":{},"finish_reason":"STOP"}]})
-                    chunk = "";
-                  }
-                  // else: keep chunk = raw so we don't drop content from unexpected shapes
-                } catch {
-                  // use raw as chunk
-                }
-              }
+              const chunk = normalizeEmailTemplateStreamChunk(
+                streamEvent.data.content
+              );
               fullContent += chunk;
               event.sender.send(AI_EMAIL_TEMPLATE_GENERATE_CHUNK, {
                 type: "chunk",

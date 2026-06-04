@@ -75,10 +75,12 @@ export default {
     drag_drop_file:
       "Glissez-déposez votre fichier ici ou cliquez pour sélectionner un fichier",
     search: "Rechercher",
+    replace: "Remplacer",
   },
   route: {
     dashboard: "Tableau de bord",
     home: "Accueil",
+    statistic: "Statistiques",
     system_setting: "Paramètres système",
     campaign: "Campagne",
     campaign_list: "Liste des campagnes",
@@ -136,6 +138,8 @@ export default {
     email_service_edit: "Modifier le service e-mail",
     knowledge_library: "Bibliothèque de connaissances",
     mcp_tools: "Outils MCP",
+    skills: "Compétences",
+    skills_management: "Gestion des Compétences",
     login: "Connexion",
     not_found: "Introuvable",
   },
@@ -158,7 +162,13 @@ export default {
     document_uploaded_successfully: 'Document "{name}" uploaded successfully',
     document_deleted_successfully: "Document deleted successfully",
     found_results: "Found {count} results",
-    upload_failed: "Upload failed",
+    upload_failed: "Échec du téléchargement",
+    upload_failed_max_files:
+      "Maximum {max} fichiers autorisés. Supprimez d'abord les fichiers existants.",
+    upload_failed_file_too_large:
+      'Le fichier "{name}" dépasse la limite de {maxSize}.',
+    upload_failed_unsupported_type:
+      'Le type de fichier "{name}" n\'est pas pris en charge. Formats acceptés : images, CSV, PDF, DOCX, XLS, XLSX.',
     error: "Error",
     // Document Management translations
     document_management: "Document Management",
@@ -1071,9 +1081,71 @@ export default {
     "external-system-group-description": "external system group setting",
     mcp_tools: "MCP Tools",
     manage_mcp_tools: "Manage MCP Tools",
+    manage_skills: "Gérer les compétences",
+  },
+  skills: {
+    title: "Gestion des Compétences",
+    no_skill_installed: "Aucune compétence installée",
+    no_skill_description:
+      "Importez des paquets de compétences pour étendre les capacités de l'IA",
+    import_button: "Importer une compétence",
+    import_dialog_title: "Importer une compétence depuis un Zip",
+    import_success: "Compétence importée avec succès",
+    import_error: "Échec de l'importation de la compétence",
+    uninstall_confirm:
+      "Êtes-vous sûr de vouloir désinstaller cette compétence ?",
+    uninstall_success: "Compétence désinstallée",
+    uninstall_error: "Échec de la désinstallation de la compétence",
+    toggle_enable: "Activer",
+    toggle_disable: "Désactiver",
+    toggle_success: "Compétence mise à jour",
+    toggle_error: "Échec de la mise à jour de la compétence",
+    built_in: "Intégrée",
+    user_installed: "Installée par l'utilisateur",
+    column_name: "Nom",
+    column_source: "Source",
+    column_category: "Catégorie",
+    column_version: "Version",
+    column_status: "Statut",
+    column_enabled: "Activée",
+    column_disabled: "Désactivée",
+    approval_title: "Demande d'autorisation de compétence",
+    approval_description:
+      "Cette compétence nécessite votre autorisation pour s'exécuter. Elle peut accéder à des ressources externes ou effectuer des actions en votre nom.",
+    approval_deny: "Refuser",
+    approval_allow_once: "Autoriser une fois",
+    approval_always_allow: "Toujours autoriser",
+    approval_always_allow_session: "Toujours autoriser (cette session)",
+    permission_resume_failed:
+      "Impossible d'exécuter la compétence après l'autorisation.",
+    permission_resume_no_tool_id:
+      "Informations d'appel d'outil manquantes ; impossible de continuer.",
+    permission_resume_no_active_stream:
+      "Aucun flux de conversation actif. Renvoyez votre message.",
+    shell_approval_title: "Exécution de Commande Shell",
+    shell_approval_description:
+      "L'IA demande l'exécution d'une commande locale. Vérifiez la commande avant d'approuver.",
+    shell_command_label: "Commande",
+    shell_cwd_label: "Répertoire de travail",
+    shell_timeout_label: "Délai d'attente",
+    shell_type_label: "Shell",
+  },
+  systemDependency: {
+    dialog_title: "Installer la dépendance système",
+    security_note:
+      "Seuls les paquets approuvés du catalogue local sont installés.",
+    approve: "Approuver l'installation",
+    deny: "Refuser",
+    status_installed: "Dépendance installée avec succès",
+    status_already_installed: "La dépendance est déjà installée",
+    status_permission_denied: "Installation refusée",
+    status_installer_not_found: "Gestionnaire de paquets introuvable",
+    status_unsupported_platform: "Non pris en charge sur cette plateforme",
+    status_path_issue:
+      "Installé mais non dans le PATH. Essayez de redémarrer l'application.",
+    status_installation_failed: "Échec de l'installation",
   },
   schedule: {
-    create_new_schedule: "Create New Schedule",
     create_description:
       "Set up automated task scheduling with cron expressions or dependencies",
     schedule_created_success:

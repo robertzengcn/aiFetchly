@@ -75,10 +75,12 @@ export default {
     drag_drop_file:
       "ここにファイルをドラッグ＆ドロップするか、クリックして選択してください",
     search: "検索",
+    replace: "置き換え",
   },
   route: {
     dashboard: "ダッシュボード",
     home: "ホーム",
+    statistic: "統計",
     system_setting: "システム設定",
     campaign: "キャンペーン",
     campaign_list: "キャンペーン一覧",
@@ -136,6 +138,8 @@ export default {
     email_service_edit: "メールサービスを編集",
     knowledge_library: "ナレッジライブラリ",
     mcp_tools: "MCPツール",
+    skills: "スキル",
+    skills_management: "スキル管理",
     login: "ログイン",
     not_found: "見つかりません",
   },
@@ -160,6 +164,12 @@ export default {
     document_deleted_successfully: "ドキュメントの削除に成功しました",
     found_results: "{count}件の結果が見つかりました",
     upload_failed: "アップロードに失敗しました",
+    upload_failed_max_files:
+      "ファイルは最大{max}個までです。既存のファイルを削除してください。",
+    upload_failed_file_too_large:
+      "ファイル「{name}」は{maxSize}の制限を超えています。",
+    upload_failed_unsupported_type:
+      "ファイル「{name}」の形式はサポートされていません。対応形式：画像、CSV、PDF、DOCX、XLS、XLSX。",
     error: "エラー",
     document_management: "ドキュメント管理",
     search_by_name: "名前で検索",
@@ -1058,9 +1068,69 @@ export default {
     "external-system-group-description": "外部システムグループ設定",
     mcp_tools: "MCPツール",
     manage_mcp_tools: "MCPツールを管理",
+    manage_skills: "スキルを管理",
+  },
+  skills: {
+    title: "スキル管理",
+    no_skill_installed: "インストールされたスキルはありません",
+    no_skill_description: "スキルパッケージをインポートしてAI機能を拡張",
+    import_button: "スキルをインポート",
+    import_dialog_title: "Zipからスキルをインポート",
+    import_success: "スキルのインポートに成功しました",
+    import_error: "スキルのインポートに失敗しました",
+    uninstall_confirm: "このスキルをアンインストールしてもよろしいですか？",
+    uninstall_success: "スキルをアンインストールしました",
+    uninstall_error: "スキルのアンインストールに失敗しました",
+    toggle_enable: "有効化",
+    toggle_disable: "無効化",
+    toggle_success: "スキルを更新しました",
+    toggle_error: "スキルの更新に失敗しました",
+    built_in: "内蔵",
+    user_installed: "ユーザーインストール",
+    column_name: "名前",
+    column_source: "ソース",
+    column_category: "カテゴリ",
+    column_version: "バージョン",
+    column_status: "ステータス",
+    column_enabled: "有効",
+    column_disabled: "無効",
+    approval_title: "スキル許可リクエスト",
+    approval_description:
+      "このスキルは実行に許可が必要です。外部リソースにアクセスしたり、ユーザーの代わりに操作を実行する場合があります。",
+    approval_deny: "拒否",
+    approval_allow_once: "一度だけ許可",
+    approval_always_allow: "常に許可",
+    approval_always_allow_session: "常に許可（このセッション）",
+    permission_resume_failed: "許可後もスキルを実行できませんでした。",
+    permission_resume_no_tool_id:
+      "ツール呼び出し情報がないため続行できません。",
+    permission_resume_no_active_stream:
+      "アクティブなチャットがありません。メッセージを再送信してください。",
+    shell_approval_title: "Shell コマンド実行",
+    shell_approval_description:
+      "AIがローカルShellコマンドの実行を要求しています。承認前にコマンドを慎重に確認してください。",
+    shell_command_label: "コマンド",
+    shell_cwd_label: "作業ディレクトリ",
+    shell_timeout_label: "タイムアウト",
+    shell_type_label: "Shell",
+  },
+  systemDependency: {
+    dialog_title: "システム依存関係をインストール",
+    security_note:
+      "ローカルカタログの信頼されたパッケージのみインストールされます。",
+    approve: "インストールを承認",
+    deny: "拒否",
+    status_installed: "依存関係のインストールに成功しました",
+    status_already_installed: "依存関係は既にインストールされています",
+    status_permission_denied: "インストールが拒否されました",
+    status_installer_not_found: "パッケージマネージャーが見つかりません",
+    status_unsupported_platform:
+      "このプラットフォームではサポートされていません",
+    status_path_issue:
+      "インストール済みですがPATHにありません。アプリの再起動をお試しください。",
+    status_installation_failed: "インストールに失敗しました",
   },
   schedule: {
-    create_new_schedule: "新規スケジュールを作成",
     create_description:
       "Cron式または依存関係で自動タスクスケジューリングを設定",
     schedule_created_success:

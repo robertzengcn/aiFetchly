@@ -1,6 +1,18 @@
-import { windowInvoke, windowInvokeBinary, windowSend, windowSendBinary, windowReceive } from '@/views/utils/apirequest';
-import { EmbeddingConfig, LlmCongfig, SaveTempFileResponse, ChunkAndEmbedResponse, CommonMessage } from '@/entityTypes/commonType';
-import { ModelInfo } from '@/api/ragConfigApi';
+import {
+  windowInvoke,
+  windowInvokeBinary,
+  windowSend,
+  windowSendBinary,
+  windowReceive,
+} from "@/views/utils/apirequest";
+import {
+  EmbeddingConfig,
+  LlmCongfig,
+  SaveTempFileResponse,
+  ChunkAndEmbedResponse,
+  CommonMessage,
+} from "@/entityTypes/commonType";
+import { ModelInfo } from "@/api/ragConfigApi";
 import {
   RAG_INITIALIZE,
   RAG_QUERY,
@@ -27,12 +39,12 @@ import {
   GET_FILE_STATS,
   SAVE_TEMP_FILE,
   SAVE_TEMP_FILE_PROGRESS,
-  SAVE_TEMP_FILE_COMPLETE
-} from '@/config/channellist';
-import { DocumentMetadata } from '@/entityTypes/metadataType';
-import { RagStatsResponse } from '@/entityTypes/commonType';
+  SAVE_TEMP_FILE_COMPLETE,
+} from "@/config/channellist";
+import { DocumentMetadata } from "@/entityTypes/metadataType";
+import { RagStatsResponse } from "@/entityTypes/commonType";
 // RAG API response types
-export interface RAGResponse<T = any> {
+export interface RAGResponse<T = unknown> {
   success: boolean;
   data?: T;
   message?: string;
@@ -56,7 +68,7 @@ export interface DocumentInfo {
   fileSize: number;
   fileType?: string;
   uploadDate: string;
-  status: 'processing' | 'completed' | 'error';
+  status: "processing" | "completed" | "error";
   processingStatus?: string;
   log?: string; // Error log file path
 }
@@ -126,9 +138,15 @@ export async function getRAGStats(): Promise<CommonMessage<RagStatsResponse>> {
 /**
  * Process a RAG query
  */
+export interface RAGQueryOptions {
+  topK?: number;
+  minScore?: number;
+  filterTags?: string[];
+}
+
 export async function processRAGQuery(query: {
   query: string;
-  options?: any;
+  options?: RAGQueryOptions;
 }): Promise<RAGResponse> {
   return await windowInvoke(RAG_QUERY, query);
 }
@@ -150,7 +168,20 @@ export async function uploadDocument(options: {
 /**
  * Get all documents
  */
-export async function getDocuments(filters?: any): Promise<DocumentInfo[]> {
+export interface DocumentFilters {
+  status?: string;
+  processingStatus?: string;
+  fileType?: string;
+  name?: string;
+  tags?: string[];
+  author?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export async function getDocuments(
+  filters?: DocumentFilters
+): Promise<DocumentInfo[]> {
   const response = await windowInvoke(RAG_GET_DOCUMENTS, filters);
   if (response) {
     return response;
@@ -161,14 +192,26 @@ export async function getDocuments(filters?: any): Promise<DocumentInfo[]> {
 /**
  * Get a specific document
  */
-export async function getDocument(id: number): Promise<RAGResponse<DocumentInfo>> {
+export async function getDocument(
+  id: number
+): Promise<RAGResponse<DocumentInfo>> {
   return await windowInvoke(RAG_GET_DOCUMENT, { id });
 }
 
 /**
  * Update document metadata
  */
-export async function updateDocument(id: number, metadata: any): Promise<RAGResponse> {
+export interface UpdateDocumentMetadata {
+  title?: string;
+  description?: string;
+  tags?: string[];
+  author?: string;
+}
+
+export async function updateDocument(
+  id: number,
+  metadata: UpdateDocumentMetadata
+): Promise<RAGResponse> {
   return await windowInvoke(RAG_UPDATE_DOCUMENT, { id, metadata });
 }
 
@@ -177,18 +220,23 @@ export async function updateDocument(id: number, metadata: any): Promise<RAGResp
  * @param id - Document ID to delete
  * @param deleteFile - Whether to also delete the physical file and vector index (default: true)
  */
-export async function deleteDocument(id: number, deleteFile: boolean = true): Promise<RAGResponse> {
-  try {      
+export async function deleteDocument(
+  id: number,
+  deleteFile = true
+): Promise<RAGResponse> {
+  try {
     await windowInvoke(RAG_DELETE_DOCUMENT, { id, deleteFile });
     return {
       success: true,
-      message: ''
+      message: "",
     };
-  } catch (error) {``
-    console.error('Error deleting document:', error);
+  } catch (error) {
+    ``;
+    console.error("Error deleting document:", error);
     return {
       success: false,
-      message: error instanceof Error ? error.message : 'Unknown error occurred'
+      message:
+        error instanceof Error ? error.message : "Unknown error occurred",
     };
   }
 }
@@ -203,14 +251,19 @@ export async function getDocumentStats(): Promise<RAGResponse> {
 /**
  * Search documents
  */
-export async function searchDocuments(request: SearchRequest): Promise<RAGResponse<SearchResponse>> {
+export async function searchDocuments(
+  request: SearchRequest
+): Promise<RAGResponse<SearchResponse>> {
   return await windowInvoke(RAG_SEARCH, request);
 }
 
 /**
  * Get search suggestions
  */
-export async function getSearchSuggestions(query: string, limit?: number): Promise<RAGResponse<string[]>> {
+export async function getSearchSuggestions(
+  query: string,
+  limit?: number
+): Promise<RAGResponse<string[]>> {
   return await windowInvoke(RAG_GET_SUGGESTIONS, { query, limit });
 }
 
@@ -225,57 +278,65 @@ export async function getSearchAnalytics(): Promise<RAGResponse> {
  * Update embedding model
  * @returns Object with modelName and dimension if successful, null otherwise
  */
-export async function updateEmbeddingModel(modelName: string): Promise<{ modelName: string; dimension: number } | null> {
-  const response = await windowInvoke(RAG_UPDATE_EMBEDDING_MODEL, { model: modelName });
-  
+export async function updateEmbeddingModel(
+  modelName: string
+): Promise<{ modelName: string; dimension: number } | null> {
+  const response = await windowInvoke(RAG_UPDATE_EMBEDDING_MODEL, {
+    model: modelName,
+  });
+
   return response || null;
 }
 
 /**
  * Get available embedding models
  */
-export async function getAvailableEmbeddingModels(): Promise<RAGResponse<ModelInfo[]>> {
+export async function getAvailableEmbeddingModels(): Promise<
+  RAGResponse<ModelInfo[]>
+> {
   const response = await windowInvoke(RAG_GET_AVAILABLE_MODELS, {});
   if (response) {
     // Transform the response data to match our expected format
     const modelsData = response;
     const modelsArray: ModelInfo[] = Object.values(modelsData.models || {});
-    
+
     return {
       success: response.status,
       data: modelsArray,
-      message: response.msg
+      message: response.msg,
     };
   }
   return {
     success: false,
     data: [],
-    message: 'Failed to get available models'
+    message: "Failed to get available models",
   };
 }
 
 /**
  * Get available embedding models with default model info
  */
-export async function getAvailableEmbeddingModelsWithDefault(): Promise<RAGResponse<{ models: ModelInfo[], defaultModel: string }>> {
+export async function getAvailableEmbeddingModelsWithDefault(): Promise<
+  RAGResponse<{ models: ModelInfo[]; defaultModel: string }>
+> {
   const response = await windowInvoke(RAG_GET_AVAILABLE_MODELS, {});
   if (response) {
     const modelsData = response;
     const modelsArray: ModelInfo[] = Object.values(modelsData.models || {});
-    
+
     return {
       success: response.status,
       data: {
         models: modelsArray,
-        defaultModel: modelsData.default_model || ''
+        defaultModel: modelsData.default_model || "",
       },
-      message: response.msg
+      message: response.msg,
     };
   }
   return {
     success: false,
-    data: { models: [], defaultModel: '' },
-    message: 'Failed to get available models'
+    data: { models: [], defaultModel: "" },
+    message: "Failed to get available models",
   };
 }
 
@@ -353,33 +414,33 @@ export async function saveTempFile(
 
   return new Promise((resolve, reject) => {
     // Set up progress listener
-    const progressHandler = (progressData: any) => {
+    const progressHandler = (progressData: string) => {
       try {
         const progress: FileUploadProgress = JSON.parse(progressData);
         if (onProgress) {
           onProgress(progress);
         }
       } catch (error) {
-        console.error('Error parsing progress data:', error);
+        console.error("Error parsing progress data:", error);
       }
     };
 
     // Set up completion listener
-    const completeHandler = (completeData: any) => {
+    const completeHandler = (completeData: string) => {
       try {
         const result: FileUploadComplete = JSON.parse(completeData);
-        
+
         if (onComplete) {
           onComplete(result);
         }
-        
+
         if (result.status) {
           resolve(result.data);
         } else {
           reject(new Error(result.msg));
         }
       } catch (error) {
-        console.error('Error parsing completion data:', error);
+        console.error("Error parsing completion data:", error);
         reject(error);
       }
     };
@@ -396,38 +457,56 @@ export async function saveTempFile(
 /**
  * Select files using native dialog
  */
-export async function selectFilesNative(): Promise<(File & { path: string })[]> {
+export async function selectFilesNative(): Promise<
+  (File & { path: string })[]
+> {
   try {
     const result = await showOpenDialog({
-      properties: ['openFile', 'multiSelections'],
+      properties: ["openFile", "multiSelections"],
       filters: [
-        { name: 'Documents', extensions: ['pdf', 'txt', 'doc', 'docx', 'md', 'html', 'htm'] },
-        { name: 'All Files', extensions: ['*'] }
-      ]
+        {
+          name: "Documents",
+          extensions: [
+            "pdf",
+            "txt",
+            "doc",
+            "docx",
+            "md",
+            "html",
+            "htm",
+            "csv",
+            "xlsx",
+            "xls",
+          ],
+        },
+        { name: "All Files", extensions: ["*"] },
+      ],
     });
 
     if (!result.canceled && result.filePaths.length > 0) {
       // Convert file paths to File objects for consistency
-      const files = await Promise.all(result.filePaths.map(async (filePath: string) => {
-        const fileName = filePath.split('/').pop() || 'unknown';
-        const stats = await getFileStats(filePath);
-        
-        // Create a File-like object with the actual file path
-        return {
-          name: fileName,
-          path: filePath, // This is the key difference - we have the actual path
-          size: stats.size,
-          type: getFileType(fileName),
-          lastModified: stats.mtime.getTime()
-        } as File & { path: string };
-      }));
-      
+      const files = await Promise.all(
+        result.filePaths.map(async (filePath: string) => {
+          const fileName = filePath.split("/").pop() || "unknown";
+          const stats = await getFileStats(filePath);
+
+          // Create a File-like object with the actual file path
+          return {
+            name: fileName,
+            path: filePath, // This is the key difference - we have the actual path
+            size: stats.size,
+            type: getFileType(fileName),
+            lastModified: stats.mtime.getTime(),
+          } as File & { path: string };
+        })
+      );
+
       return files;
     }
     return [];
   } catch (error) {
-    console.error('Error selecting files:', error);
-    throw new Error('Failed to select files');
+    console.error("Error selecting files:", error);
+    throw new Error("Failed to select files");
   }
 }
 
@@ -435,7 +514,7 @@ export async function selectFilesNative(): Promise<(File & { path: string })[]> 
  * Copy file to temporary location with progress updates
  */
 export async function copyFileToTemp(
-  file: File, 
+  file: File,
   metadata?: DocumentMetadata,
   onProgress?: (progress: FileUploadProgress) => void,
   onComplete?: (result: FileUploadComplete) => void
@@ -453,38 +532,43 @@ export async function copyFileToTemp(
         const tempFileName = `rag_upload_${Date.now()}_${file.name}`;
         console.log("tempFileName is ready");
         console.log(tempFileName);
-        
+
         // Prepare metadata with defaults
         const fileMetadata = {
-          title: metadata?.title || file.name.replace(/\.[^/.]+$/, ''),
-          description: metadata?.description || `Uploaded document: ${file.name}`,
-          tags: metadata?.tags || ['uploaded', 'knowledge'],
-          author: metadata?.author || 'User',
+          title: metadata?.title || file.name.replace(/\.[^/.]+$/, ""),
+          description:
+            metadata?.description || `Uploaded document: ${file.name}`,
+          tags: metadata?.tags || ["uploaded", "knowledge"],
+          author: metadata?.author || "User",
           // model_name: metadata?.model_name
         };
-        
+
         // Use API to save file to temp location with progress callbacks
-        const saveResult = await saveTempFile({
-          fileName: tempFileName,
-          buffer: buffer,
-          metadata: fileMetadata
-        }, onProgress, onComplete);
+        const saveResult = await saveTempFile(
+          {
+            fileName: tempFileName,
+            buffer: buffer,
+            metadata: fileMetadata,
+          },
+          onProgress,
+          onComplete
+        );
         console.log("saveResult is ready");
         console.log(saveResult);
-        
+
         // Check if database save was successful
         if (saveResult.databaseError) {
-          console.warn('Database save failed:', saveResult.databaseError);
+          console.warn("Database save failed:", saveResult.databaseError);
         } else if (saveResult.databaseSaved) {
-          console.log('Document successfully saved to database');
+          console.log("Document successfully saved to database");
         }
-        
+
         resolve(saveResult);
       } catch (error) {
         reject(error);
       }
     };
-    reader.onerror = () => reject(new Error('Failed to read file'));
+    reader.onerror = () => reject(new Error("Failed to read file"));
     reader.readAsArrayBuffer(file);
   });
 }
@@ -493,38 +577,41 @@ export async function copyFileToTemp(
  * Get file MIME type from extension
  */
 function getFileType(fileName: string): string {
-  const ext = fileName.split('.').pop()?.toLowerCase();
+  const ext = fileName.split(".").pop()?.toLowerCase();
   const mimeTypes: Record<string, string> = {
-    'pdf': 'application/pdf',
-    'txt': 'text/plain',
-    'doc': 'application/msword',
-    'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    'md': 'text/markdown',
-    'html': 'text/html',
-    'htm': 'text/html'
+    pdf: "application/pdf",
+    txt: "text/plain",
+    doc: "application/msword",
+    docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    md: "text/markdown",
+    html: "text/html",
+    htm: "text/html",
+    csv: "text/csv",
+    xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    xls: "application/vnd.ms-excel",
   };
-  return mimeTypes[ext || ''] || 'application/octet-stream';
+  return mimeTypes[ext || ""] || "application/octet-stream";
 }
 
 /**
  * Chunk and embed a document
- * 
+ *
  * This function takes a document ID from the frontend and performs two operations:
  * 1. Chunks the document into smaller pieces for better search and retrieval
  * 2. Generates embeddings for each chunk to enable semantic search
- * 
+ *
  * The chunking configuration is automatically fetched from the remote server.
  * If the remote server is unavailable, default configuration will be used.
- * 
+ *
  * @param documentId - Document ID to chunk and embed
  * @param modelName - Embedding model name to use
  * @returns Promise with chunking and embedding results
- * 
+ *
  * @example
  * ```typescript
  * // Basic usage - chunking config fetched from remote server
  * const result = await chunkAndEmbedDocument(123, 'Qwen/Qwen3-Embedding-4B');
- * 
+ *
  * if (result.success) {
  *   console.log(`Created ${result.data.chunksCreated} chunks`);
  *   console.log(`Generated ${result.data.embeddingsGenerated} embeddings`);
@@ -532,7 +619,7 @@ function getFileType(fileName: string): string {
  * ```
  */
 export async function chunkAndEmbedDocument(
-  documentId: number,
+  documentId: number
   // modelName: string
 ): Promise<RAGResponse<ChunkAndEmbedResponse>> {
   try {
@@ -541,18 +628,22 @@ export async function chunkAndEmbedDocument(
       // modelName
     };
 
-    const response = await windowInvoke(RAG_CHUNK_AND_EMBED_DOCUMENT, requestData);
-    
+    const response = await windowInvoke(
+      RAG_CHUNK_AND_EMBED_DOCUMENT,
+      requestData
+    );
+
     return {
       success: true,
       data: response.data,
-      message: ""
+      message: "",
     };
   } catch (error) {
-    console.error('Error chunking and embedding document:', error);
+    console.error("Error chunking and embedding document:", error);
     return {
       success: false,
-      message: error instanceof Error ? error.message : 'Unknown error occurred'
+      message:
+        error instanceof Error ? error.message : "Unknown error occurred",
     };
   }
 }
@@ -563,25 +654,29 @@ export async function chunkAndEmbedDocument(
  * @param fileName - File name for the download
  * @returns Download result
  */
-export async function downloadDocument(documentId: number, fileName: string): Promise<RAGResponse<{ downloaded: boolean }>> {
+export async function downloadDocument(
+  documentId: number,
+  fileName: string
+): Promise<RAGResponse<{ downloaded: boolean }>> {
   try {
     const requestData = {
       documentId,
-      fileName
+      fileName,
     };
 
     const response = await windowInvoke(RAG_DOWNLOAD_DOCUMENT, requestData);
-    
+
     return {
       success: true,
       data: response,
-      message: ""
+      message: "",
     };
   } catch (error) {
-    console.error('Error downloading document:', error);
+    console.error("Error downloading document:", error);
     return {
       success: false,
-      message: error instanceof Error ? error.message : 'Unknown error occurred'
+      message:
+        error instanceof Error ? error.message : "Unknown error occurred",
     };
   }
 }
@@ -591,21 +686,27 @@ export async function downloadDocument(documentId: number, fileName: string): Pr
  * @param documentId - Document ID to get error log for
  * @returns Error log content or null if no log exists
  */
-export async function getDocumentErrorLog(documentId: number): Promise<RAGResponse<string | null>> {
+export async function getDocumentErrorLog(
+  documentId: number
+): Promise<RAGResponse<string | null>> {
   try {
     const requestData = { documentId };
-    const response = await windowInvoke(RAG_GET_DOCUMENT_ERROR_LOG, requestData);
-    
+    const response = await windowInvoke(
+      RAG_GET_DOCUMENT_ERROR_LOG,
+      requestData
+    );
+
     return {
       success: true,
       data: response,
-      message: ""
+      message: "",
     };
   } catch (error) {
-    console.error('Error getting document error log:', error);
+    console.error("Error getting document error log:", error);
     return {
       success: false,
-      message: error instanceof Error ? error.message : 'Unknown error occurred'
+      message:
+        error instanceof Error ? error.message : "Unknown error occurred",
     };
   }
 }

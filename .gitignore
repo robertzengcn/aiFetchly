@@ -113,3 +113,11 @@ dev-debug.log
 # tasks/ 
 .cursor/mcp.json
 hyperframes-search-engine-scraping-video/renders/aifetchly-search-engine-scraping.mp4
+.vscode/pinned-files.json
+
+# Gstack skill - binaries and deps (teammates run ./setup after clone)
+.claude/skills/gstack/node_modules/
+.claude/skills/gstack/browse/dist/
+.claude/skills/gstack/design/dist/
+.claude/skills/gstack/make-pdf/dist/
+.claude/skills/gstack/bin/gstack-global-discover

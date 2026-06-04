@@ -12,6 +12,9 @@ import { WebsiteAnalysisService } from "@/service/WebsiteAnalysisService";
 import { RateLimiter, RateLimitConfig } from "./RateLimiter";
 import { AiChatApi, BatchKeywordGenerationRequestItem } from "@/api/aiChatApi";
 import { extractContactFromUrls } from "@/main-process/communication/contactExtraction-ipc";
+import { DocumentService } from "@/service/DocumentService";
+import { FileToolService } from "@/service/FileToolService";
+import { FILE_TOOL_RATE_LIMITS } from "@/config/fileToolConfig";
 
 /**
  * Rate limiting configuration for tool execution
@@ -37,6 +40,9 @@ const RATE_LIMIT_CONFIG = {
     maxConcurrent: 3,
     cooldownMs: 800,
   },
+  fileRead: FILE_TOOL_RATE_LIMITS.fileRead,
+  fileSearch: FILE_TOOL_RATE_LIMITS.fileSearch,
+  fileWrite: FILE_TOOL_RATE_LIMITS.fileWrite,
   default: {
     maxPerMinute: 30,
     maxConcurrent: 5,
@@ -74,6 +80,12 @@ class RateLimiterManager {
       toolName.includes("yellowpages")
     ) {
       return RATE_LIMIT_CONFIG.yellowPages;
+    } else if (toolName === "file_read") {
+      return RATE_LIMIT_CONFIG.fileRead;
+    } else if (toolName === "glob_files" || toolName === "grep_files") {
+      return RATE_LIMIT_CONFIG.fileSearch;
+    } else if (toolName === "file_write" || toolName === "file_edit") {
+      return RATE_LIMIT_CONFIG.fileWrite;
     } else {
       return RATE_LIMIT_CONFIG.default;
     }
@@ -131,6 +143,7 @@ export class ToolExecutor {
       case "scrape_urls_from_bing":
       case "scrape_urls_from_yandex":
       case "scrape_urls_from_baidu":
+      case "scrape_urls_from_search_engine":
         return await this.executeSearchEngineTool(toolName, toolParams);
 
       case "search_yellow_pages":
@@ -159,6 +172,19 @@ export class ToolExecutor {
 
       case "extract_contact_info":
         return await this.executeContactExtraction(toolParams);
+
+      case "read_attachment_content":
+        return await this.executeReadAttachmentContent(
+          toolParams,
+          conversationId
+        );
+
+      case "file_read":
+      case "file_write":
+      case "file_edit":
+      case "glob_files":
+      case "grep_files":
+        return await this.executeFileTool(toolName, toolParams);
 
       default:
         return {
@@ -220,6 +246,48 @@ export class ToolExecutor {
   }
 
   /**
+   * Resolve display engine name for SearchModule (Google, Bing, Yandex, Baidu).
+   */
+  private static resolveSearchScrapeEngineName(
+    toolName: string,
+    toolParams: Record<string, unknown>
+  ): string {
+    const legacyByTool: Record<string, string> = {
+      scrape_urls_from_google: "Google",
+      scrape_urls_from_bing: "Bing",
+      scrape_urls_from_yandex: "Yandex",
+      scrape_urls_from_baidu: "Baidu",
+    };
+    const fromLegacy = legacyByTool[toolName];
+    if (fromLegacy !== undefined) {
+      return fromLegacy;
+    }
+    if (toolName === "scrape_urls_from_search_engine") {
+      const raw = toolParams.search_engine;
+      if (typeof raw !== "string" || !raw.trim()) {
+        throw new Error(
+          "search_engine is required (google | bing | yandex | baidu)"
+        );
+      }
+      const key = raw.trim().toLowerCase();
+      const byParam: Record<string, string> = {
+        google: "Google",
+        bing: "Bing",
+        yandex: "Yandex",
+        baidu: "Baidu",
+      };
+      const resolved = byParam[key];
+      if (!resolved) {
+        throw new Error(
+          `Invalid search_engine "${raw}". Use one of: google, bing, yandex, baidu`
+        );
+      }
+      return resolved;
+    }
+    throw new Error(`Unexpected search scrape tool: ${toolName}`);
+  }
+
+  /**
    * Execute search engine tool (Google, Bing, Yandex, Baidu)
    */
   private static async executeSearchEngineTool(
@@ -239,15 +307,7 @@ export class ToolExecutor {
       throw new Error("parameter of Query is required");
     }
 
-    // Map tool name to engine name
-    const engineName =
-      toolName === "scrape_urls_from_google"
-        ? "Google"
-        : toolName === "scrape_urls_from_bing"
-        ? "Bing"
-        : toolName === "scrape_urls_from_baidu"
-        ? "Baidu"
-        : "Yandex";
+    const engineName = this.resolveSearchScrapeEngineName(toolName, toolParams);
 
     // Calculate num_pages based on num_results (assuming ~10 results per page)
     const numPages = Math.ceil(numResults / 10);
@@ -1115,5 +1175,81 @@ export class ToolExecutor {
         error: r.error,
       })),
     };
+  }
+
+  /**
+   * Execute read_attachment_content: read staged markdown content by attachment_ref.
+   */
+  private static async executeReadAttachmentContent(
+    toolParams: Record<string, unknown>,
+    conversationId: string
+  ): Promise<Record<string, unknown>> {
+    const attachmentRef =
+      typeof toolParams.attachment_ref === "string"
+        ? toolParams.attachment_ref.trim()
+        : "";
+
+    if (!attachmentRef) {
+      return {
+        success: false,
+        error:
+          "attachment_ref parameter is required and must be a non-empty string",
+      };
+    }
+
+    const maxLength =
+      typeof toolParams.max_length === "number"
+        ? Math.max(1000, Math.min(300000, Math.round(toolParams.max_length)))
+        : 120000;
+
+    try {
+      const documentService = new DocumentService();
+      const staged = await documentService.readStagedAttachment(
+        conversationId,
+        attachmentRef
+      );
+      const isTruncated = staged.markdown.length > maxLength;
+      const content = isTruncated
+        ? staged.markdown.slice(0, maxLength)
+        : staged.markdown;
+
+      return {
+        success: true,
+        fileName: staged.fileName,
+        content,
+        truncated: isTruncated,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to read attachment content",
+      };
+    }
+  }
+
+  /**
+   * Execute a file tool by delegating to FileToolService.
+   * M2 fix — reuse a cached instance instead of creating per call.
+   */
+  private static fileToolService: FileToolService | null = null;
+
+  private static getFileToolService(): FileToolService {
+    if (!ToolExecutor.fileToolService) {
+      ToolExecutor.fileToolService = new FileToolService();
+    }
+    return ToolExecutor.fileToolService;
+  }
+
+  private static async executeFileTool(
+    toolName: string,
+    toolParams: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    return await ToolExecutor.getFileToolService().execute(
+      toolName,
+      toolParams
+    );
   }
 }
