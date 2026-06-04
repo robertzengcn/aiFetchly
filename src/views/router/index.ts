@@ -308,61 +308,6 @@ export const constantRoutes: RouteRecordRaw[] = [
       },
     ],
   },
-  {
-    path: "/proxy",
-    name: "Proxy",
-    meta: {
-      visible: true,
-      title: "route.proxy",
-      icon: "mdi-shield-outline",
-    },
-    component: Layout,
-    children: [
-      {
-        path: "list",
-        component: () =>
-          import(
-            /* webpackChunkName: "staff-list" */ "@/views/pages/proxy/proxy.vue"
-          ),
-        name: "Proxylist",
-        meta: {
-          visible: true,
-          title: "route.proxy_list",
-          icon: "mdi-format-list-bulleted",
-        },
-      },
-      {
-        path: "edit/:id(\\d+)",
-        component: () => import("@/views/pages/proxy/proxydetail.vue"),
-        name: "editProxy",
-        meta: {
-          visible: false,
-          title: "route.edit_proxy",
-          icon: "mdi-pencil",
-        },
-      },
-      {
-        path: "add",
-        component: () => import("@/views/pages/proxy/proxydetail.vue"),
-        name: "AddProxy",
-        meta: {
-          visible: false,
-          title: "route.add_proxy",
-          icon: "mdi-plus",
-        },
-      },
-      {
-        path: "parse",
-        component: () => import("@/views/pages/proxy/proxyparse.vue"),
-        name: "BatchUploadProxy",
-        meta: {
-          visible: true,
-          title: "route.parse_proxy",
-          icon: "mdi-upload-multiple",
-        },
-      },
-    ],
-  },
   // {
   //   path: '/extramodules',
   //   name: 'Modules',
@@ -616,6 +561,61 @@ export const constantRoutes: RouteRecordRaw[] = [
           visible: false,
           title: "route.yandex_maps_scraper",
           icon: "mdi-map-search-outline",
+        },
+      },
+    ],
+  },
+  {
+    path: "/proxy",
+    name: "Proxy",
+    meta: {
+      visible: true,
+      title: "route.proxy",
+      icon: "mdi-shield-outline",
+    },
+    component: Layout,
+    children: [
+      {
+        path: "list",
+        component: () =>
+          import(
+            /* webpackChunkName: "staff-list" */ "@/views/pages/proxy/proxy.vue"
+          ),
+        name: "Proxylist",
+        meta: {
+          visible: true,
+          title: "route.proxy_list",
+          icon: "mdi-format-list-bulleted",
+        },
+      },
+      {
+        path: "edit/:id(\\d+)",
+        component: () => import("@/views/pages/proxy/proxydetail.vue"),
+        name: "editProxy",
+        meta: {
+          visible: false,
+          title: "route.edit_proxy",
+          icon: "mdi-pencil",
+        },
+      },
+      {
+        path: "add",
+        component: () => import("@/views/pages/proxy/proxydetail.vue"),
+        name: "AddProxy",
+        meta: {
+          visible: false,
+          title: "route.add_proxy",
+          icon: "mdi-plus",
+        },
+      },
+      {
+        path: "parse",
+        component: () => import("@/views/pages/proxy/proxyparse.vue"),
+        name: "BatchUploadProxy",
+        meta: {
+          visible: true,
+          title: "route.parse_proxy",
+          icon: "mdi-upload-multiple",
         },
       },
     ],

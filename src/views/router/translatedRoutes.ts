@@ -308,61 +308,6 @@ export const createTranslatedRoutes = (): RouteRecordRaw[] => {
       ],
     },
     {
-      path: "/proxy",
-      name: "Proxy",
-      meta: {
-        visible: true,
-        title: computed(() => t("router.proxy")),
-        icon: "mdi-shield-outline",
-      },
-      component: Layout,
-      children: [
-        {
-          path: "list",
-          component: () =>
-            import(
-              /* webpackChunkName: "staff-list" */ "@/views/pages/proxy/proxy.vue"
-            ),
-          name: "Proxylist",
-          meta: {
-            visible: true,
-            title: computed(() => t("router.proxy_list")),
-            icon: "mdi-format-list-bulleted",
-          },
-        },
-        {
-          path: "edit/:id(\\d+)",
-          component: () => import("@/views/pages/proxy/proxydetail.vue"),
-          name: "editProxy",
-          meta: {
-            visible: false,
-            title: computed(() => t("router.edit_proxy")),
-            icon: "mdi-pencil",
-          },
-        },
-        {
-          path: "add",
-          component: () => import("@/views/pages/proxy/proxydetail.vue"),
-          name: "AddProxy",
-          meta: {
-            visible: false,
-            title: computed(() => t("router.add_proxy")),
-            icon: "mdi-plus",
-          },
-        },
-        {
-          path: "parse",
-          component: () => import("@/views/pages/proxy/proxyparse.vue"),
-          name: "ParseProxy",
-          meta: {
-            visible: true,
-            title: computed(() => t("router.parse_proxy")),
-            icon: "mdi-code-braces",
-          },
-        },
-      ],
-    },
-    {
       path: "/search",
       name: "Search",
       meta: {
@@ -717,6 +662,61 @@ export const createTranslatedRoutes = (): RouteRecordRaw[] => {
             import(
               /* webpackChunkName: "staff-list" */ "@/views/pages/emailservice/servicedetail.vue"
             ),
+        },
+      ],
+    },
+    {
+      path: "/proxy",
+      name: "Proxy",
+      meta: {
+        visible: true,
+        title: computed(() => t("router.proxy")),
+        icon: "mdi-shield-outline",
+      },
+      component: Layout,
+      children: [
+        {
+          path: "list",
+          component: () =>
+            import(
+              /* webpackChunkName: "staff-list" */ "@/views/pages/proxy/proxy.vue"
+            ),
+          name: "Proxylist",
+          meta: {
+            visible: true,
+            title: computed(() => t("router.proxy_list")),
+            icon: "mdi-format-list-bulleted",
+          },
+        },
+        {
+          path: "edit/:id(\\d+)",
+          component: () => import("@/views/pages/proxy/proxydetail.vue"),
+          name: "editProxy",
+          meta: {
+            visible: false,
+            title: computed(() => t("router.edit_proxy")),
+            icon: "mdi-pencil",
+          },
+        },
+        {
+          path: "add",
+          component: () => import("@/views/pages/proxy/proxydetail.vue"),
+          name: "AddProxy",
+          meta: {
+            visible: false,
+            title: computed(() => t("router.add_proxy")),
+            icon: "mdi-plus",
+          },
+        },
+        {
+          path: "parse",
+          component: () => import("@/views/pages/proxy/proxyparse.vue"),
+          name: "ParseProxy",
+          meta: {
+            visible: true,
+            title: computed(() => t("router.parse_proxy")),
+            icon: "mdi-code-braces",
+          },
         },
       ],
     },
