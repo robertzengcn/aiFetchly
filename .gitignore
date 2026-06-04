@@ -112,6 +112,7 @@ dev-debug.log
 # tasks.json
 # tasks/ 
 .cursor/mcp.json
+hyperframes-search-engine-scraping-video/renders/aifetchly-search-engine-scraping.mp4
 .vscode/pinned-files.json
 
 # Gstack skill - binaries and deps (teammates run ./setup after clone)
