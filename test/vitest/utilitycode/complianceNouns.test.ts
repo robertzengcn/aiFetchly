@@ -43,6 +43,13 @@ describe("compliance-facing product nouns", () => {
     }
   });
 
+  test("keeps Market Insight search engine names explicit", () => {
+    for (const messages of Object.values(locales)) {
+      expect(messages.search.google).toBe("Google");
+      expect(messages.search.yandex).toBe("Yandex");
+    }
+  });
+
   test("localizes Market Insight guidance in every supported language", () => {
     const expectedSearchCopy: Record<
       string,

@@ -643,9 +643,9 @@ export default {
     change_account: "更换账户",
   },
   search: {
-    google: "Channel Alpha",
+    google: "Google",
     bing: "Bing.com",
-    yandex: "Channel Beta",
+    yandex: "Yandex",
     baidu: "Baidu.com",
     platform: "平台",
     keyword: "关键词",

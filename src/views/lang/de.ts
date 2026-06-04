@@ -672,9 +672,9 @@ export default {
     change_account: "Konto wechseln",
   },
   search: {
-    google: "Channel Alpha",
+    google: "Google",
     bing: "Bing.com",
-    yandex: "Channel Beta",
+    yandex: "Yandex",
     baidu: "Baidu.com",
     platform: "Plattform",
     keyword: "Schlüsselwort",
