@@ -224,7 +224,7 @@ export const createTranslatedRoutes = (): RouteRecordRaw[] => {
           meta: {
             visible: true,
             title: computed(() => t("router.account_list")),
-            icon: "mdi-format-list-bulleted",
+            icon: "mdi-account-details",
           },
         },
         {
@@ -272,7 +272,7 @@ export const createTranslatedRoutes = (): RouteRecordRaw[] => {
           meta: {
             visible: true,
             title: computed(() => t("router.schedule_list")),
-            icon: "mdi-format-list-bulleted",
+            icon: "mdi-calendar-clock",
           },
         },
         {

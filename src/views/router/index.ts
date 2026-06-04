@@ -225,7 +225,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         meta: {
           visible: true,
           title: "route.account_list",
-          icon: "mdi-format-list-bulleted",
+          icon: "mdi-account-details",
         },
       },
       {
@@ -273,7 +273,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         meta: {
           visible: true,
           title: "route.schedule_list",
-          icon: "mdi-format-list-bulleted",
+          icon: "mdi-calendar-clock",
         },
       },
       {
