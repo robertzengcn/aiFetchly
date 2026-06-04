@@ -120,3 +120,6 @@ dev-debug.log
 .claude/skills/gstack/design/dist/
 .claude/skills/gstack/make-pdf/dist/
 .claude/skills/gstack/bin/gstack-global-discover
+
+# Generated tutorial video renders
+hyperframes-search-engine-scraping-video/renders/*.mp4
