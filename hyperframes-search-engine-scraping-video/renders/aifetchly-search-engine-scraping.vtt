@@ -1,0 +1,22 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:05.200
+Welcome to AiFetchly Search Engine Scraping. This walkthrough shows how to turn search results into qualified leads.
+
+00:00:05.200 --> 00:00:11.000
+Start in the left navigation. Open Search, then choose Search Scraper.
+
+00:00:11.000 --> 00:00:17.300
+Add one keyword per line, then choose google.com, bing.com, or Yandex.
+
+00:00:17.300 --> 00:00:23.500
+If you choose google.com, select a Google search engine account before running the scraper.
+
+00:00:23.500 --> 00:00:29.300
+Use Search Task List to monitor status, retry failures, edit settings, stop running jobs, and open results.
+
+00:00:29.300 --> 00:00:35.500
+Select result rows, run AI analysis, extract contact info, and export the best leads for your campaign.
+
+00:00:35.500 --> 00:00:41.000
+Small batches, good proxies, local browser, and AI scoring make Search Engine Scraping more reliable and more useful.
