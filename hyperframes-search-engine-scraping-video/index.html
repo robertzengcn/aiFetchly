@@ -603,11 +603,11 @@
           <div class="hero">
             <div>
               <h1>Search Engine Scraping</h1>
-              <p class="lead">Collect search results, qualify leads with AI, extract contact info, and export outreach-ready data.</p>
+              <p class="lead">Collect results from google.com, bing.com, and Yandex, qualify leads with AI, extract contact info, and export outreach-ready data.</p>
             </div>
             <div class="flow-list">
               <div class="flow-card"><div class="num">1</div><h3>Create task</h3><p>Keywords, engine, page, concurrency.</p></div>
-              <div class="flow-card"><div class="num">2</div><h3>Run safely</h3><p>Proxies, local browser, accounts, AI recovery.</p></div>
+              <div class="flow-card"><div class="num">2</div><h3>Run safely</h3><p>Proxies, local browser, search accounts, AI recovery.</p></div>
               <div class="flow-card"><div class="num">3</div><h3>Analyze</h3><p>Score leads and classify industries.</p></div>
               <div class="flow-card"><div class="num">4</div><h3>Export</h3><p>CSV with links, scores, email, phone, address.</p></div>
             </div>
@@ -664,16 +664,21 @@
                 <div class="pill good">Duplicates removed automatically</div>
               </div>
               <div class="field-row">
-                <div class="field">Google</div>
+                <div class="field">google.com</div>
                 <div class="field">Page 1</div>
                 <div class="field">Concurrent 3</div>
+              </div>
+              <div class="pill-row" style="margin-top: 24px;">
+                <div class="pill good">Supported: google.com</div>
+                <div class="pill good">Supported: bing.com</div>
+                <div class="pill good">Supported: Yandex</div>
               </div>
             </div>
           </div>
         </div>
         <div class="callout-ring" style="left: 155px; top: 326px; width: 1608px; height: 178px;"></div>
         <div class="cursor-dot" style="left: 1602px; top: 553px;"></div>
-        <div class="caption">Add one keyword per line, then choose Google, Bing, or Yandex. Start from page 1 for a fresh task.</div>
+        <div class="caption">Add one keyword per line, then choose google.com, bing.com, or Yandex.</div>
       </section>
 
       <section id="scene-options" class="scene">
@@ -684,7 +689,7 @@
               <div class="toggle-grid">
                 <div class="toggle-line"><span>Choose Proxy</span><div class="btn secondary">CHOOSE PROXY</div></div>
                 <div class="toggle-line"><span>Use local browser</span><div class="seg"><span>NO</span><span class="on">YES</span></div></div>
-                <div class="toggle-line"><span>Use search engine account</span><div class="seg"><span>NO</span><span class="on">YES</span></div></div>
+                <div class="toggle-line"><span>Choose Google search engine account</span><div class="seg"><span>NO</span><span class="on">YES</span></div></div>
                 <div class="toggle-line"><span>Show in browser</span><div class="seg"><span class="on">NO</span><span>YES</span></div></div>
                 <div class="toggle-line"><span>Enable AI Recovery</span><div class="seg"><span>NO</span><span class="on">YES</span></div></div>
                 <div class="toggle-line"><span>Concurrency</span><div class="pill">1-3 first</div></div>
@@ -695,6 +700,7 @@
                 <div class="btn secondary">RETURN</div>
               </div>
               <div class="pill-row">
+                <div class="pill good">google.com needs a Google search account</div>
                 <div class="pill good">Yandex requires local browser</div>
                 <div class="pill">Use proxies for higher volume</div>
                 <div class="pill">Enable AI Recovery for difficult engines</div>
@@ -703,7 +709,7 @@
           </div>
         </div>
         <div class="callout-ring" style="left: 133px; top: 234px; width: 1654px; height: 407px;"></div>
-        <div class="caption">Before running at scale, configure proxies, local browser, accounts, browser visibility, and AI Recovery.</div>
+        <div class="caption">If you choose google.com, select a Google search engine account before running the scraper.</div>
       </section>
 
       <section id="scene-tasklist" class="scene">
@@ -718,9 +724,9 @@
               </div>
               <div class="table" style="margin-top: 30px;">
                 <div class="table-row header"><span>ID</span><span>Keywords</span><span>Engine</span><span>Status</span><span>Record Time</span><span>Actions</span></div>
-                <div class="table-row"><span>18</span><span>marketing automation</span><span>Google</span><span class="status">Processing</span><span>Today</span><span>View / Kill</span></div>
-                <div class="table-row"><span>17</span><span>local agencies</span><span>Bing</span><span class="status">Complete</span><span>Yesterday</span><span>View Results</span></div>
-                <div class="table-row"><span>16</span><span>cybersecurity vendors</span><span>Google</span><span class="status warn">Error</span><span>Yesterday</span><span>Retry / Logs</span></div>
+                <div class="table-row"><span>18</span><span>marketing automation</span><span>google.com</span><span class="status">Processing</span><span>Today</span><span>View / Kill</span></div>
+                <div class="table-row"><span>17</span><span>local agencies</span><span>bing.com</span><span class="status">Complete</span><span>Yesterday</span><span>View Results</span></div>
+                <div class="table-row"><span>16</span><span>cybersecurity vendors</span><span>Yandex</span><span class="status warn">Error</span><span>Yesterday</span><span>Retry / Logs</span></div>
               </div>
               <div class="pill-row" style="margin-top: 28px;">
                 <div class="pill">Run</div><div class="pill">Retry</div><div class="pill">Edit</div><div class="pill">Kill Process</div><div class="pill good">View Results</div><div class="pill">Download Logs</div>
@@ -767,8 +773,8 @@
           <div class="tips-grid" style="margin-top: 34px;">
             <div class="tip-card"><h3>Start small</h3><p>Begin with 5-10 keywords and concurrency 1-3. Scale only after results look healthy.</p></div>
             <div class="tip-card"><h3>Use proxies</h3><p>Rotate proxies for larger jobs and reduce concurrency if blocks or captchas appear.</p></div>
-            <div class="tip-card"><h3>Use local browser</h3><p>Required for Yandex and recommended for Google at scale or stricter anti-bot flows.</p></div>
-            <div class="tip-card"><h3>Use accounts</h3><p>Google and Yandex accounts improve access for larger authenticated scraping tasks.</p></div>
+            <div class="tip-card"><h3>Use local browser</h3><p>Required for Yandex and recommended for google.com at scale or stricter anti-bot flows.</p></div>
+            <div class="tip-card"><h3>Use accounts</h3><p>When google.com is selected, choose a Google search engine account before running.</p></div>
             <div class="tip-card"><h3>Enable AI Recovery</h3><p>Let AI inspect errors and suggest recovery actions during difficult runs.</p></div>
             <div class="tip-card"><h3>Focus outreach</h3><p>Analyze first, extract contacts second, and prioritize leads scoring 70% or higher.</p></div>
           </div>
