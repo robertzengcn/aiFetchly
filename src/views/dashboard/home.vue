@@ -177,10 +177,6 @@ const isChartsLoading = ref(false);
 const chartsError = ref<string | null>(null);
 const chartsVisible = ref(false);
 
-// State - Date Range
-const currentStartDate = ref<string>('');
-const currentEndDate = ref<string>('');
-
 // State - UI
 const isRefreshing = ref(false);
 const showErrorSnackbar = ref(false);
@@ -223,11 +219,8 @@ function isCacheValid<T>(cache: CacheEntry<T> | undefined): boolean {
 
 async function fetchSummaryData(startDate: string, endDate: string, bypassCache = false) {
   const cacheKey = getCacheKey(startDate, endDate);
-  
-  // Performance monitoring
   const startTime = performance.now();
-  
-  // Check cache
+
   if (!bypassCache && isCacheValid(summaryCache.value[cacheKey])) {
     summaryData.value = summaryCache.value[cacheKey].data;
     const loadTime = performance.now() - startTime;
@@ -236,25 +229,22 @@ async function fetchSummaryData(startDate: string, endDate: string, bypassCache 
   }
 
   isSummaryLoading.value = true;
-  
+
   try {
     const response = await getDashboardSummary(startDate, endDate);
-    
+
     if (response) {
       summaryData.value = response;
-      
-      // Update cache
-      summaryCache.value[cacheKey] = {
-        data: response,
-        timestamp: Date.now()
+
+      summaryCache.value = {
+        ...summaryCache.value,
+        [cacheKey]: { data: response, timestamp: Date.now() }
       };
-      
-      // Performance logging
+
       const loadTime = performance.now() - startTime;
       performanceMarks.summaryDataLoad = loadTime;
       console.log(`[Dashboard] Summary data loaded in ${loadTime.toFixed(2)}ms`);
-      
-      // Verify performance target (< 2s)
+
       if (loadTime > 2000) {
         console.warn(`[Dashboard] Summary load time (${loadTime.toFixed(2)}ms) exceeds 2s target`);
       }
@@ -265,8 +255,7 @@ async function fetchSummaryData(startDate: string, endDate: string, bypassCache 
     console.error('Error fetching summary data:', error);
     errorMessage.value = error instanceof Error ? error.message : 'Failed to load dashboard data';
     showErrorSnackbar.value = true;
-    
-    // Log error for debugging
+
     if (error instanceof Error) {
       console.error('[Dashboard] Error details:', {
         message: error.message,
@@ -281,11 +270,8 @@ async function fetchSummaryData(startDate: string, endDate: string, bypassCache 
 
 async function fetchChartsData(startDate: string, endDate: string, bypassCache = false) {
   const cacheKey = getCacheKey(startDate, endDate);
-  
-  // Performance monitoring
   const startTime = performance.now();
-  
-  // Check cache
+
   if (!bypassCache && isCacheValid(chartsCache.value[cacheKey])) {
     const cached = chartsCache.value[cacheKey].data;
     trendsData.value = cached.trends;
@@ -298,9 +284,8 @@ async function fetchChartsData(startDate: string, endDate: string, bypassCache =
 
   isChartsLoading.value = true;
   chartsError.value = null;
-  
+
   try {
-    // Fetch all chart data in parallel
     const [trendsResponse, searchEngineResponse, emailStatusResponse] = await Promise.all([
       getDashboardTrends(startDate, endDate),
       getSearchEngineBreakdown(startDate, endDate),
@@ -320,36 +305,34 @@ async function fetchChartsData(startDate: string, endDate: string, bypassCache =
     }
 
     if (emailStatusResponse) {
-      console.log('emailStatusResponse', emailStatusResponse);
       emailStatusData.value = emailStatusResponse;
     } else {
       throw new Error('Failed to load email status data');
     }
 
-    // Update cache
-    chartsCache.value[cacheKey] = {
-      data: {
-        trends: trendsData.value,
-        searchEngine: searchEngineData.value,
-        emailStatus: emailStatusData.value
-      },
-      timestamp: Date.now()
+    chartsCache.value = {
+      ...chartsCache.value,
+      [cacheKey]: {
+        data: {
+          trends: trendsData.value,
+          searchEngine: searchEngineData.value,
+          emailStatus: emailStatusData.value
+        },
+        timestamp: Date.now()
+      }
     };
-    
-    // Performance logging
+
     const loadTime = performance.now() - startTime;
     performanceMarks.chartsDataLoad = loadTime;
     console.log(`[Dashboard] Charts data loaded in ${loadTime.toFixed(2)}ms`);
-    
-    // Verify performance target (< 500ms)
+
     if (loadTime > 500) {
       console.warn(`[Dashboard] Charts load time (${loadTime.toFixed(2)}ms) exceeds 500ms target`);
     }
   } catch (error) {
     console.error('Error fetching charts data:', error);
     chartsError.value = error instanceof Error ? error.message : 'Failed to load chart data';
-    
-    // Log error for debugging
+
     if (error instanceof Error) {
       console.error('[Dashboard] Charts error details:', {
         message: error.message,
@@ -363,46 +346,41 @@ async function fetchChartsData(startDate: string, endDate: string, bypassCache =
 }
 
 function handleDateRangeChange(payload: { startDate: string; endDate: string; preset: string }) {
-  // Clear any existing debounce timer
   if (debounceTimer) {
     clearTimeout(debounceTimer);
   }
-  
-  // Show debouncing indicator
+
   isDebouncing.value = true;
-  
-  // Debounce the actual data fetch by 300ms
+
   debounceTimer = setTimeout(() => {
-    currentStartDate.value = payload.startDate;
-    currentEndDate.value = payload.endDate;
-    
     // Clear cache when date range changes
     summaryCache.value = {};
     chartsCache.value = {};
-    
-    // Fetch new data
+
     fetchSummaryData(payload.startDate, payload.endDate);
-    
-    // Only fetch charts if they're visible
+
     if (chartsVisible.value) {
       fetchChartsData(payload.startDate, payload.endDate);
     }
-    
-    // Hide debouncing indicator
+
     isDebouncing.value = false;
     debounceTimer = null;
   }, 300);
 }
 
 async function handleManualRefresh() {
-  if (!currentStartDate.value || !currentEndDate.value) return;
-  
+  if (!summaryData.value) return;
+
   isRefreshing.value = true;
-  
+
   try {
+    const startDate = Object.keys(summaryCache.value)[0]?.split('_')[0] || '';
+    const endDate = Object.keys(summaryCache.value)[0]?.split('_').slice(1).join('_') || '';
+    if (!startDate || !endDate) return;
+
     await Promise.all([
-      fetchSummaryData(currentStartDate.value, currentEndDate.value, true),
-      chartsVisible.value ? fetchChartsData(currentStartDate.value, currentEndDate.value, true) : Promise.resolve()
+      fetchSummaryData(startDate, endDate, true),
+      chartsVisible.value ? fetchChartsData(startDate, endDate, true) : Promise.resolve()
     ]);
   } finally {
     isRefreshing.value = false;
@@ -410,13 +388,15 @@ async function handleManualRefresh() {
 }
 
 function refreshCharts() {
-  if (currentStartDate.value && currentEndDate.value) {
-    fetchChartsData(currentStartDate.value, currentEndDate.value, true);
+  if (!summaryData.value) return;
+  const startDate = Object.keys(summaryCache.value)[0]?.split('_')[0] || '';
+  const endDate = Object.keys(summaryCache.value)[0]?.split('_').slice(1).join('_') || '';
+  if (startDate && endDate) {
+    fetchChartsData(startDate, endDate, true);
   }
 }
 
 function handleCardClick(metricType: string) {
-  // Navigate to respective detail pages
   switch (metricType) {
     case 'search':
       router.push('/search/tasklist');
@@ -435,47 +415,40 @@ function handleCardClick(metricType: string) {
 
 function handleEngineClick(engineName: string) {
   console.log('Engine clicked:', engineName);
-  // Navigate to search results filtered by engine
   router.push({ path: '/search-results', query: { engine: engineName } });
 }
 
 function setupIntersectionObserver() {
   if (!chartsSection.value) return;
-  
+
   chartsObserver = new IntersectionObserver(
     (entries) => {
       entries.forEach((entry) => {
         if (entry.isIntersecting && !chartsVisible.value) {
           chartsVisible.value = true;
-          
-          // Fetch charts data when section becomes visible
-          if (currentStartDate.value && currentEndDate.value) {
-            fetchChartsData(currentStartDate.value, currentEndDate.value);
+
+          const startDate = Object.keys(summaryCache.value)[0]?.split('_')[0] || '';
+          const endDate = Object.keys(summaryCache.value)[0]?.split('_').slice(1).join('_') || '';
+          if (startDate && endDate) {
+            fetchChartsData(startDate, endDate);
           }
-          
-          // Stop observing after first intersection
+
           if (chartsObserver) {
             chartsObserver.disconnect();
           }
         }
       });
     },
-    {
-      threshold: 0.1 // Trigger when 10% of the element is visible
-    }
+    { threshold: 0.1 }
   );
 
   chartsObserver.observe(chartsSection.value);
 }
 
-// Lifecycle
 onMounted(() => {
-  // Performance monitoring - mark page load start
   performanceMarks.pageLoadStart = performance.now();
-  
   setupIntersectionObserver();
-  
-  // Log total page load time after initial data load
+
   setTimeout(() => {
     const totalLoadTime = performance.now() - performanceMarks.pageLoadStart;
     console.log(`[Dashboard] Total page load time: ${totalLoadTime.toFixed(2)}ms`);
@@ -484,8 +457,7 @@ onMounted(() => {
       chartsLoad: `${performanceMarks.chartsDataLoad.toFixed(2)}ms`,
       totalLoad: `${totalLoadTime.toFixed(2)}ms`
     });
-    
-    // Verify performance targets
+
     if (totalLoadTime > 2000) {
       console.warn(`[Dashboard] Total load time (${totalLoadTime.toFixed(2)}ms) exceeds 2s target`);
     }
@@ -493,12 +465,10 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
-  // Cleanup
   if (chartsObserver) {
     chartsObserver.disconnect();
   }
-  
-  // Clear debounce timer
+
   if (debounceTimer) {
     clearTimeout(debounceTimer);
   }

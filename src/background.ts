@@ -11,6 +11,7 @@ const session = require("electron").session;
 // import { createProtocol } from 'vue-cli-plugin-electron-builder/lib'
 import installExtension, { VUEJS3_DEVTOOLS } from "electron-devtools-installer";
 import { registerCommunicationIpcHandlers } from "./main-process/communication/";
+import { SkillImportService } from "@/service/SkillImportService";
 import * as path from "path";
 import { Token } from "@/modules/token";
 import { MenuManager } from "@/main-process/menu/MenuManager";
@@ -29,7 +30,7 @@ import fs from "fs";
 import ProtocolRegistry from "protocol-registry";
 //import { RemoteSource } from '@/modules/remotesource'
 import { UserController } from "@/controller/UserController";
-import { NATIVATECOMMAND } from "@/config/channellist";
+import { NATIVATECOMMAND, LOGIN_STATUS } from "@/config/channellist";
 import { NativateDatatype } from "@/entityTypes/commonType";
 import { ScheduleManager } from "@/modules/ScheduleManager";
 import { runafterbootup } from "@/modules/bootuprun";
@@ -259,14 +260,31 @@ function initialize() {
     }
   }
 
-  async function createWindow() {
-    // Check if window already exists and is not destroyed
+  /** Prevents concurrent createWindow() races (e.g. whenReady + activate) that double-register ipcMain handlers. */
+  let createWindowInFlight: Promise<void> | null = null;
+
+  async function createWindow(): Promise<void> {
     if (win && !(win as any).isDestroyed()) {
       console.log("Window already exists and is valid, focusing...");
       (win as any).focus();
       return;
     }
+    if (createWindowInFlight) {
+      await createWindowInFlight;
+      if (win && !(win as any).isDestroyed()) {
+        (win as any).focus();
+      }
+      return;
+    }
+    createWindowInFlight = createWindowBody();
+    try {
+      await createWindowInFlight;
+    } finally {
+      createWindowInFlight = null;
+    }
+  }
 
+  async function createWindowBody(): Promise<void> {
     // Create the browser window.
     win = new BrowserWindow({
       // Hide by default on Windows/Linux. (macOS uses the system menu bar.)
@@ -323,6 +341,11 @@ function initialize() {
       }
       //if (userdataPath){//register communication ipc handlers
       registerCommunicationIpcHandlers(win);
+
+      // Load persisted skills into runtime registry
+      SkillImportService.loadPersistedSkills().catch((err: unknown) => {
+        console.warn("[Startup] Failed to load persisted skills:", err);
+      });
       //}
     }
 
@@ -810,11 +833,19 @@ function clearTokens(): void {
 
 async function handleDeepLink(url: string) {
   try {
+    // Notify frontend that login processing has started
+    if (win && !(win as any).isDestroyed()) {
+      (win as any).webContents.send(LOGIN_STATUS, {
+        status: "processing",
+      });
+    }
+
     const parsedUrl = new URL(url);
 
     // Validate deep link origin to prevent malicious token injection
     if (!isValidDeepLinkOrigin(parsedUrl)) {
       log.error("Invalid deep link origin:", url);
+      sendLoginError("Invalid deep link origin. This link may be malicious.");
       dialog.showErrorBox(
         "Security Error",
         "Invalid deep link origin. This link may be malicious."
@@ -876,6 +907,7 @@ async function handleDeepLink(url: string) {
 
     if (!token) {
       log.error("No token found in deep link");
+      sendLoginError("No authentication token found.");
       return;
     }
 
@@ -922,6 +954,7 @@ async function handleDeepLink(url: string) {
         storageError instanceof Error
           ? storageError.message
           : String(storageError);
+      sendLoginError(`Failed to store authentication tokens: ${errorMessage}`);
       dialog.showErrorBox(
         "Authentication Error",
         `Failed to store authentication tokens: ${errorMessage}`
@@ -1069,6 +1102,7 @@ async function handleDeepLink(url: string) {
         }
       } else {
         log.error("Failed to get user info from remote source");
+        sendLoginError("Failed to get user info from remote source.");
         dialog.showErrorBox(
           "User Info Error",
           "Failed to get user info from remote source."
@@ -1081,6 +1115,7 @@ async function handleDeepLink(url: string) {
       log.error("Error updating user info:", userError);
       const errorMessage =
         userError instanceof Error ? userError.message : String(userError);
+      sendLoginError(`Failed to update user information: ${errorMessage}`);
       dialog.showErrorBox(
         "User Info Update Error",
         `Failed to update user information: ${errorMessage}`
@@ -1093,6 +1128,7 @@ async function handleDeepLink(url: string) {
     log.error("Failed to handle deep link:", error);
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error("Deep link handling error:", errorMessage);
+    sendLoginError(`Failed to process authentication link: ${errorMessage}`);
 
     // Show error dialog to user
     if ((app as any).isReady()) {
@@ -1101,6 +1137,15 @@ async function handleDeepLink(url: string) {
         `Failed to process authentication link: ${errorMessage}`
       );
     }
+  }
+}
+
+function sendLoginError(message: string): void {
+  if (win && !(win as any).isDestroyed()) {
+    (win as any).webContents.send(LOGIN_STATUS, {
+      status: "error",
+      message,
+    });
   }
 }
 

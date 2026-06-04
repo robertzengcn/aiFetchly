@@ -139,6 +139,16 @@ class="message-bubble" :class="{
 
             <!-- Tool Result Message -->
             <template v-else-if="message.messageType === MESSAGE_TYPE.TOOL_RESULT">
+              <!-- Skill Permission Approval Card -->
+              <SkillApprovalCard
+                v-if="(message.metadata?.toolResult as Record<string, unknown>)?.needsPermissionPrompt"
+                :tool-name="String(message.metadata?.toolName || '')"
+                :permission-category="String((message.metadata?.toolResult as Record<string, unknown>)?.permissionCategory || '')"
+                :shell-preview="((message.metadata?.toolResult as Record<string, unknown>)?.shellPreview ?? undefined) as any"
+                @grant="(payload) => handleSkillPermissionGrant(message, payload.persistent)"
+                @deny="handleSkillPermissionDeny(message)"
+              />
+              <template v-else>
               <div class="tool-result-header">
                 <v-icon size="small" :color="message.metadata?.success === false ? 'error' : 'success'" class="mr-1">
                   {{ message.metadata?.success === false ? 'mdi-alert-circle' : 'mdi-check-circle' }}
@@ -173,6 +183,7 @@ class="message-bubble" :class="{
                 <v-icon size="x-small" class="mr-1">mdi-clock-outline</v-icon>
                 {{ formatTimestamp(message.timestamp) }}
               </div>
+              </template>
             </template>
 
             <!-- Plan Created Message -->
@@ -315,6 +326,24 @@ class="message-bubble" :class="{
                 >
                   <v-icon v-if="!isResendingMessage || resendingMessageId !== message.id" size="small">mdi-refresh</v-icon>
                 </v-btn>
+              </div>
+              <div
+                v-if="message.role === 'user' && (message.metadata?.attachments as any[])?.length"
+                class="attachment-preview"
+              >
+                <div class="attachment-preview-header">
+                  <v-icon size="x-small" class="mr-1">mdi-file-document</v-icon>
+                  <strong>{{ t('knowledge.documents') }}</strong>
+                </div>
+                <div class="attachment-preview-files">
+                  <div
+                    v-for="(att, idx) in (message.metadata?.attachments as any[])"
+                    :key="`${att.fileName}-${idx}`"
+                    class="attachment-preview-file"
+                  >
+                    {{ att.fileName }}
+                  </div>
+                </div>
               </div>
               <!-- eslint-disable-next-line vue/no-v-html -->
               <div class="message-text" v-html="formatMessage(message.content)"></div>
@@ -523,16 +552,32 @@ class="message-bubble" :class="{
         variant="outlined"
         density="compact"
         hide-details
-        @keydown.enter.exact.prevent="handleSendMessage"
+        @keydown.enter="handleEnterKey"
         @keydown.shift.enter.prevent="inputMessage += '\n'"
+        @keydown.down="handleSlashArrowDown"
+        @keydown.up="handleSlashArrowUp"
+        @keydown.esc="handleSlashEscape"
+        @keydown.tab="handleSlashTab"
         :disabled="isLoading"
       >
         <template v-slot:append-inner>
           <v-btn
             icon
             size="small"
+            variant="text"
             color="primary"
-            :disabled="!inputMessage.trim() && !isLoading"
+            :disabled="isLoading || selectedUploadFiles.length >= MAX_UPLOAD_FILES"
+            :loading="isUploadingFiles"
+            @click="triggerFilePicker"
+            :title="t('knowledge.select_files')"
+          >
+            <v-icon size="small">mdi-paperclip</v-icon>
+          </v-btn>
+          <v-btn
+            icon
+            size="small"
+            color="primary"
+            :disabled="(!inputMessage.trim() && selectedUploadFiles.length === 0) && !isLoading"
             :loading="false"
             @click="isLoading ? handleStopStream() : handleSendMessage()"
             :title="isLoading ? (t('knowledge.stop_generating') || 'Stop generating') : ''"
@@ -541,6 +586,65 @@ class="message-bubble" :class="{
           </v-btn>
         </template>
       </v-textarea>
+
+      <div
+        v-if="showSlashMenu"
+        class="slash-command-menu"
+      >
+        <div v-if="filteredSlashCommands.length > 0">
+          <div
+            v-for="(cmd, index) in filteredSlashCommands"
+            :key="cmd.name"
+            class="slash-command-item"
+            :class="{ 'is-selected': index === selectedSlashIndex }"
+            @mousedown.prevent="inputMessage = cmd.usage; showSlashMenu = false"
+          >
+            <div class="slash-command-name">{{ cmd.name }}</div>
+            <div class="slash-command-description">{{ cmd.description }}</div>
+          </div>
+        </div>
+        <div v-else class="slash-command-empty">No commands found</div>
+      </div>
+
+      <input
+        ref="fileInputRef"
+        type="file"
+        multiple
+        hidden
+        :accept="fileAccept"
+        @change="handleFileSelection"
+      />
+    </div>
+
+    <div
+      v-if="selectedUploadFiles.length > 0"
+      class="attached-files-preview"
+    >
+      <div class="attached-files-header">
+        <v-icon size="x-small" class="mr-1">mdi-paperclip</v-icon>
+        <strong>{{ t('knowledge.documents') }}</strong>
+      </div>
+      <div class="attached-files-list">
+        <div
+          v-for="(f, index) in selectedUploadFiles"
+          :key="`${f.name}-${index}`"
+          class="attached-file-item"
+        >
+          <span class="attached-file-name">{{ f.name }}</span>
+          <span class="attached-file-size">({formatBytes(f.size)})</span>
+          <v-btn
+            icon
+            size="x-small"
+            variant="text"
+            color="primary"
+            :disabled="isLoading || isUploadingFiles"
+            @click="removeSelectedFile(index)"
+            :title="t('common.comfirm_delete') || 'Remove'"
+          >
+            <v-icon size="x-small">mdi-close</v-icon>
+          </v-btn>
+        </div>
+      </div>
     </div>
 
     <!-- MCP Tool Manager Dialog -->
@@ -617,9 +721,10 @@ class="message-bubble" :class="{
 import { ref, computed, onMounted, nextTick, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { streamChatMessage, stopStreamingChat, getChatHistory, clearChatHistory, getConversations, ConversationMetadata } from '@/views/api/aiChat';
-import { ChatMessage, ChatStreamChunk, Plan, PlanStep, PlanStepStatus } from '@/entityTypes/commonType';
-import { MessageType } from '@/entityTypes/commonType';
+import { ChatMessage, ChatStreamChunk, Plan, PlanStep, PlanStepStatus, MessageType, UploadedFilePayload, LLMImageAttachmentPayload, CommonMessage } from '@/entityTypes/commonType';
+import { AI_CHAT_RESUME_TOOL_AFTER_PERMISSION } from '@/config/channellist';
 import MCPToolManager from './MCPToolManager.vue';
+import SkillApprovalCard from './SkillApprovalCard.vue';
 
 // Stream state enum for type safety
 // This ensures type safety for stream state management
@@ -642,6 +747,22 @@ const MESSAGE_TYPE = {
     PLAN_EXECUTE_RESUME: MessageType.PLAN_EXECUTE_RESUME
 } as const;
 
+type SlashCommandDefinition = {
+  name: '/skills';
+  description: string;
+  usage: string;
+  examples: readonly string[];
+};
+
+const AI_CHAT_SLASH_COMMANDS: readonly SlashCommandDefinition[] = [
+  {
+    name: '/skills',
+    description: 'List currently available AI skills/tools in this system.',
+    usage: '/skills',
+    examples: ['/skills'],
+  },
+] as const;
+
 // i18n setup
 const { t } = useI18n();
 
@@ -654,7 +775,8 @@ const props = withDefaults(defineProps<Props>(), {
   visible: false
 });
 
-// Emits - eslint-disable-next-line @typescript-eslint/no-unused-vars
+// Emits
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const emit = defineEmits<{
   close: [];
 }>();
@@ -663,12 +785,15 @@ const emit = defineEmits<{
 const messages = ref<ChatMessage[]>([]);
 const inputMessage = ref('');
 const isLoading = ref(false);
+const isUploadingFiles = ref(false);
 const isLoadingHistory = ref(false);
 const isTyping = ref(false);
 const messagesContainer = ref<HTMLElement | null>(null);
 const showScrollButton = ref(false);
 const conversationId = ref<string | undefined>(undefined);
 const inputField = ref<HTMLTextAreaElement | null>(null);
+const fileInputRef = ref<HTMLInputElement | null>(null);
+const selectedUploadFiles = ref<File[]>([]);
 const useRAGContext = ref(false);
 const isExecutingTool = ref(false);
 const currentToolName = ref('');
@@ -682,6 +807,15 @@ const isLoadingConversations = ref(false);
 const copiedMessageId = ref<string | null>(null);
 const showMCPToolManager = ref(false);
 const activeStreamConversationId = ref<string | undefined>(undefined);
+const showSlashMenu = ref(false);
+const selectedSlashIndex = ref(0);
+
+const MAX_UPLOAD_FILES = 3;
+const MAX_UPLOAD_FILE_BYTES = 5 * 1024 * 1024; // 5MB
+const MAX_TOTAL_MESSAGE_CHARS = 95000; // must stay below aifetchserver AskStreamData.message max_length (100000)
+
+// Allow images plus supported document files for chat uploads.
+const fileAccept = 'image/*,.png,.jpg,.jpeg,.webp,.gif,.csv,.pdf,.docx,.xlsx,.xls';
 
 // Resend message state
 const isResendingMessage = ref(false);
@@ -705,6 +839,149 @@ function createAssistantMessage(content = ''): ChatMessage {
     timestamp: new Date(),
     conversationId: conversationId.value || StreamState.PENDING
   };
+}
+
+function isStreamableAssistantMessage(message: ChatMessage | undefined): boolean {
+  return Boolean(
+    message &&
+    message.role === 'assistant' &&
+    (!message.messageType || message.messageType === MESSAGE_TYPE.MESSAGE)
+  );
+}
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let i = 0;
+  let value = bytes;
+  while (value >= 1024 && i < units.length - 1) {
+    value /= 1024;
+    i++;
+  }
+  const precision = i === 0 ? 0 : 1;
+  return `${value.toFixed(precision)} ${units[i]}`;
+}
+
+
+function isSupportedAttachmentFile(file: File): boolean {
+  const mime = (file.type || '').toLowerCase();
+  const nameLower = file.name.toLowerCase();
+  if (mime.startsWith('image/')) return true;
+  if (
+    mime === 'text/csv' ||
+    mime === 'application/csv' ||
+    mime === 'application/pdf' ||
+    mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+    mime === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+    mime === 'application/vnd.ms-excel'
+  ) {
+    return true;
+  }
+  return (
+    nameLower.endsWith('.png') ||
+    nameLower.endsWith('.jpg') ||
+    nameLower.endsWith('.jpeg') ||
+    nameLower.endsWith('.webp') ||
+    nameLower.endsWith('.gif') ||
+    nameLower.endsWith('.csv') ||
+    nameLower.endsWith('.pdf') ||
+    nameLower.endsWith('.docx') ||
+    nameLower.endsWith('.xlsx') ||
+    nameLower.endsWith('.xls')
+  );
+}
+
+function resolveAttachmentMimeType(file: File): string {
+  const mime = (file.type || '').toLowerCase();
+  if (mime.startsWith('image/')) return mime;
+  if (
+    mime === 'text/csv' ||
+    mime === 'application/csv' ||
+    mime === 'application/pdf' ||
+    mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+    mime === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+    mime === 'application/vnd.ms-excel'
+  ) {
+    return mime;
+  }
+  const nameLower = file.name.toLowerCase();
+  if (nameLower.endsWith('.png')) return 'image/png';
+  if (nameLower.endsWith('.jpg') || nameLower.endsWith('.jpeg')) return 'image/jpeg';
+  if (nameLower.endsWith('.webp')) return 'image/webp';
+  if (nameLower.endsWith('.gif')) return 'image/gif';
+  if (nameLower.endsWith('.csv')) return 'text/csv';
+  if (nameLower.endsWith('.pdf')) return 'application/pdf';
+  if (nameLower.endsWith('.docx')) return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  if (nameLower.endsWith('.xlsx')) return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  if (nameLower.endsWith('.xls')) return 'application/vnd.ms-excel';
+  return 'application/octet-stream';
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  // Convert ArrayBuffer -> base64 string (browser-safe).
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  const chunkSize = 8192; // keep low to avoid engine argument limits
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    for (let j = 0; j < chunk.length; j++) {
+      binary += String.fromCharCode(chunk[j]);
+    }
+  }
+  return btoa(binary);
+}
+
+function triggerFilePicker(): void {
+  fileInputRef.value?.click();
+}
+
+function removeSelectedFile(index: number): void {
+  selectedUploadFiles.value = selectedUploadFiles.value.filter((_, i) => i !== index);
+}
+
+async function handleFileSelection(event: Event): Promise<void> {
+  const target = event.target as HTMLInputElement;
+  const fileList = target.files;
+  if (!fileList || fileList.length === 0) return;
+
+  if (selectedUploadFiles.value.length >= MAX_UPLOAD_FILES) {
+    streamError.value = t('knowledge.upload_failed_max_files', { max: MAX_UPLOAD_FILES }) || `Maximum ${MAX_UPLOAD_FILES} files allowed. Remove existing files first.`;
+    target.value = '';
+    return;
+  }
+
+  const files = Array.from(fileList);
+  const remainingSlots = MAX_UPLOAD_FILES - selectedUploadFiles.value.length;
+  const toConsider = files.slice(0, remainingSlots);
+
+  const newFiles: File[] = [];
+  const invalidReasons: string[] = [];
+  for (const file of toConsider) {
+    if (file.size > MAX_UPLOAD_FILE_BYTES) {
+      invalidReasons.push(
+        t('knowledge.upload_failed_file_too_large', { name: file.name, maxSize: formatBytes(MAX_UPLOAD_FILE_BYTES) })
+        || `File "${file.name}" exceeds the ${formatBytes(MAX_UPLOAD_FILE_BYTES)} size limit.`
+      );
+      continue;
+    }
+    if (!isSupportedAttachmentFile(file)) {
+      invalidReasons.push(
+        t('knowledge.upload_failed_unsupported_type', { name: file.name })
+        || `File "${file.name}" type is not supported.`
+      );
+      continue;
+    }
+    newFiles.push(file);
+  }
+
+  selectedUploadFiles.value = [...selectedUploadFiles.value, ...newFiles];
+
+  if (invalidReasons.length > 0) {
+    streamError.value = invalidReasons.join('\n');
+  }
+
+  // Allow selecting the same file again
+  target.value = '';
 }
 
 // Filter out messages with empty content (unless they have a messageType like tool calls, plans, etc.)
@@ -741,6 +1018,23 @@ const allStepsCompleted = computed(() => {
   );
 });
 
+const slashQuery = computed(() => {
+  const trimmed = inputMessage.value.trimStart();
+  if (!trimmed.startsWith('/')) return '';
+  return trimmed.slice(1).trim().toLowerCase();
+});
+
+const filteredSlashCommands = computed<SlashCommandDefinition[]>(() => {
+  const query = slashQuery.value;
+  if (!query) {
+    return [...AI_CHAT_SLASH_COMMANDS];
+  }
+  return AI_CHAT_SLASH_COMMANDS.filter((cmd) => {
+    const normalizedName = cmd.name.slice(1).toLowerCase();
+    return normalizedName.includes(query);
+  });
+});
+
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const activeStepIndex = computed(() => {
   if (!currentPlan.value) return -1;
@@ -754,8 +1048,8 @@ function canResendMessage(message: ChatMessage): boolean {
   return (
     message.role === 'user' &&
     (!message.messageType || message.messageType === MESSAGE_TYPE.MESSAGE) &&
-    message.content &&
-    message.content.trim()
+    Boolean(message.content) &&
+    Boolean(message.content.trim())
   );
 }
 
@@ -818,6 +1112,20 @@ watch(conversationId, (newId, oldId) => {
 watch(showConversationsDialog, (isOpen) => {
   if (isOpen) {
     loadConversations();
+  }
+});
+
+watch(inputMessage, (newValue) => {
+  const trimmed = newValue.trimStart();
+  const inSlashMode = trimmed.startsWith('/');
+  showSlashMenu.value = inSlashMode;
+  if (!inSlashMode) {
+    selectedSlashIndex.value = 0;
+    return;
+  }
+  const maxIndex = Math.max(filteredSlashCommands.value.length - 1, 0);
+  if (selectedSlashIndex.value > maxIndex) {
+    selectedSlashIndex.value = 0;
   }
 });
 
@@ -983,7 +1291,11 @@ async function handleCopyMessage(content: string, messageId: string) {
 /**
  * Core send logic shared by new messages and resend
  */
-async function sendMessage(userMessageContent: string): Promise<void> {
+async function sendMessage(
+  userMessageContent: string,
+  uploadedFiles?: UploadedFilePayload[],
+  attachments?: LLMImageAttachmentPayload[]
+): Promise<void> {
   if (!userMessageContent.trim() || isLoading.value) return;
 
   isLoading.value = true;
@@ -991,7 +1303,11 @@ async function sendMessage(userMessageContent: string): Promise<void> {
   streamError.value = null;
 
   // Track the conversation ID for this stream
-  const streamConversationId = conversationId.value || StreamState.PENDING;
+  // IMPORTANT: This value must stay in sync with `activeStreamConversationId`.
+  // The backend assigns the real conversationId via a `conversation_start` chunk.
+  // If we keep a stale `PENDING` id here, the `complete` error handler (and its catch)
+  // can skip UI updates.
+  let streamConversationId = conversationId.value || StreamState.PENDING;
   activeStreamConversationId.value = streamConversationId;
 
   // Reset tool-related states
@@ -1008,7 +1324,16 @@ async function sendMessage(userMessageContent: string): Promise<void> {
     role: 'user',
     content: userMessageContent,
     timestamp: new Date(),
-    conversationId: conversationId.value || StreamState.PENDING
+    conversationId: conversationId.value || StreamState.PENDING,
+    metadata: uploadedFiles?.length
+      ? {
+          attachments: uploadedFiles.map((f) => ({
+            fileName: f.fileName,
+            mimeType: f.mimeType,
+            sizeBytes: f.sizeBytes,
+          })),
+        }
+      : undefined,
   };
   messages.value.push(userMessage);
   
@@ -1073,10 +1398,9 @@ async function sendMessage(userMessageContent: string): Promise<void> {
             let lastIndex = messages.value.length - 1;
             const lastMessage = messages.value[lastIndex];
 
-            // If the last message is NOT an assistant message OR if it's a plan_execute_resume message,
-            // append a new assistant message so we can stream into it
-            // This handles cases where the last message is from 'user', 'system', 'tool', plan_execute_resume, or any other role
-            if (lastMessage.role !== 'assistant' || lastMessage.messageType === MESSAGE_TYPE.PLAN_EXECUTE_RESUME) {
+            // Stream tokens only into plain assistant text messages.
+            // Tool/plan/system assistant messages should never receive conversational tokens.
+            if (!isStreamableAssistantMessage(lastMessage)) {
               messages.value.push(createAssistantMessage());
               lastIndex = messages.value.length - 1; // Update to point at the new assistant message
             }
@@ -1125,15 +1449,55 @@ async function sendMessage(userMessageContent: string): Promise<void> {
             console.log('tool_result', chunk);
             // Hide tool execution indicator and show result
             isExecutingTool.value = false;
-            if (chunk.toolResult) {
-              toolResult.value = chunk.toolResult;
+            const hasContentPayload =
+              typeof chunk.content === 'string' && chunk.content.trim().length > 0;
+
+            if (chunk.replacesPermissionPromptForToolId) {
+              const rid = chunk.replacesPermissionPromptForToolId;
+              const existingIdx = messages.value.findIndex(
+                (m) =>
+                  m.messageType === MessageType.TOOL_RESULT &&
+                  m.metadata?.toolId === rid
+              );
+              if (existingIdx !== -1 && (chunk.toolResult || hasContentPayload)) {
+                const tr = (chunk.toolResult || {}) as Record<string, unknown>;
+                toolResult.value = tr;
+                showToolResult.value = false;
+                messages.value[existingIdx] = {
+                  ...messages.value[existingIdx],
+                  content:
+                    typeof chunk.content === 'string' && chunk.content.trim().length > 0
+                      ? chunk.content
+                      : JSON.stringify(chunk.toolResult ?? {}, null, 2),
+                  metadata: {
+                    ...messages.value[existingIdx].metadata,
+                    toolName: chunk.toolName ?? messages.value[existingIdx].metadata?.toolName,
+                    toolId: rid,
+                    toolResult: chunk.toolResult,
+                    success: tr.success !== false && !tr.error,
+                    executionTimeMs: tr.executionTimeMs as number | undefined,
+                    summary: tr.summary as string | undefined,
+                    error: tr.error as string | undefined,
+                  },
+                };
+                throttledScrollToBottom();
+              }
+              isTyping.value = true;
+              break;
+            }
+
+            if (chunk.toolResult || hasContentPayload) {
+              toolResult.value = (chunk.toolResult as Record<string, unknown>) || null;
               showToolResult.value = false;
 
               // Add tool result message to chat history
               const toolResultMessage: ChatMessage = {
                 id: `tool-result-${chunk.toolId || Date.now()}-${Date.now()}`,
                 role: 'assistant',
-                content: '',
+                content:
+                  typeof chunk.content === 'string' && chunk.content.trim().length > 0
+                    ? chunk.content
+                    : JSON.stringify(chunk.toolResult ?? {}, null, 2),
                 timestamp: new Date(),
                 conversationId: chunk.conversationId || conversationId.value,
                 messageType: MessageType.TOOL_RESULT,
@@ -1163,6 +1527,7 @@ async function sendMessage(userMessageContent: string): Promise<void> {
               // Update active stream conversation ID if it was 'pending'
               if (activeStreamConversationId.value === StreamState.PENDING) {
                 activeStreamConversationId.value = chunk.conversationId;
+                streamConversationId = chunk.conversationId;
                 console.log('activeStreamConversationId.value', activeStreamConversationId.value);
               }
 
@@ -1281,7 +1646,9 @@ async function sendMessage(userMessageContent: string): Promise<void> {
       streamConversationId,
       undefined, // model
       useRAGContext.value, // useRAG flag
-      5 // ragLimit
+      5, // ragLimit
+      uploadedFiles, // attachments for local persistence
+      attachments
     );
   } catch (error) {
     console.error('Error sending message:', error);
@@ -1292,6 +1659,20 @@ async function sendMessage(userMessageContent: string): Promise<void> {
       isTyping.value = false;
       isLoading.value = false;
       isExecutingTool.value = false;
+      
+      // If streaming failed before any tokens arrived, we may still have a trailing
+      // empty assistant placeholder. Remove it to avoid showing a blank bubble.
+      const lastIndex = messages.value.length - 1;
+      if (lastIndex >= 0) {
+        const lastMessage = messages.value[lastIndex];
+        if (
+          lastMessage.role === 'assistant' &&
+          (!lastMessage.content || lastMessage.content.trim() === '') &&
+          lastMessage.conversationId === streamConversationId
+        ) {
+          messages.value.splice(lastIndex, 1);
+        }
+      }
       
       // Show error message
       const errorMessage: ChatMessage = {
@@ -1317,9 +1698,109 @@ async function sendMessage(userMessageContent: string): Promise<void> {
  */
 async function handleSendMessage() {
   const trimmed = inputMessage.value.trim();
-  if (!trimmed) return;
-  inputMessage.value = '';
-  await sendMessage(trimmed);
+  if (showSlashMenu.value && trimmed.startsWith('/')) return;
+  if (!trimmed && selectedUploadFiles.value.length === 0) return;
+  if (isUploadingFiles.value) return;
+
+  isUploadingFiles.value = true;
+  streamError.value = null;
+
+  try {
+    const uploadedFiles: UploadedFilePayload[] = [];
+    const attachments: LLMImageAttachmentPayload[] = [];
+    let finalMessage =
+      trimmed.length > MAX_TOTAL_MESSAGE_CHARS
+        ? trimmed.slice(0, MAX_TOTAL_MESSAGE_CHARS)
+        : trimmed;
+
+    for (const file of selectedUploadFiles.value) {
+      if (file.size > MAX_UPLOAD_FILE_BYTES) continue;
+      if (!isSupportedAttachmentFile(file)) continue;
+
+      const mimeType = resolveAttachmentMimeType(file);
+
+      const buf = await file.arrayBuffer();
+      const contentBase64 = arrayBufferToBase64(buf);
+      uploadedFiles.push({
+        fileName: file.name,
+        mimeType,
+        sizeBytes: file.size,
+        contentBase64,
+      });
+      if (mimeType.startsWith('image/')) {
+        attachments.push({
+          type: 'image',
+          mediaType: mimeType,
+          dataBase64: contentBase64,
+          detail: 'auto',
+        });
+      }
+    }
+
+    if (!finalMessage.trim()) {
+      if (attachments.length > 0) {
+        finalMessage = 'Please analyze attached file(s).';
+      } else {
+        streamError.value = t('knowledge.upload_failed_file_too_large', { name: selectedUploadFiles.value.map(f => f.name).join(', '), maxSize: formatBytes(MAX_UPLOAD_FILE_BYTES) })
+          || `All selected files exceed the ${formatBytes(MAX_UPLOAD_FILE_BYTES)} size limit or are unsupported.`;
+        return;
+      }
+    }
+
+    // Clear inputs after building the request payload.
+    inputMessage.value = '';
+    selectedUploadFiles.value = [];
+
+    await sendMessage(finalMessage, uploadedFiles, attachments);
+  } finally {
+    isUploadingFiles.value = false;
+  }
+}
+
+function handleSlashArrowDown(event: KeyboardEvent): void {
+  if (!showSlashMenu.value || filteredSlashCommands.value.length === 0) return;
+  event.preventDefault();
+  selectedSlashIndex.value =
+    (selectedSlashIndex.value + 1) % filteredSlashCommands.value.length;
+}
+
+function handleSlashArrowUp(event: KeyboardEvent): void {
+  if (!showSlashMenu.value || filteredSlashCommands.value.length === 0) return;
+  event.preventDefault();
+  selectedSlashIndex.value =
+    (selectedSlashIndex.value - 1 + filteredSlashCommands.value.length) %
+    filteredSlashCommands.value.length;
+}
+
+function handleSlashEscape(event: KeyboardEvent): void {
+  if (!showSlashMenu.value) return;
+  event.preventDefault();
+  showSlashMenu.value = false;
+}
+
+function applySelectedSlashCommand(): void {
+  if (!showSlashMenu.value || filteredSlashCommands.value.length === 0) return;
+  const selected = filteredSlashCommands.value[selectedSlashIndex.value];
+  if (!selected) return;
+  inputMessage.value = selected.usage;
+  showSlashMenu.value = false;
+}
+
+function handleSlashTab(event: KeyboardEvent): void {
+  if (!showSlashMenu.value || filteredSlashCommands.value.length === 0) return;
+  event.preventDefault();
+  applySelectedSlashCommand();
+}
+
+function handleEnterKey(event: KeyboardEvent): void {
+  if (event.shiftKey) return;
+  if (!showSlashMenu.value || filteredSlashCommands.value.length === 0) {
+    event.preventDefault();
+    void handleSendMessage();
+    return;
+  }
+  event.preventDefault();
+  applySelectedSlashCommand();
 }
 
 /**
@@ -1384,6 +1865,141 @@ async function handleNewConversation() {
   scrollToBottom();
   if (inputField.value && inputField.value.focus) {
     inputField.value.focus();
+  }
+}
+
+/**
+ * Resolve OpenAI-style tool_call id for a permission row (metadata or nearest prior tool_call).
+ */
+function resolveToolIdForPermissionMessage(message: ChatMessage): string | undefined {
+  const direct = message.metadata?.toolId;
+  if (typeof direct === 'string' && direct.length > 0) {
+    return direct;
+  }
+  const toolName = message.metadata?.toolName;
+  if (typeof toolName !== 'string' || !toolName) {
+    return undefined;
+  }
+  const idx = messages.value.findIndex((m) => m.id === message.id);
+  if (idx <= 0) {
+    return undefined;
+  }
+  for (let i = idx - 1; i >= 0; i--) {
+    const m = messages.value[i];
+    if (
+      m.messageType === MessageType.TOOL_CALL &&
+      m.metadata?.toolName === toolName &&
+      typeof m.metadata?.toolId === 'string' &&
+      m.metadata.toolId.length > 0
+    ) {
+      return m.metadata.toolId;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Handle skill permission grant — user approved; main process re-runs the tool and continues the stream.
+ */
+async function handleSkillPermissionGrant(
+  message: ChatMessage,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _persistent: boolean
+): Promise<void> {
+  const toolId = resolveToolIdForPermissionMessage(message);
+  if (!toolId) {
+    const idx = messages.value.findIndex((m) => m.id === message.id);
+    if (idx !== -1) {
+      messages.value = [
+        ...messages.value.slice(0, idx),
+        {
+          ...messages.value[idx],
+          content:
+            t('skills.permission_resume_no_tool_id') ||
+            'Missing tool call information; cannot continue execution.',
+          metadata: {
+            ...messages.value[idx].metadata,
+            toolResult: undefined,
+            success: false,
+          },
+        },
+        ...messages.value.slice(idx + 1),
+      ];
+    }
+    return;
+  }
+
+  try {
+    const raw: unknown = await window.api.invoke(
+      AI_CHAT_RESUME_TOOL_AFTER_PERMISSION,
+      JSON.stringify({
+        toolId,
+        conversationId: message.conversationId || conversationId.value,
+      })
+    );
+    const res = raw as CommonMessage<{ ok: boolean; error?: string } | null>;
+    if (!res.status || !res.data?.ok) {
+      const errMsg =
+        res.data?.error ||
+        res.msg ||
+        t('skills.permission_resume_failed') ||
+        'Could not continue the skill after permission was granted.';
+      const errIdx = messages.value.findIndex((m) => m.id === message.id);
+      if (errIdx !== -1) {
+        messages.value = [
+          ...messages.value.slice(0, errIdx),
+          {
+            ...messages.value[errIdx],
+            content: errMsg,
+            metadata: {
+              ...messages.value[errIdx].metadata,
+              toolResult: { error: errMsg, success: false },
+              success: false,
+              error: errMsg,
+            },
+          },
+          ...messages.value.slice(errIdx + 1),
+        ];
+      }
+    }
+  } catch (error) {
+    const errMsg =
+      error instanceof Error ? error.message : String(error);
+    const errIdx = messages.value.findIndex((m) => m.id === message.id);
+    if (errIdx !== -1) {
+      messages.value = [
+        ...messages.value.slice(0, errIdx),
+        {
+          ...messages.value[errIdx],
+          content: errMsg,
+          metadata: {
+            ...messages.value[errIdx].metadata,
+            toolResult: { error: errMsg, success: false },
+            success: false,
+            error: errMsg,
+          },
+        },
+        ...messages.value.slice(errIdx + 1),
+      ];
+    }
+  }
+}
+
+/**
+ * Handle skill permission deny — user denied the skill execution.
+ */
+function handleSkillPermissionDeny(message: ChatMessage): void {
+  const idx = messages.value.findIndex((m) => m.id === message.id);
+  if (idx !== -1) {
+    messages.value = [
+      ...messages.value.slice(0, idx),
+      {
+        ...messages.value[idx],
+        content: 'Permission denied. The skill will not be executed.',
+        metadata: { ...messages.value[idx].metadata, toolResult: undefined, success: false },
+      },
+      ...messages.value.slice(idx + 1),
+    ];
   }
 }
 
@@ -1919,6 +2535,47 @@ onMounted(() => {
   padding: 12px 16px;
   border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
   background-color: rgb(var(--v-theme-surface));
+}
+
+.slash-command-menu {
+  margin-top: 8px;
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  border-radius: 8px;
+  background-color: rgb(var(--v-theme-surface));
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.slash-command-item {
+  padding: 8px 10px;
+  cursor: pointer;
+  border-bottom: 1px solid rgba(var(--v-border-color), 0.12);
+
+  &:last-child {
+    border-bottom: none;
+  }
+
+  &.is-selected {
+    background-color: rgba(var(--v-theme-primary), 0.08);
+  }
+}
+
+.slash-command-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: rgb(var(--v-theme-primary));
+}
+
+.slash-command-description {
+  font-size: 12px;
+  color: rgb(var(--v-theme-on-surface-variant));
+  margin-top: 2px;
+}
+
+.slash-command-empty {
+  padding: 10px;
+  font-size: 12px;
+  color: rgb(var(--v-theme-on-surface-variant));
 }
 
 /* Scrollbar styling */
@@ -2520,6 +3177,79 @@ onMounted(() => {
   to {
     transform: rotate(360deg);
   }
+}
+
+/* Attachment preview in message bubbles */
+.attachment-preview {
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  background-color: rgba(var(--v-theme-primary), 0.06);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.attachment-preview-header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 4px;
+  color: rgb(var(--v-theme-primary));
+}
+
+.attachment-preview-files {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.attachment-preview-file {
+  color: rgb(var(--v-theme-on-surface-variant));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Attached files preview below input area */
+.attached-files-preview {
+  padding: 8px 16px;
+  background-color: rgb(var(--v-theme-surface));
+  border-top: 1px solid rgba(var(--v-border-color), 0.1);
+}
+
+.attached-files-header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: rgb(var(--v-theme-primary));
+}
+
+.attached-files-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.attached-file-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background-color: rgba(var(--v-theme-on-surface), 0.04);
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.attached-file-name {
+  color: rgb(var(--v-theme-on-surface));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.attached-file-size {
+  color: rgb(var(--v-theme-on-surface-variant));
+  font-size: 11px;
+  flex-shrink: 0;
 }
 </style>
 

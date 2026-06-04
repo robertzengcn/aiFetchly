@@ -20,7 +20,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20.19.3
+          node-version: 22.14.0
 
       # Python 3.12+ removed distutils; bundled node-gyp in electron-rebuild still imports it.
       # Pin 3.11 so gyp (used by sqlite3/bufferutil rebuild) runs. Same issue as macOS setuptools fix.
@@ -84,12 +84,21 @@ jobs:
           else
             echo "lzma-native deps directory not found"
           fi
-      - name: Rebuild electron
-        run: yarn electron-rebuild --force --types prod,dev,optional --module-dir .         
-      - name: Rebuild sqlite3
-        run: yarn rebuild-sqlite3
-      - name: Rebuild better sqlite
-        run: yarn rebuild-better-sqlite
+      - name: Skip sqlite3 Electron rebuild
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "package.json rebuild-sqlite3 script:"
+          node -e "console.log(require('./package.json').scripts['rebuild-sqlite3'])"
+          yarn rebuild-sqlite3
+
+      - name: Rebuild better-sqlite3 for Electron
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "package.json rebuild-better-sqlite script:"
+          node -e "console.log(require('./package.json').scripts['rebuild-better-sqlite'])"
+          npm_config_runtime=electron npm_config_target=35.7.5 npm_config_disturl=https://electronjs.org/headers npm rebuild better-sqlite3 --build-from-source
       # - name: Rebuild canvas
       #   run: yarn rebuild-canvas
 
@@ -265,7 +274,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20.19.3
+          node-version: 22.14.0
       - name: Calculate version
         id: calculate_version
         run: |
@@ -417,7 +426,7 @@ jobs:
           echo "npm_config_target_platform: $npm_config_target_platform"
           echo "npm_config_arch: $npm_config_arch"
           echo "npm_config_target_arch: $npm_config_target_arch"
-      - name: Rebuild Native Modules for Electron
+      - name: Configure native module rebuild environment
         run: |
           # Export all flags so the 'make' subprocess inherits them
           export CFLAGS="-std=c11 -arch arm64 -I/opt/homebrew/include"
@@ -430,13 +439,8 @@ jobs:
           # Critical: Ensure node-gyp uses C++20 standard
           export npm_config_target="35.7.5"
           export npm_config_disturl="https://electronjs.org/headers"
-
-          # Now run the rebuild with explicit C++20 support
-          npx electron-rebuild --force --arch="${TARGET_ARCH}" --types prod,dev,optional --module-dir . --force-abi || {
-            echo "Standard rebuild failed, trying with alternative flags..."
-            # Try skipping problematic modules
-            npx electron-rebuild --force --arch="${TARGET_ARCH}" -w better-sqlite3,sqlite3,bufferutil,utf-8-validate || echo "Selective rebuild also failed"
-          }
+          echo "Skipping broad electron-rebuild because it attempts to rebuild isolated-vm."
+          echo "Targeted native module rebuilds run in the following steps."
         env:
           # Ensure this is set for the step
           TARGET_ARCH: arm64
@@ -449,22 +453,24 @@ jobs:
       # - name: Rebuild canvas
       #   run: |
       #     CXXFLAGS="-std=c++20" CFLAGS="-std=c11" yarn rebuild-canvas
-      - name: yarn electron-rebuild
+      - name: Skip broad electron-rebuild
         run: |
           TARGET_ARCH="${TARGET_ARCH:-$(uname -m)}"
-          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" yarn electron-rebuild --arch="${TARGET_ARCH}"
-      - name: Rebuild with verbose output
+          echo "Skipping yarn electron-rebuild for ${TARGET_ARCH}; targeted rebuilds avoid isolated-vm."
+      - name: Verify targeted native rebuild configuration
         run: |
-          echo "=== Rebuilding with verbose output ==="
+          echo "=== Native rebuild configuration ==="
           TARGET_ARCH="${TARGET_ARCH:-$(uname -m)}"
-          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" DEBUG=* npx electron-rebuild --force --arch="${TARGET_ARCH}" --verbose || echo "Verbose rebuild failed, continuing..."
+          echo "TARGET_ARCH: ${TARGET_ARCH}"
+          node -e "console.log('rebuild-sqlite3: ' + require('./package.json').scripts['rebuild-sqlite3'])"
+          node -e "console.log('rebuild-better-sqlite: ' + require('./package.json').scripts['rebuild-better-sqlite'])"
       - name: Rebuild C modules specifically
         run: |
           echo "=== Rebuilding C modules specifically ==="
           # Rebuild bufferutil and utf-8-validate which are C modules
           TARGET_ARCH="${TARGET_ARCH:-$(uname -m)}"
-          CFLAGS="-std=c11" yarn electron-rebuild --arch="${TARGET_ARCH}" -f -w bufferutil || echo "bufferutil rebuild failed"
-          CFLAGS="-std=c11" yarn electron-rebuild --arch="${TARGET_ARCH}" -f -w utf-8-validate || echo "utf-8-validate rebuild failed"
+          npm_config_runtime=electron npm_config_target=35.7.5 npm_config_arch="${TARGET_ARCH}" npm_config_disturl=https://electronjs.org/headers CFLAGS="-std=c11" npm rebuild bufferutil --build-from-source || echo "bufferutil rebuild failed"
+          npm_config_runtime=electron npm_config_target=35.7.5 npm_config_arch="${TARGET_ARCH}" npm_config_disturl=https://electronjs.org/headers CFLAGS="-std=c11" npm rebuild utf-8-validate --build-from-source || echo "utf-8-validate rebuild failed"
       - name: Debug - Check native modules
         run: |
           echo "=== Checking native modules ==="
@@ -612,5 +618,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: electron-app-macos-v${{ steps.calculate_version.outputs.version }}
-          path: out/
+          path: |
+            out/make/**/*.dmg
+            out/make/**/*.zip
           if-no-files-found: error

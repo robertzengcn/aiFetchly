@@ -1,4 +1,11 @@
-import { ipcRenderer, contextBridge } from "electron";
+import { ipcRenderer, contextBridge, webUtils } from "electron";
+
+/** Maps renderer callbacks to the ipcRenderer listener so removeListener works. */
+type IpcRendererOnCallback = NonNullable<Parameters<typeof ipcRenderer.on>[1]>;
+const ipcReceiveWrappers = new WeakMap<
+  (...args: unknown[]) => void,
+  IpcRendererOnCallback
+>();
 import {
   EXTRAMODULECHANNE_LIST,
   EXTRAMODULECHANNE_INSTALL,
@@ -68,6 +75,7 @@ import {
   QUERY_USER_INFO,
   OPENLOGINPAGE,
   NATIVATECOMMAND,
+  LOGIN_STATUS,
   VIDEO_PUBLISH,
   EMAILSEARCHTASK_ERROR_LOG_DOWNLOAD,
   RETRYSEARCHTASK,
@@ -185,6 +193,7 @@ import {
   AI_CHAT_HISTORY,
   AI_CHAT_CLEAR,
   AI_CHAT_CONVERSATIONS,
+  AI_CHAT_RESUME_TOOL_AFTER_PERMISSION,
   AI_KEYWORDS_GENERATE,
   // Dashboard Channels
   DASHBOARD_SUMMARY,
@@ -219,6 +228,23 @@ import {
   AI_EMAIL_TEMPLATE_ERROR,
   AI_EMAIL_TEMPLATE_STOP,
   AI_EMAIL_TEMPLATE_VALIDATE,
+  // Skill Management Channels
+  SKILL_CHECK_PERMISSION,
+  SKILL_GRANT_PERMISSION,
+  SKILL_DENY_PERMISSION,
+  SKILL_REVOKE_PERMISSION,
+  SKILL_GET_PERMISSION_STATUS,
+  // Skill Import & Management Channels
+  SKILL_IMPORT,
+  SKILL_LIST_INSTALLED,
+  SKILL_TOGGLE,
+  SKILL_UNINSTALL,
+  // System Dependency Channels
+  SYSTEM_DEPENDENCY_RESOLVE,
+  SYSTEM_DEPENDENCY_INSTALL,
+  SYSTEM_DEPENDENCY_GET_AUDIT_LOG,
+  SYSTEM_DEPENDENCY_PROMPT,
+  SYSTEM_DEPENDENCY_PROMPT_RESPONSE,
 } from "@/config/channellist";
 
 // window.ipcRenderer = ipcRenderer
@@ -227,6 +253,7 @@ import {
 //     userLogin: (data) => ipcRenderer.invoke('user:login', data)
 // })
 contextBridge.exposeInMainWorld("api", {
+  getPathForFile: (file: File) => webUtils.getPathForFile(file),
   send: (channel, data) => {
     // whitelist channels
     const validChannels = [
@@ -309,6 +336,7 @@ contextBridge.exposeInMainWorld("api", {
       VIDEOTASKDOWNLOAD_RETRY_MESSAGE,
       VIDEO_INFORMATION_TRANSLATE,
       NATIVATECOMMAND,
+      LOGIN_STATUS,
       VIDEO_PUBLISH_RECORD_MESSAGE,
       SAVE_TEMP_FILE_PROGRESS,
       SAVE_TEMP_FILE_COMPLETE,
@@ -323,12 +351,18 @@ contextBridge.exposeInMainWorld("api", {
       WEBSOCKET_EVENT,
       // Contact Extraction Progress Channel
       CONTACT_EXTRACTION_PROGRESS,
+      // System Dependency Prompt (main→renderer)
+      SYSTEM_DEPENDENCY_PROMPT,
     ];
-    const regex = "/^socialtask:log:/";
+    const isSocialTaskLogChannel = /^socialtask:log:/.test(channel);
 
-    if (validChannels.includes(channel) || channel.test(regex)) {
+    if (validChannels.includes(channel) || isSocialTaskLogChannel) {
       // Deliberately strip event as it includes `sender`
-      ipcRenderer.on(channel, (event, ...args) => func(...args));
+      const wrapped: IpcRendererOnCallback = (_event, ...args) => {
+        func(...args);
+      };
+      ipcReceiveWrappers.set(func, wrapped);
+      ipcRenderer.on(channel, wrapped);
     }
   },
   removeListener: (channel, func) => {
@@ -358,6 +392,7 @@ contextBridge.exposeInMainWorld("api", {
       VIDEOTASKDOWNLOAD_RETRY_MESSAGE,
       VIDEO_INFORMATION_TRANSLATE,
       NATIVATECOMMAND,
+      LOGIN_STATUS,
       VIDEO_PUBLISH_RECORD_MESSAGE,
       SAVE_TEMP_FILE_PROGRESS,
       SAVE_TEMP_FILE_COMPLETE,
@@ -372,11 +407,17 @@ contextBridge.exposeInMainWorld("api", {
       WEBSOCKET_EVENT,
       // Contact Extraction Progress Channel
       CONTACT_EXTRACTION_PROGRESS,
+      // System Dependency Prompt (main→renderer)
+      SYSTEM_DEPENDENCY_PROMPT,
     ];
-    const regex = "/^socialtask:log:/";
+    const isSocialTaskLogChannel = /^socialtask:log:/.test(channel);
 
-    if (validChannels.includes(channel) || channel.test(regex)) {
-      ipcRenderer.removeListener(channel, func);
+    if (validChannels.includes(channel) || isSocialTaskLogChannel) {
+      const wrapped = ipcReceiveWrappers.get(func);
+      if (wrapped) {
+        ipcRenderer.removeListener(channel, wrapped);
+        ipcReceiveWrappers.delete(func);
+      }
     }
   },
   removeAllListeners: (channel) => {
@@ -560,6 +601,7 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_HISTORY,
       AI_CHAT_CLEAR,
       AI_CHAT_CONVERSATIONS,
+      AI_CHAT_RESUME_TOOL_AFTER_PERMISSION,
       AI_KEYWORDS_GENERATE,
       // Dashboard Channels
       DASHBOARD_SUMMARY,
@@ -587,6 +629,23 @@ contextBridge.exposeInMainWorld("api", {
       RETRY_CONTACT_EXTRACTION,
       // AI Email Template Channels
       AI_EMAIL_TEMPLATE_VALIDATE,
+      // Skill Permission Channels
+      SKILL_CHECK_PERMISSION,
+      SKILL_GRANT_PERMISSION,
+      SKILL_DENY_PERMISSION,
+      SKILL_REVOKE_PERMISSION,
+      SKILL_GET_PERMISSION_STATUS,
+      // Skill Import & Management Channels
+      SKILL_IMPORT,
+      SKILL_LIST_INSTALLED,
+      SKILL_TOGGLE,
+      SKILL_UNINSTALL,
+      // System Dependency Channels
+      SYSTEM_DEPENDENCY_RESOLVE,
+      SYSTEM_DEPENDENCY_INSTALL,
+      SYSTEM_DEPENDENCY_GET_AUDIT_LOG,
+      SYSTEM_DEPENDENCY_PROMPT,
+      SYSTEM_DEPENDENCY_PROMPT_RESPONSE,
     ];
     if (validChannels.includes(channel)) {
       return ipcRenderer.invoke(channel, data);

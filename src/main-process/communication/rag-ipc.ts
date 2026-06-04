@@ -287,11 +287,9 @@ export function registerRagIpcHandlers(): void {
     // Initialize RAG module
     ipcMain.handle(RAG_INITIALIZE, async (event, data): Promise<CommonMessage<any | null>> => {
         try {
-            // Create controller and check default embedding model
+            // Create controller and run dedicated module initializer.
             const ragController = await createRagController();
-            
-            // Check if default embedding model exists in system settings
-            await ragController.checkAndSetDefaultEmbeddingModel();
+            await ragController.initializeRagModule();
             
             const response: CommonMessage<any> = {
                 status: true,

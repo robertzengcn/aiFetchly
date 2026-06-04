@@ -46,10 +46,14 @@ import { RAGDocumentEntity } from "@/entity/RAGDocument.entity";
 import { RAGChunkEntity } from "@/entity/RAGChunk.entity";
 // import { RAGModelEntity } from "@/entity/RAGModel.entity";
 import { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
+import { AIChatAttachmentEntity } from "@/entity/AIChatAttachment.entity";
 import { VectorEntity, VectorMetadataEntity } from "@/entity/Vector.entity";
 import { MCPToolEntity } from "@/entity/MCPTool.entity";
 import { TaskEntity } from "@/entity/Task.entity";
 import { ContactInfoEntity } from "@/entity/ContactInfo.entity";
+import { InstalledSkillEntity } from "@/entity/InstalledSkill.entity";
+import { DependencyInstallAuditEntity } from "@/entity/DependencyInstallAudit";
+import { ShellAuditEntity } from "@/entity/ShellAudit.entity";
 // import sqlite3 from "sqlite3";
 import Database from "better-sqlite3";
 import { app } from "electron";
@@ -444,11 +448,15 @@ export class SqliteDb {
           RAGChunkEntity,
           // RAGModelEntity,
           AIChatMessageEntity,
+          AIChatAttachmentEntity,
           VectorEntity,
           VectorMetadataEntity,
           MCPToolEntity,
           TaskEntity,
           ContactInfoEntity,
+          InstalledSkillEntity,
+          DependencyInstallAuditEntity,
+          ShellAuditEntity,
         ],
         synchronize: true,
         migrations: [],

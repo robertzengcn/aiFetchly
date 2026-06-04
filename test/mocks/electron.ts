@@ -92,9 +92,17 @@ export const ipcRenderer = {
   },
 };
 
+/** Matches Electron `webUtils`; runtime preload resolves real `electron` from node_modules. */
+export const webUtils = {
+  getPathForFile(_file: File): string {
+    return "";
+  },
+};
+
 export default {
   app,
   BrowserWindow,
   ipcMain,
   ipcRenderer,
+  webUtils,
 };

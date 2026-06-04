@@ -17,12 +17,14 @@ import {
 import {
   AI_CHAT_STREAM_CHUNK,
   AI_CHAT_STREAM_COMPLETE,
+  SYSTEM_DEPENDENCY_PROMPT,
 } from "@/config/channellist";
 import { AIChatModule } from "@/modules/AIChatModule";
 import { AiChatApi } from "@/api/aiChatApi";
-import { getAvailableToolFunctions } from "@/config/aiTools.config";
 import { ToolExecutionService } from "./ToolExecutionService";
 import { ToolExecutor } from "./ToolExecutor";
+import { SkillExecutor } from "./SkillExecutor";
+import { SkillRegistry } from "@/config/skillsRegistry";
 import { MessageType } from "@/entityTypes/commonType";
 import { PlanValidator } from "./ValidationUtils";
 import {
@@ -30,6 +32,9 @@ import {
   ClassifiedError,
   RecoveryStrategy,
 } from "./ErrorClassification";
+import { SystemDependencyRetryService } from "./SystemDependencyRetryService";
+import type { RetryContext } from "./SystemDependencyRetryService";
+import { SkillDiagnosticsService } from "./SkillDiagnosticsService";
 
 /**
  * Configuration constants for plan execution
@@ -41,6 +46,19 @@ export const PLAN_CONFIG = {
   MAX_PLAN_TITLE_LENGTH: 300,
   MAX_PLAN_DESCRIPTION_LENGTH: 2000,
 } as const;
+
+/** Tool results waiting for in-chat skill permission before continuing the AI stream. */
+export interface PendingSkillPermissionTool {
+  readonly toolName: string;
+  readonly toolParams: Record<string, unknown>;
+  readonly toolStartMs: number;
+}
+
+function isDeferredSkillPermissionResult(
+  toolResult: Record<string, unknown>
+): boolean {
+  return toolResult.needsPermissionPrompt === true;
+}
 
 /**
  * Configuration constants for timeouts and limits
@@ -80,6 +98,13 @@ export interface StreamState {
   // Plan execute agent state
   currentPlan: Plan | null;
   planThreadId?: string;
+  /**
+   * True while the main HTTP stream has ended but the user has not finished the
+   * in-chat skill permission flow (see ai-chat-ipc retained processor).
+   */
+  awaitingSkillPermissionGrant?: boolean;
+  /** Clears main-process stream globals when this turn no longer needs them. */
+  releaseMainProcessStreamBinding?: () => void;
 }
 
 /**
@@ -88,10 +113,181 @@ export interface StreamState {
 export class StreamEventProcessor {
   private event: IpcMainEvent;
   private state: StreamState;
+  /** toolIds currently executed by local tool pipeline. */
+  private readonly localExecutingToolIds = new Set<string>();
+  private readonly pendingSkillPermissionByToolId = new Map<
+    string,
+    PendingSkillPermissionTool
+  >();
+
+  /** Pending dependency install approvals: toolId → { resolution, context } */
+  private readonly pendingDependencyByToolId = new Map<
+    string,
+    {
+      readonly resolution: import("@/entityTypes/systemDependencyTypes").ResolveSystemDependencyOutput;
+      readonly reason: string;
+      readonly context: RetryContext;
+      readonly toolStartMs: number;
+    }
+  >();
 
   constructor(event: IpcMainEvent, state: StreamState) {
     this.event = event;
     this.state = state;
+  }
+
+  /** True when a skill is waiting for the user to approve execution in the chat UI. */
+  hasPendingSkillPermission(): boolean {
+    return this.pendingSkillPermissionByToolId.size > 0;
+  }
+
+  /** True when local tool execution/continuation is still in flight. */
+  hasPendingToolCalls(): boolean {
+    return this.state.pendingToolCalls.size > 0;
+  }
+
+  /**
+   * Drop main-process references (abort controller + processor) once the
+   * permission wait is over and no tool calls are in flight.
+   */
+  private tryReleaseRetainedMainProcessStreamBinding(): void {
+    if (!this.state.awaitingSkillPermissionGrant) return;
+    if (this.hasPendingSkillPermission()) return;
+    if (this.state.pendingToolCalls.size !== 0) return;
+    this.state.awaitingSkillPermissionGrant = false;
+    this.state.releaseMainProcessStreamBinding?.();
+  }
+
+  /**
+   * Re-run a registry skill after the user granted permission in the UI.
+   * Sends the real tool result to the renderer and continues the remote stream.
+   */
+  async resumeToolAfterSkillPermissionGrant(
+    toolId: string,
+    conversationId?: string
+  ): Promise<{ ok: true } | { ok: false; error: string }> {
+    if (conversationId && conversationId !== this.state.streamConversationId) {
+      return {
+        ok: false,
+        error: "Conversation does not match the active stream.",
+      };
+    }
+
+    const pending = this.pendingSkillPermissionByToolId.get(toolId);
+    if (!pending) {
+      return {
+        ok: false,
+        error:
+          "No pending permission request for this tool call, or the stream already continued.",
+      };
+    }
+    this.pendingSkillPermissionByToolId.delete(toolId);
+
+    const resumeStart = Date.now();
+    const { toolName, toolParams } = pending;
+
+    try {
+      let toolResult: Record<string, unknown>;
+      if (SkillRegistry.isRegistered(toolName)) {
+        const skillResult = await SkillExecutor.execute(toolName, toolParams, {
+          conversationId: this.state.streamConversationId,
+          toolCallId: toolId,
+          skipPermissionCheck: true,
+        });
+        toolResult = skillResult.success
+          ? (skillResult.result as Record<string, unknown>)
+          : {
+              ...(skillResult.result as Record<string, unknown>),
+              success: false,
+            };
+      } else {
+        return { ok: false, error: "Tool is not a registered skill." };
+      }
+
+      if (isDeferredSkillPermissionResult(toolResult)) {
+        this.pendingSkillPermissionByToolId.set(toolId, pending);
+        const blockedChunk: ChatStreamChunk = {
+          content: this.serializeToolResultContent(toolResult),
+          isComplete: false,
+          messageId: this.state.assistantMessageId,
+          eventType: StreamEventType.TOOL_RESULT,
+          toolResult,
+          conversationId: this.state.streamConversationId,
+          toolId,
+          toolName,
+          replacesPermissionPromptForToolId: toolId,
+        };
+        this.event.sender.send(
+          AI_CHAT_STREAM_CHUNK,
+          JSON.stringify(blockedChunk)
+        );
+        return {
+          ok: false,
+          error: "Permission is still required for this skill.",
+        };
+      }
+
+      await this.saveToolResult(toolId, toolName, toolResult, resumeStart);
+
+      const resultChunk: ChatStreamChunk = {
+        content: this.serializeToolResultContent(toolResult),
+        isComplete: false,
+        messageId: this.state.assistantMessageId,
+        eventType: StreamEventType.TOOL_RESULT,
+        toolResult,
+        conversationId: this.state.streamConversationId,
+        toolId,
+        toolName,
+        replacesPermissionPromptForToolId: toolId,
+      };
+      this.event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(resultChunk));
+
+      await this.sendToolResultToAI(
+        toolId,
+        toolName,
+        toolResult,
+        resumeStart,
+        this.state.planThreadId
+      );
+
+      if (toolId) {
+        this.state.pendingToolCalls.delete(toolId);
+        this.localExecutingToolIds.delete(toolId);
+        console.log(
+          `Tool call completed after permission: ${toolName} (ID: ${toolId}), pending: ${this.state.pendingToolCalls.size}`
+        );
+        this.sendDeferredCompletionIfReady();
+        this.tryReleaseRetainedMainProcessStreamBinding();
+      }
+      return { ok: true };
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown error occurred";
+      await this.handleToolError(toolId, toolName, errorMessage, resumeStart, {
+        replacePermissionPromptForToolId: toolId,
+      });
+      return { ok: false, error: errorMessage };
+    }
+  }
+
+  private serializeToolResultContent(
+    toolResult: unknown,
+    fallback = ""
+  ): string {
+    if (typeof toolResult === "string") {
+      return toolResult;
+    }
+
+    if (toolResult === undefined || toolResult === null) {
+      return fallback;
+    }
+
+    try {
+      return JSON.stringify(toolResult, null, 2);
+    } catch (error) {
+      console.warn("Failed to serialize tool result content:", error);
+      return String(toolResult);
+    }
   }
 
   /**
@@ -126,6 +322,7 @@ export class StreamEventProcessor {
         break;
 
       case StreamEventType.DONE:
+      case StreamEventType.COMPLETE:
         this.handleDoneEvent();
         break;
 
@@ -220,6 +417,7 @@ export class StreamEventProcessor {
     // Add tool to pending set
     if (toolId) {
       this.state.pendingToolCalls.add(toolId);
+      this.localExecutingToolIds.add(toolId);
       console.log(
         `Tool call started: ${toolName} (ID: ${toolId}), pending: ${this.state.pendingToolCalls.size}`
       );
@@ -263,26 +461,114 @@ export class StreamEventProcessor {
   ): Promise<void> {
     const toolStartMs = Date.now();
     try {
-      // Use ToolExecutor to execute the tool
-      const toolResult = await ToolExecutor.execute(
-        toolName,
-        toolParams,
-        this.state.streamConversationId
-      );
+      // Use SkillExecutor for registry-known skills, fall back to ToolExecutor for MCP/legacy
+      let toolResult: Record<string, unknown>;
+      if (SkillRegistry.isRegistered(toolName)) {
+        const skillResult = await SkillExecutor.execute(toolName, toolParams, {
+          conversationId: this.state.streamConversationId,
+          toolCallId: toolId,
+        });
+        // Convert ToolExecutionResult to the format expected by sendToolResult
+        toolResult = skillResult.success
+          ? (skillResult.result as Record<string, unknown>)
+          : {
+              ...(skillResult.result as Record<string, unknown>),
+              success: false,
+            };
+
+        // Check if the skill failed due to a missing system dependency
+        // and prompt the user for approval before installing (FR-006).
+        if (
+          toolResult.success === false &&
+          SkillRegistry.isRegistered(toolName)
+        ) {
+          const errorStr =
+            typeof toolResult.error === "string"
+              ? toolResult.error
+              : JSON.stringify(toolResult);
+          const diagnosis = SkillDiagnosticsService.diagnoseStderr(errorStr);
+
+          if (
+            diagnosis.cause === "missing_system_tool" &&
+            diagnosis.dependency_id
+          ) {
+            console.log(
+              `Detected missing system dependency "${diagnosis.dependency_id}" for tool ${toolName}, prompting user for approval`
+            );
+
+            const retryContext: RetryContext = {
+              toolName,
+              toolParams,
+              conversationId: this.state.streamConversationId,
+              toolCallId: toolId,
+              stderr: errorStr,
+            };
+            const resolveResult =
+              SystemDependencyRetryService.resolveOnly(retryContext);
+
+            if (resolveResult.isDependencyError && resolveResult.resolution) {
+              // Save pending state so the IPC handler can resume after user responds
+              this.pendingDependencyByToolId.set(toolId, {
+                resolution: resolveResult.resolution,
+                reason: resolveResult.message,
+                context: retryContext,
+                toolStartMs,
+              });
+
+              // Prompt the renderer to show DependencyInstallDialog
+              this.event.sender.send(SYSTEM_DEPENDENCY_PROMPT, {
+                toolId,
+                toolName,
+                conversationId: this.state.streamConversationId,
+                resolution: resolveResult.resolution,
+                reason: resolveResult.message,
+              });
+
+              // Mark as deferred — execution will resume when user responds
+              // via SYSTEM_DEPENDENCY_PROMPT_RESPONSE IPC handler
+              return;
+            }
+          }
+        }
+      } else {
+        // MCP tools and legacy tools still go through ToolExecutor
+        toolResult = await ToolExecutor.execute(
+          toolName,
+          toolParams,
+          this.state.streamConversationId
+        );
+      }
 
       // Save tool result to database
       await this.saveToolResult(toolId, toolName, toolResult, toolStartMs);
 
+      const deferredPermission = isDeferredSkillPermissionResult(toolResult);
+
       // Send tool result to UI
       const resultChunk: ChatStreamChunk = {
-        content: "",
+        content: this.serializeToolResultContent(toolResult),
         isComplete: false,
         messageId: this.state.assistantMessageId,
         eventType: StreamEventType.TOOL_RESULT,
         toolResult: toolResult,
         conversationId: this.state.streamConversationId,
+        toolId,
+        toolName,
       };
       this.event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(resultChunk));
+
+      if (deferredPermission) {
+        this.state.awaitingSkillPermissionGrant = true;
+        this.pendingSkillPermissionByToolId.set(toolId, {
+          toolName,
+          toolParams,
+          toolStartMs,
+        });
+        console.log(
+          `Tool call deferred for skill permission: ${toolName} (ID: ${toolId}), pending stream tools: ${this.state.pendingToolCalls.size}`
+        );
+        return;
+      }
 
       // Send tool result back to AI server to continue the stream
       await this.sendToolResultToAI(
@@ -296,10 +582,12 @@ export class StreamEventProcessor {
       // Remove tool from pending set
       if (toolId) {
         this.state.pendingToolCalls.delete(toolId);
+        this.localExecutingToolIds.delete(toolId);
         console.log(
           `Tool call completed: ${toolName} (ID: ${toolId}), pending: ${this.state.pendingToolCalls.size}`
         );
         this.sendDeferredCompletionIfReady();
+        this.tryReleaseRetainedMainProcessStreamBinding();
       }
     } catch (error) {
       console.error(`Error executing tool ${toolName}:`, error);
@@ -381,7 +669,7 @@ export class StreamEventProcessor {
       ];
 
       // Get available tools (static + MCP)
-      const availableTools = await getAvailableToolFunctions();
+      const availableTools = await SkillRegistry.getAllToolFunctions();
 
       // Continue the stream with tool results
       await this.state.aiChatApi.streamContinueWithToolResults(
@@ -404,7 +692,8 @@ export class StreamEventProcessor {
     toolId: string,
     toolName: string,
     errorMessage: string,
-    toolStartMs: number
+    toolStartMs: number,
+    options?: { replacePermissionPromptForToolId?: string }
   ): Promise<void> {
     const errorToolResult = {
       success: false,
@@ -413,12 +702,20 @@ export class StreamEventProcessor {
 
     // Send error result to UI
     const errorResult: ChatStreamChunk = {
-      content: "",
+      content: this.serializeToolResultContent(errorToolResult),
       isComplete: false,
       messageId: this.state.assistantMessageId,
       eventType: StreamEventType.TOOL_RESULT,
       toolResult: errorToolResult,
       conversationId: this.state.streamConversationId,
+      toolId,
+      toolName,
+      ...(options?.replacePermissionPromptForToolId
+        ? {
+            replacesPermissionPromptForToolId:
+              options.replacePermissionPromptForToolId,
+          }
+        : {}),
     };
     this.event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(errorResult));
 
@@ -462,12 +759,14 @@ export class StreamEventProcessor {
     // Remove tool from pending set even on error
     if (toolId) {
       this.state.pendingToolCalls.delete(toolId);
+      this.localExecutingToolIds.delete(toolId);
       console.log(
         `Tool call failed: ${toolName} (ID: ${toolId}), pending: ${this.state.pendingToolCalls.size}`
       );
 
       // Check if we can send completion (deferred completion will be handled when stream ends)
       this.sendDeferredCompletionIfReady();
+      this.tryReleaseRetainedMainProcessStreamBinding();
     }
   }
 
@@ -514,17 +813,26 @@ export class StreamEventProcessor {
       })();
     }
 
-    // Remove tool from pending set if this is a server result
+    // Remove tool from pending set if this is a server-managed result.
+    // For locally executed tools, the continuation stream may emit a TOOL_RESULT
+    // acknowledgement before TOKEN/DONE; clearing pending here can trigger
+    // deferred completion too early and hide later assistant tokens.
     if (toolId && this.state.pendingToolCalls.has(toolId)) {
-      this.state.pendingToolCalls.delete(toolId);
-      console.log(
-        `Tool result received from server (ID: ${toolId}), pending: ${this.state.pendingToolCalls.size}`
-      );
-      this.sendDeferredCompletionIfReady();
+      if (this.localExecutingToolIds.has(toolId)) {
+        console.log(
+          `Ignoring server TOOL_RESULT pending-clear for local tool (ID: ${toolId})`
+        );
+      } else {
+        this.state.pendingToolCalls.delete(toolId);
+        console.log(
+          `Tool result received from server (ID: ${toolId}), pending: ${this.state.pendingToolCalls.size}`
+        );
+        this.sendDeferredCompletionIfReady();
+      }
     }
 
     const chunk: ChatStreamChunk = {
-      content: "",
+      content: this.serializeToolResultContent(toolResult),
       isComplete: false,
       messageId: this.state.assistantMessageId,
       eventType: StreamEventType.TOOL_RESULT,
@@ -1054,7 +1362,11 @@ export class StreamEventProcessor {
    */
   private handlePlanStepStartEvent(streamEvent: StreamEvent): void {
     try {
-      const stepData = this.validatePlanStepData(streamEvent.data.content);
+      const stepDataInput =
+        streamEvent.data.data && typeof streamEvent.data.data === "object"
+          ? streamEvent.data.data
+          : streamEvent.data.content;
+      const stepData = this.validatePlanStepData(stepDataInput);
       if (!stepData || !stepData.step_id) {
         throw new Error("Invalid plan step start data - missing step_id");
       }
@@ -1108,7 +1420,11 @@ export class StreamEventProcessor {
    */
   private handlePlanStepCompleteEvent(streamEvent: StreamEvent): void {
     try {
-      const stepData = this.validatePlanStepData(streamEvent.data.content);
+      const stepDataInput =
+        streamEvent.data.data && typeof streamEvent.data.data === "object"
+          ? streamEvent.data.data
+          : streamEvent.data.content;
+      const stepData = this.validatePlanStepData(stepDataInput);
       if (!stepData || !stepData.step_id) {
         throw new Error("Invalid plan step complete data - missing step_id");
       }
@@ -1501,5 +1817,94 @@ export class StreamEventProcessor {
         console.error("Failed to emit error chunk:", emitError);
       }
     }
+  }
+
+  /**
+   * Resume execution after the user responds to the dependency install prompt.
+   *
+   * Called from the SYSTEM_DEPENDENCY_PROMPT_RESPONSE IPC handler.
+   * If approved: installs the dependency, retries the skill, and sends the result.
+   * If denied: sends the original error result.
+   */
+  async resumeAfterDependencyApproval(
+    toolId: string,
+    approved: boolean
+  ): Promise<void> {
+    const pending = this.pendingDependencyByToolId.get(toolId);
+    if (!pending) {
+      console.warn(`No pending dependency install for toolId ${toolId}`);
+      return;
+    }
+    this.pendingDependencyByToolId.delete(toolId);
+
+    let toolResult: Record<string, unknown>;
+
+    if (approved) {
+      console.log(
+        `User approved install of "${pending.resolution.dependency_id}", proceeding`
+      );
+      const retryOutcome = await SystemDependencyRetryService.installAndRetry(
+        pending.resolution.dependency_id ?? "",
+        pending.reason,
+        pending.context
+      );
+
+      if (retryOutcome.retried && retryOutcome.retryResult) {
+        toolResult = retryOutcome.retryResult.success
+          ? (retryOutcome.retryResult.result as Record<string, unknown>)
+          : {
+              ...(retryOutcome.retryResult.result as Record<string, unknown>),
+              success: false,
+              _dependency_retry: true,
+              _dependency_id: retryOutcome.dependencyId,
+              _retry_message: retryOutcome.message,
+            };
+        console.log(
+          `Dependency retry ${
+            retryOutcome.retrySuccess ? "succeeded" : "failed"
+          } for ${pending.context.toolName}`
+        );
+      } else {
+        // Install happened but retry was not recommended or failed
+        toolResult = {
+          success: false,
+          error: retryOutcome.message,
+          _dependency_retry: true,
+          _dependency_id: retryOutcome.dependencyId,
+          _install_status: retryOutcome.installResult?.install_status,
+        };
+      }
+    } else {
+      // User denied — log denial and return original error
+      console.log(
+        `User denied install of "${pending.resolution.dependency_id}"`
+      );
+      toolResult = {
+        success: false,
+        error: `User denied installation of system dependency "${pending.resolution.dependency_id}".`,
+        _dependency_denied: true,
+        _dependency_id: pending.resolution.dependency_id,
+      };
+    }
+
+    // Save and send the result
+    await this.saveToolResult(
+      toolId,
+      pending.context.toolName,
+      toolResult,
+      pending.toolStartMs
+    );
+
+    const resultChunk: ChatStreamChunk = {
+      content: this.serializeToolResultContent(toolResult),
+      isComplete: false,
+      messageId: this.state.assistantMessageId,
+      eventType: StreamEventType.TOOL_RESULT,
+      toolResult,
+      conversationId: this.state.streamConversationId,
+      toolId,
+      toolName: pending.context.toolName,
+    };
+    this.event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(resultChunk));
   }
 }

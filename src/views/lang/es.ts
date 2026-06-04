@@ -75,10 +75,12 @@ export default {
     drag_drop_file:
       "Arrastre y suelte su archivo aquí o haga clic para seleccionar un archivo",
     search: "Buscar",
+    replace: "Reemplazar",
   },
   route: {
     dashboard: "Panel",
     home: "Inicio",
+    statistic: "Estadísticas",
     system_setting: "Configuración del sistema",
     campaign: "Campaña",
     campaign_list: "Lista de campañas",
@@ -136,6 +138,8 @@ export default {
     email_service_edit: "Editar servicio de correo",
     knowledge_library: "Biblioteca de conocimiento",
     mcp_tools: "Herramientas MCP",
+    skills: "Habilidades",
+    skills_management: "Gestión de Habilidades",
     login: "Iniciar sesión",
     not_found: "No encontrado",
   },
@@ -160,6 +164,12 @@ export default {
     document_deleted_successfully: "Documento eliminado correctamente",
     found_results: "Se encontraron {count} resultados",
     upload_failed: "Error al subir",
+    upload_failed_max_files:
+      "Máximo {max} archivos permitidos. Elimine archivos existentes primero.",
+    upload_failed_file_too_large:
+      'El archivo "{name}" excede el límite de {maxSize}.',
+    upload_failed_unsupported_type:
+      'El tipo de archivo "{name}" no es compatible. Formatos permitidos: imágenes, CSV, PDF, DOCX, XLS, XLSX.',
     error: "Error",
     document_management: "Gestión de documentos",
     search_by_name: "Buscar por nombre",
@@ -1086,9 +1096,69 @@ export default {
       "Configuración del grupo de sistema externo",
     mcp_tools: "Herramientas MCP",
     manage_mcp_tools: "Gestionar herramientas MCP",
+    manage_skills: "Gestionar habilidades",
+  },
+  skills: {
+    title: "Gestión de Habilidades",
+    no_skill_installed: "No hay habilidades instaladas",
+    no_skill_description:
+      "Importe paquetes de habilidades para ampliar las capacidades de IA",
+    import_button: "Importar habilidad",
+    import_dialog_title: "Importar habilidad desde Zip",
+    import_success: "Habilidad importada correctamente",
+    import_error: "Error al importar la habilidad",
+    uninstall_confirm: "¿Está seguro de que desea desinstalar esta habilidad?",
+    uninstall_success: "Habilidad desinstalada",
+    uninstall_error: "Error al desinstalar la habilidad",
+    toggle_enable: "Activar",
+    toggle_disable: "Desactivar",
+    toggle_success: "Habilidad actualizada",
+    toggle_error: "Error al actualizar la habilidad",
+    built_in: "Integrada",
+    user_installed: "Instalada por el usuario",
+    column_name: "Nombre",
+    column_source: "Origen",
+    column_category: "Categoría",
+    column_version: "Versión",
+    column_status: "Estado",
+    column_enabled: "Activada",
+    column_disabled: "Desactivada",
+    approval_title: "Solicitud de permiso de habilidad",
+    approval_description:
+      "Esta habilidad requiere su permiso para ejecutarse. Puede acceder a recursos externos o realizar acciones en su nombre.",
+    approval_deny: "Denegar",
+    approval_allow_once: "Permitir una vez",
+    approval_always_allow: "Permitir siempre",
+    approval_always_allow_session: "Permitir siempre (esta sesión)",
+    permission_resume_failed:
+      "No se pudo ejecutar la habilidad tras conceder el permiso.",
+    permission_resume_no_tool_id:
+      "Falta información de la llamada a la herramienta; no se puede continuar.",
+    permission_resume_no_active_stream:
+      "No hay una conversación activa. Vuelve a enviar el mensaje.",
+    shell_approval_title: "Ejecución de Comando Shell",
+    shell_approval_description:
+      "La IA solicita ejecutar un comando local. Revisa el comando antes de aprobar.",
+    shell_command_label: "Comando",
+    shell_cwd_label: "Directorio de trabajo",
+    shell_timeout_label: "Tiempo de espera",
+    shell_type_label: "Shell",
+  },
+  systemDependency: {
+    dialog_title: "Instalar dependencia del sistema",
+    security_note: "Solo se instalan paquetes de confianza del catálogo local.",
+    approve: "Aprobar instalación",
+    deny: "Denegar",
+    status_installed: "Dependencia instalada correctamente",
+    status_already_installed: "La dependencia ya está instalada",
+    status_permission_denied: "Instalación denegada",
+    status_installer_not_found: "Gestor de paquetes no encontrado",
+    status_unsupported_platform: "No compatible con esta plataforma",
+    status_path_issue:
+      "Instalado pero no en PATH. Intente reiniciar la aplicación.",
+    status_installation_failed: "Error en la instalación",
   },
   schedule: {
-    create_new_schedule: "Crear nueva programación",
     create_description:
       "Configure la programación automatizada de tareas con expresiones cron o dependencias",
     schedule_created_success:
