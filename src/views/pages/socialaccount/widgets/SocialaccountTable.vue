@@ -2,7 +2,8 @@
     <div class="search_bar mt-4 mb-4 d-flex jsb">
         <div class="d-flex jsb search_tool">
             <div class="search_wrap mr-4">
-                <v-text-field rounded class="elevation-0" density="compact" variant="solo" label="Search"
+                <v-text-field
+rounded class="elevation-0" density="compact" variant="solo" label="Search"
                     append-inner-icon="mdi-magnify" single-line hide-details v-model="search"></v-text-field>
             </div>
             <!-- <v-btn class="btn" variant="flat" prepend-icon="mdi-filter-variant"><span> More</span></v-btn> -->
@@ -21,7 +22,8 @@
       :type="alerttype"
     ></v-alert>
       </div> -->
-    <v-data-table-server v-model:items-per-page="itemsPerPage" :search="search" :headers="headers"
+    <v-data-table-server
+v-model:items-per-page="itemsPerPage" :search="search" :headers="headers"
         :items-length="totalItems" :items="serverItems" :loading="loading" item-value="name"
         @update:options="loadItems">
         <template v-slot:[`item.status`]="{ item }">
@@ -36,9 +38,6 @@
             <v-icon size="small" class="me-2" @click="editAccount(item)">
                 mdi-pencil
             </v-icon>
-            <v-icon size="small" class="me-2" @click="deleteAccount(item)">
-                mdi-delete
-            </v-icon>
             <v-icon size="small" class="me-2" @click="loginAccount(item)">
                 mdi-login
             </v-icon>
@@ -50,8 +49,11 @@
                 </template>
                 <span>{{ t('socialaccount.upload_cookies_button') }}</span>
             </v-tooltip>
-            <v-icon size="small" @click="clearCookies(item)">
+            <v-icon size="small" class="me-2" @click="clearCookies(item)">
                 mdi-close
+            </v-icon>
+            <v-icon size="small" @click="deleteAccount(item)">
+                mdi-delete
             </v-icon>
 
         </template>
@@ -71,7 +73,8 @@
 
     <!-- Delete Confirmation Modal -->
     <v-dialog v-model="showDeleteModal" width="auto">
-        <v-card max-width="400" prepend-icon="mdi-update" text="The account will be delete"
+        <v-card
+max-width="400" prepend-icon="mdi-update" text="The account will be delete"
             title="Confirm to delete account">
             <template v-slot:actions>
                 <v-btn class="ms-auto" text="Ok" color="secondary" @click="confirmrmAccount">
@@ -84,7 +87,8 @@
 
     <!-- Clear Cookies Confirmation Modal -->
     <v-dialog v-model="showClearCookiesModal" width="auto">
-        <v-card max-width="400" prepend-icon="mdi-cookie-remove" text="The cookies will be cleared"
+        <v-card
+max-width="400" prepend-icon="mdi-cookie-remove" text="The cookies will be cleared"
             title="Confirm to clear cookies">
             <template v-slot:actions>
                 <v-btn class="ms-auto" text="Ok" color="secondary" @click="confirmClearCookies">
@@ -108,10 +112,11 @@
             {{alertext}}
    </v-alert>
         </v-dialog> -->
-        <ErrorDialog :showDialog="alert" :alertext="alertContent" :alertitle="alertTitle" @dialogclose="closeAlert" />
+        <ErrorDialog :show-dialog="alert" :alertext="alertContent" :alertitle="alertTitle" @dialogclose="closeAlert" />
     </div>
-    <confirmDialog :showDialog="confirmDialogctl" :noticeText="confirmContent" :noticeTitle="confirmTitle"
-        @dialogclose="confirmDialogctl = false" @okCallback="openNextstepdialog" />
+    <confirmDialog
+:show-dialog="confirmDialogctl" :notice-text="confirmContent" :notice-title="confirmTitle"
+        @dialogclose="confirmDialogctl = false" @ok-callback="openNextstepdialog" />
 </template>
 
 <script setup lang="ts">
