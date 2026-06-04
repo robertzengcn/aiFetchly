@@ -657,9 +657,9 @@ export default {
     change_account: "アカウントを変更",
   },
   search: {
-    google: "Channel Alpha",
+    google: "Google",
     bing: "Bing.com",
-    yandex: "Channel Beta",
+    yandex: "Yandex",
     baidu: "Baidu.com",
     platform: "プラットフォーム",
     keyword: "キーワード",

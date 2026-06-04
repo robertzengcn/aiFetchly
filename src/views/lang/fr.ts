@@ -666,9 +666,9 @@ export default {
     change_account: "change account",
   },
   search: {
-    google: "Channel Alpha",
+    google: "Google",
     bing: "Bing.com",
-    yandex: "Channel Beta",
+    yandex: "Yandex",
     baidu: "Baidu.com",
     platform: "platform",
     keyword: "Keyword",
