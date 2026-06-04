@@ -683,13 +683,15 @@ export default {
     keyword: "Palabra clave",
     search_enginer_name: "Motor de búsqueda",
     input_keywords_hint: "Ingrese palabras clave, una por línea",
-    market_insight_placeholder: "请输入您需要进行市场洞察的公开网络源或行业关键词...",
-    public_information_notice: "注：本功能仅用于公开网页信息的自动化结构化整理，请确保您的检索行为符合目标网站的 Robots 协议。",
+    market_insight_placeholder:
+      "Introduce una fuente web pública o una palabra clave del sector para obtener información de mercado...",
+    public_information_notice:
+      "Nota: Esta función solo estructura información de páginas web públicas. Asegúrate de que tu actividad de investigación cumpla con la política de robots del sitio de destino.",
     show_in_Browser: "Mostrar en navegador",
     use_hint:
-      "Input public sources or industry keywords for market insight organization",
+      "Introduce fuentes públicas o palabras clave del sector para organizar información de mercado",
     concurrent_quantity: "Cantidad simultánea",
-    scraper_failed: "Market insight organization failed",
+    scraper_failed: "Error al organizar información de mercado",
     search_enginer_empty: "Motor de búsqueda vacío",
     keywords_empty: "Palabras clave vacías",
     page_number: "Número de página",
@@ -700,7 +702,7 @@ export default {
     use_local_browser: "Usar navegador local",
     choose_local_browser: "Elegir navegador local",
     use_search_enginer_account: "Usar cuenta del motor de búsqueda",
-    edit_task: "Edit Market Insight Task",
+    edit_task: "Editar tarea de información de mercado",
     task_updated_successfully: "Tarea actualizada correctamente",
     task_cannot_be_edited:
       "La tarea no puede ser editada. Solo las tareas con estado 'No iniciada', 'Error', 'Procesando' o 'Completa' pueden ser modificadas.",
@@ -723,7 +725,7 @@ export default {
     no_keywords_generated: "No se generaron palabras clave",
     enable_ai_recovery: "Habilitar recuperación IA",
     enable_ai_recovery_hint:
-      "When enabled, AI will help recover from data alignment errors by analyzing page structure and suggesting alternative actions",
+      "Cuando está activado, la IA ayuda a recuperarse de errores de alineación de datos analizando la estructura de la página y sugiriendo acciones alternativas",
   },
   searchtask: {
     id: "ID de tarea",

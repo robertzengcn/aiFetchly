@@ -680,13 +680,15 @@ export default {
     keyword: "Schlüsselwort",
     search_enginer_name: "Suchmaschine",
     input_keywords_hint: "Schlüsselwörter eingeben, eines pro Zeile",
-    market_insight_placeholder: "请输入您需要进行市场洞察的公开网络源或行业关键词...",
-    public_information_notice: "注：本功能仅用于公开网页信息的自动化结构化整理，请确保您的检索行为符合目标网站的 Robots 协议。",
+    market_insight_placeholder:
+      "Geben Sie eine öffentliche Webquelle oder ein Branchenstichwort für Marktinformationen ein...",
+    public_information_notice:
+      "Hinweis: Diese Funktion strukturiert nur Informationen aus öffentlichen Webseiten. Stellen Sie sicher, dass Ihre Recherche die Robots-Richtlinie der Zielwebsite einhält.",
     show_in_Browser: "Im Browser anzeigen",
     use_hint:
-      "Input public sources or industry keywords for market insight organization",
+      "Geben Sie öffentliche Quellen oder Branchenstichwörter ein, um Marktinformationen zu strukturieren",
     concurrent_quantity: "Gleichzeitige Anzahl",
-    scraper_failed: "Market insight organization failed",
+    scraper_failed: "Strukturierung der Marktinformationen fehlgeschlagen",
     search_enginer_empty: "Suchmaschine leer",
     keywords_empty: "Schlüsselwörter leer",
     page_number: "Seitennummer",
@@ -697,7 +699,7 @@ export default {
     use_local_browser: "Lokalen Browser verwenden",
     choose_local_browser: "Lokalen Browser auswählen",
     use_search_enginer_account: "Suchmaschinen-Konto verwenden",
-    edit_task: "Edit Market Insight Task",
+    edit_task: "Marktinformation-Aufgabe bearbeiten",
     task_updated_successfully: "Aufgabe erfolgreich aktualisiert",
     task_cannot_be_edited:
       "Aufgabe kann nicht bearbeitet werden. Nur Aufgaben mit Status 'Nicht gestartet', 'Fehler', 'Wird verarbeitet' oder 'Abgeschlossen' können geändert werden.",
@@ -721,7 +723,7 @@ export default {
     no_keywords_generated: "Es wurden keine Schlüsselwörter generiert",
     enable_ai_recovery: "KI-Wiederherstellung aktivieren",
     enable_ai_recovery_hint:
-      "When enabled, AI will help recover from data alignment errors by analyzing page structure and suggesting alternative actions",
+      "Wenn aktiviert, hilft KI bei der Wiederherstellung nach Datenabgleichsfehlern, indem sie die Seitenstruktur analysiert und alternative Aktionen vorschlägt",
   },
   searchtask: {
     id: "Aufgaben-ID",

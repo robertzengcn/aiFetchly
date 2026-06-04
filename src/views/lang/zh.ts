@@ -654,10 +654,9 @@ export default {
     market_insight_placeholder: "请输入您需要进行市场洞察的公开网络源或行业关键词...",
     public_information_notice: "注：本功能仅用于公开网页信息的自动化结构化整理，请确保您的检索行为符合目标网站的 Robots 协议。",
     show_in_Browser: "在浏览器中显示",
-    use_hint:
-      "Input public sources or industry keywords for market insight organization",
+    use_hint: "输入公开来源或行业关键词，用于市场洞察整理",
     concurrent_quantity: "并发数量",
-    scraper_failed: "Market insight organization failed",
+    scraper_failed: "市场洞察整理失败",
     search_enginer_empty: "搜索引擎为空",
     keywords_empty: "关键词为空",
     page_number: "页数",
@@ -668,7 +667,7 @@ export default {
     use_local_browser: "使用本地浏览器",
     choose_local_browser: "选择本地浏览器",
     use_search_enginer_account: "使用搜索引擎账户",
-    edit_task: "Edit Market Insight Task",
+    edit_task: "编辑市场洞察任务",
     task_updated_successfully: "任务更新成功",
     task_cannot_be_edited:
       "任务无法编辑。只有状态为'未开始'、'错误'、'处理中'或'完成'的任务才能修改。",
@@ -690,7 +689,7 @@ export default {
     no_keywords_generated: "未生成关键词",
     enable_ai_recovery: "启用AI恢复",
     enable_ai_recovery_hint:
-      "When enabled, AI will help recover from data alignment errors by analyzing page structure and suggesting alternative actions",
+      "启用后，AI 将通过分析页面结构并建议替代操作，帮助从数据对齐错误中恢复",
   },
   searchtask: {
     id: "任务ID",
