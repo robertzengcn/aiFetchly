@@ -19,18 +19,18 @@ class="my-4 layout_navigation" :rail="navState.rail" expand-on-hover rail-width=
                 <v-list-subheader>{{ t('route.dashboard') }}</v-list-subheader>
                 <template v-for="(item, key) in navState.routes" :key="key">
                     <v-list-item
-v-if="item.meta?.visible && !item.children" :prepend-icon="(item.meta?.icon as any)"
-                        :title="getTranslatedTitle(item.meta?.title as string)" :to="{ name: item.name }" class="mx-1"
+v-if="item.meta?.visible && (!item.children || visibleRouteChildren(item).length === 1)" :prepend-icon="(singleVisibleChild(item)?.meta?.icon || item.meta?.icon as any)"
+                        :title="getTranslatedTitle((singleVisibleChild(item)?.meta?.title || item.meta?.title) as string)" :to="{ name: singleVisibleChild(item)?.name || item.name }" class="mx-1"
                         active-class="nav_active"></v-list-item>
 
-                    <v-list-group v-if="item.meta?.visible && item.children && item.children.length > 0" class="mx-1">
+                    <v-list-group v-if="item.meta?.visible && item.children && visibleRouteChildren(item).length > 1" class="mx-1">
                         <template v-slot:activator="{ props }">
                             <v-list-item v-bind="props" :prepend-icon="item.meta.icon" :title="getTranslatedTitle(item.meta.title as string)" />
                         </template>
-                        <template v-for="(row, i) in item.children">
+                        <template v-for="(row, i) in visibleRouteChildren(item)" :key="i">
                             <v-list-item
-v-if="(row.meta?.visible as any)" :title="getTranslatedTitle(row.meta?.title as string)"
-                                :prepend-icon="navState.isMini ? (row.meta?.icon as any) : ''" :key="i"
+                                :title="getTranslatedTitle(row.meta?.title as string)"
+                                :prepend-icon="navState.isMini ? (row.meta?.icon as any) : ''"
                                 :to="{ name: row.name }" />
                         </template>
                     </v-list-group>
@@ -154,7 +154,7 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
 <script setup lang="ts">
 import logo from '@/assets/images/icon.png';
 import wxtx from '@/assets/wx.png';
-import { RouterView, useRouter } from 'vue-router';
+import { RouterView, type RouteRecordRaw, useRouter } from 'vue-router';
 import Breadcrumbs from '@/views/components/breadcrumbs/breadcrumbs.vue';
 import { reactive, computed, watch } from 'vue';
 import { useMainStore } from '@/views/store/appMain';
@@ -203,6 +203,13 @@ const navState = reactive({
     isMini: !mainStore.isMobile,
     routes: router.options.routes,
 });
+const visibleRouteChildren = (route: RouteRecordRaw): RouteRecordRaw[] => {
+    return (route.children ?? []).filter((row) => Boolean(row.meta?.visible));
+};
+const singleVisibleChild = (route: RouteRecordRaw): RouteRecordRaw | undefined => {
+    const children = visibleRouteChildren(route);
+    return children.length === 1 ? children[0] : undefined;
+};
 const permanent = computed(() => {
     return !mainStore.isMobile;
 });

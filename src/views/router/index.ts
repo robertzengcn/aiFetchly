@@ -586,21 +586,34 @@ export const constantRoutes: RouteRecordRaw[] = [
     component: Layout,
     children: [
       {
-        path: "google",
-        component: () => import("@/views/pages/google-maps-scraper/index.vue"),
-        name: "GoogleMapsScraper",
+        path: "",
+        component: () => import("@/views/pages/map-scraper/index.vue"),
+        name: "MapScraper",
+        props: { initialProvider: "google" },
         meta: {
           visible: true,
+          title: "route.map_scraper",
+          icon: "mdi-map-marker-multiple",
+        },
+      },
+      {
+        path: "google",
+        component: () => import("@/views/pages/map-scraper/index.vue"),
+        name: "GoogleMapsScraper",
+        props: { initialProvider: "google" },
+        meta: {
+          visible: false,
           title: "route.google_maps_scraper",
           icon: "mdi-map-marker-radius",
         },
       },
       {
         path: "yandex",
-        component: () => import("@/views/pages/yandex-maps-scraper/index.vue"),
+        component: () => import("@/views/pages/map-scraper/index.vue"),
         name: "YandexMapsScraper",
+        props: { initialProvider: "yandex" },
         meta: {
-          visible: true,
+          visible: false,
           title: "route.yandex_maps_scraper",
           icon: "mdi-map-search-outline",
         },
