@@ -10,8 +10,8 @@ Source manual:
 
 1. Intro: Search Engine Scraping turns search results into lead lists.
 2. Navigate: open Search, then Search Scraper.
-3. Configure: enter one keyword per line, optionally generate related keywords, choose Google/Bing/Yandex.
-4. Safety settings: page number, concurrency, proxies, local browser, search account, show browser, AI recovery.
+3. Configure: enter one keyword per line, optionally generate related keywords, choose a supported engine: google.com, bing.com, or Yandex.
+4. Safety settings: page number, concurrency, proxies, local browser, search engine account, show browser, AI recovery.
 5. Execute: Submit to run now or Save Only to create the task.
 6. Manage: open Search Task List, run/retry/edit/view results/download logs.
 7. Improve leads: AI Analyze, AI Extract Contact Info, Extract Emails, Export CSV.
@@ -40,11 +40,13 @@ Start from the left navigation. Open Search, then choose Search Scraper. This is
 
 Add your keywords, one per line. Use specific terms for better lead quality. If AI is enabled, Generate Related Keywords can expand your list and remove duplicates.
 
-Choose the search engine: Google, Bing, or Yandex. Google is great for broad coverage, Bing is often forgiving, and Yandex requires local browser mode.
+Choose the search engine: google.com, bing.com, or Yandex.
+
+If you choose google.com, choose a Google search engine account before running the task. This improves access and reliability when using the Google search scraper.
 
 Set the starting page and concurrency. Start with one to three concurrent searches, then increase gradually when proxies and accounts are ready.
 
-For more reliable scraping, choose proxies, enable local browser for human-like behavior, select search accounts when needed, and enable AI Recovery for large or difficult runs.
+For more reliable scraping, choose proxies, enable local browser for human-like behavior, select search engine accounts when needed, and enable AI Recovery for large or difficult runs.
 
 When everything looks right, Submit runs the task immediately. Save Only stores the task so you can run it later from the task list.
 
