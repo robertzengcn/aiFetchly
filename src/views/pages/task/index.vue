@@ -9,7 +9,7 @@
               Task Management
             </h2>
             <p class="text-subtitle-1 text-medium-emphasis">
-              Create, manage, and monitor your scraping tasks
+              Create, manage, and monitor your workflow automation tasks
             </p>
           </div>
           <div class="d-flex">

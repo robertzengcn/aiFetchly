@@ -289,7 +289,7 @@
       </v-col>
     </v-row>
 
-    <!-- Scraping Information -->
+    <!-- Data Alignment Information -->
     <v-row>
       <v-col cols="12">
         <v-card>
@@ -465,5 +465,4 @@ const openWebsite = (url: string) => {
   }
 }
 </style>
-
 

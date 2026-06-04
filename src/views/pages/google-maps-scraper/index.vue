@@ -5,10 +5,10 @@
       <v-col cols="12">
         <h2 class="text-h4 font-weight-bold">
           <v-icon class="mr-2">mdi-map-marker-radius</v-icon>
-          {{ t('googleMaps.title') || 'Google Maps Scraper' }}
+          {{ t('googleMaps.title') || 'Local Business Finder' }}
         </h2>
         <p class="text-subtitle-1 text-medium-emphasis">
-          {{ t('googleMaps.description') || 'Search Google Maps for local businesses by keyword and location' }}
+          {{ t('googleMaps.description') || 'Search public local business sources by keyword and location' }}
         </p>
       </v-col>
     </v-row>
@@ -121,7 +121,7 @@
                   :items="googleAccounts"
                   item-title="user"
                   item-value="id"
-                  :label="t('googleMaps.account_label') || 'Google Account'"
+                  :label="t('googleMaps.account_label') || 'Channel Alpha Account'"
                   :hint="t('googleMaps.account_hint') || 'Select an account to use its cookies'"
                   persistent-hint
                   :disabled="searchState === 'running'"
@@ -211,7 +211,7 @@
               prepend-icon="mdi-file-delimited"
               @click="exportCSV"
             >
-              {{ t('googleMaps.export_csv') || 'Export CSV' }}
+              {{ t('googleMaps.export_csv') || 'Export To Routing Sheet' }}
             </v-btn>
             <v-btn
               color="info"
@@ -292,7 +292,7 @@
                         variant="text"
                         prepend-icon="mdi-map"
                       >
-                        {{ t('googleMaps.view_on_maps') || 'View on Google Maps' }}
+                        {{ t('googleMaps.view_on_maps') || 'View public listing' }}
                       </v-btn>
                     </v-col>
                   </v-row>

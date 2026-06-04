@@ -6,12 +6,12 @@
           <div>
             <h2 class="text-h4 font-weight-bold">
               <v-icon class="mr-2">mdi-map-marker-multiple</v-icon>
-              {{ t("mapScraper.title") || "Map Scraper" }}
+              {{ t("mapScraper.title") || "Local Business Finder" }}
             </h2>
             <p class="text-subtitle-1 text-medium-emphasis mb-0">
               {{
                 t("mapScraper.description") ||
-                "Search local businesses across Google Maps and Yandex Maps"
+                "Find public local business information through neutral source channels"
               }}
             </p>
           </div>
@@ -151,7 +151,7 @@
                   v-model="language"
                   :label="t('mapScraper.language_label') || 'Language'"
                   :placeholder="t('mapScraper.language_placeholder') || 'e.g. ru, en, tr'"
-                  :hint="t('mapScraper.language_hint') || 'Yandex Maps UI language code'"
+                  :hint="t('mapScraper.language_hint') || 'Channel Beta interface language code'"
                   persistent-hint
                   :disabled="searchState === 'running'"
                   clearable
@@ -298,7 +298,7 @@
               prepend-icon="mdi-file-delimited"
               @click="exportCSV"
             >
-              {{ t("mapScraper.export_csv") || "Export CSV" }}
+              {{ t("mapScraper.export_csv") || "Export To Routing Sheet" }}
             </v-btn>
             <v-btn
               color="info"
@@ -550,12 +550,12 @@ const providerMeta = computed(() => getMapScraperProviderMeta(provider.value));
 const providerOptions = computed(() => [
   {
     value: "google" as const,
-    title: t("mapScraper.provider_google") || "Google Maps",
+    title: t("mapScraper.provider_google") || "Channel Alpha (Global)",
     icon: getMapScraperProviderMeta("google").icon,
   },
   {
     value: "yandex" as const,
-    title: t("mapScraper.provider_yandex") || "Yandex Maps",
+    title: t("mapScraper.provider_yandex") || "Channel Beta (CIS Region)",
     icon: getMapScraperProviderMeta("yandex").icon,
   },
 ]);
@@ -584,8 +584,8 @@ const locationHint = computed(() =>
 
 const accountLabel = computed(() =>
   provider.value === "yandex"
-    ? t("mapScraper.yandex_account_label") || "Yandex Account"
-    : t("mapScraper.google_account_label") || "Google Account"
+    ? t("mapScraper.yandex_account_label") || "Channel Beta Account"
+    : t("mapScraper.google_account_label") || "Channel Alpha Account"
 );
 
 const progressPercent = computed(() =>

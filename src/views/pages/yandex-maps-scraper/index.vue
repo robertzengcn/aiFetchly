@@ -5,10 +5,10 @@
       <v-col cols="12">
         <h2 class="text-h4 font-weight-bold">
           <v-icon class="mr-2">mdi-map-search-outline</v-icon>
-          {{ t('yandexMaps.title') || 'Yandex Maps Scraper' }}
+          {{ t('yandexMaps.title') || 'Local Business Finder' }}
         </h2>
         <p class="text-subtitle-1 text-medium-emphasis">
-          {{ t('yandexMaps.description') || 'Search Yandex Maps for local businesses by keyword and location' }}
+          {{ t('yandexMaps.description') || 'Search public local business sources by keyword and location' }}
         </p>
       </v-col>
     </v-row>
@@ -124,7 +124,7 @@
               v-model="language"
               :label="t('yandexMaps.language_label') || 'Language'"
               :placeholder="t('yandexMaps.language_placeholder') || 'e.g. ru, en, tr'"
-              :hint="t('yandexMaps.language_hint') || 'Yandex Maps UI language code'"
+              :hint="t('yandexMaps.language_hint') || 'Channel Beta interface language code'"
               persistent-hint
               :disabled="searchState === 'running'"
               clearable
@@ -157,7 +157,7 @@
               :items="yandexAccounts"
               item-title="user"
               item-value="id"
-              :label="t('yandexMaps.account_label') || 'Yandex Account'"
+              :label="t('yandexMaps.account_label') || 'Channel Beta Account'"
               :hint="t('yandexMaps.account_hint') || 'Select an account to use its cookies'"
               persistent-hint
               :disabled="searchState === 'running'"
@@ -268,7 +268,7 @@
           prepend-icon="mdi-file-delimited"
           @click="exportCSV"
         >
-          {{ t('yandexMaps.export_csv') || 'Export CSV' }}
+          {{ t('yandexMaps.export_csv') || 'Export To Routing Sheet' }}
         </v-btn>
         <v-btn
           color="info"
