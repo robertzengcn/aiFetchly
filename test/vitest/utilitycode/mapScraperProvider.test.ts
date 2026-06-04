@@ -16,6 +16,8 @@ describe("map scraper provider helpers", () => {
   });
 
   test("returns stable display metadata for each provider", () => {
+    expect(getMapScraperProviderMeta("google").label).toBe("Channel Alpha (Global)");
+    expect(getMapScraperProviderMeta("yandex").label).toBe("Channel Beta (CIS Region)");
     expect(getMapScraperProviderMeta("google").accountWhere).toBe("Google");
     expect(getMapScraperProviderMeta("yandex").accountWhere).toBe("Yandex");
   });

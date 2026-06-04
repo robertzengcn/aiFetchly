@@ -617,11 +617,11 @@ const getTaskTypeColor = (taskType: TaskType): string => {
 
 const getTaskTypeLabel = (taskType: TaskType): string => {
   switch (taskType) {
-    case TaskType.SEARCH: return 'Search'
-    case TaskType.EMAIL_EXTRACT: return 'Email Extract'
+    case TaskType.SEARCH: return 'Market Insight'
+    case TaskType.EMAIL_EXTRACT: return 'Contact Profile Insights'
     case TaskType.BUCK_EMAIL: return 'Buck Email'
     case TaskType.VIDEO_DOWNLOAD: return 'Video Download'
-    case TaskType.YELLOW_PAGES: return 'Yellow Pages'
+    case TaskType.YELLOW_PAGES: return 'Directory Assistant'
     default: return 'Unknown'
   }
 }
@@ -674,4 +674,4 @@ onMounted(() => {
   font-family: 'Courier New', monospace;
   font-size: 0.875rem;
 }
-</style> 
+</style>

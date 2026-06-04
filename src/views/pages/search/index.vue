@@ -2,7 +2,12 @@
   <v-sheet class="mx-auto px-6" rounded>
     <v-form ref="form" @submit.prevent="onSubmit">
       <h3>{{ isEditMode ? t('search.edit_task') : t('search.use_hint') }}</h3>
-      <v-textarea class="mt-3" v-model="keywords" :label="t('search.input_keywords_hint')"></v-textarea>
+      <v-textarea
+        class="mt-3"
+        v-model="keywords"
+        :label="t('search.input_keywords_hint')"
+        :placeholder="t('search.market_insight_placeholder')"
+      ></v-textarea>
       <v-btn 
         color="primary" 
         class="mt-2 mb-3" 
@@ -94,6 +99,9 @@ v-model="localBrowser" :items="LocalBrowerList" :label="t('search.choose_local_b
           {{ t('common.return') }}
         </v-btn>
       </div>
+      <p class="text-caption text-grey mt-2">
+        {{ t('search.public_information_notice') }}
+      </p>
 
 
       <!-- <div class="d-flex flex-column">

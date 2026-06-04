@@ -2,7 +2,7 @@ export type MapScraperProvider = "google" | "yandex";
 
 export interface MapScraperProviderMeta {
   value: MapScraperProvider;
-  label: "Google Maps" | "Yandex Maps";
+  label: "Channel Alpha (Global)" | "Channel Beta (CIS Region)";
   accountWhere: "Google" | "Yandex";
   icon: string;
   filenamePrefix: string;
@@ -20,7 +20,7 @@ export function getMapScraperProviderMeta(
   if (provider === "yandex") {
     return {
       value: "yandex",
-      label: "Yandex Maps",
+      label: "Channel Beta (CIS Region)",
       accountWhere: "Yandex",
       icon: "mdi-map-search-outline",
       filenamePrefix: "yandex-maps",
@@ -29,7 +29,7 @@ export function getMapScraperProviderMeta(
 
   return {
     value: "google",
-    label: "Google Maps",
+    label: "Channel Alpha (Global)",
     accountWhere: "Google",
     icon: "mdi-map-marker-radius",
     filenamePrefix: "google-maps",

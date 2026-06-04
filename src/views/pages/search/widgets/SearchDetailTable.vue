@@ -400,7 +400,7 @@ v-model:items-per-page="itemsPerPage" v-model="selectedItems"
 
                 <v-row class="mb-4">
                     <v-col cols="12" sm="6">
-                        <div class="text-caption text-grey">{{ t('contactExtraction.extraction_status') || 'Extraction Status' }}:</div>
+                        <div class="text-caption text-grey">{{ t('contactExtraction.extraction_status') || 'Insight Status' }}:</div>
                         <div class="text-body-2 d-flex align-center">
                             <v-progress-circular
                                 v-if="selectedResult.id !== undefined && isExtractionInProgress(selectedResult.id)"
@@ -422,7 +422,7 @@ v-model:items-per-page="itemsPerPage" v-model="selectedItems"
                         </div>
                     </v-col>
                     <v-col cols="12" sm="6" v-if="selectedResult.id !== undefined && getContactInfo(selectedResult.id)?.extractionDate">
-                        <div class="text-caption text-grey">{{ t('contactExtraction.extraction_date') || 'Extraction Date' }}:</div>
+                        <div class="text-caption text-grey">{{ t('contactExtraction.extraction_date') || 'Insight Date' }}:</div>
                         <div class="text-body-2">
                             {{ new Date(getContactInfo(selectedResult.id)!.extractionDate!).toLocaleString() }}
                         </div>
@@ -670,7 +670,7 @@ headers.value = [
         minWidth: '120px',
     },
     {
-        title: computed(_ => CapitalizeFirstLetter(t("contactExtraction.contact_extraction_status") || 'Contact Extraction')),
+        title: computed(_ => CapitalizeFirstLetter(t("contactExtraction.contact_extraction_status") || 'Profile Insights')),
         align: 'start',
         sortable: false,
         key: 'extraction_status',
@@ -868,7 +868,7 @@ const selectedCount = computed(() => {
  * Computed property for button text
  */
 const buttonText = computed(() => {
-    const baseText = t('emailextraction.extract_emails') || 'Extract Emails';
+    const baseText = t('emailextraction.extract_emails') || 'Build Contact Profiles';
     const count = selectedItems.value.length;
     if (count > 0) {
         return `${baseText} (${count})`;
@@ -1013,7 +1013,7 @@ async function exportContactInfoToCSV() {
                     'Phone': contactInfo.phone || '',
                     'Address': contactInfo.address || '',
                     'Social Links': contactInfo.socialLinks ? contactInfo.socialLinks.join('; ') : '',
-                    'Extraction Date': contactInfo.extractionDate || '',
+                    'Insight Date': contactInfo.extractionDate || '',
                     'Status': contactInfo.extractionStatus || ''
                 });
             }
@@ -1104,7 +1104,7 @@ async function handleContactExtraction() {
             // Show notice that extraction runs in background
             extractionNotice.message =
                 t('contactExtraction.extraction_started_notice', { count: resultIds.length }) ||
-                `Contact extraction started for ${resultIds.length} item(s). Processing in the background. Check the Extraction Status column for progress.`;
+                `Profile insights started for ${resultIds.length} item(s). Processing in the background. Check the Insight Status column for progress.`;
             extractionNotice.type = 'info';
             extractionNotice.timeout = 6000;
             extractionNotice.show = true;
@@ -1112,8 +1112,8 @@ async function handleContactExtraction() {
             // Load contact info for selected items (may override with actual status from server)
             await loadContactInfo(resultIds);
         } else {
-            console.error('Failed to start contact extraction:', response.message);
-            alert(`Failed to start extraction: ${response.message}`);
+            console.error('Failed to start profile insights:', response.message);
+            alert(`Failed to start profile insights: ${response.message}`);
         }
     } catch (error) {
         console.error('Error starting contact extraction:', error);
@@ -1223,11 +1223,11 @@ async function copyToClipboard(text: string): Promise<void> {
 }
 
 /**
- * Navigate to email extraction page with URLs from selected search results
+ * Navigate to contact profile insights page with URLs from selected search results
  */
 function handleScrapeEmail() {
     if (selectedItems.value.length === 0) {
-        alert('Please select at least one item to extract emails from');
+        alert('Please select at least one item to build contact profiles from');
         return;
     }
     
