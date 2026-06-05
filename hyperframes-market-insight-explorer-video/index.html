@@ -583,11 +583,25 @@
         bottom: 130px;
       }
 
-      .transition-wipe {
+      .transition-soft {
         position: absolute;
         inset: 0;
         z-index: 30;
-        background: var(--primary);
+        overflow: hidden;
+        background: rgba(247, 248, 252, 0.9);
+        opacity: 0;
+        pointer-events: none;
+        backdrop-filter: blur(8px);
+      }
+
+      .transition-sheen {
+        position: absolute;
+        top: -18%;
+        bottom: -18%;
+        left: -22%;
+        width: 42%;
+        background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.92), transparent);
+        opacity: 0;
         pointer-events: none;
       }
     </style>
@@ -604,7 +618,7 @@
     >
       <div class="decor-word one" data-layout-ignore>INSIGHT</div>
       <div class="decor-word two" data-layout-ignore>LEADS</div>
-      <div class="transition-wipe" data-layout-ignore></div>
+      <div class="transition-soft" data-layout-ignore><div class="transition-sheen"></div></div>
 
       <section id="scene-intro" class="scene">
         <div class="scene-content">
@@ -852,21 +866,23 @@
         }
 
         function transitionTo(currentScene, nextScene, nextStart) {
-          const coverStart = nextStart - 0.9;
-          tl.to(".transition-wipe", { xPercent: 0, duration: 0.45, ease: "power3.inOut", overwrite: "auto" }, coverStart);
-          tl.set(currentScene, { opacity: 0 }, coverStart + 0.45);
-          tl.set(nextScene, { opacity: 1 }, coverStart + 0.45);
-          tl.to(".transition-wipe", { xPercent: 105, duration: 0.45, ease: "power3.inOut", overwrite: "auto" }, coverStart + 0.45);
-          tl.set(".transition-wipe", { xPercent: -105 }, coverStart + 0.91);
+          const coverStart = nextStart - 0.78;
+          tl.to(".transition-soft", { opacity: 1, duration: 0.34, ease: "sine.inOut", overwrite: "auto" }, coverStart);
+          tl.fromTo(".transition-sheen", { xPercent: -130, opacity: 0, rotation: -10 }, { xPercent: 205, opacity: 0.5, rotation: -10, duration: 0.62, ease: "sine.inOut" }, coverStart + 0.05);
+          tl.set(currentScene, { opacity: 0 }, coverStart + 0.35);
+          tl.set(nextScene, { opacity: 1 }, coverStart + 0.35);
+          tl.to(".transition-soft", { opacity: 0, duration: 0.43, ease: "sine.inOut", overwrite: "auto" }, coverStart + 0.36);
+          tl.set(".transition-sheen", { xPercent: -130, opacity: 0, rotation: -10 }, coverStart + 0.8);
         }
 
         let at = 0;
         const durations = [5.2, 5.8, 6.3, 6.2, 5.8, 6.2, 6.5];
         tl.set(scenes, { opacity: 0 }, 0);
         tl.set(scenes[0], { opacity: 1 }, 0);
-        tl.set(".transition-wipe", { xPercent: -105 }, 0);
+        tl.set(".transition-soft", { opacity: 0 }, 0);
+        tl.set(".transition-sheen", { xPercent: -130, opacity: 0, rotation: -10 }, 0);
         scenes.forEach((scene, index) => {
-          showScene(scene, at);
+          showScene(scene, index === 0 ? at : at - 0.25);
           at += durations[index];
           if (index < scenes.length - 1) {
             transitionTo(scene, scenes[index + 1], at);
