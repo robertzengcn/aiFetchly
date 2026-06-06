@@ -375,8 +375,10 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
     // Stage: launching browser
     sendProgress(requestId, "launching", 0, maxResults, "Launching browser...");
     const browserManager = new BrowserManager();
+    // Always use headless: false for stealth -- Yandex detects headless browsers.
+    // Puppeteer will run Chromium with a virtual display if needed.
     browser = await browserManager.launchWithStealth({
-      headless: !showBrowser,
+      headless: false,
     });
 
     const page = await browser.newPage();
@@ -476,6 +478,10 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
       // Count elements by broad patterns
       const patterns: Record<string, number> = {};
       const selectors = [
+        "ul.search-list-view__list",
+        "div.search-list-view",
+        "li.search-snippet-view",
+        "div.business-card-view",
         'div[class*="search"]',
         'a[class*="search"]',
         'li[class*="search"]',
@@ -509,6 +515,7 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
       // Get the first few class names from the sidebar/search area
       const sidebar =
         document.querySelector('[class*="sidebar"]') ??
+        document.querySelector('[class*="search-list"]') ??
         document.querySelector('[class*="search"]') ??
         document.querySelector('[class*="panel"]');
       info.sidebarClasses = sidebar?.className?.slice(0, 200) ?? "none";
