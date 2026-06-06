@@ -9,6 +9,7 @@ export default {
     uninstalling: "卸载中",
     reset: "重置",
     submit: "提交",
+    save: "保存",
     update: "更新",
     success: "成功",
     fill_require_field: "请填写所有必填字段",
