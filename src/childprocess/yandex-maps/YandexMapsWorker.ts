@@ -318,30 +318,29 @@ async function detectCaptcha(page: Page): Promise<boolean> {
  * Ordered by specificity; tried sequentially until one matches.
  */
 const RESULT_LIST_SELECTORS = [
-  'div[class*="search-business-list"]',
+  "ul.search-list-view__list",
+  "div.search-list-view",
+  'ul[class*="search-list"]',
   'div[class*="search-list"]',
-  "div.search-list",
-  'div[class*="business-snippet"]',
 ];
 
 /**
  * Selectors for individual business card elements within the results list.
  */
 const CARD_SELECTORS = [
-  'div[class*="search-business-snippet-view"]',
-  'a[class*="search-snippet"]',
-  'div[class*="business-snippet"]',
-  'li[class*="search-snippet"]',
+  "li.search-snippet-view",
+  "li[class*='search-snippet']",
+  'div[class*="search-business-snippet"]',
 ];
 
 /**
  * Selectors for the detail panel that opens after clicking a card.
  */
 const DETAIL_PANEL_SELECTORS = [
+  "div.business-card-view",
   'div[class*="business-card"]',
   'div[class*="business-view"]',
   'div[class*="place-card"]',
-  'div[class*="sidebar"]',
 ];
 
 // ---------------------------------------------------------------------------
@@ -478,7 +477,7 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
     const initialDiag = await page.evaluate(() => {
       const info: Record<string, unknown> = {};
       info.title = document.title;
-      info.url = location.href;
+      info.url = window.location.href;
       info.bodyClasses = document.body?.className?.slice(0, 200);
 
       // Count elements by broad patterns
@@ -858,10 +857,12 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
             const cardName = await freshCards[c].evaluate((el) => {
               // Try to get the business name from the card
               const nameEl =
+                el.querySelector(".search-business-snippet-view__title") ??
                 el.querySelector("h2") ??
                 el.querySelector("h3") ??
                 el.querySelector('[class*="title"]') ??
                 el.querySelector('[class*="name"]') ??
+                el.querySelector("a.link-overlay") ??
                 el.querySelector("a");
               return nameEl?.textContent?.trim().slice(0, 80) ?? "";
             });
@@ -902,10 +903,12 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
             try {
               const cardName = await moreCards[c].evaluate((el) => {
                 const nameEl =
+                  el.querySelector(".search-business-snippet-view__title") ??
                   el.querySelector("h2") ??
                   el.querySelector("h3") ??
                   el.querySelector('[class*="title"]') ??
                   el.querySelector('[class*="name"]') ??
+                  el.querySelector("a.link-overlay") ??
                   el.querySelector("a");
                 return nameEl?.textContent?.trim().slice(0, 80) ?? "";
               });
@@ -983,7 +986,9 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
           const categoryDiag = await page.evaluate(() => {
             const results: Record<string, string> = {};
             for (const sel of [
+              "a.business-categories-view__category",
               'a[class*="rubric"]',
+              '[class*="business-categorie"]',
               '[class*="business-category"]',
               '[class*="rubric"]',
               '[class*="category"]',
@@ -1128,6 +1133,7 @@ async function extractBusinessData(
   // Name: try multiple selectors
   const name = await extractText(
     page,
+    "h1.card-title-view__title",
     "h1",
     '[class*="business-name"]',
     '[class*="title"]',
@@ -1138,6 +1144,7 @@ async function extractBusinessData(
   // Rating: look for star rating elements
   const ratingText = await extractAriaLabel(
     page,
+    'div[class*="business-rating-badge-view"]',
     'span[class*="rating"]',
     'div[class*="stars"]',
     '[class*="business-rating"]'
@@ -1153,6 +1160,7 @@ async function extractBusinessData(
   const reviewText = await extractText(
     page,
     'span[class*="rating__count"]',
+    'button[class*="business-rating"]',
     'a[class*="reviews"]',
     '[class*="review-count"]',
     'span[class*="business-rating"] span:last-child'
@@ -1167,6 +1175,8 @@ async function extractBusinessData(
   // Category / rubric -- try most specific selectors first, validate result
   let category = await extractText(
     page,
+    "a.business-categories-view__category",
+    '[class*="business-categorie"]',
     'a[class*="rubric"]',
     '[class*="business-category"]',
     '[class*="rubric"]',
@@ -1186,13 +1196,21 @@ async function extractBusinessData(
   );
 
   // Address
-  const address = await extractText(
+  let address = await extractText(
     page,
+    "div.business-contacts-view__address-link",
     '[class*="address"]',
-    '[itemprop="address"]',
     '[class*="business-address"]',
     'span[class*="address"]'
   );
+  // Fallback: try meta[itemprop="address"] content attribute
+  if (!address) {
+    address = await extractAttribute(
+      page,
+      "content",
+      'meta[itemprop="address"]'
+    );
+  }
   console.log(
     `[DEBUG] extractBusinessData address: matched="${address ?? "none"}"`
   );
@@ -1200,6 +1218,7 @@ async function extractBusinessData(
   // Phone
   const phoneText = await extractText(
     page,
+    "div.card-phones-view__number",
     '[class*="phone"]',
     'a[href^="tel:"]',
     '[class*="business-phone"]',
@@ -1216,7 +1235,10 @@ async function extractBusinessData(
   let website: string | undefined;
   try {
     const websiteEl = await page.$(
-      'a[class*="website"], a[class*="link__text"], a[href]:not([href^="tel:"]):not([href^="mailto:"]):not([href^="#"])'
+      'div.business-urls-view__url a[itemprop="url"], ' +
+        "div.business-urls-view__url a[href], " +
+        'a[class*="website"], a[class*="link__text"], ' +
+        'a[href]:not([href^="tel:"]):not([href^="mailto:"]):not([href^="#"])'
     );
     if (websiteEl) {
       const href = await websiteEl.evaluate(
@@ -1238,6 +1260,7 @@ async function extractBusinessData(
   // Hours / schedule
   const hours = await extractText(
     page,
+    "._working-status",
     '[class*="schedule"]',
     '[class*="hours"]',
     '[class*="work-time"]',
