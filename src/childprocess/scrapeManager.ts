@@ -154,13 +154,8 @@ export class ScrapeManager {
         // '--disable-features=IsolateOrigins',
         // '--disable-site-isolation-trials'
       ],
-      //fix google account can not login
-      // ignoreDefaultArgs: [
-      //   "--enable-automation",
-      //   "--disable-extensions",
-      //   "--disable-default-apps",
-      //   "--disable-component-extensions-with-background-pages",
-      // ],
+      // Remove automation flags that expose Puppeteer to bot detection
+      ignoreDefaultArgs: ["--enable-automation"],
       // the number of pages to scrape for each keyword
       num_pages: 1,
       // path to output file, data will be stored in JSON
@@ -199,7 +194,7 @@ export class ScrapeManager {
       // check if headless chrome escapes common detection techniques
       // this is a quick test and should be used for debugging
       test_evasion: true,
-      apply_evasion_techniques: false,
+      apply_evasion_techniques: true,
       // settings for puppeteer-cluster
       puppeteer_cluster_config: {
         timeout: 30 * 60 * 1000, // max timeout set to 30 minutes
@@ -335,7 +330,12 @@ export class ScrapeManager {
         const res = {
           headless: this.config.headless,
           ignoreHTTPSErrors: true,
-          args: [...this.config.chrome_flags, `--user-agent=${userAgents}`],
+          ignoreDefaultArgs: this.config.ignoreDefaultArgs as string[],
+          args: [
+            ...this.config.chrome_flags,
+            `--user-agent=${userAgents}`,
+            "--disable-blink-features=AutomationControlled",
+          ],
         };
         // if(userAgents.length>0){
         //   res.args.push(`--user-agent=${userAgents}`)
