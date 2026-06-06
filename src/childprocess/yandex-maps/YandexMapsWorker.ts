@@ -9,8 +9,9 @@
  * - Sends:    { type: 'progress', ... } | { type: 'result', ... }
  */
 
-import { launch, type Browser, type Page } from "puppeteer";
+import { type Browser, type Page } from "puppeteer";
 import useProxy from "@lem0-packages/puppeteer-page-proxy";
+import { BrowserManager } from "@/modules/browserManager";
 import type {
   YandexMapsSearchResult,
   YandexMapsBusinessResult,
@@ -373,24 +374,16 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
 
     // Stage: launching browser
     sendProgress(requestId, "launching", 0, maxResults, "Launching browser...");
-    browser = await launch({
+    const browserManager = new BrowserManager();
+    browser = await browserManager.launchWithStealth({
       headless: !showBrowser,
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-      ],
     });
 
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 800 });
 
     // Set a realistic user agent
-    await page.setUserAgent(
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    );
+    await page.setUserAgent(browserManager.getRandomUserAgent());
 
     // Apply cookies if provided (from a logged-in account)
     if (msg.cookies && msg.cookies.length > 0) {
