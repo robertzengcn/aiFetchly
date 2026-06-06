@@ -517,9 +517,6 @@ export class SqliteDb {
     if (!filepath || filepath.length === 0) {
       // If we have a valid instance, return it instead of creating invalid one
       if (SqliteDb.instance && SqliteDb.instance.connection) {
-        console.warn(
-          "getInstance called with empty path, returning existing instance"
-        );
         return SqliteDb.instance;
       }
       throw new Error("Cannot create SqliteDb instance with empty filepath");

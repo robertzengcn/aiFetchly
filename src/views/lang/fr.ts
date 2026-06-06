@@ -18,6 +18,7 @@ export default {
     uninstalling: "Désinstallation",
     reset: "Réinitialiser",
     submit: "Envoyer",
+    save: "Enregistrer",
     update: "Mettre à jour",
     success: "Succès",
     fill_require_field: "Veuillez remplir tous les champs obligatoires",
