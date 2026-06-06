@@ -51,6 +51,16 @@
         <v-btn :value="1" color="success">Yes</v-btn>
       </v-btn-toggle>
 
+      <v-switch
+        v-if="aiOptionVisible"
+        v-model="aiSupportEnabled"
+        :label="t('emailextraction.ai_support_enabled') || 'Enable AI Enrichment'"
+        :hint="t('emailextraction.ai_support_hint') || 'Extract phone, address, social links using AI'"
+        persistent-hint
+        color="primary"
+        class="mt-3"
+      ></v-switch>
+
 
       <div class="d-flex justify-space-between mt-4 mb-4">
         <v-btn color="success" type="submit" :loading="loading" class="flex-grow-1 mr-2">
@@ -98,8 +108,10 @@ import SearchResultSelectTable from "@/views/pages/search/widgets/SearchResultSe
 import { ProxyEntity,ProxyListEntity } from "@/entityTypes/proxyType";
 import {SearchtaskItem } from "@/entityTypes/searchControlType"
 import {EmailscFormdata, EmailSearchTaskDetail} from '@/entityTypes/emailextraction-type'
-import {EMAILEXTRACTIONMESSAGE} from "@/config/channellist"
+import {EMAILEXTRACTIONMESSAGE, QUERY_USER_INFO} from "@/config/channellist"
 import { CommonDialogMsg } from "@/entityTypes/commonType"
+import { UserInfoType } from "@/entityTypes/userType"
+import { windowInvoke } from "@/views/utils/apirequest"
 
 // Props for edit mode (for backward compatibility)
 const props = defineProps({
@@ -163,6 +175,8 @@ const concurrent_quantity = ref(1);
 const proxyValue = ref<Array<ProxyEntity>>([]);
 const proxytableshow = ref(false);
 const searchtaskId=ref<number>(0);
+const aiSupportEnabled = ref(false);
+const aiOptionVisible = ref(false);
 
 // Task data for edit mode
 const taskData = ref<EmailSearchTaskDetail | null>(null);
@@ -227,6 +241,9 @@ const loadTaskData = async () => {
       if (task.proxies && task.proxies.length > 0) {
         proxyValue.value = task.proxies;
       }
+
+      // Set AI support toggle
+      aiSupportEnabled.value = task.aiSupportEnabled || false;
     }
   } catch (error) {
     console.error('Error loading task data:', error);
@@ -236,8 +253,17 @@ const loadTaskData = async () => {
   }
 };
 
-onMounted(() => {
+onMounted(async () => {
   initialize();
+  // Check AI enabled status
+  try {
+    const userInfo = await windowInvoke(QUERY_USER_INFO) as UserInfoType | undefined;
+    if (userInfo?.aiEnabled) {
+      aiOptionVisible.value = true;
+    }
+  } catch (e) {
+    console.error('Failed to check AI enabled status:', e);
+  }
   if (isEditMode.value) {
     loadTaskData();
   } else {
@@ -371,7 +397,8 @@ async function onSubmit() {
     proxys:proxyValue.value,
     searchTaskId:searchtaskId.value,
     processTimeout:processTimeout.value,
-    maxPageNumber:maxPageNumber.value
+    maxPageNumber:maxPageNumber.value,
+    aiSupportEnabled: aiSupportEnabled.value,
    }
    console.log(scraperData)
    
