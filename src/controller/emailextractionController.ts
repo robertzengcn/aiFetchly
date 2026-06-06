@@ -289,4 +289,49 @@ export class EmailextractionController {
     // Delete the task
     await this.emailSeachTaskModule.deleteTask(taskId);
   }
+
+  /**
+   * Converts email extraction results to CSV format with enrichment columns
+   * @param results - Array of email extraction results to convert
+   * @returns CSV string with headers and data rows
+   */
+  public convertToCSV(results: EmailResultDisplay[]): string {
+    if (results.length === 0) {
+      return "";
+    }
+
+    const headers = [
+      "ID",
+      "URL",
+      "Page Title",
+      "Emails",
+      "Record Time",
+      "Phone",
+      "Address",
+      "Social Links",
+      "AI Status",
+    ];
+
+    const csvRows = results.map((result) => [
+      this.escapeCSV(String(result.id ?? "")),
+      this.escapeCSV(result.url ?? ""),
+      this.escapeCSV(result.pageTitle ?? ""),
+      this.escapeCSV(result.emails?.join("; ") ?? ""),
+      this.escapeCSV(result.recordTime ?? ""),
+      this.escapeCSV(result.phone ?? ""),
+      this.escapeCSV(result.address ?? ""),
+      this.escapeCSV(result.socialLinks?.join("; ") ?? ""),
+      this.escapeCSV(result.aiEnrichmentStatus ?? ""),
+    ]);
+
+    const csvContent = [headers, ...csvRows]
+      .map((row) => row.map((field) => `"${field}"`).join(","))
+      .join("\n");
+
+    return csvContent;
+  }
+
+  private escapeCSV(value: string): string {
+    return value.replace(/"/g, '""');
+  }
 }
