@@ -27,19 +27,19 @@ export class EmailSearchResultEntity extends AuditableEntity {
   record_time: string;
 
   @Column("text", { nullable: true })
-  phone: string;
+  phone: string | null;
 
   @Column("text", { nullable: true })
-  address: string;
+  address: string | null;
 
   @Column("text", { nullable: true })
-  socialLinks: string;
+  socialLinks: string | null;
 
   @Column("text", { nullable: true, default: "none" })
-  aiEnrichmentStatus: string;
+  aiEnrichmentStatus: string | null;
 
   @Column("text", { nullable: true })
-  aiEnrichmentError: string;
+  aiEnrichmentError: string | null;
 
   @Column("real", { nullable: true, default: 0 })
   aiConfidence: number;
