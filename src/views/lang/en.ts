@@ -17,6 +17,7 @@ export default {
     uninstalling: "uninstalling",
     reset: "reset",
     submit: "submit",
+    save: "save",
     update: "update",
     success: "success",
     fill_require_field: "Please fill all required fields",

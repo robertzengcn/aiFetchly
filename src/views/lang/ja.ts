@@ -18,6 +18,7 @@ export default {
     uninstalling: "アンインストール中",
     reset: "リセット",
     submit: "送信",
+    save: "保存",
     update: "更新",
     success: "成功",
     fill_require_field: "必須項目をすべて入力してください",
