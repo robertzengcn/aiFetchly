@@ -289,6 +289,21 @@ async function detectCaptcha(page: Page): Promise<boolean> {
       );
       if (captchaElements.length > 0) return true;
 
+      // Check for "not a robot" / verification text on the page
+      const bodyText = document.body?.textContent?.toLowerCase() ?? "";
+      if (
+        bodyText.includes("confirm that you are not a robot") ||
+        bodyText.includes("confirm you're not a robot") ||
+        bodyText.includes("verify you are human") ||
+        bodyText.includes("are you a robot") ||
+        bodyText.includes("are you human") ||
+        bodyText.includes("checking your browser") ||
+        bodyText.includes("please confirm") ||
+        bodyText.includes("smartcaptcha")
+      ) {
+        return true;
+      }
+
       return false;
     });
 
@@ -299,8 +314,16 @@ async function detectCaptcha(page: Page): Promise<boolean> {
     if (
       title.includes("captcha") ||
       title.includes("verification") ||
-      title.includes("verify you are human")
+      title.includes("verify you are human") ||
+      title.includes("attention") ||
+      title.includes("please confirm")
     ) {
+      return true;
+    }
+
+    // Check URL for captcha redirect
+    const url = page.url().toLowerCase();
+    if (url.includes("captcha") || url.includes("showcaptcha")) {
       return true;
     }
 
@@ -386,6 +409,57 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
 
     // Set a realistic user agent
     await page.setUserAgent(browserManager.getRandomUserAgent());
+
+    // ── Yandex-specific anti-detection (mirrors yandexScraper.ts) ──
+    // These evaluateOnNewDocument scripts run BEFORE any page JS executes.
+    await page.evaluateOnNewDocument(() => {
+      // Hide navigator.webdriver
+      Object.defineProperty(navigator, "webdriver", {
+        get: () => undefined,
+        configurable: true,
+      });
+
+      // Realistic navigator properties
+      Object.defineProperty(navigator, "platform", {
+        get: () => "Win32",
+      });
+      Object.defineProperty(navigator, "hardwareConcurrency", {
+        get: () => 8,
+        configurable: true,
+      });
+      Object.defineProperty(navigator, "deviceMemory", {
+        get: () => 8,
+        configurable: true,
+      });
+      Object.defineProperty(navigator, "maxTouchPoints", {
+        get: () => 0,
+        configurable: true,
+      });
+
+      // Hide CDP / Puppeteer detection vectors
+      const originalHasOwnProperty = Object.prototype.hasOwnProperty;
+      Object.prototype.hasOwnProperty = function (prop: string) {
+        if (
+          prop === "__cdpBindings__" ||
+          prop === "__puppeteer_evaluation_script__"
+        ) {
+          return false;
+        }
+        return originalHasOwnProperty.call(this, prop);
+      };
+
+      // Jitter Date.now to defeat timing-based fingerprinting
+      const originalDateNow = Date.now;
+      const offset = Math.floor(Math.random() * 3);
+      Date.now = function () {
+        return originalDateNow() + offset;
+      };
+    });
+
+    // Simulate a realistic mouse position before page loads
+    const startX = Math.floor(Math.random() * 640) + 320;
+    const startY = Math.floor(Math.random() * 240) + 240;
+    await page.mouse.move(startX, startY, { steps: 5 });
 
     // Apply cookies if provided (from a logged-in account)
     if (msg.cookies && msg.cookies.length > 0) {
