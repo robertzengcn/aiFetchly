@@ -50,10 +50,14 @@ export type EmailClusterdata = {
   visited?: Set<string>;
   maxPageNumber?: number;
   aiSupportEnabled?: boolean;
+  bestCandidate?: EmailAiCandidate;
+  aiEnrichmentRequested?: boolean;
+  aiEnrichmentResult?: EmailAiEnrichment;
   callback?: (arg: EmailResult) => void;
 };
 export type EmailDatascraper = {
   urls: Array<string>;
+  aiSupportEnabled?: boolean;
   callback?: (arg: EmailResult) => void;
 };
 export type EmailSearchData = {

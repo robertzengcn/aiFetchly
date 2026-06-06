@@ -22,6 +22,10 @@ import {
 import { EmailsearchUrlEntity } from "@/model/emailsearchUrldb";
 import { EmailsControldata } from "@/entityTypes/emailextraction-type";
 import {
+  EmailAiEnrichmentHandler,
+  EmailAiRequest,
+} from "@/modules/EmailAiEnrichmentHandler";
+import {
   WriteLog,
   getApplogspath,
   getRandomValues,
@@ -202,7 +206,20 @@ export class EmailSearchTaskModule extends BaseModule {
     child.on("message", (message) => {
       console.log("get message from child");
       console.log("Message from child:", JSON.parse(message));
-      const childdata = JSON.parse(message) as ProcessMessage<EmailResult>;
+      const parsed = JSON.parse(message);
+
+      // Handle AI enrichment request from child process
+      if (parsed.type === "EMAIL_AI_ENRICHMENT_REQUEST") {
+        const aiRequest = parsed as EmailAiRequest;
+        const aiHandler = new EmailAiEnrichmentHandler(runLogfile);
+        aiHandler.handleRequest(aiRequest, (response) => {
+          child.postMessage(JSON.stringify(response));
+        });
+        return;
+      }
+
+      // Handle regular email result save
+      const childdata = parsed as ProcessMessage<EmailResult>;
       if (childdata.action == "saveres") {
         if (childdata.data) {
           //save result
