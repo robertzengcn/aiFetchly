@@ -1,8 +1,8 @@
-import { Page } from 'puppeteer';
-import winston from "winston"
-import {ProxyServer} from "@/entityTypes/proxyType"
-import {ProxyEntity} from '@/entityTypes/proxyType'
-import {CookiesType} from "@/entityTypes/cookiesType"
+import { Page } from "puppeteer";
+import winston from "winston";
+import { ProxyServer } from "@/entityTypes/proxyType";
+import { ProxyEntity } from "@/entityTypes/proxyType";
+import { CookiesType } from "@/entityTypes/cookiesType";
 
 export type SMconfig = {
   logger: winston.Logger;
@@ -13,11 +13,12 @@ export type SMconfig = {
   use_proxies_only: boolean;
   custom_func: string;
   chrome_flags: Array<string>;
+  ignoreDefaultArgs?: string[];
   puppeteer_cluster_config: {
     maxConcurrency: number;
     monitor: boolean;
     timeout: number;
-  }
+  };
   random_user_agent: boolean;
   user_agent: string;
   headless: boolean;
@@ -29,8 +30,8 @@ export type SMconfig = {
   log_ip_address?: boolean;
   scrape_from_file?: string;
   sleep_range?: {
-    min: number,
-    max: number
+    min: number;
+    max: number;
   };
   screen_output?: boolean;
   html_output?: boolean;
@@ -47,32 +48,32 @@ export type SMconfig = {
   save_html?: boolean;
   ai_recovery?: {
     enabled: boolean;
-    model?: string;                // AI model to use (default: 'gpt-4o-mini')
-    maxAttempts?: number;          // Max recovery attempts per operation (default: 2)
-    timeoutMs?: number;            // Timeout for AI response (default: 30000)
-    includeScreenshot?: boolean;   // Include screenshot for vision models
-    operations?: string[];         // Which operations to enable recovery for
-    rateLimitWindow?: number;      // Time window for rate limiting in ms (default: 60000)
-    rateLimitMax?: number;         // Max requests per window (default: 10)
-    recoveryDelayMs?: number;      // Delay after recovery before retry (default: 2000)
+    model?: string; // AI model to use (default: 'gpt-4o-mini')
+    maxAttempts?: number; // Max recovery attempts per operation (default: 2)
+    timeoutMs?: number; // Timeout for AI response (default: 30000)
+    includeScreenshot?: boolean; // Include screenshot for vision models
+    operations?: string[]; // Which operations to enable recovery for
+    rateLimitWindow?: number; // Time window for rate limiting in ms (default: 60000)
+    rateLimitMax?: number; // Max requests per window (default: 10)
+    recoveryDelayMs?: number; // Delay after recovery before retry (default: 2000)
     networkIdleTimeoutMs?: number; // Timeout for waitForNetworkIdle after recovery (default: 30000)
-    actionDelayMin?: number;       // Minimum delay between recovery actions in ms (default: 200)
-    actionDelayMax?: number;       // Maximum delay between recovery actions in ms (default: 500)
+    actionDelayMin?: number; // Minimum delay between recovery actions in ms (default: 200)
+    actionDelayMax?: number; // Maximum delay between recovery actions in ms (default: 500)
   };
-}
+};
 export type pluginType = {
-  results: object,
-  num_keywords: number,
-  num_requests: number,
-  keyword: string
-}
+  results: object;
+  num_keywords: number;
+  num_requests: number;
+  keyword: string;
+};
 
 export interface pluggableType {
-  start_browser?: () => void,
-  close_browser?: () => void,
-  handle_results?: (result: object) => void,
-  handle_metadata?: (data: MetadataType) => void,
-  before_keyword_scraped?: () => void
+  start_browser?: () => void;
+  close_browser?: () => void;
+  handle_results?: (result: object) => void;
+  handle_metadata?: (data: MetadataType) => void;
+  before_keyword_scraped?: () => void;
 }
 
 export interface ScrapeOptions {
@@ -80,10 +81,10 @@ export interface ScrapeOptions {
   //     logger: logType,
   //     search_engine?: string, keywords?: Array<string>, proxy?: string, apply_evasion_techniques?: boolean, block_assets?: boolean, test_evasion?: boolean, log_http_headers?: boolean, log_ip_address?: boolean
   // },
-  config: SMconfig,
-  context?: object,
-  pluggable?: pluggableType,
-  page?: Page,
+  config: SMconfig;
+  context?: object;
+  pluggable?: pluggableType;
+  page?: Page;
   // browser:Browser
   // platform:string
 }
@@ -113,9 +114,9 @@ export interface ScrapeOptions {
 //   }
 export type SMstruct = {
   // the user agent to scrape with
-  user_agent?: string,
+  user_agent?: string;
   // if random_user_agent is set to True, a random user agent is chosen
-  random_user_agent?: boolean,
+  random_user_agent?: boolean;
   // whether to start the browser in headless mode
   // headless: false,
   // whether debug information should be printed
@@ -123,166 +124,164 @@ export type SMstruct = {
   // level 1: print most important info
   // ...
   // level 4: print all shit nobody wants to know
-  debug_level: number,
+  debug_level: number;
   // specify flags passed to chrome here
-  chrome_flags?: Array<string>,
+  chrome_flags?: Array<string>;
   // path to js module that extends functionality
   // this module should export the functions:
   // get_browser, handle_metadata, close_browser
   // must be an absolute path to the module
   //custom_func: resolve('examples/pluggable.js'),
-  custom_func?: string,
+  custom_func?: string;
   // use a proxy for all connections
   // example: 'socks5://78.94.172.42:1080'
   // example: 'http://118.174.233.10:48400'
-  proxies?: Array<string>,
+  proxies?: Array<string>;
   // a file with one proxy per line. Example:
   // socks5://78.94.172.42:1080
   // http://118.174.233.10:48400
-  proxy_file?: string,
-  use_cluster?: boolean,
+  proxy_file?: string;
+  use_cluster?: boolean;
   puppeteer_cluster_config: {
-    timeout: number, // max timeout set to 10 minutes
-    monitor: boolean,
-    concurrency?: number, // one scraper per tab
-    maxConcurrency: number, // scrape with 1 tab
-  },
-  sleep_range?: Array<number>,
-  headless: boolean,
-  num_pages?: number,
-  page_length?: number,
-  logger?: winston.Logger,
-  debug_log_path?:string,
+    timeout: number; // max timeout set to 10 minutes
+    monitor: boolean;
+    concurrency?: number; // one scraper per tab
+    maxConcurrency: number; // scrape with 1 tab
+  };
+  sleep_range?: Array<number>;
+  headless: boolean;
+  num_pages?: number;
+  page_length?: number;
+  logger?: winston.Logger;
+  debug_log_path?: string;
   // taskid?: number,
   // taskrunId?: number
-  save_html?:boolean,
-  maxPageNumber?:number
-}
+  save_html?: boolean;
+  maxPageNumber?: number;
+};
 export type SearchDataParam = {
-  keywords: Array<string>,
-  engine: string,
-  num_pages?: number,
-  concurrency?: number,
-  notShowBrowser?: boolean,
-  proxys?: Array<ProxyEntity>,
-  error_log?:string,
-  run_log?:string,
-  debug_log_path?:string,
+  keywords: Array<string>;
+  engine: string;
+  num_pages?: number;
+  concurrency?: number;
+  notShowBrowser?: boolean;
+  proxys?: Array<ProxyEntity>;
+  error_log?: string;
+  run_log?: string;
+  debug_log_path?: string;
   //useLocalbrowserdata:boolean,
-  localBrowser?:string
-  accounts?:Array<number>
+  localBrowser?: string;
+  accounts?: Array<number>;
   cookies?: Array<Array<CookiesType>>;
-}
+};
 export interface clusterData {
-  page: Page
+  page: Page;
 }
 export interface ClusterSearchData {
   keywords: string[];
   proxyServer?: ProxyServer | null;
   cookies?: Array<CookiesType>;
-  accountId?: number;  // Track which account's cookies are being used
+  accountId?: number; // Track which account's cookies are being used
 }
 export type ClusterFunctionparam = {
-  page: Page,
-  data: ClusterSearchData,
+  page: Page;
+  data: ClusterSearchData;
   worker: {
-    id: number
-  },
+    id: number;
+  };
   resultCallback?: (result: ResultParseItemType) => void;
-}
+};
 export type metadataObj = {
-  http_headers?: object,
-  ipinfo?: { ip: string },
-  scraping_detected?: boolean | void
+  http_headers?: object;
+  ipinfo?: { ip: string };
+  scraping_detected?: boolean | void;
 };
 export type RunResult = {
-  results: object,
-  metadata: metadataObj,
-  num_requests: number,
-  updatedCookies?: Array<CookiesType>;  // Updated cookies after scraping
-  accountId?: number;  // Account ID for cookie update
-}
+  results: object;
+  metadata: metadataObj;
+  num_requests: number;
+  updatedCookies?: Array<CookiesType>; // Updated cookies after scraping
+  accountId?: number; // Account ID for cookie update
+};
 export type MetadataType = {
-  elapsed_time?: string,
-  ms_per_keyword?: string,
-  num_requests?: number,
-}
+  elapsed_time?: string;
+  ms_per_keyword?: string;
+  num_requests?: number;
+};
 export type ParseObg = {
-  value: Array<SearchResult>,
-  screenshot: string,
-  html: string
-}
+  value: Array<SearchResult>;
+  screenshot: string;
+  html: string;
+};
 export type ParseType = {
-  [key: number]: ParseObg
-}
+  [key: number]: ParseObg;
+};
 export type ResultParseType = {
-  [key: string]: ParseType
-}
+  [key: string]: ParseType;
+};
 export type ResultParseItemType = {
-  keyword: string,
-  page: number,
-  results?: Array<SearchResult>
-}
+  keyword: string;
+  page: number;
+  results?: Array<SearchResult>;
+};
 
 export type SearchResultWithCookies = {
   results: Array<ResultParseItemType>;
   updatedCookies?: Array<CookiesType>;
   accountId?: number;
-}
+};
 
 export type SearchResult = {
   link: string | null | undefined;
-  title: string | null | undefined
+  title: string | null | undefined;
   snippet: string | null | undefined;
   visible_link?: string | null | undefined;
   date?: string | null | undefined;
-}
+};
 export type SearchData = {
-  num_results: string,
-  no_results: boolean,
-  effective_query: string,
-  right_info: object,
-  results: Array<SearchResult>,
-  top_products: [],
-  right_products: [],
-  top_ads: [],
-  bottom_ads: [],
+  num_results: string;
+  no_results: boolean;
+  effective_query: string;
+  right_info: object;
+  results: Array<SearchResult>;
+  top_products: [];
+  right_products: [];
+  top_ads: [];
+  bottom_ads: [];
   // places: Array<googlePlaces>,
-}
+};
 
 export type SearchDataRun = {
-  results: ResultParseType,
-  metadata: MetadataType,
-}
+  results: ResultParseType;
+  metadata: MetadataType;
+};
 
 export type SearchResEntity = {
-  id?: number,
-  keyword_id: number, 
-  link: string, 
-  title: string|null|undefined, 
-  snippet: string|null|undefined, 
-  visible_link: string|null|undefined
-  record_time?: string|null|undefined
-  ai_industry?: string | null
-  ai_match_score?: number | null
-  ai_reasoning?: string | null
-  ai_client_business?: string | null
-  ai_analysis_time?: string | null
-  ai_analysis_status?: string | null // 'pending', 'analyzing', 'completed', 'failed'
-}
+  id?: number;
+  keyword_id: number;
+  link: string;
+  title: string | null | undefined;
+  snippet: string | null | undefined;
+  visible_link: string | null | undefined;
+  record_time?: string | null | undefined;
+  ai_industry?: string | null;
+  ai_match_score?: number | null;
+  ai_reasoning?: string | null;
+  ai_client_business?: string | null;
+  ai_analysis_time?: string | null;
+  ai_analysis_status?: string | null; // 'pending', 'analyzing', 'completed', 'failed'
+};
 export interface SearchResEntityDisplay extends SearchResEntity {
-  keyword:string, 
-  index?:number
-  ai_industry?: string | null
-  ai_match_score?: number | null
-  ai_reasoning?: string | null
-  ai_client_business?: string | null
-  ai_analysis_time?: string | null
-  ai_analysis_status?: string | null // 'pending', 'analyzing', 'completed', 'failed'
+  keyword: string;
+  index?: number;
+  ai_industry?: string | null;
+  ai_match_score?: number | null;
+  ai_reasoning?: string | null;
+  ai_client_business?: string | null;
+  ai_analysis_time?: string | null;
+  ai_analysis_status?: string | null; // 'pending', 'analyzing', 'completed', 'failed'
 }
 export type SearchResEntityRecord = {
- record:Array<SearchResEntityDisplay>
- total:number
-}
-
-
+  record: Array<SearchResEntityDisplay>;
+  total: number;
+};
