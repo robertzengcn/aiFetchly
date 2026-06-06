@@ -16,6 +16,7 @@ import { CommonMessage } from "@/entityTypes/commonType"
 import {SearchResultModule} from "@/modules/SearchResultModule"
 import {ISearchResultApi} from "@/modules/interface/ISearchResultApi"
 import { EmailSearchTaskModule } from '@/modules/EmailSearchTaskModule'
+import { resolveSearchResultUrls } from "@/main-process/communication/emailExtractionSearchResultUrls";
 export function registerEmailextractionIpcHandlers() {
     // const searchModel = new searhModel();
     // const emailCon = new EmailextractionController();
@@ -78,8 +79,9 @@ export function registerEmailextractionIpcHandlers() {
             //const searchModel = new SearchModule();
             //get search task
             const searchResultModule:ISearchResultApi = new SearchResultModule()
-            const searchResult = await searchResultModule.getSearchResultsByTaskId(qdata.searchTaskId)
-            if(!searchResult){
+            const searchResult = await searchResultModule.getAllSearchResultsByTaskId(qdata.searchTaskId)
+            validUrls.push(...resolveSearchResultUrls(searchResult))
+            if(validUrls.length === 0){
                 const comMsgs: CommonDialogMsg = {
                     status: false,
                     code: 20240705103811,
