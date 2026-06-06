@@ -138,7 +138,8 @@ async function applyCookies(page: Page, cookies: unknown[]): Promise<void> {
 // Extraction helpers
 // ---------------------------------------------------------------------------
 
-/** Extract text content from an element matching one of several selectors. */
+/** Extract text content from an element matching one of several selectors.
+ *  Strips script/style content and validates the result is clean text. */
 async function extractText(
   page: Page,
   ...selectors: string[]
@@ -147,9 +148,23 @@ async function extractText(
     try {
       const el = await page.$(sel);
       if (el) {
-        const text = await el.evaluate((e) => e.textContent?.trim() ?? "");
+        const text = await el.evaluate((e) => {
+          // Clone and remove script/style/noscript to avoid extracting JS/HTML content
+          const clone = e.cloneNode(true) as HTMLElement;
+          for (const child of Array.from(
+            clone.querySelectorAll("script, style, noscript, svg")
+          )) {
+            child.remove();
+          }
+          return clone.textContent?.trim() ?? "";
+        });
         await el.dispose();
-        if (text) return text;
+        console.log(
+          `[DEBUG] extractText selector="${sel}" textLength=${
+            text?.length ?? 0
+          } preview="${text?.slice(0, 100) ?? "none"}"`
+        );
+        if (text && isCleanText(text)) return text;
       }
     } catch {
       continue;
@@ -197,6 +212,26 @@ function parseNumber(text: string | undefined): number | undefined {
   if (!match) return undefined;
   const num = parseFloat(match[0].replace(/,/g, ""));
   return isNaN(num) ? undefined : num;
+}
+
+/** Validate that extracted text is clean (not raw HTML/JS content). */
+function isCleanText(
+  text: string | undefined,
+  maxLength = 500
+): boolean {
+  if (!text || text.length === 0) return false;
+  if (text.length > maxLength) return false;
+  // Reject text that looks like JavaScript or HTML source
+  if (
+    text.includes("window.") ||
+    text.includes("function(") ||
+    text.includes("var ")
+  )
+    return false;
+  if (text.includes("document.") || text.includes("addEventListener"))
+    return false;
+  if ((text.match(/{/g) ?? []).length > 3) return false;
+  return true;
 }
 
 /** Deduplicate results by yandex_id or name+address fallback. */
@@ -451,6 +486,44 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
           `[DEBUG] No result list container found, but card elements detected directly.`
         );
       } catch {
+        // Diagnostic: dump what selectors exist on the page for debugging
+        console.log(`[DEBUG] === SELECTOR DIAGNOSTICS ===`);
+        for (const sel of [...RESULT_LIST_SELECTORS, ...CARD_SELECTORS]) {
+          const count = await page.evaluate((s: string) => {
+            try {
+              return document.querySelectorAll(s).length;
+            } catch {
+              return -1;
+            }
+          }, sel);
+          console.log(`[DEBUG] Selector "${sel}" => ${count} elements`);
+        }
+        // Also try to find generic list/card patterns
+        const genericCounts = await page.evaluate(() => {
+          const results: Record<string, number> = {};
+          for (const sel of [
+            'div[class*="search"]',
+            'a[class*="search"]',
+            'li[class*="search"]',
+            'div[class*="snippet"]',
+            'a[class*="snippet"]',
+            'div[class*="card"]',
+            'div[class*="business"]',
+            'a[class*="business"]',
+            'div[class*="place"]',
+          ]) {
+            try {
+              results[sel] = document.querySelectorAll(sel).length;
+            } catch {
+              results[sel] = -1;
+            }
+          }
+          return results;
+        });
+        console.log(
+          `[DEBUG] Generic selector counts: ${JSON.stringify(genericCounts)}`
+        );
+        console.log(`[DEBUG] === END DIAGNOSTICS ===`);
         throw new Error(
           "Yandex Maps search results not found. The page structure may have changed or no results were returned."
         );
@@ -607,7 +680,26 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
       try {
         // Re-query fresh card handles each iteration (DOM changes after goBack)
         const freshCards = await page.$$(CARD_SELECTORS.join(", "));
-        console.log(`[DEBUG] Fresh card handles on page: ${freshCards.length}`);
+        // Log card names for debugging to identify what we're clicking
+        const freshCardPreviews = await Promise.all(
+          freshCards
+            .slice(0, Math.min(i + 3, freshCards.length))
+            .map(async (card, idx) => {
+              try {
+                const text = await card.evaluate(
+                  (el) => el.textContent?.trim().slice(0, 60) ?? ""
+                );
+                return `[${idx}] "${text}"`;
+              } catch {
+                return `[${idx}] <error>`;
+              }
+            })
+        );
+        console.log(
+          `[DEBUG] Fresh card handles: ${
+            freshCards.length
+          }, previews: ${freshCardPreviews.join(" | ")}`
+        );
 
         if (i >= freshCards.length) {
           console.log(
@@ -644,8 +736,12 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
               console.log(`[DEBUG] Cards not found after re-navigate`);
             });
 
-          // Scroll down to where we were
-          for (let s = 0; s < Math.ceil((i + 1) / 10); s++) {
+          // Scroll down to where we were -- scroll more aggressively to load cards
+          const scrollIterations = Math.max(Math.ceil((i + 1) / 5), 3);
+          console.log(
+            `[DEBUG] Scrolling ${scrollIterations} times to reach card index ${i}...`
+          );
+          for (let s = 0; s < scrollIterations; s++) {
             await page.evaluate(() => {
               const scrollContainer =
                 document.querySelector('div[class*="search-list"]') ??
@@ -670,6 +766,11 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
           }
           await retryCards[i].click();
         } else {
+          // Log what we're about to click
+          const clickPreview = await freshCards[i].evaluate(
+            (el) => el.textContent?.trim().slice(0, 80) ?? ""
+          );
+          console.log(`[DEBUG] Clicking card[${i}]: "${clickPreview}"`);
           await freshCards[i].click();
         }
 
@@ -707,6 +808,40 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
         }
 
         await randomDelay(500, 1000);
+
+        // Diagnostic: log what category/rubric elements exist on the detail page
+        if (i === 0) {
+          const categoryDiag = await page.evaluate(() => {
+            const results: Record<string, string> = {};
+            for (const sel of [
+              'a[class*="rubric"]',
+              '[class*="business-category"]',
+              '[class*="rubric"]',
+              '[class*="category"]',
+            ]) {
+              try {
+                const els = document.querySelectorAll(sel);
+                results[sel] = `${els.length} elements`;
+                if (els.length > 0 && els.length <= 5) {
+                  const previews: string[] = [];
+                  els.forEach((el, idx) => {
+                    const text = el.textContent?.trim().slice(0, 80) ?? "";
+                    previews.push(`[${idx}] "${text}"`);
+                  });
+                  results[sel] += `: ${previews.join(", ")}`;
+                }
+              } catch {
+                results[sel] = "error";
+              }
+            }
+            return results;
+          });
+          console.log(
+            `[DEBUG] Category selectors diagnostic (first card): ${JSON.stringify(
+              categoryDiag
+            )}`
+          );
+        }
 
         // Check captcha after clicking into detail
         const captchaAfterClick = await detectCaptcha(page);
@@ -752,6 +887,11 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
           });
         await randomDelay(800, 1500);
 
+        // Log current URL to verify we're back on search results
+        console.log(
+          `[DEBUG] After goBack, current URL: ${page.url().slice(0, 120)}`
+        );
+
         // Check captcha after going back
         const captchaAfterBack = await detectCaptcha(page);
         if (captchaAfterBack) {
@@ -777,6 +917,32 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
           .catch(() => {
             console.log(`[DEBUG] Cards did not re-appear after goBack`);
           });
+
+        // Scroll down to restore position so next card is visible
+        if (i + 1 < limit) {
+          const restoreScrollIterations = Math.max(Math.ceil((i + 2) / 5), 2);
+          for (let s = 0; s < restoreScrollIterations; s++) {
+            await page.evaluate(() => {
+              const scrollContainer =
+                document.querySelector('div[class*="search-list"]') ??
+                document.querySelector('div[class*="scroll"]') ??
+                document.scrollingElement;
+              if (scrollContainer) {
+                (scrollContainer as Element).scrollTop = (
+                  scrollContainer as Element
+                ).scrollHeight;
+              }
+            });
+            await sleep(800);
+          }
+          const restoredCards = await page.$$(CARD_SELECTORS.join(", "));
+          console.log(
+            `[DEBUG] After scroll restore: ${
+              restoredCards.length
+            } cards visible (need index ${i + 1})`
+          );
+        }
+
         console.log(
           `[DEBUG] Back on results page, collectedCards so far: ${collectedCards.length}`
         );
@@ -891,14 +1057,23 @@ async function extractBusinessData(
     }", parsed=${reviewCount ?? "none"}`
   );
 
-  // Category / rubric
-  const category = await extractText(
+  // Category / rubric -- try most specific selectors first, validate result
+  let category = await extractText(
     page,
-    '[class*="category"]',
-    '[class*="rubric"]',
+    'a[class*="rubric"]',
     '[class*="business-category"]',
-    'a[class*="rubric"]'
+    '[class*="rubric"]',
+    '[class*="category"]'
   );
+  // Validate category is clean text (not JS/HTML), limit to 200 chars
+  if (!isCleanText(category, 200)) {
+    console.log(
+      `[DEBUG] extractBusinessData category REJECTED as unclean: length=${
+        category?.length ?? 0
+      } preview="${category?.slice(0, 100) ?? "none"}"`
+    );
+    category = undefined;
+  }
   console.log(
     `[DEBUG] extractBusinessData category: matched="${category ?? "none"}"`
   );
