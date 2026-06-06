@@ -496,13 +496,31 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
     // Stage: loading
     sendProgress(requestId, "loading", 0, maxResults, "Loading Yandex Maps...");
 
+    // Use domcontentloaded (not networkidle2) to capture the page early,
+    // before Yandex's SPA can auto-navigate to a business detail page.
     await page.goto(searchUrl, {
-      waitUntil: "networkidle2",
+      waitUntil: "domcontentloaded",
       timeout: 60000,
     });
 
-    // Extra wait for SPA to render search results
-    await sleep(3000);
+    // Wait briefly for the SPA to start rendering, then immediately
+    // look for selectors. Do NOT use a long sleep — it gives the SPA
+    // time to auto-click into a detail page.
+    await sleep(1500);
+
+    // If the page auto-navigated to a detail page, go back to search list.
+    const currentUrl = page.url();
+    const isOnDetailPage = /\/maps\/org\//.test(currentUrl);
+    if (isOnDetailPage) {
+      console.log(
+        `[DEBUG] Page auto-navigated to detail page: ${currentUrl}. Navigating back to search URL.`
+      );
+      await page.goto(searchUrl, {
+        waitUntil: "domcontentloaded",
+        timeout: 60000,
+      });
+      await sleep(1500);
+    }
 
     // Log page state for debugging
     const pageTitle = await page.title();
@@ -617,72 +635,72 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
     );
 
     let resultListSelector: string | undefined;
-    for (const sel of RESULT_LIST_SELECTORS) {
-      try {
-        await page.waitForSelector(sel, { timeout: 15000 });
-        resultListSelector = sel;
-        console.log(`[DEBUG] Result list matched selector: ${sel}`);
-        break;
-      } catch {
-        console.log(`[DEBUG] Result list selector "${sel}" not found`);
-        continue;
-      }
-    }
+    // Combine all selectors and wait for ANY of them at once (faster than sequential)
+    const allSearchSelectors = [...RESULT_LIST_SELECTORS, ...CARD_SELECTORS];
+    const combinedSelector = allSearchSelectors.join(", ");
 
-    if (!resultListSelector) {
-      // Try a broader fallback: any container with multiple card-like elements
-      try {
-        await page.waitForSelector(CARD_SELECTORS.join(", "), {
-          timeout: 5000,
-        });
-        console.log(
-          `[DEBUG] No result list container found, but card elements detected directly.`
+    try {
+      await page.waitForSelector(combinedSelector, { timeout: 20000 });
+      // Figure out which specific selector matched
+      for (const sel of RESULT_LIST_SELECTORS) {
+        const count = await page.evaluate(
+          (s: string) => document.querySelectorAll(s).length,
+          sel
         );
-      } catch {
-        // Diagnostic: dump what selectors exist on the page for debugging
-        console.log(`[DEBUG] === SELECTOR DIAGNOSTICS (full dump) ===`);
-        for (const sel of [...RESULT_LIST_SELECTORS, ...CARD_SELECTORS]) {
-          const count = await page.evaluate((s: string) => {
-            try {
-              return document.querySelectorAll(s).length;
-            } catch {
-              return -1;
-            }
-          }, sel);
-          console.log(`[DEBUG] Selector "${sel}" => ${count} elements`);
+        if (count > 0) {
+          resultListSelector = sel;
+          console.log(`[DEBUG] Result list matched selector: ${sel}`);
+          break;
         }
-
-        // Dump a sample of the visible DOM to see what's actually there
-        const domSample = await page.evaluate(() => {
-          // Get all elements with class attributes that might be search results
-          const allDivs = document.querySelectorAll(
-            "div[class], a[class], li[class]"
-          );
-          const samples: string[] = [];
-          for (let i = 0; i < allDivs.length && samples.length < 30; i++) {
-            const el = allDivs[i];
-            const cls = el.className?.toString() ?? "";
-            if (cls.length > 5) {
-              samples.push(
-                `<${el.tagName.toLowerCase()} class="${cls.slice(
-                  0,
-                  100
-                )}"> text="${(el.textContent ?? "").slice(0, 50)}"`
-              );
-            }
-          }
-          return samples;
-        });
+      }
+      if (!resultListSelector) {
         console.log(
-          `[DEBUG] DOM sample (first 30 elements with classes):\n${domSample.join(
-            "\n"
-          )}`
-        );
-        console.log(`[DEBUG] === END DIAGNOSTICS ===`);
-        throw new Error(
-          "Yandex Maps search results not found. The page structure may have changed or no results were returned."
+          `[DEBUG] No result list container, but card elements detected directly.`
         );
       }
+    } catch {
+      // Diagnostic: dump what selectors exist on the page for debugging
+      console.log(`[DEBUG] === SELECTOR DIAGNOSTICS (full dump) ===`);
+      for (const sel of [...RESULT_LIST_SELECTORS, ...CARD_SELECTORS]) {
+        const count = await page.evaluate((s: string) => {
+          try {
+            return document.querySelectorAll(s).length;
+          } catch {
+            return -1;
+          }
+        }, sel);
+        console.log(`[DEBUG] Selector "${sel}" => ${count} elements`);
+      }
+
+      // Dump a sample of the visible DOM to see what's actually there
+      const domSample = await page.evaluate(() => {
+        const allDivs = document.querySelectorAll(
+          "div[class], a[class], li[class]"
+        );
+        const samples: string[] = [];
+        for (let i = 0; i < allDivs.length && samples.length < 30; i++) {
+          const el = allDivs[i];
+          const cls = el.className?.toString() ?? "";
+          if (cls.length > 5) {
+            samples.push(
+              `<${el.tagName.toLowerCase()} class="${cls.slice(
+                0,
+                100
+              )}"> text="${(el.textContent ?? "").slice(0, 50)}"`
+            );
+          }
+        }
+        return samples;
+      });
+      console.log(
+        `[DEBUG] DOM sample (first 30 elements with classes):\n${domSample.join(
+          "\n"
+        )}`
+      );
+      console.log(`[DEBUG] === END DIAGNOSTICS ===`);
+      throw new Error(
+        "Yandex Maps search results not found. The page structure may have changed or no results were returned."
+      );
     }
 
     // Stage: extracting -- scroll to load more results
