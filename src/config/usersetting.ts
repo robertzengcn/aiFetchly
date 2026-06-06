@@ -1,5 +1,5 @@
 export const USERSDBPATH='user_dbpath'
-export const TOKENNAME='user_social-market-token'
+export const TOKENNAME='user-social-market-token'
 export const REFRESHTOKEN='user_refresh_token'
 export const TOKENEXPIRY='user_token_expiry'
 export const REFRESHTOKENEXPIRY='user_refresh_token_expiry'
