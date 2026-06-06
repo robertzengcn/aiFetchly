@@ -215,10 +215,7 @@ function parseNumber(text: string | undefined): number | undefined {
 }
 
 /** Validate that extracted text is clean (not raw HTML/JS content). */
-function isCleanText(
-  text: string | undefined,
-  maxLength = 500
-): boolean {
+function isCleanText(text: string | undefined, maxLength = 500): boolean {
   if (!text || text.length === 0) return false;
   if (text.length > maxLength) return false;
   // Reject text that looks like JavaScript or HTML source
@@ -638,7 +635,12 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
       `Extracting ${limit} businesses...`
     );
 
-    for (let i = 0; i < limit; i++) {
+    // Track already-clicked card names to prevent clicking the same card twice
+    const clickedNames = new Set<string>();
+    let consecutiveSkips = 0;
+    const maxConsecutiveSkips = limit + 5; // Safety: stop if we skip too many
+
+    for (let i = 0; i < limit && consecutiveSkips < maxConsecutiveSkips; i++) {
       if (isCancelled) {
         sendProgress(
           requestId,
@@ -656,15 +658,22 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
         return;
       }
 
+      // Stop if we've collected enough unique results
+      if (collectedCards.length >= maxResults) break;
+
       sendProgress(
         requestId,
         "extracting",
-        i,
+        collectedCards.length,
         maxResults,
-        `Extracting business ${i + 1} of ${limit}...`
+        `Extracting business ${collectedCards.length + 1} of ${maxResults}...`
       );
 
-      console.log(`[DEBUG] === Extracting card ${i + 1}/${limit} ===`);
+      console.log(
+        `[DEBUG] === Attempt ${i + 1}, collected=${
+          collectedCards.length
+        }, clickedNames=${clickedNames.size} ===`
+      );
 
       // Rotate proxy for this card (round-robin)
       if (proxies && proxies.length > 0 && i > 0) {
@@ -678,37 +687,14 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
       }
 
       try {
-        // Re-query fresh card handles each iteration (DOM changes after goBack)
-        const freshCards = await page.$$(CARD_SELECTORS.join(", "));
-        // Log card names for debugging to identify what we're clicking
-        const freshCardPreviews = await Promise.all(
-          freshCards
-            .slice(0, Math.min(i + 3, freshCards.length))
-            .map(async (card, idx) => {
-              try {
-                const text = await card.evaluate(
-                  (el) => el.textContent?.trim().slice(0, 60) ?? ""
-                );
-                return `[${idx}] "${text}"`;
-              } catch {
-                return `[${idx}] <error>`;
-              }
-            })
-        );
-        console.log(
-          `[DEBUG] Fresh card handles: ${
-            freshCards.length
-          }, previews: ${freshCardPreviews.join(" | ")}`
-        );
-
-        if (i >= freshCards.length) {
-          console.log(
-            `[DEBUG] Card index ${i} out of range (only ${freshCards.length} cards). Re-navigating to search URL.`
-          );
+        // ── For i > 0, always re-navigate to search URL (goBack is unreliable in SPA) ──
+        if (i > 0) {
+          console.log(`[DEBUG] Re-navigating to search URL for next card...`);
           await page.goto(searchUrl, {
             waitUntil: "domcontentloaded",
             timeout: 60000,
           });
+          await randomDelay(500, 1000);
 
           // Check captcha after re-navigation
           const captchaAfterReNav = await detectCaptcha(page);
@@ -729,19 +715,89 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
             return;
           }
 
-          // Wait for cards to appear again
+          // Wait for cards to appear
           await page
             .waitForSelector(CARD_SELECTORS.join(", "), { timeout: 15000 })
             .catch(() => {
               console.log(`[DEBUG] Cards not found after re-navigate`);
             });
 
-          // Scroll down to where we were -- scroll more aggressively to load cards
-          const scrollIterations = Math.max(Math.ceil((i + 1) / 5), 3);
+          // Scroll down to load more cards -- enough to show cards we haven't clicked yet
+          const targetLoaded = Math.min(clickedNames.size + 10, maxResults + 5);
+          const scrollIterations = Math.max(Math.ceil(targetLoaded / 5), 3);
           console.log(
-            `[DEBUG] Scrolling ${scrollIterations} times to reach card index ${i}...`
+            `[DEBUG] Scrolling ${scrollIterations} times to load ~${targetLoaded} cards...`
           );
           for (let s = 0; s < scrollIterations; s++) {
+            await page.evaluate(() => {
+              const scrollContainer =
+                document.querySelector('div[class*="search-list"]') ??
+                document.querySelector('div[class*="scroll"]') ??
+                document.querySelector('div[class*="search-business"]') ??
+                document.scrollingElement;
+              if (scrollContainer) {
+                (scrollContainer as Element).scrollTop = (
+                  scrollContainer as Element
+                ).scrollHeight;
+              }
+            });
+            await sleep(1000);
+          }
+        }
+
+        // Query all visible card handles
+        const freshCards = await page.$$(CARD_SELECTORS.join(", "));
+        // Log card previews for debugging
+        const freshCardPreviews = await Promise.all(
+          freshCards.slice(0, 15).map(async (card, idx) => {
+            try {
+              const text = await card.evaluate(
+                (el) => el.textContent?.trim().slice(0, 60) ?? ""
+              );
+              return `[${idx}] "${text}"`;
+            } catch {
+              return `[${idx}] <error>`;
+            }
+          })
+        );
+        console.log(
+          `[DEBUG] Cards on page: ${
+            freshCards.length
+          }, first 15: ${freshCardPreviews.join(" | ")}`
+        );
+
+        // ── Find the first card that hasn't been clicked yet ──
+        let targetIndex = -1;
+        for (let c = 0; c < freshCards.length; c++) {
+          try {
+            const cardName = await freshCards[c].evaluate((el) => {
+              // Try to get the business name from the card
+              const nameEl =
+                el.querySelector("h2") ??
+                el.querySelector("h3") ??
+                el.querySelector('[class*="title"]') ??
+                el.querySelector('[class*="name"]') ??
+                el.querySelector("a");
+              return nameEl?.textContent?.trim().slice(0, 80) ?? "";
+            });
+            if (cardName && !clickedNames.has(cardName)) {
+              targetIndex = c;
+              console.log(
+                `[DEBUG] Found unclicked card at index ${c}: "${cardName}"`
+              );
+              break;
+            }
+          } catch {
+            continue;
+          }
+        }
+
+        if (targetIndex === -1) {
+          console.log(
+            `[DEBUG] All ${freshCards.length} cards already clicked or no identifiable cards. Scrolling more...`
+          );
+          // Try scrolling more to load new cards
+          for (let s = 0; s < 5; s++) {
             await page.evaluate(() => {
               const scrollContainer =
                 document.querySelector('div[class*="search-list"]') ??
@@ -756,27 +812,55 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
             await sleep(1000);
           }
 
-          const retryCards = await page.$$(CARD_SELECTORS.join(", "));
-          console.log(
-            `[DEBUG] After re-navigate and scroll: ${retryCards.length} cards`
-          );
-          if (i >= retryCards.length) {
-            console.log(`[DEBUG] Still can't find card ${i}. Skipping.`);
-            continue;
+          const moreCards = await page.$$(CARD_SELECTORS.join(", "));
+          for (let c = freshCards.length; c < moreCards.length; c++) {
+            try {
+              const cardName = await moreCards[c].evaluate((el) => {
+                const nameEl =
+                  el.querySelector("h2") ??
+                  el.querySelector("h3") ??
+                  el.querySelector('[class*="title"]') ??
+                  el.querySelector('[class*="name"]') ??
+                  el.querySelector("a");
+                return nameEl?.textContent?.trim().slice(0, 80) ?? "";
+              });
+              if (cardName && !clickedNames.has(cardName)) {
+                targetIndex = c;
+                console.log(
+                  `[DEBUG] Found unclicked card after more scrolling at index ${c}: "${cardName}"`
+                );
+                break;
+              }
+            } catch {
+              continue;
+            }
           }
-          await retryCards[i].click();
-        } else {
-          // Log what we're about to click
-          const clickPreview = await freshCards[i].evaluate(
-            (el) => el.textContent?.trim().slice(0, 80) ?? ""
-          );
-          console.log(`[DEBUG] Clicking card[${i}]: "${clickPreview}"`);
-          await freshCards[i].click();
+
+          if (targetIndex === -1) {
+            console.log(
+              `[DEBUG] No more unclicked cards found. Stopping extraction.`
+            );
+            break;
+          }
         }
 
-        console.log(
-          `[DEBUG] Clicked card ${i + 1}, waiting for detail panel...`
+        // Click the target card
+        const allCards = await page.$$(CARD_SELECTORS.join(", "));
+        if (targetIndex >= allCards.length) {
+          console.log(
+            `[DEBUG] targetIndex ${targetIndex} out of range (${allCards.length} cards). Skipping.`
+          );
+          consecutiveSkips++;
+          continue;
+        }
+
+        const clickPreview = await allCards[targetIndex].evaluate(
+          (el) => el.textContent?.trim().slice(0, 80) ?? ""
         );
+        console.log(`[DEBUG] Clicking card[${targetIndex}]: "${clickPreview}"`);
+        await allCards[targetIndex].click();
+
+        console.log(`[DEBUG] Clicked card, waiting for detail panel...`);
         await randomDelay(1000, 2000);
 
         // Wait for detail panel to appear
@@ -809,8 +893,8 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
 
         await randomDelay(500, 1000);
 
-        // Diagnostic: log what category/rubric elements exist on the detail page
-        if (i === 0) {
+        // Diagnostic: log what category/rubric elements exist on the detail page (first card only)
+        if (collectedCards.length === 0) {
           const categoryDiag = await page.evaluate(() => {
             const results: Record<string, string> = {};
             for (const sel of [
@@ -869,88 +953,26 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
             business.phone ?? "N/A"
           }", website="${business.website ?? "N/A"}"`
         );
+
+        // Mark this card as clicked (even if extraction failed, to avoid re-clicking)
         if (business.name) {
+          clickedNames.add(business.name);
           collectedCards.push(business);
-        }
-
-        // Go back to results list
-        console.log(`[DEBUG] Navigating back to results list...`);
-        await page
-          .goBack({ waitUntil: "domcontentloaded", timeout: 15000 })
-          .catch(async () => {
-            // If goBack fails, re-navigate
-            console.log(`[DEBUG] goBack failed, re-navigating to searchUrl`);
-            await page.goto(searchUrl, {
-              waitUntil: "domcontentloaded",
-              timeout: 60000,
-            });
-          });
-        await randomDelay(800, 1500);
-
-        // Log current URL to verify we're back on search results
-        console.log(
-          `[DEBUG] After goBack, current URL: ${page.url().slice(0, 120)}`
-        );
-
-        // Check captcha after going back
-        const captchaAfterBack = await detectCaptcha(page);
-        if (captchaAfterBack) {
-          sendProgress(
-            requestId,
-            "captcha",
-            collectedCards.length,
-            maxResults,
-            "Captcha detected after navigating back."
-          );
-          send({
-            type: "result",
-            requestId,
-            success: false,
-            error: "CAPTCHA",
-          });
-          return;
-        }
-
-        // Wait for results list to re-appear
-        await page
-          .waitForSelector(CARD_SELECTORS.join(", "), { timeout: 10000 })
-          .catch(() => {
-            console.log(`[DEBUG] Cards did not re-appear after goBack`);
-          });
-
-        // Scroll down to restore position so next card is visible
-        if (i + 1 < limit) {
-          const restoreScrollIterations = Math.max(Math.ceil((i + 2) / 5), 2);
-          for (let s = 0; s < restoreScrollIterations; s++) {
-            await page.evaluate(() => {
-              const scrollContainer =
-                document.querySelector('div[class*="search-list"]') ??
-                document.querySelector('div[class*="scroll"]') ??
-                document.scrollingElement;
-              if (scrollContainer) {
-                (scrollContainer as Element).scrollTop = (
-                  scrollContainer as Element
-                ).scrollHeight;
-              }
-            });
-            await sleep(800);
-          }
-          const restoredCards = await page.$$(CARD_SELECTORS.join(", "));
+          consecutiveSkips = 0; // Reset skip counter on success
+        } else {
+          // Card had no name -- still mark its preview as clicked to avoid re-clicking
+          clickedNames.add(clickPreview);
+          consecutiveSkips++;
           console.log(
-            `[DEBUG] After scroll restore: ${
-              restoredCards.length
-            } cards visible (need index ${i + 1})`
+            `[DEBUG] Card had no name, marking preview as clicked. consecutiveSkips=${consecutiveSkips}`
           );
         }
-
-        console.log(
-          `[DEBUG] Back on results page, collectedCards so far: ${collectedCards.length}`
-        );
       } catch (err) {
         console.error(
           `[DEBUG] Error extracting card ${i + 1}:`,
           err instanceof Error ? err.message : err
         );
+        consecutiveSkips++;
         // Continue to next card -- re-navigate to search URL
         await page
           .goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 60000 })
