@@ -258,6 +258,9 @@ import {
   YANDEX_MAPS_SEARCH_CANCEL,
   YANDEX_MAPS_SEARCH_PROGRESS,
   YANDEX_MAPS_SEARCH_RESULT,
+  YANDEX_MAPS_HISTORY_LIST,
+  YANDEX_MAPS_HISTORY_DETAIL,
+  YANDEX_MAPS_HISTORY_DELETE,
   AI_FILE_OPEN,
 } from "@/config/channellist";
 
@@ -686,6 +689,9 @@ contextBridge.exposeInMainWorld("api", {
       // Yandex Maps Scraper Channels
       YANDEX_MAPS_SEARCH_START,
       YANDEX_MAPS_SEARCH_CANCEL,
+      YANDEX_MAPS_HISTORY_LIST,
+      YANDEX_MAPS_HISTORY_DETAIL,
+      YANDEX_MAPS_HISTORY_DELETE,
       // AI File Operation Channels
       AI_FILE_OPEN,
     ];
