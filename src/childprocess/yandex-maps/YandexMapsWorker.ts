@@ -397,8 +397,8 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
     sendProgress(requestId, "loading", 0, maxResults, "Loading Yandex Maps...");
 
     await page.goto(searchUrl, {
-      waitUntil: "networkidle2",
-      timeout: 30000,
+      waitUntil: "domcontentloaded",
+      timeout: 60000,
     });
 
     // Captcha check after initial navigation
@@ -614,8 +614,8 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
             `[DEBUG] Card index ${i} out of range (only ${freshCards.length} cards). Re-navigating to search URL.`
           );
           await page.goto(searchUrl, {
-            waitUntil: "networkidle2",
-            timeout: 30000,
+            waitUntil: "domcontentloaded",
+            timeout: 60000,
           });
 
           // Check captcha after re-navigation
@@ -741,13 +741,13 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
         // Go back to results list
         console.log(`[DEBUG] Navigating back to results list...`);
         await page
-          .goBack({ waitUntil: "networkidle2", timeout: 10000 })
+          .goBack({ waitUntil: "domcontentloaded", timeout: 15000 })
           .catch(async () => {
             // If goBack fails, re-navigate
             console.log(`[DEBUG] goBack failed, re-navigating to searchUrl`);
             await page.goto(searchUrl, {
-              waitUntil: "networkidle2",
-              timeout: 30000,
+              waitUntil: "domcontentloaded",
+              timeout: 60000,
             });
           });
         await randomDelay(800, 1500);
@@ -787,7 +787,7 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
         );
         // Continue to next card -- re-navigate to search URL
         await page
-          .goto(searchUrl, { waitUntil: "networkidle2", timeout: 30000 })
+          .goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 60000 })
           .catch(() => {
             /* re-navigation already attempted */
           });
