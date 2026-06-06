@@ -34,10 +34,15 @@
         <template v-slot:expanded-row="{ columns, item }">
       <tr>
         <td :colspan="columns.length" >
-         <div class="ellipsis-cell"> 
+         <div class="ellipsis-cell">
             <div v-for="(val, index) in item.emails" :key="index" class="url-item">
          {{ val }}
-        </div> 
+        </div>
+            <div v-if="item.phone || item.address || (item.socialLinks && item.socialLinks.length)" class="mt-2 ai-enrichment-info">
+              <span v-if="item.phone" class="mr-3"><strong>Phone:</strong> {{ item.phone }}</span>
+              <span v-if="item.address" class="mr-3"><strong>Address:</strong> {{ item.address }}</span>
+              <span v-if="item.socialLinks && item.socialLinks.length"><strong>Social:</strong> {{ item.socialLinks.join(', ') }}</span>
+            </div>
          </div>
         </td>
       </tr>
@@ -115,6 +120,34 @@ headers.value = [
         sortable: false,
         key: 'recordTime',
         width: '10%'
+    },
+    {
+        title: computed(_ => CapitalizeFirstLetter(t("emailextraction.phone"))),
+        align: 'start',
+        sortable: false,
+        key: 'phone',
+        width: '10%'
+    },
+    {
+        title: computed(_ => CapitalizeFirstLetter(t("emailextraction.address"))),
+        align: 'start',
+        sortable: false,
+        key: 'address',
+        width: '10%'
+    },
+    {
+        title: computed(_ => CapitalizeFirstLetter(t("emailextraction.social_links"))),
+        align: 'start',
+        sortable: false,
+        key: 'socialLinks',
+        width: '10%'
+    },
+    {
+        title: computed(_ => CapitalizeFirstLetter(t("emailextraction.ai_enrichment_status"))),
+        align: 'start',
+        sortable: false,
+        key: 'aiEnrichmentStatus',
+        width: '8%'
     },
 
 ];
