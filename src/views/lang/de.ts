@@ -18,6 +18,7 @@ export default {
     uninstalling: "Deinstalliere",
     reset: "Zurücksetzen",
     submit: "Senden",
+    save: "Speichern",
     update: "Aktualisieren",
     success: "Erfolgreich",
     fill_require_field: "Bitte alle Pflichtfelder ausfüllen",
