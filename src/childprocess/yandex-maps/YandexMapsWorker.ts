@@ -429,9 +429,22 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
     sendProgress(requestId, "loading", 0, maxResults, "Loading Yandex Maps...");
 
     await page.goto(searchUrl, {
-      waitUntil: "domcontentloaded",
+      waitUntil: "networkidle2",
       timeout: 60000,
     });
+
+    // Extra wait for SPA to render search results
+    await sleep(3000);
+
+    // Log page state for debugging
+    const pageTitle = await page.title();
+    const pageUrl = page.url();
+    console.log(
+      `[DEBUG] Page loaded -- title="${pageTitle}", url="${pageUrl.slice(
+        0,
+        120
+      )}"`
+    );
 
     // Captcha check after initial navigation
     const hasCaptchaOnLoad = await detectCaptcha(page);
@@ -461,6 +474,75 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
       "Waiting for search results..."
     );
 
+    // ── Diagnostic: dump what actually exists on the page ──
+    const initialDiag = await page.evaluate(() => {
+      const info: Record<string, unknown> = {};
+      info.title = document.title;
+      info.url = location.href;
+      info.bodyClasses = document.body?.className?.slice(0, 200);
+
+      // Count elements by broad patterns
+      const patterns: Record<string, number> = {};
+      const selectors = [
+        'div[class*="search"]',
+        'a[class*="search"]',
+        'li[class*="search"]',
+        'div[class*="snippet"]',
+        'a[class*="snippet"]',
+        'div[class*="business"]',
+        'a[class*="business"]',
+        'div[class*="card"]',
+        'div[class*="place"]',
+        'div[class*="org"]',
+        'a[class*="org"]',
+        'div[class*="list"]',
+        "ul[class]",
+        "li[class]",
+        'div[class*="scroll"]',
+        'div[class*="sidebar"]',
+        'div[class*="panel"]',
+        'div[class*="result"]',
+        'a[class*="result"]',
+        "h1",
+        "h2",
+        "h3",
+        "article",
+      ];
+      for (const sel of selectors) {
+        const count = document.querySelectorAll(sel).length;
+        if (count > 0) patterns[sel] = count;
+      }
+      info.matchingPatterns = patterns;
+
+      // Get the first few class names from the sidebar/search area
+      const sidebar =
+        document.querySelector('[class*="sidebar"]') ??
+        document.querySelector('[class*="search"]') ??
+        document.querySelector('[class*="panel"]');
+      info.sidebarClasses = sidebar?.className?.slice(0, 200) ?? "none";
+      info.sidebarChildCount = sidebar?.children?.length ?? 0;
+
+      // Get first 3 children of sidebar with their tag + class
+      if (sidebar && sidebar.children.length > 0) {
+        const childInfo: string[] = [];
+        for (let i = 0; i < Math.min(sidebar.children.length, 5); i++) {
+          const child = sidebar.children[i];
+          childInfo.push(
+            `<${child.tagName.toLowerCase()} class="${child.className?.slice(
+              0,
+              80
+            )}"> children=${child.children.length}`
+          );
+        }
+        info.sidebarChildren = childInfo;
+      }
+
+      return info;
+    });
+    console.log(
+      `[DEBUG] Page diagnostics: ${JSON.stringify(initialDiag, null, 2)}`
+    );
+
     let resultListSelector: string | undefined;
     for (const sel of RESULT_LIST_SELECTORS) {
       try {
@@ -469,6 +551,7 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
         console.log(`[DEBUG] Result list matched selector: ${sel}`);
         break;
       } catch {
+        console.log(`[DEBUG] Result list selector "${sel}" not found`);
         continue;
       }
     }
@@ -484,7 +567,7 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
         );
       } catch {
         // Diagnostic: dump what selectors exist on the page for debugging
-        console.log(`[DEBUG] === SELECTOR DIAGNOSTICS ===`);
+        console.log(`[DEBUG] === SELECTOR DIAGNOSTICS (full dump) ===`);
         for (const sel of [...RESULT_LIST_SELECTORS, ...CARD_SELECTORS]) {
           const count = await page.evaluate((s: string) => {
             try {
@@ -495,30 +578,32 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
           }, sel);
           console.log(`[DEBUG] Selector "${sel}" => ${count} elements`);
         }
-        // Also try to find generic list/card patterns
-        const genericCounts = await page.evaluate(() => {
-          const results: Record<string, number> = {};
-          for (const sel of [
-            'div[class*="search"]',
-            'a[class*="search"]',
-            'li[class*="search"]',
-            'div[class*="snippet"]',
-            'a[class*="snippet"]',
-            'div[class*="card"]',
-            'div[class*="business"]',
-            'a[class*="business"]',
-            'div[class*="place"]',
-          ]) {
-            try {
-              results[sel] = document.querySelectorAll(sel).length;
-            } catch {
-              results[sel] = -1;
+
+        // Dump a sample of the visible DOM to see what's actually there
+        const domSample = await page.evaluate(() => {
+          // Get all elements with class attributes that might be search results
+          const allDivs = document.querySelectorAll(
+            "div[class], a[class], li[class]"
+          );
+          const samples: string[] = [];
+          for (let i = 0; i < allDivs.length && samples.length < 30; i++) {
+            const el = allDivs[i];
+            const cls = el.className?.toString() ?? "";
+            if (cls.length > 5) {
+              samples.push(
+                `<${el.tagName.toLowerCase()} class="${cls.slice(
+                  0,
+                  100
+                )}"> text="${(el.textContent ?? "").slice(0, 50)}"`
+              );
             }
           }
-          return results;
+          return samples;
         });
         console.log(
-          `[DEBUG] Generic selector counts: ${JSON.stringify(genericCounts)}`
+          `[DEBUG] DOM sample (first 30 elements with classes):\n${domSample.join(
+            "\n"
+          )}`
         );
         console.log(`[DEBUG] === END DIAGNOSTICS ===`);
         throw new Error(
@@ -691,7 +776,7 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
         if (i > 0) {
           console.log(`[DEBUG] Re-navigating to search URL for next card...`);
           await page.goto(searchUrl, {
-            waitUntil: "domcontentloaded",
+            waitUntil: "networkidle2",
             timeout: 60000,
           });
           await randomDelay(500, 1000);
@@ -975,7 +1060,7 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
         consecutiveSkips++;
         // Continue to next card -- re-navigate to search URL
         await page
-          .goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 60000 })
+          .goto(searchUrl, { waitUntil: "networkidle2", timeout: 60000 })
           .catch(() => {
             /* re-navigation already attempted */
           });
