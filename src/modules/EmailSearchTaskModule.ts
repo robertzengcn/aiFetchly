@@ -278,18 +278,23 @@ export class EmailSearchTaskModule extends BaseModule {
     });
   }
   /**
-   * Kill a running email search task's child process
+   * Kill a running email search task's child process.
+   * If the process has already exited (orphaned task), just update DB status.
    * @param taskId - The task ID to kill
-   * @throws Error if task is not running
    */
-  public killProcess(taskId: number): void {
+  public async killProcess(taskId: number): Promise<void> {
     const child = EmailSearchTaskModule.processMap.get(taskId);
     if (!child) {
-      throw new Error("No running process found for this task");
+      // Process already exited but DB status is stale — just fix the status
+      console.warn(
+        `No running process for task ${taskId}, marking as cancelled in DB`
+      );
+      await this.updateTaskStatus(taskId, TaskStatus.Cancel);
+      return;
     }
     child.kill();
     EmailSearchTaskModule.processMap.delete(taskId);
-    this.updateTaskStatus(taskId, TaskStatus.Cancel);
+    await this.updateTaskStatus(taskId, TaskStatus.Cancel);
   }
 
   /**
@@ -303,6 +308,38 @@ export class EmailSearchTaskModule extends BaseModule {
     }
     await this.updateTaskStatus(taskId, TaskStatus.Processing);
     this.searchEmail(taskId);
+  }
+
+  /**
+   * Reset any tasks stuck in "Processing" status from a previous app session.
+   * Should be called once on app startup. Since processMap is in-memory,
+   * any "Processing" tasks after a restart are orphaned.
+   */
+  public async resetOrphanedProcessingTasks(): Promise<void> {
+    // Reuse listSearchtask to find all tasks — we only need status
+    const pageSize = 100;
+    let page = 0;
+    let hasMore = true;
+    while (hasMore) {
+      const { records } = await this.emailsearchTaskdb.listSearchtask(
+        page * pageSize,
+        pageSize
+      );
+      for (const task of records) {
+        // TaskStatus.Processing = 1
+        if (
+          task.status === 1 &&
+          !EmailSearchTaskModule.processMap.has(task.id!)
+        ) {
+          console.warn(
+            `Resetting orphaned Processing task ${task.id} to Error`
+          );
+          await this.updateTaskStatus(task.id!, TaskStatus.Error);
+        }
+      }
+      hasMore = records.length === pageSize;
+      page++;
+    }
   }
 
   //save search task, call it when user start search email
