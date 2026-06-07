@@ -207,18 +207,8 @@ export async function exportEmailResults(
 export async function killEmailSearchTask(taskId: number): Promise<string> {
   try {
     const querydata = { id: taskId };
-    console.log(
-      "[DEBUG] killEmailSearchTask: calling windowInvoke with channel=",
-      EMAIL_SEARCH_TASK_KILL,
-      "data=",
-      querydata
-    );
-    const resp = await windowInvoke(EMAIL_SEARCH_TASK_KILL, querydata);
-    console.log("[DEBUG] killEmailSearchTask: resp=", resp);
-    if (!resp || !resp.status) {
-      throw new Error(resp?.msg || "Failed to stop task");
-    }
-    return resp.data;
+    // windowInvoke already checks status and returns result.data
+    return await windowInvoke(EMAIL_SEARCH_TASK_KILL, querydata);
   } catch (error) {
     console.error("Error stopping task:", error);
     throw error;
@@ -234,11 +224,8 @@ export async function killEmailSearchTask(taskId: number): Promise<string> {
 export async function startEmailSearchTask(taskId: number): Promise<string> {
   try {
     const querydata = { id: taskId };
-    const resp = await windowInvoke(EMAIL_SEARCH_TASK_START, querydata);
-    if (!resp || !resp.status) {
-      throw new Error(resp?.msg || "Failed to start task");
-    }
-    return resp.data;
+    // windowInvoke already checks status and returns result.data
+    return await windowInvoke(EMAIL_SEARCH_TASK_START, querydata);
   } catch (error) {
     console.error("Error starting task:", error);
     throw error;

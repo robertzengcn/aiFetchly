@@ -519,24 +519,13 @@ export function registerEmailextractionIpcHandlers() {
 
   // Kill running email search task
   ipcMain.handle(EMAIL_SEARCH_TASK_KILL, async (event, data: unknown) => {
-    console.log(
-      "[DEBUG] EMAIL_SEARCH_TASK_KILL handler called, raw data:",
-      data,
-      "type:",
-      typeof data
-    );
     try {
       const qdata = JSON.parse(data as string) as CommonIdrequestType<number>;
-      console.log("[DEBUG] EMAIL_SEARCH_TASK_KILL parsed qdata:", qdata);
       if (!("id" in qdata)) {
         throw new Error("Task ID not found");
       }
       const emailCon = new EmailextractionController();
       await emailCon.killEmailSearchTask(qdata.id);
-      console.log(
-        "[DEBUG] EMAIL_SEARCH_TASK_KILL: killEmailSearchTask succeeded for taskId:",
-        qdata.id
-      );
       const resp: CommonMessage<string> = {
         status: true,
         msg: "Task stopped successfully",
@@ -544,7 +533,6 @@ export function registerEmailextractionIpcHandlers() {
       };
       return resp;
     } catch (error) {
-      console.error("[DEBUG] EMAIL_SEARCH_TASK_KILL error:", error);
       const resp: CommonMessage<string> = {
         status: false,
         msg: error instanceof Error ? error.message : "Unknown error occurred",

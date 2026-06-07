@@ -7,9 +7,7 @@ type Iresponse = {
 export const windowInvoke = async (channel: string, data?: object) => {
   // console.log(data)
   // campaign:list
-  console.log("[DEBUG] windowInvoke: channel=", channel, "data=", data);
   const result = await window.api.invoke(channel, JSON.stringify(data));
-  console.log("[DEBUG] windowInvoke: result=", result, "type=", typeof result);
   if (!result) {
     throw new Error("unknow error");
   }
