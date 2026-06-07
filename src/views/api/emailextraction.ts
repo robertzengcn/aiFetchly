@@ -207,7 +207,14 @@ export async function exportEmailResults(
 export async function killEmailSearchTask(taskId: number): Promise<string> {
   try {
     const querydata = { id: taskId };
+    console.log(
+      "[DEBUG] killEmailSearchTask: calling windowInvoke with channel=",
+      EMAIL_SEARCH_TASK_KILL,
+      "data=",
+      querydata
+    );
     const resp = await windowInvoke(EMAIL_SEARCH_TASK_KILL, querydata);
+    console.log("[DEBUG] killEmailSearchTask: resp=", resp);
     if (!resp || !resp.status) {
       throw new Error(resp?.msg || "Failed to stop task");
     }
