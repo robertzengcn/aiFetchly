@@ -1,11 +1,17 @@
 <template>
-    <div>
+    <div class="d-flex align-center mb-4">
+        <v-btn
+            color="error"
+            @click="router.go(-1)"
+        >
+            {{ t('common.return') }}
+        </v-btn>
         <v-btn
             color="primary"
             @click="handleExport"
             :loading="exporting"
             :disabled="exporting"
-            class="mb-4"
+            class="ml-4"
         >
             <v-icon start>mdi-download</v-icon>
             {{ t('common.export') || 'Export' }}

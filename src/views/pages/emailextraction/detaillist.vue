@@ -1,16 +1,11 @@
 <template>
     <div class="tables_page">
-       <v-btn color="error" @click="router.go(-1)" class="mb-4">{{ t('common.return') }}</v-btn>
+
 <EmailResultDetailTable />
     </div>
 </template>
 <script setup lang="ts">
-import { useRouter } from 'vue-router'
-import { useI18n } from 'vue-i18n'
 import EmailResultDetailTable from '@/views/pages/emailextraction/widgets/EmailResultDetail.vue'
-
-const router = useRouter()
-const { t } = useI18n()
 
 
 </script>
