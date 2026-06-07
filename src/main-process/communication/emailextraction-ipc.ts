@@ -566,4 +566,10 @@ export function registerEmailextractionIpcHandlers() {
       return resp;
     }
   });
+
+  // Reset any tasks stuck in "Processing" from a previous app session
+  const emailTaskModule = new EmailSearchTaskModule();
+  emailTaskModule.resetOrphanedProcessingTasks().catch((err) => {
+    console.error("Failed to reset orphaned email tasks:", err);
+  });
 }
