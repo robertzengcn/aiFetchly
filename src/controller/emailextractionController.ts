@@ -247,13 +247,27 @@ export class EmailextractionController {
       return "";
     }
 
-    const headers = ["ID", "URL", "Page Title", "Emails", "Record Time"];
+    const headers = [
+      "ID",
+      "URL",
+      "Page Title",
+      "Emails",
+      "Record Time",
+      "Phone",
+      "Address",
+      "Social Links",
+      "AI Enrichment Status",
+    ];
     const rows = results.map((result) => [
       this.escapeCSV(result.id?.toString() ?? ""),
       this.escapeCSV(result.url ?? ""),
       this.escapeCSV(result.pageTitle ?? ""),
       this.escapeCSV(result.emails.join("; ") ?? ""),
       this.escapeCSV(result.recordTime ?? ""),
+      this.escapeCSV(result.phone ?? ""),
+      this.escapeCSV(result.address ?? ""),
+      this.escapeCSV(result.socialLinks?.join("; ") ?? ""),
+      this.escapeCSV(result.aiEnrichmentStatus ?? "none"),
     ]);
 
     const csvRows = [headers.join(","), ...rows.map((row) => row.join(","))];
