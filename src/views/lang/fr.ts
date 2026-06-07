@@ -838,6 +838,14 @@ export default {
     update_error: "Failed to update task",
     load_task_error: "Failed to load task data",
     no_valid_urls: "No valid URLs found",
+    confirm_kill: "Êtes-vous sûr de vouloir arrêter cette tâche ?",
+    kill_task: "Arrêter la tâche",
+    kill_success: "Tâche arrêtée avec succès",
+    kill_error: "Échec de l'arrêt de la tâche",
+    confirm_start: "Êtes-vous sûr de vouloir démarrer cette tâche ?",
+    start_task: "Démarrer la tâche",
+    start_success: "Tâche démarrée avec succès",
+    start_error: "Échec du démarrage de la tâche",
   },
   contactExtraction: {
     extract_contact_info: "AI Profile Insights",
@@ -853,8 +861,7 @@ export default {
     status_analyzing: "Analyse",
     status_failed: "Échec",
     status_pending: "En attente",
-    select_items_hint:
-      "Please select at least one item for profile insights",
+    select_items_hint: "Please select at least one item for profile insights",
     no_valid_items_hint:
       "Les éléments sélectionnés n'ont pas d'ID valides. Veuillez sélectionner d'autres éléments.",
     extraction_started: "Profile insights started",
@@ -1477,8 +1484,7 @@ export default {
   },
   googleMaps: {
     title: "Local Business Finder",
-    description:
-      "Search public local business sources by keyword and location",
+    description: "Search public local business sources by keyword and location",
     query_label: "Mot-clé",
     query_placeholder: "ex. dentiste, restaurant italien, plombier",
     query_hint: "Entrez le type ou le nom d'entreprise à rechercher",
@@ -1533,8 +1539,7 @@ export default {
   },
   yandexMaps: {
     title: "Local Business Finder",
-    description:
-      "Search public local business sources by keyword and location",
+    description: "Search public local business sources by keyword and location",
     query_label: "Mot-clé",
     query_placeholder: "ex. dentiste, restaurant italien, plombier",
     query_hint: "Entrez le type ou le nom d'entreprise à rechercher",
@@ -1597,7 +1602,8 @@ export default {
   },
   mapScraper: {
     title: "Local Business Finder",
-    description: "Find public local business information through neutral source channels",
+    description:
+      "Find public local business information through neutral source channels",
     provider_google: "Channel Alpha (Global)",
     provider_yandex: "Channel Beta (CIS Region)",
     search_tab: "Rechercher",

@@ -849,6 +849,14 @@ export default {
     update_error: "Error al actualizar la tarea",
     load_task_error: "Error al cargar datos de la tarea",
     no_valid_urls: "No se encontraron URLs válidas",
+    confirm_kill: "¿Está seguro de que desea detener esta tarea?",
+    kill_task: "Detener Tarea",
+    kill_success: "Tarea detenida exitosamente",
+    kill_error: "Error al detener la tarea",
+    confirm_start: "¿Está seguro de que desea iniciar esta tarea?",
+    start_task: "Iniciar Tarea",
+    start_success: "Tarea iniciada exitosamente",
+    start_error: "Error al iniciar la tarea",
   },
   contactExtraction: {
     extract_contact_info: "AI Profile Insights",
@@ -864,8 +872,7 @@ export default {
     status_analyzing: "Analizando",
     status_failed: "Fallido",
     status_pending: "Pendiente",
-    select_items_hint:
-      "Please select at least one item for profile insights",
+    select_items_hint: "Please select at least one item for profile insights",
     no_valid_items_hint:
       "Los elementos seleccionados no tienen ID válidos. Por favor, seleccione otros elementos.",
     extraction_started: "Profile insights started",
@@ -1481,8 +1488,7 @@ export default {
   },
   googleMaps: {
     title: "Local Business Finder",
-    description:
-      "Search public local business sources by keyword and location",
+    description: "Search public local business sources by keyword and location",
     query_label: "Palabra clave",
     query_placeholder: "ej. dentista, restaurante italiano, fontanero",
     query_hint: "Introduce el tipo o nombre de negocio a buscar",
@@ -1538,8 +1544,7 @@ export default {
   },
   yandexMaps: {
     title: "Local Business Finder",
-    description:
-      "Search public local business sources by keyword and location",
+    description: "Search public local business sources by keyword and location",
     query_label: "Palabra clave",
     query_placeholder: "ej. dentista, restaurante italiano, fontanero",
     query_hint: "Introduce el tipo o nombre de negocio a buscar",
@@ -1603,7 +1608,8 @@ export default {
   },
   mapScraper: {
     title: "Local Business Finder",
-    description: "Find public local business information through neutral source channels",
+    description:
+      "Find public local business information through neutral source channels",
     provider_google: "Channel Alpha (Global)",
     provider_yandex: "Channel Beta (CIS Region)",
     search_tab: "Buscar",

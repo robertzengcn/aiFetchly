@@ -844,6 +844,14 @@ export default {
     update_error: "Aufgabe konnte nicht aktualisiert werden",
     load_task_error: "Aufgabendaten konnten nicht geladen werden",
     no_valid_urls: "Keine gültigen URLs gefunden",
+    confirm_kill: "Sind Sie sicher, dass Sie diese Aufgabe stoppen möchten?",
+    kill_task: "Aufgabe stoppen",
+    kill_success: "Aufgabe erfolgreich gestoppt",
+    kill_error: "Aufgabe konnte nicht gestoppt werden",
+    confirm_start: "Sind Sie sicher, dass Sie diese Aufgabe starten möchten?",
+    start_task: "Aufgabe starten",
+    start_success: "Aufgabe erfolgreich gestartet",
+    start_error: "Aufgabe konnte nicht gestartet werden",
   },
   contactExtraction: {
     extract_contact_info: "AI Profile Insights",
@@ -859,8 +867,7 @@ export default {
     status_analyzing: "Analyse",
     status_failed: "Fehlgeschlagen",
     status_pending: "Ausstehend",
-    select_items_hint:
-      "Please select at least one item for profile insights",
+    select_items_hint: "Please select at least one item for profile insights",
     no_valid_items_hint:
       "Die ausgewählten Elemente haben keine gültigen IDs. Bitte wählen Sie andere Elemente aus.",
     extraction_started: "Profile insights started",
@@ -1478,8 +1485,7 @@ export default {
   },
   googleMaps: {
     title: "Local Business Finder",
-    description:
-      "Search public local business sources by keyword and location",
+    description: "Search public local business sources by keyword and location",
     query_label: "Schlagwort",
     query_placeholder: "z.B. Zahnarzt, italienisches Restaurant, Klempner",
     query_hint: "Geben Sie den Typ oder Namen des Unternehmens ein",
@@ -1534,8 +1540,7 @@ export default {
   },
   yandexMaps: {
     title: "Local Business Finder",
-    description:
-      "Search public local business sources by keyword and location",
+    description: "Search public local business sources by keyword and location",
     query_label: "Schlagwort",
     query_placeholder: "z.B. Zahnarzt, italienisches Restaurant, Klempner",
     query_hint: "Geben Sie den Typ oder Namen des Unternehmens ein",
@@ -1598,7 +1603,8 @@ export default {
   },
   mapScraper: {
     title: "Local Business Finder",
-    description: "Find public local business information through neutral source channels",
+    description:
+      "Find public local business information through neutral source channels",
     provider_google: "Channel Alpha (Global)",
     provider_yandex: "Channel Beta (CIS Region)",
     search_tab: "Suche",

@@ -859,6 +859,14 @@ export default {
     address: "Address",
     social_links: "Social Links",
     ai_confidence: "AI Confidence",
+    confirm_kill: "Are you sure you want to stop this task?",
+    kill_task: "Stop Task",
+    kill_success: "Task stopped successfully",
+    kill_error: "Failed to stop task",
+    confirm_start: "Are you sure you want to start this task?",
+    start_task: "Start Task",
+    start_success: "Task started successfully",
+    start_error: "Failed to start task",
   },
   contactExtraction: {
     extract_contact_info: "AI Profile Insights",
@@ -874,8 +882,7 @@ export default {
     status_analyzing: "Analyzing",
     status_failed: "Failed",
     status_pending: "Pending",
-    select_items_hint:
-      "Please select at least one item for profile insights",
+    select_items_hint: "Please select at least one item for profile insights",
     no_valid_items_hint:
       "Selected items do not have valid IDs. Please select different items.",
     extraction_started: "Profile insights started",
@@ -1493,8 +1500,7 @@ export default {
   },
   googleMaps: {
     title: "Local Business Finder",
-    description:
-      "Search public local business sources by keyword and location",
+    description: "Search public local business sources by keyword and location",
     query_label: "Business Keyword",
     query_placeholder: "e.g. dentist, Italian restaurant, plumber",
     query_hint: "Enter a business type or name to search for",
@@ -1549,8 +1555,7 @@ export default {
   },
   yandexMaps: {
     title: "Local Business Finder",
-    description:
-      "Search public local business sources by keyword and location",
+    description: "Search public local business sources by keyword and location",
     query_label: "Business Keyword",
     query_placeholder: "e.g. dentist, Italian restaurant, plumber",
     query_hint: "Enter a business type or name to search for",
@@ -1613,7 +1618,8 @@ export default {
   },
   mapScraper: {
     title: "Local Business Finder",
-    description: "Find public local business information through neutral source channels",
+    description:
+      "Find public local business information through neutral source channels",
     provider_google: "Channel Alpha (Global)",
     provider_yandex: "Channel Beta (CIS Region)",
     search_tab: "Search",

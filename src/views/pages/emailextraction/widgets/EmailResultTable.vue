@@ -1,6 +1,7 @@
 <template>
   <!-- extraction task list table -->
-  <v-data-table-server v-model="selected" :items-per-page="itemsPerPage" :search="search" :headers="computedHeaders"
+  <v-data-table-server
+v-model="selected" :items-per-page="itemsPerPage" :search="search" :headers="computedHeaders"
     :items-length="totalItems" :items="serverItems" :loading="loading" item-key="id" @update:options="loadItems"
     class="custom-data-table" show-expand :show-select="isSelectedtable" select-strategy="single" return-object>
     <template v-slot:[`item.statusName`]="{ item }">
@@ -12,6 +13,12 @@
       </v-icon>
       <v-icon size="small" class="me-2" v-if="item.statusName == 'Error'" @click="downloadErrorlog(item)">
         mdi-download
+      </v-icon>
+      <v-icon size="small" class="me-2" v-if="item.statusName === 'Processing'" @click="killTask(item)" color="warning">
+        mdi-stop-circle
+      </v-icon>
+      <v-icon size="small" class="me-2" v-if="canStart(item)" @click="startTask(item)" color="success">
+        mdi-play-circle
       </v-icon>
       <v-icon size="small" class="me-2" v-if="canEdit(item)" @click="editTask(item)" color="primary">
         mdi-pencil
@@ -38,7 +45,7 @@
 
 <script setup lang="ts">
 import { useI18n } from "vue-i18n";
-import { listEmailSearchtasks, downloadErrorLog, deleteEmailSearchTask } from '@/views/api/emailextraction'
+import { listEmailSearchtasks, downloadErrorLog, deleteEmailSearchTask, killEmailSearchTask, startEmailSearchTask } from '@/views/api/emailextraction'
 //import {SearchTaskItemdisplay} from '@/entityTypes/emailextraction-type'
 import { ref, computed, onMounted, onUnmounted, reactive, watch } from 'vue'
 import { SearchResult } from '@/views/api/types'
@@ -135,7 +142,7 @@ headers.value = [
     title: CapitalizeFirstLetter(t("common.actions")),
     key: 'actions',
     sortable: false,
-    width: '15%'
+    width: '20%'
   },
   { title: '', key: 'data-table-expand', sortable: false },
 ];
@@ -235,6 +242,37 @@ const canEdit = (item: EmailsearchTaskEntityDisplay): boolean => {
 // Check if task can be deleted (only pending or error tasks)
 const canDelete = (item: EmailsearchTaskEntityDisplay): boolean => {
   return item.statusName === 'Pending' || item.statusName === 'Error'
+}
+
+// Check if task can be started (not currently processing)
+const canStart = (item: EmailsearchTaskEntityDisplay): boolean => {
+  return item.statusName !== 'Processing'
+}
+
+// Kill a running task
+const killTask = async (item: EmailsearchTaskEntityDisplay) => {
+  if (confirm(t('emailextraction.confirm_kill'))) {
+    try {
+      await killEmailSearchTask(item.id)
+      loadItems({ page: options.page, itemsPerPage: options.itemsPerPage, sortBy: "" })
+    } catch (error) {
+      console.error('Failed to stop task:', error)
+      alert(t('emailextraction.kill_error'))
+    }
+  }
+}
+
+// Start (or restart) a task
+const startTask = async (item: EmailsearchTaskEntityDisplay) => {
+  if (confirm(t('emailextraction.confirm_start'))) {
+    try {
+      await startEmailSearchTask(item.id)
+      loadItems({ page: options.page, itemsPerPage: options.itemsPerPage, sortBy: "" })
+    } catch (error) {
+      console.error('Failed to start task:', error)
+      alert(t('emailextraction.start_error'))
+    }
+  }
 }
 
 // Edit task

@@ -37,6 +37,8 @@ export const GETEMAILSEARCHTASK = "email:search:task:get";
 export const UPDATEEMAILSEARCHTASK = "email:search:task:update";
 export const DELETEEMAILSEARCHTASK = "email:search:task:delete";
 export const EMAILEXTRACTION_RESULT_EXPORT = "email:extraction:result:export";
+export const EMAIL_SEARCH_TASK_KILL = "email:search:task:kill";
+export const EMAIL_SEARCH_TASK_START = "email:search:task:start";
 
 export const EMAILMARKETINGTEMPLIST = "email:marketing:template:list";
 export const EMAILMARKETINGTEMPDETAIL = "email:marketing:template:detail";
