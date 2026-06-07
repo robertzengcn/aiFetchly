@@ -342,6 +342,7 @@ export class EmailextractionController {
       record_time: task.record_time,
       urls: urls,
       proxies: proxies,
+      aiSupportEnabled: task.aiSupportEnabled || false,
     };
   }
 
