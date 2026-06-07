@@ -46,6 +46,11 @@ import { EmailSearchTaskEntity } from "@/entity/EmailSearchTask.entity";
 import { IEmailSearchTaskProxyModuleInterface } from "./interface/IEmailSearchTaskProxyModuleInterface";
 import { EmailSearchTaskProxyModule } from "./EmailSearchTaskProxyModule";
 import { ProxyEntity } from "@/entity/Proxy.entity";
+import {
+  EmailAiEnrichmentHandler,
+  EmailAiRequest,
+  EmailAiResponse,
+} from "@/modules/EmailAiEnrichmentHandler";
 
 export class EmailSearchTaskModule extends BaseModule {
   /** Static map tracking running child processes by taskId */
@@ -104,6 +109,7 @@ export class EmailSearchTaskModule extends BaseModule {
       type: task.type_id,
       processTimeout: task.processTimeout,
       maxPageNumber: task.maxPageNumber,
+      aiSupportEnabled: task.aiSupportEnabled || false,
     };
     return data;
   }
@@ -209,6 +215,27 @@ export class EmailSearchTaskModule extends BaseModule {
     });
     child.on("message", (message: unknown) => {
       try {
+        // Check if this is an AI enrichment request from the child process
+        const rawMsg =
+          typeof message === "string" ? message : JSON.stringify(message);
+        let parsedMsg: Record<string, unknown>;
+        try {
+          parsedMsg = JSON.parse(rawMsg);
+        } catch {
+          parsedMsg = {};
+        }
+
+        if (parsedMsg.type === "EMAIL_AI_ENRICHMENT_REQUEST") {
+          const aiHandler = new EmailAiEnrichmentHandler(errorLogfile);
+          aiHandler.handleRequest(
+            parsedMsg as unknown as EmailAiRequest,
+            (response: EmailAiResponse) => {
+              child.postMessage(JSON.stringify(response));
+            }
+          );
+          return;
+        }
+
         const result = parseChildMessage<EmailResult>(message);
         if (result.kind === "error") {
           console.error(
@@ -278,6 +305,7 @@ export class EmailSearchTaskModule extends BaseModule {
     task.is_active = true;
     task.notShowBrowser = data.notShowBrowser;
     task.search_result_id = data.searchResultId || 0;
+    task.aiSupportEnabled = data.aiSupportEnabled || false;
     const taskId = await this.emailsearchTaskdb.createTask(task);
     //console.log("task id is" + taskId)
     for (let i = 0; i < data.validUrls.length; i++) {
@@ -606,6 +634,7 @@ export class EmailSearchTaskModule extends BaseModule {
       task.type_id = data.type;
       task.processTimeout = data.processTimeout || 30;
       task.maxPageNumber = data.maxPageNumber || 0;
+      task.aiSupportEnabled = data.aiSupportEnabled || false;
       await this.emailsearchTaskdb.updateTask(task);
     }
 

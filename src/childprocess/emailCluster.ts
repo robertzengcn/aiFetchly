@@ -1,25 +1,28 @@
-import { EmailClusterdata, EmailDatascraper } from '@/entityTypes/emailextraction-type'
-import { SMconfig, SMstruct } from "@/entityTypes/scrapeType"
-import { Cluster } from "puppeteer-cluster"
+import {
+  EmailClusterdata,
+  EmailDatascraper,
+} from "@/entityTypes/emailextraction-type";
+import { SMconfig, SMstruct } from "@/entityTypes/scrapeType";
+import { Cluster } from "puppeteer-cluster";
 //import { pluggableType } from "@/entityTypes/scrapeType"
-import { Page, Browser } from 'puppeteer';
-import defaults from "lodash/defaults"
-import winston from "winston"
-import { createLogger, format, transports } from "winston"
-import debug from 'debug';
-const logger = debug('ScrapeManager');
+import { Page, Browser } from "puppeteer";
+import defaults from "lodash/defaults";
+import winston from "winston";
+import { createLogger, format, transports } from "winston";
+import debug from "debug";
+const logger = debug("ScrapeManager");
 const { combine, timestamp, printf } = format;
 const MAX_ALLOWED_BROWSERS = 10;
 const MAX_CRAWL_PAGE_LENGTH = 10;
 import map from "lodash/map";
 //import randomUseragent from "random-useragent";
-import UserAgent from 'user-agents';
-import clone from "lodash/clone"
-import times from "lodash/times"
-import { crawlSite } from '@/childprocess/emailScraper'
-import { getDomain } from "@/modules/lib/function"
-import {CustomConcurrency} from "@/modules/concurrency-implementation"
-import {ProxyServer} from "@/entityTypes/proxyType"
+import UserAgent from "user-agents";
+import clone from "lodash/clone";
+import times from "lodash/times";
+import { crawlSite } from "@/childprocess/emailScraper";
+import { getDomain } from "@/modules/lib/function";
+import { CustomConcurrency } from "@/modules/concurrency-implementation";
+import { ProxyServer } from "@/entityTypes/proxyType";
 
 export class EmailCluster {
   cluster: Cluster<EmailClusterdata>;
@@ -31,8 +34,8 @@ export class EmailCluster {
   page: Page;
   numClusters: number;
   tmppath: string;
-  proxiesArr: Array<ProxyServer|null>
-  maxPageNumber:number
+  proxiesArr: Array<ProxyServer | null>;
+  maxPageNumber: number;
   // runLogin: Function;
   // taskid?: number;
   // taskrunId?: number;
@@ -72,7 +75,8 @@ export class EmailCluster {
             return `${timestamp} [${level}] ${message}`;
           })
         ),
-        transports: [new transports.Console(),
+        transports: [
+          new transports.Console(),
           //       new winston.transports.File({ filename: path.join(app.getPath("logs"),'error.log'), level: 'error' }),
           // new winston.transports.File({ filename: path.join(app.getPath("logs"),'combined.log') }),
           //       new winston.transports.File({ filename: 'error.log', level: 'error' }),
@@ -159,23 +163,18 @@ export class EmailCluster {
     // }
 
     this.logger = this.config.logger;
-    if(config.maxPageNumber&&config.maxPageNumber>0){
-      this.maxPageNumber = config.maxPageNumber
+    if (config.maxPageNumber && config.maxPageNumber > 0) {
+      this.maxPageNumber = config.maxPageNumber;
     }
 
     if (config.sleep_range) {
       // parse an array
       // config.sleep_range = eval(config.sleep_range);
 
-      if (
-        config.sleep_range.length !== 2
-      ) {
+      if (config.sleep_range.length !== 2) {
         throw "sleep_range is not a valid array of two integers.";
       }
     }
-
-
-
 
     // if (this.config.proxy_file) {
     //   this.config.proxies = read_keywords_from_file(this.config.proxy_file);
@@ -212,48 +211,53 @@ export class EmailCluster {
       this.proxiesArr = times(this.numClusters, () => null);
     }
 
-    const perBrowserOptions = map(this.proxiesArr.slice(0, this.numClusters), (proxy) => {
-      //let userAgent: string;
-      let userAgents: string;
-      if (this.config.random_user_agent) {
-        // Randomly choose between Chrome and Firefox user agents
-        // const isChrome = Math.random() > 0.5;
-        // if (isChrome) {
-        //   // Modern Chrome user agent
-        //   userAgent = new UserAgent({
-        //     deviceCategory: "desktop",
-        //     browser: "chrome",
-        //     platform: "win32"
-        //   }).toString();
-        // } else {
-        //   // Modern Firefox user agent
-        //   userAgent = new UserAgent({
-        //     deviceCategory: "desktop",
-        //     browser: "firefox",
-        //     platform: "win32"
-        //   }).toString();
-        // }
-        // const Agent = new UserAgent({
-        //   deviceCategory: "desktop",
-        //   //browser: "chrome",
-        //   platform: "win32"
-        // });
-        //userAgent = randomUseragent.getRandom();
-        const userAgent = new UserAgent({ deviceCategory: 'desktop' });
-        console.log("user agent is "+userAgent.toString());
-        userAgents = userAgent.toString();
-      } else {
-        userAgents = this.config.user_agent;
+    const perBrowserOptions = map(
+      this.proxiesArr.slice(0, this.numClusters),
+      (proxy) => {
+        //let userAgent: string;
+        let userAgents: string;
+        if (this.config.random_user_agent) {
+          // Randomly choose between Chrome and Firefox user agents
+          // const isChrome = Math.random() > 0.5;
+          // if (isChrome) {
+          //   // Modern Chrome user agent
+          //   userAgent = new UserAgent({
+          //     deviceCategory: "desktop",
+          //     browser: "chrome",
+          //     platform: "win32"
+          //   }).toString();
+          // } else {
+          //   // Modern Firefox user agent
+          //   userAgent = new UserAgent({
+          //     deviceCategory: "desktop",
+          //     browser: "firefox",
+          //     platform: "win32"
+          //   }).toString();
+          // }
+          // const Agent = new UserAgent({
+          //   deviceCategory: "desktop",
+          //   //browser: "chrome",
+          //   platform: "win32"
+          // });
+          //userAgent = randomUseragent.getRandom();
+          const userAgent = new UserAgent({ deviceCategory: "desktop" });
+          console.log("user agent is " + userAgent.toString());
+          userAgents = userAgent.toString();
+        } else {
+          userAgents = this.config.user_agent;
+        }
+        const args = this.config.chrome_flags.concat([
+          `--user-agent=${userAgents}`,
+        ]);
+        return {
+          headless: this.config.headless,
+          ignoreHTTPSErrors: true,
+          args,
+        };
       }
-      const args = this.config.chrome_flags.concat([`--user-agent=${userAgents}`]);
-      return {
-        headless: this.config.headless,
-        ignoreHTTPSErrors: true,
-        args,
-      };
-    });
+    );
     this.logger.info(perBrowserOptions);
-    console.log("cluster number is "+this.numClusters)
+    console.log("cluster number is " + this.numClusters);
     this.cluster = await Cluster.launch({
       // puppeteer,
       monitor: this.config.puppeteer_cluster_config.monitor,
@@ -265,20 +269,21 @@ export class EmailCluster {
       retryLimit: 3,
       // puppeteerOptions:perBrowserOptions,
     });
-
-
   }
 
   async searchdata(param: EmailDatascraper) {
     await this.start(param);
-    const pageLength = Math.min(this.config.page_length ?? MAX_CRAWL_PAGE_LENGTH, MAX_CRAWL_PAGE_LENGTH)
-    await this.cluster.task(crawlSite)
+    const pageLength = Math.min(
+      this.config.page_length ?? MAX_CRAWL_PAGE_LENGTH,
+      MAX_CRAWL_PAGE_LENGTH
+    );
+    await this.cluster.task(crawlSite);
     param.urls.forEach((value) => {
-      const domain = getDomain(value)
+      const domain = getDomain(value);
       if (!domain) {
-        return
+        return;
       }
-      //get random proxy 
+      //get random proxy
       const randomIndex = Math.floor(Math.random() * this.proxiesArr.length);
       const proxyServer = this.proxiesArr[randomIndex];
       const crawlData: EmailClusterdata = {
@@ -286,18 +291,17 @@ export class EmailCluster {
         proxy: proxyServer,
         domain: domain,
         maxPageLevel: pageLength,
-        maxPageNumber:this.maxPageNumber,
-        callback: param.callback
-      }
+        maxPageNumber: this.maxPageNumber,
+        callback: param.callback,
+        aiSupportEnabled: param.aiSupportEnabled || false,
+      };
       this.cluster.queue(crawlData);
-    })
+    });
     await this.quit();
   }
 
   async quit() {
-  
-      await this.cluster.idle();
-      await this.cluster.close();
-    
+    await this.cluster.idle();
+    await this.cluster.close();
   }
 }

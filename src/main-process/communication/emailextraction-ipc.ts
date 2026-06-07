@@ -180,6 +180,7 @@ export function registerEmailextractionIpcHandlers() {
       type: extraType,
       processTimeout: Number(qdata.processTimeout),
       maxPageNumber: qdata.maxPageNumber,
+      aiSupportEnabled: qdata.aiSupportEnabled || false,
     };
 
     const emailCon = new EmailextractionController();
@@ -378,6 +379,7 @@ export function registerEmailextractionIpcHandlers() {
             : EmailExtractionTypes.ManualInputUrl,
         processTimeout: Number(qdata.data.processTimeout),
         maxPageNumber: qdata.data.maxPageNumber,
+        aiSupportEnabled: qdata.data.aiSupportEnabled || false,
       };
 
       await emailCon.updateEmailSearchTask(qdata.id, updateData);
