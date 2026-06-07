@@ -11,8 +11,19 @@ export class EmailsearchResultModel extends BaseDb {
     }
 
     async create(emailsearchResult: EmailSearchResultEntity): Promise<number> {
-        const item = await this.getByTaskIdUrl(emailsearchResult.task_id, emailsearchResult.email);
+        const item = await this.getByTaskIdUrl(emailsearchResult.task_id, emailsearchResult.url);
         if (item) {
+            if (this.hasAiEnrichmentData(emailsearchResult)) {
+                await this.repository.update(item.id, {
+                    phone: emailsearchResult.phone,
+                    address: emailsearchResult.address,
+                    socialLinks: emailsearchResult.socialLinks,
+                    aiEnrichmentStatus: emailsearchResult.aiEnrichmentStatus,
+                    aiEnrichmentError: emailsearchResult.aiEnrichmentError,
+                    aiConfidence: emailsearchResult.aiConfidence,
+                    title: emailsearchResult.title || item.title,
+                });
+            }
             return item.id;
         }
 
@@ -34,8 +45,8 @@ export class EmailsearchResultModel extends BaseDb {
         return result.affected?true:false
     }
 
-    async getByTaskIdUrl(taskId: number, email: string): Promise<EmailSearchResultEntity | null> {
-        return this.repository.findOne({ where: { task_id: taskId, email } });
+    async getByTaskIdUrl(taskId: number, url: string): Promise<EmailSearchResultEntity | null> {
+        return this.repository.findOne({ where: { task_id: taskId, url } });
     }
 
     async getTaskResult(taskId: number, page: number, size: number): Promise<EmailSearchResultEntity[]> {
@@ -95,4 +106,15 @@ export class EmailsearchResultModel extends BaseDb {
                 return `DATE(${column})`;
         }
     }
-} 
+
+    private hasAiEnrichmentData(emailsearchResult: EmailSearchResultEntity): boolean {
+        return !!(
+            emailsearchResult.phone ||
+            emailsearchResult.address ||
+            emailsearchResult.socialLinks ||
+            emailsearchResult.aiEnrichmentError ||
+            emailsearchResult.aiConfidence ||
+            (emailsearchResult.aiEnrichmentStatus && emailsearchResult.aiEnrichmentStatus !== "none")
+        );
+    }
+}

@@ -2,7 +2,7 @@
 import { describe, test, expect } from "vitest";
 import {
   parseChildMessage,
-  ParseChildMessageResult,
+  parseTypedChildMessage,
 } from "@/utils/childProcessMessage";
 
 // ---------------------------------------------------------------------------
@@ -306,5 +306,38 @@ describe("parseChildMessage", () => {
         expect(result.data.data).toBe("");
       }
     });
+  });
+});
+
+describe("parseTypedChildMessage", () => {
+  test("parses wrapped type-only message", () => {
+    const request = {
+      type: "EMAIL_AI_ENRICHMENT_REQUEST",
+      requestId: "req-1",
+      url: "https://example.com",
+      pageContent: "Contact us at Example",
+      pageTitle: "Example",
+    };
+
+    const result = parseTypedChildMessage<typeof request>({
+      data: JSON.stringify(request),
+    });
+
+    expect(result.kind).toBe("parsed");
+    if (result.kind === "parsed") {
+      expect(result.data.type).toBe("EMAIL_AI_ENRICHMENT_REQUEST");
+      expect(result.data.requestId).toBe("req-1");
+    }
+  });
+
+  test("returns error for wrapped typed message without type", () => {
+    const result = parseTypedChildMessage<{ type: string }>({
+      data: JSON.stringify({ action: "saveres" }),
+    });
+
+    expect(result.kind).toBe("error");
+    if (result.kind === "error") {
+      expect(result.reason).toContain("valid type");
+    }
   });
 });
