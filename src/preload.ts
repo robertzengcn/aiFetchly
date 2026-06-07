@@ -262,6 +262,8 @@ import {
   YANDEX_MAPS_HISTORY_DETAIL,
   YANDEX_MAPS_HISTORY_DELETE,
   AI_FILE_OPEN,
+  EMAIL_SEARCH_TASK_KILL,
+  EMAIL_SEARCH_TASK_START,
 } from "@/config/channellist";
 
 // window.ipcRenderer = ipcRenderer
@@ -694,6 +696,9 @@ contextBridge.exposeInMainWorld("api", {
       YANDEX_MAPS_HISTORY_DELETE,
       // AI File Operation Channels
       AI_FILE_OPEN,
+      // Email Search Task Kill/Start Channels
+      EMAIL_SEARCH_TASK_KILL,
+      EMAIL_SEARCH_TASK_START,
     ];
     if (validChannels.includes(channel)) {
       return ipcRenderer.invoke(channel, data);
