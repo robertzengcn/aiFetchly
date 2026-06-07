@@ -40,8 +40,11 @@ export class EmailsearchTaskdb {
       task.record_time = getRecorddatetime();
     }
     const stmt = this.db.prepare(`
-            INSERT INTO ${this.emailsearchtaskTable} (error_log, runtime_log, record_time,type_id, status, aiSupportEnabled)
-        VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO ${this.emailsearchtaskTable}
+              (error_log, runtime_log, record_time, type_id, status, aiSupportEnabled,
+               search_result_id, concurrency, page_length, notShowBrowser,
+               processTimeout, maxPageNumber, is_active)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
     const result = stmt.run(
       task.error_log,
@@ -49,7 +52,14 @@ export class EmailsearchTaskdb {
       task.record_time,
       task.type_id,
       task.status,
-      task.aiSupportEnabled ? 1 : 0
+      task.aiSupportEnabled ? 1 : 0,
+      task.search_result_id || 0,
+      task.concurrency || 0,
+      task.page_length || 0,
+      task.notShowBrowser ? 1 : 0,
+      task.processTimeout || 30,
+      task.maxPageNumber || 0,
+      task.is_active ? 1 : 0
     );
     return Number(result.lastInsertRowid);
   }
@@ -68,7 +78,10 @@ export class EmailsearchTaskdb {
   updateTask(task: EmailsearchTaskEntity): boolean {
     const stmt = this.db.prepare(`
             UPDATE ${this.emailsearchtaskTable}
-            SET error_log = ?, runtime_log = ?, record_time = ?, status = ?, aiSupportEnabled = ?
+            SET error_log = ?, runtime_log = ?, record_time = ?, status = ?,
+                aiSupportEnabled = ?, search_result_id = ?, concurrency = ?,
+                page_length = ?, notShowBrowser = ?, processTimeout = ?,
+                maxPageNumber = ?, type_id = ?
             WHERE id = ?
         `);
     const result = stmt.run(
@@ -77,6 +90,13 @@ export class EmailsearchTaskdb {
       task.record_time,
       task.status,
       task.aiSupportEnabled ? 1 : 0,
+      task.search_result_id || 0,
+      task.concurrency || 0,
+      task.page_length || 0,
+      task.notShowBrowser ? 1 : 0,
+      task.processTimeout || 30,
+      task.maxPageNumber || 0,
+      task.type_id,
       task.id
     );
     return result.changes > 0;
