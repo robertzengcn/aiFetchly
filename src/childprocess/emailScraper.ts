@@ -4,6 +4,7 @@ import {
   EmailResult,
   EmailAiCandidate,
 } from "@/entityTypes/emailextraction-type";
+import type { EmailAiResponse } from "@/modules/EmailAiEnrichmentHandler";
 import { Page, InterceptResolutionAction } from "puppeteer";
 import useProxy from "@lem0-packages/puppeteer-page-proxy";
 import { convertProxyServertourl } from "@/modules/lib/function";
@@ -12,6 +13,19 @@ import {
   generateContentHash,
   meetsMinimumScore,
 } from "@/childprocess/email-ai-enrichment/candidateScorer";
+
+type UtilityParentMessage = {
+  data: string;
+};
+
+type UtilityParentPort = {
+  on: (event: "message", handler: (event: UtilityParentMessage) => void) => void;
+  removeListener: (
+    event: "message",
+    handler: (event: UtilityParentMessage) => void
+  ) => void;
+  postMessage: (message: string) => void;
+};
 
 export const extractLink = async (page: Page, val: EmailClusterdata) => {
   const url = val.url;
@@ -225,6 +239,7 @@ export async function crawlSite({
           address: data.aiEnrichmentResult.address,
           socialLinks: data.aiEnrichmentResult.socialLinks,
           status: data.aiEnrichmentResult.status,
+          error: data.aiEnrichmentResult.error,
           confidence: data.aiEnrichmentResult.confidence,
         },
       };
@@ -245,9 +260,15 @@ async function requestAiEnrichmentForBestCandidate(
 
   try {
     // Dynamic import to avoid issues if process.parentPort is unavailable
-    const parentPort = (process as any).parentPort;
+    const parentPort = (process as NodeJS.Process & {
+      parentPort?: UtilityParentPort;
+    }).parentPort;
     if (!parentPort) {
       console.warn("No parentPort available for AI enrichment request");
+      data.aiEnrichmentResult = {
+        status: "skipped",
+        error: "No parent process channel available for AI enrichment",
+      };
       return;
     }
 
@@ -263,23 +284,25 @@ async function requestAiEnrichmentForBestCandidate(
     };
 
     // Store the pending response handler
-    const responsePromise = new Promise<any>((resolve, reject) => {
+    const responsePromise = new Promise<EmailAiResponse>((resolve, reject) => {
       const timeout = setTimeout(() => {
         reject(new Error("AI enrichment request timed out"));
       }, 60_000);
 
-      const handler = (e: any) => {
+      const handler = (e: UtilityParentMessage) => {
         try {
-          const msg = JSON.parse(e.data);
+          const msg = JSON.parse(e.data) as Partial<EmailAiResponse>;
           if (
             msg.type === "EMAIL_AI_ENRICHMENT_RESPONSE" &&
             msg.requestId === requestId
           ) {
             clearTimeout(timeout);
             parentPort.removeListener("message", handler);
-            resolve(msg);
+            resolve(msg as EmailAiResponse);
           }
-        } catch {}
+        } catch {
+          return;
+        }
       };
       parentPort.on("message", handler);
     });
@@ -302,12 +325,17 @@ async function requestAiEnrichmentForBestCandidate(
       console.log(`[Email AI] Enrichment successful for ${candidate.url}`);
     } else {
       console.warn(`[Email AI] Enrichment failed: ${response.errorMessage}`);
+      data.aiEnrichmentResult = {
+        status: "failed" as const,
+        error: response.errorMessage || "AI enrichment failed",
+      };
     }
   } catch (error) {
-    console.error(
-      `[Email AI] Enrichment error: ${
-        error instanceof Error ? error.message : error
-      }`
-    );
+    const message = error instanceof Error ? error.message : String(error);
+    data.aiEnrichmentResult = {
+      status: "failed",
+      error: message,
+    };
+    console.error(`[Email AI] Enrichment error: ${message}`);
   }
 }

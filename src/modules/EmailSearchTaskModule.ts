@@ -12,7 +12,6 @@ import { EmailExtractionTypes } from "@/config/emailextraction";
 import { SortBy, TaskStatus } from "@/entityTypes/commonType";
 import { EmailItem } from "@/entityTypes/emailmarketingType";
 import { BaseModule } from "@/modules/baseModule";
-import { EmailSearchResultEntity } from "@/entity/EmailSearchResult.entity";
 import { EmailSearchResultDetailEntity } from "@/entity/EmailSearchResultDetail.entity";
 import {
   EmailsearchTaskEntity,
@@ -34,7 +33,10 @@ import { Token } from "@/modules/token";
 import { USERLOGPATH, USEREMAIL } from "@/config/usersetting";
 import { utilityProcess, app, type UtilityProcess } from "electron";
 import { ProcessMessage } from "@/entityTypes/processMessage-type";
-import { parseChildMessage } from "@/utils/childProcessMessage";
+import {
+  parseChildMessage,
+  parseTypedChildMessage,
+} from "@/utils/childProcessMessage";
 import { v4 as uuidv4 } from "uuid";
 import {
   twocaptchagroup,
@@ -51,6 +53,10 @@ import {
   EmailAiRequest,
   EmailAiResponse,
 } from "@/modules/EmailAiEnrichmentHandler";
+import {
+  buildEmailResultDisplay,
+  buildEmailSearchResultEntity,
+} from "@/modules/emailSearchResultMapper";
 
 export class EmailSearchTaskModule extends BaseModule {
   /** Static map tracking running child processes by taskId */
@@ -202,33 +208,36 @@ export class EmailSearchTaskModule extends BaseModule {
         //child.kill()
       }
     });
-    child.on("exit", (code) => {
+    child.on("exit", async (code) => {
       // Remove from process map on exit
       EmailSearchTaskModule.processMap.delete(taskId);
-      if (code !== 0) {
-        console.error(`Child process exited with code ${code}`);
-        this.updateTaskStatus(taskId, TaskStatus.Error);
-      } else {
-        console.log("Child process exited successfully");
-        this.updateTaskStatus(taskId, TaskStatus.Complete);
+      try {
+        if (code !== 0) {
+          console.error(`Child process exited with code ${code}`);
+          await this.updateTaskStatus(taskId, TaskStatus.Error);
+        } else {
+          console.log("Child process exited successfully");
+          await this.updateTaskStatus(taskId, TaskStatus.Complete);
+        }
+      } catch (error) {
+        console.error(
+          `Failed to update email search task ${taskId} status after child exit:`,
+          error
+        );
       }
     });
     child.on("message", (message: unknown) => {
       try {
         // Check if this is an AI enrichment request from the child process
-        const rawMsg =
-          typeof message === "string" ? message : JSON.stringify(message);
-        let parsedMsg: Record<string, unknown>;
-        try {
-          parsedMsg = JSON.parse(rawMsg);
-        } catch {
-          parsedMsg = {};
-        }
-
-        if (parsedMsg.type === "EMAIL_AI_ENRICHMENT_REQUEST") {
+        const typedMessage =
+          parseTypedChildMessage<EmailAiRequest>(message);
+        if (
+          typedMessage.kind === "parsed" &&
+          typedMessage.data.type === "EMAIL_AI_ENRICHMENT_REQUEST"
+        ) {
           const aiHandler = new EmailAiEnrichmentHandler(errorLogfile);
           aiHandler.handleRequest(
-            parsedMsg as unknown as EmailAiRequest,
+            typedMessage.data,
             (response: EmailAiResponse) => {
               child.postMessage(JSON.stringify(response));
             }
@@ -251,7 +260,12 @@ export class EmailSearchTaskModule extends BaseModule {
         if (childdata.action == "saveres") {
           if (childdata.data) {
             //save result
-            this.saveSearchResult(taskId, childdata.data);
+            this.saveSearchResult(taskId, childdata.data).catch((error) => {
+              console.error(
+                `Failed to save email search result for task ${taskId}:`,
+                error
+              );
+            });
           }
           //child.kill()
         }
@@ -422,13 +436,7 @@ export class EmailSearchTaskModule extends BaseModule {
   }
   //save search result
   public async saveSearchResult(taskId: number, res: EmailResult) {
-    //convert url to domain
-    const url = new URL(res.url);
-    const domain = url.hostname;
-    const data = new EmailSearchResultEntity();
-    data.task_id = taskId;
-    data.url = domain;
-    data.title = res.pageTitle;
+    const data = buildEmailSearchResultEntity(taskId, res);
     const resultId = await this.emailsearchresultdb.create(data);
     if (!resultId) {
       throw new Error("save search result failed");
@@ -501,11 +509,9 @@ export class EmailSearchTaskModule extends BaseModule {
       // }
 
       const item: EmailResultDisplay = {
-        id: value.id,
-        url: value.url,
-        pageTitle: value.title,
-        emails: emailsArr,
-        recordTime: value.createdAt ? this.formatDateTime(value.createdAt) : "",
+        ...buildEmailResultDisplay(value, emailsArr, {
+          formatDateTime: this.formatDateTime,
+        }),
       };
       result.push(item);
     }
@@ -535,11 +541,9 @@ export class EmailSearchTaskModule extends BaseModule {
       }
 
       const item: EmailResultDisplay = {
-        id: value.id,
-        url: value.url,
-        pageTitle: value.title,
-        emails: emailsArr,
-        recordTime: value.createdAt ? this.formatDateTime(value.createdAt) : "",
+        ...buildEmailResultDisplay(value, emailsArr, {
+          formatDateTime: this.formatDateTime,
+        }),
       };
       result.push(item);
     }

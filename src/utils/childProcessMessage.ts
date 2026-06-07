@@ -10,6 +10,10 @@ export type ParseChildMessageResult<T> =
   | { kind: "parsed"; data: ProcessMessage<T> }
   | { kind: "error"; reason: string; raw: unknown };
 
+export type ParseTypedChildMessageResult<T extends { type: string }> =
+  | { kind: "parsed"; data: T }
+  | { kind: "error"; reason: string; raw: unknown };
+
 /**
  * Parse a message received from an Electron utilityProcess child.
  *
@@ -94,10 +98,79 @@ export function parseChildMessage<T>(message: unknown): ParseChildMessageResult<
   };
 }
 
+export function parseTypedChildMessage<T extends { type: string }>(
+  message: unknown
+): ParseTypedChildMessageResult<T> {
+  const parsed = parseUnknownChildPayload(message);
+  if (parsed.kind === "error") {
+    return parsed;
+  }
+
+  if (isTypedMessage(parsed.data)) {
+    return { kind: "parsed", data: parsed.data as T };
+  }
+
+  return {
+    kind: "error",
+    reason: "Parsed message does not contain a valid type",
+    raw: message,
+  };
+}
+
+type ParseUnknownChildPayloadResult =
+  | { kind: "parsed"; data: unknown }
+  | { kind: "error"; reason: string; raw: unknown };
+
+function parseUnknownChildPayload(
+  message: unknown
+): ParseUnknownChildPayloadResult {
+  if (typeof message === "string") {
+    try {
+      return { kind: "parsed", data: JSON.parse(message) as unknown };
+    } catch {
+      return {
+        kind: "error",
+        reason: "Failed to parse string message as JSON",
+        raw: message,
+      };
+    }
+  }
+
+  if (message === null || message === undefined || typeof message !== "object") {
+    return {
+      kind: "error",
+      reason: "Message is not a string or object",
+      raw: message,
+    };
+  }
+
+  const msg = message as Record<string, unknown>;
+  if ("data" in msg && typeof msg.data === "string" && !("type" in msg)) {
+    try {
+      return { kind: "parsed", data: JSON.parse(msg.data) as unknown };
+    } catch {
+      return {
+        kind: "error",
+        reason: "Failed to parse wrapped data as JSON",
+        raw: message,
+      };
+    }
+  }
+
+  return { kind: "parsed", data: message };
+}
+
 /** Type guard: does the value look like a ProcessMessage? */
 function isProcessMessage(value: unknown): value is ProcessMessage<unknown> {
   if (value === null || value === undefined || typeof value !== "object") {
     return false;
   }
   return "action" in value && typeof (value as Record<string, unknown>).action === "string";
+}
+
+function isTypedMessage(value: unknown): value is { type: string } {
+  if (value === null || value === undefined || typeof value !== "object") {
+    return false;
+  }
+  return "type" in value && typeof (value as Record<string, unknown>).type === "string";
 }
