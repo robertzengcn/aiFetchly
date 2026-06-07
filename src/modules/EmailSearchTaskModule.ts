@@ -32,7 +32,7 @@ import * as fs from "fs";
 import { MessageChannelMain } from "electron";
 import { Token } from "@/modules/token";
 import { USERLOGPATH, USEREMAIL } from "@/config/usersetting";
-import { utilityProcess, app } from "electron";
+import { utilityProcess, app, type UtilityProcess } from "electron";
 import { ProcessMessage } from "@/entityTypes/processMessage-type";
 import { parseChildMessage } from "@/utils/childProcessMessage";
 import { v4 as uuidv4 } from "uuid";
@@ -48,6 +48,9 @@ import { EmailSearchTaskProxyModule } from "./EmailSearchTaskProxyModule";
 import { ProxyEntity } from "@/entity/Proxy.entity";
 
 export class EmailSearchTaskModule extends BaseModule {
+  /** Static map tracking running child processes by taskId */
+  private static processMap: Map<number, UtilityProcess> = new Map();
+
   //private dbpath: string
   private emailsearchTaskdb: EmailsearchTaskModel;
   private emailsearchUrldb: EmailsearchTaskUrlModel;
@@ -165,6 +168,9 @@ export class EmailSearchTaskModule extends BaseModule {
       taskId.toString() + "_" + uuid + ".runtime.log"
     );
 
+    // Track the child process for kill support
+    EmailSearchTaskModule.processMap.set(taskId, child);
+
     child.on("spawn", () => {
       console.log("child process satart, pid is" + child.pid);
       child.postMessage(JSON.stringify({ action: "searchEmail", data: data }), [
@@ -191,6 +197,8 @@ export class EmailSearchTaskModule extends BaseModule {
       }
     });
     child.on("exit", (code) => {
+      // Remove from process map on exit
+      EmailSearchTaskModule.processMap.delete(taskId);
       if (code !== 0) {
         console.error(`Child process exited with code ${code}`);
         this.updateTaskStatus(taskId, TaskStatus.Error);
@@ -228,6 +236,34 @@ export class EmailSearchTaskModule extends BaseModule {
       }
     });
   }
+  /**
+   * Kill a running email search task's child process
+   * @param taskId - The task ID to kill
+   * @throws Error if task is not running
+   */
+  public killProcess(taskId: number): void {
+    const child = EmailSearchTaskModule.processMap.get(taskId);
+    if (!child) {
+      throw new Error("No running process found for this task");
+    }
+    child.kill();
+    EmailSearchTaskModule.processMap.delete(taskId);
+    this.updateTaskStatus(taskId, TaskStatus.Cancel);
+  }
+
+  /**
+   * Start (or restart) an existing email search task
+   * @param taskId - The task ID to start
+   * @throws Error if task is already running
+   */
+  public async startTask(taskId: number): Promise<void> {
+    if (EmailSearchTaskModule.processMap.has(taskId)) {
+      throw new Error("Task is already running");
+    }
+    await this.updateTaskStatus(taskId, TaskStatus.Processing);
+    this.searchEmail(taskId);
+  }
+
   //save search task, call it when user start search email
   public async saveSearchtask(data: EmailsControldata): Promise<number> {
     console.log("save search task");

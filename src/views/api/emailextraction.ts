@@ -1,11 +1,31 @@
-import {EmailscFormdata,EmailResultDisplay,EmailsearchtaskResultquery} from '@/entityTypes/emailextraction-type'
-import { windowInvoke,windowReceive,windowSend } from '@/views/utils/apirequest'
-import {EMAILEXTRACTIONAPI, EMAILSEARCHTASK_ERROR_LOG_DOWNLOAD, GETEMAILSEARCHTASK, UPDATEEMAILSEARCHTASK, DELETEEMAILSEARCHTASK, EMAILEXTRACTION_RESULT_EXPORT} from '@/config/channellist'
-import { SearchResult} from '@/views/api/types'
-import {ItemSearchparam} from "@/entityTypes/commonType"
-import {LISTEMAILSEARCHTASK,EMAILSEARCHTASKRESULT} from "@/config/channellist";
+import {
+  EmailscFormdata,
+  EmailResultDisplay,
+  EmailsearchtaskResultquery,
+} from "@/entityTypes/emailextraction-type";
+import {
+  windowInvoke,
+  windowReceive,
+  windowSend,
+} from "@/views/utils/apirequest";
+import {
+  EMAILEXTRACTIONAPI,
+  EMAILSEARCHTASK_ERROR_LOG_DOWNLOAD,
+  GETEMAILSEARCHTASK,
+  UPDATEEMAILSEARCHTASK,
+  DELETEEMAILSEARCHTASK,
+  EMAILEXTRACTION_RESULT_EXPORT,
+  EMAIL_SEARCH_TASK_KILL,
+  EMAIL_SEARCH_TASK_START,
+} from "@/config/channellist";
+import { SearchResult } from "@/views/api/types";
+import { ItemSearchparam } from "@/entityTypes/commonType";
+import {
+  LISTEMAILSEARCHTASK,
+  EMAILSEARCHTASKRESULT,
+} from "@/config/channellist";
 // import { CommonResponse } from "@/entityTypes/commonType"
-import {EmailsearchTaskEntityDisplay} from '@/entityTypes/emailextraction-type'
+import { EmailsearchTaskEntityDisplay } from "@/entityTypes/emailextraction-type";
 
 /**
  * Submits a new email extraction task to the backend
@@ -14,10 +34,9 @@ import {EmailsearchTaskEntityDisplay} from '@/entityTypes/emailextraction-type'
  * @throws Error if the submission fails
  */
 export async function submitScraper(data: EmailscFormdata) {
-    
-    await windowSend(EMAILEXTRACTIONAPI, data) 
-    
-    // return resp 
+  await windowSend(EMAILEXTRACTIONAPI, data);
+
+  // return resp
 }
 /**
  * Retrieves a list of email extraction tasks with pagination support
@@ -25,17 +44,19 @@ export async function submitScraper(data: EmailscFormdata) {
  * @returns Promise that resolves to a SearchResult containing task data and total count
  * @throws Error if the request fails or returns invalid data
  */
-export async function listEmailSearchtasks(data: ItemSearchparam): Promise<SearchResult<EmailsearchTaskEntityDisplay>> {
-    const resp = await windowInvoke(LISTEMAILSEARCHTASK, data);
-    //console.log(resp)
-    if (!resp) {
-        throw new Error("unknow error")
-    }
-    const resdata: SearchResult<EmailsearchTaskEntityDisplay> = {
-        data: resp.records,
-        total: resp.num,
-    }
-    return resdata;
+export async function listEmailSearchtasks(
+  data: ItemSearchparam
+): Promise<SearchResult<EmailsearchTaskEntityDisplay>> {
+  const resp = await windowInvoke(LISTEMAILSEARCHTASK, data);
+  //console.log(resp)
+  if (!resp) {
+    throw new Error("unknow error");
+  }
+  const resdata: SearchResult<EmailsearchTaskEntityDisplay> = {
+    data: resp.records,
+    total: resp.num,
+  };
+  return resdata;
 }
 /**
  * Retrieves detailed results for a specific email extraction task
@@ -43,18 +64,17 @@ export async function listEmailSearchtasks(data: ItemSearchparam): Promise<Searc
  * @returns Promise that resolves to a SearchResult containing email extraction results
  * @throws Error if the request fails or the task is not found
  */
-export async function getEmailtaskdetail(data: EmailsearchtaskResultquery){
-    const resp = await windowInvoke(EMAILSEARCHTASKRESULT, data);
-    if (!resp) {
-        throw new Error("unknow error")
-    }
-    // EmailResultDisplay
-    const resdata: SearchResult<EmailResultDisplay> = {
-        data: resp.records,
-        total: resp.num,
-    }
-    return resdata;
-
+export async function getEmailtaskdetail(data: EmailsearchtaskResultquery) {
+  const resp = await windowInvoke(EMAILSEARCHTASKRESULT, data);
+  if (!resp) {
+    throw new Error("unknow error");
+  }
+  // EmailResultDisplay
+  const resdata: SearchResult<EmailResultDisplay> = {
+    data: resp.records,
+    total: resp.num,
+  };
+  return resdata;
 }
 
 /**
@@ -62,9 +82,11 @@ export async function getEmailtaskdetail(data: EmailsearchtaskResultquery){
  * @param channel - The IPC channel name to listen on
  * @param cb - Callback function to handle received events
  */
-export function receiveSearchEmailevent(channel:string,cb:(data:any)=>void){
-   
-    windowReceive(channel,cb)
+export function receiveSearchEmailevent(
+  channel: string,
+  cb: (data: any) => void
+) {
+  windowReceive(channel, cb);
 }
 
 /**
@@ -74,16 +96,18 @@ export function receiveSearchEmailevent(channel:string,cb:(data:any)=>void){
  * @throws Error if the log file is not found or the download fails
  */
 export async function downloadErrorLog(id: number): Promise<string> {
-    try {
-        const querydata = { id: id }
-        const res = await windowInvoke(EMAILSEARCHTASK_ERROR_LOG_DOWNLOAD, querydata)
-        console.log(res)
-        return res
-        
-    } catch (error) {
-        console.error('Error downloading log:', error)
-        throw error
-    }
+  try {
+    const querydata = { id: id };
+    const res = await windowInvoke(
+      EMAILSEARCHTASK_ERROR_LOG_DOWNLOAD,
+      querydata
+    );
+    console.log(res);
+    return res;
+  } catch (error) {
+    console.error("Error downloading log:", error);
+    throw error;
+  }
 }
 
 /**
@@ -93,18 +117,18 @@ export async function downloadErrorLog(id: number): Promise<string> {
  * @throws Error if the task is not found or the request fails
  */
 export async function getEmailSearchTask(taskId: number): Promise<any> {
-    try {
-        const querydata = { id: taskId }
-        const resp = await windowInvoke(GETEMAILSEARCHTASK, querydata)
-        if (!resp) {
-            throw new Error(resp?.msg || "Failed to get task")
-        }
-        console.log("resp", resp)
-        return resp
-    } catch (error) {
-        console.error('Error getting task:', error)
-        throw error
+  try {
+    const querydata = { id: taskId };
+    const resp = await windowInvoke(GETEMAILSEARCHTASK, querydata);
+    if (!resp) {
+      throw new Error(resp?.msg || "Failed to get task");
     }
+    console.log("resp", resp);
+    return resp;
+  } catch (error) {
+    console.error("Error getting task:", error);
+    throw error;
+  }
 }
 
 /**
@@ -114,18 +138,21 @@ export async function getEmailSearchTask(taskId: number): Promise<any> {
  * @returns Promise that resolves to a success message
  * @throws Error if the task cannot be updated (e.g., running/completed tasks) or the request fails
  */
-export async function updateEmailSearchTask(taskId: number, data: EmailscFormdata): Promise<string> {
-    try {
-        const querydata = { id: taskId, data: data }
-        const resp = await windowInvoke(UPDATEEMAILSEARCHTASK, querydata)
-        if (!resp || !resp.status) {
-            throw new Error(resp?.msg || "Failed to update task")
-        }
-        return resp.data
-    } catch (error) {
-        console.error('Error updating task:', error)
-        throw error
+export async function updateEmailSearchTask(
+  taskId: number,
+  data: EmailscFormdata
+): Promise<string> {
+  try {
+    const querydata = { id: taskId, data: data };
+    const resp = await windowInvoke(UPDATEEMAILSEARCHTASK, querydata);
+    if (!resp || !resp.status) {
+      throw new Error(resp?.msg || "Failed to update task");
     }
+    return resp.data;
+  } catch (error) {
+    console.error("Error updating task:", error);
+    throw error;
+  }
 }
 
 /**
@@ -135,17 +162,17 @@ export async function updateEmailSearchTask(taskId: number, data: EmailscFormdat
  * @throws Error if the task cannot be deleted (e.g., running tasks) or the request fails
  */
 export async function deleteEmailSearchTask(taskId: number): Promise<string> {
-    try {
-        const querydata = { id: taskId }
-        const resp = await windowInvoke(DELETEEMAILSEARCHTASK, querydata)
-        if (!resp || !resp.status) {
-            throw new Error(resp?.msg || "Failed to delete task")
-        }
-        return resp.data
-    } catch (error) {
-        console.error('Error deleting task:', error)
-        throw error
+  try {
+    const querydata = { id: taskId };
+    const resp = await windowInvoke(DELETEEMAILSEARCHTASK, querydata);
+    if (!resp || !resp.status) {
+      throw new Error(resp?.msg || "Failed to delete task");
     }
+    return resp.data;
+  } catch (error) {
+    console.error("Error deleting task:", error);
+    throw error;
+  }
 }
 
 /**
@@ -154,16 +181,59 @@ export async function deleteEmailSearchTask(taskId: number): Promise<string> {
  * @param format Export format ('json' or 'csv')
  * @returns Promise with file path or error
  */
-export async function exportEmailResults(taskId: number, format: 'json' | 'csv' = 'csv'): Promise<string> {
-    try {
-        const querydata = { taskId, format }
-        const resp = await windowInvoke(EMAILEXTRACTION_RESULT_EXPORT, querydata)
-        if (!resp) {
-            throw new Error(resp?.msg || "Failed to export results")
-        }
-        return resp
-    } catch (error) {
-        console.error('Error exporting results:', error)
-        throw error
+export async function exportEmailResults(
+  taskId: number,
+  format: "json" | "csv" = "csv"
+): Promise<string> {
+  try {
+    const querydata = { taskId, format };
+    const resp = await windowInvoke(EMAILEXTRACTION_RESULT_EXPORT, querydata);
+    if (!resp) {
+      throw new Error(resp?.msg || "Failed to export results");
     }
+    return resp;
+  } catch (error) {
+    console.error("Error exporting results:", error);
+    throw error;
+  }
+}
+
+/**
+ * Kill a running email search task's backend process
+ * @param taskId - The task ID to kill
+ * @returns Promise that resolves to a success message
+ * @throws Error if the task is not running or the kill fails
+ */
+export async function killEmailSearchTask(taskId: number): Promise<string> {
+  try {
+    const querydata = { id: taskId };
+    const resp = await windowInvoke(EMAIL_SEARCH_TASK_KILL, querydata);
+    if (!resp || !resp.status) {
+      throw new Error(resp?.msg || "Failed to stop task");
+    }
+    return resp.data;
+  } catch (error) {
+    console.error("Error stopping task:", error);
+    throw error;
+  }
+}
+
+/**
+ * Start (or restart) an existing email search task
+ * @param taskId - The task ID to start
+ * @returns Promise that resolves to a success message
+ * @throws Error if the task is already running or the start fails
+ */
+export async function startEmailSearchTask(taskId: number): Promise<string> {
+  try {
+    const querydata = { id: taskId };
+    const resp = await windowInvoke(EMAIL_SEARCH_TASK_START, querydata);
+    if (!resp || !resp.status) {
+      throw new Error(resp?.msg || "Failed to start task");
+    }
+    return resp.data;
+  } catch (error) {
+    console.error("Error starting task:", error);
+    throw error;
+  }
 }

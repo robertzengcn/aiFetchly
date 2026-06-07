@@ -316,7 +316,8 @@ export default {
     yellowpage_description: "Aligning public directory data",
     create_yellow_pages_task: "Create Directory Assistant Task",
     edit_yellow_pages_task: "Edit Directory Assistant Task",
-    configure_yellow_pages_task: "Configure and create a new Directory Assistant task",
+    configure_yellow_pages_task:
+      "Configure and create a new Directory Assistant task",
     modify_yellow_pages_task: "Modify existing Directory Assistant task",
     task_configuration: "任务配置",
     task_name: "任务名称",
@@ -381,9 +382,11 @@ export default {
     update_task: "更新任务",
     cancel: "取消",
     task_created_successfully: "任务创建成功",
-    task_created_message: "Your Directory Assistant task has been created successfully!",
+    task_created_message:
+      "Your Directory Assistant task has been created successfully!",
     task_updated_successfully: "任务更新成功",
-    task_updated_message: "Your Directory Assistant task has been updated successfully!",
+    task_updated_message:
+      "Your Directory Assistant task has been updated successfully!",
     error_creating_task: "创建任务时出错",
     view_all_tasks: "查看所有任务",
     view_task_details: "查看任务详情",
@@ -428,7 +431,8 @@ export default {
     account_manage_description: "管理系统中的账户",
     // Directory Assistant List Page
     yellow_pages_task_management: "Directory Assistant Task Management",
-    yellow_pages_task_management_description: "Manage data alignment tasks for directory sources",
+    yellow_pages_task_management_description:
+      "Manage data alignment tasks for directory sources",
     new_task: "新建任务",
     import: "导入",
     export: "导出",
@@ -652,8 +656,10 @@ export default {
     keyword: "关键词",
     search_enginer_name: "搜索引擎",
     input_keywords_hint: "输入关键词，每行一个",
-    market_insight_placeholder: "请输入您需要进行市场洞察的公开网络源或行业关键词...",
-    public_information_notice: "注：本功能仅用于公开网页信息的自动化结构化整理，请确保您的检索行为符合目标网站的 Robots 协议。",
+    market_insight_placeholder:
+      "请输入您需要进行市场洞察的公开网络源或行业关键词...",
+    public_information_notice:
+      "注：本功能仅用于公开网页信息的自动化结构化整理，请确保您的检索行为符合目标网站的 Robots 协议。",
     show_in_Browser: "在浏览器中显示",
     use_hint: "输入公开来源或行业关键词，用于市场洞察整理",
     concurrent_quantity: "并发数量",
@@ -825,6 +831,14 @@ export default {
     address: "地址",
     social_links: "社交链接",
     ai_confidence: "AI置信度",
+    confirm_kill: "确定要停止此任务吗？",
+    kill_task: "停止任务",
+    kill_success: "任务已成功停止",
+    kill_error: "停止任务失败",
+    confirm_start: "确定要启动此任务吗？",
+    start_task: "启动任务",
+    start_success: "任务已成功启动",
+    start_error: "启动任务失败",
   },
   contactExtraction: {
     extract_contact_info: "AI Profile Insights",
@@ -1377,7 +1391,8 @@ export default {
   },
   yellowPages: {
     ai_support: "AI 辅助",
-    ai_support_hint: "Use AI to assist data alignment when selectors fail to read public data",
+    ai_support_hint:
+      "Use AI to assist data alignment when selectors fail to read public data",
     ai_query_keywords: "AI 生成关键词",
     ai_query_keywords_default_seed: "商业",
     use_account: "使用账号",
@@ -1422,7 +1437,8 @@ export default {
     list_task_pause_failed: "暂停任务「{name}」失败：{message}",
     list_task_resumed_success: "任务「{name}」已恢复运行",
     list_task_resume_failed: "恢复任务「{name}」失败：{message}",
-    list_task_still_running_results: "Task is still running. Results will be available when data alignment completes.",
+    list_task_still_running_results:
+      "Task is still running. Results will be available when data alignment completes.",
     list_task_no_results_yet: "该任务暂无结果。",
     list_view_results_anyway_confirm: "是否仍要查看结果页？",
     list_unknown_error: "未知错误",
@@ -1548,7 +1564,8 @@ export default {
   },
   mapScraper: {
     title: "Local Business Finder",
-    description: "Find public local business information through neutral source channels",
+    description:
+      "Find public local business information through neutral source channels",
     provider_google: "Channel Alpha (Global)",
     provider_yandex: "Channel Beta (CIS Region)",
     search_tab: "搜索",
@@ -1575,7 +1592,8 @@ export default {
     cancel_search: "Cancel",
     searching: "搜索中...",
     progress_label: "{current} / {total} 个商家",
-    found_results: "在 '{location}' 找到 {count} 个 {provider} 商家，关键词 '{query}'",
+    found_results:
+      "在 '{location}' 找到 {count} 个 {provider} 商家，关键词 '{query}'",
     copy_all: "全部复制",
     export_csv: "Export To Routing Sheet",
     export_json: "导出 JSON",

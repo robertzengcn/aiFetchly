@@ -828,6 +828,14 @@ export default {
     update_error: "タスクの更新に失敗しました",
     load_task_error: "タスクデータの読み込みに失敗しました",
     no_valid_urls: "有効なURLが見つかりません",
+    confirm_kill: "このタスクを停止してもよろしいですか？",
+    kill_task: "タスクを停止",
+    kill_success: "タスクが正常に停止されました",
+    kill_error: "タスクの停止に失敗しました",
+    confirm_start: "このタスクを開始してもよろしいですか？",
+    start_task: "タスクを開始",
+    start_success: "タスクが正常に開始されました",
+    start_error: "タスクの開始に失敗しました",
   },
   contactExtraction: {
     extract_contact_info: "AI Profile Insights",
@@ -843,8 +851,7 @@ export default {
     status_analyzing: "分析中",
     status_failed: "失敗",
     status_pending: "保留中",
-    select_items_hint:
-      "Please select at least one item for profile insights",
+    select_items_hint: "Please select at least one item for profile insights",
     no_valid_items_hint:
       "選択されたアイテムに有効なIDがありません。別のアイテムを選択してください。",
     extraction_started: "Profile insights started",
@@ -1566,7 +1573,8 @@ export default {
   },
   mapScraper: {
     title: "Local Business Finder",
-    description: "Find public local business information through neutral source channels",
+    description:
+      "Find public local business information through neutral source channels",
     provider_google: "Channel Alpha (Global)",
     provider_yandex: "Channel Beta (CIS Region)",
     search_tab: "検索",
