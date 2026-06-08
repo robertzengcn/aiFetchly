@@ -1430,7 +1430,9 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     requiresConfirmation: false,
     permissionCategory: "pure",
     source: "built-in",
-    execute: async (args): Promise<{ success: boolean; result: unknown }> => {
+    execute: async (
+      args
+    ): Promise<{ success: boolean; result: Record<string, unknown> }> => {
       const { RagSearchModule } = await import("@/modules/RagSearchModule");
       const module = new RagSearchModule();
       const result = await module.searchKnowledgeForTool({
@@ -1445,7 +1447,10 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
           | boolean
           | undefined,
       });
-      return { success: result.success, result };
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
     },
   },
 ];

@@ -1031,7 +1031,7 @@ export class RagSearchModule extends BaseModule {
   ): Promise<KnowledgeSearchToolResult> {
     const totalStart = Date.now();
     const vectorStart = Date.now();
-    const keywordStart = Date.now();
+    const keywordMs = 0;
     let rerankMs = 0;
 
     try {
@@ -1076,8 +1076,7 @@ export class RagSearchModule extends BaseModule {
         }
       );
 
-      const vectorMs = keywordStart - vectorStart;
-      keywordMs = Date.now() - keywordStart;
+      const searchMs = Date.now() - vectorStart;
 
       const totalCandidates = candidates.length;
 
@@ -1090,8 +1089,8 @@ export class RagSearchModule extends BaseModule {
           truncated: false,
           results: [],
           timing: {
-            vectorMs,
-            keywordMs,
+            vectorMs: searchMs,
+            keywordMs: 0,
             rerankMs: 0,
             totalMs: Date.now() - totalStart,
           },
@@ -1214,7 +1213,7 @@ export class RagSearchModule extends BaseModule {
         truncated,
         warning: rerankOutcome.warning,
         results: trimmedItems,
-        timing: { vectorMs, keywordMs, rerankMs, totalMs },
+        timing: { vectorMs: searchMs, keywordMs, rerankMs, totalMs },
       };
     } catch (error) {
       console.error("Knowledge search tool failed:", error);
