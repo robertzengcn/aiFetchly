@@ -36,4 +36,14 @@ describe("GoogleScraper result parsing", () => {
       },
     ]);
   });
+
+  test("detects when Google already reached the search results page", () => {
+    expect(
+      GoogleScraper.isSearchResultsPageState({
+        url: "https://www.google.com/search?q=software+sale+company",
+        title: "software sale company - Google Search",
+        html: '<html itemscope itemtype="http://schema.org/SearchResultsPage"></html>',
+      })
+    ).toBe(true);
+  });
 });
