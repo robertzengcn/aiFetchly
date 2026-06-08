@@ -361,6 +361,8 @@ export class EmailSearchTaskModule extends BaseModule {
    * any "Processing" tasks after a restart are orphaned.
    */
   public async resetOrphanedProcessingTasks(): Promise<void> {
+    // Ensure DataSource is initialized before querying
+    await this.ensureConnection();
     // Reuse listSearchtask to find all tasks — we only need status
     const pageSize = 100;
     let page = 0;
