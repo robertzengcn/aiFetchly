@@ -27,6 +27,7 @@ import UserAgent from "user-agents";
 // import puppeteer from 'puppeteer-extra';
 import { CustomConcurrency } from "@/modules/concurrency-implementation";
 import { searchEngineFactory } from "@/modules/searchEngineFactory";
+import * as path from "path";
 // import { Keyword } from "./keyword";
 import { pluggableType } from "@/entityTypes/scrapeType";
 import { ProxyServer } from "@/entityTypes/proxyType";
@@ -508,7 +509,11 @@ export class ScrapeManager {
     }
 
     const engineFactory = new searchEngineFactory();
-    const execPromises: Array<Promise<any>> = [];
+    const execPromises: Array<Promise<{
+      results: RunResult;
+      metadata: MetadataType;
+      num_requests: number;
+    }>> = [];
 
     for (let c = 0; c < chunks.length; c++) {
       const scop: ScrapeOptions = {
@@ -554,7 +559,14 @@ export class ScrapeManager {
         data: ClusterSearchData;
         worker: { id: number };
       }) => {
-        return await obj.run({ ...data, resultCallback });
+        try {
+          return await obj.run({ ...data, resultCallback });
+        } catch (error) {
+          if (error instanceof Error) {
+            await this.saveDebugArtifacts(data.page, "cluster_task_error", error);
+          }
+          throw error;
+        }
       };
 
       // Wrap the execute call in a try-catch to handle Puppeteer errors
@@ -585,35 +597,10 @@ export class ScrapeManager {
           };
         } catch (error) {
           if (error instanceof Error) {
-            const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-            const debugDir = this.debug_log_path || "./debug";
-
-            // Create debug directory if it doesn't exist
-            if (!fs.existsSync(debugDir)) {
-              fs.mkdirSync(debugDir);
-            }
-
-            // Use the page from ScrapeOptions
-            if (scop.page) {
-              const page = scop.page;
-
-              // Save HTML
-              const html = await page.content();
-              const htmlPath = `${debugDir}/error_${timestamp}.html`;
-              fs.writeFileSync(htmlPath, html);
-
-              // Save screenshot
-              const screenshotPath = `${debugDir}/error_${timestamp}.png`;
-              await page.screenshot({
-                path: screenshotPath as `${string}.png`,
-                fullPage: true,
-              });
-
-              this.logger.error(
-                `Puppeteer error occurred. Debug files saved to ${debugDir}/error_${timestamp}.*`
-              );
-              this.logger.error(`Error details: ${error.message}`);
-            }
+            this.logger.error(`Puppeteer error occurred: ${error.message}`);
+            this.logger.error(
+              `Cluster task page artifacts are saved from inside the failed task when a page is available.`
+            );
           }
           throw error; // Re-throw the error after saving debug info
         }
@@ -629,7 +616,7 @@ export class ScrapeManager {
       for (const promiseReturn of promiseReturns) {
         console.log(`promiseReturn: ${promiseReturn}`);
         console.log(`promiseReturn.results: ${promiseReturn.results}`);
-        results.push(promiseReturn.results.results);
+        results.push(...promiseReturn.results.results);
         //Object.assign(results, promiseReturn.results);
         Object.assign(metadata, promiseReturn.metadata);
         num_requests += promiseReturn.num_requests;
@@ -725,6 +712,48 @@ export class ScrapeManager {
     } else {
       await this.cluster.idle();
       await this.cluster.close();
+    }
+  }
+
+  private async saveDebugArtifacts(
+    page: Page,
+    prefix: string,
+    error: Error
+  ): Promise<void> {
+    const debugDir = this.debug_log_path || "./debug";
+    await fs.promises.mkdir(debugDir, { recursive: true });
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const basePath = path.join(debugDir, `${prefix}_${timestamp}`);
+
+    try {
+      const html = await page.content();
+      await fs.promises.writeFile(`${basePath}.html`, html);
+
+      await page.screenshot({
+        path: `${basePath}.png` as `${string}.png`,
+        fullPage: true,
+      });
+
+      await fs.promises.writeFile(
+        `${basePath}.json`,
+        JSON.stringify(
+          {
+            url: page.url(),
+            title: await page.title().catch(() => ""),
+            error: error.message,
+            stack: error.stack,
+          },
+          null,
+          2
+        )
+      );
+
+      this.logger.error(`Debug files saved to ${basePath}.*`);
+    } catch (debugError) {
+      const message =
+        debugError instanceof Error ? debugError.message : String(debugError);
+      this.logger.error(`Failed to save debug artifacts: ${message}`);
     }
   }
   // async downloadPlatomvideo(links: Array<Linkdata>) {
