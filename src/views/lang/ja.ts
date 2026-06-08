@@ -263,6 +263,16 @@ export default {
     minutes_ago: "{count}分前",
     hours_ago: "{count}時間前",
     resend_message: "メッセージを再送",
+    queue_title: "待ち行列のメッセージ",
+    queue_item_label: "メッセージ {index}: {preview}",
+    queue_remove: "削除",
+    queue_clear_all: "すべてクリア",
+    queue_empty: "待ち行列にメッセージはありません",
+    queue_auto_dispatch:
+      "現在の応答が完了すると、メッセージが自動的に送信されます。",
+    queue_confirm_clear: "待ち行列にメッセージがあります。クリアしますか？",
+    queue_confirm_switch:
+      "待ち行列にメッセージがあります。破棄して会話を切り替えますか？",
   },
   notifications: {
     cloudflare_protection_detected: "Cloudflare保護を検出",

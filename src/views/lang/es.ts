@@ -267,6 +267,16 @@ export default {
     minutes_ago: "Hace {count}m",
     hours_ago: "Hace {count}h",
     resend_message: "Reenviar mensaje",
+    queue_title: "Mensajes en cola",
+    queue_item_label: "Mensaje {index}: {preview}",
+    queue_remove: "Eliminar",
+    queue_clear_all: "Borrar todo",
+    queue_empty: "No hay mensajes en cola",
+    queue_auto_dispatch:
+      "Los mensajes se enviarán automáticamente después de que se complete la respuesta actual.",
+    queue_confirm_clear: "Hay mensajes en cola. ¿Borrarlos?",
+    queue_confirm_switch:
+      "Hay mensajes en cola. ¿Descartarlos y cambiar de conversación?",
   },
   notifications: {
     cloudflare_protection_detected: "Protección de Cloudflare detectada",

@@ -263,6 +263,16 @@ export default {
     minutes_ago: "{count}m ago",
     hours_ago: "{count}h ago",
     resend_message: "Renvoyer le message",
+    queue_title: "Messages en file d'attente",
+    queue_item_label: "Message {index} : {preview}",
+    queue_remove: "Supprimer",
+    queue_clear_all: "Tout effacer",
+    queue_empty: "Aucun message en file d'attente",
+    queue_auto_dispatch:
+      "Les messages seront envoyés automatiquement une fois la réponse actuelle terminée.",
+    queue_confirm_clear: "Des messages sont en file d'attente. Les effacer ?",
+    queue_confirm_switch:
+      "Des messages sont en file d'attente. Les abandonner et changer de conversation ?",
   },
   notifications: {
     cloudflare_protection_detected: "Cloudflare Protection Detected",

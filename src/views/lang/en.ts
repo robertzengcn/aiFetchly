@@ -262,6 +262,16 @@ export default {
     minutes_ago: "{count}m ago",
     hours_ago: "{count}h ago",
     resend_message: "Resend message",
+    queue_title: "Queued messages",
+    queue_item_label: "Message {index}: {preview}",
+    queue_remove: "Remove",
+    queue_clear_all: "Clear all",
+    queue_empty: "No queued messages",
+    queue_auto_dispatch:
+      "Messages will be sent automatically after the current response completes.",
+    queue_confirm_clear: "There are queued messages. Clear them?",
+    queue_confirm_switch:
+      "There are queued messages. Discard them and switch conversation?",
   },
   notifications: {
     cloudflare_protection_detected: "Cloudflare Protection Detected",
