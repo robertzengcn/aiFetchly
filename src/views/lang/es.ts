@@ -739,6 +739,7 @@ export default {
     record_time: "Hora de registro",
     keyword: "Palabra clave",
     status: "Estado",
+    numbers: "Cantidad",
   },
   searchresultdetail: {
     title: "Detalles del Resultado de Búsqueda",

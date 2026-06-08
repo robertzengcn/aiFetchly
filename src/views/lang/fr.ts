@@ -730,6 +730,7 @@ export default {
     record_time: "record Time",
     keyword: "keyword",
     status: "status",
+    numbers: "Nombre",
   },
   searchresultdetail: {
     title: "Détails du résultat de recherche",

@@ -734,6 +734,7 @@ export default {
     record_time: "record Time",
     keyword: "keyword",
     status: "status",
+    numbers: "Numbers",
   },
   searchresultdetail: {
     title: "Search Result Details",

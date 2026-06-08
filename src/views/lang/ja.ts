@@ -721,6 +721,7 @@ export default {
     record_time: "記録時間",
     keyword: "キーワード",
     status: "状態",
+    numbers: "件数",
   },
   searchresultdetail: {
     title: "検索結果の詳細",
