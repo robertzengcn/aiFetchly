@@ -46,6 +46,12 @@
       <v-row v-if="formData.task_type==TaskType.BUCK_EMAIL">
 <EmailSendtaskTable :isSelectedtable="true" @change="handleEmailsendtaskChanged" />
       </v-row>
+      <v-row v-if="formData.task_type==TaskType.GOOGLE_MAPS">
+        <GoogleMapsSelectTable @change="handleGoogleMapsChanged" />
+      </v-row>
+      <v-row v-if="formData.task_type==TaskType.YANDEX_MAPS">
+        <YandexMapsSelectTable @change="handleYandexMapsChanged" />
+      </v-row>
 
       <v-row>
         <v-col cols="12" md="6">
@@ -219,6 +225,8 @@ import SearchResultSelectTable from "@/views/pages/search/widgets/SearchResultSe
 import { EmailsearchTaskEntityDisplay } from '@/entityTypes/emailextraction-type'
 import EmailSendtaskTable from '@/views/pages/emailsendtask/widgets/EmailSendtaskTable.vue'
 import {BuckEmailListType} from "@/entityTypes/buckemailType"
+import GoogleMapsSelectTable from '@/views/pages/google-maps-scraper/widgets/GoogleMapsSelectTable.vue'
+import YandexMapsSelectTable from '@/views/pages/yandex-maps-scraper/widgets/YandexMapsSelectTable.vue'
 const { t } = useI18n()
 
 // Props
@@ -279,8 +287,8 @@ const taskTypeOptions = [
   { title: t('schedule.search_task'), value: TaskType.SEARCH },
   { title: t('schedule.email_extract'), value: TaskType.EMAIL_EXTRACT },
   { title: t('schedule.bulk_email'), value: TaskType.BUCK_EMAIL },
-  { title: t('schedule.video_download'), value: TaskType.VIDEO_DOWNLOAD },
- 
+  { title: t('schedule.google_maps'), value: TaskType.GOOGLE_MAPS },
+  { title: t('schedule.yandex_maps'), value: TaskType.YANDEX_MAPS },
 ]
 
 const triggerTypeOptions = [
@@ -342,6 +350,22 @@ const handleEmailsendtaskChanged = (newValue: Array<BuckEmailListType>|undefined
     formData.value.task_id = newValue[0].TaskId
   }
   //console.log(emailsourcesdata.value)
+}
+
+const handleGoogleMapsChanged = (newValue: Array<{id: number; query: string; location: string}>|undefined) => {
+  if (newValue && newValue.length > 0 && newValue[0].id) {
+    formData.value.task_id = newValue[0].id
+  } else {
+    formData.value.task_id = 0
+  }
+}
+
+const handleYandexMapsChanged = (newValue: Array<{id: number; query: string; location: string}>|undefined) => {
+  if (newValue && newValue.length > 0 && newValue[0].id) {
+    formData.value.task_id = newValue[0].id
+  } else {
+    formData.value.task_id = 0
+  }
 }
 
 // Methods
