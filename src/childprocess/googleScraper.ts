@@ -459,6 +459,7 @@ export class GoogleScraper extends SearchScrape {
     }
 
     async search_keyword(keyword: string) {
+        let lastSearchInputError = '';
         for (const selector of this.searchSelectors) {
             try {
                 const input = await this.page.$(selector);
@@ -474,7 +475,7 @@ export class GoogleScraper extends SearchScrape {
                         
                         // Wait for navigation
                         try {
-                            await this.page.waitForNavigation({ timeout: 5000 });
+                            await this.waitForSubmittedSearch(keyword);
                         } catch {
                             // If navigation doesn't happen, find the form and submit it
                             await input.evaluate((el) => {
@@ -484,6 +485,7 @@ export class GoogleScraper extends SearchScrape {
                                     form.submit();
                                 }
                             });
+                            await this.waitForSubmittedSearch(keyword);
                         }
                         return;
                     } else {
@@ -532,20 +534,33 @@ export class GoogleScraper extends SearchScrape {
                         });
                         await input.focus();
                         await this.page.keyboard.press("Enter");
+                        await this.waitForSubmittedSearch(keyword);
                         return;
                     }
                 }else{
                     throw new CustomError("input keyword button not found", 202405301120303)
                 }
             } catch (error) {
+                lastSearchInputError = error instanceof Error ? error.message : String(error);
+                if (await this.hasReachedSearchResultsPage(keyword)) {
+                    this.logger.info(
+                        `Search for "${keyword}" reached Google results after selector ${selector} raised: ${lastSearchInputError}`
+                    );
+                    return;
+                }
                 continue;
             }
+        }
+
+        if (await this.hasReachedSearchResultsPage(keyword)) {
+            this.logger.info(`Search for "${keyword}" reached Google results before AI recovery`);
+            return;
         }
 
         // All selectors failed - try AI recovery
         const recoveryResult = await this.tryAIRecovery(
             'search_input',
-            'No search input found with standard selectors',
+            `No search input found with standard selectors. Last error: ${lastSearchInputError || 'none'}`,
             this.searchSelectors,
             { keyword }
         );
@@ -559,6 +574,74 @@ export class GoogleScraper extends SearchScrape {
         }
 
         throw new CustomError("No search input found", 202405301120304);
+    }
+
+    private async waitForSubmittedSearch(keyword: string): Promise<void> {
+        try {
+            await this.page.waitForFunction(
+                (expectedKeyword: string) => {
+                    const query = new URLSearchParams(window.location.search).get("q") || "";
+                    const normalizedQuery = query.toLowerCase().replace(/\s+/g, " ").trim();
+                    const normalizedKeyword = expectedKeyword.toLowerCase().replace(/\s+/g, " ").trim();
+                    return (
+                        window.location.pathname.includes("/search") &&
+                        normalizedQuery === normalizedKeyword
+                    ) || document.documentElement.getAttribute("itemtype") === "http://schema.org/SearchResultsPage";
+                },
+                { timeout: 10000 },
+                keyword
+            );
+            return;
+        } catch (error) {
+            if (await this.hasReachedSearchResultsPage(keyword)) {
+                return;
+            }
+            throw error;
+        }
+    }
+
+    private async hasReachedSearchResultsPage(keyword?: string): Promise<boolean> {
+        try {
+            const pageState = {
+                url: this.page.url(),
+                title: await this.page.title(),
+                html: await this.page.content(),
+            };
+
+            if (!GoogleScraper.isSearchResultsPageState(pageState)) {
+                return false;
+            }
+
+            if (!keyword) {
+                return true;
+            }
+
+            const normalizedKeyword = GoogleScraper.normalizeSearchText(keyword);
+            const normalizedTitle = GoogleScraper.normalizeSearchText(pageState.title);
+            const query = new URL(pageState.url).searchParams.get("q") || "";
+            const normalizedQuery = GoogleScraper.normalizeSearchText(query);
+
+            return normalizedQuery === normalizedKeyword || normalizedTitle.includes(normalizedKeyword);
+        } catch {
+            return false;
+        }
+    }
+
+    static isSearchResultsPageState(pageState: { url: string; title: string; html: string }): boolean {
+        if (pageState.html.includes('itemtype="http://schema.org/SearchResultsPage"')) {
+            return true;
+        }
+
+        if (pageState.title.endsWith(" - Google Search")) {
+            return true;
+        }
+
+        try {
+            const url = new URL(pageState.url);
+            return url.hostname.endsWith("google.com") && url.pathname.includes("/search") && url.searchParams.has("q");
+        } catch {
+            return false;
+        }
     }
     //click next page
     async next_page(): Promise<boolean | void> {
@@ -809,6 +892,10 @@ export class GoogleScraper extends SearchScrape {
 
     private static cleanText(value: string): string {
         return value.replace(/\s+/g, " ").trim();
+    }
+
+    private static normalizeSearchText(value: string): string {
+        return value.replace(/\+/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
     }
 
     async wait_for_results() {
