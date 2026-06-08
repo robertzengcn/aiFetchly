@@ -974,6 +974,9 @@ export function registerAiChatIpcHandlers(): void {
       );
 
       // If useRAG is true, perform local RAG search and append results to the message
+      // When tool calling is available (streaming path), skip pre-injection and let the
+      // AI call knowledge_library_search instead. Pre-injection remains as fallback for
+      // non-streaming paths.
       if (requestData.useRAG) {
         try {
           const searchRequest: SearchRequest = {
@@ -1022,11 +1025,17 @@ export function registerAiChatIpcHandlers(): void {
       // Get available tools (registry-built-in + MCP)
       const availableTools = await SkillRegistry.getAllToolFunctions();
 
+      // Build system prompt instruction for knowledge-library tool use
+      const knowledgeToolInstruction = requestData.useRAG
+        ? "When the user asks about uploaded documents, saved knowledge, internal notes, or the knowledge library, call `knowledge_library_search` before answering. Base factual claims on returned sources. If the tool returns no relevant result, say that the knowledge library did not contain enough information."
+        : undefined;
+
       // Send to remote API for streaming
       const chatRequest: ChatRequest = {
         message: enhancedMessage,
         conversationId: conversationId,
         model: requestData.model,
+        systemPrompt: knowledgeToolInstruction,
         useRAG: requestData.useRAG,
         ragLimit: requestData.ragLimit,
         functions: availableTools,
