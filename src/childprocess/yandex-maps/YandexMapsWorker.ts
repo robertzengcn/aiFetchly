@@ -266,6 +266,150 @@ function normalizeResult(
 }
 
 // ---------------------------------------------------------------------------
+// Detail page content helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Expand hidden content on the detail page.
+ * Yandex Maps hides phone numbers behind a "Show phone" button.
+ */
+async function expandHiddenContent(page: Page): Promise<void> {
+  const phoneRevealSelectors = [
+    'button[class*="phone"]',
+    'a[class*="phone"]',
+    '[class*="show-phone"]',
+    '[class*="phones-view__show"]',
+    '[class*="phone-number__show"]',
+    '[class*="collapse__button"]',
+    'button[class*="expand"]',
+  ];
+
+  for (const sel of phoneRevealSelectors) {
+    try {
+      const buttons = await page.$$(sel);
+      for (const btn of buttons) {
+        try {
+          const text = await btn.evaluate(
+            (el) => el.textContent?.trim().toLowerCase() ?? ""
+          );
+          if (
+            text.includes("phone") ||
+            text.includes("show") ||
+            text.includes("телефон") ||
+            text.includes("показать")
+          ) {
+            console.log(
+              `[DEBUG] Clicking expand button: "${text.slice(
+                0,
+                50
+              )}" (sel: ${sel})`
+            );
+            await btn.click();
+            await sleep(800);
+          }
+          await btn.dispose();
+        } catch {
+          continue;
+        }
+      }
+    } catch {
+      continue;
+    }
+  }
+}
+
+/**
+ * Dump comprehensive diagnostics of the detail page DOM.
+ * Helps identify correct selectors when extraction fails.
+ */
+async function dumpDetailPageDiagnostics(
+  page: Page,
+  cardIndex: number
+): Promise<void> {
+  const diag = await page.evaluate(() => {
+    const info: Record<string, unknown> = {};
+    info.url = window.location.href;
+    info.title = document.title;
+
+    // Find elements with contact-related keywords in their class
+    const keywords = [
+      "phone",
+      "address",
+      "rating",
+      "website",
+      "url",
+      "schedule",
+      "hours",
+      "category",
+      "rubric",
+      "contact",
+      "email",
+    ];
+    const matches: Record<string, string[]> = {};
+
+    document.querySelectorAll("*").forEach((el) => {
+      const cls = (el as HTMLElement).className?.toString() ?? "";
+      if (!cls) return;
+      const clsLower = cls.toLowerCase();
+      for (const kw of keywords) {
+        if (clsLower.includes(kw)) {
+          if (!matches[kw]) matches[kw] = [];
+          const text = (el.textContent ?? "").trim().slice(0, 80);
+          const tag = el.tagName.toLowerCase();
+          matches[kw].push(
+            `<${tag} class="${cls.slice(0, 80)}"> text="${text}"`
+          );
+        }
+      }
+    });
+
+    const filtered: Record<string, string[]> = {};
+    for (const [key, val] of Object.entries(matches)) {
+      if (val.length > 0) filtered[key] = val.slice(0, 8);
+    }
+    info.classMatches = filtered;
+
+    // Specific selector checks
+    const checks: Record<string, unknown> = {};
+    checks['a[href^="tel:"]'] = Array.from(
+      document.querySelectorAll('a[href^="tel:"]')
+    ).map(
+      (el) =>
+        `href="${el.getAttribute("href")}" text="${el.textContent
+          ?.trim()
+          .slice(0, 60)}"`
+    );
+    checks['a[href^="http"]'] = Array.from(
+      document.querySelectorAll('a[href^="http"]')
+    )
+      .slice(0, 15)
+      .map(
+        (el) =>
+          `href="${el.getAttribute("href")?.slice(0, 100)}" class="${(
+            el as HTMLElement
+          ).className
+            ?.toString()
+            ?.slice(0, 60)}"`
+      );
+    checks["meta[itemprop]"] = Array.from(
+      document.querySelectorAll("meta[itemprop]")
+    ).map(
+      (el) =>
+        `itemprop="${el.getAttribute("itemprop")}" content="${el
+          .getAttribute("content")
+          ?.slice(0, 100)}"`
+    );
+    info.selectorChecks = checks;
+
+    return info;
+  });
+
+  console.log(`[DEBUG] ═══ DETAIL PAGE DIAGNOSTICS (card ${cardIndex}) ═══`);
+  console.log(`[DEBUG] ${JSON.stringify(diag, null, 2)}`);
+  console.log(`[DEBUG] ═══ END DIAGNOSTICS ═══`);
+}
+
+// ---------------------------------------------------------------------------
 // Captcha detection
 // ---------------------------------------------------------------------------
 
@@ -398,10 +542,8 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
     // Stage: launching browser
     sendProgress(requestId, "launching", 0, maxResults, "Launching browser...");
     const browserManager = new BrowserManager();
-    // Always use headless: false for stealth -- Yandex detects headless browsers.
-    // Puppeteer will run Chromium with a virtual display if needed.
     browser = await browserManager.launchWithStealth({
-      headless: false,
+      headless: !showBrowser,
     });
 
     const page = await browser.newPage();
@@ -1128,6 +1270,32 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
           return;
         }
 
+        // ── Expand hidden content (phone numbers behind "Show" buttons) ──
+        await expandHiddenContent(page);
+
+        // ── Wait for detail page content to fully render ──
+        try {
+          await page.waitForFunction(
+            () => {
+              // Check that the detail page has actual content, not just a container
+              const h1 = document.querySelector("h1");
+              if (!h1 || !h1.textContent?.trim()) return false;
+              // Also check for at least some body content beyond the nav
+              const body = document.body;
+              return body ? body.textContent.length > 200 : false;
+            },
+            { timeout: 10000 }
+          );
+          console.log(`[DEBUG] Detail page content ready`);
+        } catch {
+          console.log(`[DEBUG] Content readiness timed out, proceeding anyway`);
+        }
+
+        // ── Dump DOM diagnostics on first card to debug selector issues ──
+        if (collectedCards.length === 0) {
+          await dumpDetailPageDiagnostics(page, i);
+        }
+
         // Extract business data from detail panel
         const business = await extractBusinessData(page);
         console.log(
@@ -1401,14 +1569,95 @@ async function extractBusinessData(
     }`
   );
 
+  // ── Fallback extraction for missing fields ──
+  let finalPhone = phone;
+  let finalWebsite = website;
+  let finalAddress = address;
+
+  if (!finalPhone || !finalWebsite || !finalAddress) {
+    try {
+      const fallbackData = await page.evaluate(() => {
+        const result: Record<string, string | undefined> = {};
+
+        // Phone: look for tel: links (may have appeared after expand)
+        const telLinks = document.querySelectorAll('a[href^="tel:"]');
+        if (telLinks.length > 0) {
+          result.phone = telLinks[0].textContent?.trim();
+        }
+
+        // Website: find first non-Yandex external link in a business context
+        const extLinks = document.querySelectorAll('a[href^="http"]');
+        for (const link of Array.from(extLinks)) {
+          const href = link.getAttribute("href") ?? "";
+          const cls =
+            (link as HTMLElement).className?.toString()?.toLowerCase() ?? "";
+          if (
+            !href.includes("yandex.") &&
+            !href.includes("ya.ru") &&
+            !href.includes("yastatic") &&
+            !href.includes("avatars") &&
+            !href.includes("api-maps") &&
+            (cls.includes("url") ||
+              cls.includes("link") ||
+              cls.includes("website") ||
+              cls.includes("business"))
+          ) {
+            result.website = href;
+            break;
+          }
+        }
+        // Broader website fallback: first non-Yandex external link
+        if (!result.website) {
+          for (const link of Array.from(extLinks)) {
+            const href = link.getAttribute("href") ?? "";
+            if (
+              !href.includes("yandex.") &&
+              !href.includes("ya.ru") &&
+              !href.includes("yastatic") &&
+              !href.includes("avatars") &&
+              !href.includes("api-maps") &&
+              !href.includes("passport") &&
+              !href.includes("oauth")
+            ) {
+              result.website = href;
+              break;
+            }
+          }
+        }
+
+        // Address from meta tag
+        const addrMeta = document.querySelector('meta[itemprop="address"]');
+        if (addrMeta)
+          result.address = addrMeta.getAttribute("content") ?? undefined;
+
+        return result;
+      });
+
+      if (!finalPhone && fallbackData.phone) {
+        finalPhone = fallbackData.phone;
+        console.log(`[DEBUG] Phone from fallback: "${finalPhone}"`);
+      }
+      if (!finalWebsite && fallbackData.website) {
+        finalWebsite = fallbackData.website;
+        console.log(`[DEBUG] Website from fallback: "${finalWebsite}"`);
+      }
+      if (!finalAddress && fallbackData.address) {
+        finalAddress = fallbackData.address;
+        console.log(`[DEBUG] Address from fallback: "${finalAddress}"`);
+      }
+    } catch (err) {
+      console.log(`[DEBUG] Fallback extraction error: ${err}`);
+    }
+  }
+
   return {
     name: name ?? "",
     rating,
     review_count: reviewCount,
     category,
-    address,
-    phone,
-    website,
+    address: finalAddress,
+    phone: finalPhone,
+    website: finalWebsite,
     maps_url: mapsUrl,
     yandex_id: yandexId,
     hours,
