@@ -389,6 +389,8 @@ export class SqliteDb {
   public connection: DataSource;
   private static instance: SqliteDb | null = null;
   private static currentDbPath: string | null = null;
+  /** Guards against concurrent initialize() calls on the same DataSource */
+  private static initPromise: Promise<void> | null = null;
 
   private constructor(filepath: string) {
     if (filepath.length > 0) {
@@ -550,6 +552,31 @@ export class SqliteDb {
     }
 
     return SqliteDb.instance;
+  }
+
+  /**
+   * Ensure the singleton DataSource is initialized.
+   * Safe to call concurrently — only the first call runs initialize();
+   * subsequent callers await the same promise.
+   */
+  public static async ensureInitialized(): Promise<void> {
+    if (!SqliteDb.instance) {
+      throw new Error("SqliteDb not created yet — call getInstance first");
+    }
+    if (SqliteDb.instance.connection.isInitialized) {
+      return;
+    }
+    if (!SqliteDb.initPromise) {
+      SqliteDb.initPromise = SqliteDb.instance.connection.initialize().then(
+        () => {
+          SqliteDb.initPromise = null;
+        },
+        () => {
+          SqliteDb.initPromise = null;
+        }
+      );
+    }
+    await SqliteDb.initPromise;
   }
 
   /**
