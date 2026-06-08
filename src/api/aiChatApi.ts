@@ -364,6 +364,93 @@ export interface ObserveResponse {
   processing_time?: number;
 }
 
+// ==================== OpenAI-Compatible API Types ====================
+
+/** OpenAI-compatible message role */
+export type OpenAIMessageRole =
+  | "system"
+  | "user"
+  | "assistant"
+  | "function"
+  | "tool";
+
+/** OpenAI-compatible chat message */
+export interface OpenAIChatMessage {
+  role: OpenAIMessageRole;
+  content: string;
+}
+
+/** OpenAI-compatible chat completion request */
+export interface OpenAIChatCompletionRequest {
+  messages: OpenAIChatMessage[];
+  model?: string;
+  temperature?: number;
+  max_tokens?: number;
+  stream?: boolean;
+}
+
+/** OpenAI-compatible model object */
+export interface OpenAIModel {
+  id: string;
+  object: string;
+  created: number;
+  owned_by: string;
+}
+
+/** OpenAI-compatible models list response */
+export interface OpenAIModelsResponse {
+  object: string;
+  data: OpenAIModel[];
+}
+
+/** OpenAI-compatible chat completion choice (non-streaming) */
+export interface OpenAIChatCompletionChoice {
+  index: number;
+  message: OpenAIChatMessage;
+  finish_reason: string | null;
+}
+
+/** OpenAI-compatible usage info */
+export interface OpenAIUsage {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+}
+
+/** OpenAI-compatible chat completion response (non-streaming) */
+export interface OpenAIChatCompletionResponse {
+  id: string;
+  object: string;
+  created: number;
+  model: string;
+  choices: OpenAIChatCompletionChoice[];
+  usage: OpenAIUsage;
+}
+
+/** OpenAI-compatible streaming chunk delta */
+export interface OpenAIStreamDelta {
+  role?: string;
+  content?: string;
+}
+
+/** OpenAI-compatible streaming chunk choice */
+export interface OpenAIStreamChoice {
+  index: number;
+  delta: OpenAIStreamDelta;
+  finish_reason: string | null;
+}
+
+/** OpenAI-compatible streaming chunk */
+export interface OpenAIChatCompletionChunk {
+  id: string;
+  object: string;
+  created: number;
+  model: string;
+  choices: OpenAIStreamChoice[];
+}
+
+// ==================== End OpenAI-Compatible API Types ====================
+
 /**
  * Website analysis request interface
  */
@@ -1392,5 +1479,182 @@ export class AiChatApi {
     return this._httpClient.postJson("/api/ai/puppeteer/recovery", {
       data,
     });
+  }
+
+  // ==================== OpenAI-Compatible API Methods ====================
+
+  /**
+   * List available models from the OpenAI-compatible API.
+   * GET /v1/models
+   *
+   * @returns Promise resolving to models list in OpenAI format
+   */
+  async listOpenAIModels(): Promise<OpenAIModelsResponse> {
+    this.ensureAIEnabled();
+    return this._httpClient.get("/v1/models");
+  }
+
+  /**
+   * Non-streaming chat completion using the OpenAI-compatible API.
+   * POST /v1/chat/completions (stream: false or omitted)
+   *
+   * @param request - Chat completion request with messages and optional parameters
+   * @returns Promise resolving to chat completion response
+   */
+  async openAIChatCompletion(
+    request: OpenAIChatCompletionRequest
+  ): Promise<OpenAIChatCompletionResponse> {
+    this.ensureAIEnabled();
+    const data: OpenAIChatCompletionRequest = {
+      messages: request.messages,
+      stream: false,
+    };
+    if (request.model) {
+      data.model = request.model;
+    }
+    if (request.temperature !== undefined) {
+      data.temperature = request.temperature;
+    }
+    if (request.max_tokens !== undefined) {
+      data.max_tokens = request.max_tokens;
+    }
+    return this._httpClient.postJson("/v1/chat/completions", data);
+  }
+
+  /**
+   * Streaming chat completion using the OpenAI-compatible API.
+   * POST /v1/chat/completions (stream: true)
+   *
+   * @param request - Chat completion request with messages and optional parameters
+   * @param onChunk - Callback invoked for each parsed streaming chunk
+   * @param options - Optional abort signal to cancel the stream
+   */
+  async openAIChatCompletionStream(
+    request: OpenAIChatCompletionRequest,
+    onChunk: (chunk: OpenAIChatCompletionChunk) => void,
+    options?: { signal?: AbortSignal }
+  ): Promise<void> {
+    this.ensureAIEnabled();
+    const data: OpenAIChatCompletionRequest = {
+      messages: request.messages,
+      stream: true,
+    };
+    if (request.model) {
+      data.model = request.model;
+    }
+    if (request.temperature !== undefined) {
+      data.temperature = request.temperature;
+    }
+    if (request.max_tokens !== undefined) {
+      data.max_tokens = request.max_tokens;
+    }
+
+    const fetchOptions: RequestInit = {};
+    if (options?.signal) {
+      fetchOptions.signal = options.signal;
+    }
+
+    const response = await this._httpClient.postStream(
+      "/v1/chat/completions",
+      data,
+      fetchOptions
+    );
+
+    if (!response.ok || response.status !== 200) {
+      const errorText = await response.text().catch(() => "Unknown error");
+      throw new Error(`Server returned ${response.status}: ${errorText}`);
+    }
+
+    if (!response.body) {
+      throw new Error("Response body is null");
+    }
+
+    await this._consumeOpenAIStreamResponse(response, onChunk);
+  }
+
+  /**
+   * Consume an OpenAI-format SSE stream.
+   * Parses `data: {json}` lines and emits parsed chunks.
+   * Terminates on `data: [DONE]`.
+   */
+  private async _consumeOpenAIStreamResponse(
+    response: Response,
+    onChunk: (chunk: OpenAIChatCompletionChunk) => void
+  ): Promise<void> {
+    if (!response.body) {
+      throw new Error("Response body is null");
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    try {
+      let streamActive = true;
+      while (streamActive) {
+        let result: ReadableStreamReadResult<Uint8Array>;
+        try {
+          result = await reader.read();
+        } catch (readError: unknown) {
+          if (
+            readError instanceof Error &&
+            (readError.name === "AbortError" ||
+              (readError instanceof DOMException &&
+                readError.name === "AbortError"))
+          ) {
+            streamActive = false;
+            throw readError;
+          }
+          throw readError;
+        }
+
+        const { done, value } = result;
+        if (done) {
+          streamActive = false;
+          continue;
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          const trimmedLine = line.trim();
+          if (!trimmedLine) continue;
+
+          if (trimmedLine === "data: [DONE]") {
+            streamActive = false;
+            break;
+          }
+
+          if (trimmedLine.startsWith("data: ")) {
+            const jsonStr = trimmedLine.substring(6);
+            try {
+              const chunk: OpenAIChatCompletionChunk = JSON.parse(jsonStr);
+              onChunk(chunk);
+            } catch {
+              // Ignore parse errors for individual chunks
+            }
+          }
+        }
+      }
+
+      // Process any remaining data in buffer
+      const trimmedBuffer = buffer.trim();
+      if (
+        trimmedBuffer &&
+        trimmedBuffer !== "data: [DONE]" &&
+        trimmedBuffer.startsWith("data: ")
+      ) {
+        const jsonStr = trimmedBuffer.substring(6);
+        try {
+          const chunk: OpenAIChatCompletionChunk = JSON.parse(jsonStr);
+          onChunk(chunk);
+        } catch {
+          // Ignore parse errors
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
   }
 }
