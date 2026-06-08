@@ -160,11 +160,6 @@ async function extractText(
           return clone.textContent?.trim() ?? "";
         });
         await el.dispose();
-        console.log(
-          `[DEBUG] extractText selector="${sel}" textLength=${
-            text?.length ?? 0
-          } preview="${text?.slice(0, 100) ?? "none"}"`
-        );
         if (text && isCleanText(text)) return text;
       }
     } catch {
@@ -298,12 +293,6 @@ async function expandHiddenContent(page: Page): Promise<void> {
             text.includes("телефон") ||
             text.includes("показать")
           ) {
-            console.log(
-              `[DEBUG] Clicking expand button: "${text.slice(
-                0,
-                50
-              )}" (sel: ${sel})`
-            );
             await btn.click();
             await sleep(800);
           }
@@ -316,97 +305,6 @@ async function expandHiddenContent(page: Page): Promise<void> {
       continue;
     }
   }
-}
-
-/**
- * Dump comprehensive diagnostics of the detail page DOM.
- * Helps identify correct selectors when extraction fails.
- */
-async function dumpDetailPageDiagnostics(
-  page: Page,
-  cardIndex: number
-): Promise<void> {
-  const diag = await page.evaluate(() => {
-    const info: Record<string, unknown> = {};
-    info.url = window.location.href;
-    info.title = document.title;
-
-    // Find elements with contact-related keywords in their class
-    const keywords = [
-      "phone",
-      "address",
-      "rating",
-      "website",
-      "url",
-      "schedule",
-      "hours",
-      "category",
-      "rubric",
-      "contact",
-      "email",
-    ];
-    const matches: Record<string, string[]> = {};
-
-    document.querySelectorAll("*").forEach((el) => {
-      const cls = (el as HTMLElement).className?.toString() ?? "";
-      if (!cls) return;
-      const clsLower = cls.toLowerCase();
-      for (const kw of keywords) {
-        if (clsLower.includes(kw)) {
-          if (!matches[kw]) matches[kw] = [];
-          const text = (el.textContent ?? "").trim().slice(0, 80);
-          const tag = el.tagName.toLowerCase();
-          matches[kw].push(
-            `<${tag} class="${cls.slice(0, 80)}"> text="${text}"`
-          );
-        }
-      }
-    });
-
-    const filtered: Record<string, string[]> = {};
-    for (const [key, val] of Object.entries(matches)) {
-      if (val.length > 0) filtered[key] = val.slice(0, 8);
-    }
-    info.classMatches = filtered;
-
-    // Specific selector checks
-    const checks: Record<string, unknown> = {};
-    checks['a[href^="tel:"]'] = Array.from(
-      document.querySelectorAll('a[href^="tel:"]')
-    ).map(
-      (el) =>
-        `href="${el.getAttribute("href")}" text="${el.textContent
-          ?.trim()
-          .slice(0, 60)}"`
-    );
-    checks['a[href^="http"]'] = Array.from(
-      document.querySelectorAll('a[href^="http"]')
-    )
-      .slice(0, 15)
-      .map(
-        (el) =>
-          `href="${el.getAttribute("href")?.slice(0, 100)}" class="${(
-            el as HTMLElement
-          ).className
-            ?.toString()
-            ?.slice(0, 60)}"`
-      );
-    checks["meta[itemprop]"] = Array.from(
-      document.querySelectorAll("meta[itemprop]")
-    ).map(
-      (el) =>
-        `itemprop="${el.getAttribute("itemprop")}" content="${el
-          .getAttribute("content")
-          ?.slice(0, 100)}"`
-    );
-    info.selectorChecks = checks;
-
-    return info;
-  });
-
-  console.log(`[DEBUG] ═══ DETAIL PAGE DIAGNOSTICS (card ${cardIndex}) ═══`);
-  console.log(`[DEBUG] ${JSON.stringify(diag, null, 2)}`);
-  console.log(`[DEBUG] ═══ END DIAGNOSTICS ═══`);
 }
 
 // ---------------------------------------------------------------------------
@@ -654,25 +552,12 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
     const currentUrl = page.url();
     const isOnDetailPage = /\/maps\/org\//.test(currentUrl);
     if (isOnDetailPage) {
-      console.log(
-        `[DEBUG] Page auto-navigated to detail page: ${currentUrl}. Navigating back to search URL.`
-      );
       await page.goto(searchUrl, {
         waitUntil: "domcontentloaded",
         timeout: 60000,
       });
       await sleep(1500);
     }
-
-    // Log page state for debugging
-    const pageTitle = await page.title();
-    const pageUrl = page.url();
-    console.log(
-      `[DEBUG] Page loaded -- title="${pageTitle}", url="${pageUrl.slice(
-        0,
-        120
-      )}"`
-    );
 
     // Captcha check after initial navigation
     const hasCaptchaOnLoad = await detectCaptcha(page);
@@ -702,80 +587,6 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
       "Waiting for search results..."
     );
 
-    // ── Diagnostic: dump what actually exists on the page ──
-    const initialDiag = await page.evaluate(() => {
-      const info: Record<string, unknown> = {};
-      info.title = document.title;
-      info.url = window.location.href;
-      info.bodyClasses = document.body?.className?.slice(0, 200);
-
-      // Count elements by broad patterns
-      const patterns: Record<string, number> = {};
-      const selectors = [
-        "ul.search-list-view__list",
-        "div.search-list-view",
-        "li.search-snippet-view",
-        "div.business-card-view",
-        'div[class*="search"]',
-        'a[class*="search"]',
-        'li[class*="search"]',
-        'div[class*="snippet"]',
-        'a[class*="snippet"]',
-        'div[class*="business"]',
-        'a[class*="business"]',
-        'div[class*="card"]',
-        'div[class*="place"]',
-        'div[class*="org"]',
-        'a[class*="org"]',
-        'div[class*="list"]',
-        "ul[class]",
-        "li[class]",
-        'div[class*="scroll"]',
-        'div[class*="sidebar"]',
-        'div[class*="panel"]',
-        'div[class*="result"]',
-        'a[class*="result"]',
-        "h1",
-        "h2",
-        "h3",
-        "article",
-      ];
-      for (const sel of selectors) {
-        const count = document.querySelectorAll(sel).length;
-        if (count > 0) patterns[sel] = count;
-      }
-      info.matchingPatterns = patterns;
-
-      // Get the first few class names from the sidebar/search area
-      const sidebar =
-        document.querySelector('[class*="sidebar"]') ??
-        document.querySelector('[class*="search-list"]') ??
-        document.querySelector('[class*="search"]') ??
-        document.querySelector('[class*="panel"]');
-      info.sidebarClasses = sidebar?.className?.slice(0, 200) ?? "none";
-      info.sidebarChildCount = sidebar?.children?.length ?? 0;
-
-      // Get first 3 children of sidebar with their tag + class
-      if (sidebar && sidebar.children.length > 0) {
-        const childInfo: string[] = [];
-        for (let i = 0; i < Math.min(sidebar.children.length, 5); i++) {
-          const child = sidebar.children[i];
-          childInfo.push(
-            `<${child.tagName.toLowerCase()} class="${child.className?.slice(
-              0,
-              80
-            )}"> children=${child.children.length}`
-          );
-        }
-        info.sidebarChildren = childInfo;
-      }
-
-      return info;
-    });
-    console.log(
-      `[DEBUG] Page diagnostics: ${JSON.stringify(initialDiag, null, 2)}`
-    );
-
     let resultListSelector: string | undefined;
     // Combine all selectors and wait for ANY of them at once (faster than sequential)
     const allSearchSelectors = [...RESULT_LIST_SELECTORS, ...CARD_SELECTORS];
@@ -791,55 +602,10 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
         );
         if (count > 0) {
           resultListSelector = sel;
-          console.log(`[DEBUG] Result list matched selector: ${sel}`);
           break;
         }
       }
-      if (!resultListSelector) {
-        console.log(
-          `[DEBUG] No result list container, but card elements detected directly.`
-        );
-      }
     } catch {
-      // Diagnostic: dump what selectors exist on the page for debugging
-      console.log(`[DEBUG] === SELECTOR DIAGNOSTICS (full dump) ===`);
-      for (const sel of [...RESULT_LIST_SELECTORS, ...CARD_SELECTORS]) {
-        const count = await page.evaluate((s: string) => {
-          try {
-            return document.querySelectorAll(s).length;
-          } catch {
-            return -1;
-          }
-        }, sel);
-        console.log(`[DEBUG] Selector "${sel}" => ${count} elements`);
-      }
-
-      // Dump a sample of the visible DOM to see what's actually there
-      const domSample = await page.evaluate(() => {
-        const allDivs = document.querySelectorAll(
-          "div[class], a[class], li[class]"
-        );
-        const samples: string[] = [];
-        for (let i = 0; i < allDivs.length && samples.length < 30; i++) {
-          const el = allDivs[i];
-          const cls = el.className?.toString() ?? "";
-          if (cls.length > 5) {
-            samples.push(
-              `<${el.tagName.toLowerCase()} class="${cls.slice(
-                0,
-                100
-              )}"> text="${(el.textContent ?? "").slice(0, 50)}"`
-            );
-          }
-        }
-        return samples;
-      });
-      console.log(
-        `[DEBUG] DOM sample (first 30 elements with classes):\n${domSample.join(
-          "\n"
-        )}`
-      );
-      console.log(`[DEBUG] === END DIAGNOSTICS ===`);
       throw new Error(
         "Yandex Maps search results not found. The page structure may have changed or no results were returned."
       );
@@ -860,10 +626,6 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
     let previousCardCount = 0;
     const scrollStartTime = Date.now();
     const maxScrollTimeMs = 60_000; // Hard timeout: 60s max for scrolling
-
-    console.log(
-      `[DEBUG] Starting scroll loop -- maxResults=${maxResults}, maxNoNewCards=${maxNoNewCards}, maxScrollTime=${maxScrollTimeMs}ms`
-    );
 
     while (
       previousCardCount < maxResults &&
@@ -895,18 +657,12 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
       }, cardSelectorStr);
 
       const elapsed = Date.now() - scrollStartTime;
-      console.log(
-        `[DEBUG] Scroll loop -- cardCount=${cardCount}, previousCardCount=${previousCardCount}, noNewCardsCount=${noNewCardsCount}, elapsed=${elapsed}ms`
-      );
 
       if (cardCount > previousCardCount) {
         noNewCardsCount = 0;
         previousCardCount = cardCount;
       } else {
         noNewCardsCount++;
-        console.log(
-          `[DEBUG] No new cards (${noNewCardsCount}/${maxNoNewCards})`
-        );
       }
 
       // Scroll the results container to load more
@@ -933,16 +689,10 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
         : noNewCardsCount >= maxNoNewCards
         ? `no new cards after ${maxNoNewCards} scrolls`
         : `scroll timeout (${Date.now() - scrollStartTime}ms)`;
-    console.log(
-      `[DEBUG] Scroll loop ended -- reason: ${scrollExitReason}, total cards on page: ${previousCardCount}`
-    );
 
     // Get all card elements -- capture fresh handles
     const cardHandles = await page.$$(CARD_SELECTORS.join(", "));
     const limit = Math.min(cardHandles.length, maxResults);
-    console.log(
-      `[DEBUG] cardHandles.length=${cardHandles.length}, limit=${limit}`
-    );
 
     // Extract data from each card by clicking into detail view
     sendProgress(
@@ -987,27 +737,15 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
         `Extracting business ${collectedCards.length + 1} of ${maxResults}...`
       );
 
-      console.log(
-        `[DEBUG] === Attempt ${i + 1}, collected=${
-          collectedCards.length
-        }, clickedNames=${clickedNames.size} ===`
-      );
-
       // Rotate proxy for this card (round-robin)
       if (proxies && proxies.length > 0 && i > 0) {
         const rotated = proxies[i % proxies.length];
         currentProxyUrl = proxyToUrl(rotated);
-        console.log(
-          `[DEBUG] Rotated to proxy ${i % proxies.length}: ${rotated.host}:${
-            rotated.port
-          }`
-        );
       }
 
       try {
         // ── For i > 0, always re-navigate to search URL (goBack is unreliable in SPA) ──
         if (i > 0) {
-          console.log(`[DEBUG] Re-navigating to search URL for next card...`);
           await page.goto(searchUrl, {
             waitUntil: "networkidle2",
             timeout: 60000,
@@ -1037,15 +775,12 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
           await page
             .waitForSelector(CARD_SELECTORS.join(", "), { timeout: 15000 })
             .catch(() => {
-              console.log(`[DEBUG] Cards not found after re-navigate`);
+              /* cards may already be visible */
             });
 
           // Scroll down to load more cards -- enough to show cards we haven't clicked yet
           const targetLoaded = Math.min(clickedNames.size + 10, maxResults + 5);
           const scrollIterations = Math.max(Math.ceil(targetLoaded / 5), 3);
-          console.log(
-            `[DEBUG] Scrolling ${scrollIterations} times to load ~${targetLoaded} cards...`
-          );
           for (let s = 0; s < scrollIterations; s++) {
             await page.evaluate(() => {
               const scrollContainer =
@@ -1065,24 +800,6 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
 
         // Query all visible card handles
         const freshCards = await page.$$(CARD_SELECTORS.join(", "));
-        // Log card previews for debugging
-        const freshCardPreviews = await Promise.all(
-          freshCards.slice(0, 15).map(async (card, idx) => {
-            try {
-              const text = await card.evaluate(
-                (el) => el.textContent?.trim().slice(0, 60) ?? ""
-              );
-              return `[${idx}] "${text}"`;
-            } catch {
-              return `[${idx}] <error>`;
-            }
-          })
-        );
-        console.log(
-          `[DEBUG] Cards on page: ${
-            freshCards.length
-          }, first 15: ${freshCardPreviews.join(" | ")}`
-        );
 
         // ── Find the first card that hasn't been clicked yet ──
         let targetIndex = -1;
@@ -1102,9 +819,6 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
             });
             if (cardName && !clickedNames.has(cardName)) {
               targetIndex = c;
-              console.log(
-                `[DEBUG] Found unclicked card at index ${c}: "${cardName}"`
-              );
               break;
             }
           } catch {
@@ -1113,9 +827,6 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
         }
 
         if (targetIndex === -1) {
-          console.log(
-            `[DEBUG] All ${freshCards.length} cards already clicked or no identifiable cards. Scrolling more...`
-          );
           // Try scrolling more to load new cards
           for (let s = 0; s < 5; s++) {
             await page.evaluate(() => {
@@ -1148,9 +859,6 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
               });
               if (cardName && !clickedNames.has(cardName)) {
                 targetIndex = c;
-                console.log(
-                  `[DEBUG] Found unclicked card after more scrolling at index ${c}: "${cardName}"`
-                );
                 break;
               }
             } catch {
@@ -1159,9 +867,6 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
           }
 
           if (targetIndex === -1) {
-            console.log(
-              `[DEBUG] No more unclicked cards found. Stopping extraction.`
-            );
             break;
           }
         }
@@ -1169,9 +874,6 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
         // Click the target card
         const allCards = await page.$$(CARD_SELECTORS.join(", "));
         if (targetIndex >= allCards.length) {
-          console.log(
-            `[DEBUG] targetIndex ${targetIndex} out of range (${allCards.length} cards). Skipping.`
-          );
           consecutiveSkips++;
           continue;
         }
@@ -1179,10 +881,8 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
         const clickPreview = await allCards[targetIndex].evaluate(
           (el) => el.textContent?.trim().slice(0, 80) ?? ""
         );
-        console.log(`[DEBUG] Clicking card[${targetIndex}]: "${clickPreview}"`);
         await allCards[targetIndex].click();
 
-        console.log(`[DEBUG] Clicked card, waiting for detail panel...`);
         await randomDelay(1000, 2000);
 
         // Wait for detail panel to appear
@@ -1190,7 +890,6 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
         for (const panelSel of DETAIL_PANEL_SELECTORS) {
           try {
             await page.waitForSelector(panelSel, { timeout: 5000 });
-            console.log(`[DEBUG] Detail panel matched selector: ${panelSel}`);
             detailPanelFound = true;
             break;
           } catch {
@@ -1200,56 +899,14 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
 
         if (!detailPanelFound) {
           // Fallback: wait for any h1 (business name usually in detail panel)
-          console.log(
-            `[DEBUG] No detail panel selector matched, trying fallback h1...`
-          );
           try {
             await page.waitForSelector("h1", { timeout: 5000 });
-            console.log(`[DEBUG] Fallback h1 found`);
           } catch {
-            console.log(
-              `[DEBUG] No h1 found either, extracting from current page state.`
-            );
+            /* proceed with extraction anyway */
           }
         }
 
         await randomDelay(500, 1000);
-
-        // Diagnostic: log what category/rubric elements exist on the detail page (first card only)
-        if (collectedCards.length === 0) {
-          const categoryDiag = await page.evaluate(() => {
-            const results: Record<string, string> = {};
-            for (const sel of [
-              "a.business-categories-view__category",
-              'a[class*="rubric"]',
-              '[class*="business-categorie"]',
-              '[class*="business-category"]',
-              '[class*="rubric"]',
-              '[class*="category"]',
-            ]) {
-              try {
-                const els = document.querySelectorAll(sel);
-                results[sel] = `${els.length} elements`;
-                if (els.length > 0 && els.length <= 5) {
-                  const previews: string[] = [];
-                  els.forEach((el, idx) => {
-                    const text = el.textContent?.trim().slice(0, 80) ?? "";
-                    previews.push(`[${idx}] "${text}"`);
-                  });
-                  results[sel] += `: ${previews.join(", ")}`;
-                }
-              } catch {
-                results[sel] = "error";
-              }
-            }
-            return results;
-          });
-          console.log(
-            `[DEBUG] Category selectors diagnostic (first card): ${JSON.stringify(
-              categoryDiag
-            )}`
-          );
-        }
 
         // Check captcha after clicking into detail
         const captchaAfterClick = await detectCaptcha(page);
@@ -1286,23 +943,12 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
             },
             { timeout: 10000 }
           );
-          console.log(`[DEBUG] Detail page content ready`);
         } catch {
-          console.log(`[DEBUG] Content readiness timed out, proceeding anyway`);
-        }
-
-        // ── Dump DOM diagnostics on first card to debug selector issues ──
-        if (collectedCards.length === 0) {
-          await dumpDetailPageDiagnostics(page, i);
+          /* proceed with extraction anyway */
         }
 
         // Extract business data from detail panel
         const business = await extractBusinessData(page);
-        console.log(
-          `[DEBUG] Extracted: name="${business.name}", phone="${
-            business.phone ?? "N/A"
-          }", website="${business.website ?? "N/A"}"`
-        );
 
         // Mark this card as clicked (even if extraction failed, to avoid re-clicking)
         if (business.name) {
@@ -1313,13 +959,10 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
           // Card had no name -- still mark its preview as clicked to avoid re-clicking
           clickedNames.add(clickPreview);
           consecutiveSkips++;
-          console.log(
-            `[DEBUG] Card had no name, marking preview as clicked. consecutiveSkips=${consecutiveSkips}`
-          );
         }
       } catch (err) {
         console.error(
-          `[DEBUG] Error extracting card ${i + 1}:`,
+          "[YandexMapsWorker] Error extracting card:",
           err instanceof Error ? err.message : err
         );
         consecutiveSkips++;
@@ -1332,10 +975,6 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
         await sleep(2000);
       }
     }
-
-    console.log(
-      `[DEBUG] Extraction complete. collectedCards=${collectedCards.length}, deduplicating...`
-    );
 
     // Deduplicate results by yandex_id
     const dedupedResults = deduplicate(collectedCards);
@@ -1399,7 +1038,6 @@ async function extractBusinessData(
     '[class*="title"]',
     '[class*="place-name"]'
   );
-  console.log(`[DEBUG] extractBusinessData name: matched="${name ?? "none"}"`);
 
   // Rating: look for star rating elements
   const ratingText = await extractAriaLabel(
@@ -1410,11 +1048,6 @@ async function extractBusinessData(
     '[class*="business-rating"]'
   );
   const rating = ratingText?.match(/[\d.]+/)?.[0];
-  console.log(
-    `[DEBUG] extractBusinessData rating: raw="${
-      ratingText ?? "none"
-    }", parsed="${rating ?? "none"}"`
-  );
 
   // Review count
   const reviewText = await extractText(
@@ -1426,11 +1059,6 @@ async function extractBusinessData(
     'span[class*="business-rating"] span:last-child'
   );
   const reviewCount = parseNumber(reviewText);
-  console.log(
-    `[DEBUG] extractBusinessData review_count: raw="${
-      reviewText ?? "none"
-    }", parsed=${reviewCount ?? "none"}`
-  );
 
   // Category / rubric -- try most specific selectors first, validate result
   let category = await extractText(
@@ -1444,16 +1072,8 @@ async function extractBusinessData(
   );
   // Validate category is clean text (not JS/HTML), limit to 200 chars
   if (!isCleanText(category, 200)) {
-    console.log(
-      `[DEBUG] extractBusinessData category REJECTED as unclean: length=${
-        category?.length ?? 0
-      } preview="${category?.slice(0, 100) ?? "none"}"`
-    );
     category = undefined;
   }
-  console.log(
-    `[DEBUG] extractBusinessData category: matched="${category ?? "none"}"`
-  );
 
   // Address
   let address = await extractText(
@@ -1471,9 +1091,6 @@ async function extractBusinessData(
       'meta[itemprop="address"]'
     );
   }
-  console.log(
-    `[DEBUG] extractBusinessData address: matched="${address ?? "none"}"`
-  );
 
   // Phone
   const phoneText = await extractText(
@@ -1487,9 +1104,6 @@ async function extractBusinessData(
   const phoneHref = await extractAttribute(page, "href", 'a[href^="tel:"]');
   const phone =
     phoneText ?? (phoneHref ? phoneHref.replace("tel:", "") : undefined);
-  console.log(
-    `[DEBUG] extractBusinessData phone: matched="${phone ?? "none"}"`
-  );
 
   // Website
   let website: string | undefined;
@@ -1513,9 +1127,6 @@ async function extractBusinessData(
   } catch {
     website = undefined;
   }
-  console.log(
-    `[DEBUG] extractBusinessData website: matched="${website ?? "none"}"`
-  );
 
   // Hours / schedule
   const hours = await extractText(
@@ -1525,9 +1136,6 @@ async function extractBusinessData(
     '[class*="hours"]',
     '[class*="work-time"]',
     'div[class*="business-status"]'
-  );
-  console.log(
-    `[DEBUG] extractBusinessData hours: matched="${hours ?? "none"}"`
   );
 
   const mapsUrl = page.url();
@@ -1549,9 +1157,6 @@ async function extractBusinessData(
       "[data-id]"
     );
   }
-  console.log(
-    `[DEBUG] extractBusinessData yandex_id: matched="${yandexId ?? "none"}"`
-  );
 
   // Extract coordinates from URL (Yandex uses ll=longitude,latitude)
   let latitude: number | undefined;
@@ -1563,11 +1168,6 @@ async function extractBusinessData(
     if (isNaN(latitude)) latitude = undefined;
     if (isNaN(longitude)) longitude = undefined;
   }
-  console.log(
-    `[DEBUG] extractBusinessData coords: lat=${latitude ?? "none"}, lng=${
-      longitude ?? "none"
-    }`
-  );
 
   // ── Fallback extraction for missing fields ──
   let finalPhone = phone;
@@ -1635,18 +1235,15 @@ async function extractBusinessData(
 
       if (!finalPhone && fallbackData.phone) {
         finalPhone = fallbackData.phone;
-        console.log(`[DEBUG] Phone from fallback: "${finalPhone}"`);
       }
       if (!finalWebsite && fallbackData.website) {
         finalWebsite = fallbackData.website;
-        console.log(`[DEBUG] Website from fallback: "${finalWebsite}"`);
       }
       if (!finalAddress && fallbackData.address) {
         finalAddress = fallbackData.address;
-        console.log(`[DEBUG] Address from fallback: "${finalAddress}"`);
       }
-    } catch (err) {
-      console.log(`[DEBUG] Fallback extraction error: ${err}`);
+    } catch {
+      /* fallback extraction is best-effort */
     }
   }
 
