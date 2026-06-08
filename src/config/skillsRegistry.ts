@@ -1369,6 +1369,85 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       };
     },
   },
+  {
+    name: "knowledge_library_search",
+    description:
+      "Search the local knowledge library for factual information from uploaded documents. " +
+      "Use this before answering questions that require knowledge-base context. " +
+      "Returns relevant passages with source citations.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description:
+            "The search query to find relevant knowledge-library passages.",
+        },
+        limit: {
+          type: "number",
+          description:
+            "Maximum number of results to return (default: 5, max: 10).",
+          default: 5,
+        },
+        documentIds: {
+          type: "array",
+          items: { type: "number" },
+          description: "Restrict search to these document IDs.",
+        },
+        documentTypes: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Restrict search to these file types (e.g. pdf, docx, txt).",
+        },
+        tags: {
+          type: "array",
+          items: { type: "string" },
+          description: "Restrict search to documents with these tags.",
+        },
+        author: {
+          type: "string",
+          description: "Restrict search to documents by this author.",
+        },
+        dateRange: {
+          type: "object",
+          properties: {
+            start: { type: "string", description: "Start date (ISO 8601)" },
+            end: { type: "string", description: "End date (ISO 8601)" },
+          },
+          description: "Restrict to documents uploaded within this date range.",
+        },
+        includeNeighborChunks: {
+          type: "boolean",
+          description:
+            "Whether to include neighboring chunks for context (default: true).",
+          default: true,
+        },
+      },
+      required: ["query"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "pure",
+    source: "built-in",
+    execute: async (args): Promise<{ success: boolean; result: unknown }> => {
+      const { RagSearchModule } = await import("@/modules/RagSearchModule");
+      const module = new RagSearchModule();
+      const result = await module.searchKnowledgeForTool({
+        query: args.query as string,
+        limit: args.limit as number | undefined,
+        documentIds: args.documentIds as number[] | undefined,
+        documentTypes: args.documentTypes as string[] | undefined,
+        tags: args.tags as string[] | undefined,
+        author: args.author as string | undefined,
+        dateRange: args.dateRange as { start: string; end: string } | undefined,
+        includeNeighborChunks: args.includeNeighborChunks as
+          | boolean
+          | undefined,
+      });
+      return { success: result.success, result };
+    },
+  },
 ];
 
 // Register all built-in skills at module load time
