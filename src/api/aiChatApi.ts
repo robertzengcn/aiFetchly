@@ -449,7 +449,36 @@ export interface OpenAIChatCompletionChunk {
   choices: OpenAIStreamChoice[];
 }
 
-// ==================== End OpenAI-Compatible API Types ====================
+// ==================== Rerank API Types ====================
+
+/** Rerank document - can be a plain string or a JSON object with text field */
+export type RerankDocument = string | { text: string; [key: string]: unknown };
+
+/** Rerank request interface matching the /v1/rerank endpoint */
+export interface RerankRequest {
+  query: string;
+  documents: RerankDocument[];
+  model?: string;
+  top_n?: number;
+  return_documents?: boolean;
+}
+
+/** Single rerank result item */
+export interface RerankResultItem {
+  index: number;
+  relevance_score: number;
+  document?: { text: string };
+}
+
+/** Rerank response interface matching the /v1/rerank endpoint */
+export interface RerankResponse {
+  id: string;
+  results: RerankResultItem[];
+  model: string;
+  usage: { prompt_tokens: number; total_tokens: number };
+}
+
+// ==================== End Rerank API Types ====================
 
 /**
  * Website analysis request interface
@@ -1656,5 +1685,32 @@ export class AiChatApi {
     } finally {
       reader.releaseLock();
     }
+  }
+
+  // ==================== Rerank API ====================
+
+  /**
+   * Rerank documents by relevance to a query.
+   * POST /v1/rerank
+   *
+   * @param request - Rerank request with query, documents, and optional parameters
+   * @returns Ranked results with relevance scores
+   */
+  async rerank(request: RerankRequest): Promise<RerankResponse> {
+    this.ensureAIEnabled();
+    const data: RerankRequest = {
+      query: request.query,
+      documents: request.documents,
+    };
+    if (request.model) {
+      data.model = request.model;
+    }
+    if (request.top_n !== undefined) {
+      data.top_n = request.top_n;
+    }
+    if (request.return_documents !== undefined) {
+      data.return_documents = request.return_documents;
+    }
+    return this._httpClient.postJson("/v1/rerank", data);
   }
 }
