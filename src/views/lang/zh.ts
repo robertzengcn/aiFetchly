@@ -709,6 +709,7 @@ export default {
     record_time: "记录时间",
     keyword: "关键词",
     status: "状态",
+    numbers: "结果数量",
   },
   searchresultdetail: {
     title: "搜索结果详情",

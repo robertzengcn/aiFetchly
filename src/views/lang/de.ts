@@ -737,6 +737,7 @@ export default {
     record_time: "Erfassungszeit",
     keyword: "Schlüsselwort",
     status: "Status",
+    numbers: "Anzahl",
   },
   searchresultdetail: {
     title: "Suchergebnisdetails",
