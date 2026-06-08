@@ -753,6 +753,7 @@ export class SearchModule extends BaseModule {
       //console.log("item is follow")
       //console.log(item)
       const keywords = await this.serKeywordModel.getKeywordsByTask(item.id);
+      const resultCount = await this.countSearchResult(item.id);
       const data: SearchtaskItem = {
         id: item.id,
         enginer_name: this.convertNumtoSE(Math.round(item.enginer_id)),
@@ -760,6 +761,7 @@ export class SearchModule extends BaseModule {
         keywords: keywords,
         record_time: item.record_time,
         pid: item.pid ?? undefined,
+        result_count: resultCount,
       };
       data.keywordline = data.keywords.join(",");
 
