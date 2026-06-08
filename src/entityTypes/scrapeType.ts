@@ -197,7 +197,7 @@ export type metadataObj = {
   scraping_detected?: boolean | void;
 };
 export type RunResult = {
-  results: object;
+  results: Array<ResultParseItemType>;
   metadata: metadataObj;
   num_requests: number;
   updatedCookies?: Array<CookiesType>; // Updated cookies after scraping

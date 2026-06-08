@@ -2,6 +2,8 @@
 import { SearchScrape } from "@/childprocess/searchScraper"
 import { ScrapeOptions, SearchData, SearchResult } from "@/entityTypes/scrapeType"
 import { CustomError } from "@/modules/customError"
+import * as fs from "fs";
+import * as path from "path";
 // import debug from 'debug';
 // import { e } from "vitest/dist/reporters-1evA5lom";
 //import { R } from "vitest/dist/reporters-1evA5lom";
@@ -29,6 +31,35 @@ export type googlePlaces = {
     contact: string;
     hours: string;
 }
+
+export type GoogleResultAnchorSnapshot = {
+    href: string;
+    text: string;
+    hasHeading: boolean;
+    headingText?: string;
+    ariaLabel?: string | null;
+};
+
+export type GoogleResultSnapshot = {
+    htmlPreview: string;
+    anchors: GoogleResultAnchorSnapshot[];
+    headings: string[];
+    citeTexts: string[];
+    snippetTexts: string[];
+};
+
+type GoogleSelectorDiagnostic = {
+    selector: string;
+    elementCount: number;
+    parsedCount: number;
+    validCount: number;
+    samples: Array<{
+        title: string;
+        link: string;
+        snippet: string;
+        htmlPreview: string;
+    }>;
+};
 
 export class GoogleScraper extends SearchScrape {
     search_engine_name = "google"
@@ -192,21 +223,20 @@ export class GoogleScraper extends SearchScrape {
         //  const searchResultsExist = await this.page.$('#search .MjjYud');
         //  if (!searchResultsExist) {
         // Try alternative selectors for search results
-        const alternativeSelectors = [
-            '#main .Gx5Zad',
-            '#main .MjjYud',
-            '#search .MjjYud',
-            '#search .g',
-            '#search .rc',
-            '#search .srg .g',
-            '#search .srg .rc',
-            '#search .srg .g .rc'
-        ];
+        const alternativeSelectors = this.getResultContainerSelectors();
         let findelement=false
+        const diagnostics: GoogleSelectorDiagnostic[] = [];
         for (const selector of alternativeSelectors) {
             this.logger.info(`Searching for results with selector: ${selector}`);
-            const results = await this.page.$(selector);
-            if (results) {
+            const diagnostic = await this.collectSelectorDiagnostic(selector);
+            diagnostics.push(diagnostic);
+            this.logger.info(
+                `Google selector diagnostic: selector=${selector}, elements=${diagnostic.elementCount}, parsed=${diagnostic.parsedCount}, valid=${diagnostic.validCount}`
+            );
+            if (diagnostic.samples.length > 0) {
+                this.logger.info(`Google selector sample: ${JSON.stringify(diagnostic.samples[0])}`);
+            }
+            if (diagnostic.validCount > 0) {
                 findelement=true
                 this.logger.info(`Found results with alternative selector: ${selector}`);
                 this.page.on('console', msg => {
@@ -223,6 +253,7 @@ export class GoogleScraper extends SearchScrape {
                 break; // Exit loop once we find results
             }
         }
+        await this.writeParseDiagnostics(diagnostics);
         if(!findelement){
             // Try AI recovery before throwing error
             const recoveryResult = await this.tryAIRecovery(
@@ -243,8 +274,8 @@ export class GoogleScraper extends SearchScrape {
 
                 // Try parsing again with the first selector
                 for (const selector of alternativeSelectors) {
-                    const results = await this.page.$(selector);
-                    if (results) {
+                    const diagnostic = await this.collectSelectorDiagnostic(selector);
+                    if (diagnostic.validCount > 0) {
                         const searchRes = await this.parseSearchResults(selector);
 
                         for (const resValue of searchRes) {
@@ -599,43 +630,185 @@ export class GoogleScraper extends SearchScrape {
      * @returns Array of parsed search results
      */
     private async parseSearchResults(selector: string): Promise<SearchResult[]> {
-        const searchRes = await this.page.$$eval(selector, elements =>
-            elements.map(el => {
-                const selectors = [
-                    { link: 'a', title: 'h3', snippet: '.VwiC3b span, .st', visible: 'cite' },
-                    { link: 'a', title: 'h3', snippet: '.kCrYT span', visible: '.sCuL3' },
-                    { link: 'a', title: '.v7jaNc', snippet: '.VwiC3b span', visible: '.ob9lvb' },
-                    { link: '.yuRUbf a', title: '.yuRUbf a h3', snippet: '.VwiC3b span', visible: '.yuRUbf cite' },
-                    { link: '.g a', title: '.g h3', snippet: '.st', visible: '.g cite' }
-                ];
+        const snapshots = await this.collectResultSnapshots(selector);
+        return GoogleScraper.parseResultSnapshots(snapshots);
+    }
 
-                let link = '', title = '', snippet = '', visible_link = '';
+    static parseResultSnapshots(snapshots: GoogleResultSnapshot[]): SearchResult[] {
+        const results: SearchResult[] = [];
+        const seenLinks = new Set<string>();
 
-                for (const sel of selectors) {
-                    const linkEl = el.querySelector(sel.link);
-                    const titleEl = el.querySelector(sel.title);
-                    const snippetEl = el.querySelector(sel.snippet);
-                    const visibleEl = el.querySelector(sel.visible);
+        for (const snapshot of snapshots) {
+            const anchor = snapshot.anchors.find(item => {
+                return item.hasHeading && GoogleScraper.isOrganicResultLink(item.href);
+            });
 
-                    if (linkEl && titleEl) {
-                        link = linkEl.getAttribute('href') || '';
-                        title = titleEl.textContent || '';
-                        snippet = snippetEl?.textContent || '';
-                        visible_link = visibleEl?.textContent || '';
-                        break;
-                    }
-                }
+            if (!anchor) {
+                continue;
+            }
+
+            const link = GoogleScraper.normalizeGoogleResultLink(anchor.href);
+            if (!link || seenLinks.has(link)) {
+                continue;
+            }
+
+            const title = GoogleScraper.cleanText(anchor.headingText || anchor.text || anchor.ariaLabel || snapshot.headings[0] || "");
+            if (!title) {
+                continue;
+            }
+
+            seenLinks.add(link);
+            results.push({
+                link,
+                title,
+                snippet: GoogleScraper.cleanText(snapshot.snippetTexts[0] || ""),
+                visible_link: GoogleScraper.cleanText(snapshot.citeTexts[0] || ""),
+            });
+        }
+
+        return results;
+    }
+
+    private getResultContainerSelectors(): string[] {
+        return [
+            '#main .Gx5Zad',
+            '#main .MjjYud',
+            '#search .MjjYud',
+            '#search .g',
+            '#search .rc',
+            '#search .srg .g',
+            '#search .srg .rc',
+            '#search .srg .g .rc'
+        ];
+    }
+
+    private async collectSelectorDiagnostic(selector: string): Promise<GoogleSelectorDiagnostic> {
+        const snapshots = await this.collectResultSnapshots(selector);
+        const parsed = GoogleScraper.parseResultSnapshots(snapshots);
+        return {
+            selector,
+            elementCount: snapshots.length,
+            parsedCount: parsed.length,
+            validCount: parsed.filter(item => Boolean(item.link && item.title)).length,
+            samples: parsed.slice(0, 3).map((item, index) => ({
+                title: item.title || "",
+                link: item.link || "",
+                snippet: item.snippet || "",
+                htmlPreview: snapshots[index]?.htmlPreview || "",
+            })),
+        };
+    }
+
+    private async collectResultSnapshots(selector: string): Promise<GoogleResultSnapshot[]> {
+        return await this.page.$$eval(selector, elements => {
+            const cleanText = (value: string | null | undefined): string => {
+                return (value || "").replace(/\s+/g, " ").trim();
+            };
+
+            const snippetSelectors = [
+                ".VwiC3b",
+                ".VwiC3b span",
+                "[data-sncf]",
+                ".kb0PBd",
+                ".kCrYT span",
+                ".st",
+                ".IsZvec",
+                ".lyLwlc",
+            ];
+
+            return elements.map(el => {
+                const anchors = Array.from(el.querySelectorAll("a")).map(anchor => {
+                    const heading = anchor.querySelector("h3");
+                    return {
+                        href: anchor.getAttribute("href") || "",
+                        text: cleanText(anchor.textContent),
+                        hasHeading: Boolean(heading),
+                        headingText: cleanText(heading?.textContent),
+                        ariaLabel: anchor.getAttribute("aria-label"),
+                    };
+                });
+
+                const headings = Array.from(el.querySelectorAll("h3"))
+                    .map(node => cleanText(node.textContent))
+                    .filter(text => text.length > 0);
+
+                const citeTexts = Array.from(el.querySelectorAll("cite, .TbwUpd, .tjvcx, .NJjxre"))
+                    .map(node => cleanText(node.textContent))
+                    .filter(text => text.length > 0);
+
+                const snippetTexts = snippetSelectors
+                    .flatMap(snippetSelector => Array.from(el.querySelectorAll(snippetSelector)))
+                    .map(node => cleanText(node.textContent))
+                    .filter(text => text.length > 0 && !headings.includes(text));
 
                 return {
-                    link: link ? link : '',
-                    title: title ? title : '',
-                    snippet: snippet,
-                    visible_link: visible_link
+                    htmlPreview: el.outerHTML.slice(0, 500),
+                    anchors,
+                    headings,
+                    citeTexts,
+                    snippetTexts,
                 };
-            })
-        );
+            });
+        });
+    }
 
-        return searchRes;
+    private async writeParseDiagnostics(diagnostics: GoogleSelectorDiagnostic[]): Promise<void> {
+        if (!this.config.debug_log_path) {
+            return;
+        }
+
+        await fs.promises.mkdir(this.config.debug_log_path, { recursive: true });
+        const filePath = path.join(
+            this.config.debug_log_path,
+            `google_parse_diagnostics_${Date.now()}.json`
+        );
+        await fs.promises.writeFile(filePath, JSON.stringify({
+            url: await this.page.url(),
+            title: await this.page.title(),
+            diagnostics,
+        }, null, 2));
+        this.logger.info(`Saved Google parse diagnostics to ${filePath}`);
+    }
+
+    private static normalizeGoogleResultLink(href: string): string {
+        const trimmedHref = href.trim();
+        if (!trimmedHref) {
+            return "";
+        }
+
+        if (trimmedHref.startsWith("/url?") || trimmedHref.startsWith("https://www.google.com/url?")) {
+            try {
+                const url = new URL(trimmedHref, "https://www.google.com");
+                return url.searchParams.get("q") || url.searchParams.get("url") || trimmedHref;
+            } catch {
+                return trimmedHref;
+            }
+        }
+
+        return trimmedHref;
+    }
+
+    private static isOrganicResultLink(href: string): boolean {
+        const normalized = GoogleScraper.normalizeGoogleResultLink(href);
+        if (!normalized) {
+            return false;
+        }
+
+        if (!/^https?:\/\//i.test(normalized)) {
+            return false;
+        }
+
+        try {
+            const parsed = new URL(normalized);
+            const hostname = parsed.hostname.toLowerCase();
+            return !["google.com", "www.google.com"].includes(hostname);
+        } catch {
+            return false;
+        }
+    }
+
+    private static cleanText(value: string): string {
+        return value.replace(/\s+/g, " ").trim();
     }
 
     async wait_for_results() {
