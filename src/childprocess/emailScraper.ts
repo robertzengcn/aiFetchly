@@ -19,7 +19,10 @@ type UtilityParentMessage = {
 };
 
 type UtilityParentPort = {
-  on: (event: "message", handler: (event: UtilityParentMessage) => void) => void;
+  on: (
+    event: "message",
+    handler: (event: UtilityParentMessage) => void
+  ) => void;
   removeListener: (
     event: "message",
     handler: (event: UtilityParentMessage) => void
@@ -32,29 +35,16 @@ export const extractLink = async (page: Page, val: EmailClusterdata) => {
   if (!url) return;
   const maxPageNumber = val.maxPageNumber ? val.maxPageNumber : 0;
 
-  if (val.proxy) {
-    if (val.proxy != undefined) {
-      await page.setRequestInterception(true);
-      page.on("request", async (interceptedRequest) => {
-        if (
-          interceptedRequest.interceptResolutionState().action ===
-          InterceptResolutionAction.AlreadyHandled
-        )
-          return;
-        await useProxy(interceptedRequest, convertProxyServertourl(val.proxy!));
-        if (
-          interceptedRequest.interceptResolutionState().action ===
-          InterceptResolutionAction.AlreadyHandled
-        )
-          return;
-        interceptedRequest.continue();
-      });
-    }
-  }
+  // Note: proxy interception is set up by crawlSite() before calling extractLink.
+  // Do NOT set up proxy interception here to avoid duplicate handlers that cause
+  // race conditions and browser crashes.
+
+  console.log(`[extractLink] Navigating to ${url}`);
   await page.goto(url, {
     waitUntil: "networkidle2",
     timeout: 60000,
   });
+  console.log(`[extractLink] Page loaded successfully: ${url}`);
   const pageTitle = await page.evaluate(() => document.title);
 
   // Extract all links from the page
@@ -63,6 +53,7 @@ export const extractLink = async (page: Page, val: EmailClusterdata) => {
       (anchor) => anchor.href
     );
   });
+  console.log(`[extractLink] Found ${links.length} total links on ${url}`);
 
   // Filter links with page level less than 3
   const filteredLinks = links.filter((link) => {
@@ -79,6 +70,9 @@ export const extractLink = async (page: Page, val: EmailClusterdata) => {
       return false;
     }
   });
+  console.log(
+    `[extractLink] Filtered to ${filteredLinks.length} internal links on ${url}`
+  );
   const emails = await page.evaluate(() => {
     const emailRegex = /[a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9._-]+/g;
     const bodyText = document.body.innerText;
@@ -91,6 +85,7 @@ export const extractLink = async (page: Page, val: EmailClusterdata) => {
     pageContent = await page.evaluate(() => document.body.innerText);
   }
 
+  console.log(`[extractLink] Found ${emails.length} emails on ${url}`);
   if (val.callback) {
     if (emails.length > 0) {
       const er: EmailResult = {
@@ -145,24 +140,34 @@ export async function crawlSite({
   page: Page;
   data: EmailClusterdata;
 }) {
-  if (data.url.length == 0) {
-    return;
-  }
-  if (!data.visited) {
-    data.visited = new Set();
-  }
-  if (data.visited.has(data.url)) return;
-  data.visited.add(data.url);
+  try {
+    if (data.url.length == 0) {
+      console.log("[crawlSite] Empty URL, skipping");
+      return;
+    }
+    if (!data.visited) {
+      data.visited = new Set();
+    }
+    if (data.visited.has(data.url)) {
+      console.log(`[crawlSite] Already visited ${data.url}, skipping`);
+      return;
+    }
+    data.visited.add(data.url);
 
-  // Check if we've exceeded maxPageNumber
-  const maxPageNumber = data.maxPageNumber ?? 0;
-  if (maxPageNumber > 0 && data.visited.size > maxPageNumber) {
-    console.log(`Reached maximum page limit of ${maxPageNumber}`);
-    return;
-  }
+    // Check if we've exceeded maxPageNumber
+    const maxPageNumber = data.maxPageNumber ?? 0;
+    if (maxPageNumber > 0 && data.visited.size > maxPageNumber) {
+      console.log(`[crawlSite] Reached maximum page limit of ${maxPageNumber}`);
+      return;
+    }
 
-  if (data.proxy) {
-    if (data.proxy != undefined) {
+    // Set up proxy interception only ONCE per page (not per recursive call)
+    if (
+      data.proxy &&
+      data.proxy != undefined &&
+      !(page as unknown as Record<string, unknown>).__proxyInterceptionSet
+    ) {
+      console.log(`[crawlSite] Setting up proxy interception for page`);
       this.proxyServer = data.proxy;
       await this.page.setRequestInterception(true);
       this.page.on("request", async (interceptedRequest) => {
@@ -171,10 +176,14 @@ export async function crawlSite({
           InterceptResolutionAction.AlreadyHandled
         )
           return;
-        await useProxy(
-          interceptedRequest,
-          convertProxyServertourl(data.proxy!)
-        );
+        try {
+          await useProxy(
+            interceptedRequest,
+            convertProxyServertourl(data.proxy!)
+          );
+        } catch (proxyErr) {
+          console.error("[crawlSite] Proxy request error:", proxyErr);
+        }
         if (
           interceptedRequest.interceptResolutionState().action ===
           InterceptResolutionAction.AlreadyHandled
@@ -182,69 +191,92 @@ export async function crawlSite({
           return;
         interceptedRequest.continue();
       });
+      // Mark page so we don't set up interception again on recursive calls
+      (page as unknown as Record<string, unknown>).__proxyInterceptionSet =
+        true;
     }
-  }
 
-  const result = await extractLink(page, {
-    url: data.url,
-    domain: data.domain,
-    maxPageLevel: data.maxPageLevel,
-    callback: data.callback,
-    aiSupportEnabled: data.aiSupportEnabled,
-  });
-  console.log("extract link result is following");
-  console.log(result);
-  if (!result) return;
-
-  console.log(`Page Title: ${result.pageTitle}`);
-  console.log(`URL: ${data.url}`);
-  console.log(`Filtered Links: ${result.filteredLinks}`);
-
-  // Score this page as an AI candidate
-  if (data.aiSupportEnabled && result.pageContent) {
-    data.bestCandidate = updateBestCandidate(
-      data.bestCandidate,
-      data.url,
-      result.pageTitle,
-      result.emails,
-      result.pageContent
+    console.log(
+      `[crawlSite] Extracting links from ${data.url} (visited: ${data.visited.size})`
     );
-  }
+    const result = await extractLink(page, {
+      url: data.url,
+      domain: data.domain,
+      maxPageLevel: data.maxPageLevel,
+      callback: data.callback,
+      aiSupportEnabled: data.aiSupportEnabled,
+    });
+    console.log(
+      `[crawlSite] Extract link result for ${data.url}:`,
+      result
+        ? `found ${result.emails?.length ?? 0} emails, ${
+            result.filteredLinks?.length ?? 0
+          } links`
+        : "no result"
+    );
+    if (!result) return;
 
-  for (const link of result.filteredLinks) {
-    data.url = link;
-    await crawlSite({ page: page, data: data });
-  }
+    console.log(
+      `[crawlSite] Page Title: ${result.pageTitle}, URL: ${data.url}`
+    );
 
-  // After all recursive crawling is done for the root domain, request AI enrichment
-  // Only do this once per domain — at the root call when visited size indicates we're back at the start
-  if (
-    data.aiSupportEnabled &&
-    data.bestCandidate &&
-    !data.aiEnrichmentRequested
-  ) {
-    data.aiEnrichmentRequested = true;
-    await requestAiEnrichmentForBestCandidate(data);
-
-    // After enrichment, send a result with the enrichment data via callback
-    // so the main process can save it alongside the domain's email results
-    if (data.aiEnrichmentResult && data.callback) {
-      const enrichmentResult: EmailResult = {
-        url: data.bestCandidate.url,
-        pageTitle: data.bestCandidate.title,
-        filteredLinks: [],
-        emails: [],
-        aiEnrichment: {
-          phone: data.aiEnrichmentResult.phone,
-          address: data.aiEnrichmentResult.address,
-          socialLinks: data.aiEnrichmentResult.socialLinks,
-          status: data.aiEnrichmentResult.status,
-          error: data.aiEnrichmentResult.error,
-          confidence: data.aiEnrichmentResult.confidence,
-        },
-      };
-      data.callback(enrichmentResult);
+    // Score this page as an AI candidate
+    if (data.aiSupportEnabled && result.pageContent) {
+      data.bestCandidate = updateBestCandidate(
+        data.bestCandidate,
+        data.url,
+        result.pageTitle,
+        result.emails,
+        result.pageContent
+      );
     }
+
+    for (const link of result.filteredLinks) {
+      data.url = link;
+      await crawlSite({ page: page, data: data });
+    }
+
+    // After all recursive crawling is done for the root domain, request AI enrichment
+    // Only do this once per domain — at the root call when visited size indicates we're back at the start
+    if (
+      data.aiSupportEnabled &&
+      data.bestCandidate &&
+      !data.aiEnrichmentRequested
+    ) {
+      console.log(
+        `[crawlSite] Requesting AI enrichment for best candidate: ${data.bestCandidate.url} (score: ${data.bestCandidate.score})`
+      );
+      data.aiEnrichmentRequested = true;
+      await requestAiEnrichmentForBestCandidate(data);
+
+      // After enrichment, send a result with the enrichment data via callback
+      // so the main process can save it alongside the domain's email results
+      if (data.aiEnrichmentResult && data.callback) {
+        console.log(
+          `[crawlSite] AI enrichment result status: ${data.aiEnrichmentResult.status}`
+        );
+        const enrichmentResult: EmailResult = {
+          url: data.bestCandidate.url,
+          pageTitle: data.bestCandidate.title,
+          filteredLinks: [],
+          emails: [],
+          aiEnrichment: {
+            phone: data.aiEnrichmentResult.phone,
+            address: data.aiEnrichmentResult.address,
+            socialLinks: data.aiEnrichmentResult.socialLinks,
+            status: data.aiEnrichmentResult.status,
+            error: data.aiEnrichmentResult.error,
+            confidence: data.aiEnrichmentResult.confidence,
+          },
+        };
+        data.callback(enrichmentResult);
+      }
+    }
+  } catch (error) {
+    const errMsg = error instanceof Error ? error.message : String(error);
+    console.error(`[crawlSite] Error crawling ${data.url}: ${errMsg}`);
+    // Re-throw so puppeteer-cluster can handle the task failure
+    throw error;
   }
 }
 
@@ -260,9 +292,11 @@ async function requestAiEnrichmentForBestCandidate(
 
   try {
     // Dynamic import to avoid issues if process.parentPort is unavailable
-    const parentPort = (process as NodeJS.Process & {
-      parentPort?: UtilityParentPort;
-    }).parentPort;
+    const parentPort = (
+      process as NodeJS.Process & {
+        parentPort?: UtilityParentPort;
+      }
+    ).parentPort;
     if (!parentPort) {
       console.warn("No parentPort available for AI enrichment request");
       data.aiEnrichmentResult = {
