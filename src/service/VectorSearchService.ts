@@ -26,7 +26,12 @@ export interface SearchResult {
 
 export interface SearchOptions {
   limit?: number;
+  /** @deprecated Use minScore or maxDistance instead */
   threshold?: number;
+  /** Maximum vector distance (lower is closer). Applied to raw L2 distance. Default: Infinity (no filter) */
+  maxDistance?: number;
+  /** Minimum normalized similarity score (0-1, higher is better). Default: 0 */
+  minScore?: number;
   includeMetadata?: boolean;
   documentTypes?: string[];
   dateRange?: {
@@ -134,7 +139,7 @@ export class VectorSearchService {
               dimensions: numericDimensions,
               documentIndexPath: doc.vectorIndexPath || undefined,
             });
-            const distance = options.threshold || 0.5;
+            const distance = options.maxDistance ?? 0.5;
             const documentResults = await this.vectorStore.search(
               queryVector,
               options.limit || 10,
@@ -411,17 +416,34 @@ export class VectorSearchService {
       // Get chunks with their documents using module
       const chunks = await this.chunkModule.getChunksByIds(chunkIds);
 
-      // Create results array
-      const results: SearchResult[] = [];
-      const threshold = options.threshold || 0;
+      // Build lookup map so chunk data stays attached to the correct score
+      const chunkById = new Map(chunks.map((chunk) => [chunk.id, chunk]));
 
-      for (let i = 0; i < chunks.length; i++) {
-        const chunk = chunks[i];
+      // Resolve threshold values: maxDistance filters raw L2 distance,
+      // minScore filters the normalised similarity score.
+      const maxDistance = options.maxDistance ?? Infinity;
+      const minScore = options.minScore ?? options.threshold ?? 0;
+
+      const results: SearchResult[] = [];
+
+      for (let i = 0; i < chunkIds.length; i++) {
+        const chunkId = chunkIds[i];
+        const chunk = chunkById.get(chunkId);
+        if (!chunk) {
+          continue;
+        }
+
         const distance = distances[i];
+
+        // Apply distance filter first (before converting to score)
+        if (distance > maxDistance) {
+          continue;
+        }
+
         const score = this.distanceToScore(distance);
 
-        // Apply threshold filter
-        if (score < threshold) {
+        // Apply score filter
+        if (score < minScore) {
           continue;
         }
 
@@ -481,10 +503,7 @@ export class VectorSearchService {
    * @param limit - Number of suggestions
    * @returns Array of suggestion strings
    */
-  async getSearchSuggestions(
-    query: string,
-    limit = 5
-  ): Promise<string[]> {
+  async getSearchSuggestions(query: string, limit = 5): Promise<string[]> {
     try {
       // Get chunks that contain the query text using module
       const chunks = await this.chunkModule.searchChunksByContent(
