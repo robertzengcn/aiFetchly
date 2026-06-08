@@ -1,6 +1,7 @@
 <template>
 
-    <v-data-table-server v-model="selected" :items-per-page="itemsPerPage" :search="search" :headers="headers"
+    <v-data-table-server
+v-model="selected" :items-per-page="itemsPerPage" :search="search" :headers="headers"
         :items-length="totalItems" :items="serverItems" :loading="loading" item-value="name" @update:options="loadItems" class="custom-data-table" return-object show-select select-strategy="single">
         
     </v-data-table-server>
@@ -70,6 +71,12 @@ headers.value = [
         sortable: false,
         key: 'keywordline',
         // value: computed(value => value.join(', '))
+    },
+    {
+        title: computed(_ => CapitalizeFirstLetter(t("searchresult.numbers"))),
+        align: 'center',
+        sortable: false,
+        key: 'result_count',
     },
     {
         title: computed(_ => CapitalizeFirstLetter(t("searchresult.status"))),
