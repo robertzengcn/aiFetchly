@@ -278,9 +278,22 @@ export class EmailCluster {
       MAX_CRAWL_PAGE_LENGTH
     );
     await this.cluster.task(crawlSite);
+
+    // Listen for cluster-level errors (e.g., browser crashes)
+    this.cluster.on("taskerror", (err: Error, data: EmailClusterdata) => {
+      console.error(
+        `[EmailCluster] Task error for ${data?.url || "unknown URL"}: ${
+          err.message
+        }`
+      );
+    });
+
     param.urls.forEach((value) => {
       const domain = getDomain(value);
       if (!domain) {
+        console.warn(
+          `[EmailCluster] Skipping invalid URL (no domain): ${value}`
+        );
         return;
       }
       //get random proxy
@@ -301,7 +314,35 @@ export class EmailCluster {
   }
 
   async quit() {
-    await this.cluster.idle();
-    await this.cluster.close();
+    try {
+      // Add a timeout so cluster.idle() doesn't hang forever if browser crashes
+      const idleTimeout =
+        this.config.puppeteer_cluster_config.timeout || 30 * 60 * 1000;
+      console.log(
+        `[EmailCluster] Waiting for cluster idle (timeout: ${
+          idleTimeout / 1000
+        }s)...`
+      );
+      await Promise.race([
+        this.cluster.idle(),
+        new Promise<void>((_, reject) =>
+          setTimeout(
+            () => reject(new Error("Cluster idle timeout exceeded")),
+            idleTimeout
+          )
+        ),
+      ]);
+      console.log("[EmailCluster] Cluster idle, closing...");
+      await this.cluster.close();
+      console.log("[EmailCluster] Cluster closed successfully");
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : String(error);
+      console.error(`[EmailCluster] Error during quit: ${errMsg}`);
+      try {
+        await this.cluster.close();
+      } catch (closeErr) {
+        console.error("[EmailCluster] Failed to close cluster:", closeErr);
+      }
+    }
   }
 }

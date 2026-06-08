@@ -183,8 +183,30 @@ export class EmailSearchTaskModule extends BaseModule {
     // Track the child process for kill support
     EmailSearchTaskModule.processMap.set(taskId, child);
 
+    // Set a hard timeout to kill the child process if it runs too long
+    const processTimeoutMs = (data.processTimeout || 30) * 60 * 1000;
+    const processTimeoutHandle = setTimeout(() => {
+      if (EmailSearchTaskModule.processMap.has(taskId)) {
+        console.error(
+          `[EmailSearchTask] Child process for task ${taskId} exceeded timeout of ${
+            processTimeoutMs / 1000
+          }s, killing...`
+        );
+        child.kill();
+        EmailSearchTaskModule.processMap.delete(taskId);
+        this.updateTaskStatus(taskId, TaskStatus.Error).catch((err) => {
+          console.error(
+            `[EmailSearchTask] Failed to update task ${taskId} status after timeout kill:`,
+            err
+          );
+        });
+      }
+    }, processTimeoutMs);
+
     child.on("spawn", () => {
-      console.log("child process satart, pid is" + child.pid);
+      console.log(
+        `[EmailSearchTask] Child process started for task ${taskId}, pid: ${child.pid}`
+      );
       child.postMessage(JSON.stringify({ action: "searchEmail", data: data }), [
         port1,
       ]);
@@ -193,7 +215,6 @@ export class EmailSearchTaskModule extends BaseModule {
 
     child.stdout?.on("data", (data) => {
       WriteLog(runLogfile, data);
-      // child.kill()
     });
     child.stderr?.on("data", (data) => {
       const ingoreStr = [
@@ -202,35 +223,51 @@ export class EmailSearchTaskModule extends BaseModule {
         "Most NODE_OPTIONs are not supported in packaged apps",
       ];
       if (!ingoreStr.some((value) => data.includes(value))) {
-        // seModel.saveTaskerrorlog(taskId,data)
         WriteLog(errorLogfile, data);
-        //this.emailSeachTaskModule.updateTaskStatus(taskId,EmailsearchTaskStatus.Error)
-        //child.kill()
       }
     });
+    // Handle child process errors (e.g., process can't start, crashes)
+    child.on("error", (err) => {
+      console.error(
+        `[EmailSearchTask] Child process error for task ${taskId}:`,
+        err
+      );
+      clearTimeout(processTimeoutHandle);
+      EmailSearchTaskModule.processMap.delete(taskId);
+      this.updateTaskStatus(taskId, TaskStatus.Error).catch((updateErr) => {
+        console.error(
+          `[EmailSearchTask] Failed to update task ${taskId} status after error:`,
+          updateErr
+        );
+      });
+    });
     child.on("exit", async (code) => {
+      clearTimeout(processTimeoutHandle);
       // Remove from process map on exit
       EmailSearchTaskModule.processMap.delete(taskId);
       try {
         if (code !== 0) {
-          console.error(`Child process exited with code ${code}`);
+          console.error(
+            `[EmailSearchTask] Child process for task ${taskId} exited with code ${code}`
+          );
           await this.updateTaskStatus(taskId, TaskStatus.Error);
         } else {
-          console.log("Child process exited successfully");
+          console.log(
+            `[EmailSearchTask] Child process for task ${taskId} exited successfully`
+          );
           await this.updateTaskStatus(taskId, TaskStatus.Complete);
         }
       } catch (error) {
         console.error(
-          `Failed to update email search task ${taskId} status after child exit:`,
+          `[EmailSearchTask] Failed to update task ${taskId} status after child exit:`,
           error
         );
       }
     });
-    child.on("message", (message: unknown) => {
+    child.on("message", async (message: unknown) => {
       try {
         // Check if this is an AI enrichment request from the child process
-        const typedMessage =
-          parseTypedChildMessage<EmailAiRequest>(message);
+        const typedMessage = parseTypedChildMessage<EmailAiRequest>(message);
         if (
           typedMessage.kind === "parsed" &&
           typedMessage.data.type === "EMAIL_AI_ENRICHMENT_REQUEST"
@@ -267,7 +304,13 @@ export class EmailSearchTaskModule extends BaseModule {
               );
             });
           }
-          //child.kill()
+        } else if (childdata.action == "searcherror") {
+          // Child process reported a search error - update task status
+          console.error(
+            `[EmailSearchTask] Search error from child for task ${taskId}:`,
+            childdata.data
+          );
+          await this.updateTaskStatus(taskId, TaskStatus.Error);
         }
       } catch (error) {
         console.error("Failed to parse message from child process:", error);
@@ -287,11 +330,12 @@ export class EmailSearchTaskModule extends BaseModule {
     if (!child) {
       // Process already exited but DB status is stale — just fix the status
       console.warn(
-        `No running process for task ${taskId}, marking as cancelled in DB`
+        `[EmailSearchTask] No running process for task ${taskId}, marking as cancelled in DB`
       );
       await this.updateTaskStatus(taskId, TaskStatus.Cancel);
       return;
     }
+    console.log(`[EmailSearchTask] Killing child process for task ${taskId}`);
     child.kill();
     EmailSearchTaskModule.processMap.delete(taskId);
     await this.updateTaskStatus(taskId, TaskStatus.Cancel);
@@ -306,6 +350,7 @@ export class EmailSearchTaskModule extends BaseModule {
     if (EmailSearchTaskModule.processMap.has(taskId)) {
       throw new Error("Task is already running");
     }
+    console.log(`[EmailSearchTask] Starting task ${taskId}`);
     await this.updateTaskStatus(taskId, TaskStatus.Processing);
     this.searchEmail(taskId);
   }

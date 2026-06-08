@@ -185,14 +185,26 @@ if (parentPort) {
           return;
         }
         const emailSearchModel = new EmailSearch();
-        await emailSearchModel.searchEmail(userEmaildata, (res) => {
-          const message: ProcessMessage<EmailResult> = {
-            action: "saveres",
-            data: res,
-          };
+        try {
+          await emailSearchModel.searchEmail(userEmaildata, (res) => {
+            const message: ProcessMessage<EmailResult> = {
+              action: "saveres",
+              data: res,
+            };
 
-          parentPort.postMessage(JSON.stringify(message));
-        });
+            parentPort.postMessage(JSON.stringify(message));
+          });
+          console.log("[taskCode] searchEmail completed successfully");
+        } catch (error) {
+          const errMsg = error instanceof Error ? error.message : String(error);
+          console.error(`[taskCode] searchEmail failed: ${errMsg}`);
+          // Send error message so main process knows the task failed
+          const errorMessage: ProcessMessage<{ error: string }> = {
+            action: "searcherror",
+            data: { error: errMsg },
+          };
+          parentPort.postMessage(JSON.stringify(errorMessage));
+        }
         break;
       }
       case "aiRecoveryResponse": {
