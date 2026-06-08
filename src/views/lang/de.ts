@@ -268,6 +268,17 @@ export default {
     minutes_ago: "Vor {count}m",
     hours_ago: "Vor {count}h",
     resend_message: "Nachricht erneut senden",
+    queue_title: "Nachrichten in der Warteschlange",
+    queue_item_label: "Nachricht {index}: {preview}",
+    queue_remove: "Entfernen",
+    queue_clear_all: "Alle löschen",
+    queue_empty: "Keine Nachrichten in der Warteschlange",
+    queue_auto_dispatch:
+      "Nachrichten werden automatisch gesendet, nachdem die aktuelle Antwort abgeschlossen ist.",
+    queue_confirm_clear:
+      "Es befinden sich Nachrichten in der Warteschlange. Diese löschen?",
+    queue_confirm_switch:
+      "Es befinden sich Nachrichten in der Warteschlange. Verwerfen und Konversation wechseln?",
   },
   notifications: {
     cloudflare_protection_detected: "Cloudflare-Schutz erkannt",

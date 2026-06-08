@@ -561,12 +561,63 @@ class="message-bubble" :class="{
       </div>
     </div>
 
+    <!-- Message Queue Panel -->
+    <div v-if="messageQueue.length > 0" class="message-queue-panel">
+      <div class="queue-panel-header">
+        <v-icon size="small" class="mr-1" color="primary">mdi-message-text-clock</v-icon>
+        <span class="queue-panel-title">
+          {{ t('knowledge.queue_title') || 'Queued messages' }}
+          <v-chip size="x-small" variant="tonal" color="primary" class="ml-1">
+            {{ messageQueue.length }}
+          </v-chip>
+        </span>
+        <v-spacer />
+        <v-btn
+          icon
+          size="x-small"
+          variant="text"
+          color="error"
+          @click="handleClearQueue()"
+          :title="t('knowledge.queue_clear_all') || 'Clear all'"
+        >
+          <v-icon size="small">mdi-delete-sweep</v-icon>
+        </v-btn>
+      </div>
+      <div class="queue-panel-hint">
+        {{ t('knowledge.queue_auto_dispatch') || 'Messages will be sent automatically after the current response completes.' }}
+      </div>
+      <div class="queue-panel-items">
+        <div
+          v-for="(item, idx) in messageQueue"
+          :key="item.id"
+          class="queue-item"
+        >
+          <span class="queue-item-index">{{ idx + 1 }}.</span>
+          <span class="queue-item-preview">{{ truncateMessage(item.content, 60) }}</span>
+          <span v-if="item.uploadedFiles.length > 0" class="queue-item-attachment">
+            <v-icon size="x-small">mdi-paperclip</v-icon>
+            {{ item.uploadedFiles.length }}
+          </span>
+          <v-btn
+            icon
+            size="x-small"
+            variant="text"
+            density="compact"
+            @click="removeQueuedMessage(item.id)"
+            :title="t('knowledge.queue_remove') || 'Remove'"
+          >
+            <v-icon size="x-small">mdi-close</v-icon>
+          </v-btn>
+        </div>
+      </div>
+    </div>
+
     <!-- Chat Input -->
     <div class="chat-input">
       <v-textarea
         ref="inputField"
         v-model="inputMessage"
-        :placeholder="t('knowledge.type_message_placeholder')"
+        :placeholder="isLoading ? t('knowledge.type_message_placeholder') : t('knowledge.type_message_placeholder')"
         rows="1"
         auto-grow
         max-rows="4"
@@ -579,7 +630,6 @@ class="message-bubble" :class="{
         @keydown.up="handleSlashArrowUp"
         @keydown.esc="handleSlashEscape"
         @keydown.tab="handleSlashTab"
-        :disabled="isLoading"
       >
         <template v-slot:append-inner>
           <v-btn
@@ -587,7 +637,7 @@ class="message-bubble" :class="{
             size="small"
             variant="text"
             color="primary"
-            :disabled="isLoading || selectedUploadFiles.length >= MAX_UPLOAD_FILES"
+            :disabled="isUploadingFiles || selectedUploadFiles.length >= MAX_UPLOAD_FILES"
             :loading="isUploadingFiles"
             @click="triggerFilePicker"
             :title="t('knowledge.select_files')"
@@ -595,15 +645,24 @@ class="message-bubble" :class="{
             <v-icon size="small">mdi-paperclip</v-icon>
           </v-btn>
           <v-btn
+            v-if="isLoading"
+            icon
+            size="small"
+            color="error"
+            @click="handleStopStream()"
+            :title="t('knowledge.stop_generating') || 'Stop generating'"
+          >
+            <v-icon>mdi-stop</v-icon>
+          </v-btn>
+          <v-btn
+            v-else
             icon
             size="small"
             color="primary"
-            :disabled="(!inputMessage.trim() && selectedUploadFiles.length === 0) && !isLoading"
-            :loading="false"
-            @click="isLoading ? handleStopStream() : handleSendMessage()"
-            :title="isLoading ? (t('knowledge.stop_generating') || 'Stop generating') : ''"
+            :disabled="!inputMessage.trim() && selectedUploadFiles.length === 0"
+            @click="handleSendMessage()"
           >
-            <v-icon>{{ isLoading ? 'mdi-stop' : 'mdi-send' }}</v-icon>
+            <v-icon>mdi-send</v-icon>
           </v-btn>
         </template>
       </v-textarea>
@@ -770,6 +829,15 @@ const MESSAGE_TYPE = {
     PLAN_EXECUTE_RESUME: MessageType.PLAN_EXECUTE_RESUME
 } as const;
 
+// Queued message for the FIFO message queue
+interface QueuedChatMessage {
+  id: string;
+  content: string;
+  uploadedFiles: UploadedFilePayload[];
+  attachments: LLMImageAttachmentPayload[];
+  enqueuedAt: number;
+}
+
 type SlashCommandDefinition = {
   name: '/skills';
   description: string;
@@ -858,6 +926,9 @@ const showMCPToolManager = ref(false);
 const activeStreamConversationId = ref<string | undefined>(undefined);
 const showSlashMenu = ref(false);
 const selectedSlashIndex = ref(0);
+
+// FIFO message queue for follow-up messages during streaming
+const messageQueue = ref<QueuedChatMessage[]>([]);
 
 // File operation badge state: conversationId → records
 const fileOps = ref<Map<string, readonly FileOperationRecord[]>>(new Map());
@@ -1320,9 +1391,17 @@ async function loadConversations() {
  * Handle conversation selection
  */
 async function handleSelectConversation(selectedConversationId: string) {
+  // Confirm if there are queued messages
+  if (messageQueue.value.length > 0) {
+    if (!confirm(t('knowledge.queue_confirm_switch') || 'There are queued messages. Discard them and switch conversation?')) {
+      return;
+    }
+    clearMessageQueue();
+  }
+
   // Clear active stream tracking when switching conversations
   activeStreamConversationId.value = undefined;
-  
+
   conversationId.value = selectedConversationId;
   showConversationsDialog.value = false;
   await loadChatHistory();
@@ -1745,6 +1824,8 @@ async function sendMessage(
           if (activeStreamConversationId.value === capturedId) {
             activeStreamConversationId.value = undefined;
           }
+          // Auto-dispatch next queued message after natural completion
+          processNextQueuedMessage();
         }, 0);
       },
       streamConversationId,
@@ -1798,64 +1879,119 @@ async function sendMessage(
 }
 
 /**
- * Send a message to the AI from the input box
+ * Build a QueuedChatMessage from current input state (file-to-base64 conversion).
+ * Returns null if input is invalid or all files are rejected.
+ */
+async function buildOutgoingMessage(): Promise<QueuedChatMessage | null> {
+  const trimmed = inputMessage.value.trim();
+  if (showSlashMenu.value && trimmed.startsWith('/')) return null;
+  if (!trimmed && selectedUploadFiles.value.length === 0) return null;
+
+  const uploadedFiles: UploadedFilePayload[] = [];
+  const attachments: LLMImageAttachmentPayload[] = [];
+  let finalMessage =
+    trimmed.length > MAX_TOTAL_MESSAGE_CHARS
+      ? trimmed.slice(0, MAX_TOTAL_MESSAGE_CHARS)
+      : trimmed;
+
+  for (const file of selectedUploadFiles.value) {
+    if (file.size > MAX_UPLOAD_FILE_BYTES) continue;
+    if (!isSupportedAttachmentFile(file)) continue;
+
+    const mimeType = resolveAttachmentMimeType(file);
+
+    const buf = await file.arrayBuffer();
+    const contentBase64 = arrayBufferToBase64(buf);
+    uploadedFiles.push({
+      fileName: file.name,
+      mimeType,
+      sizeBytes: file.size,
+      contentBase64,
+    });
+    if (mimeType.startsWith('image/')) {
+      attachments.push({
+        type: 'image',
+        mediaType: mimeType,
+        dataBase64: contentBase64,
+        detail: 'auto',
+      });
+    }
+  }
+
+  if (!finalMessage.trim()) {
+    if (attachments.length > 0) {
+      finalMessage = 'Please analyze attached file(s).';
+    } else {
+      streamError.value = t('knowledge.upload_failed_file_too_large', { name: selectedUploadFiles.value.map(f => f.name).join(', '), maxSize: formatBytes(MAX_UPLOAD_FILE_BYTES) })
+        || `All selected files exceed the ${formatBytes(MAX_UPLOAD_FILE_BYTES)} size limit or are unsupported.`;
+      return null;
+    }
+  }
+
+  return {
+    id: `queued-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    content: finalMessage,
+    uploadedFiles,
+    attachments,
+    enqueuedAt: Date.now(),
+  };
+}
+
+/**
+ * Remove a single item from the message queue by id
+ */
+function removeQueuedMessage(id: string): void {
+  messageQueue.value = messageQueue.value.filter(m => m.id !== id);
+}
+
+/**
+ * Clear all queued messages
+ */
+function clearMessageQueue(): void {
+  messageQueue.value = [];
+}
+
+/**
+ * Handle clearing the queue via UI button
+ */
+function handleClearQueue(): void {
+  clearMessageQueue();
+}
+
+/**
+ * Process the next queued message (called after stream completes successfully)
+ */
+function processNextQueuedMessage(): void {
+  if (messageQueue.value.length === 0) return;
+  const next = messageQueue.value[0];
+  messageQueue.value = messageQueue.value.slice(1);
+  void sendMessage(next.content, next.uploadedFiles, next.attachments);
+}
+
+/**
+ * Send a message to the AI from the input box.
+ * If a stream is active, the message is enqueued for auto-dispatch after completion.
  */
 async function handleSendMessage() {
-  const trimmed = inputMessage.value.trim();
-  if (showSlashMenu.value && trimmed.startsWith('/')) return;
-  if (!trimmed && selectedUploadFiles.value.length === 0) return;
   if (isUploadingFiles.value) return;
 
   isUploadingFiles.value = true;
   streamError.value = null;
 
   try {
-    const uploadedFiles: UploadedFilePayload[] = [];
-    const attachments: LLMImageAttachmentPayload[] = [];
-    let finalMessage =
-      trimmed.length > MAX_TOTAL_MESSAGE_CHARS
-        ? trimmed.slice(0, MAX_TOTAL_MESSAGE_CHARS)
-        : trimmed;
+    const outgoing = await buildOutgoingMessage();
+    if (!outgoing) return;
 
-    for (const file of selectedUploadFiles.value) {
-      if (file.size > MAX_UPLOAD_FILE_BYTES) continue;
-      if (!isSupportedAttachmentFile(file)) continue;
-
-      const mimeType = resolveAttachmentMimeType(file);
-
-      const buf = await file.arrayBuffer();
-      const contentBase64 = arrayBufferToBase64(buf);
-      uploadedFiles.push({
-        fileName: file.name,
-        mimeType,
-        sizeBytes: file.size,
-        contentBase64,
-      });
-      if (mimeType.startsWith('image/')) {
-        attachments.push({
-          type: 'image',
-          mediaType: mimeType,
-          dataBase64: contentBase64,
-          detail: 'auto',
-        });
-      }
-    }
-
-    if (!finalMessage.trim()) {
-      if (attachments.length > 0) {
-        finalMessage = 'Please analyze attached file(s).';
-      } else {
-        streamError.value = t('knowledge.upload_failed_file_too_large', { name: selectedUploadFiles.value.map(f => f.name).join(', '), maxSize: formatBytes(MAX_UPLOAD_FILE_BYTES) })
-          || `All selected files exceed the ${formatBytes(MAX_UPLOAD_FILE_BYTES)} size limit or are unsupported.`;
-        return;
-      }
-    }
-
-    // Clear inputs after building the request payload.
+    // Clear inputs after building the payload
     inputMessage.value = '';
     selectedUploadFiles.value = [];
 
-    await sendMessage(finalMessage, uploadedFiles, attachments);
+    if (isLoading.value) {
+      // Stream is active — enqueue for auto-dispatch
+      messageQueue.value = [...messageQueue.value, outgoing];
+    } else {
+      await sendMessage(outgoing.content, outgoing.uploadedFiles, outgoing.attachments);
+    }
   } finally {
     isUploadingFiles.value = false;
   }
@@ -1939,13 +2075,16 @@ async function handleResendMessage(message: ChatMessage): Promise<void> {
 async function handleNewConversation() {
   // Clear active stream tracking when starting new conversation
   activeStreamConversationId.value = undefined;
-  
+
   // Reset conversation ID to start fresh
   conversationId.value = undefined;
-  
+
   // Clear all messages
   messages.value = [];
-  
+
+  // Clear message queue
+  clearMessageQueue();
+
   // Reset tool-related states
   isExecutingTool.value = false;
   currentToolName.value = '';
@@ -2111,6 +2250,12 @@ function handleSkillPermissionDeny(message: ChatMessage): void {
  * Clear chat history
  */
 async function handleClearChat() {
+  if (messageQueue.value.length > 0) {
+    if (!confirm(t('knowledge.queue_confirm_clear') || 'There are queued messages. Clear them?')) {
+      return;
+    }
+    clearMessageQueue();
+  }
   if (!confirm(t('knowledge.clear_chat_confirm'))) return;
 
   try {
@@ -3400,6 +3545,82 @@ onMounted(() => {
 .file-ops-body {
   padding: 4px 16px 10px;
   border-top: 1px solid rgba(var(--v-border-color), 0.08);
+}
+
+/* Message Queue Panel Styles */
+.message-queue-panel {
+  border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  background-color: rgba(var(--v-theme-primary), 0.04);
+  padding: 0;
+  max-height: 200px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.queue-panel-header {
+  display: flex;
+  align-items: center;
+  padding: 6px 16px;
+  gap: 4px;
+}
+
+.queue-panel-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: rgb(var(--v-theme-primary));
+  display: flex;
+  align-items: center;
+}
+
+.queue-panel-hint {
+  font-size: 11px;
+  color: rgb(var(--v-theme-on-surface-variant));
+  padding: 0 16px 4px;
+  opacity: 0.8;
+}
+
+.queue-panel-items {
+  overflow-y: auto;
+  max-height: 140px;
+  padding: 0 8px 8px;
+}
+
+.queue-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background-color: rgb(var(--v-theme-surface));
+  border-radius: 6px;
+  margin-bottom: 4px;
+  font-size: 12px;
+  border: 1px solid rgba(var(--v-border-color), 0.12);
+}
+
+.queue-item-index {
+  color: rgb(var(--v-theme-primary));
+  font-weight: 600;
+  flex-shrink: 0;
+  width: 18px;
+}
+
+.queue-item-preview {
+  flex: 1;
+  min-width: 0;
+  color: rgb(var(--v-theme-on-surface));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.queue-item-attachment {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  color: rgb(var(--v-theme-on-surface-variant));
+  font-size: 11px;
+  flex-shrink: 0;
 }
 </style>
 
