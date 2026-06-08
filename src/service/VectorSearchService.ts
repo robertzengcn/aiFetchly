@@ -4,6 +4,15 @@ import { EmbeddingImpl } from "@/modules/interface/EmbeddingImpl";
 import { RAGDocumentModule } from "@/modules/RAGDocumentModule";
 import { RAGChunkModule } from "@/modules/RAGChunkModule";
 import { RagConfigApi } from "@/api/ragConfigApi";
+import {
+  RagSearchCandidate,
+  VECTOR_CANDIDATE_LIMIT,
+  KEYWORD_CANDIDATE_LIMIT,
+  DEFAULT_VECTOR_WEIGHT,
+  DEFAULT_KEYWORD_WEIGHT,
+  IDENTIFIER_VECTOR_WEIGHT,
+  IDENTIFIER_KEYWORD_WEIGHT,
+} from "./RagSearchTypes";
 
 export interface SearchResult {
   chunkId: number;
@@ -192,6 +201,133 @@ export class VectorSearchService {
         }`
       );
     }
+  }
+
+  /**
+   * Hybrid retrieval: collects vector and keyword candidates, merges and
+   * dedupes them, and returns ranked candidates for rerank or direct use.
+   */
+  async searchCandidates(
+    query: string,
+    options: {
+      vectorLimit?: number;
+      keywordLimit?: number;
+      maxDistance?: number;
+      documentIds?: number[];
+    } = {}
+  ): Promise<RagSearchCandidate[]> {
+    const vectorLimit = options.vectorLimit ?? VECTOR_CANDIDATE_LIMIT;
+    const keywordLimit = options.keywordLimit ?? KEYWORD_CANDIDATE_LIMIT;
+    const maxDistance = options.maxDistance ?? 2.0;
+
+    // 1. Collect vector candidates
+    const vectorResults = await this.search(query, {
+      limit: vectorLimit,
+      maxDistance,
+    });
+
+    // 2. Collect keyword candidates
+    const keywordHits = await this.chunkModule.searchChunksByKeywords(query, {
+      limit: keywordLimit,
+      documentIds: options.documentIds,
+    });
+
+    // 3. Build candidate maps keyed by chunkId for merge/dedupe
+    const candidateMap = new Map<number, RagSearchCandidate>();
+
+    // Determine if query looks like an identifier (email, URL, date, etc.)
+    const isIdentifierLike = this.isIdentifierQuery(query);
+    const vectorWeight = isIdentifierLike
+      ? IDENTIFIER_VECTOR_WEIGHT
+      : DEFAULT_VECTOR_WEIGHT;
+    const keywordWeight = isIdentifierLike
+      ? IDENTIFIER_KEYWORD_WEIGHT
+      : DEFAULT_KEYWORD_WEIGHT;
+
+    // Add vector candidates
+    for (const result of vectorResults) {
+      const normalizedVectorScore = Math.max(0, Math.min(1, result.score));
+      candidateMap.set(result.chunkId, {
+        chunkId: result.chunkId,
+        documentId: result.documentId,
+        content: result.content,
+        source: "vector",
+        vectorDistance: 1 - result.score,
+        vectorScore: normalizedVectorScore,
+        combinedScore: vectorWeight * normalizedVectorScore,
+        metadata: result.metadata,
+        document: result.document,
+      });
+    }
+
+    // Add keyword candidates (merge with existing or create new)
+    for (const hit of keywordHits) {
+      const existing = candidateMap.get(hit.id);
+      const normalizedKeywordScore = Math.min(1, hit.score / 10);
+
+      if (existing) {
+        // Merge: this chunk appeared in both vector and keyword results
+        existing.source = "hybrid";
+        existing.keywordScore = normalizedKeywordScore;
+        existing.combinedScore =
+          vectorWeight * (existing.vectorScore ?? 0) +
+          keywordWeight * normalizedKeywordScore;
+      } else {
+        // Need to fetch document info for keyword-only hits
+        const chunks = await this.chunkModule.getChunksByIds([hit.id]);
+        const chunk = chunks[0];
+        if (!chunk) continue;
+
+        candidateMap.set(hit.id, {
+          chunkId: hit.id,
+          documentId: hit.documentId,
+          content: hit.content,
+          source: "keyword",
+          keywordScore: normalizedKeywordScore,
+          combinedScore: keywordWeight * normalizedKeywordScore,
+          metadata: {
+            chunkIndex: hit.chunkIndex,
+          },
+          document: chunk.document
+            ? {
+                id: chunk.document.id,
+                name: chunk.document.name,
+                title: chunk.document.title,
+                fileType: chunk.document.fileType,
+              }
+            : { id: hit.documentId, name: "Unknown", fileType: "unknown" },
+        });
+      }
+    }
+
+    // 4. Sort by combined score descending
+    const candidates = Array.from(candidateMap.values());
+    candidates.sort((a, b) => b.combinedScore - a.combinedScore);
+
+    return candidates;
+  }
+
+  /**
+   * Detect if a query looks like an identifier (email, URL, date, phone,
+   * numeric ID, quoted phrase, or camelCase/snake_case symbol) that should
+   * shift weight toward keyword results.
+   */
+  private isIdentifierQuery(query: string): boolean {
+    const trimmed = query.trim();
+    if (trimmed.length === 0) return false;
+
+    const identifierPatterns: RegExp[] = [
+      /@/, // email
+      /https?:\/\//, // URL
+      /^\d{4}[-/]\d{2}[-/]\d{2}/, // date
+      /\+\d{1,3}[\s-]?\d{3,}/, // phone
+      /^\d{5,}$/, // long numeric ID
+      /^".*"$/, // quoted phrase
+      /[a-z][A-Z]/, // camelCase
+      /_/, // snake_case
+    ];
+
+    return identifierPatterns.some((p) => p.test(trimmed));
   }
 
   private normalizeModelKey(modelName: string): string {
