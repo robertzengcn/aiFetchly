@@ -1,24 +1,28 @@
-import { describe, expect, test, vi, beforeEach, afterEach } from "vitest";
+import { describe, expect, test, vi, afterEach, type Mock } from "vitest";
 import { SqliteDb } from "@/config/SqliteDb";
 
-/**
- * Access private static fields on SqliteDb for test manipulation.
- * This lets us reset singleton state between tests without touching production code.
- */
-type SqliteDbInternals = typeof SqliteDb & {
+// ---------------------------------------------------------------------------
+// Helpers to access SqliteDb private static fields for test setup/teardown.
+// Using `any` here is intentional — we're testing internals that are
+// intentionally private in production.
+// ---------------------------------------------------------------------------
+
+/** Shape of the private static state we need to manipulate in tests. */
+interface StaticState {
   instance: SqliteDb | null;
   currentDbPath: string | null;
   initPromise: Promise<void> | null;
-};
+}
 
-function internals(): SqliteDbInternals {
-  return SqliteDb as unknown as SqliteDbInternals;
+function getStaticState(): StaticState {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return SqliteDb as any;
 }
 
 /** Save and restore SqliteDb static state around a test block. */
 function withResetSingleton(fn: () => Promise<void>): () => Promise<void> {
   return async () => {
-    const s = internals();
+    const s = getStaticState();
     const prevInstance = s.instance;
     const prevPath = s.currentDbPath;
     const prevPromise = s.initPromise;
@@ -36,12 +40,15 @@ function withResetSingleton(fn: () => Promise<void>): () => Promise<void> {
 function createMockSqliteDb(overrides?: {
   isInitialized?: boolean;
   initializeFn?: () => Promise<void>;
-}): { sqliteDb: SqliteDb; initializeMock: ReturnType<typeof vi.fn> } {
-  const initializeMock =
-    overrides?.initializeFn?.bind(null) ??
-    vi.fn(async () => {
-      /* noop */
-    });
+}): {
+  sqliteDb: SqliteDb;
+  initializeMock: Mock<() => Promise<void>>;
+} {
+  const initializeMock = overrides?.initializeFn
+    ? vi.fn(overrides.initializeFn)
+    : vi.fn(async () => {
+        /* noop */
+      });
 
   const connection = {
     isInitialized: overrides?.isInitialized ?? false,
@@ -55,19 +62,18 @@ function createMockSqliteDb(overrides?: {
 }
 
 // ---------------------------------------------------------------------------
-// Tests
+// SqliteDb.ensureInitialized
 // ---------------------------------------------------------------------------
 
 describe("SqliteDb.ensureInitialized", () => {
-  beforeEach(() => {
+  afterEach(() => {
     vi.restoreAllMocks();
   });
 
   test(
     "throws if no singleton instance exists",
     withResetSingleton(async () => {
-      const s = internals();
-      s.instance = null;
+      getStaticState().instance = null;
 
       await expect(SqliteDb.ensureInitialized()).rejects.toThrow(
         "SqliteDb not created yet"
@@ -79,7 +85,7 @@ describe("SqliteDb.ensureInitialized", () => {
     "returns immediately when DataSource is already initialized",
     withResetSingleton(async () => {
       const { sqliteDb } = createMockSqliteDb({ isInitialized: true });
-      internals().instance = sqliteDb;
+      getStaticState().instance = sqliteDb;
 
       // Should resolve without calling initialize()
       await SqliteDb.ensureInitialized();
@@ -95,7 +101,7 @@ describe("SqliteDb.ensureInitialized", () => {
       const { sqliteDb, initializeMock } = createMockSqliteDb({
         isInitialized: false,
       });
-      internals().instance = sqliteDb;
+      getStaticState().instance = sqliteDb;
 
       await SqliteDb.ensureInitialized();
 
@@ -117,7 +123,9 @@ describe("SqliteDb.ensureInitialized", () => {
         isInitialized: false,
         initialize: initializeMock,
       };
-      internals().instance = { connection } as unknown as SqliteDb;
+      getStaticState().instance = {
+        connection,
+      } as unknown as SqliteDb;
 
       // Fire 5 concurrent ensureInitialized calls before the first resolves
       const promises = Array.from({ length: 5 }, () =>
@@ -142,13 +150,13 @@ describe("SqliteDb.ensureInitialized", () => {
       const { sqliteDb, initializeMock } = createMockSqliteDb({
         isInitialized: false,
       });
-      internals().instance = sqliteDb;
+      getStaticState().instance = sqliteDb;
 
       await SqliteDb.ensureInitialized();
       expect(initializeMock).toHaveBeenCalledOnce();
 
       // After success, initPromise should be nulled out
-      expect(internals().initPromise).toBeNull();
+      expect(getStaticState().initPromise).toBeNull();
     })
   );
 
@@ -162,15 +170,17 @@ describe("SqliteDb.ensureInitialized", () => {
         isInitialized: false,
         initialize: initializeMock,
       };
-      internals().instance = { connection } as unknown as SqliteDb;
+      getStaticState().instance = {
+        connection,
+      } as unknown as SqliteDb;
 
-      // Both concurrent callers should get the same rejection
+      // Caller should get the rejection
       await expect(SqliteDb.ensureInitialized()).rejects.toThrow(
         "db init failed"
       );
 
       // Promise should be cleaned up even on failure
-      expect(internals().initPromise).toBeNull();
+      expect(getStaticState().initPromise).toBeNull();
     })
   );
 });
@@ -180,10 +190,6 @@ describe("SqliteDb.ensureInitialized", () => {
 // ---------------------------------------------------------------------------
 
 describe("BaseModule.ensureConnection delegates to SqliteDb.ensureInitialized", () => {
-  // We test the delegation pattern by mocking SqliteDb.ensureInitialized.
-  // Importing BaseModule after the mock is set up ensures the module under test
-  // calls our mock.
-
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -193,9 +199,9 @@ describe("BaseModule.ensureConnection delegates to SqliteDb.ensureInitialized", 
       .spyOn(SqliteDb, "ensureInitialized")
       .mockResolvedValue(undefined);
 
-    // BaseModule is abstract; create a minimal concrete subclass
     const { BaseModule: BM } = await import("@/modules/baseModule");
 
+    // BaseModule is abstract; create a minimal concrete subclass
     class TestModule extends BM {
       public testEnsure() {
         return this.ensureConnection();
@@ -283,7 +289,7 @@ describe("EmailSearchTaskModule.resetOrphanedProcessingTasks", () => {
     const listMock = vi.fn().mockResolvedValue({ records: [], total: 0 });
     vi.spyOn(
       EmailsearchTaskModel.prototype,
-      "listSearchtask" as keyof EmailsearchTaskModel
+      "listSearchtask" as keyof typeof EmailsearchTaskModel.prototype
     ).mockImplementation(listMock);
 
     const mod = new EmailSearchTaskModule();
