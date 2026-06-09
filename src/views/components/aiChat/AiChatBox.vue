@@ -1190,6 +1190,12 @@ function canResendMessage(message: ChatMessage): boolean {
  * Validate if a stream chunk belongs to the active conversation
  */
 function isValidStreamChunk(chunk: ChatStreamChunk, activeId: string | undefined): boolean {
+  // After a user-initiated stop, reject ALL chunks — the main process may
+  // still send events from a continuation stream before the abort propagates.
+  if (wasStoppedByUser.value) {
+    return false;
+  }
+
   // Always allow conversation_start events - they establish the conversation ID
   if (chunk.eventType === 'conversation_start') {
     return true;

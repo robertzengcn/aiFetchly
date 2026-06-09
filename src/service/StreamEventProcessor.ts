@@ -146,6 +146,11 @@ export class StreamEventProcessor {
     return this.state.pendingToolCalls.size > 0;
   }
 
+  /** True when the user has requested a stop via the stop button. */
+  private isAborted(): boolean {
+    return this.state.abortSignal?.aborted === true;
+  }
+
   /**
    * Drop main-process references (abort controller + processor) once the
    * permission wait is over and no tool calls are in flight.
@@ -294,6 +299,12 @@ export class StreamEventProcessor {
    * Process a single stream event
    */
   processEvent(streamEvent: StreamEvent): void {
+    // If the user stopped the stream, discard all subsequent events from
+    // any continuation stream so the renderer is not disturbed.
+    if (this.isAborted()) {
+      return;
+    }
+
     const eventType = streamEvent.event;
 
     // Extract content from the event data
@@ -541,6 +552,17 @@ export class StreamEventProcessor {
 
       // Save tool result to database
       await this.saveToolResult(toolId, toolName, toolResult, toolStartMs);
+
+      // If the user stopped the stream while the tool was executing,
+      // do NOT send the result to the AI server or start a continuation stream.
+      if (this.isAborted()) {
+        console.log(
+          `Stream aborted — skipping tool result dispatch for ${toolName}`
+        );
+        this.state.pendingToolCalls.delete(toolId);
+        this.localExecutingToolIds.delete(toolId);
+        return;
+      }
 
       const deferredPermission = isDeferredSkillPermissionResult(toolResult);
 
@@ -1176,6 +1198,11 @@ export class StreamEventProcessor {
    * Send deferred completion if ready
    */
   private sendDeferredCompletionIfReady(): void {
+    if (this.isAborted()) {
+      // Frontend already handled the stop — discard the deferred completion.
+      this.state.deferredCompletionChunk = null;
+      return;
+    }
     if (this.canSendCompletion() && this.state.deferredCompletionChunk) {
       this.saveMessageToDatabase().catch((err) => {
         console.error("Error saving message on deferred completion:", err);
