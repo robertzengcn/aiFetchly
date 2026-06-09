@@ -1872,6 +1872,15 @@ function findSkillForFileExtension(ext: string): SkillDefinition | null {
   return null;
 }
 
+/**
+ * Return all built-in skill definitions (excludes user/marketplace/MCP).
+ */
+function listBuiltInSkillDefinitions(): SkillDefinition[] {
+  return Array.from(registry.values()).filter(
+    (skill) => skill.source === "built-in"
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Exports
 // ---------------------------------------------------------------------------
@@ -1883,4 +1892,5 @@ export const SkillRegistry = {
   registerSkill,
   unregisterSkill,
   findSkillForFileExtension,
+  listBuiltInSkillDefinitions,
 } as const;
