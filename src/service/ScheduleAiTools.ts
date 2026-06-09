@@ -442,7 +442,7 @@ export async function createScheduleForAi(
     savedSchedule.trigger_type === TriggerType.CRON
   ) {
     try {
-      getScheduleManager().addSchedule(savedSchedule);
+      await getScheduleManager().addSchedule(savedSchedule);
     } catch (syncError: unknown) {
       const syncMessage =
         syncError instanceof Error
