@@ -34,7 +34,7 @@ import {
   ScheduleCreateRequest,
   ScheduleUpdateRequest,
 } from "@/entityTypes/schedule-type";
-import { ListData } from "@/entityTypes/commonType";
+import { ListData, SortBy } from "@/entityTypes/commonType";
 import {
   ExecutionStatus,
   TriggerType as LogTriggerType,
@@ -250,11 +250,14 @@ export async function listSchedulesForAi(args: unknown): Promise<
       return validationFailure(parsed.error);
     }
 
-    const { page, size } = parsed.data;
+    const { page, size, sort_key, sort_order } = parsed.data;
     const module = getScheduleModule();
+    const sort: SortBy | undefined =
+      sort_key && sort_order ? { key: sort_key, order: sort_order } : undefined;
     const result: ListData<ScheduleTaskEntity> = await module.listSchedules(
       page,
-      size
+      size,
+      sort
     );
 
     const schedules = result.records.map(toSafeSchedulePayload);
