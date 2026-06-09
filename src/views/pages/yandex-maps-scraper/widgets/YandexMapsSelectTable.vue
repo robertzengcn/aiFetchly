@@ -129,8 +129,8 @@ onMounted(() => {
   }
 });
 
-watch(selected, (newValue: YandexMapsHistoryRecord | undefined) => {
-  emit("change", newValue ? [newValue] : undefined);
+watch(selected, (newValue) => {
+  emit("change", newValue || undefined);
 });
 </script>
 
