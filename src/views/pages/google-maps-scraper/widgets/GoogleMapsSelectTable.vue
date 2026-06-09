@@ -129,8 +129,8 @@ onMounted(() => {
   }
 });
 
-watch(selected, (newValue: GoogleMapsHistoryRecord | undefined) => {
-  emit("change", newValue ? [newValue] : undefined);
+watch(selected, (newValue) => {
+  emit("change", newValue || undefined);
 });
 </script>
 
