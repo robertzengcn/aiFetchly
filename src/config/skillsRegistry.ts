@@ -31,6 +31,17 @@ import {
   listEmailTemplates,
   startBulkEmailSendTask,
 } from "@/service/EmailMarketingAiTools";
+import {
+  listSchedulesForAi,
+  getScheduleDetailsForAi,
+  listScheduleExecutionsForAi,
+  createScheduleForAi,
+  updateScheduleForAi,
+  deleteScheduleForAi,
+  pauseScheduleForAi,
+  resumeScheduleForAi,
+  runScheduleNowForAi,
+} from "@/service/ScheduleAiTools";
 
 // ---------------------------------------------------------------------------
 // Internal state
@@ -1447,6 +1458,375 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
           | boolean
           | undefined,
       });
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  // ── Schedule Management Skills ──────────────────────────────────────────
+  {
+    name: "list_schedules",
+    description:
+      "List all automation schedules in the application. Returns paginated schedule data including name, task type, cron expression, active status, execution counts, and next run time. Use this to inspect existing schedules or find a schedule to update.",
+    parameters: {
+      type: "object",
+      properties: {
+        page: {
+          type: "number",
+          description: "Page number (0-based)",
+          default: 0,
+        },
+        size: {
+          type: "number",
+          description: "Page size (1-100)",
+          default: 20,
+        },
+      },
+      required: [],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await listSchedulesForAi(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "get_schedule_details",
+    description:
+      "Get full details for a single schedule by ID. Returns schedule metadata, cron expression, status, execution statistics, last error message, and next run time. Use this before updating or deleting a schedule.",
+    parameters: {
+      type: "object",
+      properties: {
+        schedule_id: {
+          type: "number",
+          description: "The schedule ID to look up",
+        },
+      },
+      required: ["schedule_id"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await getScheduleDetailsForAi(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "list_schedule_executions",
+    description:
+      "List execution history for schedules. Returns paginated execution records with status, duration, trigger type, and timestamps. Filter by schedule ID, status, or trigger type. Use this to diagnose why a schedule failed or check recent execution health.",
+    parameters: {
+      type: "object",
+      properties: {
+        schedule_id: {
+          type: "number",
+          description: "Optional schedule ID to filter",
+        },
+        page: {
+          type: "number",
+          description: "Page number (0-based)",
+          default: 0,
+        },
+        size: {
+          type: "number",
+          description: "Page size (1-100)",
+          default: 20,
+        },
+        status: {
+          type: "string",
+          enum: [
+            "pending",
+            "running",
+            "success",
+            "failed",
+            "cancelled",
+            "timeout",
+          ],
+          description: "Optional execution status filter",
+        },
+        triggered_by: {
+          type: "string",
+          enum: ["cron", "dependency", "manual"],
+          description: "Optional trigger type filter",
+        },
+      },
+      required: [],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await listScheduleExecutionsForAi(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "create_schedule",
+    description:
+      "Create a new automation schedule for an existing task. The schedule defaults to inactive (is_active: false) for safety. Supported task types: search, email_extract, buck_email, yellow_pages, google_maps, yandex_maps. Requires a valid cron expression. This action requires user confirmation because it can trigger future automation.",
+    parameters: {
+      type: "object",
+      properties: {
+        name: {
+          type: "string",
+          description: "Schedule name",
+        },
+        description: {
+          type: "string",
+          description: "Optional schedule description",
+        },
+        task_type: {
+          type: "string",
+          enum: [
+            "search",
+            "email_extract",
+            "buck_email",
+            "yellow_pages",
+            "google_maps",
+            "yandex_maps",
+          ],
+          description: "Type of task this schedule manages",
+        },
+        task_id: {
+          type: "number",
+          description: "ID of the existing task",
+        },
+        cron_expression: {
+          type: "string",
+          description: 'Cron expression (e.g. "0 9 * * 1-5")',
+        },
+        is_active: {
+          type: "boolean",
+          description: "Whether the schedule should be active immediately",
+          default: false,
+        },
+        trigger_type: {
+          type: "string",
+          enum: ["cron", "dependency", "manual"],
+          description: "Trigger type for the schedule",
+          default: "cron",
+        },
+        parent_schedule_id: {
+          type: "number",
+          description:
+            "Optional parent schedule ID for dependency-triggered schedules",
+        },
+        dependency_condition: {
+          type: "string",
+          enum: ["on_success", "on_completion", "on_failure"],
+          description:
+            "Condition for dependency-triggered schedules (when parent completes, succeeds, or fails)",
+        },
+        delay_minutes: {
+          type: "number",
+          description: "Delay in minutes (0-1440)",
+          default: 0,
+        },
+      },
+      required: ["name", "task_type", "task_id", "cron_expression"],
+    },
+    tier: "main",
+    requiresConfirmation: true,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await createScheduleForAi(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "update_schedule",
+    description:
+      "Update an existing schedule. Only provided fields are changed. If task_type or task_id changes, the new task reference is validated. If cron or activation state changes, the runtime scheduler is synchronized. This action requires user confirmation.",
+    parameters: {
+      type: "object",
+      properties: {
+        schedule_id: {
+          type: "number",
+          description: "Schedule ID to update",
+        },
+        name: {
+          type: "string",
+          description: "New schedule name",
+        },
+        description: {
+          type: "string",
+          description: "New schedule description",
+        },
+        task_type: {
+          type: "string",
+          enum: [
+            "search",
+            "email_extract",
+            "buck_email",
+            "yellow_pages",
+            "google_maps",
+            "yandex_maps",
+          ],
+          description: "New task type",
+        },
+        task_id: {
+          type: "number",
+          description: "New task ID",
+        },
+        cron_expression: {
+          type: "string",
+          description: "New cron expression",
+        },
+        is_active: {
+          type: "boolean",
+          description: "New active status",
+        },
+        trigger_type: {
+          type: "string",
+          enum: ["cron", "dependency", "manual"],
+          description: "New trigger type",
+        },
+        parent_schedule_id: {
+          type: "number",
+          description: "New parent schedule ID",
+        },
+        dependency_condition: {
+          type: "string",
+          enum: ["on_success", "on_completion", "on_failure"],
+          description: "New dependency condition",
+        },
+        delay_minutes: {
+          type: "number",
+          description: "New delay in minutes (0-1440)",
+        },
+      },
+      required: ["schedule_id"],
+    },
+    tier: "main",
+    requiresConfirmation: true,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await updateScheduleForAi(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "delete_schedule",
+    description:
+      "Delete a schedule. Schedules with child schedules cannot be deleted until the children are removed first. The runtime cron job is stopped before database deletion. This action requires user confirmation.",
+    parameters: {
+      type: "object",
+      properties: {
+        schedule_id: {
+          type: "number",
+          description: "Schedule ID to delete",
+        },
+      },
+      required: ["schedule_id"],
+    },
+    tier: "main",
+    requiresConfirmation: true,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await deleteScheduleForAi(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "pause_schedule",
+    description:
+      "Pause an active schedule. Updates the schedule status and removes the runtime cron job. The schedule can be resumed later. This action requires user confirmation.",
+    parameters: {
+      type: "object",
+      properties: {
+        schedule_id: {
+          type: "number",
+          description: "Schedule ID to pause",
+        },
+      },
+      required: ["schedule_id"],
+    },
+    tier: "main",
+    requiresConfirmation: true,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await pauseScheduleForAi(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "resume_schedule",
+    description:
+      "Resume a paused schedule. Updates the schedule status and re-adds the runtime cron job if the schedule is active. This action requires user confirmation.",
+    parameters: {
+      type: "object",
+      properties: {
+        schedule_id: {
+          type: "number",
+          description: "Schedule ID to resume",
+        },
+      },
+      required: ["schedule_id"],
+    },
+    tier: "main",
+    requiresConfirmation: true,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await resumeScheduleForAi(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "run_schedule_now",
+    description:
+      "Execute an active schedule immediately instead of waiting for the next cron trigger. Uses the existing execution logging and task execution pipeline. The schedule must be active. This action requires user confirmation.",
+    parameters: {
+      type: "object",
+      properties: {
+        schedule_id: {
+          type: "number",
+          description: "Schedule ID to execute immediately",
+        },
+      },
+      required: ["schedule_id"],
+    },
+    tier: "main",
+    requiresConfirmation: true,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await runScheduleNowForAi(args);
       return {
         success: result.success,
         result: result as unknown as Record<string, unknown>,
