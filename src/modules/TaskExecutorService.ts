@@ -16,6 +16,7 @@ import { YellowPagesModule } from "./YellowPagesModule";
 import { GoogleMapsModule } from "./GoogleMapsModule";
 import { YandexMapsModule } from "./YandexMapsModule";
 import { AiMessageTaskModule } from "@/modules/AiMessageTaskModule";
+import { ScheduledAiMessageRunner } from "@/service/ScheduledAiMessageRunner";
 import type { GoogleMapsSearchInput } from "@/entityTypes/googleMapsTypes";
 import type { YandexMapsSearchInput } from "@/entityTypes/yandexMapsTypes";
 //import {getStatusName} from "@/modules/lib/function"
@@ -307,8 +308,7 @@ export class TaskExecutorService {
   }
 
   /**
-   * Execute an AI message task (Phase 1 stub).
-   * Full headless runner implementation comes in Phase 2.
+   * Execute an AI message task using the headless runner.
    */
   async executeAiMessageTask(
     taskId: number,
@@ -317,38 +317,16 @@ export class TaskExecutorService {
     try {
       console.log(`Executing AI message task ${taskId}`);
 
-      const task = await this.aiMessageTaskModule.getTask(taskId);
-      if (!task) {
-        throw new Error(`AI message task ${taskId} not found`);
-      }
+      const runner = new ScheduledAiMessageRunner();
+      const result = await runner.run(taskId, scheduleId);
 
-      // Phase 1: Stub — log execution and return task ID.
-      // Phase 2 will introduce ScheduledAiMessageRunner for full AI execution.
       console.log(
-        `AI message task ${taskId} (${task.name}) stub executed successfully`
+        `AI message task ${taskId} run completed with status: ${result.status}, run ID: ${result.runId}`
       );
 
-      await this.aiMessageTaskModule.updateLastRunResult(
-        taskId,
-        "[Phase 1 stub] Task scheduled but headless runner not yet implemented.",
-        null
-      );
-
-      return taskId;
+      return result.runId || taskId;
     } catch (error) {
       console.error(`Failed to execute AI message task ${taskId}:`, error);
-      try {
-        await this.aiMessageTaskModule.updateLastRunResult(
-          taskId,
-          null,
-          error instanceof Error ? error.message : "Unknown error"
-        );
-      } catch (updateError) {
-        console.error(
-          "Failed to update AI message task last run result:",
-          updateError
-        );
-      }
       throw error;
     }
   }
