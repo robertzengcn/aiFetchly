@@ -175,6 +175,23 @@ export class RAGDocumentModule extends BaseModule {
   }
 
   /**
+   * Check for duplicate document by name and file size
+   */
+  async checkDuplicate(
+    name: string,
+    fileSize: number
+  ): Promise<{ isDuplicate: boolean; existingDocuments: RAGDocumentEntity[] }> {
+    const matches = await this.ragDocumentModel.findByNameAndSize(
+      name,
+      fileSize
+    );
+    return {
+      isDuplicate: matches.length > 0,
+      existingDocuments: matches,
+    };
+  }
+
+  /**
    * Find document by file path
    */
   async findDocumentByPath(

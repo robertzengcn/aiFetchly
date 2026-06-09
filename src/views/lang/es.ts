@@ -255,6 +255,12 @@ export default {
       'Documento "{name}" subido y pendiente de procesamiento',
     file_saved_but_database_error:
       "Archivo guardado pero error en la base de datos",
+    // Duplicate check translations
+    duplicate_detected: "Archivos duplicados detectados",
+    duplicate_files_found:
+      "Los siguientes archivos ya existen en su biblioteca:",
+    upload_anyway: "Subir de todos modos",
+    skip_duplicates: "Omitir duplicados",
     ai_assistant: "Asistente de IA",
     type_message_placeholder:
       "Escriba un mensaje... (Shift+Enter para nueva línea)",

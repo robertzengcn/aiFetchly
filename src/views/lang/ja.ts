@@ -253,6 +253,11 @@ export default {
       "ドキュメント「{name}」がアップロードされ、処理待ちです",
     file_saved_but_database_error:
       "ファイルは保存されましたが、データベースエラーが発生しました",
+    // 重複チェック翻訳
+    duplicate_detected: "重複ファイルが検出されました",
+    duplicate_files_found: "次のファイルは既にライブラリに存在します：",
+    upload_anyway: "とにかくアップロード",
+    skip_duplicates: "重複をスキップ",
     ai_assistant: "AIアシスタント",
     type_message_placeholder: "メッセージを入力... (Shift+Enterで改行)",
     start_conversation: "AIアシスタントとの会話を開始",

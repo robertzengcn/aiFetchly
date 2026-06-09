@@ -252,6 +252,12 @@ export default {
     document_uploaded_pending_processing:
       'Document "{name}" uploaded and pending processing',
     file_saved_but_database_error: "File saved but database error",
+    // Duplicate check translations
+    duplicate_detected: "Fichiers en double détectés",
+    duplicate_files_found:
+      "Les fichiers suivants existent déjà dans votre bibliothèque :",
+    upload_anyway: "Télécharger quand même",
+    skip_duplicates: "Ignorer les doublons",
     // AI Chat translations
     ai_assistant: "AI Assistant",
     type_message_placeholder: "Type a message... (Shift+Enter for new line)",
