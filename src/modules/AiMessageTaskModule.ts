@@ -20,9 +20,7 @@ export class AiMessageTaskModule extends BaseModule {
     this.model = new AiMessageTaskModel(this.dbpath);
   }
 
-  async createTask(
-    request: CreateAiMessageTaskRequest
-  ): Promise<number> {
+  async createTask(request: CreateAiMessageTaskRequest): Promise<number> {
     await this.ensureConnection();
 
     if (!request.message || request.message.trim().length === 0) {
@@ -32,14 +30,15 @@ export class AiMessageTaskModule extends BaseModule {
       throw new Error("Name is required");
     }
 
-    const allowedTools = request.allowedTools ?? AI_MESSAGE_TASK_DEFAULTS.allowedTools;
+    const allowedTools =
+      request.allowedTools ?? AI_MESSAGE_TASK_DEFAULTS.allowedTools;
 
     const entity: Partial<AiMessageTaskEntity> = {
       name: request.name.trim(),
-      description: request.description?.trim() ?? null,
+      description: request.description?.trim() ?? undefined,
       message: request.message.trim(),
-      system_prompt: request.systemPrompt?.trim() ?? null,
-      model: request.model ?? null,
+      system_prompt: request.systemPrompt?.trim() ?? undefined,
+      model: request.model ?? undefined,
       conversation_id: request.conversationId || generateConversationId(),
       allowed_tools_json: JSON.stringify(allowedTools),
       auto_approve_tools:
@@ -68,10 +67,10 @@ export class AiMessageTaskModule extends BaseModule {
 
     if (request.name !== undefined) updates.name = request.name.trim();
     if (request.description !== undefined)
-      updates.description = request.description?.trim() ?? null;
+      updates.description = request.description?.trim() ?? undefined;
     if (request.message !== undefined) updates.message = request.message.trim();
     if (request.systemPrompt !== undefined)
-      updates.system_prompt = request.systemPrompt?.trim() ?? null;
+      updates.system_prompt = request.systemPrompt?.trim() ?? undefined;
     if (request.model !== undefined) updates.model = request.model;
     if (request.conversationId !== undefined)
       updates.conversation_id = request.conversationId;

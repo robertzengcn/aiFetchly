@@ -28,7 +28,7 @@ export async function updateAiMessageTask(
 }
 
 export async function deleteAiMessageTask(id: number): Promise<void> {
-  await windowInvoke(AI_MESSAGE_TASK_DELETE, id);
+  await windowInvoke(AI_MESSAGE_TASK_DELETE, { id });
 }
 
 export async function listAiMessageTasks(
@@ -38,10 +38,8 @@ export async function listAiMessageTasks(
   return windowInvoke(AI_MESSAGE_TASK_LIST, { page, limit });
 }
 
-export async function getAiMessageTaskDetail(
-  id: number
-): Promise<unknown> {
-  return windowInvoke(AI_MESSAGE_TASK_DETAIL, id);
+export async function getAiMessageTaskDetail(id: number): Promise<unknown> {
+  return windowInvoke(AI_MESSAGE_TASK_DETAIL, { id });
 }
 
 export async function listAiMessageTaskRuns(
@@ -52,10 +50,8 @@ export async function listAiMessageTaskRuns(
   return windowInvoke(AI_MESSAGE_TASK_RUN_LIST, { taskId, page, limit });
 }
 
-export async function getAiMessageTaskRunDetail(
-  id: number
-): Promise<unknown> {
-  return windowInvoke(AI_MESSAGE_TASK_RUN_DETAIL, id);
+export async function getAiMessageTaskRunDetail(id: number): Promise<unknown> {
+  return windowInvoke(AI_MESSAGE_TASK_RUN_DETAIL, { id });
 }
 
 export async function listAvailableAiMessageTaskTools(): Promise<

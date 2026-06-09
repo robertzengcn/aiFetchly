@@ -16,10 +16,7 @@ export class AiMessageTaskModel extends BaseDb {
     return saved.id;
   }
 
-  async update(
-    id: number,
-    data: Partial<AiMessageTaskEntity>
-  ): Promise<void> {
+  async update(id: number, data: Partial<AiMessageTaskEntity>): Promise<void> {
     await this.repository.update(id, data);
   }
 
@@ -51,8 +48,8 @@ export class AiMessageTaskModel extends BaseDb {
   ): Promise<void> {
     await this.repository.update(id, {
       last_run_time: new Date(),
-      last_result_summary: resultSummary,
-      last_error_message: errorMessage,
+      last_result_summary: resultSummary ?? undefined,
+      last_error_message: errorMessage ?? undefined,
     });
   }
 }

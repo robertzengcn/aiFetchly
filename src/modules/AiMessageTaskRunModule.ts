@@ -23,8 +23,8 @@ export class AiMessageTaskRunModule extends BaseModule {
 
     const entity: Partial<AiMessageTaskRunEntity> = {
       task_id: params.taskId,
-      schedule_id: params.scheduleId ?? null,
-      conversation_id: params.conversationId ?? null,
+      schedule_id: params.scheduleId ?? undefined,
+      conversation_id: params.conversationId ?? undefined,
       status: "pending",
       started_at: new Date(),
       tool_calls_count: 0,
@@ -92,9 +92,7 @@ export class AiMessageTaskRunModule extends BaseModule {
       duration_ms: durationMs,
       error_message: errorMessage,
       tool_calls_count: params?.toolCallsCount ?? 0,
-      blocked_tool_calls_json: JSON.stringify(
-        params?.blockedToolCalls ?? []
-      ),
+      blocked_tool_calls_json: JSON.stringify(params?.blockedToolCalls ?? []),
       metadata_json: params?.metadata
         ? JSON.stringify(params.metadata)
         : undefined,
@@ -124,9 +122,7 @@ export class AiMessageTaskRunModule extends BaseModule {
     return this.model.listBySchedule(scheduleId, page, limit);
   }
 
-  async getLatestRun(
-    taskId: number
-  ): Promise<AiMessageTaskRunEntity | null> {
+  async getLatestRun(taskId: number): Promise<AiMessageTaskRunEntity | null> {
     await this.ensureConnection();
     return this.model.getLatestByTask(taskId);
   }

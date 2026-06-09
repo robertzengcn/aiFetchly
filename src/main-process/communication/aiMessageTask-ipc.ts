@@ -36,21 +36,19 @@ export function registerAiMessageTaskIpcHandlers(): void {
         return {
           status: false,
           msg: "AI features are not enabled",
-          data: null,
         };
       }
       try {
-        const request = (typeof data === "string"
-          ? JSON.parse(data)
-          : data) as CreateAiMessageTaskRequest;
+        const request = (
+          typeof data === "string" ? JSON.parse(data) : data
+        ) as CreateAiMessageTaskRequest;
         const module = new AiMessageTaskModule();
         const id = await module.createTask(request);
         return { status: true, msg: "AI message task created", data: id };
       } catch (error) {
-        const msg =
-          error instanceof Error ? error.message : "Unknown error";
+        const msg = error instanceof Error ? error.message : "Unknown error";
         console.error("AI_MESSAGE_TASK_CREATE error:", msg);
-        return { status: false, msg, data: null };
+        return { status: false, msg };
       }
     }
   );
@@ -58,26 +56,24 @@ export function registerAiMessageTaskIpcHandlers(): void {
   // Update AI message task
   ipcMain.handle(
     AI_MESSAGE_TASK_UPDATE,
-    async (_event, data: unknown): Promise<CommonMessage<null>> => {
+    async (_event, data: unknown): Promise<CommonMessage<void>> => {
       if (!isAiEnabled()) {
         return {
           status: false,
           msg: "AI features are not enabled",
-          data: null,
         };
       }
       try {
-        const request = (typeof data === "string"
-          ? JSON.parse(data)
-          : data) as UpdateAiMessageTaskRequest;
+        const request = (
+          typeof data === "string" ? JSON.parse(data) : data
+        ) as UpdateAiMessageTaskRequest;
         const module = new AiMessageTaskModule();
         await module.updateTask(request);
-        return { status: true, msg: "AI message task updated", data: null };
+        return { status: true, msg: "AI message task updated" };
       } catch (error) {
-        const msg =
-          error instanceof Error ? error.message : "Unknown error";
+        const msg = error instanceof Error ? error.message : "Unknown error";
         console.error("AI_MESSAGE_TASK_UPDATE error:", msg);
-        return { status: false, msg, data: null };
+        return { status: false, msg };
       }
     }
   );
@@ -85,12 +81,11 @@ export function registerAiMessageTaskIpcHandlers(): void {
   // Delete AI message task
   ipcMain.handle(
     AI_MESSAGE_TASK_DELETE,
-    async (_event, data: unknown): Promise<CommonMessage<null>> => {
+    async (_event, data: unknown): Promise<CommonMessage<void>> => {
       if (!isAiEnabled()) {
         return {
           status: false,
           msg: "AI features are not enabled",
-          data: null,
         };
       }
       try {
@@ -98,12 +93,11 @@ export function registerAiMessageTaskIpcHandlers(): void {
           typeof data === "string" ? JSON.parse(data) : (data as number);
         const module = new AiMessageTaskModule();
         await module.deleteTask(id);
-        return { status: true, msg: "AI message task deleted", data: null };
+        return { status: true, msg: "AI message task deleted" };
       } catch (error) {
-        const msg =
-          error instanceof Error ? error.message : "Unknown error";
+        const msg = error instanceof Error ? error.message : "Unknown error";
         console.error("AI_MESSAGE_TASK_DELETE error:", msg);
-        return { status: false, msg, data: null };
+        return { status: false, msg };
       }
     }
   );
@@ -118,13 +112,12 @@ export function registerAiMessageTaskIpcHandlers(): void {
       CommonMessage<{
         items: unknown[];
         total: number;
-      } | null>
+      }>
     > => {
       if (!isAiEnabled()) {
         return {
           status: false,
           msg: "AI features are not enabled",
-          data: null,
         };
       }
       try {
@@ -139,10 +132,9 @@ export function registerAiMessageTaskIpcHandlers(): void {
           data: result,
         };
       } catch (error) {
-        const msg =
-          error instanceof Error ? error.message : "Unknown error";
+        const msg = error instanceof Error ? error.message : "Unknown error";
         console.error("AI_MESSAGE_TASK_LIST error:", msg);
-        return { status: false, msg, data: null };
+        return { status: false, msg };
       }
     }
   );
@@ -155,7 +147,6 @@ export function registerAiMessageTaskIpcHandlers(): void {
         return {
           status: false,
           msg: "AI features are not enabled",
-          data: null,
         };
       }
       try {
@@ -167,15 +158,13 @@ export function registerAiMessageTaskIpcHandlers(): void {
           return {
             status: false,
             msg: "AI message task not found",
-            data: null,
           };
         }
         return { status: true, msg: "Task retrieved", data: task };
       } catch (error) {
-        const msg =
-          error instanceof Error ? error.message : "Unknown error";
+        const msg = error instanceof Error ? error.message : "Unknown error";
         console.error("AI_MESSAGE_TASK_DETAIL error:", msg);
-        return { status: false, msg, data: null };
+        return { status: false, msg };
       }
     }
   );
@@ -190,13 +179,12 @@ export function registerAiMessageTaskIpcHandlers(): void {
       CommonMessage<{
         items: unknown[];
         total: number;
-      } | null>
+      }>
     > => {
       if (!isAiEnabled()) {
         return {
           status: false,
           msg: "AI features are not enabled",
-          data: null,
         };
       }
       try {
@@ -212,10 +200,9 @@ export function registerAiMessageTaskIpcHandlers(): void {
           data: result,
         };
       } catch (error) {
-        const msg =
-          error instanceof Error ? error.message : "Unknown error";
+        const msg = error instanceof Error ? error.message : "Unknown error";
         console.error("AI_MESSAGE_TASK_RUN_LIST error:", msg);
-        return { status: false, msg, data: null };
+        return { status: false, msg };
       }
     }
   );
@@ -228,7 +215,6 @@ export function registerAiMessageTaskIpcHandlers(): void {
         return {
           status: false,
           msg: "AI features are not enabled",
-          data: null,
         };
       }
       try {
@@ -240,15 +226,13 @@ export function registerAiMessageTaskIpcHandlers(): void {
           return {
             status: false,
             msg: "AI message task run not found",
-            data: null,
           };
         }
         return { status: true, msg: "Run retrieved", data: run };
       } catch (error) {
-        const msg =
-          error instanceof Error ? error.message : "Unknown error";
+        const msg = error instanceof Error ? error.message : "Unknown error";
         console.error("AI_MESSAGE_TASK_RUN_DETAIL error:", msg);
-        return { status: false, msg, data: null };
+        return { status: false, msg };
       }
     }
   );
@@ -272,8 +256,7 @@ export function registerAiMessageTaskIpcHandlers(): void {
           data: tools,
         };
       } catch (error) {
-        const msg =
-          error instanceof Error ? error.message : "Unknown error";
+        const msg = error instanceof Error ? error.message : "Unknown error";
         console.error("AI_MESSAGE_TASK_LIST_AVAILABLE_TOOLS error:", msg);
         return { status: false, msg, data: [] };
       }
