@@ -214,6 +214,7 @@
             <ExecutionHistoryTable
               :executions="executionHistory"
               :loading="loadingHistory"
+              @view-details="handleViewDetails"
             />
           </v-card-text>
         </v-card>
@@ -557,6 +558,22 @@ const deleteSchedule = () => {
 
 const editSchedule = () => {
   router.push(`/schedule/edit/${route.params.id}`)
+}
+
+const handleViewDetails = (_execution: any) => {
+  if (!schedule.value) return
+
+  const taskType = schedule.value.task_type as TaskType
+  switch (taskType) {
+    case TaskType.GOOGLE_MAPS:
+      router.push('/map-scraper/google')
+      break
+    case TaskType.YANDEX_MAPS:
+      router.push('/map-scraper/yandex')
+      break
+    default:
+      break
+  }
 }
 
 const goBack = () => {

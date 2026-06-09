@@ -8,16 +8,16 @@
     item-key="id"
   >
     <!-- Start Time Column -->
-    <template v-slot:item.start_time="{ item }">
+    <template v-slot:item.execution_time="{ item }">
       <div class="font-weight-medium">
-        {{ formatDateTime(item.start_time) }}
+        {{ formatDateTime(item.execution_time) }}
       </div>
     </template>
 
     <!-- End Time Column -->
-    <template v-slot:item.end_time="{ item }">
-      <div v-if="item.end_time" class="font-weight-medium">
-        {{ formatDateTime(item.end_time) }}
+    <template v-slot:item.completion_time="{ item }">
+      <div v-if="item.completion_time" class="font-weight-medium">
+        {{ formatDateTime(item.completion_time) }}
       </div>
       <div v-else class="text-medium-emphasis">
         Running...
@@ -25,12 +25,12 @@
     </template>
 
     <!-- Duration Column -->
-    <template v-slot:item.duration="{ item }">
-      <div v-if="item.duration" class="font-weight-medium">
-        {{ formatDuration(item.duration) }}
+    <template v-slot:item.execution_duration="{ item }">
+      <div v-if="item.execution_duration" class="font-weight-medium">
+        {{ formatDuration(item.execution_duration) }}
       </div>
-      <div v-else-if="item.start_time && !item.end_time" class="text-medium-emphasis">
-        {{ getRunningDuration(item.start_time) }}
+      <div v-else-if="item.execution_time && !item.completion_time" class="text-medium-emphasis">
+        {{ getRunningDuration(item.execution_time) }}
       </div>
       <div v-else class="text-medium-emphasis">
         -
@@ -43,19 +43,9 @@
     </template>
 
     <!-- Result Column -->
-    <template v-slot:item.result="{ item }">
-      <div v-if="item.result" class="text-body-2">
-        {{ item.result }}
-      </div>
-      <div v-else class="text-medium-emphasis">
-        -
-      </div>
-    </template>
-
-    <!-- Error Message Column -->
-    <template v-slot:item.error_message="{ item }">
-      <div v-if="item.error_message" class="text-body-2 text-error">
-        {{ item.error_message }}
+    <template v-slot:item.result_message="{ item }">
+      <div v-if="item.result_message" class="text-body-2">
+        {{ item.result_message }}
       </div>
       <div v-else class="text-medium-emphasis">
         -
@@ -132,19 +122,19 @@ const { t } = useI18n()
 const headers = computed(() => [
   {
     title: t('schedule.execution_start_time'),
-    key: 'start_time',
+    key: 'execution_time',
     sortable: true,
     width: '150px'
   },
   {
     title: t('schedule.execution_end_time'),
-    key: 'end_time',
+    key: 'completion_time',
     sortable: true,
     width: '150px'
   },
   {
     title: t('schedule.execution_duration'),
-    key: 'duration',
+    key: 'execution_duration',
     sortable: true,
     width: '100px'
   },
@@ -156,13 +146,7 @@ const headers = computed(() => [
   },
   {
     title: t('schedule.execution_result'),
-    key: 'result',
-    sortable: false,
-    width: '200px'
-  },
-  {
-    title: t('schedule.execution_error'),
-    key: 'error_message',
+    key: 'result_message',
     sortable: false,
     width: '200px'
   },
