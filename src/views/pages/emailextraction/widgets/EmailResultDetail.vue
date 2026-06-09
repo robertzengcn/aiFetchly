@@ -17,8 +17,9 @@
             {{ t('common.export') || 'Export' }}
         </v-btn>
     </div>
-    <v-data-table-server v-model:items-per-page="itemsPerPage" :search="search" :headers="headers"
-        :items-length="totalItems" :items="serverItems" :loading="loading" item-value="name" @update:options="loadItems" class="custom-data-table" show-expand :show-select="isSelectedtable" select-strategy="single" >
+    <v-data-table-server
+v-model:items-per-page="itemsPerPage" :search="search" :headers="headers"
+        :items-length="totalItems" :items="serverItems" :loading="loading" item-value="id" @update:options="loadItems" class="custom-data-table" show-expand :show-select="isSelectedtable" select-strategy="single">
         <template v-slot:[`item.actions`]="{ item }" v-if="isSelectedtable==true">
             <v-icon
             size="small"
@@ -39,7 +40,7 @@
         </template>
         <template v-slot:expanded-row="{ columns, item }">
       <tr>
-        <td :colspan="columns.length" >
+        <td :colspan="columns.length">
          <div class="ellipsis-cell">
             <div v-for="(val, index) in item.emails" :key="index" class="url-item">
          {{ val }}
