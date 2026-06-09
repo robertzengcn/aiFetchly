@@ -15,6 +15,7 @@ import { EmailSearchTaskModule } from "./EmailSearchTaskModule";
 import { YellowPagesModule } from "./YellowPagesModule";
 import { GoogleMapsModule } from "./GoogleMapsModule";
 import { YandexMapsModule } from "./YandexMapsModule";
+import { AiMessageTaskModule } from "@/modules/AiMessageTaskModule";
 import type { GoogleMapsSearchInput } from "@/entityTypes/googleMapsTypes";
 import type { YandexMapsSearchInput } from "@/entityTypes/yandexMapsTypes";
 //import {getStatusName} from "@/modules/lib/function"
@@ -36,6 +37,7 @@ export class TaskExecutorService {
   private yellowPagesModule: YellowPagesModule;
   private googleMapsModule: GoogleMapsModule;
   private yandexMapsModule: YandexMapsModule;
+  private aiMessageTaskModule: AiMessageTaskModule;
   //private socialTaskModel: SocialTaskModel;
 
   constructor() {
@@ -49,6 +51,7 @@ export class TaskExecutorService {
     this.yellowPagesModule = new YellowPagesModule();
     this.googleMapsModule = new GoogleMapsModule();
     this.yandexMapsModule = new YandexMapsModule();
+    this.aiMessageTaskModule = new AiMessageTaskModule();
 
     //this.socialTaskModel = new SocialTaskModel(filepath);
   }
@@ -90,6 +93,12 @@ export class TaskExecutorService {
           break;
         case TaskType.YANDEX_MAPS:
           taskOutputId = await this.executeYandexMapsTask(schedule.task_id);
+          break;
+        case TaskType.AI_MESSAGE:
+          taskOutputId = await this.executeAiMessageTask(
+            schedule.task_id,
+            schedule.id
+          );
           break;
         default:
           throw new Error(`Unsupported task type: ${schedule.task_type}`);
@@ -298,6 +307,53 @@ export class TaskExecutorService {
   }
 
   /**
+   * Execute an AI message task (Phase 1 stub).
+   * Full headless runner implementation comes in Phase 2.
+   */
+  async executeAiMessageTask(
+    taskId: number,
+    scheduleId?: number
+  ): Promise<number> {
+    try {
+      console.log(`Executing AI message task ${taskId}`);
+
+      const task = await this.aiMessageTaskModule.getTask(taskId);
+      if (!task) {
+        throw new Error(`AI message task ${taskId} not found`);
+      }
+
+      // Phase 1: Stub — log execution and return task ID.
+      // Phase 2 will introduce ScheduledAiMessageRunner for full AI execution.
+      console.log(
+        `AI message task ${taskId} (${task.name}) stub executed successfully`
+      );
+
+      await this.aiMessageTaskModule.updateLastRunResult(
+        taskId,
+        "[Phase 1 stub] Task scheduled but headless runner not yet implemented.",
+        null
+      );
+
+      return taskId;
+    } catch (error) {
+      console.error(`Failed to execute AI message task ${taskId}:`, error);
+      try {
+        await this.aiMessageTaskModule.updateLastRunResult(
+          taskId,
+          null,
+          error instanceof Error ? error.message : "Unknown error"
+        );
+      } catch (updateError) {
+        console.error(
+          "Failed to update AI message task last run result:",
+          updateError
+        );
+      }
+      throw error;
+    }
+  }
+
+  /**
    * Execute a video download task
    * @param taskId The video download task ID
    * @returns The task output ID
@@ -462,6 +518,24 @@ export class TaskExecutorService {
         //     const socialTask = await this.socialTaskModel.getTaskById(taskId);
         //     status = socialTask?.status || 'unknown';
         //     break;
+        case TaskType.AI_MESSAGE: {
+          const aiMsgTask = await this.aiMessageTaskModule.getTask(taskId);
+          if (!aiMsgTask) {
+            status = TaskStatus.Notstart;
+          } else {
+            switch (aiMsgTask.status) {
+              case "active":
+                status = TaskStatus.Complete;
+                break;
+              case "inactive":
+                status = TaskStatus.Cancel;
+                break;
+              default:
+                status = TaskStatus.Notstart;
+            }
+          }
+          break;
+        }
         default:
           throw new Error(`Unsupported task type: ${taskType}`);
       }
@@ -550,6 +624,12 @@ export class TaskExecutorService {
           await this.yandexMapsModule.cancelSearch(
             `schedule-yandex-maps-${taskId}`
           );
+          break;
+        case TaskType.AI_MESSAGE:
+          await this.aiMessageTaskModule.updateTask({
+            id: taskId,
+            status: "inactive",
+          });
           break;
         // case TaskType.VIDEO_DOWNLOAD:
         //     // Update video download task status
@@ -697,6 +777,11 @@ export class TaskExecutorService {
         case TaskType.YANDEX_MAPS: {
           const ymRecord = await this.yandexMapsModule.getSearchRecord(taskId);
           taskExists = !!ymRecord;
+          break;
+        }
+        case TaskType.AI_MESSAGE: {
+          const aiMsgTask = await this.aiMessageTaskModule.getTask(taskId);
+          taskExists = !!aiMsgTask;
           break;
         }
         // case TaskType.VIDEO_DOWNLOAD:
