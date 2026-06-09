@@ -25,7 +25,11 @@ export enum ScheduleToolErrorCode {
 // Result types
 // ---------------------------------------------------------------------------
 
-export type ScheduleToolSuccess<T> = { success: true; data: T };
+export type ScheduleToolSuccess<T> = {
+  success: true;
+  data: T;
+  warning?: string;
+};
 export type ScheduleToolFailure = {
   success: false;
   error: string;
