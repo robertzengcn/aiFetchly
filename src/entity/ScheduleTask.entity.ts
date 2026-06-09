@@ -8,6 +8,7 @@ export enum TaskType {
   YELLOW_PAGES = "yellow_pages",
   GOOGLE_MAPS = "google_maps",
   YANDEX_MAPS = "yandex_maps",
+  AI_MESSAGE = "ai_message",
 }
 
 export enum ScheduleStatus {
@@ -45,7 +46,7 @@ export class ScheduleTaskEntity extends AuditableEntity {
   @Column("varchar", {
     length: 50,
     comment:
-      "Type of task to be executed: search, email_extract, buck_email, yellow_pages, google_maps, yandex_maps",
+      "Type of task to be executed: search, email_extract, buck_email, yellow_pages, google_maps, yandex_maps, ai_message",
   })
   task_type: string;
 
