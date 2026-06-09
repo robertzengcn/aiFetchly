@@ -1,0 +1,51 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "outDir": "./dist",
+    "strict": false,
+    "strictNullChecks": false,
+    "noImplicitAny": false,
+    "esModuleInterop": true,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "declaration": false,
+    "sourceMap": true,
+    "baseUrl": "..",
+    "paths": {
+      "@/*": ["./src/*"],
+      "electron": ["./test/mocks/electron.ts"],
+      "electron-store": ["./test/mocks/electron-store.ts"],
+      "electron-log": ["./test/mocks/electron-log.ts"]
+    },
+    "types": ["node"]
+  },
+  "include": [
+    "bin/**/*.ts",
+    "src/**/*.ts",
+    "../src/entity/**/*.ts",
+    "../src/entityTypes/**/*.ts",
+    "../src/model/BaseDb.ts",
+    "../src/config/SqliteDb.ts",
+    "../src/config/usersetting.ts",
+    "../src/modules/baseModule.ts",
+    "../src/modules/token.ts",
+    "../src/modules/electronstoreservice.ts",
+    "../src/modules/cryptosource.ts",
+    "../test/mocks/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "../src/views/**",
+    "../src/childprocess/**",
+    "../src/scripts/**",
+    "../src/test/**",
+    "../src/service/**",
+    "../src/controller/**",
+    "../src/modules/lib/**"
+  ]
+}

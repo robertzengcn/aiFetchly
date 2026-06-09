@@ -1,0 +1,30 @@
+{
+  "name": "cli-anything-aifetchly",
+  "version": "1.0.0",
+  "description": "CLI harness for aiFetchly - AI-powered marketing automation",
+  "bin": {
+    "cli-anything-aifetchly": "./dist/bin/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.cli.json",
+    "dev": "ts-node -P tsconfig.cli.json bin/cli.ts",
+    "test": "python3 -m pytest tests/ -v --tb=short",
+    "test:unit": "python3 -m pytest tests/test_core.py -v",
+    "test:e2e": "python3 -m pytest tests/test_full_e2e.py -v -s"
+  },
+  "dependencies": {
+    "commander": "^12.0.0",
+    "cli-table3": "^0.6.5",
+    "chalk": "^4.1.2",
+    "uuid": "^9.0.0",
+    "better-sqlite3": "^11.0.0",
+    "csv-stringify": "^6.5.0"
+  },
+  "devDependencies": {
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.0",
+    "@types/node": "^20.0.0",
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/uuid": "^9.0.0"
+  }
+}

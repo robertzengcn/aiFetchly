@@ -117,6 +117,19 @@ export const webUtils = {
   },
 };
 
+export class Notification {
+  // eslint-disable-next-line @typescript-eslint/no-empty-function
+  constructor(_options?: unknown) {}
+  // eslint-disable-next-line @typescript-eslint/no-empty-function
+  show(): void {}
+  // eslint-disable-next-line @typescript-eslint/no-empty-function
+  close(): void {}
+  static isSupported(): boolean {
+    return false;
+  }
+  static permission = "granted";
+}
+
 export default {
   app,
   BrowserWindow,
