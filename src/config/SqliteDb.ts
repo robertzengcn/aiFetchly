@@ -567,14 +567,15 @@ export class SqliteDb {
       return;
     }
     if (!SqliteDb.initPromise) {
-      SqliteDb.initPromise = SqliteDb.instance.connection.initialize().then(
-        () => {
+      SqliteDb.initPromise = SqliteDb.instance.connection
+        .initialize()
+        .catch((err: unknown) => {
           SqliteDb.initPromise = null;
-        },
-        () => {
+          throw err;
+        })
+        .then(() => {
           SqliteDb.initPromise = null;
-        }
-      );
+        });
     }
     await SqliteDb.initPromise;
   }
