@@ -1,6 +1,12 @@
 // src/service/ScheduledAiMessageRunner.ts
 
-import { AiChatApi, type StreamEvent, StreamEventType, type ToolFunction, type ToolExecutionResult } from "@/api/aiChatApi";
+import {
+  AiChatApi,
+  type StreamEvent,
+  StreamEventType,
+  type ToolFunction,
+  type ToolExecutionResult,
+} from "@/api/aiChatApi";
 import { Token } from "@/modules/token";
 import { USER_AI_ENABLED } from "@/config/usersetting";
 import { SkillRegistry } from "@/config/skillsRegistry";
@@ -67,22 +73,40 @@ export class ScheduledAiMessageRunner {
    * @param scheduleId - Optional schedule ID that triggered this run
    * @returns The run result with run ID and status
    */
-  async run(taskId: number, scheduleId?: number): Promise<ScheduledAiMessageRunResult> {
+  async run(
+    taskId: number,
+    scheduleId?: number
+  ): Promise<ScheduledAiMessageRunResult> {
     // 1. Check AI enabled
     const token = new Token();
     const aiEnabled = token.getValue(USER_AI_ENABLED);
     if (aiEnabled !== "true") {
-      return this.failFast(taskId, scheduleId, "AI features are not enabled. Please upgrade your plan.", "AI_DISABLED");
+      return this.failFast(
+        taskId,
+        scheduleId,
+        "AI features are not enabled. Please upgrade your plan.",
+        "AI_DISABLED"
+      );
     }
 
     // 2. Load task configuration
     const task = await this.taskModule.getTask(taskId);
     if (!task) {
-      return this.failFast(taskId, scheduleId, `AI message task ${taskId} not found.`, "TASK_NOT_FOUND");
+      return this.failFast(
+        taskId,
+        scheduleId,
+        `AI message task ${taskId} not found.`,
+        "TASK_NOT_FOUND"
+      );
     }
 
     if (task.status !== "active") {
-      return this.failFast(taskId, scheduleId, `AI message task ${taskId} is not active (status: ${task.status}).`, "TASK_NOT_FOUND");
+      return this.failFast(
+        taskId,
+        scheduleId,
+        `AI message task ${taskId} is not active (status: ${task.status}).`,
+        "TASK_NOT_FOUND"
+      );
     }
 
     // 3. Parse policy and limits
@@ -105,7 +129,7 @@ export class ScheduledAiMessageRunner {
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : "Unknown error";
       await this.runModule.failRun(runId, errorMsg);
-      await this.taskModule.updateLastRunResult(taskId, undefined, errorMsg);
+      await this.taskModule.updateLastRunResult(taskId, null, errorMsg);
       return {
         runId,
         status: "failed",
@@ -158,19 +182,25 @@ export class ScheduledAiMessageRunner {
 
           switch (event.event) {
             case StreamEventType.TOKEN: {
-              const token = typeof event.data.content === "string"
-                ? event.data.content
-                : "";
-              if (token && assistantMessage.length + token.length <= limits.maxAssistantMessageLength) {
+              const token =
+                typeof event.data.content === "string"
+                  ? event.data.content
+                  : "";
+              if (
+                token &&
+                assistantMessage.length + token.length <=
+                  limits.maxAssistantMessageLength
+              ) {
                 assistantMessage += token;
               }
               break;
             }
 
             case StreamEventType.ERROR: {
-              const errMsg = typeof event.data.content === "string"
-                ? event.data.content
-                : JSON.stringify(event.data.content);
+              const errMsg =
+                typeof event.data.content === "string"
+                  ? event.data.content
+                  : JSON.stringify(event.data.content);
               throw new Error(`REMOTE_AI_ERROR: ${errMsg}`);
             }
 
@@ -181,7 +211,8 @@ export class ScheduledAiMessageRunner {
                 const blocked: BlockedToolCallRecord = {
                   toolName: toolData.name,
                   toolCallId: toolData.id,
-                  reason: "Tool execution is not supported in Phase 2. Scheduled tool calls will be enabled in a future update.",
+                  reason:
+                    "Tool execution is not supported in Phase 2. Scheduled tool calls will be enabled in a future update.",
                   timestamp: new Date().toISOString(),
                   args: toolData.arguments,
                 };
@@ -215,12 +246,16 @@ export class ScheduledAiMessageRunner {
           blockedToolCalls,
           errorMessage: `Run exceeded maximum runtime of ${limits.maxRuntimeMs}ms.`,
         };
-        await this.runModule.failRun(runId, result.errorMessage, {
+        await this.runModule.failRun(runId, result.errorMessage ?? "Timeout", {
           toolCallsCount,
           blockedToolCalls,
           metadata: { elapsedMs: Date.now() - startTime },
         });
-        await this.taskModule.updateLastRunResult(task.id, undefined, result.errorMessage);
+        await this.taskModule.updateLastRunResult(
+          task.id,
+          null,
+          result.errorMessage ?? "Timeout"
+        );
         return result;
       }
       // Other errors — rethrow to outer catch
@@ -238,10 +273,11 @@ export class ScheduledAiMessageRunner {
       metadata: { elapsedMs: Date.now() - startTime, model: task.model },
     });
 
-    const resultSummary = finalMessage.length > 200
-      ? finalMessage.substring(0, 200) + "..."
-      : finalMessage;
-    await this.taskModule.updateLastRunResult(task.id, resultSummary, undefined);
+    const resultSummary =
+      finalMessage.length > 200
+        ? finalMessage.substring(0, 200) + "..."
+        : finalMessage;
+    await this.taskModule.updateLastRunResult(task.id, resultSummary, null);
 
     return {
       runId,
@@ -273,7 +309,8 @@ export class ScheduledAiMessageRunner {
     return {
       maxRuntimeMs: task.max_runtime_ms || DEFAULT_RUN_LIMITS.maxRuntimeMs,
       maxToolCalls: task.max_tool_calls || DEFAULT_RUN_LIMITS.maxToolCalls,
-      maxContinueCalls: task.max_continue_calls || DEFAULT_RUN_LIMITS.maxContinueCalls,
+      maxContinueCalls:
+        task.max_continue_calls || DEFAULT_RUN_LIMITS.maxContinueCalls,
       maxAssistantMessageLength: DEFAULT_RUN_LIMITS.maxAssistantMessageLength,
       maxConsecutiveToolFailures: DEFAULT_RUN_LIMITS.maxConsecutiveToolFailures,
     };
@@ -283,7 +320,9 @@ export class ScheduledAiMessageRunner {
    * Build filtered client_tools list to send to the AI server.
    * Only includes tools that are allowed by the task policy.
    */
-  private buildFilteredClientTools(policy: AiMessageTaskToolPolicy): ToolFunction[] {
+  private buildFilteredClientTools(
+    policy: AiMessageTaskToolPolicy
+  ): ToolFunction[] {
     if (!policy.autoApproveTools || policy.allowedTools.length === 0) {
       return [];
     }
@@ -320,7 +359,7 @@ export class ScheduledAiMessageRunner {
         scheduleId: scheduleId ?? undefined,
       });
       await this.runModule.failRun(runId, errorMessage);
-      await this.taskModule.updateLastRunResult(taskId, undefined, errorMessage);
+      await this.taskModule.updateLastRunResult(taskId, null, errorMessage);
       return {
         runId,
         status: "failed",
