@@ -133,6 +133,14 @@ describe("StreamEventProcessor", () => {
       return { processor, event, state, abortController };
     }
 
+    /** Timestamp string used in all test stream events. */
+    const ts = new Date().toISOString();
+
+    /** Shorthand for a plain-text content data block. */
+    function textData(content: string) {
+      return { content, timestamp: ts };
+    }
+
     // ----- processEvent ----------------------------------------------------
 
     test("processEvent discards TOKEN events after abort", () => {
@@ -141,7 +149,7 @@ describe("StreamEventProcessor", () => {
       // Before abort: token events are processed
       const tokenEvent: StreamEvent = {
         event: StreamEventType.TOKEN,
-        data: { content: "hello" },
+        data: textData("hello"),
       };
       processor.processEvent(tokenEvent);
       expect(event.sender.send).toHaveBeenCalled();
@@ -161,7 +169,7 @@ describe("StreamEventProcessor", () => {
 
       const doneEvent: StreamEvent = {
         event: StreamEventType.DONE,
-        data: { content: "" },
+        data: textData(""),
       };
       processor.processEvent(doneEvent);
 
@@ -182,6 +190,7 @@ describe("StreamEventProcessor", () => {
         event: StreamEventType.TOOL_CALL,
         data: {
           content: "",
+          timestamp: ts,
           data: {
             id: "tool-1",
             name: "test_tool",
@@ -205,7 +214,8 @@ describe("StreamEventProcessor", () => {
         event: StreamEventType.TOOL_RESULT,
         data: {
           content: { success: true, data: "result" },
-          data: { id: "tool-1", name: "test_tool" },
+          timestamp: ts,
+          data: { id: "tool-1", name: "test_tool", arguments: {} },
         },
       };
       processor.processEvent(toolResultEvent);
@@ -225,7 +235,7 @@ describe("StreamEventProcessor", () => {
       // Process DONE — it should be deferred, not sent immediately
       const doneEvent: StreamEvent = {
         event: StreamEventType.DONE,
-        data: { content: "" },
+        data: textData(""),
       };
       processor.processEvent(doneEvent);
 
@@ -245,7 +255,7 @@ describe("StreamEventProcessor", () => {
       // (in real flow this is called from executeTool cleanup)
       processor.processEvent({
         event: StreamEventType.DONE,
-        data: { content: "" },
+        data: textData(""),
       });
 
       // No completion should be sent after abort
@@ -264,7 +274,7 @@ describe("StreamEventProcessor", () => {
       // Process DONE — deferred
       processor.processEvent({
         event: StreamEventType.DONE,
-        data: { content: "" },
+        data: textData(""),
       });
       expect(state.deferredCompletionChunk).not.toBeNull();
 
@@ -272,7 +282,7 @@ describe("StreamEventProcessor", () => {
       state.pendingToolCalls.delete("tool-pending");
       processor.processEvent({
         event: StreamEventType.COMPLETE,
-        data: { content: "" },
+        data: textData(""),
       });
 
       expect(event.sender.send).toHaveBeenCalledWith(
@@ -298,7 +308,7 @@ describe("StreamEventProcessor", () => {
       // Default state has no abortSignal
       const doneEvent: StreamEvent = {
         event: StreamEventType.DONE,
-        data: { content: "" },
+        data: textData(""),
       };
       streamEventProcessor.processEvent(doneEvent);
 
