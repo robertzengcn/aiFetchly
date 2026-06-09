@@ -56,6 +56,8 @@ import { DependencyInstallAuditEntity } from "@/entity/DependencyInstallAudit";
 import { ShellAuditEntity } from "@/entity/ShellAudit.entity";
 import { GoogleMapsSearchRecordEntity } from "@/entity/GoogleMapsSearchRecord.entity";
 import { YandexMapsSearchRecordEntity } from "@/entity/YandexMapsSearchRecord.entity";
+import { AiMessageTaskEntity } from "@/entity/AiMessageTask.entity";
+import { AiMessageTaskRunEntity } from "@/entity/AiMessageTaskRun.entity";
 // import sqlite3 from "sqlite3";
 import Database from "better-sqlite3";
 import { app } from "electron";
@@ -463,6 +465,8 @@ export class SqliteDb {
           ShellAuditEntity,
           GoogleMapsSearchRecordEntity,
           YandexMapsSearchRecordEntity,
+          AiMessageTaskEntity,
+          AiMessageTaskRunEntity,
         ],
         synchronize: true,
         migrations: [],
