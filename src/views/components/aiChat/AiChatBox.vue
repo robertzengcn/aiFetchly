@@ -655,12 +655,12 @@ class="message-bubble" :class="{
             <v-icon>mdi-stop</v-icon>
           </v-btn>
           <v-btn
-            v-else
             icon
             size="small"
             color="primary"
-            :disabled="!inputMessage.trim() && selectedUploadFiles.length === 0"
+            :disabled="(!inputMessage.trim() && selectedUploadFiles.length === 0) || isUploadingFiles"
             @click="handleSendMessage()"
+            :title="isLoading ? (t('knowledge.queue_send') || 'Queue message') : (t('knowledge.send_message') || 'Send')"
           >
             <v-icon>mdi-send</v-icon>
           </v-btn>
