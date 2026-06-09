@@ -55,7 +55,7 @@ const RATE_LIMIT_CONFIG = {
   fileRead: FILE_TOOL_RATE_LIMITS.fileRead,
   fileSearch: FILE_TOOL_RATE_LIMITS.fileSearch,
   fileWrite: FILE_TOOL_RATE_LIMITS.fileWrite,
-  yandexMaps: {
+  mapsBusiness: {
     maxPerMinute: 10,
     maxConcurrent: 2,
     cooldownMs: 2000,
@@ -103,11 +103,8 @@ class RateLimiterManager {
       return RATE_LIMIT_CONFIG.fileSearch;
     } else if (toolName === "file_write" || toolName === "file_edit") {
       return RATE_LIMIT_CONFIG.fileWrite;
-    } else if (
-      toolName.includes("yandex_maps") ||
-      toolName.includes("yandexmaps")
-    ) {
-      return RATE_LIMIT_CONFIG.yandexMaps;
+    } else if (toolName === "search_maps_businesses") {
+      return RATE_LIMIT_CONFIG.mapsBusiness;
     } else {
       return RATE_LIMIT_CONFIG.default;
     }
@@ -195,11 +192,8 @@ export class ToolExecutor {
       case "extract_contact_info":
         return await this.executeContactExtraction(toolParams);
 
-      case "search_google_maps_businesses":
-        return await this.executeGoogleMapsSearch(toolParams);
-
-      case "search_yandex_maps_businesses":
-        return await this.executeYandexMapsSearch(toolParams);
+      case "search_maps_businesses":
+        return await this.executeMapsSearch(toolParams);
 
       case "read_attachment_content":
         return await this.executeReadAttachmentContent(
@@ -1208,16 +1202,18 @@ export class ToolExecutor {
   /**
    * Execute Google Maps business search using GoogleMapsModule.
    */
-  private static async executeGoogleMapsSearch(
+  /**
+   * Execute Maps business search — dispatches to Google or Yandex based on platform param.
+   */
+  private static async executeMapsSearch(
     toolParams: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
+    const platform =
+      typeof toolParams.platform === "string" ? toolParams.platform : "google";
+
     const query = typeof toolParams.query === "string" ? toolParams.query : "";
     const location =
       typeof toolParams.location === "string" ? toolParams.location : "";
-    const maxResults =
-      typeof toolParams.max_results === "number"
-        ? toolParams.max_results
-        : GOOGLE_MAPS_DEFAULT_MAX_RESULTS;
 
     if (!query.trim()) {
       return {
@@ -1232,6 +1228,23 @@ export class ToolExecutor {
         error: "location is required and must not be blank",
       };
     }
+
+    if (platform === "yandex") {
+      return this.executeYandexMapsSearch(toolParams);
+    }
+    return this.executeGoogleMapsSearch(toolParams);
+  }
+
+  private static async executeGoogleMapsSearch(
+    toolParams: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    const query = typeof toolParams.query === "string" ? toolParams.query : "";
+    const location =
+      typeof toolParams.location === "string" ? toolParams.location : "";
+    const maxResults =
+      typeof toolParams.max_results === "number"
+        ? toolParams.max_results
+        : GOOGLE_MAPS_DEFAULT_MAX_RESULTS;
 
     const clampedMaxResults = Math.min(
       Math.max(1, maxResults),
@@ -1285,20 +1298,6 @@ export class ToolExecutor {
       typeof toolParams.max_results === "number"
         ? toolParams.max_results
         : YANDEX_MAPS_DEFAULT_MAX_RESULTS;
-
-    if (!query.trim()) {
-      return {
-        success: false,
-        error: "query is required and must not be blank",
-      };
-    }
-
-    if (!location.trim()) {
-      return {
-        success: false,
-        error: "location is required and must not be blank",
-      };
-    }
 
     const clampedMaxResults = Math.min(
       Math.max(1, maxResults),

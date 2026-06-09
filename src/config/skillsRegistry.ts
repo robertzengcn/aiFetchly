@@ -192,12 +192,19 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     },
   },
   {
-    name: "search_google_maps_businesses",
+    name: "search_maps_businesses",
     description:
-      "Search Google Maps for local businesses by keyword and location. Returns structured business data including name, rating, review count, category, address, phone, website, and Google Maps URL. Use this for finding local businesses, lead generation, and market research.",
+      "Search map platforms (Google Maps or Yandex Maps) for local businesses by keyword and location. Returns structured business data including name, rating, review count, category, address, phone, website, and map URL. Use 'google' for global search or 'yandex' for Russian and CIS markets.",
     parameters: {
       type: "object",
       properties: {
+        platform: {
+          type: "string",
+          enum: ["google", "yandex"],
+          description:
+            'Map platform to search: "google" for Google Maps (global) or "yandex" for Yandex Maps (Russia/CIS)',
+          default: "google",
+        },
         query: {
           type: "string",
           description:
@@ -206,64 +213,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         location: {
           type: "string",
           description:
-            "Target location for the search (e.g., 'New York', 'London, UK', '90210')",
-        },
-        max_results: {
-          type: "number",
-          description:
-            "Maximum number of business results to return (default: 20, max: 50)",
-          default: 20,
-        },
-        include_website: {
-          type: "boolean",
-          description:
-            "Whether to extract website URLs from business listings (default: true)",
-          default: true,
-        },
-        include_reviews: {
-          type: "boolean",
-          description:
-            "Whether to include review count in results (default: false)",
-          default: false,
-        },
-        show_browser: {
-          type: "boolean",
-          description:
-            "Whether to show the browser window during scraping for debugging (default: false)",
-          default: false,
-        },
-      },
-      required: ["query", "location"],
-    },
-    tier: "main",
-    requiresConfirmation: false,
-    permissionCategory: "automation",
-    source: "built-in",
-    execute: async (args, context) => {
-      const result = await ToolExecutor.execute(
-        "search_google_maps_businesses",
-        args,
-        context.conversationId
-      );
-      return { success: true, result };
-    },
-  },
-  {
-    name: "search_yandex_maps_businesses",
-    description:
-      "Search Yandex Maps for local businesses by keyword and location. Returns structured business data including name, rating, review count, category, address, phone, website, and Yandex Maps URL. Supports Russian and CIS markets. Use this for finding businesses in Russia and surrounding regions, lead generation, and market research.",
-    parameters: {
-      type: "object",
-      properties: {
-        query: {
-          type: "string",
-          description:
-            "Business keyword or category to search for (e.g., 'dentist', 'Italian restaurant', 'plumber')",
-        },
-        location: {
-          type: "string",
-          description:
-            "Target location for the search (e.g., 'Moscow', 'Saint Petersburg', 'Novosibirsk')",
+            "Target location for the search (e.g., 'New York', 'Moscow', 'London, UK')",
         },
         max_results: {
           type: "number",
@@ -286,13 +236,13 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         language: {
           type: "string",
           description:
-            'Language for Yandex Maps UI and results (e.g., "ru", "en", "tr"). Defaults to "ru"',
+            'Language for Yandex Maps UI and results (e.g., "ru", "en", "tr"). Ignored for Google Maps. Defaults to "ru"',
           default: "ru",
         },
         region: {
           type: "string",
           description:
-            'Region code for search context (e.g., "ru", "kz", "by"). Optional',
+            'Region code for Yandex Maps search context (e.g., "ru", "kz", "by"). Ignored for Google Maps. Optional',
         },
         show_browser: {
           type: "boolean",
@@ -309,7 +259,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     source: "built-in",
     execute: async (args, context) => {
       const result = await ToolExecutor.execute(
-        "search_yandex_maps_businesses",
+        "search_maps_businesses",
         args,
         context.conversationId
       );
