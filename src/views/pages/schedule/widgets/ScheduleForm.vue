@@ -33,24 +33,27 @@
         </v-col>
       </v-row>
 
-      <v-row v-if="formData.task_type==TaskType.SEARCH" >
+      <v-row v-if="formData.task_type==TaskType.SEARCH">
         <!-- show search result table -->
         <SearchResultSelectTable @change="handleSearchtaskChanged" />
       </v-row>
       <v-row v-if="formData.task_type==TaskType.EMAIL_EXTRACT">
         <!-- <EmailExtractSelectTable @change="handleEmailExtractChanged" /> -->
        
-      <EmailresultTable :isSelectedtable="true" @change="handleEmailsourceChanged" />
+      <EmailresultTable :is-selectedtable="true" @change="handleEmailsourceChanged" />
           
       </v-row>
       <v-row v-if="formData.task_type==TaskType.BUCK_EMAIL">
-<EmailSendtaskTable :isSelectedtable="true" @change="handleEmailsendtaskChanged" />
+<EmailSendtaskTable :is-selectedtable="true" @change="handleEmailsendtaskChanged" />
       </v-row>
       <v-row v-if="formData.task_type==TaskType.GOOGLE_MAPS">
         <GoogleMapsSelectTable @change="handleGoogleMapsChanged" />
       </v-row>
       <v-row v-if="formData.task_type==TaskType.YANDEX_MAPS">
         <YandexMapsSelectTable @change="handleYandexMapsChanged" />
+      </v-row>
+      <v-row v-if="formData.task_type==TaskType.AI_MESSAGE">
+        <AiMessageTaskForm @change="handleAiMessageTaskChanged" />
       </v-row>
 
       <v-row>
@@ -227,6 +230,7 @@ import EmailSendtaskTable from '@/views/pages/emailsendtask/widgets/EmailSendtas
 import {BuckEmailListType} from "@/entityTypes/buckemailType"
 import GoogleMapsSelectTable from '@/views/pages/google-maps-scraper/widgets/GoogleMapsSelectTable.vue'
 import YandexMapsSelectTable from '@/views/pages/yandex-maps-scraper/widgets/YandexMapsSelectTable.vue'
+import AiMessageTaskForm from './AiMessageTaskForm.vue'
 const { t } = useI18n()
 
 // Props
@@ -289,6 +293,7 @@ const taskTypeOptions = [
   { title: t('schedule.bulk_email'), value: TaskType.BUCK_EMAIL },
   { title: t('schedule.google_maps'), value: TaskType.GOOGLE_MAPS },
   { title: t('schedule.yandex_maps'), value: TaskType.YANDEX_MAPS },
+  { title: t('schedule.ai_message_task') || 'AI Message Task', value: TaskType.AI_MESSAGE },
 ]
 
 const triggerTypeOptions = [
@@ -363,6 +368,14 @@ const handleGoogleMapsChanged = (newValue: Array<{id: number; query: string; loc
 const handleYandexMapsChanged = (newValue: Array<{id: number; query: string; location: string}>|undefined) => {
   if (newValue && newValue.length > 0 && newValue[0].id) {
     formData.value.task_id = newValue[0].id
+  } else {
+    formData.value.task_id = 0
+  }
+}
+
+const handleAiMessageTaskChanged = (newValue: number | undefined) => {
+  if (newValue && newValue > 0) {
+    formData.value.task_id = newValue
   } else {
     formData.value.task_id = 0
   }

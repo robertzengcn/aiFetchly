@@ -629,6 +629,7 @@ const getTaskTypeColor = (taskType: TaskType): string => {
     case TaskType.YELLOW_PAGES: return 'pink'
     case TaskType.GOOGLE_MAPS: return 'teal'
     case TaskType.YANDEX_MAPS: return 'indigo'
+    case TaskType.AI_MESSAGE: return 'purple'
     default: return 'grey'
   }
 }
@@ -641,6 +642,7 @@ const getTaskTypeLabel = (taskType: TaskType): string => {
     case TaskType.YELLOW_PAGES: return 'Directory Assistant'
     case TaskType.GOOGLE_MAPS: return 'Google Maps'
     case TaskType.YANDEX_MAPS: return 'Yandex Maps'
+    case TaskType.AI_MESSAGE: return t('schedule.ai_message_task') || 'AI Message Task'
     default: return 'Unknown'
   }
 }
