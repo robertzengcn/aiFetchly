@@ -305,6 +305,8 @@ const taskTypeOptions = computed(() => [
   { title: t('schedule.email_extract'), value: TaskType.EMAIL_EXTRACT },
   { title: t('schedule.bulk_email'), value: TaskType.BUCK_EMAIL },
   { title: t('schedule.video_download'), value: TaskType.VIDEO_DOWNLOAD },
+  { title: t('schedule.google_maps'), value: TaskType.GOOGLE_MAPS },
+  { title: t('schedule.yandex_maps'), value: TaskType.YANDEX_MAPS },
   // { title: t('schedule.social_task'), value: TaskType.SOCIAL_TASK }
 ])
 

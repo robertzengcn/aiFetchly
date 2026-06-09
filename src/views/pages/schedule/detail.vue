@@ -628,6 +628,8 @@ const getTaskTypeColor = (taskType: TaskType): string => {
     case TaskType.BUCK_EMAIL: return 'orange'
     case TaskType.VIDEO_DOWNLOAD: return 'purple'
     case TaskType.YELLOW_PAGES: return 'pink'
+    case TaskType.GOOGLE_MAPS: return 'teal'
+    case TaskType.YANDEX_MAPS: return 'indigo'
     default: return 'grey'
   }
 }
@@ -639,6 +641,8 @@ const getTaskTypeLabel = (taskType: TaskType): string => {
     case TaskType.BUCK_EMAIL: return 'Buck Email'
     case TaskType.VIDEO_DOWNLOAD: return 'Video Download'
     case TaskType.YELLOW_PAGES: return 'Directory Assistant'
+    case TaskType.GOOGLE_MAPS: return 'Google Maps'
+    case TaskType.YANDEX_MAPS: return 'Yandex Maps'
     default: return 'Unknown'
   }
 }
