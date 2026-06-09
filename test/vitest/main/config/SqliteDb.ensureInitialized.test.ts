@@ -42,7 +42,7 @@ function createMockSqliteDb(overrides?: {
   initializeFn?: () => Promise<void>;
 }): {
   sqliteDb: SqliteDb;
-  initializeMock: Mock<() => Promise<void>>;
+  initializeMock: Mock<[], Promise<void>>;
 } {
   const initializeMock = overrides?.initializeFn
     ? vi.fn(overrides.initializeFn)
