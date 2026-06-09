@@ -929,6 +929,7 @@ const selectedSlashIndex = ref(0);
 
 // FIFO message queue for follow-up messages during streaming
 const messageQueue = ref<QueuedChatMessage[]>([]);
+const wasStoppedByUser = ref(false);
 
 // File operation badge state: conversationId → records
 const fileOps = ref<Map<string, readonly FileOperationRecord[]>>(new Map());
@@ -1469,6 +1470,7 @@ async function sendMessage(
 
   isLoading.value = true;
   isTyping.value = true;
+  wasStoppedByUser.value = false;
   streamError.value = null;
 
   // Track the conversation ID for this stream
@@ -1801,6 +1803,14 @@ async function sendMessage(
         }
       },
       (completedConversationId) => {
+        // If the user already stopped the stream manually, handleStopStream()
+        // has already reset all UI state. Skip everything here to avoid
+        // double-resetting or auto-dispatching queued messages.
+        if (wasStoppedByUser.value) {
+          wasStoppedByUser.value = false;
+          return;
+        }
+
         // Always reset typing/tool indicators when the stream completes —
         // these are display-only states that must never persist after a
         // COMPLETE event regardless of any guard logic above.
@@ -1824,7 +1834,7 @@ async function sendMessage(
           if (activeStreamConversationId.value === capturedId) {
             activeStreamConversationId.value = undefined;
           }
-          // Auto-dispatch next queued message after natural completion
+          // Auto-dispatch next queued message after natural completion only
           processNextQueuedMessage();
         }, 0);
       },
@@ -2045,8 +2055,37 @@ function handleEnterKey(event: KeyboardEvent): void {
 
 /**
  * Stop the active AI chat stream (user clicked stop button)
+ *
+ * Immediately resets frontend UI state so the user sees the stop take effect
+ * right away. Also sends the IPC stop signal to abort the main-process fetch,
+ * but we do NOT rely on the async completion event for UI cleanup because
+ * abort propagation can be unreliable across Node.js / Electron versions.
  */
 function handleStopStream(): void {
+  // Mark that the user initiated the stop so the completion callback knows
+  // not to auto-dispatch the next queued message (PRD section 4.5).
+  wasStoppedByUser.value = true;
+
+  // Reset UI state immediately
+  isLoading.value = false;
+  isTyping.value = false;
+  isExecutingTool.value = false;
+  activeStreamConversationId.value = undefined;
+
+  // Clean up any trailing empty assistant placeholder that was added
+  // by sendMessage before any content arrived.
+  const lastIndex = messages.value.length - 1;
+  if (lastIndex >= 0) {
+    const lastMsg = messages.value[lastIndex];
+    if (
+      lastMsg.role === 'assistant' &&
+      (!lastMsg.content || lastMsg.content.trim() === '')
+    ) {
+      messages.value = messages.value.slice(0, lastIndex);
+    }
+  }
+
+  // Tell the main process to abort the ongoing fetch.
   stopStreamingChat();
 }
 
