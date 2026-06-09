@@ -237,6 +237,11 @@ export default {
     document_processing_error: '处理文档 "{name}" 时出错：{error}',
     document_uploaded_pending_processing: '文档 "{name}" 已上传，等待处理',
     file_saved_but_database_error: "文件已保存但数据库错误",
+    // 重复文件检查翻译
+    duplicate_detected: "检测到重复文件",
+    duplicate_files_found: "以下文件已存在于您的知识库中：",
+    upload_anyway: "仍然上传",
+    skip_duplicates: "跳过重复文件",
     // AI Chat translations
     ai_assistant: "AI 助手",
     type_message_placeholder: "输入消息... (Shift+Enter 换行)",

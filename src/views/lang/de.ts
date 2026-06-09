@@ -256,6 +256,12 @@ export default {
     document_uploaded_pending_processing:
       'Dokument "{name}" hochgeladen und wartet auf Verarbeitung',
     file_saved_but_database_error: "Datei gespeichert, aber Datenbankfehler",
+    // Duplicate check translations
+    duplicate_detected: "Doppelte Dateien erkannt",
+    duplicate_files_found:
+      "Die folgenden Dateien sind bereits in Ihrer Bibliothek vorhanden:",
+    upload_anyway: "Trotzdem hochladen",
+    skip_duplicates: "Duplikate überspringen",
     ai_assistant: "KI-Assistent",
     type_message_placeholder:
       "Nachricht eingeben... (Shift+Enter für neue Zeile)",

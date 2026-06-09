@@ -226,6 +226,50 @@
     </v-dialog>
 
 
+    <!-- Duplicate Confirmation Dialog -->
+    <v-dialog v-model="showDuplicateDialog" max-width="550px" persistent>
+      <v-card>
+        <v-card-title class="text-h6">
+          <v-icon color="warning" class="mr-2">mdi-alert-circle</v-icon>
+          {{ t('knowledge.duplicate_detected') }}
+        </v-card-title>
+
+        <v-card-text>
+          <p class="mb-3">
+            {{ t('knowledge.duplicate_files_found') }}
+          </p>
+          <v-list density="compact" class="bg-grey-lighten-4">
+            <v-list-item
+              v-for="(dup, idx) in duplicateFiles"
+              :key="idx"
+            >
+              <template v-slot:prepend>
+                <v-icon color="warning" size="small">mdi-file-alert</v-icon>
+              </template>
+              <v-list-item-title>{{ dup.fileName }}</v-list-item-title>
+              <v-list-item-subtitle>
+                {{ formatFileSize(dup.fileSize) }}
+              </v-list-item-subtitle>
+            </v-list-item>
+          </v-list>
+        </v-card-text>
+
+        <v-card-actions>
+          <v-spacer />
+          <v-btn color="grey" variant="text" @click="cancelUpload">
+            {{ t('common.cancel') }}
+          </v-btn>
+          <v-btn color="warning" variant="outlined" @click="handleSkipDuplicates">
+            {{ t('knowledge.skip_duplicates') }}
+          </v-btn>
+          <v-btn color="primary" @click="handleUploadAnyway">
+            {{ t('knowledge.upload_anyway') }}
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+
     <!-- Settings Dialog -->
     <v-dialog v-model="showSettingsDialog" max-width="600">
       <v-card>
@@ -332,7 +376,7 @@ const { t } = useI18n();
 
 import DocumentManagement from '@/views/pages/knowledge/DocumentManagement.vue';
 import SearchInterface from '@/views/pages/knowledge/SearchInterface.vue';
-import { initializeRAG, getRAGStats, uploadDocument, selectFilesNative as selectFilesNativeAPI, copyFileToTemp as copyFileToTempAPI, chunkAndEmbedDocument, getAvailableEmbeddingModelsWithDefault, updateEmbeddingModel, FileUploadProgress, FileUploadComplete } from '@/views/api/rag';
+import { initializeRAG, getRAGStats, uploadDocument, selectFilesNative as selectFilesNativeAPI, copyFileToTemp as copyFileToTempAPI, chunkAndEmbedDocument, getAvailableEmbeddingModelsWithDefault, updateEmbeddingModel, FileUploadProgress, FileUploadComplete, checkDocumentDuplicate } from '@/views/api/rag';
 import type { SaveTempFileResponse, UploadedDocument } from '@/entityTypes/commonType';
 import { ModelInfo } from '@/api/ragConfigApi';
 import { DocumentMetadata } from '@/entityTypes/metadataType';
@@ -374,6 +418,11 @@ const fileInput = ref<HTMLInputElement>();
 // Progress tracking
 const uploadProgress = ref<Map<string, FileUploadProgress>>(new Map());
 const currentUploadingFile = ref<string>('');
+
+// Duplicate check state
+const showDuplicateDialog = ref(false);
+const duplicateFiles = ref<Array<{ fileName: string; fileSize: number; existingId: number; existingUploadedAt: string }>>([]);
+const pendingUploadAfterDuplicateCheck = ref<File[]>([]);
 
 // Component refs
 const documentManagement = ref();
@@ -715,8 +764,71 @@ async function confirmUpload() {
   uploadProgress.value.clear();
 
   try {
+    // Check all files for duplicates in parallel
+    const duplicateChecks = await Promise.all(
+      uploadFiles.value.map(async (file): Promise<{ file: File; isDuplicate: boolean; existingDocuments: Array<{ id: number; uploadedAt: string }> }> => {
+        const result = await checkDocumentDuplicate(file.name, file.size);
+        return {
+          file,
+          isDuplicate: result.isDuplicate,
+          existingDocuments: result.existingDocuments,
+        };
+      })
+    );
+
+    const dupes = duplicateChecks.filter((c) => c.isDuplicate);
+    if (dupes.length > 0) {
+      // Store info and show dialog
+      duplicateFiles.value = dupes.map((d) => ({
+        fileName: d.file.name,
+        fileSize: d.file.size,
+        existingId: d.existingDocuments[0].id,
+        existingUploadedAt: d.existingDocuments[0].uploadedAt,
+      }));
+      pendingUploadAfterDuplicateCheck.value = uploadFiles.value;
+      showDuplicateDialog.value = true;
+      uploading.value = false;
+      return;
+    }
+
+    // No duplicates - proceed with all files
+    await doUpload(uploadFiles.value);
+  } catch (error) {
+    uploadError.value = t('knowledge.upload_failed') + ': ' + (error instanceof Error ? error.message : 'Unknown error');
+    console.error('Upload error:', error);
+  } finally {
+    uploading.value = false;
+    currentUploadingFile.value = '';
+    uploadProgress.value.clear();
+  }
+}
+
+function handleSkipDuplicates() {
+  showDuplicateDialog.value = false;
+  const dupeNames = new Set(duplicateFiles.value.map((d) => d.fileName));
+  const filteredFiles = pendingUploadAfterDuplicateCheck.value.filter(
+    (f) => !dupeNames.has(f.name)
+  );
+  if (filteredFiles.length === 0) {
+    cancelUpload();
+    return;
+  }
+  doUpload(filteredFiles);
+}
+
+function handleUploadAnyway() {
+  showDuplicateDialog.value = false;
+  doUpload(pendingUploadAfterDuplicateCheck.value);
+}
+
+async function doUpload(files: File[]) {
+  uploading.value = true;
+  uploadError.value = '';
+  uploadProgress.value.clear();
+
+  try {
     // Upload each file with progress tracking
-    const uploadPromises = uploadFiles.value.map(async (file): Promise<UploadedDocument | null> => {
+    const uploadPromises = files.map(async (file): Promise<UploadedDocument | null> => {
       // For Electron, we can access the file path directly if available
       // Otherwise, use the webkitRelativePath or create a temporary file
       let filePath = (file as any).path || file.webkitRelativePath;

@@ -4,7 +4,10 @@ import {
   SearchResponse,
   DocumentUploadResponse,
 } from "@/modules/RagSearchModule";
-import { DocumentUploadOptions } from "@/modules/RAGDocumentModule";
+import {
+  DocumentUploadOptions,
+  RAGDocumentModule,
+} from "@/modules/RAGDocumentModule";
 import { RAGDocumentEntity } from "@/entity/RAGDocument.entity";
 import { RagConfigApi, ChunkingConfig } from "@/api/ragConfigApi";
 import { RAGChunkModule } from "@/modules/RAGChunkModule";
@@ -124,6 +127,39 @@ export class RagSearchController {
     options: DocumentUploadOptions
   ): Promise<DocumentUploadResponse> {
     return await this.ragSearchModule.uploadDocument(options);
+  }
+
+  /**
+   * Check if a document with the same name and file size already exists
+   * @param name - File name
+   * @param fileSize - File size in bytes
+   * @returns Duplicate check result
+   */
+  async checkDocumentDuplicate(
+    name: string,
+    fileSize: number
+  ): Promise<{
+    isDuplicate: boolean;
+    existingDocuments: Array<{
+      id: number;
+      name: string;
+      fileSize: number;
+      uploadedAt: string;
+      status: string;
+    }>;
+  }> {
+    const module = new RAGDocumentModule();
+    const result = await module.checkDuplicate(name, fileSize);
+    return {
+      isDuplicate: result.isDuplicate,
+      existingDocuments: result.existingDocuments.map((doc) => ({
+        id: doc.id,
+        name: doc.name,
+        fileSize: doc.fileSize,
+        uploadedAt: doc.uploadedAt?.toISOString() || "",
+        status: doc.status,
+      })),
+    };
   }
 
   /**

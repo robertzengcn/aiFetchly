@@ -35,6 +35,7 @@ import {
   RAG_CHUNK_AND_EMBED_DOCUMENT,
   RAG_DOWNLOAD_DOCUMENT,
   RAG_GET_DOCUMENT_ERROR_LOG,
+  RAG_CHECK_DOCUMENT_DUPLICATE,
   SHOW_OPEN_DIALOG,
   GET_FILE_STATS,
   SAVE_TEMP_FILE,
@@ -239,6 +240,35 @@ export async function deleteDocument(
         error instanceof Error ? error.message : "Unknown error occurred",
     };
   }
+}
+
+/**
+ * Check if a document with the same name and file size already exists
+ * @param name - File name
+ * @param fileSize - File size in bytes
+ * @returns Duplicate check result
+ */
+export async function checkDocumentDuplicate(
+  name: string,
+  fileSize: number
+): Promise<{
+  isDuplicate: boolean;
+  existingDocuments: Array<{
+    id: number;
+    name: string;
+    fileSize: number;
+    uploadedAt: string;
+    status: string;
+  }>;
+}> {
+  const response = await windowInvoke(RAG_CHECK_DOCUMENT_DUPLICATE, {
+    name,
+    fileSize,
+  });
+  if (response?.status && response.data) {
+    return response.data;
+  }
+  return { isDuplicate: false, existingDocuments: [] };
 }
 
 /**
