@@ -13,9 +13,18 @@ import { YandexMapsModule } from "@/modules/YandexMapsModule";
 import {
   ScheduleToolErrorCode,
   ScheduleToolFailure,
+  ScheduleToolResult,
   SafeSchedulePayload,
   SafeExecutionPayload,
+  listSchedulesSchema,
+  getScheduleDetailsSchema,
+  listScheduleExecutionsSchema,
 } from "@/entityTypes/scheduleAiToolTypes";
+import { ListData } from "@/entityTypes/commonType";
+import {
+  ExecutionStatus,
+  TriggerType as LogTriggerType,
+} from "@/entity/ScheduleExecutionLog.entity";
 
 // ---------------------------------------------------------------------------
 // Error helpers
@@ -182,9 +191,7 @@ export async function validateTaskReference(
     }
 
     default:
-      throw new Error(
-        `Unsupported task type: ${taskType}`
-      );
+      throw new Error(`Unsupported task type: ${taskType}`);
   }
 }
 
@@ -205,4 +212,137 @@ export function getScheduleManager(): ScheduleManager {
 /** Return a fresh ScheduleExecutionLogModule instance. */
 export function getExecutionLogModule(): ScheduleExecutionLogModule {
   return new ScheduleExecutionLogModule();
+}
+
+// ---------------------------------------------------------------------------
+// Read-only tool functions
+// ---------------------------------------------------------------------------
+
+/**
+ * List all schedules with pagination. Returns safe payloads suitable for AI
+ * tool consumers.
+ */
+export async function listSchedulesForAi(args: unknown): Promise<
+  ScheduleToolResult<{
+    schedules: SafeSchedulePayload[];
+    total: number;
+    page: number;
+    size: number;
+  }>
+> {
+  try {
+    const parsed = listSchedulesSchema.safeParse(args);
+    if (!parsed.success) {
+      return validationFailure(parsed.error);
+    }
+
+    const { page, size } = parsed.data;
+    const module = getScheduleModule();
+    const result: ListData<ScheduleTaskEntity> = await module.listSchedules(
+      page,
+      size
+    );
+
+    const schedules = result.records.map(toSafeSchedulePayload);
+
+    return {
+      success: true,
+      data: {
+        schedules,
+        total: result.num,
+        page,
+        size,
+      },
+    };
+  } catch (error: unknown) {
+    const message =
+      error instanceof Error ? error.message : "Failed to list schedules";
+    return toolFailure(ScheduleToolErrorCode.VALIDATION_FAILED, message);
+  }
+}
+
+/**
+ * Get detailed information about a single schedule by ID.
+ */
+export async function getScheduleDetailsForAi(
+  args: unknown
+): Promise<ScheduleToolResult<{ schedule: SafeSchedulePayload }>> {
+  try {
+    const parsed = getScheduleDetailsSchema.safeParse(args);
+    if (!parsed.success) {
+      return validationFailure(parsed.error);
+    }
+
+    const { schedule_id } = parsed.data;
+    const module = getScheduleModule();
+    const schedule: ScheduleTaskEntity | null = await module.getScheduleById(
+      schedule_id
+    );
+
+    if (schedule === null) {
+      return toolFailure(
+        ScheduleToolErrorCode.SCHEDULE_NOT_FOUND,
+        `Schedule ${schedule_id} not found`
+      );
+    }
+
+    return {
+      success: true,
+      data: { schedule: toSafeSchedulePayload(schedule) },
+    };
+  } catch (error: unknown) {
+    const message =
+      error instanceof Error ? error.message : "Failed to get schedule details";
+    return toolFailure(ScheduleToolErrorCode.VALIDATION_FAILED, message);
+  }
+}
+
+/**
+ * List execution logs with optional filters for schedule_id, status, and
+ * triggered_by. Returns safe execution payloads suitable for AI consumers.
+ */
+export async function listScheduleExecutionsForAi(args: unknown): Promise<
+  ScheduleToolResult<{
+    executions: SafeExecutionPayload[];
+    total: number;
+    page: number;
+    size: number;
+  }>
+> {
+  try {
+    const parsed = listScheduleExecutionsSchema.safeParse(args);
+    if (!parsed.success) {
+      return validationFailure(parsed.error);
+    }
+
+    const { page, size, schedule_id, status, triggered_by } = parsed.data;
+    const module = getExecutionLogModule();
+    const result = await module.listExecutions(
+      page,
+      size,
+      schedule_id,
+      status as ExecutionStatus | undefined,
+      triggered_by as LogTriggerType | undefined
+    );
+
+    const executions = result.records.map((record) =>
+      toSafeExecutionPayload(record as unknown as Record<string, unknown>)
+    );
+
+    return {
+      success: true,
+      data: {
+        executions,
+        total: result.num,
+        page,
+        size,
+      },
+    };
+  } catch (error: unknown) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Failed to list schedule executions";
+    return toolFailure(ScheduleToolErrorCode.VALIDATION_FAILED, message);
+  }
 }
