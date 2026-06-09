@@ -341,3 +341,14 @@ export const YANDEX_MAPS_SEARCH_RESULT = "yandex_maps:search_result";
 export const YANDEX_MAPS_HISTORY_LIST = "yandex_maps:history_list";
 export const YANDEX_MAPS_HISTORY_DETAIL = "yandex_maps:history_detail";
 export const YANDEX_MAPS_HISTORY_DELETE = "yandex_maps:history_delete";
+
+// AI Message Task Channels
+export const AI_MESSAGE_TASK_CREATE = "ai-message-task:create";
+export const AI_MESSAGE_TASK_UPDATE = "ai-message-task:update";
+export const AI_MESSAGE_TASK_DELETE = "ai-message-task:delete";
+export const AI_MESSAGE_TASK_LIST = "ai-message-task:list";
+export const AI_MESSAGE_TASK_DETAIL = "ai-message-task:detail";
+export const AI_MESSAGE_TASK_RUN_LIST = "ai-message-task:run-list";
+export const AI_MESSAGE_TASK_RUN_DETAIL = "ai-message-task:run-detail";
+export const AI_MESSAGE_TASK_LIST_AVAILABLE_TOOLS =
+  "ai-message-task:list-available-tools";
