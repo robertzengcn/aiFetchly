@@ -265,8 +265,8 @@ export async function checkDocumentDuplicate(
     name,
     fileSize,
   });
-  if (response?.status && response.data) {
-    return response.data;
+  if (response) {
+    return response;
   }
   return { isDuplicate: false, existingDocuments: [] };
 }
