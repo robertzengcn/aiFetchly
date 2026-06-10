@@ -155,7 +155,7 @@ export function registerTaskCommands(parent: Command): void {
     .option("--description <desc>", "Task description")
     .option("--json", "Output as JSON")
     .action(async (opts) => {
-      if (opts.parent?.parent?.readOnly) throw new ReadOnlyError("task:create");
+      if (CliDatabase.isReadOnly()) throw new ReadOnlyError("task:create");
       try {
         await CliDatabase.ensureInitialized();
         const repo = CliDatabase.getRepository(TaskEntity);
@@ -186,7 +186,7 @@ export function registerTaskCommands(parent: Command): void {
     .option("--description <desc>", "Task description")
     .option("--json", "Output as JSON")
     .action(async (id, opts) => {
-      if (opts.parent?.parent?.readOnly) throw new ReadOnlyError("task:update");
+      if (CliDatabase.isReadOnly()) throw new ReadOnlyError("task:update");
       try {
         await CliDatabase.ensureInitialized();
         const repo = CliDatabase.getRepository(TaskEntity);
@@ -212,7 +212,7 @@ export function registerTaskCommands(parent: Command): void {
     .description("Delete a task")
     .option("--json", "Output as JSON")
     .action(async (id, opts) => {
-      if (opts.parent?.parent?.readOnly) throw new ReadOnlyError("task:delete");
+      if (CliDatabase.isReadOnly()) throw new ReadOnlyError("task:delete");
       try {
         await CliDatabase.ensureInitialized();
         const repo = CliDatabase.getRepository(TaskEntity);

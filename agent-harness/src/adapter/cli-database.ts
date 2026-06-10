@@ -194,6 +194,17 @@ export class CliDatabase {
   private static instance: CliDatabase | null = null;
   private static currentDbPath: string | null = null;
   private static initPromise: Promise<void> | null = null;
+  private static readOnlyMode = false;
+
+  /** Set read-only mode (called from CLI init) */
+  public static setReadOnly(readOnly: boolean): void {
+    CliDatabase.readOnlyMode = readOnly;
+  }
+
+  /** Check if read-only mode is enabled */
+  public static isReadOnly(): boolean {
+    return CliDatabase.readOnlyMode;
+  }
 
   private constructor(dbDir: string) {
     this.connection = new DataSource({
@@ -270,6 +281,14 @@ export class CliDatabase {
       );
     }
     return CliDatabase.instance.connection.getRepository(entityClass);
+  }
+
+  /** Get the current database directory path */
+  public static getCurrentDbPath(): string {
+    if (!CliDatabase.currentDbPath) {
+      throw new Error("Database not initialized yet");
+    }
+    return CliDatabase.currentDbPath;
   }
 
   /** Reset the singleton (for testing) */

@@ -7,7 +7,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.cli.json",
-    "dev": "ts-node -P tsconfig.cli.json bin/cli.ts",
+    "dev": "ts-node -r tsconfig-paths/register -P tsconfig.cli.json bin/cli.ts",
     "test": "python3 -m pytest tests/ -v --tb=short",
     "test:unit": "python3 -m pytest tests/test_core.py -v",
     "test:e2e": "python3 -m pytest tests/test_full_e2e.py -v -s"

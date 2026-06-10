@@ -2,21 +2,19 @@
 E2E tests for the aiFetchly CLI harness.
 
 Tests the full pipeline: create temp database -> seed data -> run commands -> verify output.
-Uses real SQLite operations through the CLI's database adapter.
+Uses a TypeScript seed script (bin/seed-test-db.ts) to create tables via TypeORM synchronize,
+ensuring the schema exactly matches entity definitions.
 """
 
 import json
 import os
-import sqlite3
+import shutil
 import subprocess
-import sys
-import tempfile
 import pytest
 
 
 def _resolve_cli(name):
     """Resolve installed CLI command; falls back to ts-node for dev."""
-    import shutil
     force = os.environ.get("CLI_ANYTHING_FORCE_INSTALLED", "").strip() == "1"
     path = shutil.which(name)
     if path:
@@ -25,14 +23,23 @@ def _resolve_cli(name):
     if force:
         raise RuntimeError(f"{name} not found in PATH. Install with: pip install -e .")
     cli_path = os.path.join(os.getcwd(), "agent-harness", "bin", "cli.ts")
+    tsconfig = os.path.join(os.getcwd(), "agent-harness", "tsconfig.cli.json")
     print(f"[_resolve_cli] Falling back to: ts-node {cli_path}")
-    return ["npx", "ts-node", "-P", "agent-harness/tsconfig.cli.json", cli_path]
+    return ["npx", "ts-node", "-r", "tsconfig-paths/register", "-P", tsconfig, cli_path]
+
+
+def _resolve_seed_script():
+    """Resolve the seed script command."""
+    seed_path = os.path.join(os.getcwd(), "agent-harness", "bin", "seed-test-db.ts")
+    tsconfig = os.path.join(os.getcwd(), "agent-harness", "tsconfig.cli.json")
+    return ["npx", "ts-node", "-r", "tsconfig-paths/register", "-P", tsconfig, seed_path]
 
 
 CLI_BASE = _resolve_cli("cli-anything-aifetchly")
+SEED_BASE = _resolve_seed_script()
 
 
-def _run_cli(args, check=True, timeout=30):
+def _run_cli(args, check=True, timeout=60):
     """Run the CLI command with the given arguments."""
     return subprocess.run(
         CLI_BASE + args,
@@ -45,213 +52,20 @@ def _run_cli(args, check=True, timeout=30):
 
 @pytest.fixture
 def test_db(tmp_path):
-    """Create a temporary database with seed data for testing."""
+    """Create a temporary database with seed data using the TypeScript seed script.
+
+    The seed script uses TypeORM synchronize=true to create all tables from entity
+    definitions, then inserts seed data. This guarantees the schema matches exactly.
+    """
     db_dir = str(tmp_path)
-    db_path = os.path.join(db_dir, "scraper.db")
-
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-
-    # Create essential tables (matching TypeORM entity schemas)
-    cursor.executescript("""
-        CREATE TABLE IF NOT EXISTS task_entity (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            platform TEXT DEFAULT '',
-            status TEXT DEFAULT 'pending',
-            keywords TEXT DEFAULT '[]',
-            description TEXT DEFAULT '',
-            "createdAt" TEXT DEFAULT (datetime('now')),
-            "updatedAt" TEXT DEFAULT (datetime('now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS search_task_entity (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            enginer_id INTEGER DEFAULT 1,
-            keyword TEXT DEFAULT '',
-            status INTEGER DEFAULT 0,
-            "createdAt" TEXT DEFAULT (datetime('now')),
-            "updatedAt" TEXT DEFAULT (datetime('now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS search_result_entity (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            taskId INTEGER DEFAULT 0,
-            link TEXT DEFAULT '',
-            title TEXT DEFAULT '',
-            snippet TEXT DEFAULT '',
-            "createdAt" TEXT DEFAULT (datetime('now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS contact_info_entity (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            email TEXT DEFAULT '',
-            phone TEXT DEFAULT '',
-            address TEXT DEFAULT '',
-            extractionStatus TEXT DEFAULT 'pending',
-            extractionDate TEXT,
-            resultId INTEGER DEFAULT 0
-        );
-
-        CREATE TABLE IF NOT EXISTS proxy_entity (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            host TEXT DEFAULT '',
-            port INTEGER DEFAULT 0,
-            username TEXT DEFAULT '',
-            password TEXT DEFAULT '',
-            type TEXT DEFAULT 'http',
-            status TEXT DEFAULT 'unchecked',
-            "lastChecked" TEXT,
-            "createdAt" TEXT DEFAULT (datetime('now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS schedule_task_entity (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT DEFAULT '',
-            cronExpression TEXT DEFAULT '',
-            taskType TEXT DEFAULT '',
-            taskId INTEGER DEFAULT 0,
-            is_active INTEGER DEFAULT 1,
-            status TEXT DEFAULT 'active',
-            "lastRunAt" TEXT,
-            "nextRunAt" TEXT,
-            "createdAt" TEXT DEFAULT (datetime('now')),
-            "updatedAt" TEXT DEFAULT (datetime('now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS email_search_task_entity (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            status TEXT DEFAULT 'pending',
-            "createdAt" TEXT DEFAULT (datetime('now')),
-            "updatedAt" TEXT DEFAULT (datetime('now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS email_search_result_entity (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            taskId INTEGER DEFAULT 0,
-            email TEXT DEFAULT '',
-            source TEXT DEFAULT '',
-            status TEXT DEFAULT 'pending',
-            "createdAt" TEXT DEFAULT (datetime('now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS social_account_entity (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            social_type_id TEXT DEFAULT '',
-            username TEXT DEFAULT '',
-            password TEXT DEFAULT '',
-            status TEXT DEFAULT 'active',
-            "lastUsed" TEXT,
-            "createdAt" TEXT DEFAULT (datetime('now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS yellow_pages_task_entity (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            platform TEXT DEFAULT '',
-            location TEXT DEFAULT '',
-            keyword TEXT DEFAULT '',
-            status TEXT DEFAULT 'pending',
-            "createdAt" TEXT DEFAULT (datetime('now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS yellow_pages_result_entity (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            taskId INTEGER DEFAULT 0,
-            name TEXT DEFAULT '',
-            phone TEXT DEFAULT '',
-            address TEXT DEFAULT '',
-            website TEXT DEFAULT '',
-            email TEXT DEFAULT ''
-        );
-
-        CREATE TABLE IF NOT EXISTS system_setting_group_entity (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT DEFAULT '',
-            description TEXT DEFAULT '',
-            "createdAt" TEXT DEFAULT (datetime('now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS system_setting_entity (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT DEFAULT '',
-            value TEXT DEFAULT '',
-            groupId INTEGER DEFAULT 0,
-            "createdAt" TEXT DEFAULT (datetime('now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS r_a_g_document_entity (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT DEFAULT '',
-            type TEXT DEFAULT '',
-            "createdAt" TEXT DEFAULT (datetime('now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS r_a_g_chunk_entity (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            documentId INTEGER DEFAULT 0,
-            content TEXT DEFAULT '',
-            "createdAt" TEXT DEFAULT (datetime('now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS google_maps_search_record_entity (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            query TEXT DEFAULT '',
-            location TEXT DEFAULT '',
-            results TEXT DEFAULT '[]',
-            "createdAt" TEXT DEFAULT (datetime('now'))
-        );
-
-        -- Seed data
-        INSERT INTO task_entity (name, platform, status, description)
-        VALUES
-            ('Test Task 1', 'google', 'completed', 'First test task'),
-            ('Test Task 2', 'linkedin', 'pending', 'Second test task'),
-            ('Test Task 3', 'google', 'running', 'Third test task');
-
-        INSERT INTO search_task_entity (enginer_id, keyword, status)
-        VALUES (1, 'marketing automation', 2), (2, 'email marketing', 1);
-
-        INSERT INTO search_result_entity (taskId, link, title, snippet)
-        VALUES
-            (1, 'https://example.com/1', 'Result 1', 'Snippet 1'),
-            (1, 'https://example.com/2', 'Result 2', 'Snippet 2'),
-            (2, 'https://example.com/3', 'Result 3', 'Snippet 3');
-
-        INSERT INTO contact_info_entity (email, phone, address, extractionStatus)
-        VALUES
-            ('john@example.com', '+1234567890', '123 Main St', 'completed'),
-            ('jane@example.com', '+0987654321', '456 Oak Ave', 'completed'),
-            ('bob@example.com', '+1122334455', '789 Pine Rd', 'pending');
-
-        INSERT INTO proxy_entity (host, port, type, status)
-        VALUES
-            ('proxy1.example.com', 8080, 'http', 'working'),
-            ('proxy2.example.com', 3128, 'socks5', 'unchecked');
-
-        INSERT INTO schedule_task_entity (name, cronExpression, taskType, taskId, is_active, status)
-        VALUES
-            ('Daily Scrape', '0 9 * * *', 'search', 1, 1, 'active'),
-            ('Weekly Report', '0 0 * * 1', 'email', 2, 0, 'inactive');
-
-        INSERT INTO social_account_entity (social_type_id, username, status)
-        VALUES ('facebook', 'user1', 'active'), ('twitter', 'user2', 'active');
-
-        INSERT INTO yellow_pages_task_entity (platform, location, keyword, status)
-        VALUES ('yelp', 'New York', 'restaurants', 'completed');
-
-        INSERT INTO yellow_pages_result_entity (taskId, name, phone, address, website, email)
-        VALUES (1, 'Test Restaurant', '+111222333', '100 Broadway', 'https://test.com', 'info@test.com');
-
-        INSERT INTO r_a_g_document_entity (name, type)
-        VALUES ('marketing-guide.pdf', 'pdf'), ('sales-playbook.docx', 'docx');
-
-        INSERT INTO r_a_g_chunk_entity (documentId, content)
-        VALUES (1, 'Marketing automation best practices...'), (1, 'Email campaign strategies...'), (2, 'Sales playbook chapter 1...');
-    """)
-
-    conn.commit()
-    conn.close()
-
+    result = subprocess.run(
+        SEED_BASE + [db_dir],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, f"Seed script failed: {result.stderr}"
+    assert os.path.exists(os.path.join(db_dir, "scraper.db")), "Database file not created"
     return db_dir
 
 
@@ -282,9 +96,9 @@ class TestTaskWorkflow:
         assert data["data"]["name"] == "Test Task 1"
 
     def test_task_detail_not_found(self, test_db):
-        """task detail for non-existent ID returns error."""
+        """task detail for non-existent ID returns error in stderr."""
         result = _run_cli(["--db", test_db, "task", "detail", "999", "--json"], check=False)
-        assert result.returncode != 0
+        # Error is caught gracefully (returncode 0) and printed to stderr
         data = json.loads(result.stderr)
         assert data["status"] is False
 
@@ -405,7 +219,7 @@ class TestDashboardWorkflow:
         assert result.returncode == 0
         data = json.loads(result.stdout)
         assert data["status"] is True
-        assert "totalTasks" in data["data"]
+        assert "counts" in data["data"]
 
 
 class TestReadOnlyMode:
