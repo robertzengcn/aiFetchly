@@ -136,7 +136,17 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
         />
 
         <!-- AI Chat Panel -->
-        <div class="ai-chat-panel" :class="{ 'panel-open': chatPanelOpen }">
+        <div
+          class="ai-chat-panel"
+          :class="{ 'panel-open': chatPanelOpen }"
+          :style="chatPanelOpen ? { width: chatPanelWidth + 'px' } : {}"
+        >
+          <!-- Resize handle -->
+          <div
+            v-if="chatPanelOpen"
+            class="chat-resize-handle"
+            @mousedown="startResize"
+          ></div>
           <AiChatBox
             :visible="chatPanelOpen"
             @close="toggleChatPanel"
@@ -195,6 +205,9 @@ const appName=ref(packageAppName)
 const snaptimeout=ref<number>(10000)
 const messages = ref<MessageItem[]>([]);
 const chatPanelOpen = ref(false);
+const chatPanelWidth = ref(420);
+const CHAT_PANEL_MIN_WIDTH = 320;
+const CHAT_PANEL_MAX_WIDTH = 900;
 const mainStore = useMainStore();
 const router = useRouter();
 const navState = reactive({
@@ -280,6 +293,33 @@ const getTranslatedTitle = (title: string): string => {
 const toggleChatPanel = () => {
     chatPanelOpen.value = !chatPanelOpen.value;
 }
+
+const startResize = (e: MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = chatPanelWidth.value;
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+        const delta = startX - moveEvent.clientX;
+        const newWidth = Math.min(
+            CHAT_PANEL_MAX_WIDTH,
+            Math.max(CHAT_PANEL_MIN_WIDTH, startWidth + delta)
+        );
+        chatPanelWidth.value = newWidth;
+    };
+
+    const onMouseUp = () => {
+        document.removeEventListener('mousemove', onMouseMove);
+        document.removeEventListener('mouseup', onMouseUp);
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+    };
+
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+};
 
 const handleKeyboardShortcut = (e: KeyboardEvent) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
@@ -467,7 +507,7 @@ const showDialog=(status:boolean, content:string)=>{
     position: fixed;
     top: 0;
     right: -420px;
-    width: 400px;
+    width: 420px;
     height: 100vh;
     background-color: #ffffff;
     box-shadow: -2px 0 16px rgba(0, 0, 0, 0.1);
@@ -515,5 +555,21 @@ const showDialog=(status:boolean, content:string)=>{
     .ai-chat-panel.panel-open {
         right: 0;
     }
+}
+
+.chat-resize-handle {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 6px;
+    height: 100%;
+    cursor: col-resize;
+    z-index: 9999;
+    background: transparent;
+    transition: background-color 0.2s;
+}
+
+.chat-resize-handle:hover {
+    background-color: rgba(var(--v-theme-primary), 0.3);
 }
 </style>
