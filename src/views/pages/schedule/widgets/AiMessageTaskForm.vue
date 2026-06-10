@@ -31,31 +31,6 @@
       </v-col>
     </v-row>
 
-    <!-- System Prompt & Model -->
-    <v-row>
-      <v-col cols="12" md="6">
-        <v-textarea
-          v-model="formState.systemPrompt"
-          :label="t('schedule.ai_message_task_system_prompt') || 'System Prompt'"
-          :placeholder="t('schedule.ai_message_task_system_prompt_hint') || 'Optional system instructions for the AI'"
-          rows="2"
-          density="compact"
-          variant="outlined"
-          @update:model-value="emitChange"
-        />
-      </v-col>
-      <v-col cols="12" md="6">
-        <v-text-field
-          v-model="formState.model"
-          :label="t('schedule.ai_message_task_model') || 'AI Model'"
-          :placeholder="t('schedule.ai_message_task_model_hint') || 'e.g. gpt-4o'"
-          density="compact"
-          variant="outlined"
-          @update:model-value="emitChange"
-        />
-      </v-col>
-    </v-row>
-
     <!-- Allowed Tools -->
     <v-row>
       <v-col cols="12">
