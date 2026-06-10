@@ -205,109 +205,6 @@ export const constantRoutes: RouteRecordRaw[] = [
       },
     ],
   },
-  {
-    path: "/socialaccount",
-    name: "Socialaccount",
-    meta: {
-      visible: true,
-      title: "route.social_account",
-      icon: "mdi-account-multiple",
-    },
-    component: Layout,
-    children: [
-      {
-        path: "list",
-        component: () =>
-          import(
-            /* webpackChunkName: "staff-list" */ "@/views/pages/socialaccount/socialaccount.vue"
-          ),
-        name: "SocialAccount",
-        meta: {
-          visible: true,
-          title: "route.account_list",
-          icon: "mdi-account-details",
-        },
-      },
-      {
-        path: "edit/:id(\\d+)",
-        component: () =>
-          import(
-            /* webpackChunkName: "staff-list" */ "@/views/pages/socialaccount/socialaccountdetail.vue"
-          ),
-        name: "editSocialAccount",
-        meta: {
-          visible: false,
-          title: "route.edit_account",
-          icon: "mdi-account-edit",
-        },
-      },
-      {
-        path: "add",
-        component: () =>
-          import(
-            /* webpackChunkName: "staff-list" */ "@/views/pages/socialaccount/socialaccountdetail.vue"
-          ),
-        name: "CreateSocialAccount",
-        meta: {
-          visible: false,
-          title: "route.add_account",
-          icon: "mdi-account-plus",
-        },
-      },
-    ],
-  },
-  {
-    path: "/schedule",
-    name: "schedule",
-    meta: {
-      visible: true,
-      title: "route.schedule",
-      icon: "mdi-clock-outline",
-    },
-    component: Layout,
-    children: [
-      {
-        path: "list",
-        component: () => import("@/views/pages/schedule/list.vue"),
-        name: "ScheduleList",
-        meta: {
-          visible: true,
-          title: "route.schedule_list",
-          icon: "mdi-calendar-clock",
-        },
-      },
-      {
-        path: "create",
-        component: () => import("@/views/pages/schedule/create.vue"),
-        name: "CreateSchedule",
-        meta: {
-          visible: false,
-          title: "route.create_schedule",
-          icon: "mdi-plus",
-        },
-      },
-      {
-        path: "edit/:id(\\d+)",
-        component: () => import("@/views/pages/schedule/edit.vue"),
-        name: "EditSchedule",
-        meta: {
-          visible: false,
-          title: "route.edit_schedule",
-          icon: "mdi-pencil",
-        },
-      },
-      {
-        path: "detail/:id(\\d+)",
-        component: () => import("@/views/pages/schedule/detail.vue"),
-        name: "ScheduleDetail",
-        meta: {
-          visible: false,
-          title: "route.schedule_detail",
-          icon: "mdi-file-document-outline",
-        },
-      },
-    ],
-  },
   // {
   //   path: '/extramodules',
   //   name: 'Modules',
@@ -566,105 +463,6 @@ export const constantRoutes: RouteRecordRaw[] = [
     ],
   },
   {
-    path: "/proxy",
-    name: "Proxy",
-    meta: {
-      visible: true,
-      title: "route.proxy",
-      icon: "mdi-shield-outline",
-    },
-    component: Layout,
-    children: [
-      {
-        path: "list",
-        component: () =>
-          import(
-            /* webpackChunkName: "staff-list" */ "@/views/pages/proxy/proxy.vue"
-          ),
-        name: "Proxylist",
-        meta: {
-          visible: true,
-          title: "route.proxy_list",
-          icon: "mdi-format-list-bulleted",
-        },
-      },
-      {
-        path: "edit/:id(\\d+)",
-        component: () => import("@/views/pages/proxy/proxydetail.vue"),
-        name: "editProxy",
-        meta: {
-          visible: false,
-          title: "route.edit_proxy",
-          icon: "mdi-pencil",
-        },
-      },
-      {
-        path: "add",
-        component: () => import("@/views/pages/proxy/proxydetail.vue"),
-        name: "AddProxy",
-        meta: {
-          visible: false,
-          title: "route.add_proxy",
-          icon: "mdi-plus",
-        },
-      },
-      {
-        path: "parse",
-        component: () => import("@/views/pages/proxy/proxyparse.vue"),
-        name: "BatchUploadProxy",
-        meta: {
-          visible: true,
-          title: "route.parse_proxy",
-          icon: "mdi-upload-multiple",
-        },
-      },
-    ],
-  },
-  {
-    path: "/knowledge",
-    name: "Knowledge_Library",
-    meta: {
-      visible: true,
-      title: "route.knowledge_library",
-      icon: "mdi-book-open-variant",
-    },
-    component: Layout,
-    children: [
-      {
-        path: "library",
-        component: () => import("@/views/pages/knowledge/KnowledgeLibrary.vue"),
-        name: "KnowledgeLibrary",
-        meta: {
-          visible: true,
-          title: "route.knowledge_library",
-          icon: "mdi-book-open-variant",
-        },
-      },
-    ],
-  },
-  {
-    path: "/skills",
-    name: "Skills",
-    meta: {
-      visible: true,
-      title: "route.skills",
-      icon: "mdi-lightning-bolt",
-    },
-    component: Layout,
-    children: [
-      {
-        path: "management",
-        component: () => import("@/views/pages/systemsetting/skills.vue"),
-        name: "SkillsManagement",
-        meta: {
-          visible: true,
-          title: "route.skills_management",
-          icon: "mdi-lightning-bolt",
-        },
-      },
-    ],
-  },
-  {
     path: "/emailmarketing",
     name: "Email_Marketing",
     meta: {
@@ -829,6 +627,208 @@ export const constantRoutes: RouteRecordRaw[] = [
           import(
             /* webpackChunkName: "staff-list" */ "@/views/pages/emailservice/servicedetail.vue"
           ),
+      },
+    ],
+  },
+  {
+    path: "/proxy",
+    name: "Proxy",
+    meta: {
+      visible: true,
+      title: "route.proxy",
+      icon: "mdi-shield-outline",
+    },
+    component: Layout,
+    children: [
+      {
+        path: "list",
+        component: () =>
+          import(
+            /* webpackChunkName: "staff-list" */ "@/views/pages/proxy/proxy.vue"
+          ),
+        name: "Proxylist",
+        meta: {
+          visible: true,
+          title: "route.proxy_list",
+          icon: "mdi-format-list-bulleted",
+        },
+      },
+      {
+        path: "edit/:id(\\d+)",
+        component: () => import("@/views/pages/proxy/proxydetail.vue"),
+        name: "editProxy",
+        meta: {
+          visible: false,
+          title: "route.edit_proxy",
+          icon: "mdi-pencil",
+        },
+      },
+      {
+        path: "add",
+        component: () => import("@/views/pages/proxy/proxydetail.vue"),
+        name: "AddProxy",
+        meta: {
+          visible: false,
+          title: "route.add_proxy",
+          icon: "mdi-plus",
+        },
+      },
+      {
+        path: "parse",
+        component: () => import("@/views/pages/proxy/proxyparse.vue"),
+        name: "BatchUploadProxy",
+        meta: {
+          visible: true,
+          title: "route.parse_proxy",
+          icon: "mdi-upload-multiple",
+        },
+      },
+    ],
+  },
+  {
+    path: "/knowledge",
+    name: "Knowledge_Library",
+    meta: {
+      visible: true,
+      title: "route.knowledge_library",
+      icon: "mdi-book-open-variant",
+    },
+    component: Layout,
+    children: [
+      {
+        path: "library",
+        component: () => import("@/views/pages/knowledge/KnowledgeLibrary.vue"),
+        name: "KnowledgeLibrary",
+        meta: {
+          visible: true,
+          title: "route.knowledge_library",
+          icon: "mdi-book-open-variant",
+        },
+      },
+    ],
+  },
+  {
+    path: "/skills",
+    name: "Skills",
+    meta: {
+      visible: true,
+      title: "route.skills",
+      icon: "mdi-lightning-bolt",
+    },
+    component: Layout,
+    children: [
+      {
+        path: "management",
+        component: () => import("@/views/pages/systemsetting/skills.vue"),
+        name: "SkillsManagement",
+        meta: {
+          visible: true,
+          title: "route.skills_management",
+          icon: "mdi-lightning-bolt",
+        },
+      },
+    ],
+  },
+  {
+    path: "/socialaccount",
+    name: "Socialaccount",
+    meta: {
+      visible: true,
+      title: "route.social_account",
+      icon: "mdi-account-multiple",
+    },
+    component: Layout,
+    children: [
+      {
+        path: "list",
+        component: () =>
+          import(
+            /* webpackChunkName: "staff-list" */ "@/views/pages/socialaccount/socialaccount.vue"
+          ),
+        name: "SocialAccount",
+        meta: {
+          visible: true,
+          title: "route.account_list",
+          icon: "mdi-account-details",
+        },
+      },
+      {
+        path: "edit/:id(\\d+)",
+        component: () =>
+          import(
+            /* webpackChunkName: "staff-list" */ "@/views/pages/socialaccount/socialaccountdetail.vue"
+          ),
+        name: "editSocialAccount",
+        meta: {
+          visible: false,
+          title: "route.edit_account",
+          icon: "mdi-account-edit",
+        },
+      },
+      {
+        path: "add",
+        component: () =>
+          import(
+            /* webpackChunkName: "staff-list" */ "@/views/pages/socialaccount/socialaccountdetail.vue"
+          ),
+        name: "CreateSocialAccount",
+        meta: {
+          visible: false,
+          title: "route.add_account",
+          icon: "mdi-account-plus",
+        },
+      },
+    ],
+  },
+  {
+    path: "/schedule",
+    name: "schedule",
+    meta: {
+      visible: true,
+      title: "route.schedule",
+      icon: "mdi-clock-outline",
+    },
+    component: Layout,
+    children: [
+      {
+        path: "list",
+        component: () => import("@/views/pages/schedule/list.vue"),
+        name: "ScheduleList",
+        meta: {
+          visible: true,
+          title: "route.schedule_list",
+          icon: "mdi-calendar-clock",
+        },
+      },
+      {
+        path: "create",
+        component: () => import("@/views/pages/schedule/create.vue"),
+        name: "CreateSchedule",
+        meta: {
+          visible: false,
+          title: "route.create_schedule",
+          icon: "mdi-plus",
+        },
+      },
+      {
+        path: "edit/:id(\\d+)",
+        component: () => import("@/views/pages/schedule/edit.vue"),
+        name: "EditSchedule",
+        meta: {
+          visible: false,
+          title: "route.edit_schedule",
+          icon: "mdi-pencil",
+        },
+      },
+      {
+        path: "detail/:id(\\d+)",
+        component: () => import("@/views/pages/schedule/detail.vue"),
+        name: "ScheduleDetail",
+        meta: {
+          visible: false,
+          title: "route.schedule_detail",
+          icon: "mdi-file-document-outline",
+        },
       },
     ],
   },
