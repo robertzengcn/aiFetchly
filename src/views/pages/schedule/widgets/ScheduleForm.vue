@@ -53,10 +53,10 @@
         <YandexMapsSelectTable @change="handleYandexMapsChanged" />
       </v-row>
       <v-row v-if="formData.task_type==TaskType.AI_MESSAGE">
-        <AiMessageTaskForm @change="handleAiMessageTaskChanged" />
+        <AiMessageTaskForm :initial-task-data="aiMessageTaskData" :is-edit="isEdit" @change="handleAiMessageTaskChanged" />
       </v-row>
 
-      <v-row>
+      <v-row v-if="formData.task_type!==TaskType.AI_MESSAGE">
         <v-col cols="12" md="6">
           <v-text-field
             v-model="formData.task_id"
@@ -230,7 +230,8 @@ import EmailSendtaskTable from '@/views/pages/emailsendtask/widgets/EmailSendtas
 import {BuckEmailListType} from "@/entityTypes/buckemailType"
 import GoogleMapsSelectTable from '@/views/pages/google-maps-scraper/widgets/GoogleMapsSelectTable.vue'
 import YandexMapsSelectTable from '@/views/pages/yandex-maps-scraper/widgets/YandexMapsSelectTable.vue'
-import AiMessageTaskForm from './AiMessageTaskForm.vue'
+import AiMessageTaskForm, { type AiMessageTaskFormState } from './AiMessageTaskForm.vue'
+import { createAiMessageTask, updateAiMessageTask } from '@/views/api/aiMessageTask'
 const { t } = useI18n()
 
 // Props
@@ -238,6 +239,17 @@ interface Props {
   schedule?: any
   isEdit?: boolean
   loading?: boolean
+  aiMessageTaskData?: {
+    name?: string;
+    message?: string;
+    system_prompt?: string;
+    model?: string;
+    allowed_tools_json?: string;
+    auto_approve_tools?: boolean;
+    max_tool_calls?: number;
+    max_runtime_ms?: number;
+    max_continue_calls?: number;
+  }
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -271,6 +283,7 @@ const formData = ref<ScheduleCreateRequest>({
 // Validation
 const cronValidationError = ref('')
 const nextRunTime = ref('')
+const aiMessageFormState = ref<AiMessageTaskFormState | undefined>(undefined)
 
 // Available parent schedules for dependency
 const availableParentSchedules = ref<any[]>([])
@@ -373,12 +386,8 @@ const handleYandexMapsChanged = (newValue: Array<{id: number; query: string; loc
   }
 }
 
-const handleAiMessageTaskChanged = (newValue: number | undefined) => {
-  if (newValue && newValue > 0) {
-    formData.value.task_id = newValue
-  } else {
-    formData.value.task_id = 0
-  }
+const handleAiMessageTaskChanged = (formState: AiMessageTaskFormState | undefined) => {
+  aiMessageFormState.value = formState
 }
 
 // Methods
@@ -455,15 +464,56 @@ const loadParentSchedules = async () => {
   }
 }
 
-const handleSubmit = () => {
+const handleSubmit = async () => {
   if (!isFormValid.value) return
 
   const submitData = { ...formData.value }
-  
+
+  // For AI_MESSAGE task type, create or update the AI task first
+  if (submitData.task_type === TaskType.AI_MESSAGE) {
+    if (!aiMessageFormState.value) {
+      return
+    }
+    try {
+      if (props.isEdit && submitData.task_id > 0) {
+        // Update existing AI task
+        await updateAiMessageTask({
+          id: submitData.task_id,
+          name: aiMessageFormState.value.name,
+          message: aiMessageFormState.value.message,
+          systemPrompt: aiMessageFormState.value.systemPrompt || undefined,
+          model: aiMessageFormState.value.model || undefined,
+          allowedTools: aiMessageFormState.value.allowedTools,
+          autoApproveTools: aiMessageFormState.value.autoApproveTools,
+          maxToolCalls: aiMessageFormState.value.maxToolCalls,
+          maxRuntimeMs: aiMessageFormState.value.maxRuntimeMs,
+          maxContinueCalls: aiMessageFormState.value.maxContinueCalls,
+        })
+      } else {
+        // Create new AI task and link to schedule
+        const taskId = await createAiMessageTask({
+          name: aiMessageFormState.value.name,
+          message: aiMessageFormState.value.message,
+          systemPrompt: aiMessageFormState.value.systemPrompt || undefined,
+          model: aiMessageFormState.value.model || undefined,
+          allowedTools: aiMessageFormState.value.allowedTools,
+          autoApproveTools: aiMessageFormState.value.autoApproveTools,
+          maxToolCalls: aiMessageFormState.value.maxToolCalls,
+          maxRuntimeMs: aiMessageFormState.value.maxRuntimeMs,
+          maxContinueCalls: aiMessageFormState.value.maxContinueCalls,
+        })
+        submitData.task_id = taskId
+      }
+    } catch (error) {
+      console.error('Failed to create/update AI message task:', error)
+      return
+    }
+  }
+
   // Convert numeric fields
   submitData.task_id = Number(submitData.task_id)
   submitData.delay_minutes = Number(submitData.delay_minutes)
-  
+
   // Convert nullable fields
   if (submitData.parent_schedule_id === 0) {
     submitData.parent_schedule_id = undefined
