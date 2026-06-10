@@ -122,7 +122,7 @@ export function registerSocialAccountCommands(parent: Command): void {
     .description("Delete a social account")
     .option("--json", "Output as JSON")
     .action(async (id, opts) => {
-      if (opts.parent?.parent?.readOnly)
+      if (CliDatabase.isReadOnly())
         throw new ReadOnlyError("social-account:delete");
       try {
         await CliDatabase.ensureInitialized();

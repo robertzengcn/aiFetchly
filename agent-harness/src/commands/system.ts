@@ -9,11 +9,7 @@ import chalk from "chalk";
 import { CliDatabase } from "../adapter/cli-database";
 import { SystemSettingEntity } from "@/entity/SystemSetting.entity";
 import { SystemSettingGroupEntity } from "@/entity/SystemSettingGroup.entity";
-import {
-  resolveDbPath,
-  getDatabaseStats,
-  isDatabaseInUse,
-} from "../adapter/cli-config";
+import { getDatabaseStats, isDatabaseInUse } from "../adapter/cli-config";
 import { formatOutput, formatError } from "../output/formatter";
 import type { TableConfig } from "../common/types";
 
@@ -80,7 +76,7 @@ export function registerSystemCommands(parent: Command): void {
     .option("--json", "Output as JSON")
     .action(async (opts) => {
       try {
-        const dbPath = resolveDbPath();
+        const dbPath = CliDatabase.getCurrentDbPath();
         const data = {
           dbDirectory: dbPath,
           dbFile: dbPath + "/scraper.db",
@@ -97,7 +93,7 @@ export function registerSystemCommands(parent: Command): void {
     .option("--json", "Output as JSON")
     .action(async (opts) => {
       try {
-        const dbPath = resolveDbPath();
+        const dbPath = CliDatabase.getCurrentDbPath();
         const stats = getDatabaseStats(dbPath);
         if (!stats) {
           throw new Error("Could not read database statistics");
@@ -105,7 +101,7 @@ export function registerSystemCommands(parent: Command): void {
 
         const data = {
           dbPath: dbPath + "/scraper.db",
-          dbSizeBytes: stats.dbSize,
+          dbSize: stats.dbSize,
           dbSizeHuman: formatBytes(stats.dbSize),
           walSizeBytes: stats.walSize,
           walSizeHuman: formatBytes(stats.walSize),
@@ -123,7 +119,7 @@ export function registerSystemCommands(parent: Command): void {
     .option("--json", "Output as JSON")
     .action(async (opts) => {
       try {
-        const dbPath = resolveDbPath();
+        const dbPath = CliDatabase.getCurrentDbPath();
         const stats = getDatabaseStats(dbPath);
         const dbInUse = isDatabaseInUse(dbPath);
 

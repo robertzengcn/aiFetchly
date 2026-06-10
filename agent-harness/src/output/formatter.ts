@@ -7,6 +7,21 @@ import Table from "cli-table3";
 import type { TableConfig, PaginatedResult } from "../common/types";
 import { printJson, printErrorJson } from "./envelope";
 
+/**
+ * Check if JSON output mode is enabled.
+ * Checks both the local command option and the parent program's global --json flag.
+ */
+export function isJsonMode(opts: Record<string, unknown>): boolean {
+  if (opts.json) return true;
+  // Walk up the Commander chain to find the global --json flag
+  let cmd = opts as Record<string, unknown>;
+  while (cmd.parent) {
+    cmd = cmd.parent as Record<string, unknown>;
+    if (cmd.json) return true;
+  }
+  return false;
+}
+
 /** Format and output data based on jsonMode flag */
 export function formatOutput<T>(
   data: T,

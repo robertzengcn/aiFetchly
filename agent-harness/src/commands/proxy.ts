@@ -116,7 +116,7 @@ export function registerProxyCommands(parent: Command): void {
     .option("--type <type>", "Proxy type (http, https, socks5, etc.)")
     .option("--json", "Output as JSON")
     .action(async (opts) => {
-      if (opts.parent?.parent?.readOnly) throw new ReadOnlyError("proxy:add");
+      if (CliDatabase.isReadOnly()) throw new ReadOnlyError("proxy:add");
       try {
         await CliDatabase.ensureInitialized();
         const repo = CliDatabase.getRepository(ProxyEntity);
@@ -146,7 +146,7 @@ export function registerProxyCommands(parent: Command): void {
     .description("Delete a proxy")
     .option("--json", "Output as JSON")
     .action(async (id, opts) => {
-      if (opts.parent?.parent?.readOnly)
+      if (CliDatabase.isReadOnly())
         throw new ReadOnlyError("proxy:delete");
       try {
         await CliDatabase.ensureInitialized();
@@ -166,7 +166,7 @@ export function registerProxyCommands(parent: Command): void {
     )
     .option("--json", "Output as JSON")
     .action(async (filePath, opts) => {
-      if (opts.parent?.parent?.readOnly)
+      if (CliDatabase.isReadOnly())
         throw new ReadOnlyError("proxy:import");
       try {
         await CliDatabase.ensureInitialized();

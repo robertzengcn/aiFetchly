@@ -130,7 +130,7 @@ export function registerScheduleCommands(parent: Command): void {
     .requiredOption("--task-id <id>", "Task ID to schedule")
     .option("--json", "Output as JSON")
     .action(async (opts) => {
-      if (opts.parent?.parent?.readOnly)
+      if (CliDatabase.isReadOnly())
         throw new ReadOnlyError("schedule:create");
       try {
         await CliDatabase.ensureInitialized();
@@ -168,7 +168,7 @@ export function registerScheduleCommands(parent: Command): void {
     .option("--enabled <boolean>", "Enable (true/false)")
     .option("--json", "Output as JSON")
     .action(async (id, opts) => {
-      if (opts.parent?.parent?.readOnly)
+      if (CliDatabase.isReadOnly())
         throw new ReadOnlyError("schedule:update");
       try {
         await CliDatabase.ensureInitialized();
@@ -199,7 +199,7 @@ export function registerScheduleCommands(parent: Command): void {
     .description("Delete a schedule")
     .option("--json", "Output as JSON")
     .action(async (id, opts) => {
-      if (opts.parent?.parent?.readOnly)
+      if (CliDatabase.isReadOnly())
         throw new ReadOnlyError("schedule:delete");
       try {
         await CliDatabase.ensureInitialized();
@@ -217,7 +217,7 @@ export function registerScheduleCommands(parent: Command): void {
     .description("Enable a schedule")
     .option("--json", "Output as JSON")
     .action(async (id, opts) => {
-      if (opts.parent?.parent?.readOnly)
+      if (CliDatabase.isReadOnly())
         throw new ReadOnlyError("schedule:enable");
       try {
         await CliDatabase.ensureInitialized();
@@ -243,7 +243,7 @@ export function registerScheduleCommands(parent: Command): void {
     .description("Disable a schedule")
     .option("--json", "Output as JSON")
     .action(async (id, opts) => {
-      if (opts.parent?.parent?.readOnly)
+      if (CliDatabase.isReadOnly())
         throw new ReadOnlyError("schedule:disable");
       try {
         await CliDatabase.ensureInitialized();
