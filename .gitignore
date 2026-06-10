@@ -125,3 +125,6 @@ hyperframes-search-engine-scraping-video/renders/aifetchly-search-engine-scrapin
 # Generated tutorial video renders
 hyperframes-search-engine-scraping-video/renders/*.mp4
 .gstack/
+./hyperframes-market-insight-explorer-video
+./hyperframes-search-engine-scraping-video
+*.pyc

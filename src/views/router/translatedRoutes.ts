@@ -205,109 +205,6 @@ export const createTranslatedRoutes = (): RouteRecordRaw[] => {
       ],
     },
     {
-      path: "/socialaccount",
-      name: "Socialaccount",
-      meta: {
-        visible: true,
-        title: computed(() => t("router.social_account")),
-        icon: "mdi-account-multiple",
-      },
-      component: Layout,
-      children: [
-        {
-          path: "list",
-          component: () =>
-            import(
-              /* webpackChunkName: "staff-list" */ "@/views/pages/socialaccount/socialaccount.vue"
-            ),
-          name: "SocialAccount",
-          meta: {
-            visible: true,
-            title: computed(() => t("router.account_list")),
-            icon: "mdi-account-details",
-          },
-        },
-        {
-          path: "edit/:id(\\d+)",
-          component: () =>
-            import(
-              /* webpackChunkName: "staff-list" */ "@/views/pages/socialaccount/socialaccountdetail.vue"
-            ),
-          name: "editSocialAccount",
-          meta: {
-            visible: false,
-            title: computed(() => t("router.edit_account")),
-            icon: "mdi-account-edit",
-          },
-        },
-        {
-          path: "add",
-          component: () =>
-            import(
-              /* webpackChunkName: "staff-list" */ "@/views/pages/socialaccount/socialaccountdetail.vue"
-            ),
-          name: "CreateSocialAccount",
-          meta: {
-            visible: false,
-            title: computed(() => t("router.add_account")),
-            icon: "mdi-account-plus",
-          },
-        },
-      ],
-    },
-    {
-      path: "/schedule",
-      name: "schedule",
-      meta: {
-        visible: true,
-        title: computed(() => t("router.schedule")),
-        icon: "mdi-clock-outline",
-      },
-      component: Layout,
-      children: [
-        {
-          path: "list",
-          component: () => import("@/views/pages/schedule/list.vue"),
-          name: "ScheduleList",
-          meta: {
-            visible: true,
-            title: computed(() => t("router.schedule_list")),
-            icon: "mdi-calendar-clock",
-          },
-        },
-        {
-          path: "create",
-          component: () => import("@/views/pages/schedule/create.vue"),
-          name: "CreateSchedule",
-          meta: {
-            visible: false,
-            title: computed(() => t("router.create_schedule")),
-            icon: "mdi-plus",
-          },
-        },
-        {
-          path: "edit/:id(\\d+)",
-          component: () => import("@/views/pages/schedule/edit.vue"),
-          name: "EditSchedule",
-          meta: {
-            visible: false,
-            title: computed(() => t("router.edit_schedule")),
-            icon: "mdi-pencil",
-          },
-        },
-        {
-          path: "detail/:id(\\d+)",
-          component: () => import("@/views/pages/schedule/detail.vue"),
-          name: "ScheduleDetail",
-          meta: {
-            visible: false,
-            title: computed(() => t("router.schedule_detail")),
-            icon: "mdi-file-document-outline",
-          },
-        },
-      ],
-    },
-    {
       path: "/search",
       name: "Search",
       meta: {
@@ -738,6 +635,109 @@ export const createTranslatedRoutes = (): RouteRecordRaw[] => {
             visible: true,
             title: computed(() => t("router.skills_management")),
             icon: "mdi-lightning-bolt",
+          },
+        },
+      ],
+    },
+    {
+      path: "/socialaccount",
+      name: "Socialaccount",
+      meta: {
+        visible: true,
+        title: computed(() => t("router.social_account")),
+        icon: "mdi-account-multiple",
+      },
+      component: Layout,
+      children: [
+        {
+          path: "list",
+          component: () =>
+            import(
+              /* webpackChunkName: "staff-list" */ "@/views/pages/socialaccount/socialaccount.vue"
+            ),
+          name: "SocialAccount",
+          meta: {
+            visible: true,
+            title: computed(() => t("router.account_list")),
+            icon: "mdi-account-details",
+          },
+        },
+        {
+          path: "edit/:id(\\d+)",
+          component: () =>
+            import(
+              /* webpackChunkName: "staff-list" */ "@/views/pages/socialaccount/socialaccountdetail.vue"
+            ),
+          name: "editSocialAccount",
+          meta: {
+            visible: false,
+            title: computed(() => t("router.edit_account")),
+            icon: "mdi-account-edit",
+          },
+        },
+        {
+          path: "add",
+          component: () =>
+            import(
+              /* webpackChunkName: "staff-list" */ "@/views/pages/socialaccount/socialaccountdetail.vue"
+            ),
+          name: "CreateSocialAccount",
+          meta: {
+            visible: false,
+            title: computed(() => t("router.add_account")),
+            icon: "mdi-account-plus",
+          },
+        },
+      ],
+    },
+    {
+      path: "/schedule",
+      name: "schedule",
+      meta: {
+        visible: true,
+        title: computed(() => t("router.schedule")),
+        icon: "mdi-clock-outline",
+      },
+      component: Layout,
+      children: [
+        {
+          path: "list",
+          component: () => import("@/views/pages/schedule/list.vue"),
+          name: "ScheduleList",
+          meta: {
+            visible: true,
+            title: computed(() => t("router.schedule_list")),
+            icon: "mdi-calendar-clock",
+          },
+        },
+        {
+          path: "create",
+          component: () => import("@/views/pages/schedule/create.vue"),
+          name: "CreateSchedule",
+          meta: {
+            visible: false,
+            title: computed(() => t("router.create_schedule")),
+            icon: "mdi-plus",
+          },
+        },
+        {
+          path: "edit/:id(\\d+)",
+          component: () => import("@/views/pages/schedule/edit.vue"),
+          name: "EditSchedule",
+          meta: {
+            visible: false,
+            title: computed(() => t("router.edit_schedule")),
+            icon: "mdi-pencil",
+          },
+        },
+        {
+          path: "detail/:id(\\d+)",
+          component: () => import("@/views/pages/schedule/detail.vue"),
+          name: "ScheduleDetail",
+          meta: {
+            visible: false,
+            title: computed(() => t("router.schedule_detail")),
+            icon: "mdi-file-document-outline",
           },
         },
       ],
