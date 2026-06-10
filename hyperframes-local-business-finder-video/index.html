@@ -10,50 +10,1076 @@
         padding: 0;
         box-sizing: border-box;
       }
+
       html,
       body {
-        margin: 0;
         width: 1920px;
         height: 1080px;
         overflow: hidden;
-        background: #000;
+        background: #f7f8fc;
       }
+
       body {
-        font-family: "Inter", sans-serif;
+        font-family: Inter, "Helvetica Neue", Arial, sans-serif;
+        color: #23242a;
       }
-      code,
-      pre,
-      .monospace {
-        font-family: "JetBrains Mono", monospace;
+
+      #root {
+        position: relative;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: #f7f8fc;
+      }
+
+      .scene {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+      }
+
+      .scene-content {
+        width: 100%;
+        height: 100%;
+        padding: 64px 76px;
+        display: flex;
+        flex-direction: column;
+        gap: 34px;
+      }
+
+      .topbar {
+        height: 58px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        color: #6e7480;
+        font-size: 22px;
+        font-weight: 700;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        color: #23242a;
+        font-size: 26px;
+      }
+
+      .mark {
+        width: 42px;
+        height: 42px;
+        border-radius: 12px;
+        background: #6366f1;
+        color: #ffffff;
+        display: grid;
+        place-items: center;
+        font-size: 24px;
+        font-weight: 900;
+      }
+
+      .pill {
+        border-radius: 999px;
+        background: #eef0f5;
+        color: #6e7480;
+        padding: 13px 20px;
+        font-size: 20px;
+        font-weight: 800;
+      }
+
+      .status-pill {
+        background: #ddf7e6;
+        color: #2ea568;
+      }
+
+      .warning-pill {
+        background: #fff3ce;
+        color: #9b6a00;
+      }
+
+      .hero-grid {
+        flex: 1;
+        display: grid;
+        grid-template-columns: 0.9fr 1.1fr;
+        gap: 48px;
+        min-height: 0;
+        align-items: center;
+      }
+
+      .copy-stack {
+        display: flex;
+        flex-direction: column;
+        gap: 24px;
+      }
+
+      .eyebrow {
+        color: #6366f1;
+        font-size: 24px;
+        font-weight: 900;
+        text-transform: uppercase;
+        letter-spacing: 0;
+      }
+
+      h1 {
+        max-width: 760px;
+        color: #23242a;
+        font-size: 78px;
+        line-height: 1.02;
+        letter-spacing: 0;
+      }
+
+      h2 {
+        color: #23242a;
+        font-size: 56px;
+        line-height: 1.08;
+        letter-spacing: 0;
+      }
+
+      .body-copy {
+        max-width: 760px;
+        color: #6e7480;
+        font-size: 30px;
+        line-height: 1.42;
+        font-weight: 650;
+      }
+
+      .caption {
+        color: #6e7480;
+        font-size: 25px;
+        line-height: 1.35;
+        font-weight: 700;
+      }
+
+      .app-shell {
+        width: 100%;
+        min-height: 650px;
+        border: 1px solid #e5e7ef;
+        border-radius: 8px;
+        background: #ffffff;
+        box-shadow: 0 24px 70px rgba(35, 36, 42, 0.12);
+        overflow: hidden;
+        display: grid;
+        grid-template-columns: 270px 1fr;
+      }
+
+      .sidebar {
+        background: #eef0f5;
+        padding: 28px 22px;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+
+      .nav-item {
+        height: 46px;
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 0 14px;
+        color: #6e7480;
+        font-size: 18px;
+        font-weight: 800;
+      }
+
+      .nav-icon {
+        width: 18px;
+        height: 18px;
+        border-radius: 5px;
+        background: #c7c9ff;
+      }
+
+      .nav-item.active {
+        background: #ffffff;
+        color: #23242a;
+        box-shadow: 0 10px 24px rgba(35, 36, 42, 0.08);
+      }
+
+      .workspace {
+        padding: 30px;
+        display: flex;
+        flex-direction: column;
+        gap: 24px;
+        min-width: 0;
+      }
+
+      .workspace-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 20px;
+      }
+
+      .workspace-title {
+        font-size: 32px;
+        font-weight: 950;
+      }
+
+      .tabs {
+        display: flex;
+        gap: 10px;
+        background: #eef0f5;
+        border-radius: 8px;
+        padding: 7px;
+        width: max-content;
+      }
+
+      .tab {
+        padding: 12px 22px;
+        border-radius: 7px;
+        color: #6e7480;
+        font-size: 18px;
+        font-weight: 850;
+      }
+
+      .tab.active {
+        background: #ffffff;
+        color: #6366f1;
+        box-shadow: 0 8px 18px rgba(99, 102, 241, 0.12);
+      }
+
+      .form-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 18px;
+      }
+
+      .field {
+        min-height: 86px;
+        border: 1px solid #e4e7f0;
+        border-radius: 8px;
+        background: #ffffff;
+        padding: 16px 18px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 9px;
+      }
+
+      .field-label {
+        color: #6e7480;
+        font-size: 16px;
+        font-weight: 850;
+        text-transform: uppercase;
+        letter-spacing: 0;
+      }
+
+      .field-value {
+        color: #23242a;
+        font-size: 25px;
+        font-weight: 900;
+      }
+
+      .option-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 16px;
+      }
+
+      .option {
+        min-height: 116px;
+        border-radius: 8px;
+        background: #f7f8fc;
+        border: 1px solid #e4e7f0;
+        padding: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        justify-content: space-between;
+      }
+
+      .toggle {
+        width: 62px;
+        height: 34px;
+        border-radius: 999px;
+        background: #c7c9ff;
+        padding: 4px;
+      }
+
+      .toggle::after {
+        content: "";
+        display: block;
+        width: 26px;
+        height: 26px;
+        border-radius: 50%;
+        background: #6366f1;
+        margin-left: 24px;
+      }
+
+      .toggle.off {
+        background: #d8dbe6;
+      }
+
+      .toggle.off::after {
+        margin-left: 0;
+        background: #ffffff;
+      }
+
+      .primary-button {
+        min-width: 184px;
+        height: 58px;
+        border-radius: 8px;
+        background: #6366f1;
+        color: #ffffff;
+        display: grid;
+        place-items: center;
+        font-size: 20px;
+        font-weight: 950;
+        box-shadow: 0 18px 34px rgba(99, 102, 241, 0.26);
+      }
+
+      .secondary-button {
+        min-width: 148px;
+        height: 50px;
+        border-radius: 8px;
+        background: #eef0f5;
+        color: #23242a;
+        display: grid;
+        place-items: center;
+        font-size: 18px;
+        font-weight: 900;
+      }
+
+      .problem-board {
+        min-height: 620px;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 26px;
+      }
+
+      .manual-list,
+      .organized-card {
+        border-radius: 8px;
+        background: #ffffff;
+        border: 1px solid #e4e7f0;
+        padding: 34px;
+        box-shadow: 0 20px 60px rgba(35, 36, 42, 0.09);
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+      }
+
+      .manual-row {
+        min-height: 64px;
+        border-radius: 8px;
+        background: #f7f8fc;
+        padding: 16px 18px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        color: #6e7480;
+        font-size: 21px;
+        font-weight: 800;
+      }
+
+      .strike {
+        text-decoration: line-through;
+        text-decoration-thickness: 3px;
+        text-decoration-color: #f4b942;
+      }
+
+      .data-chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+      }
+
+      .data-chip {
+        padding: 15px 18px;
+        border-radius: 8px;
+        background: #eef0f5;
+        color: #23242a;
+        font-size: 20px;
+        font-weight: 850;
+      }
+
+      .source-cards {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 18px;
+      }
+
+      .source-card {
+        min-height: 164px;
+        border-radius: 8px;
+        border: 2px solid #e4e7f0;
+        padding: 24px;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        background: #ffffff;
+      }
+
+      .source-card.active {
+        border-color: #6366f1;
+        box-shadow: 0 16px 30px rgba(99, 102, 241, 0.12);
+      }
+
+      .source-title {
+        font-size: 28px;
+        font-weight: 950;
+      }
+
+      .source-note {
+        color: #6e7480;
+        font-size: 20px;
+        line-height: 1.32;
+        font-weight: 700;
+      }
+
+      .slider {
+        height: 10px;
+        border-radius: 999px;
+        background: #dfe2ec;
+        overflow: hidden;
+      }
+
+      .slider-fill {
+        width: 44%;
+        height: 100%;
+        border-radius: 999px;
+        background: #6366f1;
+      }
+
+      .account-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 18px;
+      }
+
+      .account-card {
+        border-radius: 8px;
+        background: #f7f8fc;
+        border: 1px solid #e4e7f0;
+        padding: 24px;
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+      }
+
+      .check-row {
+        min-height: 54px;
+        border-radius: 8px;
+        background: #ffffff;
+        padding: 13px 16px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        color: #23242a;
+        font-size: 20px;
+        font-weight: 850;
+      }
+
+      .check {
+        width: 28px;
+        height: 28px;
+        border-radius: 7px;
+        background: #ddf7e6;
+        color: #2ea568;
+        display: grid;
+        place-items: center;
+        font-weight: 950;
+      }
+
+      .progress-card {
+        border-radius: 8px;
+        background: #ffffff;
+        border: 1px solid #e4e7f0;
+        padding: 32px;
+        display: flex;
+        flex-direction: column;
+        gap: 24px;
+        box-shadow: 0 20px 60px rgba(35, 36, 42, 0.09);
+      }
+
+      .progress-bar {
+        height: 22px;
+        border-radius: 999px;
+        background: #eef0f5;
+        overflow: hidden;
+      }
+
+      .progress-fill {
+        width: 73%;
+        height: 100%;
+        background: #6366f1;
+        border-radius: 999px;
+      }
+
+      .job-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 16px;
+      }
+
+      .job {
+        border-radius: 8px;
+        background: #f7f8fc;
+        padding: 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      .results-table {
+        border-radius: 8px;
+        border: 1px solid #e4e7f0;
+        overflow: hidden;
+        background: #ffffff;
+      }
+
+      .table-row {
+        display: grid;
+        grid-template-columns: 1.2fr 0.85fr 0.55fr 0.7fr 1.45fr 0.9fr 1fr;
+        min-height: 68px;
+        border-bottom: 1px solid #e4e7f0;
+        align-items: center;
+      }
+
+      .table-row:last-child {
+        border-bottom: 0;
+      }
+
+      .table-cell {
+        padding: 0 16px;
+        color: #23242a;
+        font-size: 18px;
+        font-weight: 750;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .table-head {
+        background: #eef0f5;
+      }
+
+      .table-head .table-cell {
+        color: #6e7480;
+        font-size: 15px;
+        font-weight: 950;
+        text-transform: uppercase;
+        letter-spacing: 0;
+      }
+
+      .star {
+        color: #f4b942;
+        font-weight: 950;
+      }
+
+      .export-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+      }
+
+      .export-actions {
+        display: flex;
+        gap: 12px;
+      }
+
+      .transition-wipe {
+        position: absolute;
+        inset: 0;
+        background: #ffffff;
+        transform-origin: left center;
+        z-index: 30;
+      }
+
+      .focus-ring {
+        outline: 4px solid #c7c9ff;
+        outline-offset: 5px;
+        box-shadow: 0 0 0 10px rgba(99, 102, 241, 0.08);
+      }
+
+      .cursor-dot {
+        position: absolute;
+        width: 30px;
+        height: 30px;
+        border-radius: 50%;
+        background: #6366f1;
+        border: 6px solid #ffffff;
+        box-shadow: 0 10px 24px rgba(99, 102, 241, 0.28);
+        z-index: 20;
+      }
+
+      .s3-cursor {
+        left: 1240px;
+        top: 658px;
+      }
+
+      .s4-cursor {
+        left: 1388px;
+        top: 606px;
+      }
+
+      .s6-cursor {
+        left: 1416px;
+        top: 776px;
       }
     </style>
   </head>
   <body>
     <div
       id="root"
-      data-composition-id="main"
+      data-composition-id="local-business-finder-video"
       data-start="0"
-      data-duration="10"
+      data-duration="96"
       data-width="1920"
       data-height="1080"
     >
-      
-      
+      <audio
+        id="voiceover"
+        data-start="0"
+        data-duration="94.4"
+        data-track-index="9"
+        src="media/local-business-finder-voiceover.wav"
+        data-volume="1"
+      ></audio>
 
-      <!--
-        Add your clips here. Example:
-        <div id="title" class="clip" data-start="0" data-duration="5" data-track-index="1"
-             style="font-size: 64px; color: #fff; padding: 40px">
-          Hello World
+      <div id="scene-1" class="scene clip" data-start="0" data-duration="10" data-track-index="1">
+        <div class="scene-content">
+          <div class="topbar">
+            <div class="brand"><div class="mark">A</div> AiFetchly</div>
+            <div class="pill warning-pill">Problem to solve</div>
+          </div>
+          <div class="hero-grid">
+            <div class="copy-stack">
+              <div id="s1-eyebrow" class="eyebrow">Local lead research</div>
+              <h1 id="s1-title">Manual map research eats hours.</h1>
+              <p id="s1-copy" class="body-copy">Local Business Finder turns scattered map listings into structured business leads.</p>
+            </div>
+            <div id="s1-board" class="problem-board">
+              <div class="manual-list">
+                <div class="pill warning-pill">Manual workflow</div>
+                <div class="manual-row"><span>Search maps</span><span class="strike">repeat</span></div>
+                <div class="manual-row"><span>Open listings</span><span class="strike">copy</span></div>
+                <div class="manual-row"><span>Check websites</span><span class="strike">paste</span></div>
+                <div class="manual-row"><span>Clean spreadsheet</span><span class="strike">again</span></div>
+              </div>
+              <div class="organized-card">
+                <div class="pill status-pill">Organized in AiFetchly</div>
+                <div class="data-chips">
+                  <div class="data-chip">Names</div>
+                  <div class="data-chip">Ratings</div>
+                  <div class="data-chip">Reviews</div>
+                  <div class="data-chip">Addresses</div>
+                  <div class="data-chip">Phones</div>
+                  <div class="data-chip">Websites</div>
+                  <div class="data-chip">Maps URLs</div>
+                </div>
+                <p class="caption">Structured local business data, ready for outreach workflows.</p>
+              </div>
+            </div>
+          </div>
         </div>
-      -->
+      </div>
+
+      <div id="scene-2" class="scene clip" data-start="10" data-duration="12" data-track-index="1">
+        <div class="scene-content">
+          <div class="topbar">
+            <div class="brand"><div class="mark">A</div> AiFetchly</div>
+            <div class="pill status-pill">Feature overview</div>
+          </div>
+          <div class="hero-grid">
+            <div class="copy-stack">
+              <div id="s2-eyebrow" class="eyebrow">What it does</div>
+              <h2 id="s2-title">Search Google Maps or Yandex Maps by keyword and location.</h2>
+              <p id="s2-copy" class="body-copy">Use Google Maps for global coverage, and Yandex Maps for Russia, CIS markets, and Turkey.</p>
+            </div>
+            <div id="s2-shell" class="app-shell">
+              <div class="sidebar">
+                <div class="nav-item"><div class="nav-icon"></div> Dashboard</div>
+                <div class="nav-item active"><div class="nav-icon"></div> Local Business Finder</div>
+                <div class="nav-item"><div class="nav-icon"></div> Outreach Campaigns</div>
+                <div class="nav-item"><div class="nav-icon"></div> Settings</div>
+              </div>
+              <div class="workspace">
+                <div class="workspace-header">
+                  <div class="workspace-title">Local Business Finder</div>
+                  <div class="tabs"><div class="tab active">Search</div><div class="tab">History</div></div>
+                </div>
+                <div class="source-cards">
+                  <div class="source-card active">
+                    <div class="source-title">Google Maps</div>
+                    <div class="source-note">Best for global markets and Western countries.</div>
+                    <div class="pill">Global coverage</div>
+                  </div>
+                  <div class="source-card">
+                    <div class="source-title">Yandex Maps</div>
+                    <div class="source-note">Best for Russia, CIS countries, and Turkey.</div>
+                    <div class="pill">Regional controls</div>
+                  </div>
+                </div>
+                <div class="data-chips">
+                  <div class="data-chip">Category</div>
+                  <div class="data-chip">Rating</div>
+                  <div class="data-chip">Review count</div>
+                  <div class="data-chip">Phone</div>
+                  <div class="data-chip">Website</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="scene-3" class="scene clip" data-start="22" data-duration="13" data-track-index="1">
+        <div class="scene-content">
+          <div class="topbar">
+            <div class="brand"><div class="mark">A</div> AiFetchly</div>
+            <div class="pill">Step 1 and 2</div>
+          </div>
+          <div id="s3-shell" class="app-shell">
+            <div class="sidebar">
+              <div class="nav-item"><div class="nav-icon"></div> Dashboard</div>
+              <div class="nav-item active"><div class="nav-icon"></div> Local Business Finder</div>
+              <div class="nav-item"><div class="nav-icon"></div> Outreach Campaigns</div>
+              <div class="nav-item"><div class="nav-icon"></div> Settings</div>
+            </div>
+            <div class="workspace">
+              <div class="workspace-header">
+                <div>
+                  <div class="workspace-title">Run a local search</div>
+                  <p class="caption">Choose source, enter keyword, then choose the target location.</p>
+                </div>
+                <div class="tabs"><div class="tab active">Search</div><div class="tab">History</div></div>
+              </div>
+              <div class="source-cards">
+                <div id="s3-google" class="source-card active focus-ring">
+                  <div class="source-title">Google Maps</div>
+                  <div class="source-note">Use for New York, London, Los Angeles, and most global searches.</div>
+                </div>
+                <div class="source-card">
+                  <div class="source-title">Yandex Maps</div>
+                  <div class="source-note">Use for Moscow, Almaty, Belarus, Turkey, and local-language searches.</div>
+                </div>
+              </div>
+              <div class="form-grid">
+                <div id="s3-keyword" class="field focus-ring">
+                  <div class="field-label">Business keyword</div>
+                  <div class="field-value">dentist</div>
+                </div>
+                <div id="s3-location" class="field focus-ring">
+                  <div class="field-label">Location</div>
+                  <div class="field-value">New York</div>
+                </div>
+              </div>
+              <div class="cursor-dot s3-cursor"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="scene-4" class="scene clip" data-start="35" data-duration="13" data-track-index="1">
+        <div class="scene-content">
+          <div class="topbar">
+            <div class="brand"><div class="mark">A</div> AiFetchly</div>
+            <div class="pill">Step 3</div>
+          </div>
+          <div id="s4-shell" class="app-shell">
+            <div class="sidebar">
+              <div class="nav-item active"><div class="nav-icon"></div> Local Business Finder</div>
+              <div class="nav-item"><div class="nav-icon"></div> Search Engine Scraper</div>
+              <div class="nav-item"><div class="nav-icon"></div> Market Insights</div>
+              <div class="nav-item"><div class="nav-icon"></div> Settings</div>
+            </div>
+            <div class="workspace">
+              <div class="workspace-header">
+                <div>
+                  <div class="workspace-title">Configure search options</div>
+                  <p class="caption">Keep it fast, or collect richer records when needed.</p>
+                </div>
+                <div class="primary-button">Start Search</div>
+              </div>
+              <div class="option-grid">
+                <div id="s4-max" class="option focus-ring">
+                  <div class="field-label">Maximum results</div>
+                  <div class="field-value">20 of 50</div>
+                  <div class="slider"><div class="slider-fill"></div></div>
+                </div>
+                <div id="s4-website" class="option focus-ring">
+                  <div class="field-label">Include website</div>
+                  <div class="field-value">On</div>
+                  <div class="toggle"></div>
+                </div>
+                <div id="s4-reviews" class="option">
+                  <div class="field-label">Include reviews</div>
+                  <div class="field-value">Off</div>
+                  <div class="toggle off"></div>
+                </div>
+                <div id="s4-browser" class="option">
+                  <div class="field-label">Show browser</div>
+                  <div class="field-value">Off</div>
+                  <div class="toggle off"></div>
+                </div>
+              </div>
+              <p class="body-copy">Website URLs make records outreach-ready. Reviews add detail but take longer. Show Browser is mainly for debugging.</p>
+              <div class="cursor-dot s4-cursor"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="scene-5" class="scene clip" data-start="48" data-duration="12" data-track-index="1">
+        <div class="scene-content">
+          <div class="topbar">
+            <div class="brand"><div class="mark">A</div> AiFetchly</div>
+            <div class="pill">Optional settings</div>
+          </div>
+          <div class="hero-grid">
+            <div class="copy-stack">
+              <div id="s5-eyebrow" class="eyebrow">Accounts and proxies</div>
+              <h2 id="s5-title">Use matching accounts and regional proxies for better success rates.</h2>
+              <p id="s5-copy" class="body-copy">Yandex searches can also use language and region settings to match the local market.</p>
+            </div>
+            <div id="s5-shell" class="app-shell">
+              <div class="sidebar">
+                <div class="nav-item active"><div class="nav-icon"></div> Local Business Finder</div>
+                <div class="nav-item"><div class="nav-icon"></div> Accounts</div>
+                <div class="nav-item"><div class="nav-icon"></div> Proxies</div>
+              </div>
+              <div class="workspace">
+                <div class="workspace-title">Search context</div>
+                <div class="form-grid">
+                  <div class="field">
+                    <div class="field-label">Yandex language</div>
+                    <div class="field-value">ru</div>
+                  </div>
+                  <div class="field">
+                    <div class="field-label">Region</div>
+                    <div class="field-value">ru</div>
+                  </div>
+                </div>
+                <div class="account-grid">
+                  <div class="account-card">
+                    <div class="source-title">Account cookies</div>
+                    <div class="check-row"><div class="check">✓</div> Google or Yandex account</div>
+                    <div class="check-row"><div class="check">✓</div> More detailed listing access</div>
+                  </div>
+                  <div class="account-card">
+                    <div class="source-title">Proxy rotation</div>
+                    <div class="check-row"><div class="check">✓</div> Spread requests safely</div>
+                    <div class="check-row"><div class="check">✓</div> Match target region</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="scene-6" class="scene clip" data-start="60" data-duration="12" data-track-index="1">
+        <div class="scene-content">
+          <div class="topbar">
+            <div class="brand"><div class="mark">A</div> AiFetchly</div>
+            <div class="pill status-pill">Step 4</div>
+          </div>
+          <div class="hero-grid">
+            <div class="copy-stack">
+              <div id="s6-eyebrow" class="eyebrow">Start the search</div>
+              <h2 id="s6-title">Run in the background and monitor live progress.</h2>
+              <p id="s6-copy" class="body-copy">You can continue using AiFetchly, cancel if needed, and run up to three searches at the same time.</p>
+            </div>
+            <div id="s6-progress" class="progress-card">
+              <div class="workspace-header">
+                <div>
+                  <div class="workspace-title">dentist in New York</div>
+                  <p class="caption">Collecting public business information</p>
+                </div>
+                <div class="secondary-button">Cancel</div>
+              </div>
+              <div class="progress-bar"><div class="progress-fill"></div></div>
+              <div class="job-grid">
+                <div class="job"><div class="pill status-pill">Search 1</div><div class="field-value">73%</div></div>
+                <div class="job"><div class="pill status-pill">Search 2</div><div class="field-value">Running</div></div>
+                <div class="job"><div class="pill">Search 3</div><div class="field-value">Queued</div></div>
+              </div>
+              <div class="cursor-dot s6-cursor"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="scene-7" class="scene clip" data-start="72" data-duration="16" data-track-index="1">
+        <div class="scene-content">
+          <div class="topbar">
+            <div class="brand"><div class="mark">A</div> AiFetchly</div>
+            <div class="pill status-pill">Completed results</div>
+          </div>
+          <div id="s7-shell" class="app-shell">
+            <div class="sidebar">
+              <div class="nav-item active"><div class="nav-icon"></div> Local Business Finder</div>
+              <div class="nav-item"><div class="nav-icon"></div> Outreach Campaigns</div>
+              <div class="nav-item"><div class="nav-icon"></div> Email Templates</div>
+              <div class="nav-item"><div class="nav-icon"></div> Settings</div>
+            </div>
+            <div class="workspace">
+              <div class="export-row">
+                <div>
+                  <div class="workspace-title">24 businesses found for dentist in New York</div>
+                  <p class="caption">Names with map links, categories, ratings, reviews, addresses, phones, and websites.</p>
+                </div>
+                <div class="export-actions">
+                  <div class="secondary-button">Copy All</div>
+                  <div class="secondary-button">Export CSV</div>
+                  <div class="primary-button">Export JSON</div>
+                </div>
+              </div>
+              <div id="s7-table" class="results-table">
+                <div class="table-row table-head">
+                  <div class="table-cell">Name</div>
+                  <div class="table-cell">Category</div>
+                  <div class="table-cell">Rating</div>
+                  <div class="table-cell">Reviews</div>
+                  <div class="table-cell">Address</div>
+                  <div class="table-cell">Phone</div>
+                  <div class="table-cell">Website</div>
+                </div>
+                <div class="table-row">
+                  <div class="table-cell">Bright Smile Dental</div>
+                  <div class="table-cell">Dentist</div>
+                  <div class="table-cell star">4.8</div>
+                  <div class="table-cell">312</div>
+                  <div class="table-cell">245 W 38th St, New York</div>
+                  <div class="table-cell">(212) 555-0198</div>
+                  <div class="table-cell">brightsmile.example</div>
+                </div>
+                <div class="table-row">
+                  <div class="table-cell">Midtown Family Dental</div>
+                  <div class="table-cell">Dental clinic</div>
+                  <div class="table-cell star">4.6</div>
+                  <div class="table-cell">188</div>
+                  <div class="table-cell">19 E 47th St, New York</div>
+                  <div class="table-cell">(212) 555-0134</div>
+                  <div class="table-cell">midtownfamily.example</div>
+                </div>
+                <div class="table-row">
+                  <div class="table-cell">Hudson Dental Studio</div>
+                  <div class="table-cell">Cosmetic dentist</div>
+                  <div class="table-cell star">4.9</div>
+                  <div class="table-cell">427</div>
+                  <div class="table-cell">510 Hudson St, New York</div>
+                  <div class="table-cell">(646) 555-0180</div>
+                  <div class="table-cell">hudsondental.example</div>
+                </div>
+                <div class="table-row">
+                  <div class="table-cell">Union Square Dental Care</div>
+                  <div class="table-cell">Dentist</div>
+                  <div class="table-cell star">4.7</div>
+                  <div class="table-cell">254</div>
+                  <div class="table-cell">32 Union Sq E, New York</div>
+                  <div class="table-cell">(917) 555-0112</div>
+                  <div class="table-cell">unionsquaredental.example</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="scene-8" class="scene clip" data-start="88" data-duration="8" data-track-index="1">
+        <div class="scene-content">
+          <div class="topbar">
+            <div class="brand"><div class="mark">A</div> AiFetchly</div>
+            <div class="pill status-pill">Ready for outreach</div>
+          </div>
+          <div class="hero-grid">
+            <div class="copy-stack">
+              <div id="s8-eyebrow" class="eyebrow">Final result</div>
+              <h1 id="s8-title">Structured local leads, ready for the next step.</h1>
+              <p id="s8-copy" class="body-copy">Copy JSON, export CSV for spreadsheets, or export JSON for downstream tools.</p>
+            </div>
+            <div id="s8-card" class="organized-card">
+              <div class="pill status-pill">Export complete</div>
+              <div class="data-chips">
+                <div class="data-chip">24 businesses</div>
+                <div class="data-chip">CSV downloaded</div>
+                <div class="data-chip">JSON ready</div>
+                <div class="data-chip">Outreach-ready websites</div>
+              </div>
+              <p class="body-copy">Local Business Finder removes the repetitive collection work, so your team can focus on qualified outreach.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="wipe-1" class="transition-wipe clip" data-start="9.5" data-duration="0.7" data-track-index="2"></div>
+      <div id="wipe-2" class="transition-wipe clip" data-start="21.5" data-duration="0.7" data-track-index="2"></div>
+      <div id="wipe-3" class="transition-wipe clip" data-start="34.5" data-duration="0.7" data-track-index="2"></div>
+      <div id="wipe-4" class="transition-wipe clip" data-start="47.5" data-duration="0.7" data-track-index="2"></div>
+      <div id="wipe-5" class="transition-wipe clip" data-start="59.5" data-duration="0.7" data-track-index="2"></div>
+      <div id="wipe-6" class="transition-wipe clip" data-start="71.5" data-duration="0.7" data-track-index="2"></div>
+      <div id="wipe-7" class="transition-wipe clip" data-start="87.5" data-duration="0.7" data-track-index="2"></div>
     </div>
 
     <script>
       window.__timelines = window.__timelines || {};
       const tl = gsap.timeline({ paused: true });
-      // Example: tl.from("#title", { opacity: 0, y: -50, duration: 1 }, 0);
-      window.__timelines["main"] = tl;
+
+      function enter(selector, vars, at) {
+        tl.from(selector, { duration: 0.58, ease: "power3.out", ...vars }, at);
+      }
+
+      function wipe(selector, at) {
+        tl.from(selector, { scaleX: 0, duration: 0.32, ease: "power2.in", overwrite: "auto" }, at);
+        tl.to(selector, { scaleX: 0, transformOrigin: "right center", duration: 0.32, ease: "power2.out", overwrite: "auto" }, at + 0.34);
+      }
+
+      enter("#s1-eyebrow", { y: 34, opacity: 0 }, 0.2);
+      enter("#s1-title", { x: -44, opacity: 0, ease: "expo.out" }, 0.38);
+      enter("#s1-copy", { y: 38, opacity: 0, ease: "power2.out" }, 0.62);
+      enter("#s1-board", { scale: 0.94, opacity: 0, ease: "back.out(1.4)" }, 0.86);
+      wipe("#wipe-1", 9.5);
+
+      enter("#s2-eyebrow", { y: 30, opacity: 0, ease: "power2.out" }, 10.25);
+      enter("#s2-title", { x: -40, opacity: 0, ease: "expo.out" }, 10.45);
+      enter("#s2-copy", { y: 42, opacity: 0, ease: "power3.out" }, 10.74);
+      enter("#s2-shell", { x: 54, opacity: 0, scale: 0.96, ease: "back.out(1.3)" }, 11.0);
+      wipe("#wipe-2", 21.5);
+
+      enter("#s3-shell", { y: 48, opacity: 0, ease: "power3.out" }, 22.25);
+      enter("#s3-google", { scale: 0.92, opacity: 0, ease: "back.out(1.7)" }, 22.8);
+      enter("#s3-keyword", { x: -42, opacity: 0, ease: "expo.out" }, 23.1);
+      enter("#s3-location", { x: 42, opacity: 0, ease: "power2.out" }, 23.26);
+      enter(".s3-cursor", { scale: 0.3, opacity: 0, ease: "back.out(2)" }, 23.7);
+      wipe("#wipe-3", 34.5);
+
+      enter("#s4-shell", { y: 46, opacity: 0, ease: "power3.out" }, 35.25);
+      enter("#s4-max", { scale: 0.94, opacity: 0, ease: "back.out(1.5)" }, 35.82);
+      enter("#s4-website", { y: 36, opacity: 0, ease: "expo.out" }, 36.02);
+      enter("#s4-reviews", { y: 42, opacity: 0, ease: "power2.out" }, 36.18);
+      enter("#s4-browser", { y: 48, opacity: 0, ease: "sine.out" }, 36.34);
+      enter(".s4-cursor", { scale: 0.3, opacity: 0, ease: "back.out(2)" }, 36.7);
+      wipe("#wipe-4", 47.5);
+
+      enter("#s5-eyebrow", { y: 34, opacity: 0, ease: "power2.out" }, 48.25);
+      enter("#s5-title", { x: -42, opacity: 0, ease: "expo.out" }, 48.48);
+      enter("#s5-copy", { y: 40, opacity: 0, ease: "power3.out" }, 48.78);
+      enter("#s5-shell", { x: 52, opacity: 0, scale: 0.96, ease: "back.out(1.4)" }, 49.04);
+      wipe("#wipe-5", 59.5);
+
+      enter("#s6-eyebrow", { y: 34, opacity: 0, ease: "power2.out" }, 60.25);
+      enter("#s6-title", { x: -42, opacity: 0, ease: "expo.out" }, 60.48);
+      enter("#s6-copy", { y: 40, opacity: 0, ease: "power3.out" }, 60.76);
+      enter("#s6-progress", { x: 52, opacity: 0, scale: 0.96, ease: "back.out(1.4)" }, 61.04);
+      enter(".s6-cursor", { scale: 0.3, opacity: 0, ease: "back.out(2)" }, 61.62);
+      tl.from(".progress-fill", { width: "8%", duration: 2.6, ease: "power1.out" }, 62.0);
+      wipe("#wipe-6", 71.5);
+
+      enter("#s7-shell", { y: 50, opacity: 0, ease: "power3.out" }, 72.25);
+      enter("#s7-table", { scale: 0.97, opacity: 0, ease: "back.out(1.25)" }, 72.78);
+      tl.from("#scene-7 .table-row:not(.table-head)", { y: 22, opacity: 0, stagger: 0.12, duration: 0.48, ease: "power2.out" }, 73.1);
+      wipe("#wipe-7", 87.5);
+
+      enter("#s8-eyebrow", { y: 34, opacity: 0, ease: "power2.out" }, 88.25);
+      enter("#s8-title", { x: -44, opacity: 0, ease: "expo.out" }, 88.48);
+      enter("#s8-copy", { y: 38, opacity: 0, ease: "power3.out" }, 88.74);
+      enter("#s8-card", { scale: 0.94, opacity: 0, ease: "back.out(1.5)" }, 89.0);
+      tl.to("#scene-8", { opacity: 0, duration: 0.9, ease: "power2.in" }, 95.0);
+
+      window.__timelines["local-business-finder-video"] = tl;
     </script>
   </body>
 </html>
