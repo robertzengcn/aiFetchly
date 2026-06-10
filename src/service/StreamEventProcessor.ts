@@ -416,7 +416,11 @@ export class StreamEventProcessor {
     const toolCallData = streamEvent.data.data;
     const toolName = toolCallData?.name || undefined;
     if (!toolName) {
-      throw new Error("tool name is required");
+      console.warn(
+        "Skipping malformed TOOL_CALL event: missing tool name.",
+        JSON.stringify(streamEvent.data)
+      );
+      return;
     }
     const toolParams = toolCallData?.arguments || {};
     const toolId = toolCallData?.id || `tool-${Date.now()}`;
