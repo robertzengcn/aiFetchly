@@ -84,8 +84,73 @@ Uses a temporary SQLite database seeded with test data.
 
 ## Test Results
 
-*Tests will be executed and results appended after running:*
-```bash
-cd /home/robertzeng/project/aiFetchly
-python3 -m pytest agent-harness/tests/ -v --tb=no
+**Date:** 2026-06-09
+**Status:** ALL PASS (40/40)
+
 ```
+$ python3 -m pytest agent-harness/tests/ -v --tb=no
+
+agent-harness/tests/test_core.py::TestCliConfig::test_resolve_db_path_explicit_flag PASSED
+agent-harness/tests/test_core.py::TestCliConfig::test_resolve_db_path_missing_db_file PASSED
+agent-harness/tests/test_core.py::TestCliConfig::test_is_database_in_use_no_wal PASSED
+agent-harness/tests/test_core.py::TestCliConfig::test_is_database_in_use_with_wal PASSED
+agent-harness/tests/test_core.py::TestCliConfig::test_get_database_stats PASSED
+agent-harness/tests/test_core.py::TestCliConfig::test_get_database_stats_missing PASSED
+agent-harness/tests/test_core.py::TestFormatter::test_create_envelope PASSED
+agent-harness/tests/test_core.py::TestFormatter::test_create_error_envelope PASSED
+agent-harness/tests/test_core.py::TestFormatter::test_paginated_result_structure PASSED
+agent-harness/tests/test_core.py::TestSessionManager::test_session_create_and_load PASSED
+agent-harness/tests/test_core.py::TestSessionManager::test_session_command_history_max PASSED
+agent-harness/tests/test_core.py::TestErrorClasses::test_readonly_error_message PASSED
+agent-harness/tests/test_core.py::TestErrorClasses::test_database_not_found_error_message PASSED
+agent-harness/tests/test_core.py::TestErrorClasses::test_validation_error PASSED
+agent-harness/tests/test_core.py::TestCLISubprocess::test_help PASSED
+agent-harness/tests/test_core.py::TestCLISubprocess::test_version PASSED
+agent-harness/tests/test_core.py::TestDatabaseAdapter::test_entity_list_completeness PASSED
+agent-harness/tests/test_core.py::TestDatabaseAdapter::test_synchronize_is_false PASSED
+agent-harness/tests/test_core.py::TestDatabaseAdapter::test_database_path_resolution_order PASSED
+agent-harness/tests/test_full_e2e.py::TestTaskWorkflow::test_task_list_json PASSED
+agent-harness/tests/test_full_e2e.py::TestTaskWorkflow::test_task_list_human PASSED
+agent-harness/tests/test_full_e2e.py::TestTaskWorkflow::test_task_detail_json PASSED
+agent-harness/tests/test_full_e2e.py::TestTaskWorkflow::test_task_detail_not_found PASSED
+agent-harness/tests/test_full_e2e.py::TestSearchWorkflow::test_search_list_json PASSED
+agent-harness/tests/test_full_e2e.py::TestSearchWorkflow::test_search_results_json PASSED
+agent-harness/tests/test_full_e2e.py::TestContactWorkflow::test_contact_list_json PASSED
+agent-harness/tests/test_full_e2e.py::TestContactWorkflow::test_contact_search_json PASSED
+agent-harness/tests/test_full_e2e.py::TestContactWorkflow::test_contact_export_csv PASSED
+agent-harness/tests/test_full_e2e.py::TestScheduleWorkflow::test_schedule_list_json PASSED
+agent-harness/tests/test_full_e2e.py::TestScheduleWorkflow::test_schedule_detail_json PASSED
+agent-harness/tests/test_full_e2e.py::TestProxyWorkflow::test_proxy_list_json PASSED
+agent-harness/tests/test_full_e2e.py::TestProxyWorkflow::test_proxy_detail_json PASSED
+agent-harness/tests/test_full_e2e.py::TestSystemWorkflow::test_system_db_path_json PASSED
+agent-harness/tests/test_full_e2e.py::TestSystemWorkflow::test_system_db_stats_json PASSED
+agent-harness/tests/test_full_e2e.py::TestSystemWorkflow::test_system_status_json PASSED
+agent-harness/tests/test_full_e2e.py::TestDashboardWorkflow::test_dashboard_summary_json PASSED
+agent-harness/tests/test_full_e2e.py::TestReadOnlyMode::test_task_create_blocked PASSED
+agent-harness/tests/test_full_e2e.py::TestReadOnlyMode::test_task_delete_blocked PASSED
+agent-harness/tests/test_full_e2e.py::TestCLISubprocessE2E::test_full_task_workflow PASSED
+agent-harness/tests/test_full_e2e.py::TestCLISubprocessE2E::test_full_contact_search_export PASSED
+
+======================== 40 passed in 64.18s ========================
+```
+
+### Test Coverage Summary
+
+| Category | Tests | Status |
+|----------|-------|--------|
+| CLI Config | 6 | PASS |
+| JSON Formatter | 3 | PASS |
+| Session Manager | 2 | PASS |
+| Error Classes | 3 | PASS |
+| CLI Subprocess | 2 | PASS |
+| Database Adapter | 3 | PASS |
+| Task Workflow | 4 | PASS |
+| Search Workflow | 2 | PASS |
+| Contact Workflow | 3 | PASS |
+| Schedule Workflow | 2 | PASS |
+| Proxy Workflow | 2 | PASS |
+| System Workflow | 3 | PASS |
+| Dashboard Workflow | 1 | PASS |
+| Read-Only Mode | 2 | PASS |
+| E2E Subprocess | 2 | PASS |
+| **Total** | **40** | **ALL PASS** |
