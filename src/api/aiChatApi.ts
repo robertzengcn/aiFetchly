@@ -1547,7 +1547,7 @@ export class AiChatApi {
     if (request.max_tokens !== undefined) {
       data.max_tokens = request.max_tokens;
     }
-    return this._httpClient.postJson("/v1/chat/completions", data);
+    return this._httpClient.postJson("/api/ai/v1/chat/completions", data);
   }
 
   /**
@@ -1711,6 +1711,6 @@ export class AiChatApi {
     if (request.return_documents !== undefined) {
       data.return_documents = request.return_documents;
     }
-    return this._httpClient.postJson("/v1/rerank", data);
+    return this._httpClient.postJson("/api/ai/v1/rerank", data);
   }
 }
