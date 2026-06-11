@@ -152,7 +152,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, reactive } from "vue";
+import { ref, onMounted, reactive, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { listAvailableAiMessageTaskTools } from "@/views/api/aiMessageTask";
 import { AI_MESSAGE_TASK_DEFAULTS } from "@/entityTypes/aiMessageTaskTypes";
@@ -217,6 +217,22 @@ const formState = reactive<AiMessageTaskFormState>({
   maxRuntimeMs: props.initialTaskData?.max_runtime_ms ?? AI_MESSAGE_TASK_DEFAULTS.maxRuntimeMs,
   maxContinueCalls: props.initialTaskData?.max_continue_calls ?? AI_MESSAGE_TASK_DEFAULTS.maxContinueCalls,
 });
+
+// Watch for initialTaskData changes (async load after component mount)
+watch(() => props.initialTaskData, (newData) => {
+  if (newData) {
+    formState.name = newData.name ?? ''
+    formState.message = newData.message ?? ''
+    formState.systemPrompt = newData.system_prompt ?? ''
+    formState.model = newData.model ?? ''
+    formState.autoApproveTools = newData.auto_approve_tools ?? AI_MESSAGE_TASK_DEFAULTS.autoApproveTools
+    formState.allowedTools = parseAllowedTools(newData.allowed_tools_json)
+    formState.maxToolCalls = newData.max_tool_calls ?? AI_MESSAGE_TASK_DEFAULTS.maxToolCalls
+    formState.maxRuntimeMs = newData.max_runtime_ms ?? AI_MESSAGE_TASK_DEFAULTS.maxRuntimeMs
+    formState.maxContinueCalls = newData.max_continue_calls ?? AI_MESSAGE_TASK_DEFAULTS.maxContinueCalls
+    emitChange()
+  }
+})
 
 // Tools catalog
 const schedulableTools = ref<SchedulableAiToolSummary[]>([]);
