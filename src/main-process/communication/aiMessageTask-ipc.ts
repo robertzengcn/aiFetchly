@@ -89,8 +89,8 @@ export function registerAiMessageTaskIpcHandlers(): void {
         };
       }
       try {
-        const id =
-          typeof data === "string" ? JSON.parse(data) : (data as number);
+        const params = typeof data === "string" ? JSON.parse(data) : data;
+        const id = (params as { id: number }).id;
         const module = new AiMessageTaskModule();
         await module.deleteTask(id);
         return { status: true, msg: "AI message task deleted" };
@@ -150,8 +150,8 @@ export function registerAiMessageTaskIpcHandlers(): void {
         };
       }
       try {
-        const id =
-          typeof data === "string" ? JSON.parse(data) : (data as number);
+        const params = typeof data === "string" ? JSON.parse(data) : data;
+        const id = (params as { id: number }).id;
         const module = new AiMessageTaskModule();
         const task = await module.getTask(id);
         if (!task) {
@@ -218,8 +218,8 @@ export function registerAiMessageTaskIpcHandlers(): void {
         };
       }
       try {
-        const id =
-          typeof data === "string" ? JSON.parse(data) : (data as number);
+        const params = typeof data === "string" ? JSON.parse(data) : data;
+        const id = (params as { id: number }).id;
         const module = new AiMessageTaskRunModule();
         const run = await module.getRun(id);
         if (!run) {

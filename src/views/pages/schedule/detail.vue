@@ -549,9 +549,9 @@ const loadSchedule = async () => {
     // Load AI message task data if applicable
     if (schedule.value?.task_type === TaskType.AI_MESSAGE && schedule.value?.task_id) {
       try {
-        const taskResult = await getAiMessageTaskDetail(schedule.value.task_id) as { data?: Record<string, unknown> } | null
-        if (taskResult?.data) {
-          aiMessageTask.value = taskResult.data
+        const taskResult = await getAiMessageTaskDetail(schedule.value.task_id) as Record<string, unknown> | null | undefined
+        if (taskResult) {
+          aiMessageTask.value = taskResult
         }
       } catch (taskErr) {
         console.error('Failed to load AI message task:', taskErr)
