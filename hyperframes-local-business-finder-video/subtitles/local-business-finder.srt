@@ -1,0 +1,68 @@
+1
+00:00:00,000 --> 00:00:07,500
+Finding local business leads one by one can eat hours.
+
+2
+00:00:07,500 --> 00:00:14,000
+You search maps, open listings, copy details, check websites,
+and still end up with a messy spreadsheet.
+
+3
+00:00:14,000 --> 00:00:24,000
+AiFetchly's Local Business Finder turns that manual work
+into an organized search.
+
+4
+00:00:24,000 --> 00:00:33,000
+Choose Google Maps for global coverage,
+or Yandex Maps for Russia, CIS markets, and Turkey.
+
+5
+00:00:33,000 --> 00:00:43,000
+Open Local Business Finder from the left navigation.
+In the Search tab, select your data source.
+
+6
+00:00:43,000 --> 00:00:53,000
+Enter the business type you want, like dentist,
+Italian restaurant, plumber, or marketing agency.
+
+7
+00:00:53,000 --> 00:01:03,000
+Next, enter the target location.
+You can use a city, address, zip code, or wider region.
+
+8
+00:01:03,000 --> 00:01:15,000
+Now tune the search. Set the maximum results from 1 to 50
+and include website URLs for outreach-ready records.
+
+9
+00:01:15,000 --> 00:01:25,000
+Turn on reviews only when you need extra detail.
+Show Browser is usually off unless you are debugging.
+
+10
+00:01:25,000 --> 00:01:36,000
+For Yandex searches, set language and region when needed.
+You can also select an account and rotate proxies.
+
+11
+00:01:36,000 --> 00:01:45,000
+Click Start Search. AiFetchly runs in the background,
+shows live progress, and lets you cancel if needed.
+
+12
+00:01:45,000 --> 00:01:52,000
+When the search finishes, the table gives you names,
+ratings, reviews, addresses, phones, websites, and map links.
+
+13
+00:01:52,000 --> 00:01:58,000
+Copy everything as JSON, export CSV for spreadsheets,
+or export JSON for downstream tools.
+
+14
+00:01:58,000 --> 00:02:00,000
+Local Business Finder gives you structured local leads,
+ready for your next outreach step.
