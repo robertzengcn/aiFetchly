@@ -94,6 +94,8 @@ jobs:
 
       - name: Rebuild better-sqlite3 for Electron
         shell: bash
+        env:
+          npm_config_msvs_version: '2022'
         run: |
           set -euo pipefail
           echo "package.json rebuild-better-sqlite script:"
