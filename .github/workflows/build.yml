@@ -94,13 +94,17 @@ jobs:
 
       - name: Rebuild better-sqlite3 for Electron
         shell: bash
-        env:
-          npm_config_msvs_version: '2022'
         run: |
           set -euo pipefail
-          echo "package.json rebuild-better-sqlite script:"
-          node -e "console.log(require('./package.json').scripts['rebuild-better-sqlite'])"
-          npm_config_runtime=electron npm_config_target=35.7.5 npm_config_disturl=https://electronjs.org/headers npm rebuild better-sqlite3 --build-from-source
+          echo "Installing latest node-gyp (bundled 9.4.1 cannot detect VS 2022)..."
+          npm install -g node-gyp@latest
+          node-gyp --version
+          echo "Rebuilding better-sqlite3 against Electron headers..."
+          cd node_modules/better-sqlite3
+          node-gyp rebuild --release \
+            --runtime=electron \
+            --target=35.7.5 \
+            --dist-url=https://electronjs.org/headers
       # - name: Rebuild canvas
       #   run: yarn rebuild-canvas
 
