@@ -85,6 +85,12 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
                     <v-btn variant="text" icon="mdi-chat" @click="toggleChatPanel">
                         <v-icon size="small"></v-icon>
                     </v-btn>
+                    <v-btn
+                        v-if="aiChatV2Enabled"
+                        variant="text"
+                        icon="mdi-robot-happy"
+                        @click="toggleV2ChatPanel"
+                    ></v-btn>
                     <v-btn variant="text" append-icon="mdi-chevron-down" class="mr-2">
                         <span v-if="!mainStore.isMobile">{{ userName }}</span>
                         <v-icon v-if="!mainStore.isMobile && isPlusPlan" icon="mdi-plus-circle" size="small" class="ml-1" color="primary" />
@@ -159,6 +165,28 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
           class="chat-backdrop"
           @click="toggleChatPanel"
         ></div>
+
+        <!-- AI Chat V2 Panel -->
+        <div
+          class="ai-chat-panel"
+          :class="{ 'panel-open': v2ChatPanelOpen }"
+          :style="v2ChatPanelOpen ? { width: chatPanelWidth + 'px' } : {}"
+        >
+          <!-- Resize handle -->
+          <div
+            v-if="v2ChatPanelOpen"
+            class="chat-resize-handle"
+            @mousedown="startResize"
+          ></div>
+          <AiChatV2 v-if="v2ChatPanelOpen" />
+        </div>
+
+        <!-- V2 Backdrop overlay -->
+        <div
+          v-if="v2ChatPanelOpen"
+          class="chat-backdrop"
+          @click="toggleV2ChatPanel"
+        ></div>
     </v-layout>
 </template>
 <script setup lang="ts">
@@ -176,6 +204,7 @@ import {receiveSystemMessage} from '@/views/api/layout'
 import {CommonDialogMsg} from "@/entityTypes/commonType"
 import NoticeSnackbar from '@/views/components/widgets/noticeSnackbar.vue';
 import AiChatBox from '@/views/components/aiChat/AiChatBox.vue';
+import AiChatV2 from '@/views/components/aiChatV2/AiChatV2.vue';
 import {GetloginUserInfo} from '@/views/api/users'
 import { getAppName } from '@/views/api/app'
 import { packageAppName } from '@/config/appPackage'
@@ -205,6 +234,9 @@ const appName=ref(packageAppName)
 const snaptimeout=ref<number>(10000)
 const messages = ref<MessageItem[]>([]);
 const chatPanelOpen = ref(false);
+const v2ChatPanelOpen = ref(false);
+const V2_FLAG_KEY = 'aifetchly:aiChatV2Enabled';
+const aiChatV2Enabled = ref(localStorage.getItem(V2_FLAG_KEY) === 'true');
 const chatPanelWidth = ref(420);
 const CHAT_PANEL_MIN_WIDTH = 320;
 const CHAT_PANEL_MAX_WIDTH = 900;
@@ -292,6 +324,13 @@ const getTranslatedTitle = (title: string): string => {
 
 const toggleChatPanel = () => {
     chatPanelOpen.value = !chatPanelOpen.value;
+}
+
+const toggleV2ChatPanel = () => {
+    v2ChatPanelOpen.value = !v2ChatPanelOpen.value;
+    if (v2ChatPanelOpen.value) {
+        chatPanelOpen.value = false;
+    }
 }
 
 const startResize = (e: MouseEvent) => {
