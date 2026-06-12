@@ -1,0 +1,133 @@
+import {
+  windowInvoke,
+  windowSend,
+  windowReceive,
+  windowRemoveAllListeners,
+} from "@/views/utils/apirequest";
+import type {
+  ChatV2StreamRequest,
+  ChatV2StreamChunk,
+  ChatV2HistoryResponse,
+  ChatV2ConversationSummary,
+} from "@/entityTypes/aiChatV2Types";
+import type { OpenAIModelsResponse } from "@/api/aiChatApi";
+import {
+  AI_CHAT_V2_MODELS,
+  AI_CHAT_V2_CONVERSATIONS,
+  AI_CHAT_V2_HISTORY,
+  AI_CHAT_V2_STREAM,
+  AI_CHAT_V2_STREAM_STOP,
+  AI_CHAT_V2_STREAM_CHUNK,
+  AI_CHAT_V2_STREAM_COMPLETE,
+  AI_CHAT_V2_CLEAR_CONVERSATION,
+  AI_CHAT_V2_CLEAR_ALL,
+} from "@/config/channellist";
+
+/**
+ * Get available OpenAI-compatible models.
+ *
+ * `windowInvoke` returns the unwrapped `result.data` from the IPC handler,
+ * so the return type matches the inner payload directly.
+ */
+export async function getOpenAIChatModels(): Promise<OpenAIModelsResponse | null> {
+  const resp = await windowInvoke(AI_CHAT_V2_MODELS);
+  return (resp as OpenAIModelsResponse | null) ?? null;
+}
+
+/**
+ * List all v2 chat conversations with summary metadata.
+ */
+export async function getChatV2Conversations(): Promise<ChatV2ConversationSummary[]> {
+  const resp = await windowInvoke(AI_CHAT_V2_CONVERSATIONS);
+  return (resp as ChatV2ConversationSummary[] | null) ?? [];
+}
+
+/**
+ * Load the message history for a specific conversation.
+ */
+export async function getChatV2History(
+  conversationId: string
+): Promise<ChatV2HistoryResponse | null> {
+  const resp = await windowInvoke(AI_CHAT_V2_HISTORY, { conversationId });
+  return (resp as ChatV2HistoryResponse | null) ?? null;
+}
+
+/**
+ * Stream a chat message over IPC.
+ *
+ * Registers listeners for chunk and complete events, then sends the stream
+ * request. The returned Promise resolves when the stream completes (success,
+ * error, or cancelled). Listeners are cleaned up in the complete handler.
+ *
+ * @param request - The stream request payload (message, model, etc.)
+ * @param onChunk - Callback for each token/chunk event received
+ * @param onComplete - Callback for the successful completion event
+ * @param onError - Callback invoked on stream error or parse failure
+ */
+export async function streamChatV2Message(
+  request: ChatV2StreamRequest,
+  onChunk: (chunk: ChatV2StreamChunk) => void,
+  onComplete: (chunk: ChatV2StreamChunk) => void,
+  onError: (error: Error) => void
+): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const chunkHandler = (raw: string): void => {
+      try {
+        const chunk: ChatV2StreamChunk = JSON.parse(raw);
+        onChunk(chunk);
+      } catch (err) {
+        console.error("aiChatV2: parse chunk error", err);
+      }
+    };
+
+    const completeHandler = (raw: string): void => {
+      try {
+        const chunk: ChatV2StreamChunk = JSON.parse(raw);
+        if (chunk.eventType === "error" && chunk.errorMessage) {
+          onError(new Error(chunk.errorMessage));
+        } else {
+          onComplete(chunk);
+        }
+      } catch (err) {
+        onError(err instanceof Error ? err : new Error("Stream completion parse error"));
+      }
+      windowRemoveAllListeners(AI_CHAT_V2_STREAM_CHUNK);
+      windowRemoveAllListeners(AI_CHAT_V2_STREAM_COMPLETE);
+      resolve();
+    };
+
+    // Remove any stale listeners from a previous stream before registering.
+    windowRemoveAllListeners(AI_CHAT_V2_STREAM_CHUNK);
+    windowRemoveAllListeners(AI_CHAT_V2_STREAM_COMPLETE);
+    windowReceive(AI_CHAT_V2_STREAM_CHUNK, chunkHandler);
+    windowReceive(AI_CHAT_V2_STREAM_COMPLETE, completeHandler);
+
+    windowSend(AI_CHAT_V2_STREAM, request);
+  });
+}
+
+/**
+ * Request the main process to abort the active v2 chat stream.
+ * Fire-and-forget; the stream completion handler will fire with a cancelled payload.
+ */
+export function stopChatV2Stream(): void {
+  windowSend(AI_CHAT_V2_STREAM_STOP, {});
+}
+
+/**
+ * Clear all messages in a specific v2 conversation.
+ */
+export async function clearChatV2Conversation(
+  conversationId: string
+): Promise<{ deleted: number } | null> {
+  const resp = await windowInvoke(AI_CHAT_V2_CLEAR_CONVERSATION, { conversationId });
+  return (resp as { deleted: number } | null) ?? null;
+}
+
+/**
+ * Clear all v2 chat history across all conversations.
+ */
+export async function clearAllChatV2History(): Promise<{ deleted: number } | null> {
+  const resp = await windowInvoke(AI_CHAT_V2_CLEAR_ALL);
+  return (resp as { deleted: number } | null) ?? null;
+}
