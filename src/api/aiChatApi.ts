@@ -1609,7 +1609,7 @@ export class AiChatApi {
     if (request.user !== undefined) {
       data.user = request.user;
     }
-    return this._httpClient.postJson("/api/ai/v1/chat/completions", data);
+    return this._httpClient.postJson("/v1/chat/completions", data);
   }
 
   /**
@@ -1658,7 +1658,7 @@ export class AiChatApi {
     }
 
     const response = await this._httpClient.postStream(
-      "/api/ai/v1/chat/completions",
+      "/v1/chat/completions",
       data,
       fetchOptions
     );
