@@ -1,0 +1,86 @@
+<template>
+  <div ref="scroller" class="v2-messages" @scroll="onScroll">
+    <div v-if="messages.length === 0" class="v2-messages__empty">
+      <v-icon size="40" color="grey-lighten-1">mdi-chat-outline</v-icon>
+      <div class="v2-messages__empty-title">
+        {{ t("aiChatV2.empty_title") || "Start a conversation" }}
+      </div>
+      <div class="v2-messages__empty-desc">
+        {{ t("aiChatV2.empty_description") || "Ask anything." }}
+      </div>
+    </div>
+    <AiChatV2Message
+      v-for="m in messages"
+      :key="m.id"
+      :message="m"
+      :status="m.id === activeAssistantMessageId ? streamStatus : 'idle'"
+      :error-message="errorMessage"
+    />
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, watch, nextTick, onMounted } from "vue";
+import { useI18n } from "vue-i18n";
+import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
+import AiChatV2Message from "./AiChatV2Message.vue";
+
+type Status = "idle" | "streaming" | "cancelled" | "error";
+
+const props = defineProps<{
+  messages: ChatV2MessageView[];
+  activeAssistantMessageId: string | null;
+  streamStatus: Status;
+  errorMessage?: string;
+}>();
+const { t } = useI18n();
+
+const scroller = ref<HTMLDivElement | null>(null);
+let pinnedToBottom = true;
+
+const scrollToBottom = async (): Promise<void> => {
+  await nextTick();
+  if (scroller.value && pinnedToBottom) {
+    scroller.value.scrollTop = scroller.value.scrollHeight;
+  }
+};
+
+const onScroll = (): void => {
+  const el = scroller.value;
+  if (!el) return;
+  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  pinnedToBottom = atBottom;
+};
+
+onMounted(scrollToBottom);
+watch(() => props.messages.length, scrollToBottom);
+watch(
+  () => props.messages.map((m) => m.content).join(""),
+  scrollToBottom
+);
+</script>
+
+<style scoped>
+.v2-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 16px;
+}
+.v2-messages__empty {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: rgba(0, 0, 0, 0.45);
+  text-align: center;
+  gap: 6px;
+}
+.v2-messages__empty-title {
+  font-weight: 600;
+  margin-top: 8px;
+}
+.v2-messages__empty-desc {
+  font-size: 13px;
+}
+</style>
