@@ -1,4 +1,4 @@
-import { ipcMain, type IpcMainEvent } from "electron";
+import { ipcMain } from "electron";
 import { Token } from "@/modules/token";
 import { USER_AI_ENABLED } from "@/config/usersetting";
 import { AiChatApi } from "@/api/aiChatApi";
@@ -28,6 +28,14 @@ import type {
 
 const CHAT_V2_PHASE1_MAX_HISTORY_MESSAGES = 30;
 
+/**
+ * Minimal structural type for the IPC event object.
+ * Mirrors the inline cast pattern used in ai-chat-ipc.ts (v1 handler).
+ */
+type IpcEventLike = {
+  sender: { send: (channel: string, message: string) => void };
+};
+
 let currentAbortController: AbortController | null = null;
 let currentConversationId: string | null = null;
 let currentAssistantMessageId: string | null = null;
@@ -47,14 +55,14 @@ function ok<T>(data: T): CommonMessage<T> {
 }
 
 function sendChunk(
-  event: IpcMainEvent,
+  event: IpcEventLike,
   chunk: ChatV2StreamChunk,
   channel: string = AI_CHAT_V2_STREAM_CHUNK
 ): void {
   event.sender.send(channel, JSON.stringify(chunk));
 }
 
-function sendComplete(event: IpcMainEvent, chunk: ChatV2StreamChunk): void {
+function sendComplete(event: IpcEventLike, chunk: ChatV2StreamChunk): void {
   event.sender.send(AI_CHAT_V2_STREAM_COMPLETE, JSON.stringify(chunk));
 }
 
@@ -71,7 +79,9 @@ async function handleModels(): Promise<CommonMessage<unknown>> {
   }
 }
 
-async function handleConversations(): Promise<CommonMessage<ChatV2ConversationSummary[]>> {
+async function handleConversations(): Promise<
+  CommonMessage<ChatV2ConversationSummary[]>
+> {
   if (!isAIEnabled()) {
     return denied("AI is not enabled");
   }
@@ -84,7 +94,7 @@ async function handleConversations(): Promise<CommonMessage<ChatV2ConversationSu
 }
 
 async function handleHistory(
-  _e: IpcMainEvent,
+  _e: IpcEventLike,
   data: string
 ): Promise<CommonMessage<ChatV2HistoryResponse | null>> {
   if (!isAIEnabled()) {
@@ -120,7 +130,7 @@ async function handleHistory(
 }
 
 async function handleClearConversation(
-  _e: IpcMainEvent,
+  _e: IpcEventLike,
   data: string
 ): Promise<CommonMessage<{ deleted: number } | null>> {
   if (!isAIEnabled()) {
@@ -140,7 +150,9 @@ async function handleClearConversation(
   }
 }
 
-async function handleClearAll(): Promise<CommonMessage<{ deleted: number } | null>> {
+async function handleClearAll(): Promise<
+  CommonMessage<{ deleted: number } | null>
+> {
   if (!isAIEnabled()) {
     return denied("AI is not enabled");
   }
@@ -153,8 +165,14 @@ async function handleClearAll(): Promise<CommonMessage<{ deleted: number } | nul
   }
 }
 
-function validateStreamRequest(req: Partial<ChatV2StreamRequest>): string | null {
-  if (!req || typeof req.message !== "string" || req.message.trim().length === 0) {
+function validateStreamRequest(
+  req: Partial<ChatV2StreamRequest>
+): string | null {
+  if (
+    !req ||
+    typeof req.message !== "string" ||
+    req.message.trim().length === 0
+  ) {
     return "Message must be a non-empty string";
   }
   if (req.conversationId !== undefined && req.conversationId === "pending") {
@@ -162,20 +180,24 @@ function validateStreamRequest(req: Partial<ChatV2StreamRequest>): string | null
   }
   if (
     req.temperature !== undefined &&
-    (typeof req.temperature !== "number" || req.temperature < 0 || req.temperature > 2)
+    (typeof req.temperature !== "number" ||
+      req.temperature < 0 ||
+      req.temperature > 2)
   ) {
     return "temperature must be a number in [0, 2]";
   }
   if (
     req.maxTokens !== undefined &&
-    (typeof req.maxTokens !== "number" || req.maxTokens <= 0 || !Number.isInteger(req.maxTokens))
+    (typeof req.maxTokens !== "number" ||
+      req.maxTokens <= 0 ||
+      !Number.isInteger(req.maxTokens))
   ) {
     return "maxTokens must be a positive integer";
   }
   return null;
 }
 
-async function handleStream(event: IpcMainEvent, data: string): Promise<void> {
+async function handleStream(event: IpcEventLike, data: string): Promise<void> {
   // AI gate FIRST, before parsing request data.
   if (!isAIEnabled()) {
     sendComplete(event, {
@@ -223,7 +245,9 @@ async function handleStream(event: IpcMainEvent, data: string): Promise<void> {
   const transcript = buildOpenAITranscript({
     // Exclude the just-saved current message from history (it is also appended
     // via currentUserMessage so it appears exactly once).
-    history: history.filter((r) => r.content !== req.message || r.role !== "user"),
+    history: history.filter(
+      (r) => r.content !== req.message || r.role !== "user"
+    ),
     currentUserMessage: req.message,
     systemPrompt: req.systemPrompt ?? module.getDefaultSystemPrompt(),
     filterSource: "chat-v2",
@@ -232,7 +256,9 @@ async function handleStream(event: IpcMainEvent, data: string): Promise<void> {
 
   const api = new AiChatApi();
   const accumulator = new OpenAIStreamAccumulator();
-  const assistantMessageId = `assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const assistantMessageId = `assistant-${Date.now()}-${Math.random()
+    .toString(36)
+    .slice(2, 8)}`;
   currentAssistantMessageId = assistantMessageId;
 
   const abortController = new AbortController();
@@ -402,11 +428,15 @@ function parseMetadata(raw?: string | null): ChatV2MessageMetadata | undefined {
 export function registerAiChatV2IpcHandlers(): void {
   ipcMain.handle(AI_CHAT_V2_MODELS, async () => handleModels());
   ipcMain.handle(AI_CHAT_V2_CONVERSATIONS, async () => handleConversations());
-  ipcMain.handle(AI_CHAT_V2_HISTORY, async (_e, data) => handleHistory(_e, data));
-  ipcMain.handle(AI_CHAT_V2_CLEAR_CONVERSATION, async (_e, data) =>
-    handleClearConversation(_e, data)
+  ipcMain.handle(AI_CHAT_V2_HISTORY, async (_e, data: unknown) =>
+    handleHistory(_e as IpcEventLike, data as string)
+  );
+  ipcMain.handle(AI_CHAT_V2_CLEAR_CONVERSATION, async (_e, data: unknown) =>
+    handleClearConversation(_e as IpcEventLike, data as string)
   );
   ipcMain.handle(AI_CHAT_V2_CLEAR_ALL, async () => handleClearAll());
-  ipcMain.on(AI_CHAT_V2_STREAM, async (event, data) => handleStream(event, data));
+  ipcMain.on(AI_CHAT_V2_STREAM, async (event, data: unknown) =>
+    handleStream(event as IpcEventLike, data as string)
+  );
   ipcMain.on(AI_CHAT_V2_STREAM_STOP, () => handleStop());
 }
