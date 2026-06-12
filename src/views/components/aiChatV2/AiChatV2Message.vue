@@ -33,7 +33,7 @@ const roleLabel = computed(() => {
   return props.message.role;
 });
 
-const status: Status = props.status ?? "idle";
+const status = computed<Status>(() => props.status ?? "idle");
 </script>
 
 <style scoped>

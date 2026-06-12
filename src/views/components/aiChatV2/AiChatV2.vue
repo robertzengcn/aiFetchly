@@ -136,6 +136,7 @@ const stopIfStreaming = (): void => {
 
 const onStop = (): void => {
   stopChatV2Stream();
+  isStreaming.value = false;
 };
 
 const onSend = async (text: string): Promise<void> => {
