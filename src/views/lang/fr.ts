@@ -1722,4 +1722,29 @@ export default {
     collapse_diff: "Réduire le diff",
     open_file_tooltip: "Ouvrir le fichier",
   },
+  aiChatV2: {
+    title: "Assistant IA (V2)",
+    new_conversation: "Nouvelle conversation",
+    empty_title: "Démarrer une conversation",
+    empty_description:
+      "Posez vos questions. Votre historique reste sur cet appareil.",
+    input_placeholder: "Envoyer un message…",
+    send: "Envoyer",
+    stop: "Arrêter",
+    retry: "Réessayer",
+    clear_conversation: "Effacer la conversation",
+    clear_all: "Tout effacer",
+    loading_models: "Chargement des modèles…",
+    loading_history: "Chargement de l'historique…",
+    streaming: "Génération…",
+    cancelled: "Annulé",
+    ai_disabled: "L'IA n'est pas activée.",
+    model_unavailable: "Le modèle sélectionné n'est pas disponible.",
+    server_unavailable: "Impossible de se connecter au serveur IA.",
+    unsupported_tool_call:
+      "L'assistant a demandé un outil non encore pris en charge.",
+    clear_confirm_title: "Effacer la conversation ?",
+    clear_confirm_body:
+      "Cela supprime tous les messages de cette conversation.",
+  },
 };
