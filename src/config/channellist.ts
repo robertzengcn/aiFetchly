@@ -258,6 +258,17 @@ export const AI_FILE_OPERATION = "ai-chat:file-operation";
 export const AI_FILE_OPEN = "ai-chat:file-open";
 export const AI_KEYWORDS_GENERATE = "ai-keywords:generate";
 
+// ==================== AI Chat V2 Channels ====================
+export const AI_CHAT_V2_MODELS = "ai-chat-v2:models";
+export const AI_CHAT_V2_CONVERSATIONS = "ai-chat-v2:conversations";
+export const AI_CHAT_V2_HISTORY = "ai-chat-v2:history";
+export const AI_CHAT_V2_STREAM = "ai-chat-v2:stream";
+export const AI_CHAT_V2_STREAM_STOP = "ai-chat-v2:stream-stop";
+export const AI_CHAT_V2_STREAM_CHUNK = "ai-chat-v2:stream-chunk";
+export const AI_CHAT_V2_STREAM_COMPLETE = "ai-chat-v2:stream-complete";
+export const AI_CHAT_V2_CLEAR_CONVERSATION = "ai-chat-v2:clear-conversation";
+export const AI_CHAT_V2_CLEAR_ALL = "ai-chat-v2:clear-all";
+
 // MCP Tool Management Channels
 export const MCP_TOOL_LIST = "mcp:tool:list";
 export const MCP_TOOL_ADD = "mcp:tool:add";
