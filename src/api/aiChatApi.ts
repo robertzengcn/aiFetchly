@@ -1658,7 +1658,7 @@ export class AiChatApi {
     }
 
     const response = await this._httpClient.postStream(
-      "/v1/chat/completions",
+      "/api/ai/v1/chat/completions",
       data,
       fetchOptions
     );
