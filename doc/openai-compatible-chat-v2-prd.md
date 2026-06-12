@@ -10,6 +10,11 @@ This is not an in-place rewrite of the existing chat UI. The new experience shou
 
 The target user experience should use Nuxt UI Chat as a product interaction reference: clear message list, prompt area, submit and stop controls, streaming state, tool status blocks, and optional reasoning/status sections. The implementation should stay native to this codebase: Vue 3, Vuetify, Electron IPC, TypeScript, local SQLite, and the existing `AiChatApi` HTTP client.
 
+### 1.1.1 Companion Documents
+
+- Technical design: `doc/openai-compatible-chat-v2-technical-design.md`
+- Local memory design: `doc/ai-chat-local-memory-design.md`
+
 ### 1.2 Goals
 
 - Create a new chat UI that can replace the old chat UI after validation, without modifying the old chat UI during initial development.
