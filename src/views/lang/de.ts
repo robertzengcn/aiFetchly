@@ -1735,4 +1735,28 @@ export default {
     collapse_diff: "Diff einklappen",
     open_file_tooltip: "Datei öffnen",
   },
+  aiChatV2: {
+    title: "KI-Assistent (V2)",
+    new_conversation: "Neue Unterhaltung",
+    empty_title: "Unterhaltung starten",
+    empty_description: "Frag alles. Dein Verlauf bleibt auf diesem Gerät.",
+    input_placeholder: "Nachricht senden…",
+    send: "Senden",
+    stop: "Stopp",
+    retry: "Erneut versuchen",
+    clear_conversation: "Unterhaltung löschen",
+    clear_all: "Alles löschen",
+    loading_models: "Modelle werden geladen…",
+    loading_history: "Verlauf wird geladen…",
+    streaming: "Wird generiert…",
+    cancelled: "Abgebrochen",
+    ai_disabled: "KI ist nicht aktiviert.",
+    model_unavailable: "Ausgewähltes Modell nicht verfügbar.",
+    server_unavailable: "Verbindung zum KI-Server nicht möglich.",
+    unsupported_tool_call:
+      "Der Assistent hat ein noch nicht unterstütztes Werkzeug angefordert.",
+    clear_confirm_title: "Unterhaltung löschen?",
+    clear_confirm_body:
+      "Dadurch werden alle Nachrichten dieser Unterhaltung entfernt.",
+  },
 };
