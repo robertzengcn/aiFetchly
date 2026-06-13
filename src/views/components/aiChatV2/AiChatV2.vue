@@ -106,7 +106,7 @@ import type {
 } from "@/entityTypes/aiChatV2Types";
 import { windowInvoke, windowRemoveAllListeners } from "@/views/utils/apirequest";
 import {
-  AI_CHAT_RESUME_TOOL_AFTER_PERMISSION,
+  AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
   AI_CHAT_V2_STREAM_CHUNK,
   AI_CHAT_V2_STREAM_COMPLETE,
 } from "@/config/channellist";
@@ -310,7 +310,7 @@ const handleSkillPermissionGrant = async (
   }
 
   try {
-    const raw = await windowInvoke(AI_CHAT_RESUME_TOOL_AFTER_PERMISSION, {
+    const raw = await windowInvoke(AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION, {
       toolId,
       conversationId: message.conversationId || activeConversationId.value,
     });

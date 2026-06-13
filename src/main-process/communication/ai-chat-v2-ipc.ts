@@ -15,7 +15,7 @@ import { OpenAIStreamAccumulator } from "@/service/OpenAIStreamAccumulator";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import { SkillExecutor } from "@/service/SkillExecutor";
 import {
-  AI_CHAT_RESUME_TOOL_AFTER_PERMISSION,
+  AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
   AI_CHAT_V2_MODELS,
   AI_CHAT_V2_CONVERSATIONS,
   AI_CHAT_V2_HISTORY,
@@ -111,9 +111,7 @@ function toOpenAITools(toolFunctions: ToolFunction[]): OpenAITool[] {
     }));
 }
 
-function serializeToolResultContent(
-  payload: Record<string, unknown>
-): string {
+function serializeToolResultContent(payload: Record<string, unknown>): string {
   try {
     return JSON.stringify(payload);
   } catch {
@@ -466,7 +464,11 @@ async function continueStreamAfterTools(state: {
   try {
     let finalAccumulator: OpenAIStreamAccumulator | null = null;
 
-    for (let round = state.startRound; round < CHAT_V2_MAX_TOOL_ROUNDS; round += 1) {
+    for (
+      let round = state.startRound;
+      round < CHAT_V2_MAX_TOOL_ROUNDS;
+      round += 1
+    ) {
       const accumulator = new OpenAIStreamAccumulator();
       activeAccumulator = accumulator;
       await state.api.openAIChatCompletionStream(
@@ -514,7 +516,9 @@ async function continueStreamAfterTools(state: {
       state.conversationMessages.push(
         buildAssistantToolCallMessage(
           parsedCalls.filter(
-            (call): call is typeof call & {
+            (
+              call
+            ): call is typeof call & {
               id: string;
               name: string;
               arguments: Record<string, unknown>;
@@ -538,11 +542,15 @@ async function continueStreamAfterTools(state: {
           toolArguments: call.arguments,
         });
 
-        const toolResult = await SkillExecutor.execute(call.name, call.arguments ?? {}, {
-          conversationId: state.conversationId,
-          toolCallId: call.id,
-          args: call.arguments,
-        });
+        const toolResult = await SkillExecutor.execute(
+          call.name,
+          call.arguments ?? {},
+          {
+            conversationId: state.conversationId,
+            toolCallId: call.id,
+            args: call.arguments,
+          }
+        );
         const toolPayload = normalizeToolResult(toolResult);
         const toolContent = serializeToolResultContent(toolPayload);
 
@@ -822,8 +830,9 @@ function parseMetadata(raw?: string | null): ChatV2MessageMetadata | undefined {
 
 export function registerAiChatV2IpcHandlers(): void {
   ipcMain.handle(
-    AI_CHAT_RESUME_TOOL_AFTER_PERMISSION,
-    async (_e, data: unknown) => handleResumeToolAfterPermission((data as string) ?? "")
+    AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
+    async (_e, data: unknown) =>
+      handleResumeToolAfterPermission((data as string) ?? "")
   );
   ipcMain.handle(AI_CHAT_V2_MODELS, async () => handleModels());
   ipcMain.handle(AI_CHAT_V2_CONVERSATIONS, async () => handleConversations());
