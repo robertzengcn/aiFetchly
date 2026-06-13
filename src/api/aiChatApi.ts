@@ -1570,7 +1570,15 @@ export class AiChatApi {
    */
   async listOpenAIModels(): Promise<OpenAIModelsResponse> {
     this.ensureAIEnabled();
-    return this._httpClient.get("/v1/models");
+    try {
+      return await this._httpClient.get("/v1/models");
+    } catch (error) {
+      if (!this.isNotFoundError(error)) {
+        throw error;
+      }
+      const legacyModels = await this._httpClient.get("/api/ai/chat/models");
+      return this.normalizeLegacyModelsResponse(legacyModels);
+    }
   }
 
   /**
@@ -1657,11 +1665,23 @@ export class AiChatApi {
       fetchOptions.signal = options.signal;
     }
 
-    const response = await this._httpClient.postStream(
-      "/v1/chat/completions",
-      data,
-      fetchOptions
-    );
+    let response: Response;
+    try {
+      response = await this._httpClient.postStream(
+        "/v1/chat/completions",
+        data,
+        fetchOptions
+      );
+    } catch (error) {
+      if (!this.isNotFoundError(error)) {
+        throw error;
+      }
+      return this.openAIChatCompletionStreamViaLegacyEndpoint(
+        request,
+        onChunk,
+        fetchOptions
+      );
+    }
 
     if (!response.ok || response.status !== 200) {
       const errorText = await response.text().catch(() => "Unknown error");
@@ -1673,6 +1693,148 @@ export class AiChatApi {
     }
 
     await this._consumeOpenAIStreamResponse(response, onChunk);
+  }
+
+  private async openAIChatCompletionStreamViaLegacyEndpoint(
+    request: OpenAIChatCompletionRequest,
+    onChunk: (chunk: OpenAIChatCompletionChunk) => void,
+    fetchOptions: RequestInit
+  ): Promise<void> {
+    const legacyRequest = this.buildLegacyChatRequestFromOpenAI(request);
+    const response = await this._httpClient.postStream(
+      "/api/ai/ask/stream",
+      legacyRequest,
+      fetchOptions
+    );
+
+    if (!response.ok || response.status !== 200) {
+      const errorText = await response.text().catch(() => "Unknown error");
+      throw new Error(`Server returned ${response.status}: ${errorText}`);
+    }
+
+    let chunkIndex = 0;
+    await this._consumeStreamResponse(response, (event) => {
+      const eventType = String(event.event ?? "");
+      const content =
+        typeof event.data?.content === "string" ? event.data.content : "";
+
+      if (eventType === StreamEventType.TOKEN && content) {
+        onChunk({
+          id: `legacy-${Date.now()}-${chunkIndex}`,
+          object: "chat.completion.chunk",
+          created: Date.now(),
+          model: request.model ?? "",
+          choices: [
+            {
+              index: chunkIndex++,
+              delta: { content },
+              finish_reason: null,
+            },
+          ],
+        });
+        return;
+      }
+
+      if (
+        eventType === StreamEventType.DONE ||
+        eventType === StreamEventType.COMPLETE ||
+        eventType === StreamEventType.CONVERSATION_END
+      ) {
+        onChunk({
+          id: `legacy-${Date.now()}-${chunkIndex}`,
+          object: "chat.completion.chunk",
+          created: Date.now(),
+          model: request.model ?? "",
+          choices: [
+            {
+              index: chunkIndex++,
+              delta: {},
+              finish_reason: "stop",
+            },
+          ],
+        });
+        return;
+      }
+
+      if (eventType === StreamEventType.ERROR) {
+        const errorMessage =
+          content ||
+          (typeof event.data === "object" &&
+          event.data &&
+          "errorMessage" in event.data &&
+          typeof event.data.errorMessage === "string"
+            ? event.data.errorMessage
+            : "Unknown error");
+        throw new Error(errorMessage);
+      }
+    }, fetchOptions.signal);
+  }
+
+  private buildLegacyChatRequestFromOpenAI(
+    request: OpenAIChatCompletionRequest
+  ): ChatApiRequestData {
+    const systemPrompt = request.messages.find((m) => m.role === "system")?.content;
+    const conversationText = request.messages
+      .filter((m) => m.role !== "system")
+      .map((m) => `${this.getLegacyRoleLabel(m.role)}: ${m.content ?? ""}`.trim())
+      .join("\n\n");
+
+    return {
+      message: conversationText || request.messages.at(-1)?.content || "",
+      model: request.model,
+      system_prompt: typeof systemPrompt === "string" ? systemPrompt : undefined,
+    };
+  }
+
+  private getLegacyRoleLabel(role: OpenAIMessageRole): string {
+    switch (role) {
+      case "assistant":
+        return "Assistant";
+      case "system":
+        return "System";
+      case "tool":
+        return "Tool";
+      case "function":
+        return "Function";
+      case "user":
+      default:
+        return "User";
+    }
+  }
+
+  private normalizeLegacyModelsResponse(
+    response: unknown
+  ): OpenAIModelsResponse {
+    const payload = this.unwrapLegacyPayload<AvailableChatModelsResponse>(response);
+    const models = Object.entries(payload?.models ?? {}).map(([id, model]) => ({
+      id,
+      object: "model",
+      created: 0,
+      owned_by: "legacy-ai-server",
+      ...("name" in model && typeof model.name === "string" && model.name
+        ? { id: model.name }
+        : {}),
+    }));
+    return {
+      object: "list",
+      data: models,
+    };
+  }
+
+  private unwrapLegacyPayload<T>(response: unknown): T {
+    if (
+      response &&
+      typeof response === "object" &&
+      "data" in response &&
+      (response as { data?: unknown }).data !== undefined
+    ) {
+      return (response as { data: T }).data;
+    }
+    return response as T;
+  }
+
+  private isNotFoundError(error: unknown): boolean {
+    return error instanceof Error && /(^|[\s:])404\b|not found/i.test(error.message);
   }
 
   /**
