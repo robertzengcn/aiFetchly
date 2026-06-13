@@ -82,15 +82,9 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
                             </v-list-item>
                         </v-list>
                     </v-menu>
-                    <v-btn variant="text" icon="mdi-chat" @click="toggleChatPanel">
+                    <v-btn variant="text" icon="mdi-chat" @click="toggleChat">
                         <v-icon size="small"></v-icon>
                     </v-btn>
-                    <v-btn
-                        v-if="aiChatV2Enabled"
-                        variant="text"
-                        icon="mdi-robot-happy"
-                        @click="toggleV2ChatPanel"
-                    ></v-btn>
                     <v-btn variant="text" append-icon="mdi-chevron-down" class="mr-2">
                         <span v-if="!mainStore.isMobile">{{ userName }}</span>
                         <v-icon v-if="!mainStore.isMobile && isPlusPlan" icon="mdi-plus-circle" size="small" class="ml-1" color="primary" />
@@ -324,6 +318,9 @@ const getTranslatedTitle = (title: string): string => {
 
 const toggleChatPanel = () => {
     chatPanelOpen.value = !chatPanelOpen.value;
+    if (chatPanelOpen.value) {
+        v2ChatPanelOpen.value = false;
+    }
 }
 
 const toggleV2ChatPanel = () => {
@@ -332,6 +329,15 @@ const toggleV2ChatPanel = () => {
         chatPanelOpen.value = false;
     }
 }
+
+/** Unified chat toggle: opens V2 when the feature flag is on, legacy chat otherwise. */
+const toggleChat = () => {
+    if (aiChatV2Enabled.value) {
+        toggleV2ChatPanel();
+    } else {
+        toggleChatPanel();
+    }
+};
 
 const startResize = (e: MouseEvent) => {
     e.preventDefault();
