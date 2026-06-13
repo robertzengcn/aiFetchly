@@ -327,6 +327,7 @@ const handleSkillPermissionGrant = async (
           content: errMsg,
           metadata: {
             ...messages.value[idx].metadata,
+            source: "chat-v2",
             toolResult: { error: errMsg, success: false },
             success: false,
             error: errMsg,
@@ -355,6 +356,7 @@ const handleSkillPermissionDeny = (message: ChatV2MessageView): void => {
       content: deniedMessage,
       metadata: {
         ...messages.value[idx].metadata,
+        source: "chat-v2",
         toolResult: undefined,
         success: false,
       },
