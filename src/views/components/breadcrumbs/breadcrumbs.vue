@@ -19,7 +19,12 @@ import { useRoute } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 
 const $route = useRoute();
-const { t, locale } = useI18n({ inheritLocale: true });
+// useI18n() with no options → 'global' scope (reads global messages directly).
+// Passing { inheritLocale: true } without useScope silently defaults to a
+// 'local' scope with empty messages, causing "Not found … Fall back to root
+// locale" warnings for every global key. The global locale ref is still
+// reactive, so watch(locale, init) below fires on language changes.
+const { t, locale } = useI18n();
 const routes = ref();
 const pageTitle = computed(() => {
     const title = $route.meta.title as string;
