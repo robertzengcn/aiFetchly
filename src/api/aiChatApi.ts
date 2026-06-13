@@ -1713,6 +1713,7 @@ export class AiChatApi {
     }
 
     let chunkIndex = 0;
+    const signal = fetchOptions.signal ?? undefined;
     await this._consumeStreamResponse(response, (event) => {
       const eventType = String(event.event ?? "");
       const content =
@@ -1767,7 +1768,7 @@ export class AiChatApi {
             : "Unknown error");
         throw new Error(errorMessage);
       }
-    }, fetchOptions.signal);
+    }, signal);
   }
 
   private buildLegacyChatRequestFromOpenAI(

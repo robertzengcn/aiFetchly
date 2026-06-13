@@ -819,7 +819,7 @@ describe("AiChatApi - OpenAI compatibility fallback", () => {
 
     expect(mockPostStreamShared).toHaveBeenNthCalledWith(
       1,
-      "/v1/chat/completions",
+      "/api/ai/v1/chat/completions",
       expect.objectContaining({
         stream: true,
         model: "gpt-4o-mini",
