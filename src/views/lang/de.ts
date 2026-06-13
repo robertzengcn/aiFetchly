@@ -1757,6 +1757,7 @@ export default {
     unsupported_tool_call:
       "Der Assistent hat ein noch nicht unterstütztes Werkzeug angefordert.",
     conversation_history: "Unterhaltungsverlauf",
+    manage_mcp_tools: "MCP-Tools verwalten",
     no_conversations: "Noch keine Unterhaltungen",
     clear_confirm_title: "Unterhaltung löschen?",
     clear_confirm_body:
@@ -1766,7 +1767,8 @@ export default {
     tool_name: "Werkzeug",
     tool_arguments: "Argumente",
     tool_result_details: "Details",
-    permission_denied: "Berechtigung verweigert. Das Werkzeug wird nicht ausgeführt.",
+    permission_denied:
+      "Berechtigung verweigert. Das Werkzeug wird nicht ausgeführt.",
     permission_resume_failed:
       "Das Werkzeug konnte nach der Freigabe nicht fortgesetzt werden.",
     permission_resume_no_tool_id:

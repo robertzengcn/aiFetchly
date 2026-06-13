@@ -1763,6 +1763,7 @@ export default {
     unsupported_tool_call:
       "El asistente solicitó una herramienta que aún no se admite.",
     conversation_history: "Historial de conversaciones",
+    manage_mcp_tools: "Gestionar herramientas MCP",
     no_conversations: "Sin conversaciones aún",
     clear_confirm_title: "¿Borrar conversación?",
     clear_confirm_body: "Esto elimina todos los mensajes de esta conversación.",

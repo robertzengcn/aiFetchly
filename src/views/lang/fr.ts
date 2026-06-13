@@ -1745,6 +1745,7 @@ export default {
     unsupported_tool_call:
       "L'assistant a demandé un outil non encore pris en charge.",
     conversation_history: "Historique des conversations",
+    manage_mcp_tools: "Gérer les outils MCP",
     no_conversations: "Pas encore de conversations",
     clear_confirm_title: "Effacer la conversation ?",
     clear_confirm_body:

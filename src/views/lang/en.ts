@@ -1770,6 +1770,7 @@ export default {
     unsupported_tool_call:
       "This assistant requested a tool that is not supported yet.",
     conversation_history: "Conversation History",
+    manage_mcp_tools: "Manage MCP Tools",
     no_conversations: "No conversations yet",
     clear_confirm_title: "Clear conversation?",
     clear_confirm_body: "This removes all messages in this conversation.",
