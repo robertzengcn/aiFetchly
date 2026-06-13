@@ -15,6 +15,7 @@ import { OpenAIStreamAccumulator } from "@/service/OpenAIStreamAccumulator";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import { SkillExecutor } from "@/service/SkillExecutor";
 import {
+  AI_CHAT_RESUME_TOOL_AFTER_PERMISSION,
   AI_CHAT_V2_MODELS,
   AI_CHAT_V2_CONVERSATIONS,
   AI_CHAT_V2_HISTORY,
@@ -48,7 +49,28 @@ type IpcEventLike = {
 
 let currentAbortController: AbortController | null = null;
 let currentConversationId: string | null = null;
-let currentAssistantMessageId: string | null = null;
+
+type PendingPermissionState = {
+  event: IpcEventLike;
+  module: AIChatV2Module;
+  api: AiChatApi;
+  req: ChatV2StreamRequest;
+  conversationId: string;
+  assistantMessageId: string;
+  conversationMessages: OpenAIChatMessage[];
+  abortController: AbortController;
+  nextRound: number;
+  toolCallId: string;
+  toolName: string;
+  toolArguments: Record<string, unknown>;
+};
+
+let pendingPermissionState: PendingPermissionState | null = null;
+
+function hasPendingPermissionForConversation(conversationId: string): boolean {
+  const pendingState = pendingPermissionState as PendingPermissionState | null;
+  return pendingState?.conversationId === conversationId;
+}
 
 function isAIEnabled(): boolean {
   const tokenService = new Token();
@@ -90,12 +112,8 @@ function toOpenAITools(toolFunctions: ToolFunction[]): OpenAITool[] {
 }
 
 function serializeToolResultContent(
-  result: ToolExecutionResult
+  payload: Record<string, unknown>
 ): string {
-  const payload = {
-    success: result.success,
-    ...result.result,
-  };
   try {
     return JSON.stringify(payload);
   } catch {
@@ -104,6 +122,20 @@ function serializeToolResultContent(
       error: "Tool result could not be serialized",
     });
   }
+}
+
+function normalizeToolResult(
+  result: ToolExecutionResult
+): Record<string, unknown> {
+  return {
+    success: result.success,
+    executionTimeMs: result.execution_time_ms,
+    ...result.result,
+  };
+}
+
+function isPermissionPromptResult(result: ToolExecutionResult): boolean {
+  return result.result.needsPermissionPrompt === true;
 }
 
 function buildAssistantToolCallMessage(
@@ -335,7 +367,6 @@ async function handleStream(event: IpcEventLike, data: string): Promise<void> {
     assistantMessageId = `assistant-${Date.now()}-${Math.random()
       .toString(36)
       .slice(2, 8)}`;
-    currentAssistantMessageId = assistantMessageId;
   } catch (err) {
     console.error("[ai-chat-v2] pre-stream error:", err);
     currentConversationId = null;
@@ -360,6 +391,7 @@ async function handleStream(event: IpcEventLike, data: string): Promise<void> {
     currentAbortController.abort();
   }
   currentAbortController = abortController;
+  pendingPermissionState = null;
 
   // Start chunk.
   sendChunk(event, {
@@ -368,37 +400,99 @@ async function handleStream(event: IpcEventLike, data: string): Promise<void> {
     messageId: assistantMessageId,
   });
 
+  try {
+    await continueStreamAfterTools({
+      event,
+      module,
+      api,
+      req,
+      conversationId,
+      assistantMessageId,
+      conversationMessages,
+      abortController,
+      openAITools,
+      startRound: 0,
+    });
+  } catch (err) {
+    await handleStreamingFailure({
+      event,
+      module,
+      conversationId,
+      assistantMessageId,
+      err,
+    });
+  } finally {
+    const waitingForPermission =
+      hasPendingPermissionForConversation(conversationId);
+    if (currentConversationId === conversationId && !waitingForPermission) {
+      currentAbortController = null;
+      currentConversationId = null;
+    }
+  }
+}
+
+function handleStop(): void {
+  if (pendingPermissionState) {
+    const pending = pendingPermissionState;
+    pendingPermissionState = null;
+    currentAbortController = null;
+    currentConversationId = null;
+    sendComplete(pending.event, {
+      eventType: "cancelled",
+      conversationId: pending.conversationId,
+      messageId: pending.assistantMessageId,
+      fullContent: "",
+    });
+  }
+  if (currentAbortController) {
+    currentAbortController.abort();
+    currentAbortController = null;
+  }
+}
+
+async function continueStreamAfterTools(state: {
+  event: IpcEventLike;
+  module: AIChatV2Module;
+  api: AiChatApi;
+  req: ChatV2StreamRequest;
+  conversationId: string;
+  assistantMessageId: string;
+  conversationMessages: OpenAIChatMessage[];
+  abortController: AbortController;
+  openAITools: OpenAITool[];
+  startRound: number;
+}): Promise<void> {
   let activeAccumulator: OpenAIStreamAccumulator | null = null;
   try {
     let finalAccumulator: OpenAIStreamAccumulator | null = null;
 
-    for (let round = 0; round < CHAT_V2_MAX_TOOL_ROUNDS; round += 1) {
+    for (let round = state.startRound; round < CHAT_V2_MAX_TOOL_ROUNDS; round += 1) {
       const accumulator = new OpenAIStreamAccumulator();
       activeAccumulator = accumulator;
-      await api.openAIChatCompletionStream(
+      await state.api.openAIChatCompletionStream(
         {
-          messages: conversationMessages,
-          model: req.model,
-          temperature: req.temperature,
-          max_tokens: req.maxTokens,
+          messages: state.conversationMessages,
+          model: state.req.model,
+          temperature: state.req.temperature,
+          max_tokens: state.req.maxTokens,
           stream: true,
-          tools: openAITools.length > 0 ? openAITools : undefined,
-          tool_choice: openAITools.length > 0 ? "auto" : undefined,
+          tools: state.openAITools.length > 0 ? state.openAITools : undefined,
+          tool_choice: state.openAITools.length > 0 ? "auto" : undefined,
         },
         (rawChunk) => {
-          if (currentConversationId !== conversationId) return;
+          if (currentConversationId !== state.conversationId) return;
           const delta = accumulator.ingest(rawChunk);
           if (delta) {
-            sendChunk(event, {
+            sendChunk(state.event, {
               eventType: "token",
-              conversationId,
-              messageId: assistantMessageId,
+              conversationId: state.conversationId,
+              messageId: state.assistantMessageId,
               contentDelta: delta,
               model: accumulator.state.model,
             });
           }
         },
-        { signal: abortController.signal }
+        { signal: state.abortController.signal }
       );
 
       finalAccumulator = accumulator;
@@ -417,11 +511,14 @@ async function handleStream(event: IpcEventLike, data: string): Promise<void> {
         throw new Error("Tool call arguments were malformed.");
       }
 
-      conversationMessages.push(
+      state.conversationMessages.push(
         buildAssistantToolCallMessage(
           parsedCalls.filter(
-            (call): call is typeof call & { id: string; name: string; arguments: Record<string, unknown> } =>
-              Boolean(call.id && call.name && call.arguments)
+            (call): call is typeof call & {
+              id: string;
+              name: string;
+              arguments: Record<string, unknown>;
+            } => Boolean(call.id && call.name && call.arguments)
           ),
           accumulator.state.fullContent
         )
@@ -432,50 +529,69 @@ async function handleStream(event: IpcEventLike, data: string): Promise<void> {
           continue;
         }
 
-        sendChunk(event, {
+        sendChunk(state.event, {
           eventType: "tool_call",
-          conversationId,
-          messageId: assistantMessageId,
+          conversationId: state.conversationId,
+          messageId: state.assistantMessageId,
           toolCallId: call.id,
           toolName: call.name,
           toolArguments: call.arguments,
         });
 
         const toolResult = await SkillExecutor.execute(call.name, call.arguments ?? {}, {
-          conversationId,
+          conversationId: state.conversationId,
           toolCallId: call.id,
           args: call.arguments,
         });
-        const toolContent = serializeToolResultContent(toolResult);
+        const toolPayload = normalizeToolResult(toolResult);
+        const toolContent = serializeToolResultContent(toolPayload);
 
-        conversationMessages.push({
+        sendChunk(state.event, {
+          eventType: "tool_result",
+          conversationId: state.conversationId,
+          messageId: state.assistantMessageId,
+          toolCallId: call.id,
+          toolName: call.name,
+          fullContent: toolContent,
+          toolResult: toolPayload,
+        });
+
+        if (isPermissionPromptResult(toolResult)) {
+          pendingPermissionState = {
+            event: state.event,
+            module: state.module,
+            api: state.api,
+            req: state.req,
+            conversationId: state.conversationId,
+            assistantMessageId: state.assistantMessageId,
+            conversationMessages: state.conversationMessages,
+            abortController: state.abortController,
+            nextRound: round + 1,
+            toolCallId: call.id,
+            toolName: call.name,
+            toolArguments: call.arguments ?? {},
+          };
+          return;
+        }
+
+        state.conversationMessages.push({
           role: "tool",
           tool_call_id: call.id,
           content: toolContent,
         });
-
-        sendChunk(event, {
-          eventType: "tool_result",
-          conversationId,
-          messageId: assistantMessageId,
-          toolCallId: call.id,
-          toolName: call.name,
-          fullContent: toolContent,
-        });
       }
     }
 
-    // Late-chunk protection.
-    if (currentConversationId !== conversationId) return;
+    if (currentConversationId !== state.conversationId) return;
 
     const fullContent = finalAccumulator?.state.fullContent ?? "";
     const finishReason = finalAccumulator?.state.finishReason ?? "stop";
 
     if (fullContent.length > 0) {
-      await module.saveAssistantMessage({
-        conversationId,
+      await state.module.saveAssistantMessage({
+        conversationId: state.conversationId,
         content: fullContent,
-        messageId: assistantMessageId,
+        messageId: state.assistantMessageId,
         model: finalAccumulator?.state.model,
         metadata: {
           source: "chat-v2",
@@ -485,74 +601,181 @@ async function handleStream(event: IpcEventLike, data: string): Promise<void> {
       });
     }
 
-    sendComplete(event, {
+    sendComplete(state.event, {
       eventType: "complete",
-      conversationId,
-      messageId: assistantMessageId,
+      conversationId: state.conversationId,
+      messageId: state.assistantMessageId,
       fullContent,
       model: finalAccumulator?.state.model,
       finishReason,
     });
+    currentAbortController = null;
+    currentConversationId = null;
   } catch (err) {
-    const partial = activeAccumulator?.state.fullContent ?? "";
-    if (currentConversationId !== conversationId) return;
-
-    const aborted = err instanceof Error && err.name === "AbortError";
-    if (aborted) {
-      if (partial.length > 0) {
-        await module.saveAssistantMessage({
-          conversationId,
-          content: partial,
-          messageId: assistantMessageId,
-          model: activeAccumulator?.state.model,
-          metadata: {
-            source: "chat-v2",
-            openaiResponseId: activeAccumulator?.state.responseId,
-            finishReason: "cancelled",
-            cancelled: true,
-          } as ChatV2MessageMetadata,
-        });
-      }
-      sendComplete(event, {
-        eventType: "cancelled",
-        conversationId,
-        messageId: partial.length > 0 ? assistantMessageId : undefined,
-        fullContent: partial,
-      });
-    } else {
-      if (partial.length > 0) {
-        await module.saveAssistantMessage({
-          conversationId,
-          content: partial,
-          messageId: assistantMessageId,
-          model: activeAccumulator?.state.model,
-          metadata: {
-            source: "chat-v2",
-            finishReason: "error",
-            error: userSafeError(err),
-          },
-        });
-      }
-      sendComplete(event, {
-        eventType: "error",
-        conversationId,
-        messageId: partial.length > 0 ? assistantMessageId : undefined,
-        errorMessage: userSafeError(err),
-      });
-    }
-  } finally {
-    if (currentConversationId === conversationId) {
-      currentAbortController = null;
-      currentConversationId = null;
-      currentAssistantMessageId = null;
-    }
+    await handleStreamingFailure({
+      event: state.event,
+      module: state.module,
+      conversationId: state.conversationId,
+      assistantMessageId: state.assistantMessageId,
+      err,
+      activeAccumulator,
+    });
   }
 }
 
-function handleStop(): void {
-  if (currentAbortController) {
-    currentAbortController.abort();
+async function handleStreamingFailure(args: {
+  event: IpcEventLike;
+  module: AIChatV2Module;
+  conversationId: string;
+  assistantMessageId: string;
+  err: unknown;
+  activeAccumulator?: OpenAIStreamAccumulator | null;
+}): Promise<void> {
+  const partial = args.activeAccumulator?.state.fullContent ?? "";
+  if (currentConversationId !== args.conversationId) return;
+
+  const aborted = args.err instanceof Error && args.err.name === "AbortError";
+  if (aborted) {
+    if (partial.length > 0) {
+      await args.module.saveAssistantMessage({
+        conversationId: args.conversationId,
+        content: partial,
+        messageId: args.assistantMessageId,
+        model: args.activeAccumulator?.state.model,
+        metadata: {
+          source: "chat-v2",
+          openaiResponseId: args.activeAccumulator?.state.responseId,
+          finishReason: "cancelled",
+          cancelled: true,
+        } as ChatV2MessageMetadata,
+      });
+    }
+    sendComplete(args.event, {
+      eventType: "cancelled",
+      conversationId: args.conversationId,
+      messageId: partial.length > 0 ? args.assistantMessageId : undefined,
+      fullContent: partial,
+    });
+  } else {
+    if (partial.length > 0) {
+      await args.module.saveAssistantMessage({
+        conversationId: args.conversationId,
+        content: partial,
+        messageId: args.assistantMessageId,
+        model: args.activeAccumulator?.state.model,
+        metadata: {
+          source: "chat-v2",
+          finishReason: "error",
+          error: userSafeError(args.err),
+        },
+      });
+    }
+    sendComplete(args.event, {
+      eventType: "error",
+      conversationId: args.conversationId,
+      messageId: partial.length > 0 ? args.assistantMessageId : undefined,
+      errorMessage: userSafeError(args.err),
+    });
+  }
+  currentAbortController = null;
+  currentConversationId = null;
+  pendingPermissionState = null;
+}
+
+async function handleResumeToolAfterPermission(
+  data: string
+): Promise<CommonMessage<{ ok: boolean; error?: string } | null>> {
+  if (!isAIEnabled()) {
+    return denied("AI is not enabled");
+  }
+
+  const parsed = data
+    ? (JSON.parse(data) as { toolId?: string; conversationId?: string })
+    : {};
+  if (!parsed.toolId || typeof parsed.toolId !== "string") {
+    return denied("toolId is required");
+  }
+
+  const pending = pendingPermissionState;
+  if (!pending || pending.toolCallId !== parsed.toolId) {
+    return ok({
+      ok: false,
+      error: "No active permission-gated tool call to continue.",
+    });
+  }
+
+  if (
+    parsed.conversationId &&
+    parsed.conversationId !== pending.conversationId
+  ) {
+    return ok({
+      ok: false,
+      error: "Conversation mismatch for pending tool call.",
+    });
+  }
+
+  pendingPermissionState = null;
+  currentAbortController = pending.abortController;
+  currentConversationId = pending.conversationId;
+
+  try {
+    const toolResult = await SkillExecutor.execute(
+      pending.toolName,
+      pending.toolArguments,
+      {
+        conversationId: pending.conversationId,
+        toolCallId: pending.toolCallId,
+        args: pending.toolArguments,
+        skipPermissionCheck: true,
+      }
+    );
+    const toolPayload = normalizeToolResult(toolResult);
+    const toolContent = serializeToolResultContent(toolPayload);
+
+    sendChunk(pending.event, {
+      eventType: "tool_result",
+      conversationId: pending.conversationId,
+      messageId: pending.assistantMessageId,
+      toolCallId: pending.toolCallId,
+      toolName: pending.toolName,
+      fullContent: toolContent,
+      toolResult: toolPayload,
+      replacesPermissionPromptForToolId: pending.toolCallId,
+    });
+
+    if (isPermissionPromptResult(toolResult)) {
+      pendingPermissionState = pending;
+      return ok({
+        ok: false,
+        error: "Permission is still required for this tool.",
+      });
+    }
+
+    pending.conversationMessages.push({
+      role: "tool",
+      tool_call_id: pending.toolCallId,
+      content: toolContent,
+    });
+
+    void continueStreamAfterTools({
+      event: pending.event,
+      module: pending.module,
+      api: pending.api,
+      req: pending.req,
+      conversationId: pending.conversationId,
+      assistantMessageId: pending.assistantMessageId,
+      conversationMessages: pending.conversationMessages,
+      abortController: pending.abortController,
+      openAITools: toOpenAITools(await SkillRegistry.getAllToolFunctions()),
+      startRound: pending.nextRound,
+    });
+
+    return ok({ ok: true });
+  } catch (err) {
+    pendingPermissionState = null;
     currentAbortController = null;
+    currentConversationId = null;
+    return ok({ ok: false, error: userSafeError(err) });
   }
 }
 
@@ -598,6 +821,10 @@ function parseMetadata(raw?: string | null): ChatV2MessageMetadata | undefined {
 }
 
 export function registerAiChatV2IpcHandlers(): void {
+  ipcMain.handle(
+    AI_CHAT_RESUME_TOOL_AFTER_PERMISSION,
+    async (_e, data: unknown) => handleResumeToolAfterPermission((data as string) ?? "")
+  );
   ipcMain.handle(AI_CHAT_V2_MODELS, async () => handleModels());
   ipcMain.handle(AI_CHAT_V2_CONVERSATIONS, async () => handleConversations());
   ipcMain.handle(AI_CHAT_V2_HISTORY, async (_e, data: unknown) =>

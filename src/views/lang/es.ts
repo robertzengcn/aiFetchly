@@ -1766,5 +1766,15 @@ export default {
     no_conversations: "Sin conversaciones aún",
     clear_confirm_title: "¿Borrar conversación?",
     clear_confirm_body: "Esto elimina todos los mensajes de esta conversación.",
+    tool_call_title: "Llamada de herramienta",
+    tool_result_title: "Resultado de la herramienta",
+    tool_name: "Herramienta",
+    tool_arguments: "Argumentos",
+    tool_result_details: "Detalles",
+    permission_denied: "Permiso denegado. La herramienta no se ejecutará.",
+    permission_resume_failed:
+      "No se pudo continuar la herramienta después de conceder el permiso.",
+    permission_resume_no_tool_id:
+      "Falta la información de la llamada de herramienta; no se puede continuar.",
   },
 };

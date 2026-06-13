@@ -10,8 +10,12 @@ export interface ChatV2MessageMetadata {
   toolCallId?: string;
   toolName?: string;
   toolArguments?: Record<string, unknown>;
+  toolResult?: Record<string, unknown>;
   toolResultStatus?: "success" | "error";
   toolResultSummary?: string;
+  success?: boolean;
+  executionTimeMs?: number;
+  summary?: string;
 }
 
 /** Renderer request to start a streaming chat turn. */
@@ -86,4 +90,6 @@ export interface ChatV2StreamChunk {
   toolCallId?: string;
   toolName?: string;
   toolArguments?: Record<string, unknown>;
+  toolResult?: Record<string, unknown>;
+  replacesPermissionPromptForToolId?: string;
 }

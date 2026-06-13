@@ -15,6 +15,8 @@
       :message="m"
       :status="m.id === activeAssistantMessageId ? streamStatus : 'idle'"
       :error-message="errorMessage"
+      @grant-permission="onGrantPermission"
+      @deny-permission="onDenyPermission"
     />
   </div>
 </template>
@@ -32,6 +34,10 @@ const props = defineProps<{
   activeAssistantMessageId: string | null;
   streamStatus: Status;
   errorMessage?: string;
+}>();
+const emit = defineEmits<{
+  (e: "grant-permission", message: ChatV2MessageView, persistent: boolean): void;
+  (e: "deny-permission", message: ChatV2MessageView): void;
 }>();
 const { t } = useI18n();
 
@@ -52,10 +58,26 @@ const onScroll = (): void => {
   pinnedToBottom = atBottom;
 };
 
+const onGrantPermission = (
+  message: ChatV2MessageView,
+  payload: { persistent: boolean }
+): void => {
+  emit("grant-permission", message, payload.persistent);
+};
+
+const onDenyPermission = (message: ChatV2MessageView): void => {
+  emit("deny-permission", message);
+};
+
 onMounted(scrollToBottom);
 watch(() => props.messages.length, scrollToBottom);
 watch(
-  () => props.messages.map((m) => m.content).join(""),
+  () => {
+    // Track only the last message's id + content length instead of joining
+    // all message contents (avoids O(n) string allocation per token).
+    const last = props.messages[props.messages.length - 1];
+    return last ? `${last.id}:${last.content.length}` : "";
+  },
   scrollToBottom
 );
 </script>

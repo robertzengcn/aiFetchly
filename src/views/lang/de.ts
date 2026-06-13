@@ -1761,5 +1761,15 @@ export default {
     clear_confirm_title: "Unterhaltung löschen?",
     clear_confirm_body:
       "Dadurch werden alle Nachrichten dieser Unterhaltung entfernt.",
+    tool_call_title: "Werkzeugaufruf",
+    tool_result_title: "Werkzeugergebnis",
+    tool_name: "Werkzeug",
+    tool_arguments: "Argumente",
+    tool_result_details: "Details",
+    permission_denied: "Berechtigung verweigert. Das Werkzeug wird nicht ausgeführt.",
+    permission_resume_failed:
+      "Das Werkzeug konnte nach der Freigabe nicht fortgesetzt werden.",
+    permission_resume_no_tool_id:
+      "Werkzeugaufrufinformationen fehlen; Fortsetzung nicht möglich.",
   },
 };

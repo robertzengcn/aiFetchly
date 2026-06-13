@@ -1749,5 +1749,15 @@ export default {
     clear_confirm_title: "Effacer la conversation ?",
     clear_confirm_body:
       "Cela supprime tous les messages de cette conversation.",
+    tool_call_title: "Appel d'outil",
+    tool_result_title: "Résultat de l'outil",
+    tool_name: "Outil",
+    tool_arguments: "Arguments",
+    tool_result_details: "Détails",
+    permission_denied: "Permission refusée. L'outil ne sera pas exécuté.",
+    permission_resume_failed:
+      "Impossible de reprendre l'outil après l'autorisation.",
+    permission_resume_no_tool_id:
+      "Informations d'appel d'outil manquantes ; impossible de continuer.",
   },
 };

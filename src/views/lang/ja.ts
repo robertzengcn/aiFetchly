@@ -1726,5 +1726,14 @@ export default {
     no_conversations: "まだ会話がありません",
     clear_confirm_title: "会話を消去しますか？",
     clear_confirm_body: "この会話のすべてのメッセージが削除されます。",
+    tool_call_title: "ツール呼び出し",
+    tool_result_title: "ツール結果",
+    tool_name: "ツール",
+    tool_arguments: "引数",
+    tool_result_details: "詳細",
+    permission_denied: "権限が拒否されました。ツールは実行されません。",
+    permission_resume_failed: "許可後にツールを再開できませんでした。",
+    permission_resume_no_tool_id:
+      "ツール呼び出し情報が不足しているため、続行できません。",
   },
 };
