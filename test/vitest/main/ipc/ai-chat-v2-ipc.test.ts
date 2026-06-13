@@ -97,7 +97,7 @@ vi.mock("@/service/SkillExecutor", () => ({
 
 import { registerAiChatV2IpcHandlers } from "@/main-process/communication/ai-chat-v2-ipc";
 import {
-  AI_CHAT_RESUME_TOOL_AFTER_PERMISSION,
+  AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
   AI_CHAT_V2_CONVERSATIONS,
   AI_CHAT_V2_CLEAR_CONVERSATION,
   AI_CHAT_V2_CLEAR_ALL,
@@ -571,7 +571,7 @@ describe("AI Chat V2 — stream lifecycle", () => {
     });
 
     const resumeResult = await mockIpcMain.callHandler(
-      AI_CHAT_RESUME_TOOL_AFTER_PERMISSION,
+      AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
       {},
       JSON.stringify({
         toolId: "call_1",

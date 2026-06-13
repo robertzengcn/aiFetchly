@@ -268,6 +268,9 @@ export const AI_CHAT_V2_STREAM_CHUNK = "ai-chat-v2:stream-chunk";
 export const AI_CHAT_V2_STREAM_COMPLETE = "ai-chat-v2:stream-complete";
 export const AI_CHAT_V2_CLEAR_CONVERSATION = "ai-chat-v2:clear-conversation";
 export const AI_CHAT_V2_CLEAR_ALL = "ai-chat-v2:clear-all";
+/** Resume a V2 skill/tool call after the user granted permission in the chat UI. */
+export const AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION =
+  "ai-chat-v2:resume-tool-after-permission";
 
 // MCP Tool Management Channels
 export const MCP_TOOL_LIST = "mcp:tool:list";
