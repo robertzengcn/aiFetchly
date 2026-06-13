@@ -102,6 +102,9 @@ async function handleHistory(
   }
   try {
     const req = JSON.parse(data ?? "{}");
+    if (typeof req.conversationId !== "string") {
+      return denied("conversationId must be a string");
+    }
     const conversationId: string = req.conversationId;
     if (!conversationId) {
       return denied("conversationId is required");
@@ -138,6 +141,9 @@ async function handleClearConversation(
   }
   try {
     const req = JSON.parse(data ?? "{}");
+    if (typeof req.conversationId !== "string") {
+      return denied("conversationId must be a string");
+    }
     const conversationId: string = req.conversationId;
     if (!conversationId) {
       return denied("conversationId is required");
@@ -231,37 +237,61 @@ async function handleStream(event: IpcEventLike, data: string): Promise<void> {
   }
 
   const module = new AIChatV2Module();
-  const conversationId = module.createConversationIfNeeded(req.conversationId);
-  currentConversationId = conversationId;
+  let conversationId: string;
+  let transcript: ReturnType<typeof buildOpenAITranscript>;
+  let assistantMessageId: string;
 
-  // Save user message before remote call.
-  await module.saveUserMessage({
-    conversationId,
-    content: req.message,
-  });
+  // Database operations and transcript building happen before the streaming
+  // try/catch. Wrap them so a failure sends a proper error response instead
+  // of silently hanging the renderer.
+  try {
+    conversationId = module.createConversationIfNeeded(req.conversationId);
+    currentConversationId = conversationId;
 
-  // Load history and build transcript.
-  const history = await module.getConversationMessages(conversationId);
-  const transcript = buildOpenAITranscript({
-    // Exclude the just-saved current message from history (it is also appended
-    // via currentUserMessage so it appears exactly once).
-    history: history.filter(
-      (r) => r.content !== req.message || r.role !== "user"
-    ),
-    currentUserMessage: req.message,
-    systemPrompt: req.systemPrompt ?? module.getDefaultSystemPrompt(),
-    filterSource: "chat-v2",
-    maxMessages: CHAT_V2_PHASE1_MAX_HISTORY_MESSAGES,
-  });
+    // Save user message before remote call; capture its messageId so we can
+    // exclude ONLY this row from the transcript (it is re-appended via
+    // currentUserMessage). Filtering by content would silently drop earlier
+    // turns that happen to share the same text (e.g. "ok", "thanks").
+    const savedUser = await module.saveUserMessage({
+      conversationId,
+      content: req.message,
+    });
+
+    // Load history and build transcript.
+    const history = await module.getConversationMessages(conversationId);
+    transcript = buildOpenAITranscript({
+      history: history.filter((r) => r.messageId !== savedUser.messageId),
+      currentUserMessage: req.message,
+      systemPrompt: req.systemPrompt ?? module.getDefaultSystemPrompt(),
+      filterSource: "chat-v2",
+      maxMessages: CHAT_V2_PHASE1_MAX_HISTORY_MESSAGES,
+    });
+
+    assistantMessageId = `assistant-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2, 8)}`;
+    currentAssistantMessageId = assistantMessageId;
+  } catch (err) {
+    console.error("[ai-chat-v2] pre-stream error:", err);
+    currentConversationId = null;
+    sendComplete(event, {
+      eventType: "error",
+      conversationId: req.conversationId ?? "",
+      errorMessage: userSafeError(err),
+    });
+    return;
+  }
 
   const api = new AiChatApi();
   const accumulator = new OpenAIStreamAccumulator();
-  const assistantMessageId = `assistant-${Date.now()}-${Math.random()
-    .toString(36)
-    .slice(2, 8)}`;
-  currentAssistantMessageId = assistantMessageId;
 
   const abortController = new AbortController();
+  // Abort any prior stream before overwriting the reference (defense-in-depth;
+  // the renderer guards against concurrent sends, but the main process should
+  // not leak a dangling fetch if it ever happens).
+  if (currentAbortController) {
+    currentAbortController.abort();
+  }
   currentAbortController = abortController;
 
   // Start chunk.
@@ -405,7 +435,10 @@ function userSafeError(err: unknown): string {
     if (/Failed to fetch|NetworkError|ECONNREFUSED|fetch failed/i.test(msg)) {
       return "Could not connect to the AI server.";
     }
-    return msg;
+    // Avoid surfacing raw server response bodies (may contain internal details,
+    // stack traces, or echoed request data). Log the full error for debugging.
+    console.error("[ai-chat-v2] unmapped error:", msg);
+    return "An unexpected error occurred. Please try again.";
   }
   return "Unknown error";
 }
@@ -435,8 +468,18 @@ export function registerAiChatV2IpcHandlers(): void {
     handleClearConversation(_e as IpcEventLike, data as string)
   );
   ipcMain.handle(AI_CHAT_V2_CLEAR_ALL, async () => handleClearAll());
-  ipcMain.on(AI_CHAT_V2_STREAM, async (event, data: unknown) =>
-    handleStream(event as IpcEventLike, data as string)
-  );
+  ipcMain.on(AI_CHAT_V2_STREAM, async (event, data: unknown) => {
+    try {
+      await handleStream(event as IpcEventLike, data as string);
+    } catch (err) {
+      console.error("[ai-chat-v2] unhandled stream error:", err);
+      const evt = event as IpcEventLike;
+      sendComplete(evt, {
+        eventType: "error",
+        conversationId: "",
+        errorMessage: userSafeError(err),
+      });
+    }
+  });
   ipcMain.on(AI_CHAT_V2_STREAM_STOP, () => handleStop());
 }

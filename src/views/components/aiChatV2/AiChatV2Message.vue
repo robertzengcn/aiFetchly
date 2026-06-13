@@ -25,10 +25,12 @@ const props = defineProps<{
   status?: Status;
   errorMessage?: string;
 }>();
-const { t } = useI18n();
+const { t, te } = useI18n();
 
 const roleLabel = computed(() => {
-  if (props.message.role === "user") return t("common.user") || "You";
+  if (props.message.role === "user") {
+    return te("common.user") ? t("common.user") : "You";
+  }
   if (props.message.role === "assistant") return "AI";
   return props.message.role;
 });
