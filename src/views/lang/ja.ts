@@ -1723,6 +1723,7 @@ export default {
     server_unavailable: "AI サーバーに接続できませんでした。",
     unsupported_tool_call: "アシスタントが未対応のツールを要求しました。",
     conversation_history: "会話履歴",
+    manage_mcp_tools: "MCP ツールを管理",
     no_conversations: "まだ会話がありません",
     clear_confirm_title: "会話を消去しますか？",
     clear_confirm_body: "この会話のすべてのメッセージが削除されます。",

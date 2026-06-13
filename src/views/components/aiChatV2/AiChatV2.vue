@@ -20,6 +20,15 @@
           icon
           size="small"
           variant="text"
+          @click="showMCPToolManager = true"
+          :title="t('aiChatV2.manage_mcp_tools') || 'Manage MCP Tools'"
+        >
+          <v-icon size="small">mdi-toolbox</v-icon>
+        </v-btn>
+        <v-btn
+          icon
+          size="small"
+          variant="text"
           @click="onNewConversation"
           :title="t('aiChatV2.new_conversation') || 'New conversation'"
         >
@@ -54,6 +63,9 @@
         @stop="onStop"
       />
     </div>
+
+    <!-- MCP Tool Manager Dialog -->
+    <MCPToolManager v-model="showMCPToolManager" />
 
     <!-- Conversation history dialog -->
     <v-dialog v-model="showConversationsDialog" max-width="500" scrollable>
@@ -119,6 +131,7 @@ import {
 } from "@/views/api/aiChatV2";
 import AiChatV2Messages from "./AiChatV2Messages.vue";
 import AiChatV2Composer from "./AiChatV2Composer.vue";
+import MCPToolManager from "../aiChat/MCPToolManager.vue";
 
 type Status = "idle" | "streaming" | "cancelled" | "error";
 
@@ -131,6 +144,7 @@ const isStreaming = ref(false);
 const streamError = ref<string | null>(null);
 const activeAssistantMessageId = ref<string | null>(null);
 const showConversationsDialog = ref(false);
+const showMCPToolManager = ref(false);
 
 const streamStatus = computed<Status>(() => {
   if (isStreaming.value) return "streaming";
