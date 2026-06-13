@@ -1,10 +1,19 @@
 import { ipcMain } from "electron";
 import { Token } from "@/modules/token";
 import { USER_AI_ENABLED } from "@/config/usersetting";
-import { AiChatApi } from "@/api/aiChatApi";
+import {
+  AiChatApi,
+  type OpenAIChatMessage,
+  type OpenAITool,
+  type OpenAIToolCall,
+  type ToolExecutionResult,
+  type ToolFunction,
+} from "@/api/aiChatApi";
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { buildOpenAITranscript } from "@/service/OpenAIChatTranscriptBuilder";
 import { OpenAIStreamAccumulator } from "@/service/OpenAIStreamAccumulator";
+import { SkillRegistry } from "@/config/skillsRegistry";
+import { SkillExecutor } from "@/service/SkillExecutor";
 import {
   AI_CHAT_V2_MODELS,
   AI_CHAT_V2_CONVERSATIONS,
@@ -27,6 +36,7 @@ import type {
 } from "@/entityTypes/aiChatV2Types";
 
 const CHAT_V2_PHASE1_MAX_HISTORY_MESSAGES = 30;
+const CHAT_V2_MAX_TOOL_ROUNDS = 8;
 
 /**
  * Minimal structural type for the IPC event object.
@@ -64,6 +74,61 @@ function sendChunk(
 
 function sendComplete(event: IpcEventLike, chunk: ChatV2StreamChunk): void {
   event.sender.send(AI_CHAT_V2_STREAM_COMPLETE, JSON.stringify(chunk));
+}
+
+function toOpenAITools(toolFunctions: ToolFunction[]): OpenAITool[] {
+  return toolFunctions
+    .filter((tool) => tool.type === "function" && typeof tool.name === "string")
+    .map((tool) => ({
+      type: "function",
+      function: {
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters,
+      },
+    }));
+}
+
+function serializeToolResultContent(
+  result: ToolExecutionResult
+): string {
+  const payload = {
+    success: result.success,
+    ...result.result,
+  };
+  try {
+    return JSON.stringify(payload);
+  } catch {
+    return JSON.stringify({
+      success: false,
+      error: "Tool result could not be serialized",
+    });
+  }
+}
+
+function buildAssistantToolCallMessage(
+  parsedCalls: Array<{
+    index: number;
+    id?: string;
+    name?: string;
+    arguments?: Record<string, unknown>;
+  }>,
+  assistantContent: string
+): OpenAIChatMessage {
+  const toolCalls: OpenAIToolCall[] = parsedCalls.map((call, index) => ({
+    id: call.id ?? `call_${index}`,
+    type: "function",
+    function: {
+      name: call.name ?? "unknown_tool",
+      arguments: JSON.stringify(call.arguments ?? {}),
+    },
+  }));
+
+  return {
+    role: "assistant",
+    content: assistantContent || null,
+    tool_calls: toolCalls,
+  };
 }
 
 async function handleModels(): Promise<CommonMessage<unknown>> {
@@ -283,7 +348,9 @@ async function handleStream(event: IpcEventLike, data: string): Promise<void> {
   }
 
   const api = new AiChatApi();
-  const accumulator = new OpenAIStreamAccumulator();
+  const toolFunctions = await SkillRegistry.getAllToolFunctions();
+  const openAITools = toOpenAITools(toolFunctions);
+  const conversationMessages: OpenAIChatMessage[] = [...transcript.messages];
 
   const abortController = new AbortController();
   // Abort any prior stream before overwriting the reference (defense-in-depth;
@@ -301,46 +368,118 @@ async function handleStream(event: IpcEventLike, data: string): Promise<void> {
     messageId: assistantMessageId,
   });
 
+  let activeAccumulator: OpenAIStreamAccumulator | null = null;
   try {
-    await api.openAIChatCompletionStream(
-      {
-        messages: transcript.messages,
-        model: req.model,
-        temperature: req.temperature,
-        max_tokens: req.maxTokens,
-        stream: true,
-      },
-      (rawChunk) => {
-        if (currentConversationId !== conversationId) return;
-        const delta = accumulator.ingest(rawChunk);
-        if (delta) {
-          sendChunk(event, {
-            eventType: "token",
-            conversationId,
-            messageId: assistantMessageId,
-            contentDelta: delta,
-            model: accumulator.state.model,
-          });
+    let finalAccumulator: OpenAIStreamAccumulator | null = null;
+
+    for (let round = 0; round < CHAT_V2_MAX_TOOL_ROUNDS; round += 1) {
+      const accumulator = new OpenAIStreamAccumulator();
+      activeAccumulator = accumulator;
+      await api.openAIChatCompletionStream(
+        {
+          messages: conversationMessages,
+          model: req.model,
+          temperature: req.temperature,
+          max_tokens: req.maxTokens,
+          stream: true,
+          tools: openAITools.length > 0 ? openAITools : undefined,
+          tool_choice: openAITools.length > 0 ? "auto" : undefined,
+        },
+        (rawChunk) => {
+          if (currentConversationId !== conversationId) return;
+          const delta = accumulator.ingest(rawChunk);
+          if (delta) {
+            sendChunk(event, {
+              eventType: "token",
+              conversationId,
+              messageId: assistantMessageId,
+              contentDelta: delta,
+              model: accumulator.state.model,
+            });
+          }
+        },
+        { signal: abortController.signal }
+      );
+
+      finalAccumulator = accumulator;
+      const parsedCalls = accumulator
+        .tryParseToolCallArguments()
+        .filter((call) => call.name && call.id);
+
+      if (
+        accumulator.state.finishReason !== "tool_calls" ||
+        parsedCalls.length === 0
+      ) {
+        break;
+      }
+
+      if (parsedCalls.some((call) => !call.ok)) {
+        throw new Error("Tool call arguments were malformed.");
+      }
+
+      conversationMessages.push(
+        buildAssistantToolCallMessage(
+          parsedCalls.filter(
+            (call): call is typeof call & { id: string; name: string; arguments: Record<string, unknown> } =>
+              Boolean(call.id && call.name && call.arguments)
+          ),
+          accumulator.state.fullContent
+        )
+      );
+
+      for (const call of parsedCalls) {
+        if (!call.ok || !call.id || !call.name) {
+          continue;
         }
-      },
-      { signal: abortController.signal }
-    );
+
+        sendChunk(event, {
+          eventType: "tool_call",
+          conversationId,
+          messageId: assistantMessageId,
+          toolCallId: call.id,
+          toolName: call.name,
+          toolArguments: call.arguments,
+        });
+
+        const toolResult = await SkillExecutor.execute(call.name, call.arguments ?? {}, {
+          conversationId,
+          toolCallId: call.id,
+          args: call.arguments,
+        });
+        const toolContent = serializeToolResultContent(toolResult);
+
+        conversationMessages.push({
+          role: "tool",
+          tool_call_id: call.id,
+          content: toolContent,
+        });
+
+        sendChunk(event, {
+          eventType: "tool_result",
+          conversationId,
+          messageId: assistantMessageId,
+          toolCallId: call.id,
+          toolName: call.name,
+          fullContent: toolContent,
+        });
+      }
+    }
 
     // Late-chunk protection.
     if (currentConversationId !== conversationId) return;
 
-    const fullContent = accumulator.state.fullContent;
-    const finishReason = accumulator.state.finishReason ?? "stop";
+    const fullContent = finalAccumulator?.state.fullContent ?? "";
+    const finishReason = finalAccumulator?.state.finishReason ?? "stop";
 
     if (fullContent.length > 0) {
       await module.saveAssistantMessage({
         conversationId,
         content: fullContent,
         messageId: assistantMessageId,
-        model: accumulator.state.model,
+        model: finalAccumulator?.state.model,
         metadata: {
           source: "chat-v2",
-          openaiResponseId: accumulator.state.responseId,
+          openaiResponseId: finalAccumulator?.state.responseId,
           finishReason,
         },
       });
@@ -351,11 +490,11 @@ async function handleStream(event: IpcEventLike, data: string): Promise<void> {
       conversationId,
       messageId: assistantMessageId,
       fullContent,
-      model: accumulator.state.model,
+      model: finalAccumulator?.state.model,
       finishReason,
     });
   } catch (err) {
-    const partial = accumulator.state.fullContent;
+    const partial = activeAccumulator?.state.fullContent ?? "";
     if (currentConversationId !== conversationId) return;
 
     const aborted = err instanceof Error && err.name === "AbortError";
@@ -365,10 +504,10 @@ async function handleStream(event: IpcEventLike, data: string): Promise<void> {
           conversationId,
           content: partial,
           messageId: assistantMessageId,
-          model: accumulator.state.model,
+          model: activeAccumulator?.state.model,
           metadata: {
             source: "chat-v2",
-            openaiResponseId: accumulator.state.responseId,
+            openaiResponseId: activeAccumulator?.state.responseId,
             finishReason: "cancelled",
             cancelled: true,
           } as ChatV2MessageMetadata,
@@ -386,7 +525,7 @@ async function handleStream(event: IpcEventLike, data: string): Promise<void> {
           conversationId,
           content: partial,
           messageId: assistantMessageId,
-          model: accumulator.state.model,
+          model: activeAccumulator?.state.model,
           metadata: {
             source: "chat-v2",
             finishReason: "error",
