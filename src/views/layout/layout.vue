@@ -230,7 +230,7 @@ const messages = ref<MessageItem[]>([]);
 const chatPanelOpen = ref(false);
 const v2ChatPanelOpen = ref(false);
 const V2_FLAG_KEY = 'aifetchly:aiChatV2Enabled';
-const aiChatV2Enabled = ref(localStorage.getItem(V2_FLAG_KEY) === 'true');
+const aiChatV2Enabled = ref(localStorage.getItem(V2_FLAG_KEY) !== 'false');
 const chatPanelWidth = ref(420);
 const CHAT_PANEL_MIN_WIDTH = 320;
 const CHAT_PANEL_MAX_WIDTH = 900;

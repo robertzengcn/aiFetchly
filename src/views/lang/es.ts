@@ -1741,7 +1741,7 @@ export default {
     open_file_tooltip: "Abrir archivo",
   },
   aiChatV2: {
-    title: "Asistente de IA (V2)",
+    title: "Asistente de IA",
     new_conversation: "Nueva conversación",
     empty_title: "Inicia una conversación",
     empty_description:
@@ -1752,6 +1752,7 @@ export default {
     retry: "Reintentar",
     clear_conversation: "Borrar conversación",
     clear_all: "Borrar todo",
+    clear_chat: "Borrar chat",
     loading_models: "Cargando modelos…",
     loading_history: "Cargando historial…",
     streaming: "Generando…",
@@ -1761,6 +1762,8 @@ export default {
     server_unavailable: "No se pudo conectar al servidor de IA.",
     unsupported_tool_call:
       "El asistente solicitó una herramienta que aún no se admite.",
+    conversation_history: "Historial de conversaciones",
+    no_conversations: "Sin conversaciones aún",
     clear_confirm_title: "¿Borrar conversación?",
     clear_confirm_body: "Esto elimina todos los mensajes de esta conversación.",
   },

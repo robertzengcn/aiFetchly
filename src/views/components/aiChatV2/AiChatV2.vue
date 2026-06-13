@@ -1,48 +1,100 @@
 <template>
   <div class="v2-shell">
+    <!-- Header with icon actions like old AiChatBox -->
     <div class="v2-shell__header">
-      <v-select
-        v-model="selectedModel"
-        :items="modelItems"
-        item-title="id"
-        item-value="id"
-        :label="t('aiChatV2.loading_models') || 'Model'"
-        density="compact"
-        hide-details
-        class="v2-shell__model"
-        variant="outlined"
-      />
-      <span class="v2-shell__title">{{ t("aiChatV2.title") || "AI Assistant (V2)" }}</span>
+      <div class="v2-shell__header-left">
+        <v-icon class="mr-2">mdi-robot</v-icon>
+        <span class="v2-shell__title">{{ t("aiChatV2.title") || "AI Assistant" }}</span>
+      </div>
+      <div class="v2-shell__header-actions">
+        <v-btn
+          icon
+          size="small"
+          variant="text"
+          @click="showConversationsDialog = true"
+          :title="t('aiChatV2.conversation_history') || 'Conversation history'"
+        >
+          <v-icon size="small">mdi-history</v-icon>
+        </v-btn>
+        <v-btn
+          icon
+          size="small"
+          variant="text"
+          @click="onNewConversation"
+          :title="t('aiChatV2.new_conversation') || 'New conversation'"
+        >
+          <v-icon size="small">mdi-plus-circle</v-icon>
+        </v-btn>
+        <v-btn
+          icon
+          size="small"
+          variant="text"
+          @click="onClearMessages"
+          :disabled="messages.length === 0"
+          :title="t('aiChatV2.clear_chat') || 'Clear chat'"
+        >
+          <v-icon size="small">mdi-delete-outline</v-icon>
+        </v-btn>
+      </div>
     </div>
 
+    <!-- Main content (no sidebar) -->
     <div class="v2-shell__body">
-      <div class="v2-shell__sidebar">
-        <AiChatV2ConversationList
-          :conversations="conversations"
-          :active-conversation-id="activeConversationId"
-          @new-conversation="onNewConversation"
-          @select="onSelectConversation"
-        />
-      </div>
-      <div class="v2-shell__main">
-        <AiChatV2Messages
-          :messages="messages"
-          :active-assistant-message-id="activeAssistantMessageId"
-          :stream-status="streamStatus"
-          :error-message="streamError ?? undefined"
-        />
-        <AiChatV2Composer
-          :is-streaming="isStreaming"
-          @send="onSend"
-          @stop="onStop"
-        />
-      </div>
+      <AiChatV2Messages
+        :messages="messages"
+        :active-assistant-message-id="activeAssistantMessageId"
+        :stream-status="streamStatus"
+        :error-message="streamError ?? undefined"
+      />
+      <AiChatV2Composer
+        :is-streaming="isStreaming"
+        @send="onSend"
+        @stop="onStop"
+      />
     </div>
+
+    <!-- Conversation history dialog -->
+    <v-dialog v-model="showConversationsDialog" max-width="500" scrollable>
+      <v-card>
+        <v-card-title class="d-flex align-center justify-space-between">
+          <span>{{ t("aiChatV2.conversation_history") || "Conversation History" }}</span>
+          <v-btn icon size="small" variant="text" @click="showConversationsDialog = false">
+            <v-icon>mdi-close</v-icon>
+          </v-btn>
+        </v-card-title>
+        <v-divider></v-divider>
+        <v-card-text style="padding: 0;">
+          <div v-if="conversations.length === 0" class="pa-4 text-center">
+            <v-icon size="48" color="grey-lighten-2">mdi-chat-outline</v-icon>
+            <p class="mt-4 text-grey">{{ t("aiChatV2.no_conversations") || "No conversations yet" }}</p>
+          </div>
+          <v-list v-else density="comfortable">
+            <v-list-item
+              v-for="conv in conversations"
+              :key="conv.conversationId"
+              :class="{ 'bg-primary-lighten-5': conv.conversationId === activeConversationId }"
+              @click="onSelectConversation(conv.conversationId)"
+            >
+              <template v-slot:prepend>
+                <v-icon color="primary">mdi-chat</v-icon>
+              </template>
+              <v-list-item-title>{{ truncateText(conv.title, 60) }}</v-list-item-title>
+              <v-list-item-subtitle>
+                <div class="d-flex align-center mt-1">
+                  <v-icon size="x-small" class="mr-1">mdi-clock-outline</v-icon>
+                  <span>{{ formatTimestamp(conv.lastMessageTimestamp) }}</span>
+                </div>
+              </v-list-item-subtitle>
+            </v-list-item>
+          </v-list>
+        </v-card-text>
+      </v-card>
+    </v-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, onBeforeUnmount } from "vue";
 import { useI18n } from "vue-i18n";
 import type { MessageType } from "@/entityTypes/commonType";
 import type {
@@ -50,15 +102,17 @@ import type {
   ChatV2ConversationSummary,
   ChatV2StreamChunk,
 } from "@/entityTypes/aiChatV2Types";
-import type { OpenAIModel } from "@/api/aiChatApi";
+import { windowRemoveAllListeners } from "@/views/utils/apirequest";
 import {
-  getOpenAIChatModels,
+  AI_CHAT_V2_STREAM_CHUNK,
+  AI_CHAT_V2_STREAM_COMPLETE,
+} from "@/config/channellist";
+import {
   getChatV2Conversations,
   getChatV2History,
   streamChatV2Message,
   stopChatV2Stream,
 } from "@/views/api/aiChatV2";
-import AiChatV2ConversationList from "./AiChatV2ConversationList.vue";
 import AiChatV2Messages from "./AiChatV2Messages.vue";
 import AiChatV2Composer from "./AiChatV2Composer.vue";
 
@@ -66,16 +120,14 @@ type Status = "idle" | "streaming" | "cancelled" | "error";
 
 const { t } = useI18n();
 
-const models = ref<OpenAIModel[]>([]);
-const selectedModel = ref<string | null>(null);
 const conversations = ref<ChatV2ConversationSummary[]>([]);
 const activeConversationId = ref<string | null>(null);
 const messages = ref<ChatV2MessageView[]>([]);
 const isStreaming = ref(false);
 const streamError = ref<string | null>(null);
 const activeAssistantMessageId = ref<string | null>(null);
+const showConversationsDialog = ref(false);
 
-const modelItems = computed(() => models.value);
 const streamStatus = computed<Status>(() => {
   if (isStreaming.value) return "streaming";
   if (streamError.value) return "error";
@@ -84,15 +136,16 @@ const streamStatus = computed<Status>(() => {
   return "idle";
 });
 
-const loadModels = async (): Promise<void> => {
+const truncateText = (text: string | undefined, max: number): string => {
+  if (!text) return "";
+  return text.length > max ? text.slice(0, max) + "..." : text;
+};
+
+const formatTimestamp = (iso: string): string => {
   try {
-    const resp = await getOpenAIChatModels();
-    models.value = resp?.data ?? [];
-    if (!selectedModel.value && models.value.length > 0) {
-      selectedModel.value = models.value[0].id;
-    }
-  } catch (err) {
-    streamError.value = err instanceof Error ? err.message : (t("aiChatV2.model_unavailable") || "Model load failed");
+    return new Date(iso).toLocaleString();
+  } catch {
+    return "";
   }
 };
 
@@ -120,10 +173,15 @@ const onNewConversation = (): void => {
   streamError.value = null;
 };
 
+const onClearMessages = (): void => {
+  onNewConversation();
+};
+
 const onSelectConversation = (conversationId: string): void => {
   stopIfStreaming();
   activeConversationId.value = conversationId;
   streamError.value = null;
+  showConversationsDialog.value = false;
   void loadHistory(conversationId);
 };
 
@@ -172,7 +230,7 @@ const onSend = async (text: string): Promise<void> => {
     {
       conversationId: activeConversationId.value ?? undefined,
       message: text,
-      model: selectedModel.value ?? undefined,
+      // model omitted → backend picks default
     },
     (chunk: ChatV2StreamChunk) => {
       if (chunk.eventType === "start") {
@@ -187,7 +245,10 @@ const onSend = async (text: string): Promise<void> => {
         }
       } else if (chunk.eventType === "token" && chunk.contentDelta) {
         assistant.content += chunk.contentDelta;
-        messages.value = [...messages.value];
+        const idx = messages.value.findIndex((m) => m.id === assistant.id);
+        if (idx !== -1) {
+          messages.value[idx] = { ...messages.value[idx], content: assistant.content };
+        }
       }
     },
     (complete: ChatV2StreamChunk) => {
@@ -214,8 +275,13 @@ const onSend = async (text: string): Promise<void> => {
 };
 
 onMounted(() => {
-  void loadModels();
   void loadConversations();
+});
+
+onBeforeUnmount(() => {
+  stopIfStreaming();
+  windowRemoveAllListeners(AI_CHAT_V2_STREAM_CHUNK);
+  windowRemoveAllListeners(AI_CHAT_V2_STREAM_COMPLETE);
 });
 </script>
 
@@ -229,12 +295,18 @@ onMounted(() => {
 .v2-shell__header {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 10px 14px;
+  justify-content: space-between;
+  padding: 10px 12px;
   border-bottom: 1px solid rgba(0, 0, 0, 0.08);
 }
-.v2-shell__model {
-  max-width: 220px;
+.v2-shell__header-left {
+  display: flex;
+  align-items: center;
+}
+.v2-shell__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
 }
 .v2-shell__title {
   font-weight: 600;
@@ -242,17 +314,7 @@ onMounted(() => {
 .v2-shell__body {
   flex: 1;
   display: flex;
-  min-height: 0;
-}
-.v2-shell__sidebar {
-  width: 200px;
-  border-right: 1px solid rgba(0, 0, 0, 0.08);
-  overflow-y: auto;
-}
-.v2-shell__main {
-  flex: 1;
-  display: flex;
   flex-direction: column;
-  min-width: 0;
+  min-height: 0;
 }
 </style>

@@ -1736,7 +1736,7 @@ export default {
     open_file_tooltip: "Datei öffnen",
   },
   aiChatV2: {
-    title: "KI-Assistent (V2)",
+    title: "KI-Assistent",
     new_conversation: "Neue Unterhaltung",
     empty_title: "Unterhaltung starten",
     empty_description: "Frag alles. Dein Verlauf bleibt auf diesem Gerät.",
@@ -1746,6 +1746,7 @@ export default {
     retry: "Erneut versuchen",
     clear_conversation: "Unterhaltung löschen",
     clear_all: "Alles löschen",
+    clear_chat: "Chat löschen",
     loading_models: "Modelle werden geladen…",
     loading_history: "Verlauf wird geladen…",
     streaming: "Wird generiert…",
@@ -1755,6 +1756,8 @@ export default {
     server_unavailable: "Verbindung zum KI-Server nicht möglich.",
     unsupported_tool_call:
       "Der Assistent hat ein noch nicht unterstütztes Werkzeug angefordert.",
+    conversation_history: "Unterhaltungsverlauf",
+    no_conversations: "Noch keine Unterhaltungen",
     clear_confirm_title: "Unterhaltung löschen?",
     clear_confirm_body:
       "Dadurch werden alle Nachrichten dieser Unterhaltung entfernt.",
