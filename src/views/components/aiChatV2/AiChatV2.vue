@@ -45,6 +45,8 @@
         :active-assistant-message-id="activeAssistantMessageId"
         :stream-status="streamStatus"
         :error-message="streamError ?? undefined"
+        @grant-permission="handleSkillPermissionGrant"
+        @deny-permission="handleSkillPermissionDeny"
       />
       <AiChatV2Composer
         :is-streaming="isStreaming"
@@ -96,18 +98,20 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from "vue";
 import { useI18n } from "vue-i18n";
-import type { MessageType } from "@/entityTypes/commonType";
+import { MessageType } from "@/entityTypes/commonType";
 import type {
   ChatV2MessageView,
   ChatV2ConversationSummary,
   ChatV2StreamChunk,
 } from "@/entityTypes/aiChatV2Types";
-import { windowRemoveAllListeners } from "@/views/utils/apirequest";
+import { windowInvoke, windowRemoveAllListeners } from "@/views/utils/apirequest";
 import {
+  AI_CHAT_RESUME_TOOL_AFTER_PERMISSION,
   AI_CHAT_V2_STREAM_CHUNK,
   AI_CHAT_V2_STREAM_COMPLETE,
 } from "@/config/channellist";
 import {
+  clearChatV2StreamListeners,
   getChatV2Conversations,
   getChatV2History,
   streamChatV2Message,
@@ -194,7 +198,172 @@ const stopIfStreaming = (): void => {
 
 const onStop = (): void => {
   stopChatV2Stream();
+  clearChatV2StreamListeners();
   isStreaming.value = false;
+};
+
+const resolveToolIdForPermissionMessage = (
+  message: ChatV2MessageView
+): string | undefined => {
+  const direct = message.metadata?.toolCallId;
+  if (typeof direct === "string" && direct.length > 0) {
+    return direct;
+  }
+  const toolName = message.metadata?.toolName;
+  if (!toolName) {
+    return undefined;
+  }
+  const idx = messages.value.findIndex((m) => m.id === message.id);
+  for (let i = idx - 1; i >= 0; i -= 1) {
+    const candidate = messages.value[i];
+    if (
+      candidate.messageType === MessageType.TOOL_CALL &&
+      candidate.metadata?.toolName === toolName &&
+      candidate.metadata?.toolCallId
+    ) {
+      return candidate.metadata.toolCallId;
+    }
+  }
+  return undefined;
+};
+
+const upsertToolResultMessage = (
+  chunk: ChatV2StreamChunk,
+  conversationId: string
+): void => {
+  const toolResult = chunk.toolResult ?? {};
+  const content =
+    typeof chunk.fullContent === "string" && chunk.fullContent.trim().length > 0
+      ? chunk.fullContent
+      : JSON.stringify(toolResult, null, 2);
+  const existingIdx = chunk.replacesPermissionPromptForToolId
+    ? messages.value.findIndex(
+        (message) =>
+          message.messageType === MessageType.TOOL_RESULT &&
+          message.metadata?.toolCallId === chunk.replacesPermissionPromptForToolId
+      )
+    : -1;
+
+  const metadata = {
+    source: "chat-v2" as const,
+    toolCallId: chunk.toolCallId,
+    toolName: chunk.toolName,
+    toolResult,
+    toolResultStatus:
+      toolResult.success === false ? ("error" as const) : ("success" as const),
+    toolResultSummary:
+      typeof toolResult.summary === "string" ? toolResult.summary : undefined,
+    success: toolResult.success !== false,
+    executionTimeMs:
+      typeof toolResult.executionTimeMs === "number"
+        ? toolResult.executionTimeMs
+        : undefined,
+    summary: typeof toolResult.summary === "string" ? toolResult.summary : undefined,
+    error: typeof toolResult.error === "string" ? toolResult.error : undefined,
+  };
+
+  if (existingIdx !== -1) {
+    messages.value[existingIdx] = {
+      ...messages.value[existingIdx],
+      content,
+      metadata: {
+        ...messages.value[existingIdx].metadata,
+        ...metadata,
+      },
+    };
+    return;
+  }
+
+  if (
+    chunk.toolCallId &&
+    messages.value.some(
+      (message) =>
+        message.messageType === MessageType.TOOL_RESULT &&
+        message.metadata?.toolCallId === chunk.toolCallId
+    )
+  ) {
+    return;
+  }
+
+  messages.value.push({
+    id: `tool-result-${chunk.toolCallId || Date.now()}`,
+    conversationId,
+    role: "assistant",
+    content,
+    timestamp: new Date().toISOString(),
+    messageType: MessageType.TOOL_RESULT,
+    metadata,
+  });
+};
+
+const handleSkillPermissionGrant = async (
+  message: ChatV2MessageView
+): Promise<void> => {
+  const toolId = resolveToolIdForPermissionMessage(message);
+  if (!toolId) {
+    streamError.value =
+      t("aiChatV2.permission_resume_no_tool_id") ||
+      "Missing tool call information; cannot continue execution.";
+    isStreaming.value = false;
+    activeAssistantMessageId.value = null;
+    return;
+  }
+
+  try {
+    const raw = await windowInvoke(AI_CHAT_RESUME_TOOL_AFTER_PERMISSION, {
+      toolId,
+      conversationId: message.conversationId || activeConversationId.value,
+    });
+    const res = raw as { ok: boolean; error?: string } | null;
+    if (!res?.ok) {
+      const errMsg =
+        res?.error ||
+        t("aiChatV2.permission_resume_failed") ||
+        "Could not continue the tool after permission was granted.";
+      const idx = messages.value.findIndex((m) => m.id === message.id);
+      if (idx !== -1) {
+        messages.value[idx] = {
+          ...messages.value[idx],
+          content: errMsg,
+          metadata: {
+            ...messages.value[idx].metadata,
+            toolResult: { error: errMsg, success: false },
+            success: false,
+            error: errMsg,
+          },
+        };
+      }
+      isStreaming.value = false;
+      activeAssistantMessageId.value = null;
+    }
+  } catch (error) {
+    const errMsg = error instanceof Error ? error.message : String(error);
+    streamError.value = errMsg;
+    isStreaming.value = false;
+    activeAssistantMessageId.value = null;
+  }
+};
+
+const handleSkillPermissionDeny = (message: ChatV2MessageView): void => {
+  const idx = messages.value.findIndex((m) => m.id === message.id);
+  const deniedMessage =
+    t("aiChatV2.permission_denied") ||
+    "Permission denied. The tool will not be executed.";
+  if (idx !== -1) {
+    messages.value[idx] = {
+      ...messages.value[idx],
+      content: deniedMessage,
+      metadata: {
+        ...messages.value[idx].metadata,
+        toolResult: undefined,
+        success: false,
+      },
+    };
+  }
+  clearChatV2StreamListeners();
+  stopChatV2Stream();
+  isStreaming.value = false;
+  activeAssistantMessageId.value = null;
 };
 
 const onSend = async (text: string): Promise<void> => {
@@ -249,6 +418,26 @@ const onSend = async (text: string): Promise<void> => {
         if (idx !== -1) {
           messages.value[idx] = { ...messages.value[idx], content: assistant.content };
         }
+      } else if (chunk.eventType === "tool_call") {
+        messages.value.push({
+          id: `tool-call-${chunk.toolCallId || Date.now()}`,
+          conversationId: chunk.conversationId || activeConversationId.value || "",
+          role: "assistant",
+          content: "",
+          timestamp: new Date().toISOString(),
+          messageType: MessageType.TOOL_CALL,
+          metadata: {
+            source: "chat-v2",
+            toolCallId: chunk.toolCallId,
+            toolName: chunk.toolName,
+            toolArguments: chunk.toolArguments,
+          },
+        });
+      } else if (chunk.eventType === "tool_result") {
+        upsertToolResultMessage(
+          chunk,
+          chunk.conversationId || activeConversationId.value || ""
+        );
       }
     },
     (complete: ChatV2StreamChunk) => {
@@ -280,6 +469,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   stopIfStreaming();
+  clearChatV2StreamListeners();
   windowRemoveAllListeners(AI_CHAT_V2_STREAM_CHUNK);
   windowRemoveAllListeners(AI_CHAT_V2_STREAM_COMPLETE);
 });

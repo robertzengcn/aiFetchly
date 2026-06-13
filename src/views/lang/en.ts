@@ -1773,5 +1773,15 @@ export default {
     no_conversations: "No conversations yet",
     clear_confirm_title: "Clear conversation?",
     clear_confirm_body: "This removes all messages in this conversation.",
+    tool_call_title: "Tool Call",
+    tool_result_title: "Tool Result",
+    tool_name: "Tool",
+    tool_arguments: "Arguments",
+    tool_result_details: "Details",
+    permission_denied: "Permission denied. The tool will not be executed.",
+    permission_resume_failed:
+      "Could not continue the tool after permission was granted.",
+    permission_resume_no_tool_id:
+      "Missing tool call information; cannot continue execution.",
   },
 };

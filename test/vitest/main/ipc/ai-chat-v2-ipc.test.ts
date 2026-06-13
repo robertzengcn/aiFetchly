@@ -97,6 +97,7 @@ vi.mock("@/service/SkillExecutor", () => ({
 
 import { registerAiChatV2IpcHandlers } from "@/main-process/communication/ai-chat-v2-ipc";
 import {
+  AI_CHAT_RESUME_TOOL_AFTER_PERMISSION,
   AI_CHAT_V2_CONVERSATIONS,
   AI_CHAT_V2_CLEAR_CONVERSATION,
   AI_CHAT_V2_CLEAR_ALL,
@@ -468,9 +469,144 @@ describe("AI Chat V2 — stream lifecycle", () => {
     );
     expect(toolCallEvent).toBeTruthy();
 
+    const toolResultEvent = senderSend.mock.calls.find(
+      (call) =>
+        call[0] === AI_CHAT_V2_STREAM_CHUNK &&
+        JSON.parse(call[1] as string).eventType === "tool_result"
+    );
+    expect(toolResultEvent).toBeTruthy();
+    expect(JSON.parse(toolResultEvent?.[1] as string)).toMatchObject({
+      toolResult: expect.objectContaining({
+        success: true,
+        executionTimeMs: 12,
+      }),
+    });
+
     const payload = findCompletePayload(senderSend);
     expect(payload?.eventType).toBe("complete");
     expect(payload?.fullContent).toBe("Found one supplier.");
+  });
+
+  it("surfaces permission prompts and resumes the stream after approval", async () => {
+    mockSkillExecute
+      .mockResolvedValueOnce({
+        tool_call_id: "call_1",
+        tool_name: "scrape_urls_from_search_engine",
+        success: false,
+        result: {
+          error: "Permission required",
+          needsPermissionPrompt: true,
+          permissionCategory: "network",
+        },
+        execution_time_ms: 5,
+      })
+      .mockResolvedValueOnce({
+        tool_call_id: "call_1",
+        tool_name: "scrape_urls_from_search_engine",
+        success: true,
+        result: {
+          results: [{ title: "Milk Supplier", url: "https://example.com" }],
+        },
+        execution_time_ms: 18,
+      });
+
+    mockOpenAIChatCompletionStream
+      .mockImplementationOnce(async (_req, onChunk: (c: unknown) => void) => {
+        onChunk({
+          choices: [
+            {
+              index: 0,
+              delta: {
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "call_1",
+                    type: "function",
+                    function: {
+                      name: "scrape_urls_from_search_engine",
+                      arguments:
+                        '{"search_engine":"google","query":"milk wholesale"}',
+                    },
+                  },
+                ],
+              },
+              finish_reason: "tool_calls",
+            },
+          ],
+        });
+      })
+      .mockImplementationOnce(async (_req, onChunk: (c: unknown) => void) => {
+        onChunk({ choices: [{ delta: { content: "Approved result." } }] });
+        onChunk({
+          choices: [
+            {
+              delta: { content: "" },
+              finish_reason: "stop",
+            },
+          ],
+        });
+      });
+
+    const senderSend = vi.fn();
+    const event = { sender: { send: senderSend } };
+
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      event,
+      JSON.stringify({ message: "please search milk wholesale in google" })
+    );
+
+    expect(findCompletePayload(senderSend)).toBeUndefined();
+
+    const permissionChunk = senderSend.mock.calls
+      .filter(([channel]) => channel === AI_CHAT_V2_STREAM_CHUNK)
+      .map(([, payload]) => JSON.parse(payload as string))
+      .find((chunk) => chunk.eventType === "tool_result");
+    expect(permissionChunk).toMatchObject({
+      toolCallId: "call_1",
+      toolResult: expect.objectContaining({
+        needsPermissionPrompt: true,
+        permissionCategory: "network",
+      }),
+    });
+
+    const resumeResult = await mockIpcMain.callHandler(
+      AI_CHAT_RESUME_TOOL_AFTER_PERMISSION,
+      {},
+      JSON.stringify({
+        toolId: "call_1",
+        conversationId: "v2-test-conv",
+      })
+    );
+    expect(resumeResult).toMatchObject({
+      status: true,
+      data: { ok: true },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const replacementChunk = senderSend.mock.calls
+      .filter(([channel]) => channel === AI_CHAT_V2_STREAM_CHUNK)
+      .map(([, payload]) => JSON.parse(payload as string))
+      .find((chunk) => chunk.replacesPermissionPromptForToolId === "call_1");
+    expect(replacementChunk).toMatchObject({
+      toolResult: expect.objectContaining({
+        success: true,
+        executionTimeMs: 18,
+      }),
+    });
+
+    const payload = findCompletePayload(senderSend);
+    expect(payload?.eventType).toBe("complete");
+    expect(payload?.fullContent).toBe("Approved result.");
+    expect(mockOpenAIChatCompletionStream).toHaveBeenCalledTimes(2);
+    expect(mockSkillExecute).toHaveBeenLastCalledWith(
+      "scrape_urls_from_search_engine",
+      { search_engine: "google", query: "milk wholesale" },
+      expect.objectContaining({
+        skipPermissionCheck: true,
+      })
+    );
   });
 });
 

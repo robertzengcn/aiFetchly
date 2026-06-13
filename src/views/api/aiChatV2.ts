@@ -23,6 +23,18 @@ import {
   AI_CHAT_V2_CLEAR_ALL,
 } from "@/config/channellist";
 
+let activeChunkHandler: ((raw: string) => void) | null = null;
+let activeCompleteHandler: ((raw: string) => void) | null = null;
+
+export function clearChatV2StreamListeners(): void {
+  if (activeChunkHandler || activeCompleteHandler) {
+    windowRemoveAllListeners(AI_CHAT_V2_STREAM_CHUNK);
+    windowRemoveAllListeners(AI_CHAT_V2_STREAM_COMPLETE);
+  }
+  activeChunkHandler = null;
+  activeCompleteHandler = null;
+}
+
 /**
  * Get available OpenAI-compatible models.
  *
@@ -70,40 +82,35 @@ export async function streamChatV2Message(
   onComplete: (chunk: ChatV2StreamChunk) => void,
   onError: (error: Error) => void
 ): Promise<void> {
-  return new Promise<void>((resolve) => {
-    const chunkHandler = (raw: string): void => {
-      try {
-        const chunk: ChatV2StreamChunk = JSON.parse(raw);
-        onChunk(chunk);
-      } catch (err) {
-        console.error("aiChatV2: parse chunk error", err);
+  const chunkHandler = (raw: string): void => {
+    try {
+      const chunk: ChatV2StreamChunk = JSON.parse(raw);
+      onChunk(chunk);
+    } catch (err) {
+      console.error("aiChatV2: parse chunk error", err);
+    }
+  };
+
+  const completeHandler = (raw: string): void => {
+    try {
+      const chunk: ChatV2StreamChunk = JSON.parse(raw);
+      if (chunk.eventType === "error" && chunk.errorMessage) {
+        onError(new Error(chunk.errorMessage));
+      } else {
+        onComplete(chunk);
       }
-    };
+    } catch (err) {
+      onError(err instanceof Error ? err : new Error("Stream completion parse error"));
+    }
+    clearChatV2StreamListeners();
+  };
 
-    const completeHandler = (raw: string): void => {
-      try {
-        const chunk: ChatV2StreamChunk = JSON.parse(raw);
-        if (chunk.eventType === "error" && chunk.errorMessage) {
-          onError(new Error(chunk.errorMessage));
-        } else {
-          onComplete(chunk);
-        }
-      } catch (err) {
-        onError(err instanceof Error ? err : new Error("Stream completion parse error"));
-      }
-      windowRemoveAllListeners(AI_CHAT_V2_STREAM_CHUNK);
-      windowRemoveAllListeners(AI_CHAT_V2_STREAM_COMPLETE);
-      resolve();
-    };
-
-    // Remove any stale listeners from a previous stream before registering.
-    windowRemoveAllListeners(AI_CHAT_V2_STREAM_CHUNK);
-    windowRemoveAllListeners(AI_CHAT_V2_STREAM_COMPLETE);
-    windowReceive(AI_CHAT_V2_STREAM_CHUNK, chunkHandler);
-    windowReceive(AI_CHAT_V2_STREAM_COMPLETE, completeHandler);
-
-    windowSend(AI_CHAT_V2_STREAM, request);
-  });
+  clearChatV2StreamListeners();
+  activeChunkHandler = chunkHandler;
+  activeCompleteHandler = completeHandler;
+  windowReceive(AI_CHAT_V2_STREAM_CHUNK, chunkHandler);
+  windowReceive(AI_CHAT_V2_STREAM_COMPLETE, completeHandler);
+  windowSend(AI_CHAT_V2_STREAM, request);
 }
 
 /**

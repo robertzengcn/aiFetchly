@@ -1714,5 +1714,13 @@ export default {
     no_conversations: "暂无对话",
     clear_confirm_title: "清空对话？",
     clear_confirm_body: "这将删除该对话中的所有消息。",
+    tool_call_title: "工具调用",
+    tool_result_title: "工具结果",
+    tool_name: "工具",
+    tool_arguments: "参数",
+    tool_result_details: "详情",
+    permission_denied: "权限被拒绝。该工具不会执行。",
+    permission_resume_failed: "授权后无法继续执行该工具。",
+    permission_resume_no_tool_id: "缺少工具调用信息，无法继续执行。",
   },
 };
