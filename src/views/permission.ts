@@ -1,42 +1,43 @@
-import router from '@/views/router'
-import NProgress from 'nprogress'
-import 'nprogress/nprogress.css'
+import { watch } from "vue";
+import router from "@/views/router";
+import NProgress from "nprogress";
+import "nprogress/nprogress.css";
 // import { Message } from 'element-ui'
 //import { Router } from 'vue-router'
-import { UserModule } from '@/views/store/modules/user'
-import { PermissionModule } from '@/views/store/modules/permission'
-import i18n from '@/views/lang' // Internationalization
-import settings from '@/views/settings'
+import { UserModule } from "@/views/store/modules/user";
+import { PermissionModule } from "@/views/store/modules/permission";
+import i18n from "@/views/lang"; // Internationalization
+import settings from "@/views/settings";
 
 // NProgress.configure({ showSpinner: false })
 
-const whiteList = ['/login', '/auth-redirect']
+const whiteList = ["/login", "/auth-redirect"];
 
 const getPageTitle = (title: string) => {
-  if (title && title.startsWith('route.')) {
-    const pageName = i18n.global.t(title)
-    return `${pageName} - ${settings.title}`
+  if (title && title.startsWith("route.")) {
+    const pageName = i18n.global.t(title);
+    return `${pageName} - ${settings.title}`;
   }
-  return `${settings.title}`
-}
+  return `${settings.title}`;
+};
 
 router.beforeEach(async (to, from, next: any) => {
   // Start progress bar
-  NProgress.start()
-  let userinfo
-  try{
-  userinfo=await  UserModule.GetUserInfo()
-  console.log("userinfo")
-  console.log(userinfo)
-  }catch(err){
-    console.log(err)
+  NProgress.start();
+  let userinfo;
+  try {
+    userinfo = await UserModule.GetUserInfo();
+    console.log("userinfo");
+    console.log(userinfo);
+  } catch (err) {
+    console.log(err);
   }
   // Determine whether the user has logged in
-  if (userinfo&&userinfo.email.length>0&&userinfo.name.length>0) {
-    if (to.path === '/login') {
+  if (userinfo && userinfo.email.length > 0 && userinfo.name.length > 0) {
+    if (to.path === "/login") {
       // If is logged in, redirect to the home page
-      next({ path: '/' })
-      NProgress.done()
+      next({ path: "/" });
+      NProgress.done();
     } else {
       // console.log(UserModule.roles)
       // Check whether the user has obtained his permission roles
@@ -46,8 +47,8 @@ router.beforeEach(async (to, from, next: any) => {
       //     console.log('user role empty, login failure')
       //     next(`/login?redirect=${to.path}`)
       //   } else {
-          
-          next()
+
+      next();
       //   }
       // } catch (err) {
       //   console.error(err)
@@ -62,28 +63,39 @@ router.beforeEach(async (to, from, next: any) => {
       // }
     }
   } else {
-    console.log("to path is"+to.path)
+    console.log("to path is" + to.path);
     // Has no token
     if (whiteList.indexOf(to.path) !== -1) {
       // In the free login whitelist, go directly
-      next()
+      next();
     } else {
-      const topath=`/login?redirect=${to.path}`
-     //const topath=`/login`
+      const topath = `/login?redirect=${to.path}`;
+      //const topath=`/login`
 
-      console.log('no token')
-      console.log(topath)
+      console.log("no token");
+      console.log(topath);
       // Other pages that do not have permission to access are redirected to the login page.
-      next(topath)
-      NProgress.done()
+      next(topath);
+      NProgress.done();
     }
   }
-})
+});
+
+const applyPageTitle = (title: unknown): void => {
+  document.title = getPageTitle((title as string) ?? "");
+};
 
 router.afterEach((to) => {
   // Finish progress bar
   // hack: https://github.com/PanJiaChen/vue-element-admin/pull/2939
-  NProgress.done()
+  NProgress.done();
   // set page title
-  document.title = getPageTitle(to.meta.title as string)
-})
+  applyPageTitle(to.meta.title);
+});
+
+// afterEach only fires on navigation, so switching the language without
+// changing routes would leave document.title stuck in the old locale.
+// Re-translate the current route's title whenever the global locale changes.
+watch(i18n.global.locale, () => {
+  applyPageTitle(router.currentRoute.value.meta.title);
+});
