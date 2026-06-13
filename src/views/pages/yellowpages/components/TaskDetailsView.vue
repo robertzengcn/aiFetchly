@@ -6,7 +6,7 @@
         <v-card>
           <v-card-title class="d-flex align-center">
             <v-icon class="mr-2">mdi-information</v-icon>
-            Task Information
+            {{ t("yellowPages.detail_task_information") }}
           </v-card-title>
           <v-card-text>
             <v-list>
@@ -14,7 +14,7 @@
                 <template v-slot:prepend>
                   <v-icon>mdi-format-title</v-icon>
                 </template>
-                <v-list-item-title>Name</v-list-item-title>
+                <v-list-item-title>{{ t("yellowPages.detail_field_name") }}</v-list-item-title>
                 <v-list-item-subtitle>{{ task.name }}</v-list-item-subtitle>
               </v-list-item>
 
@@ -24,7 +24,7 @@
                     {{ getPlatformIcon(task.platform) }}
                   </v-icon>
                 </template>
-                <v-list-item-title>Platform</v-list-item-title>
+                <v-list-item-title>{{ t("yellowPages.detail_field_platform") }}</v-list-item-title>
                 <v-list-item-subtitle>{{ task.platform }}</v-list-item-subtitle>
               </v-list-item>
 
@@ -32,7 +32,7 @@
                 <template v-slot:prepend>
                   <v-icon>mdi-tag</v-icon>
                 </template>
-                <v-list-item-title>Keywords</v-list-item-title>
+                <v-list-item-title>{{ t("yellowPages.detail_field_keywords") }}</v-list-item-title>
                 <v-list-item-subtitle>{{ task.keywords.join(', ') }}</v-list-item-subtitle>
               </v-list-item>
 
@@ -40,7 +40,7 @@
                 <template v-slot:prepend>
                   <v-icon>mdi-map-marker</v-icon>
                 </template>
-                <v-list-item-title>Location</v-list-item-title>
+                <v-list-item-title>{{ t("yellowPages.detail_field_location") }}</v-list-item-title>
                 <v-list-item-subtitle>{{ task.location }}</v-list-item-subtitle>
               </v-list-item>
 
@@ -48,7 +48,7 @@
                 <template v-slot:prepend>
                   <v-icon>mdi-file-document</v-icon>
                 </template>
-                <v-list-item-title>Max Pages</v-list-item-title>
+                <v-list-item-title>{{ t("yellowPages.detail_field_max_pages") }}</v-list-item-title>
                 <v-list-item-subtitle>{{ task.max_pages }}</v-list-item-subtitle>
               </v-list-item>
 
@@ -56,7 +56,7 @@
                 <template v-slot:prepend>
                   <v-icon>mdi-priority-high</v-icon>
                 </template>
-                <v-list-item-title>Priority</v-list-item-title>
+                <v-list-item-title>{{ t("yellowPages.detail_field_priority") }}</v-list-item-title>
                 <v-list-item-subtitle>
                   <v-chip
                     :color="getPriorityColor(task.priority)"
@@ -77,7 +77,7 @@
         <v-card>
           <v-card-title class="d-flex align-center">
             <v-icon class="mr-2">mdi-chart-line</v-icon>
-            Task Status
+            {{ t("yellowPages.detail_task_status") }}
           </v-card-title>
           <v-card-text>
             <v-list>
@@ -87,7 +87,7 @@
                     {{ getStatusIcon(task.status) }}
                   </v-icon>
                 </template>
-                <v-list-item-title>Status</v-list-item-title>
+                <v-list-item-title>{{ t("yellowPages.detail_field_status") }}</v-list-item-title>
                 <v-list-item-subtitle>
                   <v-chip
                     :color="getStatusColor(task.status)"
@@ -103,7 +103,7 @@
                 <template v-slot:prepend>
                   <v-icon>mdi-progress-clock</v-icon>
                 </template>
-                <v-list-item-title>Progress</v-list-item-title>
+                <v-list-item-title>{{ t("yellowPages.detail_field_progress") }}</v-list-item-title>
                 <v-list-item-subtitle>
                   <div class="d-flex align-center">
                     <v-progress-linear
@@ -123,7 +123,7 @@
                 <template v-slot:prepend>
                   <v-icon>mdi-database</v-icon>
                 </template>
-                <v-list-item-title>Results Count</v-list-item-title>
+                <v-list-item-title>{{ t("yellowPages.detail_field_results_count") }}</v-list-item-title>
                 <v-list-item-subtitle>{{ task.results_count }}</v-list-item-subtitle>
               </v-list-item>
 
@@ -131,7 +131,7 @@
                 <template v-slot:prepend>
                   <v-icon>mdi-calendar</v-icon>
                 </template>
-                <v-list-item-title>Created</v-list-item-title>
+                <v-list-item-title>{{ t("yellowPages.detail_field_created") }}</v-list-item-title>
                 <v-list-item-subtitle>{{ formatDate(task.created_at) }}</v-list-item-subtitle>
               </v-list-item>
 
@@ -139,7 +139,7 @@
                 <template v-slot:prepend>
                   <v-icon>mdi-update</v-icon>
                 </template>
-                <v-list-item-title>Last Updated</v-list-item-title>
+                <v-list-item-title>{{ t("yellowPages.detail_field_last_updated") }}</v-list-item-title>
                 <v-list-item-subtitle>{{ formatDate(task.updated_at) }}</v-list-item-subtitle>
               </v-list-item>
             </v-list>
@@ -154,7 +154,7 @@
         <v-card>
           <v-card-title class="d-flex align-center">
             <v-icon class="mr-2">mdi-cog</v-icon>
-            Task Actions
+            {{ t("yellowPages.detail_task_actions") }}
           </v-card-title>
           <v-card-text>
             <div class="d-flex flex-wrap gap-2">
@@ -165,7 +165,7 @@
                 prepend-icon="mdi-play"
                 @click="$emit('start', task)"
               >
-                Start Task
+                {{ t("yellowPages.detail_action_start") }}
               </v-btn>
 
               <v-btn
@@ -174,7 +174,7 @@
                 prepend-icon="mdi-stop"
                 @click="$emit('stop', task)"
               >
-                Stop Task
+                {{ t("yellowPages.detail_action_stop") }}
               </v-btn>
 
               <!-- Pause/Resume Button -->
@@ -184,7 +184,7 @@
                 prepend-icon="mdi-pause"
                 @click="$emit('pause', task)"
               >
-                Pause Task
+                {{ t("yellowPages.detail_action_pause") }}
               </v-btn>
 
               <v-btn
@@ -193,7 +193,7 @@
                 prepend-icon="mdi-play"
                 @click="$emit('resume', task)"
               >
-                Resume Task
+                {{ t("yellowPages.detail_action_resume") }}
               </v-btn>
 
               <!-- View Results -->
@@ -203,7 +203,7 @@
                 prepend-icon="mdi-chart-bar"
                 @click="$emit('view-results', task)"
               >
-                View Results
+                {{ t("yellowPages.detail_action_view_results") }}
               </v-btn>
 
               <!-- Edit Task -->
@@ -212,7 +212,7 @@
                 prepend-icon="mdi-pencil"
                 @click="$emit('edit', task)"
               >
-                Edit Task
+                {{ t("yellowPages.detail_action_edit") }}
               </v-btn>
 
               <!-- Delete Task -->
@@ -222,7 +222,7 @@
                 variant="outlined"
                 @click="$emit('delete', task)"
               >
-                Delete Task
+                {{ t("yellowPages.detail_action_delete") }}
               </v-btn>
 
               <!-- Close -->
@@ -232,7 +232,7 @@
                 variant="outlined"
                 @click="$emit('close')"
               >
-                Close
+                {{ t("yellowPages.detail_action_close") }}
               </v-btn>
             </div>
           </v-card-text>
@@ -243,6 +243,10 @@
 </template>
 
 <script setup lang="ts">
+import { useI18n } from "vue-i18n";
+
+const { t } = useI18n();
+
 // Props
 interface Props {
   task: any
@@ -304,12 +308,12 @@ const getStatusIcon = (status: string) => {
 }
 
 const getStatusText = (status: string) => {
-  const texts = {
-    pending: 'Pending',
-    running: 'Running',
-    completed: 'Completed',
-    failed: 'Failed',
-    paused: 'Paused'
+  const texts: Record<string, string> = {
+    pending: t('yellowPages.detail_status_pending'),
+    running: t('yellowPages.detail_status_running'),
+    completed: t('yellowPages.detail_status_completed'),
+    failed: t('yellowPages.detail_status_failed'),
+    paused: t('yellowPages.detail_status_paused'),
   }
   return texts[status] || status
 }
@@ -348,4 +352,4 @@ const formatDate = (dateString: string) => {
 .gap-2 {
   gap: 8px;
 }
-</style> 
+</style>
