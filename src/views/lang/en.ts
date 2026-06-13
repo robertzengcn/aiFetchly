@@ -1749,7 +1749,7 @@ export default {
     open_file_tooltip: "Open file",
   },
   aiChatV2: {
-    title: "AI Assistant (V2)",
+    title: "AI Assistant",
     new_conversation: "New conversation",
     empty_title: "Start a conversation",
     empty_description: "Ask anything. Your history stays on this device.",
@@ -1759,6 +1759,7 @@ export default {
     retry: "Retry",
     clear_conversation: "Clear conversation",
     clear_all: "Clear all",
+    clear_chat: "Clear chat",
     loading_models: "Loading models…",
     loading_history: "Loading history…",
     streaming: "Generating…",
@@ -1768,6 +1769,8 @@ export default {
     server_unavailable: "Could not connect to the AI server.",
     unsupported_tool_call:
       "This assistant requested a tool that is not supported yet.",
+    conversation_history: "Conversation History",
+    no_conversations: "No conversations yet",
     clear_confirm_title: "Clear conversation?",
     clear_confirm_body: "This removes all messages in this conversation.",
   },
