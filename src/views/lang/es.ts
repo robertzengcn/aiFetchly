@@ -76,7 +76,7 @@ export default {
     download_template: "Descargar plantilla",
     drag_drop_file:
       "Arrastre y suelte su archivo aquí o haga clic para seleccionar un archivo",
-    search: "Market Insight",
+    search: "Información de Mercado",
     replace: "Reemplazar",
   },
   route: {
@@ -352,12 +352,12 @@ export default {
     search_description:
       "Extrayendo datos de sitios web desde motores de búsqueda",
     yellowpage: "Páginas Amarillas",
-    yellowpage_scraper: "Directory Assistant",
-    yellowpage_description: "Aligning public directory data",
+    yellowpage_scraper: "Asistente de Directorio",
+    yellowpage_description: "Alineando datos públicos de directorio",
     create_yellow_pages_task: "Crear Tarea de Asistente de Directorio",
     edit_yellow_pages_task: "Editar Tarea de Asistente de Directorio",
     configure_yellow_pages_task:
-      "Configure and create a new Directory Assistant task",
+      "Configurar y crear una nueva tarea de Asistente de Directorio",
     modify_yellow_pages_task:
       "Modificar tarea existente de data alignment de Páginas Amarillas",
     task_configuration: "Configuración de tarea",
@@ -425,10 +425,10 @@ export default {
     cancel: "Cancelar",
     task_created_successfully: "Tarea creada exitosamente",
     task_created_message:
-      "Your Directory Assistant task has been created successfully!",
+      "¡Su tarea de Asistente de Directorio se ha creado correctamente!",
     task_updated_successfully: "Tarea actualizada exitosamente",
     task_updated_message:
-      "Your Directory Assistant task has been updated successfully!",
+      "¡Su tarea de Asistente de Directorio se ha actualizado correctamente!",
     error_creating_task: "Error al crear tarea",
     view_all_tasks: "Ver todas las tareas",
     view_task_details: "Ver detalles de tarea",
@@ -468,13 +468,14 @@ export default {
     video_download_title: "Descarga de video",
     video_download_subtitle: "Descargar video",
     video_download_description: "Descargar video de plataforma",
-    emailextraction: "Contact Profile Insights",
-    emailextraction_subtitle: "Contact Profile Insights",
+    emailextraction: "Información de Perfiles de Contacto",
+    emailextraction_subtitle: "Información de Perfiles de Contacto",
     emailextraction_description: "Build contact profiles from public pages",
     account_manage: "Gestión de cuentas",
     account_manage_subtitle: "Gestión de cuentas",
     account_manage_description: "Gestionar cuentas en el sistema",
-    yellow_pages_task_management: "Directory Assistant Task Management",
+    yellow_pages_task_management:
+      "Gestión de Tareas de Asistente de Directorio",
     yellow_pages_task_management_description:
       "Manage data alignment tasks for directory sources",
     new_task: "Nueva tarea",
@@ -863,8 +864,8 @@ export default {
     failed: "Extracción de correos fallida",
     searchResult_empty:
       "No se encontraron resultados de búsqueda para extracción de correos",
-    create_task: "Create Contact Profile Insights Task",
-    edit_task: "Edit Contact Profile Insights Task",
+    create_task: "Crear Tarea de Información de Contactos",
+    edit_task: "Editar Tarea de Información de Contactos",
     update_success: "Tarea actualizada correctamente",
     update_error: "Error al actualizar la tarea",
     load_task_error: "Error al cargar datos de la tarea",
@@ -1055,7 +1056,7 @@ export default {
     taskId: "ID de tarea",
     status: "Estado de tarea",
     type: "Tipo de tarea",
-    create_task: "Create Contact Profile Insights Task",
+    create_task: "Crear Tarea de Información de Contactos",
   },
   emailtasksendlog: {
     id: "ID",
@@ -1233,8 +1234,8 @@ export default {
     calculating: "Calculando...",
     calculation_failed: "Error al calcular próxima ejecución",
     search_task: "Tarea de búsqueda",
-    email_marketing: "Outreach Campaign",
-    email_extract: "Contact Profile Insights",
+    email_marketing: "Campaña de Divulgación",
+    email_extract: "Información de Perfiles de Contacto",
     bulk_email: "Correo masivo",
     google_maps: "Google Maps",
     yandex_maps: "Yandex Maps",
@@ -1551,7 +1552,7 @@ export default {
     list_unknown_error_occurred: "Ocurrió un error desconocido",
   },
   googleMaps: {
-    title: "Local Business Finder",
+    title: "Buscador de Negocios Locales",
     description: "Search public local business sources by keyword and location",
     query_label: "Palabra clave",
     query_placeholder: "ej. dentista, restaurante italiano, fontanero",
@@ -1608,7 +1609,7 @@ export default {
     proxy_placeholder: "Seleccionar proxies...",
   },
   yandexMaps: {
-    title: "Local Business Finder",
+    title: "Buscador de Negocios Locales",
     description: "Search public local business sources by keyword and location",
     query_label: "Palabra clave",
     query_placeholder: "ej. dentista, restaurante italiano, fontanero",
@@ -1673,7 +1674,7 @@ export default {
     delete_btn: "Eliminar",
   },
   mapScraper: {
-    title: "Local Business Finder",
+    title: "Buscador de Negocios Locales",
     description:
       "Find public local business information through neutral source channels",
     provider_google: "Channel Alpha (Global)",
