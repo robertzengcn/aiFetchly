@@ -407,7 +407,15 @@ const onSend = async (text: string): Promise<void> => {
     timestamp: nowIso,
     messageType: "message" as MessageType,
   };
-  messages.value = [...messages.value, assistant];
+  // Lazily add the assistant placeholder only when real content arrives.
+  // This keeps tool_call/tool_result chunks (which typically arrive before
+  // the final text tokens) visually above the assistant text message.
+  let assistantAdded = false;
+  const ensureAssistantAdded = (): void => {
+    if (assistantAdded) return;
+    messages.value = [...messages.value, assistant];
+    assistantAdded = true;
+  };
 
   isStreaming.value = true;
 
@@ -429,6 +437,7 @@ const onSend = async (text: string): Promise<void> => {
           activeAssistantMessageId.value = chunk.messageId;
         }
       } else if (chunk.eventType === "token" && chunk.contentDelta) {
+        ensureAssistantAdded();
         assistant.content += chunk.contentDelta;
         const idx = messages.value.findIndex((m) => m.id === assistant.id);
         if (idx !== -1) {
@@ -460,7 +469,12 @@ const onSend = async (text: string): Promise<void> => {
       isStreaming.value = false;
       activeAssistantMessageId.value = null;
       if (complete.fullContent !== undefined) {
+        ensureAssistantAdded();
         assistant.content = complete.fullContent;
+        const idx = messages.value.findIndex((m) => m.id === assistant.id);
+        if (idx !== -1) {
+          messages.value[idx] = { ...messages.value[idx], content: assistant.content };
+        }
       }
       if (complete.conversationId) {
         activeConversationId.value = complete.conversationId;
@@ -472,7 +486,8 @@ const onSend = async (text: string): Promise<void> => {
       isStreaming.value = false;
       activeAssistantMessageId.value = null;
       streamError.value = error.message;
-      if (assistant.content.length === 0) {
+      // Only remove if the placeholder was actually added and is still empty.
+      if (assistantAdded && assistant.content.length === 0) {
         messages.value = messages.value.filter((m) => m.id !== assistant.id);
       }
     }
