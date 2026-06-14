@@ -32,7 +32,9 @@ export class AIChatPlanModel extends BaseDb {
     entity.objective = input.objective;
     entity.status = input.status;
     entity.currentVersion = 0;
-    entity.metadata = input.metadata ? JSON.stringify(input.metadata) : null;
+    entity.metadata = input.metadata
+      ? JSON.stringify(input.metadata)
+      : undefined;
     return await this.repository.save(entity);
   }
 

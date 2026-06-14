@@ -10,8 +10,15 @@ import {
   type ToolFunction,
 } from "@/api/aiChatApi";
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
+import { AIChatPlanModule } from "@/modules/AIChatPlanModule";
 import { buildOpenAITranscript } from "@/service/OpenAIChatTranscriptBuilder";
 import { OpenAIStreamAccumulator } from "@/service/OpenAIStreamAccumulator";
+import { buildPlanModeSystemPrompt } from "@/service/PlanModePromptBuilder";
+import {
+  checkPlanModeToolPolicy,
+  isPlanToolName,
+} from "@/service/PlanModeToolPolicy";
+import { PlanModeToolRegistry } from "@/service/PlanModeToolRegistry";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import { SkillExecutor } from "@/service/SkillExecutor";
 import {
@@ -25,7 +32,21 @@ import {
   AI_CHAT_V2_STREAM_COMPLETE,
   AI_CHAT_V2_CLEAR_CONVERSATION,
   AI_CHAT_V2_CLEAR_ALL,
+  AI_CHAT_V2_PLAN_STATE,
+  AI_CHAT_V2_ANSWER_QUESTION,
+  AI_CHAT_V2_APPROVE_PLAN,
+  AI_CHAT_V2_REJECT_PLAN,
+  AI_CHAT_V2_REQUEST_PLAN_CHANGES,
+  AI_CHAT_V2_PLAN_VERSIONS,
 } from "@/config/channellist";
+import type {
+  AIChatPlanStateView,
+  AIChatPlanQuestionView,
+  AIChatPlanVersionView,
+  AskUserQuestionAnswer,
+  AskUserQuestionPayload,
+  SubmitPlanForApprovalPayload,
+} from "@/entityTypes/aiChatPlanTypes";
 import type { CommonMessage } from "@/entityTypes/commonType";
 import type {
   ChatV2StreamRequest,
@@ -67,9 +88,42 @@ type PendingPermissionState = {
 
 let pendingPermissionState: PendingPermissionState | null = null;
 
+type PendingPlanQuestionState = {
+  event: IpcEventLike;
+  module: AIChatV2Module;
+  planModule: AIChatPlanModule;
+  api: AiChatApi;
+  req: ChatV2StreamRequest;
+  conversationId: string;
+  assistantMessageId: string;
+  conversationMessages: OpenAIChatMessage[];
+  abortController: AbortController;
+  nextRound: number;
+  toolCallId: string;
+  questionId: string;
+  planId: string;
+};
+
+let pendingPlanQuestionState: PendingPlanQuestionState | null = null;
+
 function hasPendingPermissionForConversation(conversationId: string): boolean {
   const pendingState = pendingPermissionState as PendingPermissionState | null;
   return pendingState?.conversationId === conversationId;
+}
+
+function hasPendingPlanQuestionForConversation(
+  conversationId: string
+): boolean {
+  return pendingPlanQuestionState?.conversationId === conversationId;
+}
+
+function isActivePlanState(plan?: AIChatPlanStateView | null): boolean {
+  if (!plan) return false;
+  return (
+    plan.status !== "completed" &&
+    plan.status !== "cancelled" &&
+    plan.status !== "rejected"
+  );
 }
 
 function isAIEnabled(): boolean {
@@ -245,6 +299,13 @@ async function handleClearConversation(
     }
     const module = new AIChatV2Module();
     const deleted = await module.clearConversation(conversationId);
+    // Cascade: clear any durable plan state for this conversation.
+    try {
+      const planModule = new AIChatPlanModule();
+      await planModule.clearConversationPlanState(conversationId);
+    } catch (err) {
+      console.error("[ai-chat-v2] clearConversationPlanState failed:", err);
+    }
     return ok({ deleted });
   } catch (err) {
     return denied(userSafeError(err));
@@ -295,6 +356,9 @@ function validateStreamRequest(
   ) {
     return "maxTokens must be a positive integer";
   }
+  if (req.mode !== undefined && req.mode !== "chat" && req.mode !== "plan") {
+    return "mode must be 'chat' or 'plan'";
+  }
   return null;
 }
 
@@ -332,6 +396,16 @@ async function handleStream(event: IpcEventLike, data: string): Promise<void> {
   }
 
   const module = new AIChatV2Module();
+  const planModule = new AIChatPlanModule();
+  let planState: AIChatPlanStateView | null = null;
+  if (req.conversationId && req.conversationId.startsWith("v2-")) {
+    try {
+      planState = await planModule.getPlanState(req.conversationId);
+    } catch {
+      // ignore lookup failures before conversation resolution
+    }
+  }
+  const isPlanMode = req.mode === "plan" || isActivePlanState(planState);
   let conversationId: string;
   let transcript: ReturnType<typeof buildOpenAITranscript>;
   let assistantMessageId: string;
@@ -342,6 +416,19 @@ async function handleStream(event: IpcEventLike, data: string): Promise<void> {
   try {
     conversationId = module.createConversationIfNeeded(req.conversationId);
     currentConversationId = conversationId;
+
+    // Resolve plan state now that we have the final conversation id.
+    if (isPlanMode) {
+      if (!planState) {
+        planState = await planModule.ensurePlanForConversation({
+          conversationId,
+          title: req.message.slice(0, 80) || "New plan",
+          objective: req.message.slice(0, 500),
+        });
+      } else if (planState.conversationId !== conversationId) {
+        planState = await planModule.getPlanState(conversationId);
+      }
+    }
 
     // Save user message before remote call; capture its messageId so we can
     // exclude ONLY this row from the transcript (it is re-appended via
@@ -354,10 +441,16 @@ async function handleStream(event: IpcEventLike, data: string): Promise<void> {
 
     // Load history and build transcript.
     const history = await module.getConversationMessages(conversationId);
+    const basePrompt = req.systemPrompt ?? module.getDefaultSystemPrompt();
     transcript = buildOpenAITranscript({
       history: history.filter((r) => r.messageId !== savedUser.messageId),
       currentUserMessage: req.message,
-      systemPrompt: req.systemPrompt ?? module.getDefaultSystemPrompt(),
+      systemPrompt: isPlanMode
+        ? buildPlanModeSystemPrompt({
+            baseSystemPrompt: basePrompt,
+            planState,
+          })
+        : basePrompt,
       filterSource: "chat-v2",
       maxMessages: CHAT_V2_PHASE1_MAX_HISTORY_MESSAGES,
     });
@@ -379,6 +472,9 @@ async function handleStream(event: IpcEventLike, data: string): Promise<void> {
   const api = new AiChatApi();
   const toolFunctions = await SkillRegistry.getAllToolFunctions();
   const openAITools = toOpenAITools(toolFunctions);
+  const allOpenAITools = isPlanMode
+    ? [...openAITools, ...PlanModeToolRegistry.toOpenAITools()]
+    : openAITools;
   const conversationMessages: OpenAIChatMessage[] = [...transcript.messages];
 
   const abortController = new AbortController();
@@ -402,13 +498,16 @@ async function handleStream(event: IpcEventLike, data: string): Promise<void> {
     await continueStreamAfterTools({
       event,
       module,
+      planModule,
       api,
       req,
       conversationId,
       assistantMessageId,
       conversationMessages,
       abortController,
-      openAITools,
+      openAITools: allOpenAITools,
+      planState,
+      isPlanMode,
       startRound: 0,
     });
   } catch (err) {
@@ -422,7 +521,13 @@ async function handleStream(event: IpcEventLike, data: string): Promise<void> {
   } finally {
     const waitingForPermission =
       hasPendingPermissionForConversation(conversationId);
-    if (currentConversationId === conversationId && !waitingForPermission) {
+    const waitingForPlanQuestion =
+      hasPendingPlanQuestionForConversation(conversationId);
+    if (
+      currentConversationId === conversationId &&
+      !waitingForPermission &&
+      !waitingForPlanQuestion
+    ) {
       currentAbortController = null;
       currentConversationId = null;
     }
@@ -442,6 +547,16 @@ function handleStop(): void {
       fullContent: "",
     });
   }
+  if (pendingPlanQuestionState) {
+    const pending = pendingPlanQuestionState;
+    pendingPlanQuestionState = null;
+    sendComplete(pending.event, {
+      eventType: "cancelled",
+      conversationId: pending.conversationId,
+      messageId: pending.assistantMessageId,
+      fullContent: "",
+    });
+  }
   if (currentAbortController) {
     currentAbortController.abort();
     currentAbortController = null;
@@ -451,6 +566,7 @@ function handleStop(): void {
 async function continueStreamAfterTools(state: {
   event: IpcEventLike;
   module: AIChatV2Module;
+  planModule?: AIChatPlanModule;
   api: AiChatApi;
   req: ChatV2StreamRequest;
   conversationId: string;
@@ -458,6 +574,8 @@ async function continueStreamAfterTools(state: {
   conversationMessages: OpenAIChatMessage[];
   abortController: AbortController;
   openAITools: OpenAITool[];
+  planState?: AIChatPlanStateView | null;
+  isPlanMode?: boolean;
   startRound: number;
 }): Promise<void> {
   let activeAccumulator: OpenAIStreamAccumulator | null = null;
@@ -557,6 +675,68 @@ async function continueStreamAfterTools(state: {
           toolName: call.name,
           toolArguments: call.arguments,
         });
+
+        // Plan tools are intercepted and handled locally — never dispatched
+        // to SkillExecutor. Each one either pauses the stream (AskUserQuestion)
+        // or records a new plan version (SubmitPlanForApproval).
+        if (state.isPlanMode && isPlanToolName(call.name)) {
+          if (call.name === "AskUserQuestion") {
+            const paused = await handlePlanToolAskUserQuestion({
+              state,
+              call,
+              round,
+            });
+            if (paused) return;
+            // If not paused (validation failed or no pending state stored),
+            // fall through to push the synthetic tool result below.
+            continue;
+          }
+          if (call.name === "SubmitPlanForApproval") {
+            await handlePlanToolSubmitForApproval({
+              state,
+              call,
+            });
+            continue;
+          }
+        }
+
+        // Plan-mode policy gate: block high-impact tools before the plan is
+        // approved. The AI receives a structured "plan approval required"
+        // result so it can explain the situation to the user.
+        if (state.isPlanMode && state.planState) {
+          const skillDef = SkillRegistry.getSkill(call.name);
+          const policyDecision = checkPlanModeToolPolicy({
+            toolName: call.name,
+            skillPermissionCategory: skillDef?.permissionCategory,
+            context: {
+              conversationId: state.conversationId,
+              planState: state.planState,
+            },
+          });
+          if (!policyDecision.allowed) {
+            const blockedContent = serializeToolResultContent({
+              success: false,
+              planApprovalRequired: true,
+              reason: policyDecision.reason ?? "Plan approval required.",
+            });
+            sendChunk(state.event, {
+              eventType: "plan_blocked_tool" as never,
+              conversationId: state.conversationId,
+              messageId: state.assistantMessageId,
+              toolCallId: call.id,
+              toolName: call.name,
+              fullContent: blockedContent,
+              planBlockedToolName: call.name,
+              planBlockedReason: policyDecision.reason ?? undefined,
+            } as ChatV2StreamChunk);
+            state.conversationMessages.push({
+              role: "tool",
+              tool_call_id: call.id,
+              content: blockedContent,
+            });
+            continue;
+          }
+        }
 
         const toolResult = await SkillExecutor.execute(
           call.name,
@@ -670,6 +850,166 @@ async function continueStreamAfterTools(state: {
       activeAccumulator,
     });
   }
+}
+
+type ContinueStreamState = Parameters<typeof continueStreamAfterTools>[0];
+
+type ParsedToolCall = {
+  index: number;
+  id?: string;
+  name?: string;
+  arguments?: Record<string, unknown>;
+  ok: boolean;
+};
+
+/**
+ * Handle the AskUserQuestion plan tool: persist the question, emit a
+ * structured chunk to the renderer, and pause the stream by storing a
+ * pendingPlanQuestionState. Returns true when the stream was paused.
+ */
+async function handlePlanToolAskUserQuestion(args: {
+  state: ContinueStreamState;
+  call: ParsedToolCall;
+  round: number;
+}): Promise<boolean> {
+  const { state, call } = args;
+  if (!state.planModule || !state.planState) {
+    return false;
+  }
+  if (!call.id || !call.name) return false;
+
+  const payload = (call.arguments ?? {}) as unknown as AskUserQuestionPayload;
+  if (!payload || !Array.isArray(payload.questions)) {
+    return false;
+  }
+
+  let questionView: AIChatPlanQuestionView;
+  try {
+    questionView = await state.planModule.saveQuestion({
+      conversationId: state.conversationId,
+      planId: state.planState.planId,
+      payload,
+    });
+  } catch (err) {
+    console.error("[ai-chat-v2] saveQuestion failed:", err);
+    const errContent = serializeToolResultContent({
+      success: false,
+      error:
+        err instanceof Error
+          ? err.message
+          : "AskUserQuestion payload was rejected.",
+    });
+    state.conversationMessages.push({
+      role: "tool",
+      tool_call_id: call.id,
+      content: errContent,
+    });
+    return false;
+  }
+
+  sendChunk(state.event, {
+    eventType: "ask_user_question" as never,
+    conversationId: state.conversationId,
+    messageId: state.assistantMessageId,
+    toolCallId: call.id,
+    toolName: call.name,
+    question: questionView,
+    planStateView: state.planState,
+  } as ChatV2StreamChunk);
+
+  // Synthetic tool result so the transcript has a well-formed tool/assistant
+  // pair; the real answer is filled in later when the user responds.
+  const ackContent = serializeToolResultContent({
+    success: true,
+    status: "awaiting_answer",
+    questionId: questionView.questionId,
+  });
+  state.conversationMessages.push({
+    role: "tool",
+    tool_call_id: call.id,
+    content: ackContent,
+  });
+
+  pendingPlanQuestionState = {
+    event: state.event,
+    module: state.module,
+    planModule: state.planModule,
+    api: state.api,
+    req: state.req,
+    conversationId: state.conversationId,
+    assistantMessageId: state.assistantMessageId,
+    conversationMessages: state.conversationMessages,
+    abortController: state.abortController,
+    nextRound: args.round + 1,
+    toolCallId: call.id,
+    questionId: questionView.questionId,
+    planId: state.planState.planId,
+  };
+  console.log(
+    `[ai-chat-v2] AskUserQuestion paused (questionId=${
+      questionView.questionId
+    }, nextRound=${args.round + 1})`
+  );
+  return true;
+}
+
+/**
+ * Handle the SubmitPlanForApproval plan tool: record a new plan version,
+ * transition status to awaiting_approval, and emit a plan_submitted chunk.
+ */
+async function handlePlanToolSubmitForApproval(args: {
+  state: ContinueStreamState;
+  call: ParsedToolCall;
+}): Promise<void> {
+  const { state, call } = args;
+  if (!state.planModule || !state.planState || !call.id) return;
+
+  const payload = (call.arguments ??
+    {}) as unknown as SubmitPlanForApprovalPayload;
+  let updatedPlan: AIChatPlanStateView;
+  try {
+    updatedPlan = await state.planModule.submitPlanForApproval({
+      conversationId: state.conversationId,
+      planId: state.planState.planId,
+      payload,
+    });
+  } catch (err) {
+    console.error("[ai-chat-v2] submitPlanForApproval failed:", err);
+    const errContent = serializeToolResultContent({
+      success: false,
+      error:
+        err instanceof Error
+          ? err.message
+          : "SubmitPlanForApproval payload was rejected.",
+    });
+    state.conversationMessages.push({
+      role: "tool",
+      tool_call_id: call.id,
+      content: errContent,
+    });
+    return;
+  }
+
+  sendChunk(state.event, {
+    eventType: "plan_submitted" as never,
+    conversationId: state.conversationId,
+    messageId: state.assistantMessageId,
+    toolCallId: call.id,
+    toolName: call.name,
+    planStateView: updatedPlan,
+  } as ChatV2StreamChunk);
+
+  const ackContent = serializeToolResultContent({
+    success: true,
+    status: "awaiting_approval",
+    planId: updatedPlan.planId,
+    version: updatedPlan.currentVersion,
+  });
+  state.conversationMessages.push({
+    role: "tool",
+    tool_call_id: call.id,
+    content: ackContent,
+  });
 }
 
 async function handleStreamingFailure(args: {
@@ -843,6 +1183,257 @@ async function handleResumeToolAfterPermission(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Plan Mode IPC handlers
+// ---------------------------------------------------------------------------
+
+async function handlePlanState(
+  data: string
+): Promise<CommonMessage<AIChatPlanStateView | null>> {
+  if (!isAIEnabled()) {
+    return denied("AI is not enabled");
+  }
+  try {
+    const req = data ? JSON.parse(data) : {};
+    if (typeof req.conversationId !== "string") {
+      return denied("conversationId must be a string");
+    }
+    const planModule = new AIChatPlanModule();
+    const planState = await planModule.getPlanState(req.conversationId);
+    return ok(planState);
+  } catch (err) {
+    return denied(userSafeError(err));
+  }
+}
+
+async function handleAnswerQuestion(
+  data: string
+): Promise<CommonMessage<{ ok: boolean; error?: string } | null>> {
+  if (!isAIEnabled()) {
+    return denied("AI is not enabled");
+  }
+  const parsed = data
+    ? (JSON.parse(data) as {
+        questionId?: string;
+        answers?: AskUserQuestionAnswer[];
+        conversationId?: string;
+      })
+    : {};
+  if (!parsed.questionId || typeof parsed.questionId !== "string") {
+    return denied("questionId is required");
+  }
+  if (!parsed.conversationId || typeof parsed.conversationId !== "string") {
+    return denied("conversationId is required");
+  }
+  if (!Array.isArray(parsed.answers)) {
+    return denied("answers must be an array");
+  }
+
+  const planModule = new AIChatPlanModule();
+  let answered;
+  try {
+    answered = await planModule.answerQuestion({
+      conversationId: parsed.conversationId,
+      questionId: parsed.questionId,
+      answers: parsed.answers,
+    });
+  } catch (err) {
+    return denied(userSafeError(err));
+  }
+
+  // If a stream is paused waiting for this answer, resume it.
+  const pending = pendingPlanQuestionState;
+  if (
+    pending &&
+    pending.questionId === parsed.questionId &&
+    (!parsed.conversationId || pending.conversationId === parsed.conversationId)
+  ) {
+    pendingPlanQuestionState = null;
+    const answerContent = serializeToolResultContent({
+      success: true,
+      status: "answered",
+      questionId: answered.questionId,
+      answers: parsed.answers,
+    });
+    // Replace the synthetic "awaiting_answer" tool result with the real
+    // answer so the model sees the user's decisions.
+    const toolMsgIndex = pending.conversationMessages.findIndex(
+      (m) => m.role === "tool" && m.tool_call_id === pending.toolCallId
+    );
+    if (toolMsgIndex >= 0) {
+      pending.conversationMessages[toolMsgIndex] = {
+        role: "tool",
+        tool_call_id: pending.toolCallId,
+        content: answerContent,
+      };
+    } else {
+      pending.conversationMessages.push({
+        role: "tool",
+        tool_call_id: pending.toolCallId,
+        content: answerContent,
+      });
+    }
+
+    currentAbortController = pending.abortController;
+    currentConversationId = pending.conversationId;
+
+    const planState = await planModule.getPlanStateByPlanId(pending.planId);
+    const allOpenAITools = [
+      ...toOpenAITools(await SkillRegistry.getAllToolFunctions()),
+      ...PlanModeToolRegistry.toOpenAITools(),
+    ];
+
+    void continueStreamAfterTools({
+      event: pending.event,
+      module: pending.module,
+      planModule: pending.planModule,
+      api: pending.api,
+      req: pending.req,
+      conversationId: pending.conversationId,
+      assistantMessageId: pending.assistantMessageId,
+      conversationMessages: pending.conversationMessages,
+      abortController: pending.abortController,
+      openAITools: allOpenAITools,
+      planState,
+      isPlanMode: true,
+      startRound: pending.nextRound,
+    });
+  }
+
+  return ok({ ok: true });
+}
+
+async function handleApprovePlan(
+  data: string
+): Promise<CommonMessage<AIChatPlanStateView | null>> {
+  if (!isAIEnabled()) {
+    return denied("AI is not enabled");
+  }
+  const parsed = data
+    ? (JSON.parse(data) as {
+        planId?: string;
+        conversationId?: string;
+        version?: number;
+      })
+    : {};
+  if (!parsed.planId) {
+    return denied("planId is required");
+  }
+  if (!parsed.conversationId) {
+    return denied("conversationId is required");
+  }
+  if (typeof parsed.version !== "number") {
+    return denied("version is required");
+  }
+  try {
+    const planModule = new AIChatPlanModule();
+    const planState = await planModule.approvePlan({
+      conversationId: parsed.conversationId,
+      planId: parsed.planId,
+      version: parsed.version,
+    });
+    return ok(planState);
+  } catch (err) {
+    return denied(userSafeError(err));
+  }
+}
+
+async function handleRejectPlan(
+  data: string
+): Promise<CommonMessage<AIChatPlanStateView | null>> {
+  if (!isAIEnabled()) {
+    return denied("AI is not enabled");
+  }
+  const parsed = data
+    ? (JSON.parse(data) as {
+        planId?: string;
+        conversationId?: string;
+        version?: number;
+        feedback?: string;
+      })
+    : {};
+  if (!parsed.planId) {
+    return denied("planId is required");
+  }
+  if (!parsed.conversationId) {
+    return denied("conversationId is required");
+  }
+  if (typeof parsed.version !== "number") {
+    return denied("version is required");
+  }
+  try {
+    const planModule = new AIChatPlanModule();
+    const planState = await planModule.rejectPlan({
+      conversationId: parsed.conversationId,
+      planId: parsed.planId,
+      version: parsed.version,
+      feedback: parsed.feedback,
+    });
+    return ok(planState);
+  } catch (err) {
+    return denied(userSafeError(err));
+  }
+}
+
+async function handleRequestPlanChanges(
+  data: string
+): Promise<CommonMessage<AIChatPlanStateView | null>> {
+  if (!isAIEnabled()) {
+    return denied("AI is not enabled");
+  }
+  const parsed = data
+    ? (JSON.parse(data) as {
+        planId?: string;
+        conversationId?: string;
+        version?: number;
+        feedback?: string;
+      })
+    : {};
+  if (!parsed.planId) {
+    return denied("planId is required");
+  }
+  if (!parsed.conversationId) {
+    return denied("conversationId is required");
+  }
+  if (typeof parsed.version !== "number") {
+    return denied("version is required");
+  }
+  if (!parsed.feedback || parsed.feedback.trim().length === 0) {
+    return denied("feedback is required");
+  }
+  try {
+    const planModule = new AIChatPlanModule();
+    const planState = await planModule.requestPlanChanges({
+      conversationId: parsed.conversationId,
+      planId: parsed.planId,
+      version: parsed.version,
+      feedback: parsed.feedback,
+    });
+    return ok(planState);
+  } catch (err) {
+    return denied(userSafeError(err));
+  }
+}
+
+async function handlePlanVersions(
+  data: string
+): Promise<CommonMessage<AIChatPlanVersionView[] | null>> {
+  if (!isAIEnabled()) {
+    return denied("AI is not enabled");
+  }
+  const parsed = data ? (JSON.parse(data) as { planId?: string }) : {};
+  if (!parsed.planId) {
+    return denied("planId is required");
+  }
+  try {
+    const planModule = new AIChatPlanModule();
+    const versions = await planModule.listVersions(parsed.planId);
+    return ok(versions);
+  } catch (err) {
+    return denied(userSafeError(err));
+  }
+}
+
 function userSafeError(err: unknown): string {
   if (err instanceof Error) {
     if (err.name === "AbortError") {
@@ -899,6 +1490,24 @@ export function registerAiChatV2IpcHandlers(): void {
     handleClearConversation(_e as IpcEventLike, data as string)
   );
   ipcMain.handle(AI_CHAT_V2_CLEAR_ALL, async () => handleClearAll());
+  ipcMain.handle(AI_CHAT_V2_PLAN_STATE, async (_e, data: unknown) =>
+    handlePlanState((data as string) ?? "")
+  );
+  ipcMain.handle(AI_CHAT_V2_ANSWER_QUESTION, async (_e, data: unknown) =>
+    handleAnswerQuestion((data as string) ?? "")
+  );
+  ipcMain.handle(AI_CHAT_V2_APPROVE_PLAN, async (_e, data: unknown) =>
+    handleApprovePlan((data as string) ?? "")
+  );
+  ipcMain.handle(AI_CHAT_V2_REJECT_PLAN, async (_e, data: unknown) =>
+    handleRejectPlan((data as string) ?? "")
+  );
+  ipcMain.handle(AI_CHAT_V2_REQUEST_PLAN_CHANGES, async (_e, data: unknown) =>
+    handleRequestPlanChanges((data as string) ?? "")
+  );
+  ipcMain.handle(AI_CHAT_V2_PLAN_VERSIONS, async (_e, data: unknown) =>
+    handlePlanVersions((data as string) ?? "")
+  );
   ipcMain.on(AI_CHAT_V2_STREAM, async (event, data: unknown) => {
     try {
       await handleStream(event as IpcEventLike, data as string);

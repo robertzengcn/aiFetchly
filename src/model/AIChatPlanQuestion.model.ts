@@ -29,7 +29,7 @@ export class AIChatPlanQuestionModel extends BaseDb {
     entity.conversationId = input.conversationId;
     entity.status = "pending";
     entity.questionsJson = JSON.stringify(input.questions);
-    entity.answersJson = null;
+    entity.answersJson = undefined;
     return await this.repository.save(entity);
   }
 

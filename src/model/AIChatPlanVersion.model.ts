@@ -25,8 +25,10 @@ export class AIChatPlanVersionModel extends BaseDb {
     entity.planId = input.planId;
     entity.version = input.version;
     entity.planMarkdown = input.planMarkdown;
-    entity.planJson = input.planJson ? JSON.stringify(input.planJson) : null;
-    entity.changeReason = input.changeReason ?? null;
+    entity.planJson = input.planJson
+      ? JSON.stringify(input.planJson)
+      : undefined;
+    entity.changeReason = input.changeReason ?? undefined;
     entity.createdBy = input.createdBy;
     return await this.repository.save(entity);
   }
