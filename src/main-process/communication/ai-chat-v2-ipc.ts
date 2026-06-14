@@ -471,6 +471,13 @@ async function continueStreamAfterTools(state: {
     ) {
       const accumulator = new OpenAIStreamAccumulator();
       activeAccumulator = accumulator;
+      console.log(
+        `[ai-chat-v2] round ${round} → POST /chat/completions msgs=${
+          state.conversationMessages.length
+        } roles=[${state.conversationMessages
+          .map((m) => m.role)
+          .join(",")}] tools=${state.openAITools.length}`
+      );
       await state.api.openAIChatCompletionStream(
         {
           messages: state.conversationMessages,
@@ -501,6 +508,15 @@ async function continueStreamAfterTools(state: {
       const parsedCalls = accumulator
         .tryParseToolCallArguments()
         .filter((call) => call.name && call.id);
+
+      console.log(
+        `[ai-chat-v2] round ${round} ← finishReason=${
+          accumulator.state.finishReason
+        } parsedCalls=${parsedCalls.length} willContinue=${
+          accumulator.state.finishReason === "tool_calls" &&
+          parsedCalls.length > 0
+        }`
+      );
 
       if (
         accumulator.state.finishReason !== "tool_calls" ||
@@ -553,6 +569,11 @@ async function continueStreamAfterTools(state: {
         );
         const toolPayload = normalizeToolResult(toolResult);
         const toolContent = serializeToolResultContent(toolPayload);
+        console.log(
+          `[ai-chat-v2] tool ${call.name} ok=${
+            toolResult.success
+          } needsPermission=${isPermissionPromptResult(toolResult)}`
+        );
 
         sendChunk(state.event, {
           eventType: "tool_result",
@@ -579,6 +600,13 @@ async function continueStreamAfterTools(state: {
             toolName: call.name,
             toolArguments: call.arguments ?? {},
           };
+          console.log(
+            `[ai-chat-v2] tool ${
+              call.name
+            } needs permission — pausing before sending result to AI (nextRound=${
+              round + 1
+            })`
+          );
           return;
         }
 
@@ -587,6 +615,9 @@ async function continueStreamAfterTools(state: {
           tool_call_id: call.id,
           content: toolContent,
         });
+        console.log(
+          `[ai-chat-v2] tool ${call.name} result pushed → round ${round} will continue to next AI request`
+        );
       }
     }
 
@@ -594,6 +625,12 @@ async function continueStreamAfterTools(state: {
 
     const fullContent = finalAccumulator?.state.fullContent ?? "";
     const finishReason = finalAccumulator?.state.finishReason ?? "stop";
+
+    console.log(
+      `[ai-chat-v2] stream complete finishReason=${finishReason} fullContentLen=${
+        fullContent.length
+      } preview=${JSON.stringify(fullContent.slice(0, 200))}`
+    );
 
     if (fullContent.length > 0) {
       await state.module.saveAssistantMessage({
@@ -620,6 +657,10 @@ async function continueStreamAfterTools(state: {
     currentAbortController = null;
     currentConversationId = null;
   } catch (err) {
+    console.error(
+      `[ai-chat-v2] continueStreamAfterTools failed:`,
+      err instanceof Error ? err.stack || err.message : err
+    );
     await handleStreamingFailure({
       event: state.event,
       module: state.module,
@@ -705,6 +746,11 @@ async function handleResumeToolAfterPermission(
   }
 
   const pending = pendingPermissionState;
+  console.log(
+    `[ai-chat-v2] resume requested toolId=${parsed.toolId} conv=${
+      parsed.conversationId
+    } hasPending=${!!pending} pendingToolCallId=${pending?.toolCallId}`
+  );
   if (!pending || pending.toolCallId !== parsed.toolId) {
     return ok({
       ok: false,
@@ -764,6 +810,16 @@ async function handleResumeToolAfterPermission(
       tool_call_id: pending.toolCallId,
       content: toolContent,
     });
+
+    console.log(
+      `[ai-chat-v2] resume re-exec ${pending.toolName} ok=${
+        toolResult.success
+      } needsPermission=${isPermissionPromptResult(
+        toolResult
+      )} → resuming stream at round ${pending.nextRound} msgs=${
+        pending.conversationMessages.length
+      }`
+    );
 
     void continueStreamAfterTools({
       event: pending.event,

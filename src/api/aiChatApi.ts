@@ -1617,7 +1617,7 @@ export class AiChatApi {
     if (request.user !== undefined) {
       data.user = request.user;
     }
-    return this._httpClient.postJson("/v1/chat/completions", data);
+    return this._httpClient.postJson("/api/ai/v1/chat/completions", data);
   }
 
   /**
@@ -1668,7 +1668,7 @@ export class AiChatApi {
     let response: Response;
     try {
       response = await this._httpClient.postStream(
-        "/v1/chat/completions",
+        "/api/ai/v1/chat/completions",
         data,
         fetchOptions
       );
