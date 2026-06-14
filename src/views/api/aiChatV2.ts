@@ -10,6 +10,11 @@ import type {
   ChatV2HistoryResponse,
   ChatV2ConversationSummary,
 } from "@/entityTypes/aiChatV2Types";
+import type {
+  AIChatPlanStateView,
+  AIChatPlanVersionView,
+  AskUserQuestionAnswer,
+} from "@/entityTypes/aiChatPlanTypes";
 import type { OpenAIModelsResponse } from "@/api/aiChatApi";
 import {
   AI_CHAT_V2_MODELS,
@@ -21,6 +26,12 @@ import {
   AI_CHAT_V2_STREAM_COMPLETE,
   AI_CHAT_V2_CLEAR_CONVERSATION,
   AI_CHAT_V2_CLEAR_ALL,
+  AI_CHAT_V2_PLAN_STATE,
+  AI_CHAT_V2_ANSWER_QUESTION,
+  AI_CHAT_V2_APPROVE_PLAN,
+  AI_CHAT_V2_REJECT_PLAN,
+  AI_CHAT_V2_REQUEST_PLAN_CHANGES,
+  AI_CHAT_V2_PLAN_VERSIONS,
 } from "@/config/channellist";
 
 let activeChunkHandler: ((raw: string) => void) | null = null;
@@ -49,7 +60,9 @@ export async function getOpenAIChatModels(): Promise<OpenAIModelsResponse | null
 /**
  * List all v2 chat conversations with summary metadata.
  */
-export async function getChatV2Conversations(): Promise<ChatV2ConversationSummary[]> {
+export async function getChatV2Conversations(): Promise<
+  ChatV2ConversationSummary[]
+> {
   const resp = await windowInvoke(AI_CHAT_V2_CONVERSATIONS);
   return (resp as ChatV2ConversationSummary[] | null) ?? [];
 }
@@ -100,7 +113,9 @@ export async function streamChatV2Message(
         onComplete(chunk);
       }
     } catch (err) {
-      onError(err instanceof Error ? err : new Error("Stream completion parse error"));
+      onError(
+        err instanceof Error ? err : new Error("Stream completion parse error")
+      );
     }
     clearChatV2StreamListeners();
   };
@@ -127,14 +142,114 @@ export function stopChatV2Stream(): void {
 export async function clearChatV2Conversation(
   conversationId: string
 ): Promise<{ deleted: number } | null> {
-  const resp = await windowInvoke(AI_CHAT_V2_CLEAR_CONVERSATION, { conversationId });
+  const resp = await windowInvoke(AI_CHAT_V2_CLEAR_CONVERSATION, {
+    conversationId,
+  });
   return (resp as { deleted: number } | null) ?? null;
 }
 
 /**
  * Clear all v2 chat history across all conversations.
  */
-export async function clearAllChatV2History(): Promise<{ deleted: number } | null> {
+export async function clearAllChatV2History(): Promise<{
+  deleted: number;
+} | null> {
   const resp = await windowInvoke(AI_CHAT_V2_CLEAR_ALL);
   return (resp as { deleted: number } | null) ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Plan Mode API
+// ---------------------------------------------------------------------------
+
+/**
+ * Load the current plan state for a conversation (status, version, pending
+ * question, etc.). Returns null if no plan exists for this conversation.
+ */
+export async function getChatV2PlanState(
+  conversationId: string
+): Promise<AIChatPlanStateView | null> {
+  const resp = await windowInvoke(AI_CHAT_V2_PLAN_STATE, { conversationId });
+  return (resp as AIChatPlanStateView | null) ?? null;
+}
+
+/**
+ * Submit answers to a pending plan question. If the AI stream was paused
+ * waiting for this answer, the main process will resume it automatically.
+ */
+export async function answerChatV2Question(
+  conversationId: string,
+  questionId: string,
+  answers: AskUserQuestionAnswer[]
+): Promise<{ ok: boolean; error?: string }> {
+  const resp = await windowInvoke(AI_CHAT_V2_ANSWER_QUESTION, {
+    conversationId,
+    questionId,
+    answers,
+  });
+  return (resp as { ok: boolean; error?: string }) ?? { ok: false };
+}
+
+/**
+ * Approve the current plan version. After approval, high-impact tools are
+ * unblocked and the AI can begin executing the plan.
+ */
+export async function approveChatV2Plan(
+  conversationId: string,
+  planId: string,
+  version: number
+): Promise<AIChatPlanStateView | null> {
+  const resp = await windowInvoke(AI_CHAT_V2_APPROVE_PLAN, {
+    conversationId,
+    planId,
+    version,
+  });
+  return (resp as AIChatPlanStateView | null) ?? null;
+}
+
+/**
+ * Reject the current plan version permanently.
+ */
+export async function rejectChatV2Plan(
+  conversationId: string,
+  planId: string,
+  version: number,
+  feedback?: string
+): Promise<AIChatPlanStateView | null> {
+  const resp = await windowInvoke(AI_CHAT_V2_REJECT_PLAN, {
+    conversationId,
+    planId,
+    version,
+    feedback,
+  });
+  return (resp as AIChatPlanStateView | null) ?? null;
+}
+
+/**
+ * Request changes to the current plan. The plan goes back to "draft" status
+ * so the AI can produce a new version. Feedback is required.
+ */
+export async function requestChatV2PlanChanges(
+  conversationId: string,
+  planId: string,
+  version: number,
+  feedback: string
+): Promise<AIChatPlanStateView | null> {
+  const resp = await windowInvoke(AI_CHAT_V2_REQUEST_PLAN_CHANGES, {
+    conversationId,
+    planId,
+    version,
+    feedback,
+  });
+  return (resp as AIChatPlanStateView | null) ?? null;
+}
+
+/**
+ * List all versions of a plan (for history/diff view).
+ */
+export async function getChatV2PlanVersions(
+  planId: string
+): Promise<AIChatPlanVersionView[]> {
+  const resp = await windowInvoke(AI_CHAT_V2_PLAN_VERSIONS, { planId });
+  return (resp as AIChatPlanVersionView[] | null) ?? [];
 }

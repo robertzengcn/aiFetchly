@@ -1,5 +1,8 @@
 <template>
   <div class="v2-composer">
+    <div v-if="$slots.prepend" class="v2-composer__prepend">
+      <slot name="prepend" />
+    </div>
     <v-textarea
       v-model="draft"
       :placeholder="t('aiChatV2.input_placeholder') || 'Send a message…'"
@@ -71,6 +74,11 @@ const onKeydown = (event: KeyboardEvent): void => {
   border-top: 1px solid rgba(0, 0, 0, 0.08);
 }
 .v2-composer__actions {
+  display: flex;
+  align-items: center;
+  padding-bottom: 4px;
+}
+.v2-composer__prepend {
   display: flex;
   align-items: center;
   padding-bottom: 4px;
