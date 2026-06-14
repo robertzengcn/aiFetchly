@@ -1800,6 +1800,8 @@ export default {
     reject: "Rejeter",
     request_changes: "Demander des modifications",
     approved: "Approuvé",
+    approved_continue_message:
+      "Plan approuvé. Veuillez commencer à exécuter le plan maintenant.",
     reject_feedback: "Raison du rejet",
     changes_feedback: "Qu'est-ce qui doit changer?",
     no_plan_yet: "Pas encore de contenu de plan.",

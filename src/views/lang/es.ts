@@ -1817,6 +1817,8 @@ export default {
     reject: "Rechazar",
     request_changes: "Solicitar cambios",
     approved: "Aprobado",
+    approved_continue_message:
+      "Plan aprobado. Por favor, comienza a ejecutar el plan ahora.",
     reject_feedback: "Motivo de rechazo",
     changes_feedback: "¿Qué necesita cambiar?",
     no_plan_yet: "Aún no hay contenido del plan.",

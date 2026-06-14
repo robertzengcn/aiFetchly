@@ -1775,6 +1775,8 @@ export default {
     reject: "拒否",
     request_changes: "変更を要求",
     approved: "承認済み",
+    approved_continue_message:
+      "計画が承認されました。今すぐ計画の実行を開始してください。",
     reject_feedback: "拒否の理由",
     changes_feedback: "何を変更する必要がありますか？",
     no_plan_yet: "計画内容がまだありません。",
