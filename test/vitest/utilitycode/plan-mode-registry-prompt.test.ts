@@ -22,18 +22,20 @@ describe("PlanModeToolRegistry", () => {
         expect(tool.function.name).toBeTruthy();
         expect(tool.function.description).toBeTruthy();
         expect(tool.function.parameters).toBeDefined();
-        expect(tool.function.parameters.type).toBe("object");
+        expect((tool.function.parameters as { type: string }).type).toBe(
+          "object"
+        );
       }
     });
 
     it("AskUserQuestion enforces 1-3 questions with 2-4 options", () => {
       const tools = PlanModeToolRegistry.toOpenAITools();
-      const askTool = tools.find(
-        (t) => t.function.name === "AskUserQuestion"
-      );
+      const askTool = tools.find((t) => t.function.name === "AskUserQuestion");
       expect(askTool).toBeDefined();
-      const questionsProp = askTool!.function.parameters!.properties!
-        .questions;
+      const params = askTool!.function.parameters as {
+        properties: { questions: { minItems: number; maxItems: number } };
+      };
+      const questionsProp = params.properties.questions;
       expect(questionsProp.minItems).toBe(1);
       expect(questionsProp.maxItems).toBe(3);
     });
@@ -44,7 +46,9 @@ describe("PlanModeToolRegistry", () => {
         (t) => t.function.name === "SubmitPlanForApproval"
       );
       expect(submitTool).toBeDefined();
-      const required = submitTool!.function.parameters!.required;
+      const required = (
+        submitTool!.function.parameters as { required: string[] }
+      ).required;
       expect(required).toContain("title");
       expect(required).toContain("objective");
       expect(required).toContain("planMarkdown");
@@ -54,9 +58,9 @@ describe("PlanModeToolRegistry", () => {
   describe("isPlanTool", () => {
     it("returns true for plan tool names", () => {
       expect(PlanModeToolRegistry.isPlanTool("AskUserQuestion")).toBe(true);
-      expect(
-        PlanModeToolRegistry.isPlanTool("SubmitPlanForApproval")
-      ).toBe(true);
+      expect(PlanModeToolRegistry.isPlanTool("SubmitPlanForApproval")).toBe(
+        true
+      );
     });
 
     it("returns false for non-plan tools", () => {
@@ -127,7 +131,7 @@ describe("buildPlanModeSystemPrompt", () => {
         version: 2,
         planMarkdown: "# Email Campaign\nSend 5 emails",
         createdAt: new Date().toISOString(),
-        createdBy: "ai",
+        createdBy: "assistant",
       },
     };
     const prompt = buildPlanModeSystemPrompt({
