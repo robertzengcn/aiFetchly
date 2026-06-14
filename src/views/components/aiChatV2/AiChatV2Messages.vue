@@ -31,6 +31,27 @@
       <span class="v2-messages__typing-dot" />
       <span class="v2-messages__typing-dot" />
     </div>
+    <div
+      v-if="retryInfo"
+      class="v2-messages__retry"
+      :aria-label="
+        t('aiChatV2.reconnecting') || 'Reconnecting to AI server…'
+      "
+    >
+      <v-icon size="16" class="v2-messages__retry-icon">mdi-refresh</v-icon>
+      <span class="v2-messages__retry-text">
+        {{ t("aiChatV2.reconnecting") || "Reconnecting…" }}
+        <span class="v2-messages__retry-count">
+          {{
+            t("aiChatV2.reconnect_attempt", {
+              n: retryInfo.attempt,
+              max: retryInfo.maxAttempts,
+            }) ||
+            `(attempt ${retryInfo.attempt}/${retryInfo.maxAttempts})`
+          }}
+        </span>
+      </span>
+    </div>
   </div>
 </template>
 
@@ -49,6 +70,7 @@ const props = defineProps<{
   errorMessage?: string;
   showTypingIndicator?: boolean;
   isStreaming?: boolean;
+  retryInfo?: { attempt: number; maxAttempts: number; delayMs: number } | null;
 }>();
 const emit = defineEmits<{
   (e: "grant-permission", message: ChatV2MessageView, persistent: boolean): void;
@@ -90,6 +112,7 @@ const onDenyPermission = (message: ChatV2MessageView): void => {
 onMounted(scrollToBottom);
 watch(() => props.messages.length, scrollToBottom);
 watch(() => props.showTypingIndicator, scrollToBottom);
+watch(() => props.retryInfo, scrollToBottom);
 watch(
   () => {
     // Track only the last message's id + content length instead of joining
@@ -157,6 +180,35 @@ watch(
   30% {
     transform: translateY(-4px);
     opacity: 1;
+  }
+}
+.v2-messages__retry {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  margin-top: 8px;
+  background: rgba(255, 152, 0, 0.12);
+  border: 1px solid rgba(255, 152, 0, 0.3);
+  border-radius: 12px;
+  width: fit-content;
+  color: rgba(0, 0, 0, 0.65);
+  font-size: 13px;
+}
+.v2-messages__retry-icon {
+  animation: v2-retry-spin 1s linear infinite;
+  color: rgb(255, 152, 0);
+}
+.v2-messages__retry-count {
+  opacity: 0.7;
+  font-size: 12px;
+}
+@keyframes v2-retry-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
   }
 }
 </style>

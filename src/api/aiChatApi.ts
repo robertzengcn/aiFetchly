@@ -592,6 +592,33 @@ const DEFAULT_VALIDATION_CONFIG: AiValidationConfig = {
   maxErrorLength: 1000,
 };
 
+/**
+ * Information passed to the onRetry callback when a streaming connection
+ * attempt fails and will be retried.
+ */
+export interface StreamRetryInfo {
+  /** Current retry attempt number (1-based). */
+  attempt: number;
+  /** Maximum number of retry attempts allowed. */
+  maxAttempts: number;
+  /** Delay in milliseconds before the next attempt. */
+  delayMs: number;
+  /** Human-readable error that triggered the retry. */
+  error: string;
+}
+
+/**
+ * Maximum number of retry attempts for a streaming connection failure
+ * (so up to maxAttempts + 1 total tries including the initial attempt).
+ */
+const STREAM_RETRY_MAX_ATTEMPTS = 3;
+
+/**
+ * Base delay in milliseconds for the first retry. Subsequent delays use
+ * exponential backoff: base * 2^attempt (1s, 2s, 4s).
+ */
+const STREAM_RETRY_BASE_DELAY_MS = 1000;
+
 export class AiChatApi {
   private _httpClient: HttpClient;
   private validationConfig: AiValidationConfig;
@@ -1626,12 +1653,19 @@ export class AiChatApi {
    *
    * @param request - Chat completion request with messages and optional parameters
    * @param onChunk - Callback invoked for each parsed streaming chunk
-   * @param options - Optional abort signal to cancel the stream
+   * @param options - Optional abort signal and retry callback. When the
+   *   initial connection to the AI server fails (network error, 5xx, or
+   *   429), the client retries up to `STREAM_RETRY_MAX_ATTEMPTS` times with
+   *   exponential backoff. The `onRetry` callback is invoked before each
+   *   retry so callers can surface the reconnection attempt in the UI.
    */
   async openAIChatCompletionStream(
     request: OpenAIChatCompletionRequest,
     onChunk: (chunk: OpenAIChatCompletionChunk) => void,
-    options?: { signal?: AbortSignal }
+    options?: {
+      signal?: AbortSignal;
+      onRetry?: (info: StreamRetryInfo) => void;
+    }
   ): Promise<void> {
     this.ensureAIEnabled();
     const data: OpenAIChatCompletionRequest = {
@@ -1665,22 +1699,75 @@ export class AiChatApi {
       fetchOptions.signal = options.signal;
     }
 
-    let response: Response;
-    try {
-      response = await this._httpClient.postStream(
-        "/api/ai/v1/chat/completions",
-        data,
-        fetchOptions
-      );
-    } catch (error) {
-      if (!this.isNotFoundError(error)) {
+    let response: Response | null = null;
+    let lastError: unknown = null;
+
+    for (let attempt = 0; attempt <= STREAM_RETRY_MAX_ATTEMPTS; attempt += 1) {
+      let res: Response;
+      try {
+        res = await this._httpClient.postStream(
+          "/api/ai/v1/chat/completions",
+          data,
+          fetchOptions
+        );
+      } catch (error) {
+        // 404 → fall back to the legacy streaming endpoint (no retry).
+        if (this.isNotFoundError(error)) {
+          return this.openAIChatCompletionStreamViaLegacyEndpoint(
+            request,
+            onChunk,
+            fetchOptions
+          );
+        }
+        // Never retry user-initiated aborts.
+        if (error instanceof Error && error.name === "AbortError") {
+          throw error;
+        }
+        // Network errors (server unreachable, DNS failure, etc.) are retryable.
+        lastError = error;
+        if (attempt < STREAM_RETRY_MAX_ATTEMPTS) {
+          const delayMs = this.computeStreamRetryDelay(attempt);
+          options?.onRetry?.({
+            attempt: attempt + 1,
+            maxAttempts: STREAM_RETRY_MAX_ATTEMPTS,
+            delayMs,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          await this.sleepWithAbort(delayMs, options?.signal);
+          continue;
+        }
         throw error;
       }
-      return this.openAIChatCompletionStreamViaLegacyEndpoint(
-        request,
-        onChunk,
-        fetchOptions
-      );
+
+      // Retryable HTTP status codes (server errors, rate limiting).
+      if (this.isRetryableStreamStatus(res.status)) {
+        lastError = new Error(`Server returned ${res.status}`);
+        if (attempt < STREAM_RETRY_MAX_ATTEMPTS) {
+          // Drain the body so the connection can be reused/closed cleanly.
+          await res.text().catch(() => undefined);
+          const delayMs = this.computeStreamRetryDelay(attempt);
+          options?.onRetry?.({
+            attempt: attempt + 1,
+            maxAttempts: STREAM_RETRY_MAX_ATTEMPTS,
+            delayMs,
+            error: `HTTP ${res.status}`,
+          });
+          await this.sleepWithAbort(delayMs, options?.signal);
+          continue;
+        }
+        const errorText = await res.text().catch(() => "Unknown error");
+        throw new Error(`Server returned ${res.status}: ${errorText}`);
+      }
+
+      // Non-retryable response — proceed with normal handling.
+      response = res;
+      break;
+    }
+
+    if (!response) {
+      throw lastError instanceof Error
+        ? lastError
+        : new Error("Failed to connect to the AI server after retries");
     }
 
     if (!response.ok || response.status !== 200) {
@@ -1693,6 +1780,50 @@ export class AiChatApi {
     }
 
     await this._consumeOpenAIStreamResponse(response, onChunk);
+  }
+
+  /**
+   * Determine whether an HTTP status code should trigger a retry.
+   * Server errors (5xx), rate limiting (429), and status 0 (network
+   * failure in some environments) are retryable.
+   */
+  private isRetryableStreamStatus(status: number): boolean {
+    return status === 0 || status === 429 || (status >= 500 && status < 600);
+  }
+
+  /**
+   * Compute the delay before the next retry attempt using exponential
+   * backoff: base * 2^attempt (1s, 2s, 4s).
+   */
+  private computeStreamRetryDelay(attempt: number): number {
+    return STREAM_RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
+  }
+
+  /**
+   * Promise-based delay that rejects immediately if the abort signal fires.
+   * Prevents the retry backoff from blocking a user-initiated cancel.
+   */
+  private sleepWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) {
+      return Promise.reject(
+        new DOMException("The operation was aborted.", "AbortError")
+      );
+    }
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(resolve, ms);
+      if (signal) {
+        signal.addEventListener(
+          "abort",
+          () => {
+            clearTimeout(timer);
+            reject(
+              new DOMException("The operation was aborted.", "AbortError")
+            );
+          },
+          { once: true }
+        );
+      }
+    });
   }
 
   private async openAIChatCompletionStreamViaLegacyEndpoint(
@@ -1714,76 +1845,85 @@ export class AiChatApi {
 
     let chunkIndex = 0;
     const signal = fetchOptions.signal ?? undefined;
-    await this._consumeStreamResponse(response, (event) => {
-      const eventType = String(event.event ?? "");
-      const content =
-        typeof event.data?.content === "string" ? event.data.content : "";
+    await this._consumeStreamResponse(
+      response,
+      (event) => {
+        const eventType = String(event.event ?? "");
+        const content =
+          typeof event.data?.content === "string" ? event.data.content : "";
 
-      if (eventType === StreamEventType.TOKEN && content) {
-        onChunk({
-          id: `legacy-${Date.now()}-${chunkIndex}`,
-          object: "chat.completion.chunk",
-          created: Date.now(),
-          model: request.model ?? "",
-          choices: [
-            {
-              index: chunkIndex++,
-              delta: { content },
-              finish_reason: null,
-            },
-          ],
-        });
-        return;
-      }
+        if (eventType === StreamEventType.TOKEN && content) {
+          onChunk({
+            id: `legacy-${Date.now()}-${chunkIndex}`,
+            object: "chat.completion.chunk",
+            created: Date.now(),
+            model: request.model ?? "",
+            choices: [
+              {
+                index: chunkIndex++,
+                delta: { content },
+                finish_reason: null,
+              },
+            ],
+          });
+          return;
+        }
 
-      if (
-        eventType === StreamEventType.DONE ||
-        eventType === StreamEventType.COMPLETE ||
-        eventType === StreamEventType.CONVERSATION_END
-      ) {
-        onChunk({
-          id: `legacy-${Date.now()}-${chunkIndex}`,
-          object: "chat.completion.chunk",
-          created: Date.now(),
-          model: request.model ?? "",
-          choices: [
-            {
-              index: chunkIndex++,
-              delta: {},
-              finish_reason: "stop",
-            },
-          ],
-        });
-        return;
-      }
+        if (
+          eventType === StreamEventType.DONE ||
+          eventType === StreamEventType.COMPLETE ||
+          eventType === StreamEventType.CONVERSATION_END
+        ) {
+          onChunk({
+            id: `legacy-${Date.now()}-${chunkIndex}`,
+            object: "chat.completion.chunk",
+            created: Date.now(),
+            model: request.model ?? "",
+            choices: [
+              {
+                index: chunkIndex++,
+                delta: {},
+                finish_reason: "stop",
+              },
+            ],
+          });
+          return;
+        }
 
-      if (eventType === StreamEventType.ERROR) {
-        const errorMessage =
-          content ||
-          (typeof event.data === "object" &&
-          event.data &&
-          "errorMessage" in event.data &&
-          typeof event.data.errorMessage === "string"
-            ? event.data.errorMessage
-            : "Unknown error");
-        throw new Error(errorMessage);
-      }
-    }, signal);
+        if (eventType === StreamEventType.ERROR) {
+          const errorMessage =
+            content ||
+            (typeof event.data === "object" &&
+            event.data &&
+            "errorMessage" in event.data &&
+            typeof event.data.errorMessage === "string"
+              ? event.data.errorMessage
+              : "Unknown error");
+          throw new Error(errorMessage);
+        }
+      },
+      signal
+    );
   }
 
   private buildLegacyChatRequestFromOpenAI(
     request: OpenAIChatCompletionRequest
   ): ChatApiRequestData {
-    const systemPrompt = request.messages.find((m) => m.role === "system")?.content;
+    const systemPrompt = request.messages.find(
+      (m) => m.role === "system"
+    )?.content;
     const conversationText = request.messages
       .filter((m) => m.role !== "system")
-      .map((m) => `${this.getLegacyRoleLabel(m.role)}: ${m.content ?? ""}`.trim())
+      .map((m) =>
+        `${this.getLegacyRoleLabel(m.role)}: ${m.content ?? ""}`.trim()
+      )
       .join("\n\n");
 
     return {
       message: conversationText || request.messages.at(-1)?.content || "",
       model: request.model,
-      system_prompt: typeof systemPrompt === "string" ? systemPrompt : undefined,
+      system_prompt:
+        typeof systemPrompt === "string" ? systemPrompt : undefined,
     };
   }
 
@@ -1806,7 +1946,8 @@ export class AiChatApi {
   private normalizeLegacyModelsResponse(
     response: unknown
   ): OpenAIModelsResponse {
-    const payload = this.unwrapLegacyPayload<AvailableChatModelsResponse>(response);
+    const payload =
+      this.unwrapLegacyPayload<AvailableChatModelsResponse>(response);
     const models = Object.entries(payload?.models ?? {}).map(([id, model]) => ({
       id,
       object: "model",
@@ -1835,7 +1976,9 @@ export class AiChatApi {
   }
 
   private isNotFoundError(error: unknown): boolean {
-    return error instanceof Error && /(^|[\s:])404\b|not found/i.test(error.message);
+    return (
+      error instanceof Error && /(^|[\s:])404\b|not found/i.test(error.message)
+    );
   }
 
   /**

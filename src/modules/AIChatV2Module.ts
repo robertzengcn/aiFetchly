@@ -107,8 +107,15 @@ export class AIChatV2Module extends BaseModule {
   }
 
   /** List v2 conversations only (filtered by v2- prefix). */
-  async getConversations(): Promise<ChatV2ConversationSummary[]> {
-    const all = await this.chatModule.getConversationsWithMetadata();
+  async getConversations(
+    searchQuery?: string
+  ): Promise<ChatV2ConversationSummary[]> {
+    const all =
+      searchQuery && searchQuery.trim().length > 0
+        ? await this.chatModule.searchConversationsWithMetadata(
+            searchQuery.trim()
+          )
+        : await this.chatModule.getConversationsWithMetadata();
     const summaries: ChatV2ConversationSummary[] = [];
     for (const conv of all) {
       // The v2- prefix is the authoritative identifier — only

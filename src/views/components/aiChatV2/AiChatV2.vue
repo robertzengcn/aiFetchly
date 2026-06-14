@@ -61,6 +61,7 @@
         :error-message="streamError ?? undefined"
         :show-typing-indicator="showTypingIndicator"
         :is-streaming="isStreaming"
+        :retry-info="retryInfo"
         @grant-permission="handleSkillPermissionGrant"
         @deny-permission="handleSkillPermissionDeny"
         @approve-plan="handleApprovePlan"
@@ -100,10 +101,35 @@
           </v-btn>
         </v-card-title>
         <v-divider></v-divider>
+        <div class="px-3 pt-3">
+          <v-text-field
+            v-model="conversationSearch"
+            :placeholder="t('aiChatV2.search_conversations') || 'Search conversations...'"
+            prepend-inner-icon="mdi-magnify"
+            density="compact"
+            variant="outlined"
+            clearable
+            hide-details
+            @click:clear="conversationSearch = ''"
+          />
+          <v-progress-linear
+            v-if="searchingConversations"
+            indeterminate
+            color="primary"
+            height="2"
+            class="mt-1"
+          />
+        </div>
         <v-card-text style="padding: 0;">
-          <div v-if="conversations.length === 0" class="pa-4 text-center">
+          <div v-if="conversations.length === 0 && !searchingConversations" class="pa-4 text-center">
             <v-icon size="48" color="grey-lighten-2">mdi-chat-outline</v-icon>
-            <p class="mt-4 text-grey">{{ t("aiChatV2.no_conversations") || "No conversations yet" }}</p>
+            <p class="mt-4 text-grey">
+              {{
+                conversationSearch
+                  ? t("aiChatV2.no_search_results") || "No conversations found"
+                  : t("aiChatV2.no_conversations") || "No conversations yet"
+              }}
+            </p>
           </div>
           <v-list v-else density="comfortable">
             <v-list-item
@@ -131,7 +157,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from "vue";
+import { ref, computed, watch, onMounted, onBeforeUnmount } from "vue";
 import { useI18n } from "vue-i18n";
 import { MessageType } from "@/entityTypes/commonType";
 import type {
@@ -183,8 +209,20 @@ const activeAssistantMessageId = ref<string | null>(null);
 // Flipped to true once the first visible AI chunk (token/tool_call/etc)
 // arrives. Drives the typing indicator while we wait for the AI response.
 const receivedFirstResponse = ref(false);
+// Tracks the active reconnection attempt when the AI server connection
+// drops and is being retried. Null when no retry is in progress.
+const retryInfo = ref<{
+  attempt: number;
+  maxAttempts: number;
+  delayMs: number;
+} | null>(null);
 const showConversationsDialog = ref(false);
 const showMCPToolManager = ref(false);
+
+// Conversation search state
+const conversationSearch = ref("");
+const searchingConversations = ref(false);
+let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
 // True only between clicking send and the first visible AI chunk. Auto-clears
 // when streaming ends for any reason (complete/error/stop/permission deny).
@@ -236,6 +274,45 @@ const loadConversations = async (): Promise<void> => {
     // non-fatal; leave list empty
   }
 };
+
+/**
+ * Debounced conversation search. Empty query reloads the full list;
+ * non-empty query filters conversations by message content server-side.
+ */
+const runConversationSearch = (query: string): void => {
+  if (searchDebounceTimer) {
+    clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = null;
+  }
+  searchDebounceTimer = setTimeout(async () => {
+    searchDebounceTimer = null;
+    searchingConversations.value = true;
+    try {
+      const q = query.trim();
+      conversations.value = await getChatV2Conversations(
+        q.length > 0 ? q : undefined
+      );
+    } catch {
+      // non-fatal; keep previous list
+    } finally {
+      searchingConversations.value = false;
+    }
+  }, 300);
+};
+
+// Debounced search as the user types
+watch(conversationSearch, (val) => {
+  const query = (val ?? "").trim();
+  runConversationSearch(query);
+});
+
+// Reset search when the dialog opens
+watch(showConversationsDialog, (open) => {
+  if (open) {
+    conversationSearch.value = "";
+    void loadConversations();
+  }
+});
 
 const loadHistory = async (conversationId: string): Promise<void> => {
   try {
@@ -621,6 +698,7 @@ const onSend = async (text: string): Promise<void> => {
 
   isStreaming.value = true;
   receivedFirstResponse.value = false;
+  retryInfo.value = null;
 
   await streamChatV2Message(
     {
@@ -641,9 +719,23 @@ const onSend = async (text: string): Promise<void> => {
           activeAssistantMessageId.value = chunk.messageId;
         }
         // `start` is metadata only; keep showing the typing indicator.
+      } else if (chunk.eventType === "retry_connect") {
+        // Connection to AI server is being retried. Show the reconnect
+        // indicator but don't treat it as the first AI response.
+        if (
+          typeof chunk.retryAttempt === "number" &&
+          typeof chunk.retryMaxAttempts === "number"
+        ) {
+          retryInfo.value = {
+            attempt: chunk.retryAttempt,
+            maxAttempts: chunk.retryMaxAttempts,
+            delayMs: chunk.retryDelayMs ?? 0,
+          };
+        }
       } else {
-        // Any non-start chunk means the AI has started responding.
+        // Any non-start/non-retry chunk means the AI has started responding.
         receivedFirstResponse.value = true;
+        retryInfo.value = null;
         if (chunk.eventType === "token" && chunk.contentDelta) {
           ensureAssistantAdded();
           assistant.content += chunk.contentDelta;
@@ -699,6 +791,7 @@ const onSend = async (text: string): Promise<void> => {
     (complete: ChatV2StreamChunk) => {
       isStreaming.value = false;
       activeAssistantMessageId.value = null;
+      retryInfo.value = null;
       if (complete.fullContent !== undefined) {
         ensureAssistantAdded();
         assistant.content = complete.fullContent;
@@ -716,6 +809,7 @@ const onSend = async (text: string): Promise<void> => {
     (error: Error) => {
       isStreaming.value = false;
       activeAssistantMessageId.value = null;
+      retryInfo.value = null;
       streamError.value = error.message;
       // Only remove if the placeholder was actually added and is still empty.
       if (assistantAdded && assistant.content.length === 0) {
@@ -734,6 +828,10 @@ onBeforeUnmount(() => {
   clearChatV2StreamListeners();
   windowRemoveAllListeners(AI_CHAT_V2_STREAM_CHUNK);
   windowRemoveAllListeners(AI_CHAT_V2_STREAM_COMPLETE);
+  if (searchDebounceTimer) {
+    clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = null;
+  }
 });
 </script>
 
