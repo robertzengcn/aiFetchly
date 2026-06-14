@@ -7,14 +7,14 @@
 
 ## Overview
 
-aiFetchly's AI chat currently supports OpenAI-compatible streaming, tool calls, skill permission prompts, conversation history, and SQLite-backed chat memory. This feature adds a first-class **Plan Mode** that lets users ask the AI to solve complex marketing problems through an explicit planning workflow before any high-impact action is executed.
+aiFetchly's AI chat currently supports OpenAI-compatible streaming, tool calls, skill permission prompts, conversation history, and SQLite-backed chat memory. This feature adds a first-class **Plan Mode** that lets users ask the AI to solve complex problems through an explicit planning workflow before any high-impact action is executed. The default product context is marketing automation, but Plan Mode must also handle non-marketing goals with a domain-appropriate plan structure.
 
 Plan Mode is inspired by Claude Code's plan-mode architecture, but must be adapted to aiFetchly's product domain:
 
 - Claude Code plans implementation work and uses file-based session plans; aiFetchly plans marketing work and must save plan artifacts in SQLite.
 - Claude Code primarily gates file edits and shell operations; aiFetchly must gate marketing actions such as sending emails, posting content, scraping at scale, creating scheduled tasks, modifying campaigns, or performing browser automation on user accounts.
 - Claude Code uses terminal-oriented `AskUserQuestion` and `ExitPlanMode`; aiFetchly must render structured question and approval cards inside the Vue chat UI.
-- Claude Code is coding-centric; aiFetchly's plan content must be marketing-centric, covering goals, audience, channel strategy, assets, compliance, execution steps, metrics, and stop criteria.
+- Claude Code is coding-centric; aiFetchly's plan content must be domain-adaptive. Marketing-related plans should cover audience, channel strategy, assets, compliance, execution steps, metrics, and stop criteria. Non-marketing plans should use general planning sections and omit irrelevant marketing sections.
 
 The feature introduces:
 
@@ -27,8 +27,8 @@ The feature introduces:
 
 ## Goals
 
-- Help users turn vague marketing requests into clear, executable plans.
-- Prevent accidental execution of high-impact marketing actions before the user understands and approves the strategy.
+- Help users turn vague or complex requests into clear, executable plans, with stronger marketing guidance when the goal is marketing-related.
+- Prevent accidental execution of high-impact actions before the user understands and approves the strategy, especially marketing automation actions that contact leads or modify external accounts.
 - Give the AI a structured workflow for complex problems instead of responding with shallow one-shot advice.
 - Store plan state and plan content in SQLite so users can resume, review, and audit previous planning sessions.
 - Integrate naturally into the existing `AiChatV2` chat experience without forcing users into a separate planning page.
@@ -63,9 +63,9 @@ A marketing user opens the AI chat and wants help with a complex task, such as "
 
 ### User Story 2 - AI Clarifies Requirements with AskUserQuestion (Priority: P1)
 
-A user asks for a marketing campaign but omits key constraints such as target audience, channel, budget, or compliance boundaries. The AI uses `AskUserQuestion` to ask structured questions with clear options instead of guessing.
+A user asks for a complex plan but omits key constraints such as target audience, channel, budget, owner, timeline, compliance boundaries, or success criteria. The AI uses `AskUserQuestion` to ask structured questions with clear options instead of guessing.
 
-**Why this priority**: The quality of marketing plans depends on user-specific constraints. Structured clarification prevents generic, low-value plans.
+**Why this priority**: The quality of any plan depends on user-specific constraints. Structured clarification prevents generic, low-value plans.
 
 **Independent Test**: Can be tested by sending an ambiguous Plan Mode request and verifying that an inline question card appears, the question is persisted in SQLite, and the user's answer resumes the same plan workflow.
 
@@ -79,9 +79,9 @@ A user asks for a marketing campaign but omits key constraints such as target au
 
 ---
 
-### User Story 3 - AI Produces a Marketing Plan for Approval (Priority: P1)
+### User Story 3 - AI Produces a Plan for Approval (Priority: P1)
 
-After gathering enough context, the AI creates a structured marketing plan and submits it for user approval. The plan is saved to SQLite and displayed in a plan approval card. The user can approve, reject, or request changes.
+After gathering enough context, the AI creates a structured, domain-appropriate plan and submits it for user approval. The plan is saved to SQLite and displayed in a plan approval card. The user can approve, reject, or request changes.
 
 **Why this priority**: Approval is the core safety and trust boundary. Users must be able to inspect the plan before execution tools are unlocked.
 
@@ -99,7 +99,7 @@ After gathering enough context, the AI creates a structured marketing plan and s
 
 ### User Story 4 - Plan Mode Blocks High-Impact Tools Until Approval (Priority: P1)
 
-The AI may need to research, inspect existing campaign data, or reason during planning, but must not execute high-impact actions before approval. The system enforces this in backend tool policy, not only in prompts.
+The AI may need to research, inspect existing data, or reason during planning, but must not execute high-impact actions before approval. The system enforces this in backend tool policy, not only in prompts.
 
 **Why this priority**: Marketing automation actions can contact real leads, alter campaigns, consume quotas, or affect external accounts. Prompt-only safety is insufficient.
 
@@ -117,9 +117,9 @@ The AI may need to research, inspect existing campaign data, or reason during pl
 
 ### User Story 5 - User Resumes Planning Across Sessions (Priority: P2)
 
-A user starts planning a campaign, closes the app, and returns later. The conversation, active plan, pending questions, and plan approval state are restored from SQLite.
+A user starts a plan, closes the app, and returns later. The conversation, active plan, pending questions, and plan approval state are restored from SQLite.
 
-**Why this priority**: Marketing planning often takes multiple sessions. Durable state is required for user trust and product usefulness.
+**Why this priority**: Complex planning often takes multiple sessions. Durable state is required for user trust and product usefulness.
 
 **Independent Test**: Can be tested by creating a pending question or awaiting approval plan, restarting the app, opening the conversation, and verifying the same workflow state is restored.
 
@@ -132,33 +132,34 @@ A user starts planning a campaign, closes the app, and returns later. The conver
 
 ---
 
-### User Story 6 - Plan Content Is Marketing-Specific (Priority: P2)
+### User Story 6 - Plan Content Adapts to the User's Goal (Priority: P2)
 
-The AI's final plan is not a generic coding-style checklist. It is structured around marketing outcomes, audience, channels, content, execution, compliance, and measurement.
+The AI's final plan is not a generic coding-style checklist. It uses a general planning structure for non-marketing goals and adds marketing-specific sections only when the user's goal involves marketing, lead generation, outreach, scraping, campaigns, social media, or email automation.
 
-**Why this priority**: aiFetchly is a marketing automation product. Plan Mode must feel native to marketing users.
+**Why this priority**: aiFetchly is a marketing automation product, but users may ask the chat assistant to plan non-marketing work. Plan Mode must feel native to marketing users without forcing irrelevant marketing headings into unrelated plans.
 
-**Independent Test**: Can be tested by sending representative marketing requests and verifying the saved plan contains required marketing sections.
+**Independent Test**: Can be tested by sending representative marketing and non-marketing requests, then verifying the saved plan uses relevant sections and omits irrelevant ones.
 
 **Acceptance Scenarios**:
 
 1. **Given** the user asks for an outreach campaign, **When** the AI submits a plan, **Then** it includes target audience, offer, channel strategy, lead source, email assets, compliance notes, metrics, and stop criteria.
 2. **Given** the user asks for social media automation, **When** the AI submits a plan, **Then** it includes platform strategy, content themes, posting cadence, account safety, and success metrics.
 3. **Given** the plan involves scraping or contact extraction, **When** the AI submits a plan, **Then** it identifies data sources, allowed scope, rate-limit concerns, compliance risks, and user approvals needed.
+4. **Given** the user asks for a non-marketing plan, such as organizing a team workflow or planning a product decision, **When** the AI submits a plan, **Then** it uses general sections such as objective, context, assumptions, options, execution steps, risks, decisions needed, and success criteria without forcing audience, channels, offer, or campaign assets.
 
 ## Required Plan Mode Workflow
 
-The AI should follow a workflow similar to Claude Code's plan mode, adapted to marketing:
+The AI should follow a workflow similar to Claude Code's plan mode, adapted to aiFetchly and the user's actual goal:
 
 1. **Understand**
-   - Restate the user's marketing objective.
+   - Restate the user's objective.
    - Identify missing constraints.
    - Decide whether planning is needed. If the user explicitly selected Plan Mode, remain in Plan Mode.
 
 2. **Explore**
    - Review existing conversation history.
    - Use safe read-only tools if needed, such as listing available skills, inspecting existing campaign summaries, reading knowledge-base context, or researching public data if permitted.
-   - Do not execute high-impact marketing actions.
+   - Do not execute high-impact actions, especially marketing automation actions that contact leads, mutate campaigns, modify schedules, or change external accounts.
 
 3. **Clarify**
    - Use `AskUserQuestion` when user-only information is required.
@@ -167,7 +168,8 @@ The AI should follow a workflow similar to Claude Code's plan mode, adapted to m
    - Do not ask questions that can be answered from existing chat, saved plan data, or safe read-only context.
 
 4. **Design**
-   - Produce a structured marketing plan with assumptions and tradeoffs.
+   - Produce a structured plan with assumptions and tradeoffs.
+   - Use marketing-specific sections only when the user's objective is marketing-related.
    - Include risks, required approvals, and success metrics.
    - Explicitly identify which actions are safe to execute after approval.
 
@@ -186,46 +188,43 @@ The AI should follow a workflow similar to Claude Code's plan mode, adapted to m
 
 ## Plan Content Template
 
-Every final plan SHOULD include these sections when relevant:
+Every final plan SHOULD include the universal sections below when relevant. Marketing-specific sections are required only when the user's goal relates to marketing, lead generation, outreach, scraping, campaigns, social media, email automation, or other aiFetchly marketing workflows.
+
+### Universal Sections
 
 1. **Objective**
-   - Clear business goal.
-   - Primary success metric.
+   - Clear goal.
+   - Primary success metric or desired outcome.
 
-2. **Audience**
-   - Target customer profile.
-   - Exclusions or disallowed audiences.
+2. **Context**
+   - Current situation.
+   - Relevant constraints.
+   - Known facts from the conversation or safe read-only context.
 
-3. **Offer and Positioning**
-   - Core value proposition.
-   - Messaging angle.
-   - Proof points or differentiators.
+3. **Assumptions**
+   - Explicit assumptions the AI is making.
+   - What should be confirmed before execution.
 
-4. **Channels**
-   - Email, social, search, maps, website analysis, or other channels.
-   - Why each channel is appropriate.
+4. **Options or Approach**
+   - Recommended approach.
+   - Alternative approaches when there are meaningful tradeoffs.
+   - Why the recommended path is preferred.
 
-5. **Data and Inputs Needed**
-   - Lead sources.
-   - Existing campaign assets.
-   - Knowledge-base documents.
+5. **Inputs Needed**
+   - Data, documents, preferences, accounts, or decisions required.
    - Required user-provided constraints.
 
 6. **Execution Steps**
    - Ordered steps the system or user will perform.
    - Tool-backed steps versus manual steps.
 
-7. **Assets to Generate**
-   - Email templates.
-   - Subject lines.
-   - Social posts.
-   - Search keywords.
-   - Landing-page copy or notes.
+7. **Deliverables**
+   - Artifacts, outputs, or decisions the plan should produce.
+   - Tool-backed deliverables versus manual deliverables.
 
-8. **Compliance and Safety**
-   - Consent, unsubscribe, anti-spam, account safety, rate limits.
-   - External account risks.
-   - Data handling risks.
+8. **Risks and Safety**
+   - Operational, compliance, data, account, financial, or user-impact risks.
+   - Mitigations and approval points.
 
 9. **Approval Checkpoints**
    - Actions requiring explicit approval.
@@ -240,6 +239,41 @@ Every final plan SHOULD include these sections when relevant:
     - When to pause or cancel the plan.
     - Failure thresholds.
     - Rollback or cleanup steps.
+
+### Marketing-Specific Sections
+
+When the goal is marketing-related, the plan SHOULD also include these sections when relevant:
+
+1. **Audience**
+   - Target customer profile.
+   - Exclusions or disallowed audiences.
+
+2. **Offer and Positioning**
+   - Core value proposition.
+   - Messaging angle.
+   - Proof points or differentiators.
+
+3. **Channels**
+   - Email, social, search, maps, website analysis, or other channels.
+   - Why each channel is appropriate.
+
+4. **Marketing Data and Inputs**
+   - Lead sources.
+   - Existing campaign assets.
+   - Knowledge-base documents.
+   - Contact enrichment or scraping scope.
+
+5. **Marketing Assets to Generate**
+   - Email templates.
+   - Subject lines.
+   - Social posts.
+   - Search keywords.
+   - Landing-page copy or notes.
+
+6. **Marketing Compliance and Account Safety**
+   - Consent, unsubscribe, anti-spam, platform rules, account safety, and rate limits.
+   - External account risks.
+   - Data handling risks.
 
 ## Requirements *(mandatory)*
 
@@ -302,7 +336,7 @@ Every final plan SHOULD include these sections when relevant:
 
 - **FR-039**: System MUST inject a Plan Mode system prompt when request mode is `plan` or the conversation has active plan state.
 - **FR-040**: The Plan Mode prompt MUST instruct the AI to follow the required workflow: Understand, Explore, Clarify, Design, Review, Submit, Exit/Iterate.
-- **FR-041**: The Plan Mode prompt MUST require marketing-specific plan sections when relevant.
+- **FR-041**: The Plan Mode prompt MUST require domain-appropriate plan sections and MUST include marketing-specific sections only when the user's objective is marketing-related.
 - **FR-042**: The Plan Mode prompt MUST instruct the AI not to execute high-impact tools before plan approval.
 - **FR-043**: System MUST prefer backend-enforced tool allowlists over relying on model compliance.
 - **FR-044**: System MUST support continuing Plan Mode after app restart or stream interruption using persisted plan/question state.
@@ -502,7 +536,7 @@ Rules:
 Rules:
 
 - `title`, `objective`, and `planMarkdown` are required.
-- `planJson` should follow the marketing plan template when possible.
+- `planJson` should follow the domain-adaptive plan template when possible.
 - Tool creates a new plan version and sets status to `awaiting_approval`.
 - Tool is only enabled in Plan Mode.
 
@@ -621,7 +655,7 @@ Conversation list items should indicate:
 - **SC-003**: `AskUserQuestion` question cards render and resume the AI stream successfully in 95% of tested planning interactions.
 - **SC-004**: High-impact tools are blocked before plan approval in 100% of automated policy tests.
 - **SC-005**: Approved plans unlock eligible execution tools while preserving normal skill permission prompts in 100% of tested flows.
-- **SC-006**: Final submitted plans include required marketing sections in 90% of sampled AI-generated plans.
+- **SC-006**: Final submitted plans use domain-appropriate sections in 90% of sampled AI-generated plans, including required marketing sections for marketing-related plans and omitting irrelevant marketing sections for non-marketing plans.
 - **SC-007**: Users can request changes and receive a new plan version without losing previous versions in 100% of versioning tests.
 - **SC-008**: All new UI text has translations in English, Chinese, Spanish, French, German, and Japanese.
 
