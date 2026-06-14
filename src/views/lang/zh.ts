@@ -701,6 +701,8 @@ export default {
       "提示：为了获得更好的Yandex搜索结果，我们建议使用本地浏览器。请启用'使用本地浏览器'选项。",
     google_account_tip:
       "提示：为了获得更好的Google搜索结果，我们建议使用搜索引擎账户。请启用'使用搜索引擎账户'选项。",
+    google_account_cookies_required:
+      "Google搜索需要带有cookies的Google账户。请在社交账户中添加一个带有有效cookies的Google账户。",
     task_id: "任务ID",
     run_task: "运行任务",
     task_status_not_start: "未开始",

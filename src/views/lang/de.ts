@@ -735,6 +735,8 @@ export default {
       "Tipp: Für bessere Ergebnisse mit Yandex empfehlen wir einen lokalen Browser. Bitte aktivieren Sie die Option 'Lokalen Browser verwenden'.",
     google_account_tip:
       "Tipp: Für bessere Ergebnisse mit Google empfehlen wir ein Suchmaschinen-Konto. Bitte aktivieren Sie die Option 'Suchmaschinen-Konto verwenden'.",
+    google_account_cookies_required:
+      "Für die Google-Suche ist ein Google-Konto mit Cookies erforderlich. Bitte fügen Sie ein Google-Konto mit gültigen Cookies unter Soziale Konten hinzu.",
     task_id: "Aufgaben-ID",
     run_task: "Aufgabe ausführen",
     task_status_not_start: "Nicht gestartet",

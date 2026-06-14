@@ -737,6 +737,8 @@ export default {
       "Consejo: Para mejores resultados con Yandex, recomendamos usar un navegador local. Por favor habilite la opción 'Usar navegador local'.",
     google_account_tip:
       "Consejo: Para mejores resultados con Google, recomendamos usar una cuenta del motor de búsqueda. Por favor habilite la opción 'Usar cuenta del motor de búsqueda'.",
+    google_account_cookies_required:
+      "Se requiere una cuenta de Google con cookies para buscar en Google. Agregue una cuenta de Google con cookies válidas en Cuentas Sociales.",
     task_id: "ID de tarea",
     run_task: "Ejecutar tarea",
     task_status_not_start: "No iniciada",

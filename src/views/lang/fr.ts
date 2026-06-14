@@ -728,6 +728,8 @@ export default {
       "Tip: For better results with Yandex, we recommend using a local browser. Please enable 'Use Local Browser' option.",
     google_account_tip:
       "Tip: For better results with Google, we recommend using a search engine account. Please enable 'Use Search Engine Account' option.",
+    google_account_cookies_required:
+      "Un compte Google avec des cookies est requis pour la recherche Google. Veuillez ajouter un compte Google avec des cookies valides dans Comptes Sociaux.",
     task_id: "Task ID",
     run_task: "Run Task",
     task_status_not_start: "Not Start",
