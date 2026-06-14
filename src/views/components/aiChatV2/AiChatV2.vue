@@ -72,7 +72,7 @@
           @answered="handleQuestionAnswered"
         />
         <AiChatV2PlanApprovalCard
-          v-if="planState"
+          v-if="planState && planState.latestVersion"
           :plan-state="planState"
           :disabled="isStreaming"
           @approve="handleApprovePlan"

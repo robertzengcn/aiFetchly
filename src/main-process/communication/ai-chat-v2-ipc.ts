@@ -914,7 +914,7 @@ async function handlePlanToolAskUserQuestion(args: {
     toolCallId: call.id,
     toolName: call.name,
     question: questionView,
-    planStateView: state.planState,
+    planState: state.planState,
   } as ChatV2StreamChunk);
 
   // Synthetic tool result so the transcript has a well-formed tool/assistant
@@ -996,7 +996,7 @@ async function handlePlanToolSubmitForApproval(args: {
     messageId: state.assistantMessageId,
     toolCallId: call.id,
     toolName: call.name,
-    planStateView: updatedPlan,
+    planState: updatedPlan,
   } as ChatV2StreamChunk);
 
   const ackContent = serializeToolResultContent({
