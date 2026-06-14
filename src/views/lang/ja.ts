@@ -1745,6 +1745,7 @@ export default {
     loading_models: "モデルを読み込み中…",
     loading_history: "履歴を読み込み中…",
     streaming: "生成中…",
+    thinking: "AIが思考中…",
     cancelled: "キャンセルされました",
     ai_disabled: "AI が有効ではありません。",
     model_unavailable: "選択したモデルは利用できません。",

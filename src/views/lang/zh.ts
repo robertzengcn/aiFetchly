@@ -1730,6 +1730,7 @@ export default {
     loading_models: "正在加载模型…",
     loading_history: "正在加载历史…",
     streaming: "生成中…",
+    thinking: "AI 正在思考…",
     cancelled: "已取消",
     ai_disabled: "AI 功能未开启。",
     model_unavailable: "所选模型不可用。",

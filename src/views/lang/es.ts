@@ -1785,6 +1785,7 @@ export default {
     loading_models: "Cargando modelos…",
     loading_history: "Cargando historial…",
     streaming: "Generando…",
+    thinking: "La IA está pensando…",
     cancelled: "Cancelado",
     ai_disabled: "La IA no está habilitada.",
     model_unavailable: "El modelo seleccionado no está disponible.",

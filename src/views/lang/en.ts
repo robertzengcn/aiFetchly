@@ -1791,6 +1791,7 @@ export default {
     loading_models: "Loading models…",
     loading_history: "Loading history…",
     streaming: "Generating…",
+    thinking: "AI is thinking…",
     cancelled: "Cancelled",
     ai_disabled: "AI is not enabled.",
     model_unavailable: "Selected model is not available.",
