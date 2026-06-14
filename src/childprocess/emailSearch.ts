@@ -8,6 +8,14 @@ import { SMstruct } from "@/entityTypes/scrapeType";
 import { Cluster } from "puppeteer-cluster";
 import { EmailCluster } from "@/childprocess/emailCluster";
 import { EmailsControldata } from "@/entityTypes/emailextraction-type";
+import { normalizeEmailSearchConcurrency } from "@/modules/emailSearchConcurrency";
+
+export {
+  DEFAULT_EMAIL_SEARCH_CONCURRENCY,
+  MAX_EMAIL_SEARCH_CONCURRENCY,
+  normalizeEmailSearchConcurrency,
+} from "@/modules/emailSearchConcurrency";
+
 export class EmailSearch {
   public async searchEmail(
     data: EmailsControldata,
@@ -37,9 +45,10 @@ export class EmailSearch {
         monitor: true,
         concurrency: Cluster.CONCURRENCY_BROWSER,
         //concurrency:data.concurrency, // one scraper per tab
-        maxConcurrency: data.concurrency, // scrape with 1 tab
+        maxConcurrency: normalizeEmailSearchConcurrency(data.concurrency),
       },
       page_length: data.pagelength,
+      block_assets: true,
       proxies: proxyStrList,
       maxPageNumber: data.maxPageNumber ? data.maxPageNumber : 0,
     };
