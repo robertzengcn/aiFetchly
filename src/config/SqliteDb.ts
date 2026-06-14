@@ -46,6 +46,10 @@ import { RAGDocumentEntity } from "@/entity/RAGDocument.entity";
 import { RAGChunkEntity } from "@/entity/RAGChunk.entity";
 // import { RAGModelEntity } from "@/entity/RAGModel.entity";
 import { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
+import { AIChatPlanEntity } from "@/entity/AIChatPlan.entity";
+import { AIChatPlanVersionEntity } from "@/entity/AIChatPlanVersion.entity";
+import { AIChatPlanQuestionEntity } from "@/entity/AIChatPlanQuestion.entity";
+import { AIChatPlanApprovalEntity } from "@/entity/AIChatPlanApproval.entity";
 import { AIChatAttachmentEntity } from "@/entity/AIChatAttachment.entity";
 import { VectorEntity, VectorMetadataEntity } from "@/entity/Vector.entity";
 import { MCPToolEntity } from "@/entity/MCPTool.entity";
@@ -467,6 +471,10 @@ export class SqliteDb {
           YandexMapsSearchRecordEntity,
           AiMessageTaskEntity,
           AiMessageTaskRunEntity,
+          AIChatPlanEntity,
+          AIChatPlanVersionEntity,
+          AIChatPlanQuestionEntity,
+          AIChatPlanApprovalEntity,
         ],
         synchronize: true,
         migrations: [],
