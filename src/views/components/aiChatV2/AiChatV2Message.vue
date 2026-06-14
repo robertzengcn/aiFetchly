@@ -1,5 +1,15 @@
 <template>
-  <div class="v2-message" :class="`v2-message--${message.role}`">
+  <!-- Plan approval card renders inline (no bubble wrapper) -->
+  <div v-if="isPlanCard" class="v2-message v2-message--plan">
+    <AiChatV2PlanApprovalCard
+      :plan-state="message.metadata!.planStateView!"
+      :disabled="disabled"
+      @approve="emit('approve-plan')"
+      @reject="(fb) => emit('reject-plan', fb)"
+      @request-changes="(fb) => emit('request-plan-changes', fb)"
+    />
+  </div>
+  <div v-else class="v2-message" :class="`v2-message--${message.role}`">
     <div class="v2-message__bubble">
       <div class="v2-message__role">{{ roleLabel }}</div>
       <template v-if="message.messageType === MessageType.TOOL_CALL">
@@ -69,6 +79,7 @@ import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
 import { MessageType } from "@/entityTypes/commonType";
 import SkillApprovalCard from "@/views/components/aiChat/SkillApprovalCard.vue";
 import AiChatV2StreamStatus from "./AiChatV2StreamStatus.vue";
+import AiChatV2PlanApprovalCard from "./AiChatV2PlanApprovalCard.vue";
 
 type Status = "idle" | "streaming" | "cancelled" | "error";
 type ShellPreview = {
@@ -82,6 +93,7 @@ const props = defineProps<{
   message: ChatV2MessageView;
   status?: Status;
   errorMessage?: string;
+  disabled?: boolean;
 }>();
 const emit = defineEmits<{
   (
@@ -90,8 +102,15 @@ const emit = defineEmits<{
     payload: { persistent: boolean }
   ): void;
   (e: "deny-permission", message: ChatV2MessageView): void;
+  (e: "approve-plan"): void;
+  (e: "reject-plan", feedback: string): void;
+  (e: "request-plan-changes", feedback: string): void;
 }>();
 const { t, te } = useI18n();
+
+const isPlanCard = computed(
+  () => props.message.metadata?.planStateView !== undefined
+);
 
 const roleLabel = computed(() => {
   if (props.message.role === "user") {
@@ -102,6 +121,7 @@ const roleLabel = computed(() => {
 });
 
 const status = computed<Status>(() => props.status ?? "idle");
+const disabled = computed(() => props.disabled ?? false);
 
 const toolResult = computed<Record<string, unknown>>(
   () => props.message.metadata?.toolResult ?? {}
@@ -137,6 +157,9 @@ const shellPreview = computed<ShellPreview | undefined>(() => {
 .v2-message {
   display: flex;
   margin: 8px 0;
+}
+.v2-message--plan {
+  justify-content: stretch;
 }
 .v2-message--user {
   justify-content: flex-end;

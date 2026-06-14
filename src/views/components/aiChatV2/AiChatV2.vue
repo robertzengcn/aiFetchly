@@ -60,24 +60,19 @@
         :stream-status="streamStatus"
         :error-message="streamError ?? undefined"
         :show-typing-indicator="showTypingIndicator"
+        :is-streaming="isStreaming"
         @grant-permission="handleSkillPermissionGrant"
         @deny-permission="handleSkillPermissionDeny"
+        @approve-plan="handleApprovePlan"
+        @reject-plan="handleRejectPlan"
+        @request-plan-changes="handleRequestPlanChanges"
       />
 
-      <!-- Plan Mode active cards -->
-      <div v-if="mode === 'plan'" class="v2-shell__plan-panel">
+      <!-- Plan Mode active cards (question card only; approval card renders inline) -->
+      <div v-if="mode === 'plan' && pendingQuestion" class="v2-shell__plan-panel">
         <AiChatV2QuestionCard
-          v-if="pendingQuestion"
           :question="pendingQuestion"
           @answered="handleQuestionAnswered"
-        />
-        <AiChatV2PlanApprovalCard
-          v-if="planState && planState.latestVersion"
-          :plan-state="planState"
-          :disabled="isStreaming"
-          @approve="handleApprovePlan"
-          @reject="handleRejectPlan"
-          @request-changes="handleRequestPlanChanges"
         />
       </div>
 
@@ -172,7 +167,6 @@ import AiChatV2Messages from "./AiChatV2Messages.vue";
 import AiChatV2Composer from "./AiChatV2Composer.vue";
 import AiChatV2ModeSelector from "./AiChatV2ModeSelector.vue";
 import AiChatV2QuestionCard from "./AiChatV2QuestionCard.vue";
-import AiChatV2PlanApprovalCard from "./AiChatV2PlanApprovalCard.vue";
 import AiChatV2PlanStatusBadge from "./AiChatV2PlanStatusBadge.vue";
 import MCPToolManager from "../aiChat/MCPToolManager.vue";
 
@@ -254,6 +248,11 @@ const loadHistory = async (conversationId: string): Promise<void> => {
         pendingQuestion.value = planState.value.pendingQuestion;
       } else {
         pendingQuestion.value = null;
+      }
+      // If the plan has content (submitted/approved/rejected), render its
+      // card inline within the message flow at the end of the loaded history.
+      if (planState.value?.latestVersion) {
+        upsertPlanMessage(planState.value);
       }
     } catch {
       planState.value = null;
@@ -468,6 +467,41 @@ const handleSkillPermissionDeny = (message: ChatV2MessageView): void => {
 // Plan Mode handlers
 // ---------------------------------------------------------------------------
 
+/**
+ * Insert or update the inline plan-approval message row so the card appears
+ * in the conversation flow (not pinned at the bottom). After approval/reject
+ * the row stays in place; later messages render below it.
+ */
+const upsertPlanMessage = (state: AIChatPlanStateView): void => {
+  const planMsgId = `plan-${state.planId}`;
+  const existingIdx = messages.value.findIndex((m) => m.id === planMsgId);
+  const metadata = {
+    source: "chat-v2" as const,
+    planEventType: "plan_submitted" as const,
+    planId: state.planId,
+    planStateView: state,
+  };
+  if (existingIdx !== -1) {
+    messages.value[existingIdx] = {
+      ...messages.value[existingIdx],
+      metadata: {
+        ...messages.value[existingIdx].metadata,
+        ...metadata,
+      },
+    };
+    return;
+  }
+  messages.value.push({
+    id: planMsgId,
+    conversationId: state.conversationId,
+    role: "assistant",
+    content: "",
+    timestamp: new Date().toISOString(),
+    messageType: "message" as MessageType,
+    metadata,
+  });
+};
+
 const handleQuestionAnswered = async (
   questionId: string,
   answers: AskUserQuestionAnswer[]
@@ -496,7 +530,10 @@ const handleApprovePlan = async (): Promise<void> => {
       planState.value.planId,
       planState.value.currentVersion
     );
-    if (updated) planState.value = updated;
+    if (updated) {
+      planState.value = updated;
+      upsertPlanMessage(updated);
+    }
 
     // After approval, kick off a new AI round so the assistant begins
     // executing the plan. The plan-mode system prompt now reflects the
@@ -520,7 +557,10 @@ const handleRejectPlan = async (feedback: string): Promise<void> => {
       planState.value.currentVersion,
       feedback
     );
-    if (updated) planState.value = updated;
+    if (updated) {
+      planState.value = updated;
+      upsertPlanMessage(updated);
+    }
   } catch (err) {
     streamError.value = err instanceof Error ? err.message : String(err);
   }
@@ -535,7 +575,10 @@ const handleRequestPlanChanges = async (feedback: string): Promise<void> => {
       planState.value.currentVersion,
       feedback
     );
-    if (updated) planState.value = updated;
+    if (updated) {
+      planState.value = updated;
+      upsertPlanMessage(updated);
+    }
   } catch (err) {
     streamError.value = err instanceof Error ? err.message : String(err);
   }
@@ -621,6 +664,7 @@ const onSend = async (text: string): Promise<void> => {
           const planChunk = chunk as ChatV2StreamChunk;
           if (planChunk.planState) {
             planState.value = planChunk.planState;
+            upsertPlanMessage(planChunk.planState);
           }
         } else if (chunk.eventType === "plan_blocked_tool" as never) {
           // Tool was blocked by plan policy — surface as a tool result message

@@ -15,8 +15,12 @@
       :message="m"
       :status="m.id === activeAssistantMessageId ? streamStatus : 'idle'"
       :error-message="errorMessage"
+      :disabled="isStreaming"
       @grant-permission="onGrantPermission"
       @deny-permission="onDenyPermission"
+      @approve-plan="emit('approve-plan')"
+      @reject-plan="(fb) => emit('reject-plan', fb)"
+      @request-plan-changes="(fb) => emit('request-plan-changes', fb)"
     />
     <div
       v-if="showTypingIndicator"
@@ -44,10 +48,14 @@ const props = defineProps<{
   streamStatus: Status;
   errorMessage?: string;
   showTypingIndicator?: boolean;
+  isStreaming?: boolean;
 }>();
 const emit = defineEmits<{
   (e: "grant-permission", message: ChatV2MessageView, persistent: boolean): void;
   (e: "deny-permission", message: ChatV2MessageView): void;
+  (e: "approve-plan"): void;
+  (e: "reject-plan", feedback: string): void;
+  (e: "request-plan-changes", feedback: string): void;
 }>();
 const { t } = useI18n();
 
