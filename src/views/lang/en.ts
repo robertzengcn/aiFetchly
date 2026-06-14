@@ -1823,6 +1823,8 @@ export default {
     reject: "Reject",
     request_changes: "Request Changes",
     approved: "Approved",
+    approved_continue_message:
+      "Plan approved. Please begin executing the plan now.",
     reject_feedback: "Reason for rejection",
     changes_feedback: "What needs to change?",
     no_plan_yet: "No plan content yet.",

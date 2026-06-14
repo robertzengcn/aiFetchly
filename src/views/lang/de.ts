@@ -1812,6 +1812,8 @@ export default {
     reject: "Ablehnen",
     request_changes: "Änderungen anfordern",
     approved: "Genehmigt",
+    approved_continue_message:
+      "Plan genehmigt. Bitte beginnen Sie jetzt mit der Ausführung des Plans.",
     reject_feedback: "Grund für Ablehnung",
     changes_feedback: "Was muss geändert werden?",
     no_plan_yet: "Noch kein Planinhalt.",

@@ -489,6 +489,7 @@ const handleQuestionAnswered = async (
 
 const handleApprovePlan = async (): Promise<void> => {
   if (!planState.value || !activeConversationId.value) return;
+  if (isStreaming.value) return;
   try {
     const updated = await approveChatV2Plan(
       activeConversationId.value,
@@ -496,6 +497,15 @@ const handleApprovePlan = async (): Promise<void> => {
       planState.value.currentVersion
     );
     if (updated) planState.value = updated;
+
+    // After approval, kick off a new AI round so the assistant begins
+    // executing the plan. The plan-mode system prompt now reflects the
+    // "approved" status, so high-impact tools are unblocked. This also
+    // drives the typing indicator (isStreaming + !receivedFirstResponse).
+    const continueText =
+      t("aiChatV2Plan.approved_continue_message") ||
+      "Plan approved. Please begin executing the plan now.";
+    await onSend(continueText);
   } catch (err) {
     streamError.value = err instanceof Error ? err.message : String(err);
   }
