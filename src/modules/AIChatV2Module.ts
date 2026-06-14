@@ -12,7 +12,10 @@ const V2_DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant.";
 
 function uuid(): string {
   // Crypto.randomUUID is available in Electron (Node 16+ / Chromium).
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+  if (
+    typeof crypto !== "undefined" &&
+    typeof crypto.randomUUID === "function"
+  ) {
     return crypto.randomUUID();
   }
   return `id-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -82,7 +85,11 @@ export class AIChatV2Module extends BaseModule {
     limit?: number,
     offset?: number
   ): Promise<AIChatMessageEntity[]> {
-    return this.chatModule.getConversationMessages(conversationId, limit, offset);
+    return this.chatModule.getConversationMessages(
+      conversationId,
+      limit,
+      offset
+    );
   }
 
   async clearConversation(conversationId: string): Promise<number> {
@@ -99,27 +106,15 @@ export class AIChatV2Module extends BaseModule {
     return total;
   }
 
-  /** List v2 conversations only (filtered by prefix + chat-v2 metadata). */
+  /** List v2 conversations only (filtered by v2- prefix). */
   async getConversations(): Promise<ChatV2ConversationSummary[]> {
     const all = await this.chatModule.getConversationsWithMetadata();
     const summaries: ChatV2ConversationSummary[] = [];
     for (const conv of all) {
+      // The v2- prefix is the authoritative identifier — only
+      // createConversationIfNeeded() in this module generates it, so no
+      // per-conversation metadata probe is needed (eliminates an N+1 query).
       if (!conv.conversationId.startsWith(V2_CONVERSATION_PREFIX)) {
-        continue;
-      }
-      // Confirm at least one row carries v2 source metadata.
-      const rows = await this.getConversationMessages(conv.conversationId, 1);
-      const first = rows[0];
-      let isV2 = false;
-      if (first?.metadata) {
-        try {
-          const parsed = JSON.parse(first.metadata);
-          isV2 = parsed?.source === "chat-v2";
-        } catch {
-          isV2 = false;
-        }
-      }
-      if (!isV2) {
         continue;
       }
       summaries.push({
