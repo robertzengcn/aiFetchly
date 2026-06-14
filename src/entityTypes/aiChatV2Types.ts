@@ -1,4 +1,14 @@
 import { MessageType } from "@/entityTypes/commonType";
+import type {
+  AIChatPlanStateView,
+  AIChatPlanQuestionView,
+  AIChatPlanVersionView,
+} from "@/entityTypes/aiChatPlanTypes";
+
+export type {
+  ChatV2Mode,
+  AIChatPlanStatus,
+} from "@/entityTypes/aiChatPlanTypes";
 
 /** Metadata stored on v2 chat rows in the existing ai_chat_messages table. */
 export interface ChatV2MessageMetadata {
@@ -16,6 +26,21 @@ export interface ChatV2MessageMetadata {
   success?: boolean;
   executionTimeMs?: number;
   summary?: string;
+  // Plan-mode fields (present only on plan-related display rows)
+  planEventType?:
+    | "ask_user_question"
+    | "plan_submitted"
+    | "plan_approved"
+    | "plan_rejected"
+    | "plan_blocked_tool"
+    | "plan_changes_requested";
+  planId?: string;
+  planVersion?: number;
+  questionId?: string;
+  questionView?: AIChatPlanQuestionView;
+  planStateView?: AIChatPlanStateView;
+  planBlockedToolName?: string;
+  planBlockedReason?: string;
 }
 
 /** Renderer request to start a streaming chat turn. */
@@ -26,6 +51,7 @@ export interface ChatV2StreamRequest {
   temperature?: number;
   maxTokens?: number;
   systemPrompt?: string;
+  mode?: ChatV2Mode;
 }
 
 export interface ChatV2HistoryRequest {
@@ -46,6 +72,8 @@ export interface ChatV2ConversationSummary {
   lastMessageTimestamp: string;
   messageCount: number;
   createdAt: string;
+  planStatus?: AIChatPlanStatus;
+  activePlanId?: string;
 }
 
 /** Single message view rendered by the UI. */
@@ -74,6 +102,13 @@ export type ChatV2StreamEventType =
   | "tool_call_delta"
   | "tool_call"
   | "tool_result"
+  | "plan_state"
+  | "ask_user_question"
+  | "plan_submitted"
+  | "plan_approved"
+  | "plan_rejected"
+  | "plan_blocked_tool"
+  | "plan_changes_requested"
   | "error"
   | "cancelled"
   | "complete";
@@ -92,4 +127,7 @@ export interface ChatV2StreamChunk {
   toolArguments?: Record<string, unknown>;
   toolResult?: Record<string, unknown>;
   replacesPermissionPromptForToolId?: string;
+  planState?: AIChatPlanStateView;
+  question?: AIChatPlanQuestionView;
+  planVersion?: AIChatPlanVersionView;
 }

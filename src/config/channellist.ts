@@ -271,6 +271,14 @@ export const AI_CHAT_V2_CLEAR_ALL = "ai-chat-v2:clear-all";
 /** Resume a V2 skill/tool call after the user granted permission in the chat UI. */
 export const AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION =
   "ai-chat-v2:resume-tool-after-permission";
+// Plan Mode channels
+export const AI_CHAT_V2_PLAN_STATE = "ai-chat-v2:plan-state";
+export const AI_CHAT_V2_ANSWER_QUESTION = "ai-chat-v2:answer-question";
+export const AI_CHAT_V2_APPROVE_PLAN = "ai-chat-v2:approve-plan";
+export const AI_CHAT_V2_REJECT_PLAN = "ai-chat-v2:reject-plan";
+export const AI_CHAT_V2_REQUEST_PLAN_CHANGES =
+  "ai-chat-v2:request-plan-changes";
+export const AI_CHAT_V2_PLAN_VERSIONS = "ai-chat-v2:plan-versions";
 
 // MCP Tool Management Channels
 export const MCP_TOOL_LIST = "mcp:tool:list";
