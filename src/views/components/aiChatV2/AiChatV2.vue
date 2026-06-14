@@ -5,6 +5,11 @@
       <div class="v2-shell__header-left">
         <v-icon class="mr-2">mdi-robot</v-icon>
         <span class="v2-shell__title">{{ t("aiChatV2.title") || "AI Assistant" }}</span>
+        <AiChatV2PlanStatusBadge
+          v-if="planState"
+          :status="planState.status"
+          class="ml-2"
+        />
       </div>
       <div class="v2-shell__header-actions">
         <v-btn
@@ -57,11 +62,33 @@
         @grant-permission="handleSkillPermissionGrant"
         @deny-permission="handleSkillPermissionDeny"
       />
+
+      <!-- Plan Mode active cards -->
+      <div v-if="mode === 'plan'" class="v2-shell__plan-panel">
+        <AiChatV2QuestionCard
+          v-if="pendingQuestion"
+          :question="pendingQuestion"
+          @answered="handleQuestionAnswered"
+        />
+        <AiChatV2PlanApprovalCard
+          v-if="planState"
+          :plan-state="planState"
+          :disabled="isStreaming"
+          @approve="handleApprovePlan"
+          @reject="handleRejectPlan"
+          @request-changes="handleRequestPlanChanges"
+        />
+      </div>
+
       <AiChatV2Composer
         :is-streaming="isStreaming"
         @send="onSend"
         @stop="onStop"
-      />
+      >
+        <template #prepend>
+          <AiChatV2ModeSelector v-model="mode" :disabled="isStreaming" />
+        </template>
+      </AiChatV2Composer>
     </div>
 
     <!-- MCP Tool Manager Dialog -->
@@ -116,6 +143,12 @@ import type {
   ChatV2ConversationSummary,
   ChatV2StreamChunk,
 } from "@/entityTypes/aiChatV2Types";
+import type {
+  AIChatPlanStateView,
+  AIChatPlanQuestionView,
+  AskUserQuestionAnswer,
+  ChatV2Mode,
+} from "@/entityTypes/aiChatPlanTypes";
 import { windowInvoke, windowRemoveAllListeners } from "@/views/utils/apirequest";
 import {
   AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
@@ -128,9 +161,18 @@ import {
   getChatV2History,
   streamChatV2Message,
   stopChatV2Stream,
+  getChatV2PlanState,
+  answerChatV2Question,
+  approveChatV2Plan,
+  rejectChatV2Plan,
+  requestChatV2PlanChanges,
 } from "@/views/api/aiChatV2";
 import AiChatV2Messages from "./AiChatV2Messages.vue";
 import AiChatV2Composer from "./AiChatV2Composer.vue";
+import AiChatV2ModeSelector from "./AiChatV2ModeSelector.vue";
+import AiChatV2QuestionCard from "./AiChatV2QuestionCard.vue";
+import AiChatV2PlanApprovalCard from "./AiChatV2PlanApprovalCard.vue";
+import AiChatV2PlanStatusBadge from "./AiChatV2PlanStatusBadge.vue";
 import MCPToolManager from "../aiChat/MCPToolManager.vue";
 
 type Status = "idle" | "streaming" | "cancelled" | "error";
@@ -145,6 +187,11 @@ const streamError = ref<string | null>(null);
 const activeAssistantMessageId = ref<string | null>(null);
 const showConversationsDialog = ref(false);
 const showMCPToolManager = ref(false);
+
+// Plan Mode state
+const mode = ref<ChatV2Mode>("chat");
+const planState = ref<AIChatPlanStateView | null>(null);
+const pendingQuestion = ref<AIChatPlanQuestionView | null>(null);
 
 const streamStatus = computed<Status>(() => {
   if (isStreaming.value) return "streaming";
@@ -179,6 +226,18 @@ const loadHistory = async (conversationId: string): Promise<void> => {
   try {
     const resp = await getChatV2History(conversationId);
     messages.value = resp?.messages ?? [];
+    // Load plan state for this conversation.
+    try {
+      planState.value = await getChatV2PlanState(conversationId);
+      if (planState.value?.pendingQuestion) {
+        pendingQuestion.value = planState.value.pendingQuestion;
+      } else {
+        pendingQuestion.value = null;
+      }
+    } catch {
+      planState.value = null;
+      pendingQuestion.value = null;
+    }
   } catch (err) {
     streamError.value = err instanceof Error ? err.message : String(err);
   }
@@ -189,6 +248,8 @@ const onNewConversation = (): void => {
   activeConversationId.value = null;
   messages.value = [];
   streamError.value = null;
+  planState.value = null;
+  pendingQuestion.value = null;
 };
 
 const onClearMessages = (): void => {
@@ -382,6 +443,73 @@ const handleSkillPermissionDeny = (message: ChatV2MessageView): void => {
   activeAssistantMessageId.value = null;
 };
 
+// ---------------------------------------------------------------------------
+// Plan Mode handlers
+// ---------------------------------------------------------------------------
+
+const handleQuestionAnswered = async (
+  questionId: string,
+  answers: AskUserQuestionAnswer[]
+): Promise<void> => {
+  if (!activeConversationId.value) return;
+  try {
+    await answerChatV2Question(
+      activeConversationId.value,
+      questionId,
+      answers
+    );
+    pendingQuestion.value = null;
+    // Refresh plan state to reflect the updated status.
+    planState.value = await getChatV2PlanState(activeConversationId.value);
+  } catch (err) {
+    streamError.value = err instanceof Error ? err.message : String(err);
+  }
+};
+
+const handleApprovePlan = async (): Promise<void> => {
+  if (!planState.value || !activeConversationId.value) return;
+  try {
+    const updated = await approveChatV2Plan(
+      activeConversationId.value,
+      planState.value.planId,
+      planState.value.currentVersion
+    );
+    if (updated) planState.value = updated;
+  } catch (err) {
+    streamError.value = err instanceof Error ? err.message : String(err);
+  }
+};
+
+const handleRejectPlan = async (feedback: string): Promise<void> => {
+  if (!planState.value || !activeConversationId.value) return;
+  try {
+    const updated = await rejectChatV2Plan(
+      activeConversationId.value,
+      planState.value.planId,
+      planState.value.currentVersion,
+      feedback
+    );
+    if (updated) planState.value = updated;
+  } catch (err) {
+    streamError.value = err instanceof Error ? err.message : String(err);
+  }
+};
+
+const handleRequestPlanChanges = async (feedback: string): Promise<void> => {
+  if (!planState.value || !activeConversationId.value) return;
+  try {
+    const updated = await requestChatV2PlanChanges(
+      activeConversationId.value,
+      planState.value.planId,
+      planState.value.currentVersion,
+      feedback
+    );
+    if (updated) planState.value = updated;
+  } catch (err) {
+    streamError.value = err instanceof Error ? err.message : String(err);
+  }
+};
+
 const onSend = async (text: string): Promise<void> => {
   if (isStreaming.value) return;
   streamError.value = null;
@@ -423,6 +551,7 @@ const onSend = async (text: string): Promise<void> => {
     {
       conversationId: activeConversationId.value ?? undefined,
       message: text,
+      mode: mode.value,
       // model omitted → backend picks default
     },
     (chunk: ChatV2StreamChunk) => {
@@ -443,6 +572,27 @@ const onSend = async (text: string): Promise<void> => {
         if (idx !== -1) {
           messages.value[idx] = { ...messages.value[idx], content: assistant.content };
         }
+      } else if (chunk.eventType === "ask_user_question" as never) {
+        // Plan Mode: show question card, stream may pause
+        const planChunk = chunk as ChatV2StreamChunk;
+        if (planChunk.question) {
+          pendingQuestion.value = planChunk.question;
+        }
+        if (planChunk.planState) {
+          planState.value = planChunk.planState;
+        }
+      } else if (chunk.eventType === "plan_submitted" as never) {
+        const planChunk = chunk as ChatV2StreamChunk;
+        if (planChunk.planState) {
+          planState.value = planChunk.planState;
+        }
+      } else if (chunk.eventType === "plan_blocked_tool" as never) {
+        // Tool was blocked by plan policy — surface as a tool result message
+        const planChunk = chunk as ChatV2StreamChunk;
+        upsertToolResultMessage(
+          planChunk,
+          planChunk.conversationId || activeConversationId.value || ""
+        );
       } else if (chunk.eventType === "tool_call") {
         messages.value.push({
           id: `tool-call-${chunk.toolCallId || Date.now()}`,
@@ -537,5 +687,10 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   min-height: 0;
+}
+.v2-shell__plan-panel {
+  padding: 0 12px;
+  max-height: 300px;
+  overflow-y: auto;
 }
 </style>
