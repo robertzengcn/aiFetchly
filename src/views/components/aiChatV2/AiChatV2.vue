@@ -59,6 +59,7 @@
         :active-assistant-message-id="activeAssistantMessageId"
         :stream-status="streamStatus"
         :error-message="streamError ?? undefined"
+        :show-typing-indicator="showTypingIndicator"
         @grant-permission="handleSkillPermissionGrant"
         @deny-permission="handleSkillPermissionDeny"
       />
@@ -185,8 +186,28 @@ const messages = ref<ChatV2MessageView[]>([]);
 const isStreaming = ref(false);
 const streamError = ref<string | null>(null);
 const activeAssistantMessageId = ref<string | null>(null);
+// Flipped to true once the first visible AI chunk (token/tool_call/etc)
+// arrives. Drives the typing indicator while we wait for the AI response.
+const receivedFirstResponse = ref(false);
 const showConversationsDialog = ref(false);
 const showMCPToolManager = ref(false);
+
+// True only between clicking send and the first visible AI chunk. Auto-clears
+// when streaming ends for any reason (complete/error/stop/permission deny).
+// Also shows during tool execution rounds (after tool_call/tool_result, before
+// the next text token) so the user sees the AI is still working.
+const showTypingIndicator = computed(() => {
+  if (!isStreaming.value) return false;
+  if (!receivedFirstResponse.value) return true;
+  // Between tool rounds: last message is a tool call/result with no
+  // active text streaming — show dots so the user knows the AI is processing.
+  const last = messages.value[messages.value.length - 1];
+  if (!last) return true;
+  return (
+    last.messageType === MessageType.TOOL_CALL ||
+    last.messageType === MessageType.TOOL_RESULT
+  );
+});
 
 // Plan Mode state
 const mode = ref<ChatV2Mode>("chat");
@@ -546,6 +567,7 @@ const onSend = async (text: string): Promise<void> => {
   };
 
   isStreaming.value = true;
+  receivedFirstResponse.value = false;
 
   await streamChatV2Message(
     {
@@ -565,54 +587,59 @@ const onSend = async (text: string): Promise<void> => {
           assistant.id = chunk.messageId;
           activeAssistantMessageId.value = chunk.messageId;
         }
-      } else if (chunk.eventType === "token" && chunk.contentDelta) {
-        ensureAssistantAdded();
-        assistant.content += chunk.contentDelta;
-        const idx = messages.value.findIndex((m) => m.id === assistant.id);
-        if (idx !== -1) {
-          messages.value[idx] = { ...messages.value[idx], content: assistant.content };
+        // `start` is metadata only; keep showing the typing indicator.
+      } else {
+        // Any non-start chunk means the AI has started responding.
+        receivedFirstResponse.value = true;
+        if (chunk.eventType === "token" && chunk.contentDelta) {
+          ensureAssistantAdded();
+          assistant.content += chunk.contentDelta;
+          const idx = messages.value.findIndex((m) => m.id === assistant.id);
+          if (idx !== -1) {
+            messages.value[idx] = { ...messages.value[idx], content: assistant.content };
+          }
+        } else if (chunk.eventType === "ask_user_question" as never) {
+          // Plan Mode: show question card, stream may pause
+          const planChunk = chunk as ChatV2StreamChunk;
+          if (planChunk.question) {
+            pendingQuestion.value = planChunk.question;
+          }
+          if (planChunk.planState) {
+            planState.value = planChunk.planState;
+          }
+        } else if (chunk.eventType === "plan_submitted" as never) {
+          const planChunk = chunk as ChatV2StreamChunk;
+          if (planChunk.planState) {
+            planState.value = planChunk.planState;
+          }
+        } else if (chunk.eventType === "plan_blocked_tool" as never) {
+          // Tool was blocked by plan policy — surface as a tool result message
+          const planChunk = chunk as ChatV2StreamChunk;
+          upsertToolResultMessage(
+            planChunk,
+            planChunk.conversationId || activeConversationId.value || ""
+          );
+        } else if (chunk.eventType === "tool_call") {
+          messages.value.push({
+            id: `tool-call-${chunk.toolCallId || Date.now()}`,
+            conversationId: chunk.conversationId || activeConversationId.value || "",
+            role: "assistant",
+            content: "",
+            timestamp: new Date().toISOString(),
+            messageType: MessageType.TOOL_CALL,
+            metadata: {
+              source: "chat-v2",
+              toolCallId: chunk.toolCallId,
+              toolName: chunk.toolName,
+              toolArguments: chunk.toolArguments,
+            },
+          });
+        } else if (chunk.eventType === "tool_result") {
+          upsertToolResultMessage(
+            chunk,
+            chunk.conversationId || activeConversationId.value || ""
+          );
         }
-      } else if (chunk.eventType === "ask_user_question" as never) {
-        // Plan Mode: show question card, stream may pause
-        const planChunk = chunk as ChatV2StreamChunk;
-        if (planChunk.question) {
-          pendingQuestion.value = planChunk.question;
-        }
-        if (planChunk.planState) {
-          planState.value = planChunk.planState;
-        }
-      } else if (chunk.eventType === "plan_submitted" as never) {
-        const planChunk = chunk as ChatV2StreamChunk;
-        if (planChunk.planState) {
-          planState.value = planChunk.planState;
-        }
-      } else if (chunk.eventType === "plan_blocked_tool" as never) {
-        // Tool was blocked by plan policy — surface as a tool result message
-        const planChunk = chunk as ChatV2StreamChunk;
-        upsertToolResultMessage(
-          planChunk,
-          planChunk.conversationId || activeConversationId.value || ""
-        );
-      } else if (chunk.eventType === "tool_call") {
-        messages.value.push({
-          id: `tool-call-${chunk.toolCallId || Date.now()}`,
-          conversationId: chunk.conversationId || activeConversationId.value || "",
-          role: "assistant",
-          content: "",
-          timestamp: new Date().toISOString(),
-          messageType: MessageType.TOOL_CALL,
-          metadata: {
-            source: "chat-v2",
-            toolCallId: chunk.toolCallId,
-            toolName: chunk.toolName,
-            toolArguments: chunk.toolArguments,
-          },
-        });
-      } else if (chunk.eventType === "tool_result") {
-        upsertToolResultMessage(
-          chunk,
-          chunk.conversationId || activeConversationId.value || ""
-        );
       }
     },
     (complete: ChatV2StreamChunk) => {

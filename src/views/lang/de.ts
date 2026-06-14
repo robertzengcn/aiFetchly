@@ -1778,6 +1778,7 @@ export default {
     loading_models: "Modelle werden geladen…",
     loading_history: "Verlauf wird geladen…",
     streaming: "Wird generiert…",
+    thinking: "Die AI denkt nach…",
     cancelled: "Abgebrochen",
     ai_disabled: "KI ist nicht aktiviert.",
     model_unavailable: "Ausgewähltes Modell nicht verfügbar.",
