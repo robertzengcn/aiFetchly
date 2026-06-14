@@ -1781,6 +1781,8 @@ export default {
     loading_history: "Verlauf wird geladen…",
     streaming: "Wird generiert…",
     thinking: "Die AI denkt nach…",
+    reconnecting: "Verbindung wird wiederhergestellt…",
+    reconnect_attempt: "(Versuch {n}/{max})",
     cancelled: "Abgebrochen",
     ai_disabled: "KI ist nicht aktiviert.",
     model_unavailable: "Ausgewähltes Modell nicht verfügbar.",
@@ -1790,6 +1792,8 @@ export default {
     conversation_history: "Unterhaltungsverlauf",
     manage_mcp_tools: "MCP-Tools verwalten",
     no_conversations: "Noch keine Unterhaltungen",
+    search_conversations: "Unterhaltungen suchen...",
+    no_search_results: "Keine Unterhaltungen gefunden",
     clear_confirm_title: "Unterhaltung löschen?",
     clear_confirm_body:
       "Dadurch werden alle Nachrichten dieser Unterhaltung entfernt.",

@@ -111,6 +111,7 @@ export type ChatV2StreamEventType =
   | "plan_rejected"
   | "plan_blocked_tool"
   | "plan_changes_requested"
+  | "retry_connect"
   | "error"
   | "cancelled"
   | "complete";
@@ -132,4 +133,7 @@ export interface ChatV2StreamChunk {
   planState?: AIChatPlanStateView;
   question?: AIChatPlanQuestionView;
   planVersion?: AIChatPlanVersionView;
+  retryAttempt?: number;
+  retryMaxAttempts?: number;
+  retryDelayMs?: number;
 }

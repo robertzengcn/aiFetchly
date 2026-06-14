@@ -1770,6 +1770,8 @@ export default {
     loading_history: "Chargement de l'historique…",
     streaming: "Génération…",
     thinking: "L'IA réfléchit…",
+    reconnecting: "Reconnexion…",
+    reconnect_attempt: "(tentative {n}/{max})",
     cancelled: "Annulé",
     ai_disabled: "L'IA n'est pas activée.",
     model_unavailable: "Le modèle sélectionné n'est pas disponible.",
@@ -1779,6 +1781,8 @@ export default {
     conversation_history: "Historique des conversations",
     manage_mcp_tools: "Gérer les outils MCP",
     no_conversations: "Pas encore de conversations",
+    search_conversations: "Rechercher des conversations...",
+    no_search_results: "Aucune conversation trouvée",
     clear_confirm_title: "Effacer la conversation ?",
     clear_confirm_body:
       "Cela supprime tous les messages de cette conversation.",

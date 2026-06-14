@@ -228,15 +228,15 @@ async function handleModels(): Promise<CommonMessage<unknown>> {
   }
 }
 
-async function handleConversations(): Promise<
-  CommonMessage<ChatV2ConversationSummary[]>
-> {
+async function handleConversations(
+  searchQuery?: string
+): Promise<CommonMessage<ChatV2ConversationSummary[]>> {
   if (!isAIEnabled()) {
     return denied("AI is not enabled");
   }
   try {
     const module = new AIChatV2Module();
-    return ok(await module.getConversations());
+    return ok(await module.getConversations(searchQuery));
   } catch (err) {
     return denied(userSafeError(err));
   }
@@ -619,7 +619,23 @@ async function continueStreamAfterTools(state: {
             });
           }
         },
-        { signal: state.abortController.signal }
+        {
+          signal: state.abortController.signal,
+          onRetry: (info) => {
+            if (currentConversationId !== state.conversationId) return;
+            console.log(
+              `[ai-chat-v2] retrying connection attempt ${info.attempt}/${info.maxAttempts} in ${info.delayMs}ms (${info.error})`
+            );
+            sendChunk(state.event, {
+              eventType: "retry_connect",
+              conversationId: state.conversationId,
+              messageId: state.assistantMessageId,
+              retryAttempt: info.attempt,
+              retryMaxAttempts: info.maxAttempts,
+              retryDelayMs: info.delayMs,
+            });
+          },
+        }
       );
 
       finalAccumulator = accumulator;
@@ -1482,7 +1498,10 @@ export function registerAiChatV2IpcHandlers(): void {
       handleResumeToolAfterPermission((data as string) ?? "")
   );
   ipcMain.handle(AI_CHAT_V2_MODELS, async () => handleModels());
-  ipcMain.handle(AI_CHAT_V2_CONVERSATIONS, async () => handleConversations());
+  ipcMain.handle(
+    AI_CHAT_V2_CONVERSATIONS,
+    async (_event, searchQuery?: string) => handleConversations(searchQuery)
+  );
   ipcMain.handle(AI_CHAT_V2_HISTORY, async (_e, data: unknown) =>
     handleHistory(_e as IpcEventLike, data as string)
   );

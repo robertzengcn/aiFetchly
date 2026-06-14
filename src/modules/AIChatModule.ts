@@ -5,125 +5,148 @@ import { MessageType } from "@/entityTypes/commonType";
 import { AIChatAttachmentModule } from "@/modules/AIChatAttachmentModule";
 
 export interface SaveMessageOptions {
-    messageId: string;
-    conversationId: string;
-    role: 'user' | 'assistant' | 'system';
-    content: string;
-    timestamp?: Date;
-    model?: string;
-    tokensUsed?: number;
-    metadata?: any;
-    messageType?: MessageType;
+  messageId: string;
+  conversationId: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  timestamp?: Date;
+  model?: string;
+  tokensUsed?: number;
+  metadata?: any;
+  messageType?: MessageType;
 }
 
 export class AIChatModule extends BaseModule {
-    private chatMessageModel: AIChatMessageModel;
-    private attachmentModule: AIChatAttachmentModule;
+  private chatMessageModel: AIChatMessageModel;
+  private attachmentModule: AIChatAttachmentModule;
 
-    constructor() {
-        super();
-        this.chatMessageModel = new AIChatMessageModel(this.dbpath);
-        this.attachmentModule = new AIChatAttachmentModule();
+  constructor() {
+    super();
+    this.chatMessageModel = new AIChatMessageModel(this.dbpath);
+    this.attachmentModule = new AIChatAttachmentModule();
+  }
+
+  /**
+   * Save a chat message to database
+   */
+  async saveMessage(options: SaveMessageOptions): Promise<AIChatMessageEntity> {
+    const message = new AIChatMessageEntity();
+    message.messageId = options.messageId;
+    message.conversationId = options.conversationId;
+    message.role = options.role;
+    message.content = options.content;
+    message.timestamp = options.timestamp || new Date();
+    message.model = options.model;
+    message.tokensUsed = options.tokensUsed;
+    message.metadata = options.metadata
+      ? JSON.stringify(options.metadata)
+      : undefined;
+    message.messageType = options.messageType || MessageType.MESSAGE;
+
+    const messageId = await this.chatMessageModel.saveMessage(message);
+    const savedMessage = await this.chatMessageModel.getMessageById(messageId);
+
+    if (!savedMessage) {
+      throw new Error("Failed to retrieve saved message");
     }
 
-    /**
-     * Save a chat message to database
-     */
-    async saveMessage(options: SaveMessageOptions): Promise<AIChatMessageEntity> {
-        const message = new AIChatMessageEntity();
-        message.messageId = options.messageId;
-        message.conversationId = options.conversationId;
-        message.role = options.role;
-        message.content = options.content;
-        message.timestamp = options.timestamp || new Date();
-        message.model = options.model;
-        message.tokensUsed = options.tokensUsed;
-        message.metadata = options.metadata ? JSON.stringify(options.metadata) : undefined;
-        message.messageType = options.messageType || MessageType.MESSAGE;
+    return savedMessage;
+  }
 
-        const messageId = await this.chatMessageModel.saveMessage(message);
-        const savedMessage = await this.chatMessageModel.getMessageById(messageId);
+  /**
+   * Get messages for a conversation
+   */
+  async getConversationMessages(
+    conversationId: string,
+    limit?: number,
+    offset?: number
+  ): Promise<AIChatMessageEntity[]> {
+    return await this.chatMessageModel.getMessagesByConversation(
+      conversationId,
+      limit,
+      offset
+    );
+  }
 
-        if (!savedMessage) {
-            throw new Error('Failed to retrieve saved message');
-        }
+  /**
+   * Get message by message ID
+   */
+  async getMessageByMessageId(
+    messageId: string
+  ): Promise<AIChatMessageEntity | null> {
+    return await this.chatMessageModel.getMessageByMessageId(messageId);
+  }
 
-        return savedMessage;
-    }
+  /**
+   * Clear conversation history
+   */
+  async clearConversation(conversationId: string): Promise<number> {
+    // Delete attachment bytes first to keep storage consistent.
+    await this.attachmentModule.deleteByConversation(conversationId);
+    return await this.chatMessageModel.deleteConversation(conversationId);
+  }
 
-    /**
-     * Get messages for a conversation
-     */
-    async getConversationMessages(
-        conversationId: string,
-        limit?: number,
-        offset?: number
-    ): Promise<AIChatMessageEntity[]> {
-        return await this.chatMessageModel.getMessagesByConversation(conversationId, limit, offset);
-    }
+  /**
+   * Clear all chat history
+   */
+  async clearAllHistory(): Promise<number> {
+    // Delete all attachment bytes first.
+    await this.attachmentModule.deleteAll();
+    return await this.chatMessageModel.deleteAllMessages();
+  }
 
-    /**
-     * Get message by message ID
-     */
-    async getMessageByMessageId(messageId: string): Promise<AIChatMessageEntity | null> {
-        return await this.chatMessageModel.getMessageByMessageId(messageId);
-    }
+  /**
+   * Get conversation statistics
+   */
+  async getStats(conversationId?: string): Promise<{
+    totalMessages: number;
+    totalConversations: number;
+    messagesByRole: Record<string, number>;
+  }> {
+    return await this.chatMessageModel.getConversationStats(conversationId);
+  }
 
-    /**
-     * Clear conversation history
-     */
-    async clearConversation(conversationId: string): Promise<number> {
-        // Delete attachment bytes first to keep storage consistent.
-        await this.attachmentModule.deleteByConversation(conversationId);
-        return await this.chatMessageModel.deleteConversation(conversationId);
-    }
+  /**
+   * Get all conversation IDs
+   */
+  async getAllConversations(): Promise<string[]> {
+    return await this.chatMessageModel.getAllConversations();
+  }
 
-    /**
-     * Clear all chat history
-     */
-    async clearAllHistory(): Promise<number> {
-        // Delete all attachment bytes first.
-        await this.attachmentModule.deleteAll();
-        return await this.chatMessageModel.deleteAllMessages();
-    }
+  /**
+   * Get latest messages
+   */
+  async getLatestMessages(limit = 10): Promise<AIChatMessageEntity[]> {
+    return await this.chatMessageModel.getLatestMessages(limit);
+  }
 
-    /**
-     * Get conversation statistics
-     */
-    async getStats(conversationId?: string): Promise<{
-        totalMessages: number;
-        totalConversations: number;
-        messagesByRole: Record<string, number>;
-    }> {
-        return await this.chatMessageModel.getConversationStats(conversationId);
-    }
+  /**
+   * Get all conversations with metadata (last message, timestamp, message count)
+   */
+  async getConversationsWithMetadata(): Promise<
+    Array<{
+      conversationId: string;
+      lastMessage: string;
+      lastMessageTimestamp: Date;
+      messageCount: number;
+      createdAt: Date;
+    }>
+  > {
+    return await this.chatMessageModel.getConversationsWithMetadata();
+  }
 
-    /**
-     * Get all conversation IDs
-     */
-    async getAllConversations(): Promise<string[]> {
-        return await this.chatMessageModel.getAllConversations();
-    }
-
-    /**
-     * Get latest messages
-     */
-    async getLatestMessages(limit = 10): Promise<AIChatMessageEntity[]> {
-        return await this.chatMessageModel.getLatestMessages(limit);
-    }
-
-    /**
-     * Get all conversations with metadata (last message, timestamp, message count)
-     */
-    async getConversationsWithMetadata(): Promise<Array<{
-        conversationId: string;
-        lastMessage: string;
-        lastMessageTimestamp: Date;
-        messageCount: number;
-        createdAt: Date;
-    }>> {
-        return await this.chatMessageModel.getConversationsWithMetadata();
-    }
+  /**
+   * Search conversations by message content (LIKE on content column).
+   */
+  async searchConversationsWithMetadata(query: string): Promise<
+    Array<{
+      conversationId: string;
+      lastMessage: string;
+      lastMessageTimestamp: Date;
+      messageCount: number;
+      createdAt: Date;
+    }>
+  > {
+    return await this.chatMessageModel.searchConversationsWithMetadata(query);
+  }
 }
-
-
