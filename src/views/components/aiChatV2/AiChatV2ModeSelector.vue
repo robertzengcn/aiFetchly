@@ -1,28 +1,22 @@
 <template>
   <div class="v2-mode-selector">
-    <v-btn-toggle
+    <v-select
       :model-value="modelValue"
+      :items="modeItems"
+      item-value="value"
+      item-title="title"
       density="compact"
-      size="small"
-      color="primary"
-      mandatory
+      variant="outlined"
+      hide-details
       :disabled="disabled"
-      divided
+      class="v2-mode-selector__select"
       @update:model-value="onChange"
-    >
-      <v-btn value="chat" size="small">
-        <v-icon start size="small">mdi-chat-outline</v-icon>
-        {{ t("aiChatV2Plan.mode_chat") || "Chat" }}
-      </v-btn>
-      <v-btn value="plan" size="small">
-        <v-icon start size="small">mdi-clipboard-list-outline</v-icon>
-        {{ t("aiChatV2Plan.mode_plan") || "Plan" }}
-      </v-btn>
-    </v-btn-toggle>
+    />
   </div>
 </template>
 
 <script setup lang="ts">
+import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import type { ChatV2Mode } from "@/entityTypes/aiChatPlanTypes";
 
@@ -35,6 +29,17 @@ const emit = defineEmits<{
 }>();
 const { t } = useI18n();
 
+const modeItems = computed(() => [
+  {
+    value: "chat" as ChatV2Mode,
+    title: t("aiChatV2Plan.mode_chat") || "Chat",
+  },
+  {
+    value: "plan" as ChatV2Mode,
+    title: t("aiChatV2Plan.mode_plan") || "Plan",
+  },
+]);
+
 const onChange = (value: unknown): void => {
   if (value === "chat" || value === "plan") {
     emit("update:modelValue", value);
@@ -46,5 +51,9 @@ const onChange = (value: unknown): void => {
 .v2-mode-selector {
   display: flex;
   align-items: center;
+}
+.v2-mode-selector__select {
+  min-width: 110px;
+  max-width: 140px;
 }
 </style>
