@@ -717,6 +717,8 @@ export default {
       "ヒント: Yandexでより良い結果を得るには、ローカルブラウザの使用をお勧めします。「ローカルブラウザを使用」オプションを有効にしてください。",
     google_account_tip:
       "ヒント: Googleでより良い結果を得るには、検索エンジンアカウントの使用をお勧めします。「検索エンジンアカウントを使用」オプションを有効にしてください。",
+    google_account_cookies_required:
+      "Google検索にはCookieを含むGoogleアカウントが必要です。ソーシャルアカウントで有効なCookieを含むGoogleアカウントを追加してください。",
     task_id: "タスクID",
     run_task: "タスクを実行",
     task_status_not_start: "未開始",
