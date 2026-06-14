@@ -53,7 +53,7 @@ const onChange = (value: unknown): void => {
   align-items: center;
 }
 .v2-mode-selector__select {
-  min-width: 110px;
-  max-width: 140px;
+  min-width: 90px;
+  max-width: 110px;
 }
 </style>

@@ -1,8 +1,5 @@
 <template>
   <div class="v2-composer">
-    <div v-if="$slots.prepend" class="v2-composer__prepend">
-      <slot name="prepend" />
-    </div>
     <v-textarea
       v-model="draft"
       :placeholder="t('aiChatV2.input_placeholder') || 'Send a message…'"
@@ -15,24 +12,29 @@
       :disabled="isStreaming"
       @keydown="onKeydown"
     />
-    <div class="v2-composer__actions">
-      <v-btn
-        v-if="!isStreaming"
-        color="primary"
-        icon="mdi-send"
-        size="small"
-        :disabled="draft.trim().length === 0"
-        :aria-label="t('aiChatV2.send') || 'Send'"
-        @click="onSend"
-      />
-      <v-btn
-        v-else
-        color="error"
-        icon="mdi-stop"
-        size="small"
-        :aria-label="t('aiChatV2.stop') || 'Stop'"
-        @click="$emit('stop')"
-      />
+    <div class="v2-composer__bar">
+      <div v-if="$slots.prepend" class="v2-composer__prepend">
+        <slot name="prepend" />
+      </div>
+      <div class="v2-composer__actions">
+        <v-btn
+          v-if="!isStreaming"
+          color="primary"
+          icon="mdi-send"
+          size="small"
+          :disabled="draft.trim().length === 0"
+          :aria-label="t('aiChatV2.send') || 'Send'"
+          @click="onSend"
+        />
+        <v-btn
+          v-else
+          color="error"
+          icon="mdi-stop"
+          size="small"
+          :aria-label="t('aiChatV2.stop') || 'Stop'"
+          @click="$emit('stop')"
+        />
+      </div>
     </div>
   </div>
 </template>
@@ -68,19 +70,23 @@ const onKeydown = (event: KeyboardEvent): void => {
 <style scoped>
 .v2-composer {
   display: flex;
-  align-items: flex-end;
+  flex-direction: column;
   gap: 8px;
   padding: 10px 12px;
   border-top: 1px solid rgba(0, 0, 0, 0.08);
 }
-.v2-composer__actions {
+.v2-composer__bar {
   display: flex;
   align-items: center;
-  padding-bottom: 4px;
+  justify-content: space-between;
+  gap: 8px;
 }
 .v2-composer__prepend {
   display: flex;
   align-items: center;
-  padding-bottom: 4px;
+}
+.v2-composer__actions {
+  display: flex;
+  align-items: center;
 }
 </style>
