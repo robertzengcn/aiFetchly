@@ -198,16 +198,21 @@ export class EmailCluster {
   }
   //init cluster
   async start(scraperData: EmailDatascraper) {
+    const requestedConcurrency = Number(
+      this.config.puppeteer_cluster_config.maxConcurrency
+    );
     this.numClusters = Math.min(
       //this.config.proxies.length + (this.config.use_proxies_only ? 0 : 1),
       scraperData.urls.length,
+      Number.isFinite(requestedConcurrency) && requestedConcurrency > 0
+        ? Math.floor(requestedConcurrency)
+        : 1,
       MAX_ALLOWED_BROWSERS
     );
 
     if (this.config.proxies && this.config.proxies.length > 0) {
       this.proxiesArr = clone(this.config.proxies);
     } else {
-      this.numClusters = this.config.puppeteer_cluster_config.maxConcurrency;
       this.proxiesArr = times(this.numClusters, () => null);
     }
 
@@ -305,6 +310,7 @@ export class EmailCluster {
         domain: domain,
         maxPageLevel: pageLength,
         maxPageNumber: this.maxPageNumber,
+        blockAssets: this.config.block_assets === true,
         callback: param.callback,
         aiSupportEnabled: param.aiSupportEnabled || false,
       };

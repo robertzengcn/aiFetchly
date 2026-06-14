@@ -30,6 +30,17 @@ type UtilityParentPort = {
   postMessage: (message: string) => void;
 };
 
+const BLOCKED_EMAIL_SEARCH_RESOURCE_TYPES = new Set([
+  "stylesheet",
+  "font",
+  "image",
+  "media",
+]);
+
+export function shouldBlockEmailSearchResource(resourceType: string): boolean {
+  return BLOCKED_EMAIL_SEARCH_RESOURCE_TYPES.has(resourceType);
+}
+
 export const extractLink = async (page: Page, val: EmailClusterdata) => {
   const url = val.url;
   if (!url) return;
@@ -161,26 +172,33 @@ export async function crawlSite({
       return;
     }
 
-    // Set up proxy interception only ONCE per page (not per recursive call)
+    // Set up request interception only ONCE per page (not per recursive call)
     if (
-      data.proxy &&
-      data.proxy != undefined &&
+      (data.proxy || data.blockAssets) &&
       !(page as unknown as Record<string, unknown>).__proxyInterceptionSet
     ) {
-      console.log(`[crawlSite] Setting up proxy interception for page`);
-      this.proxyServer = data.proxy;
-      await this.page.setRequestInterception(true);
-      this.page.on("request", async (interceptedRequest) => {
+      console.log(`[crawlSite] Setting up request interception for page`);
+      await page.setRequestInterception(true);
+      page.on("request", async (interceptedRequest) => {
         if (
           interceptedRequest.interceptResolutionState().action ===
           InterceptResolutionAction.AlreadyHandled
         )
           return;
+        if (
+          data.blockAssets &&
+          shouldBlockEmailSearchResource(interceptedRequest.resourceType())
+        ) {
+          await interceptedRequest.abort();
+          return;
+        }
         try {
-          await useProxy(
-            interceptedRequest,
-            convertProxyServertourl(data.proxy!)
-          );
+          if (data.proxy) {
+            await useProxy(
+              interceptedRequest,
+              convertProxyServertourl(data.proxy)
+            );
+          }
         } catch (proxyErr) {
           console.error("[crawlSite] Proxy request error:", proxyErr);
         }

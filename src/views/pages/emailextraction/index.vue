@@ -20,9 +20,14 @@ v-model="emailtype" :items="emailTypelist" :label="t('emailextraction.extraction
 
       <v-text-field v-model="page_length" :label="t('emailextraction.page_length')" clearable class="mt-3"></v-text-field>
 
-      <v-text-field
-v-model="concurrent_quantity" :label="t('search.concurrent_quantity')" clearable
-        class="mt-3"></v-text-field>
+      <v-number-input
+        v-model="concurrent_quantity"
+        :label="t('search.concurrent_quantity')"
+        control-variant="default"
+        :max="10"
+        :min="1"
+        class="mt-3"
+      ></v-number-input>
         <v-number-input
           :label="t('emailextraction.max_page_number')"
           control-variant="default"
@@ -174,7 +179,7 @@ const emailtype = ref<EmailOption>();
 const emailTypelist = ref<Array<EmailOption>>([]);
 const showinbrwoser = ref(0);
 // const searchtaskshow=ref(false);
-const concurrent_quantity = ref(1);
+const concurrent_quantity = ref(3);
 const proxyValue = ref<Array<ProxyEntity>>([]);
 const proxytableshow = ref(false);
 const searchtaskId=ref<number>(0);
