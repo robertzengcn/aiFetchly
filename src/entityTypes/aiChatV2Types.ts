@@ -3,6 +3,8 @@ import type {
   AIChatPlanStateView,
   AIChatPlanQuestionView,
   AIChatPlanVersionView,
+  ChatV2Mode,
+  AIChatPlanStatus,
 } from "@/entityTypes/aiChatPlanTypes";
 
 export type {

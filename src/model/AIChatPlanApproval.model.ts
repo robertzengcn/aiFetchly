@@ -24,8 +24,10 @@ export class AIChatPlanApprovalModel extends BaseDb {
     entity.planId = input.planId;
     entity.version = input.version;
     entity.decision = input.decision;
-    entity.feedback = input.feedback ?? null;
-    entity.metadata = input.metadata ? JSON.stringify(input.metadata) : null;
+    entity.feedback = input.feedback ?? undefined;
+    entity.metadata = input.metadata
+      ? JSON.stringify(input.metadata)
+      : undefined;
     return await this.repository.save(entity);
   }
 

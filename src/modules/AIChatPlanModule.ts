@@ -58,7 +58,7 @@ export class AIChatPlanModule extends BaseModule {
     planMarkdown: string;
     planJson?: string | null;
     changeReason?: string | null;
-    createdAt: Date;
+    createdAt?: Date;
     createdBy: string;
   }): AIChatPlanVersionView {
     return {
@@ -67,7 +67,7 @@ export class AIChatPlanModule extends BaseModule {
       planMarkdown: v.planMarkdown,
       planJson: parseJson<Record<string, unknown>>(v.planJson ?? undefined),
       changeReason: v.changeReason ?? undefined,
-      createdAt: v.createdAt.toISOString(),
+      createdAt: (v.createdAt ?? new Date()).toISOString(),
       createdBy: v.createdBy as AIChatPlanVersionAuthor,
     };
   }
@@ -79,7 +79,7 @@ export class AIChatPlanModule extends BaseModule {
     status: string;
     questionsJson: string;
     answersJson?: string | null;
-    createdAt: Date;
+    createdAt?: Date;
     answeredAt?: Date | null;
   }): AIChatPlanQuestionView {
     return {
@@ -88,10 +88,8 @@ export class AIChatPlanModule extends BaseModule {
       conversationId: q.conversationId,
       status: q.status as AIChatPlanQuestionView["status"],
       questions: parseJson<AskUserQuestionItem[]>(q.questionsJson) ?? [],
-      answers: parseJson<AskUserQuestionAnswer[]>(
-        q.answersJson ?? undefined
-      ),
-      createdAt: q.createdAt.toISOString(),
+      answers: parseJson<AskUserQuestionAnswer[]>(q.answersJson ?? undefined),
+      createdAt: (q.createdAt ?? new Date()).toISOString(),
       answeredAt: q.answeredAt ? q.answeredAt.toISOString() : undefined,
     };
   }
@@ -112,12 +110,8 @@ export class AIChatPlanModule extends BaseModule {
       currentVersion: plan.currentVersion,
       latestVersion: latest ? this.toVersionView(latest) : undefined,
       pendingQuestion: pending ? this.toQuestionView(pending) : undefined,
-      approvedAt: plan.approvedAt
-        ? plan.approvedAt.toISOString()
-        : undefined,
-      rejectedAt: plan.rejectedAt
-        ? plan.rejectedAt.toISOString()
-        : undefined,
+      approvedAt: plan.approvedAt ? plan.approvedAt.toISOString() : undefined,
+      rejectedAt: plan.rejectedAt ? plan.rejectedAt.toISOString() : undefined,
     };
   }
 
@@ -167,10 +161,8 @@ export class AIChatPlanModule extends BaseModule {
   private validateQuestionPayload(
     payload: AskUserQuestionPayload
   ): string | null {
-    if (!Array.isArray(payload.questions))
-      return "questions must be an array";
-    if (payload.questions.length === 0)
-      return "questions must not be empty";
+    if (!Array.isArray(payload.questions)) return "questions must be an array";
+    if (payload.questions.length === 0) return "questions must not be empty";
     if (payload.questions.length > 3)
       return "questions must contain at most 3 items";
     for (const q of payload.questions) {
@@ -204,9 +196,7 @@ export class AIChatPlanModule extends BaseModule {
     if (validationError) throw new Error(validationError);
 
     const plan =
-      (input.planId
-        ? await this.planModel.getByPlanId(input.planId)
-        : null) ??
+      (input.planId ? await this.planModel.getByPlanId(input.planId) : null) ??
       (await this.planModel.getActiveByConversation(input.conversationId));
     if (!plan) throw new Error("No active plan for conversation");
 
@@ -273,9 +263,7 @@ export class AIChatPlanModule extends BaseModule {
       throw new Error("planMarkdown is required");
 
     const plan =
-      (input.planId
-        ? await this.planModel.getByPlanId(input.planId)
-        : null) ??
+      (input.planId ? await this.planModel.getByPlanId(input.planId) : null) ??
       (await this.planModel.getActiveByConversation(input.conversationId));
     if (!plan) throw new Error("No active plan for conversation");
 
