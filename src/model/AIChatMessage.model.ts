@@ -216,7 +216,7 @@ export class AIChatMessageModel extends BaseDb {
     const matchingConvos = await this.repository
       .createQueryBuilder("message")
       .select("DISTINCT message.conversationId", "conversationId")
-      .where('message.content LIKE :query ESCAPE "\\"', { query: likePattern })
+      .where("message.content LIKE :query ESCAPE '\\'", { query: likePattern })
       .getRawMany();
 
     if (matchingConvos.length === 0) return [];
