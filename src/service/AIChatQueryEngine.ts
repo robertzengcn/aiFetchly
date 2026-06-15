@@ -151,6 +151,7 @@ export class AIChatQueryEngine {
     } catch (err) {
       console.error("[ai-chat-v2] pre-stream error:", err);
       this.currentConversationId = null;
+      this.currentAssistantMessageId = null;
       eventSink.emit({
         type: "error",
         conversationId: request.conversationId ?? "",
@@ -177,6 +178,7 @@ export class AIChatQueryEngine {
     }
     this.currentAbortController = abortController;
     this.pendingPermission = null;
+    this.pendingPlanQuestion = null;
 
     // ------------------------------------------------------------------
     // 5. Emit start event
@@ -224,13 +226,7 @@ export class AIChatQueryEngine {
       const result = await this.loop.run(loopInput);
       await this.handleLoopResult(result, module, eventSink);
     } catch (err) {
-      this.handleFailure(
-        err,
-        module,
-        conversationId,
-        assistantMessageId,
-        eventSink
-      );
+      this.handleFailure(err, conversationId, assistantMessageId, eventSink);
     } finally {
       // Clear active turn unless paused for permission or plan question.
       if (
@@ -388,6 +384,7 @@ export class AIChatQueryEngine {
         });
         this.currentAbortController = null;
         this.currentConversationId = null;
+        this.currentAssistantMessageId = null;
         break;
       }
       case "cancelled": {
@@ -414,6 +411,7 @@ export class AIChatQueryEngine {
         });
         this.currentAbortController = null;
         this.currentConversationId = null;
+        this.currentAssistantMessageId = null;
         break;
       }
       case "failed": {
@@ -440,7 +438,9 @@ export class AIChatQueryEngine {
         });
         this.currentAbortController = null;
         this.currentConversationId = null;
+        this.currentAssistantMessageId = null;
         this.pendingPermission = null;
+        this.pendingPlanQuestion = null;
         break;
       }
       case "paused_for_permission": {
@@ -465,7 +465,6 @@ export class AIChatQueryEngine {
    */
   private handleFailure(
     err: unknown,
-    _module: AIChatV2Module,
     conversationId: string,
     assistantMessageId: string,
     eventSink: AIChatQueryEventSink
@@ -479,7 +478,9 @@ export class AIChatQueryEngine {
     });
     this.currentAbortController = null;
     this.currentConversationId = null;
+    this.currentAssistantMessageId = null;
     this.pendingPermission = null;
+    this.pendingPlanQuestion = null;
   }
 
   // -------------------------------------------------------------------------
