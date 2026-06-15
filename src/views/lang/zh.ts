@@ -100,7 +100,7 @@ export default {
     parse_proxy: "批量上传代理",
     search: "市场洞察",
     search_scraper: "市场洞察浏览器",
-    search_task_list: "搜索任务列表",
+    search_task_list: "市场洞察列表",
     search_task_detail: "搜索任务详情",
     edit_search_task: "编辑搜索任务",
     create_search_task: "创建搜索任务",

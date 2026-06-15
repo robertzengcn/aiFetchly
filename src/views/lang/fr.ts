@@ -110,7 +110,7 @@ export default {
     parse_proxy: "Import en lot de proxies",
     search: "Veille Marché",
     search_scraper: "Explorateur de Veille Marché",
-    search_task_list: "Liste des tâches de recherche",
+    search_task_list: "Liste de Veille Marché",
     search_task_detail: "Détail de la tâche de recherche",
     edit_search_task: "Modifier la tâche de recherche",
     create_search_task: "Créer une tâche de recherche",

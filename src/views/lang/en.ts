@@ -109,7 +109,7 @@ export default {
     parse_proxy: "Batch Upload Proxy",
     search: "Market Insight",
     search_scraper: "Market Insight Explorer",
-    search_task_list: "Search Task List",
+    search_task_list: "Market Insight List",
     search_task_detail: "Search Task Detail",
     edit_search_task: "Edit Search Task",
     create_search_task: "Create Search Task",
