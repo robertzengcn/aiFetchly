@@ -50,6 +50,7 @@ import { AIChatPlanEntity } from "@/entity/AIChatPlan.entity";
 import { AIChatPlanVersionEntity } from "@/entity/AIChatPlanVersion.entity";
 import { AIChatPlanQuestionEntity } from "@/entity/AIChatPlanQuestion.entity";
 import { AIChatPlanApprovalEntity } from "@/entity/AIChatPlanApproval.entity";
+import { AIChatSessionMemoryEntity } from "@/entity/AIChatSessionMemory.entity";
 import { AIChatAttachmentEntity } from "@/entity/AIChatAttachment.entity";
 import { VectorEntity, VectorMetadataEntity } from "@/entity/Vector.entity";
 import { MCPToolEntity } from "@/entity/MCPTool.entity";
@@ -475,6 +476,7 @@ export class SqliteDb {
           AIChatPlanVersionEntity,
           AIChatPlanQuestionEntity,
           AIChatPlanApprovalEntity,
+          AIChatSessionMemoryEntity,
         ],
         synchronize: true,
         migrations: [],
