@@ -1,8 +1,5 @@
 // src/service/AIChatQueryEvents.ts
-import type {
-  OpenAIChatMessage,
-  OpenAITool,
-} from "@/api/aiChatApi";
+import type { OpenAIChatMessage, OpenAITool } from "@/api/aiChatApi";
 import type { ChatV2StreamRequest } from "@/entityTypes/aiChatV2Types";
 import type {
   AIChatPlanQuestionView,
@@ -140,6 +137,8 @@ export type AIChatQueryEvent =
 export type AIChatQueryLoopResult =
   | {
       type: "completed";
+      conversationId: string;
+      assistantMessageId: string;
       fullContent: string;
       finishReason: string;
       model?: string;
@@ -147,6 +146,8 @@ export type AIChatQueryLoopResult =
     }
   | {
       type: "cancelled";
+      conversationId: string;
+      assistantMessageId: string;
       partialContent: string;
       model?: string;
       responseId?: string;
@@ -161,6 +162,8 @@ export type AIChatQueryLoopResult =
     }
   | {
       type: "failed";
+      conversationId: string;
+      assistantMessageId: string;
       error: unknown;
       partialContent: string;
       model?: string;
@@ -235,6 +238,13 @@ export interface AIChatQueryLoopInput {
   eventSink: AIChatQueryEventSink;
   planContext?: AIChatPlanLoopContext;
   startRound: number;
+  /**
+   * Returns false when this turn is no longer the active turn on the engine
+   * (superseded by a newer submitMessage/resume). The loop uses this to
+   * suppress stale stream chunks that arrive after the turn was superseded
+   * but before the abort signal propagates through the underlying fetch.
+   */
+  isActiveTurn: () => boolean;
 }
 
 /** Request payload for resumeToolAfterPermission. */

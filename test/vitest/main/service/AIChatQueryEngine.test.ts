@@ -101,6 +101,8 @@ describe("AIChatQueryEngine", () => {
     it("saves user message before calling the loop", async () => {
       const fakeRun = vi.fn().mockResolvedValue({
         type: "completed" as const,
+        conversationId: "v2-test-conv",
+        assistantMessageId: "assistant-test",
         fullContent: "",
         finishReason: "stop",
       });
@@ -137,6 +139,8 @@ describe("AIChatQueryEngine", () => {
           });
           return {
             type: "completed" as const,
+            conversationId: input.conversationId,
+            assistantMessageId: input.assistantMessageId,
             fullContent: "hi",
             finishReason: "stop",
           };
@@ -164,6 +168,8 @@ describe("AIChatQueryEngine", () => {
     it("emits complete event when loop returns completed", async () => {
       const fakeRun = vi.fn().mockResolvedValue({
         type: "completed" as const,
+        conversationId: "v2-test-conv",
+        assistantMessageId: "assistant-test",
         fullContent: "Hello!",
         finishReason: "stop",
         model: "gpt-4",
@@ -187,6 +193,8 @@ describe("AIChatQueryEngine", () => {
     it("saves assistant message when loop completes with content", async () => {
       const fakeRun = vi.fn().mockResolvedValue({
         type: "completed" as const,
+        conversationId: "v2-test-conv",
+        assistantMessageId: "assistant-test",
         fullContent: "response text",
         finishReason: "stop",
         model: "gpt-4",
@@ -211,6 +219,8 @@ describe("AIChatQueryEngine", () => {
     it("emits error event when loop returns failed", async () => {
       const fakeRun = vi.fn().mockResolvedValue({
         type: "failed" as const,
+        conversationId: "v2-test-conv",
+        assistantMessageId: "assistant-test",
         error: new Error("stream broke"),
         partialContent: "",
       });
