@@ -415,9 +415,8 @@ async function handleResumeToolAfterPermission(
     });
 
     if (isPermissionPromptResult(toolResult)) {
-      // Re-store pending permission if still required.
-      engine.clearPendingPermission(); // ensure clean state
-      // The engine will handle re-pausing via handleLoopResult in the next run.
+      // Tool still requires permission even with skipPermissionCheck.
+      // pendingPermission was already cleared above; just return error.
       return ok({
         ok: false,
         error: "Permission is still required for this tool.",
