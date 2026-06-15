@@ -5,8 +5,6 @@ import {
   AiChatApi,
   type OpenAIChatMessage,
   type OpenAITool,
-  type OpenAIToolCall,
-  type ToolExecutionResult,
   type ToolFunction,
 } from "@/api/aiChatApi";
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
@@ -14,13 +12,22 @@ import { AIChatPlanModule } from "@/modules/AIChatPlanModule";
 import { buildOpenAITranscript } from "@/service/OpenAIChatTranscriptBuilder";
 import { OpenAIStreamAccumulator } from "@/service/OpenAIStreamAccumulator";
 import { buildPlanModeSystemPrompt } from "@/service/PlanModePromptBuilder";
-import {
-  checkPlanModeToolPolicy,
-  isPlanToolName,
-} from "@/service/PlanModeToolPolicy";
 import { PlanModeToolRegistry } from "@/service/PlanModeToolRegistry";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import { SkillExecutor } from "@/service/SkillExecutor";
+import { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
+import {
+  serializeToolResultContent,
+  normalizeToolResult,
+  isPermissionPromptResult,
+} from "@/service/AIChatQueryLoop";
+import type { AIChatQueryLoopDeps } from "@/service/AIChatQueryLoop";
+import type {
+  AIChatQueryEvent,
+  AIChatQueryEventSink,
+  AIChatQueryLoopInput,
+  AIChatQueryLoopResult,
+} from "@/service/AIChatQueryEvents";
 import {
   AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
   AI_CHAT_V2_MODELS,
@@ -58,7 +65,6 @@ import type {
 } from "@/entityTypes/aiChatV2Types";
 
 const CHAT_V2_PHASE1_MAX_HISTORY_MESSAGES = 30;
-const CHAT_V2_MAX_TOOL_ROUNDS = 8;
 
 /**
  * Minimal structural type for the IPC event object.
@@ -165,54 +171,242 @@ function toOpenAITools(toolFunctions: ToolFunction[]): OpenAITool[] {
     }));
 }
 
-function serializeToolResultContent(payload: Record<string, unknown>): string {
-  try {
-    return JSON.stringify(payload);
-  } catch {
-    return JSON.stringify({
-      success: false,
-      error: "Tool result could not be serialized",
-    });
-  }
-}
-
-function normalizeToolResult(
-  result: ToolExecutionResult
-): Record<string, unknown> {
-  return {
-    success: result.success,
-    executionTimeMs: result.execution_time_ms,
-    ...result.result,
-  };
-}
-
-function isPermissionPromptResult(result: ToolExecutionResult): boolean {
-  return result.result.needsPermissionPrompt === true;
-}
-
-function buildAssistantToolCallMessage(
-  parsedCalls: Array<{
-    index: number;
-    id?: string;
-    name?: string;
-    arguments?: Record<string, unknown>;
-  }>,
-  assistantContent: string
-): OpenAIChatMessage {
-  const toolCalls: OpenAIToolCall[] = parsedCalls.map((call, index) => ({
-    id: call.id ?? `call_${index}`,
-    type: "function",
-    function: {
-      name: call.name ?? "unknown_tool",
-      arguments: JSON.stringify(call.arguments ?? {}),
+/** Build the production AIChatQueryLoop with real service deps. */
+function createQueryLoop(): AIChatQueryLoop {
+  const deps: AIChatQueryLoopDeps = {
+    streamChatCompletion: (request, onChunk, options) => {
+      const api = new AiChatApi();
+      return api.openAIChatCompletionStream(request, onChunk, options);
     },
-  }));
-
-  return {
-    role: "assistant",
-    content: assistantContent || null,
-    tool_calls: toolCalls,
+    executeTool: (name, args, context) => {
+      return SkillExecutor.execute(name, args, context);
+    },
+    getSkillDefinition: (name) => SkillRegistry.getSkill(name) ?? undefined,
   };
+  return new AIChatQueryLoop(deps);
+}
+
+/** Adapter that converts AIChatQueryEvent to existing ChatV2StreamChunk renderer events. */
+function createEventSink(
+  event: IpcEventLike,
+  _conversationId: string
+): AIChatQueryEventSink {
+  return {
+    emit: (e: AIChatQueryEvent) => {
+      switch (e.type) {
+        case "token":
+          sendChunk(event, {
+            eventType: "token",
+            conversationId: e.conversationId,
+            messageId: e.messageId,
+            contentDelta: e.contentDelta,
+            model: e.model,
+          });
+          break;
+        case "retry_connect":
+          sendChunk(event, {
+            eventType: "retry_connect",
+            conversationId: e.conversationId,
+            messageId: e.messageId,
+            retryAttempt: e.retryAttempt,
+            retryMaxAttempts: e.retryMaxAttempts,
+            retryDelayMs: e.retryDelayMs,
+          });
+          break;
+        case "tool_call":
+          sendChunk(event, {
+            eventType: "tool_call",
+            conversationId: e.conversationId,
+            messageId: e.messageId,
+            toolCallId: e.toolCallId,
+            toolName: e.toolName,
+            toolArguments: e.toolArguments,
+          });
+          break;
+        case "tool_result":
+          sendChunk(event, {
+            eventType: "tool_result",
+            conversationId: e.conversationId,
+            messageId: e.messageId,
+            toolCallId: e.toolCallId,
+            toolName: e.toolName,
+            fullContent: e.fullContent,
+            toolResult: e.toolResult,
+            replacesPermissionPromptForToolId:
+              e.replacesPermissionPromptForToolId,
+          });
+          break;
+        case "plan_blocked_tool":
+          sendChunk(event, {
+            eventType: "plan_blocked_tool" as never,
+            conversationId: e.conversationId,
+            messageId: e.messageId,
+            toolCallId: e.toolCallId,
+            toolName: e.toolName,
+            fullContent: e.fullContent,
+            planBlockedToolName: e.planBlockedToolName,
+            planBlockedReason: e.planBlockedReason,
+          } as ChatV2StreamChunk);
+          break;
+        case "ask_user_question":
+          sendChunk(event, {
+            eventType: "ask_user_question" as never,
+            conversationId: e.conversationId,
+            messageId: e.messageId,
+            toolCallId: e.toolCallId,
+            toolName: e.toolName,
+            question: e.question,
+            planState: e.planState,
+          } as ChatV2StreamChunk);
+          break;
+        case "plan_submitted":
+          sendChunk(event, {
+            eventType: "plan_submitted" as never,
+            conversationId: e.conversationId,
+            messageId: e.messageId,
+            toolCallId: e.toolCallId,
+            toolName: e.toolName,
+            planState: e.planState,
+          } as ChatV2StreamChunk);
+          break;
+        // start, complete, cancelled, error are handled by handleLoopResult()
+      }
+    },
+  };
+}
+
+/** Handle the result from AIChatQueryLoop.run() — persist messages and emit terminal events. */
+async function handleLoopResult(args: {
+  result: AIChatQueryLoopResult;
+  event: IpcEventLike;
+  module: AIChatV2Module;
+  conversationId: string;
+  assistantMessageId: string;
+}): Promise<void> {
+  const { result, event, module, conversationId, assistantMessageId } = args;
+
+  switch (result.type) {
+    case "completed": {
+      if (result.fullContent.length > 0) {
+        await module.saveAssistantMessage({
+          conversationId,
+          content: result.fullContent,
+          messageId: assistantMessageId,
+          model: result.model,
+          metadata: {
+            source: "chat-v2",
+            openaiResponseId: result.responseId,
+            finishReason: result.finishReason,
+          },
+        });
+      }
+      sendComplete(event, {
+        eventType: "complete",
+        conversationId,
+        messageId: assistantMessageId,
+        fullContent: result.fullContent,
+        model: result.model,
+        finishReason: result.finishReason,
+      });
+      currentAbortController = null;
+      currentConversationId = null;
+      break;
+    }
+    case "cancelled": {
+      if (result.partialContent.length > 0) {
+        await module.saveAssistantMessage({
+          conversationId,
+          content: result.partialContent,
+          messageId: assistantMessageId,
+          model: result.model,
+          metadata: {
+            source: "chat-v2",
+            openaiResponseId: result.responseId,
+            finishReason: "cancelled",
+            cancelled: true,
+          } as ChatV2MessageMetadata,
+        });
+      }
+      sendComplete(event, {
+        eventType: "cancelled",
+        conversationId,
+        messageId:
+          result.partialContent.length > 0 ? assistantMessageId : undefined,
+        fullContent: result.partialContent,
+      });
+      currentAbortController = null;
+      currentConversationId = null;
+      break;
+    }
+    case "failed": {
+      if (result.partialContent.length > 0) {
+        await module.saveAssistantMessage({
+          conversationId,
+          content: result.partialContent,
+          messageId: assistantMessageId,
+          model: result.model,
+          metadata: {
+            source: "chat-v2",
+            openaiResponseId: result.responseId,
+            finishReason: "error",
+            error: userSafeError(result.error),
+          },
+        });
+      }
+      sendComplete(event, {
+        eventType: "error",
+        conversationId,
+        messageId:
+          result.partialContent.length > 0 ? assistantMessageId : undefined,
+        errorMessage: userSafeError(result.error),
+      });
+      currentAbortController = null;
+      currentConversationId = null;
+      pendingPermissionState = null;
+      break;
+    }
+    case "paused_for_permission": {
+      pendingPermissionState = {
+        event,
+        module,
+        api: new AiChatApi(),
+        req: result.pending.request,
+        conversationId: result.pending.conversationId,
+        assistantMessageId: result.pending.assistantMessageId,
+        conversationMessages: result.pending.conversationMessages,
+        abortController: result.pending.abortController,
+        nextRound: result.pending.nextRound,
+        toolCallId: result.pending.toolCallId,
+        toolName: result.pending.toolName,
+        toolArguments: result.pending.toolArguments,
+      };
+      console.log(
+        `[ai-chat-v2] tool ${result.pending.toolName} needs permission — paused (nextRound=${result.pending.nextRound})`
+      );
+      break;
+    }
+    case "paused_for_plan_question": {
+      pendingPlanQuestionState = {
+        event,
+        module,
+        planModule: new AIChatPlanModule(),
+        api: new AiChatApi(),
+        req: result.pending.request,
+        conversationId: result.pending.conversationId,
+        assistantMessageId: result.pending.assistantMessageId,
+        conversationMessages: result.pending.conversationMessages,
+        abortController: result.pending.abortController,
+        nextRound: result.pending.nextRound,
+        toolCallId: result.pending.toolCallId,
+        questionId: result.pending.questionId,
+        planId: result.pending.planId,
+      };
+      console.log(
+        `[ai-chat-v2] AskUserQuestion paused (questionId=${result.pending.questionId}, nextRound=${result.pending.nextRound})`
+      );
+      break;
+    }
+  }
 }
 
 async function handleModels(): Promise<CommonMessage<unknown>> {
@@ -472,7 +666,6 @@ async function handleStream(event: IpcEventLike, data: string): Promise<void> {
     return;
   }
 
-  const api = new AiChatApi();
   const toolFunctions = await SkillRegistry.getAllToolFunctions();
   const openAITools = toOpenAITools(toolFunctions);
   const allOpenAITools = isPlanMode
@@ -497,21 +690,54 @@ async function handleStream(event: IpcEventLike, data: string): Promise<void> {
     messageId: assistantMessageId,
   });
 
+  const loop = createQueryLoop();
+  const eventSink = createEventSink(event, conversationId);
+  const planContext =
+    isPlanMode && planState
+      ? {
+          planModule: {
+            saveQuestion: (input: {
+              conversationId: string;
+              planId?: string;
+              payload: AskUserQuestionPayload;
+            }) => planModule.saveQuestion(input),
+            submitPlanForApproval: (input: {
+              conversationId: string;
+              planId?: string;
+              payload: SubmitPlanForApprovalPayload;
+            }) => planModule.submitPlanForApproval(input),
+            getPlanStateByPlanId: (planId: string) =>
+              planModule.getPlanStateByPlanId(planId),
+            answerQuestion: (input: {
+              conversationId: string;
+              questionId: string;
+              answers: AskUserQuestionAnswer[];
+            }) => planModule.answerQuestion(input),
+          },
+          planState,
+        }
+      : undefined;
+
+  const loopInput: AIChatQueryLoopInput = {
+    conversationId,
+    assistantMessageId,
+    messages: conversationMessages,
+    request: req,
+    openAITools: allOpenAITools,
+    abortController,
+    eventSink,
+    planContext,
+    startRound: 0,
+  };
+
   try {
-    await continueStreamAfterTools({
+    const result = await loop.run(loopInput);
+    await handleLoopResult({
+      result,
       event,
       module,
-      planModule,
-      api,
-      req,
       conversationId,
       assistantMessageId,
-      conversationMessages,
-      abortController,
-      openAITools: allOpenAITools,
-      planState,
-      isPlanMode,
-      startRound: 0,
     });
   } catch (err) {
     await handleStreamingFailure({
@@ -564,471 +790,6 @@ function handleStop(): void {
     currentAbortController.abort();
     currentAbortController = null;
   }
-}
-
-async function continueStreamAfterTools(state: {
-  event: IpcEventLike;
-  module: AIChatV2Module;
-  planModule?: AIChatPlanModule;
-  api: AiChatApi;
-  req: ChatV2StreamRequest;
-  conversationId: string;
-  assistantMessageId: string;
-  conversationMessages: OpenAIChatMessage[];
-  abortController: AbortController;
-  openAITools: OpenAITool[];
-  planState?: AIChatPlanStateView | null;
-  isPlanMode?: boolean;
-  startRound: number;
-}): Promise<void> {
-  let activeAccumulator: OpenAIStreamAccumulator | null = null;
-  try {
-    let finalAccumulator: OpenAIStreamAccumulator | null = null;
-
-    for (
-      let round = state.startRound;
-      round < CHAT_V2_MAX_TOOL_ROUNDS;
-      round += 1
-    ) {
-      const accumulator = new OpenAIStreamAccumulator();
-      activeAccumulator = accumulator;
-      console.log(
-        `[ai-chat-v2] round ${round} → POST /chat/completions msgs=${
-          state.conversationMessages.length
-        } roles=[${state.conversationMessages
-          .map((m) => m.role)
-          .join(",")}] tools=${state.openAITools.length}`
-      );
-      await state.api.openAIChatCompletionStream(
-        {
-          messages: state.conversationMessages,
-          model: state.req.model,
-          temperature: state.req.temperature,
-          max_tokens: state.req.maxTokens,
-          stream: true,
-          tools: state.openAITools.length > 0 ? state.openAITools : undefined,
-          tool_choice: state.openAITools.length > 0 ? "auto" : undefined,
-        },
-        (rawChunk) => {
-          if (currentConversationId !== state.conversationId) return;
-          const delta = accumulator.ingest(rawChunk);
-          if (delta) {
-            sendChunk(state.event, {
-              eventType: "token",
-              conversationId: state.conversationId,
-              messageId: state.assistantMessageId,
-              contentDelta: delta,
-              model: accumulator.state.model,
-            });
-          }
-        },
-        {
-          signal: state.abortController.signal,
-          onRetry: (info) => {
-            if (currentConversationId !== state.conversationId) return;
-            console.log(
-              `[ai-chat-v2] retrying connection attempt ${info.attempt}/${info.maxAttempts} in ${info.delayMs}ms (${info.error})`
-            );
-            sendChunk(state.event, {
-              eventType: "retry_connect",
-              conversationId: state.conversationId,
-              messageId: state.assistantMessageId,
-              retryAttempt: info.attempt,
-              retryMaxAttempts: info.maxAttempts,
-              retryDelayMs: info.delayMs,
-            });
-          },
-        }
-      );
-
-      finalAccumulator = accumulator;
-      const parsedCalls = accumulator
-        .tryParseToolCallArguments()
-        .filter((call) => call.name && call.id);
-
-      console.log(
-        `[ai-chat-v2] round ${round} ← finishReason=${
-          accumulator.state.finishReason
-        } parsedCalls=${parsedCalls.length} willContinue=${
-          accumulator.state.finishReason === "tool_calls" &&
-          parsedCalls.length > 0
-        }`
-      );
-
-      if (
-        accumulator.state.finishReason !== "tool_calls" ||
-        parsedCalls.length === 0
-      ) {
-        break;
-      }
-
-      if (parsedCalls.some((call) => !call.ok)) {
-        throw new Error("Tool call arguments were malformed.");
-      }
-
-      state.conversationMessages.push(
-        buildAssistantToolCallMessage(
-          parsedCalls.filter(
-            (
-              call
-            ): call is typeof call & {
-              id: string;
-              name: string;
-              arguments: Record<string, unknown>;
-            } => Boolean(call.id && call.name && call.arguments)
-          ),
-          accumulator.state.fullContent
-        )
-      );
-
-      for (const call of parsedCalls) {
-        if (!call.ok || !call.id || !call.name) {
-          continue;
-        }
-
-        sendChunk(state.event, {
-          eventType: "tool_call",
-          conversationId: state.conversationId,
-          messageId: state.assistantMessageId,
-          toolCallId: call.id,
-          toolName: call.name,
-          toolArguments: call.arguments,
-        });
-
-        // Plan tools are intercepted and handled locally — never dispatched
-        // to SkillExecutor. Each one either pauses the stream (AskUserQuestion)
-        // or records a new plan version (SubmitPlanForApproval).
-        if (state.isPlanMode && isPlanToolName(call.name)) {
-          if (call.name === "AskUserQuestion") {
-            const paused = await handlePlanToolAskUserQuestion({
-              state,
-              call,
-              round,
-            });
-            if (paused) return;
-            // If not paused (validation failed or no pending state stored),
-            // fall through to push the synthetic tool result below.
-            continue;
-          }
-          if (call.name === "SubmitPlanForApproval") {
-            await handlePlanToolSubmitForApproval({
-              state,
-              call,
-            });
-            continue;
-          }
-        }
-
-        // Plan-mode policy gate: block high-impact tools before the plan is
-        // approved. The AI receives a structured "plan approval required"
-        // result so it can explain the situation to the user.
-        if (state.isPlanMode && state.planState) {
-          const skillDef = SkillRegistry.getSkill(call.name);
-          const policyDecision = checkPlanModeToolPolicy({
-            toolName: call.name,
-            skillPermissionCategory: skillDef?.permissionCategory,
-            context: {
-              conversationId: state.conversationId,
-              planState: state.planState,
-            },
-          });
-          if (!policyDecision.allowed) {
-            const blockedContent = serializeToolResultContent({
-              success: false,
-              planApprovalRequired: true,
-              reason: policyDecision.reason ?? "Plan approval required.",
-            });
-            sendChunk(state.event, {
-              eventType: "plan_blocked_tool" as never,
-              conversationId: state.conversationId,
-              messageId: state.assistantMessageId,
-              toolCallId: call.id,
-              toolName: call.name,
-              fullContent: blockedContent,
-              planBlockedToolName: call.name,
-              planBlockedReason: policyDecision.reason ?? undefined,
-            } as ChatV2StreamChunk);
-            state.conversationMessages.push({
-              role: "tool",
-              tool_call_id: call.id,
-              content: blockedContent,
-            });
-            continue;
-          }
-        }
-
-        const toolResult = await SkillExecutor.execute(
-          call.name,
-          call.arguments ?? {},
-          {
-            conversationId: state.conversationId,
-            toolCallId: call.id,
-            args: call.arguments,
-          }
-        );
-        const toolPayload = normalizeToolResult(toolResult);
-        const toolContent = serializeToolResultContent(toolPayload);
-        console.log(
-          `[ai-chat-v2] tool ${call.name} ok=${
-            toolResult.success
-          } needsPermission=${isPermissionPromptResult(toolResult)}`
-        );
-
-        sendChunk(state.event, {
-          eventType: "tool_result",
-          conversationId: state.conversationId,
-          messageId: state.assistantMessageId,
-          toolCallId: call.id,
-          toolName: call.name,
-          fullContent: toolContent,
-          toolResult: toolPayload,
-        });
-
-        if (isPermissionPromptResult(toolResult)) {
-          pendingPermissionState = {
-            event: state.event,
-            module: state.module,
-            api: state.api,
-            req: state.req,
-            conversationId: state.conversationId,
-            assistantMessageId: state.assistantMessageId,
-            conversationMessages: state.conversationMessages,
-            abortController: state.abortController,
-            nextRound: round + 1,
-            toolCallId: call.id,
-            toolName: call.name,
-            toolArguments: call.arguments ?? {},
-          };
-          console.log(
-            `[ai-chat-v2] tool ${
-              call.name
-            } needs permission — pausing before sending result to AI (nextRound=${
-              round + 1
-            })`
-          );
-          return;
-        }
-
-        state.conversationMessages.push({
-          role: "tool",
-          tool_call_id: call.id,
-          content: toolContent,
-        });
-        console.log(
-          `[ai-chat-v2] tool ${call.name} result pushed → round ${round} will continue to next AI request`
-        );
-      }
-    }
-
-    if (currentConversationId !== state.conversationId) return;
-
-    const fullContent = finalAccumulator?.state.fullContent ?? "";
-    const finishReason = finalAccumulator?.state.finishReason ?? "stop";
-
-    console.log(
-      `[ai-chat-v2] stream complete finishReason=${finishReason} fullContentLen=${
-        fullContent.length
-      } preview=${JSON.stringify(fullContent.slice(0, 200))}`
-    );
-
-    if (fullContent.length > 0) {
-      await state.module.saveAssistantMessage({
-        conversationId: state.conversationId,
-        content: fullContent,
-        messageId: state.assistantMessageId,
-        model: finalAccumulator?.state.model,
-        metadata: {
-          source: "chat-v2",
-          openaiResponseId: finalAccumulator?.state.responseId,
-          finishReason,
-        },
-      });
-    }
-
-    sendComplete(state.event, {
-      eventType: "complete",
-      conversationId: state.conversationId,
-      messageId: state.assistantMessageId,
-      fullContent,
-      model: finalAccumulator?.state.model,
-      finishReason,
-    });
-    currentAbortController = null;
-    currentConversationId = null;
-  } catch (err) {
-    console.error(
-      `[ai-chat-v2] continueStreamAfterTools failed:`,
-      err instanceof Error ? err.stack || err.message : err
-    );
-    await handleStreamingFailure({
-      event: state.event,
-      module: state.module,
-      conversationId: state.conversationId,
-      assistantMessageId: state.assistantMessageId,
-      err,
-      activeAccumulator,
-    });
-  }
-}
-
-type ContinueStreamState = Parameters<typeof continueStreamAfterTools>[0];
-
-type ParsedToolCall = {
-  index: number;
-  id?: string;
-  name?: string;
-  arguments?: Record<string, unknown>;
-  ok: boolean;
-};
-
-/**
- * Handle the AskUserQuestion plan tool: persist the question, emit a
- * structured chunk to the renderer, and pause the stream by storing a
- * pendingPlanQuestionState. Returns true when the stream was paused.
- */
-async function handlePlanToolAskUserQuestion(args: {
-  state: ContinueStreamState;
-  call: ParsedToolCall;
-  round: number;
-}): Promise<boolean> {
-  const { state, call } = args;
-  if (!state.planModule || !state.planState) {
-    return false;
-  }
-  if (!call.id || !call.name) return false;
-
-  const payload = (call.arguments ?? {}) as unknown as AskUserQuestionPayload;
-  if (!payload || !Array.isArray(payload.questions)) {
-    return false;
-  }
-
-  let questionView: AIChatPlanQuestionView;
-  try {
-    questionView = await state.planModule.saveQuestion({
-      conversationId: state.conversationId,
-      planId: state.planState.planId,
-      payload,
-    });
-  } catch (err) {
-    console.error("[ai-chat-v2] saveQuestion failed:", err);
-    const errContent = serializeToolResultContent({
-      success: false,
-      error:
-        err instanceof Error
-          ? err.message
-          : "AskUserQuestion payload was rejected.",
-    });
-    state.conversationMessages.push({
-      role: "tool",
-      tool_call_id: call.id,
-      content: errContent,
-    });
-    return false;
-  }
-
-  sendChunk(state.event, {
-    eventType: "ask_user_question" as never,
-    conversationId: state.conversationId,
-    messageId: state.assistantMessageId,
-    toolCallId: call.id,
-    toolName: call.name,
-    question: questionView,
-    planState: state.planState,
-  } as ChatV2StreamChunk);
-
-  // Synthetic tool result so the transcript has a well-formed tool/assistant
-  // pair; the real answer is filled in later when the user responds.
-  const ackContent = serializeToolResultContent({
-    success: true,
-    status: "awaiting_answer",
-    questionId: questionView.questionId,
-  });
-  state.conversationMessages.push({
-    role: "tool",
-    tool_call_id: call.id,
-    content: ackContent,
-  });
-
-  pendingPlanQuestionState = {
-    event: state.event,
-    module: state.module,
-    planModule: state.planModule,
-    api: state.api,
-    req: state.req,
-    conversationId: state.conversationId,
-    assistantMessageId: state.assistantMessageId,
-    conversationMessages: state.conversationMessages,
-    abortController: state.abortController,
-    nextRound: args.round + 1,
-    toolCallId: call.id,
-    questionId: questionView.questionId,
-    planId: state.planState.planId,
-  };
-  console.log(
-    `[ai-chat-v2] AskUserQuestion paused (questionId=${
-      questionView.questionId
-    }, nextRound=${args.round + 1})`
-  );
-  return true;
-}
-
-/**
- * Handle the SubmitPlanForApproval plan tool: record a new plan version,
- * transition status to awaiting_approval, and emit a plan_submitted chunk.
- */
-async function handlePlanToolSubmitForApproval(args: {
-  state: ContinueStreamState;
-  call: ParsedToolCall;
-}): Promise<void> {
-  const { state, call } = args;
-  if (!state.planModule || !state.planState || !call.id) return;
-
-  const payload = (call.arguments ??
-    {}) as unknown as SubmitPlanForApprovalPayload;
-  let updatedPlan: AIChatPlanStateView;
-  try {
-    updatedPlan = await state.planModule.submitPlanForApproval({
-      conversationId: state.conversationId,
-      planId: state.planState.planId,
-      payload,
-    });
-  } catch (err) {
-    console.error("[ai-chat-v2] submitPlanForApproval failed:", err);
-    const errContent = serializeToolResultContent({
-      success: false,
-      error:
-        err instanceof Error
-          ? err.message
-          : "SubmitPlanForApproval payload was rejected.",
-    });
-    state.conversationMessages.push({
-      role: "tool",
-      tool_call_id: call.id,
-      content: errContent,
-    });
-    return;
-  }
-
-  sendChunk(state.event, {
-    eventType: "plan_submitted" as never,
-    conversationId: state.conversationId,
-    messageId: state.assistantMessageId,
-    toolCallId: call.id,
-    toolName: call.name,
-    planState: updatedPlan,
-  } as ChatV2StreamChunk);
-
-  const ackContent = serializeToolResultContent({
-    success: true,
-    status: "awaiting_approval",
-    planId: updatedPlan.planId,
-    version: updatedPlan.currentVersion,
-  });
-  state.conversationMessages.push({
-    role: "tool",
-    tool_call_id: call.id,
-    content: ackContent,
-  });
 }
 
 async function handleStreamingFailure(args: {
@@ -1180,18 +941,36 @@ async function handleResumeToolAfterPermission(
       }`
     );
 
-    void continueStreamAfterTools({
-      event: pending.event,
-      module: pending.module,
-      api: pending.api,
-      req: pending.req,
+    const resumeLoop = createQueryLoop();
+    const resumeEventSink = createEventSink(
+      pending.event,
+      pending.conversationId
+    );
+    const resumeLoopInput: AIChatQueryLoopInput = {
       conversationId: pending.conversationId,
       assistantMessageId: pending.assistantMessageId,
-      conversationMessages: pending.conversationMessages,
-      abortController: pending.abortController,
+      messages: pending.conversationMessages,
+      request: pending.req,
       openAITools: toOpenAITools(await SkillRegistry.getAllToolFunctions()),
+      abortController: pending.abortController,
+      eventSink: resumeEventSink,
       startRound: pending.nextRound,
-    });
+    };
+
+    void resumeLoop
+      .run(resumeLoopInput)
+      .then((result) =>
+        handleLoopResult({
+          result,
+          event: pending.event,
+          module: pending.module,
+          conversationId: pending.conversationId,
+          assistantMessageId: pending.assistantMessageId,
+        })
+      )
+      .catch((err) => {
+        console.error("[ai-chat-v2] resume loop failed:", err);
+      });
 
     return ok({ ok: true });
   } catch (err) {
@@ -1302,21 +1081,61 @@ async function handleAnswerQuestion(
       ...PlanModeToolRegistry.toOpenAITools(),
     ];
 
-    void continueStreamAfterTools({
-      event: pending.event,
-      module: pending.module,
-      planModule: pending.planModule,
-      api: pending.api,
-      req: pending.req,
+    const answerLoop = createQueryLoop();
+    const answerEventSink = createEventSink(
+      pending.event,
+      pending.conversationId
+    );
+    const answerLoopPlanContext = planState
+      ? {
+          planModule: {
+            saveQuestion: (input: {
+              conversationId: string;
+              planId?: string;
+              payload: AskUserQuestionPayload;
+            }) => pending.planModule.saveQuestion(input),
+            submitPlanForApproval: (input: {
+              conversationId: string;
+              planId?: string;
+              payload: SubmitPlanForApprovalPayload;
+            }) => pending.planModule.submitPlanForApproval(input),
+            getPlanStateByPlanId: (planId: string) =>
+              pending.planModule.getPlanStateByPlanId(planId),
+            answerQuestion: (input: {
+              conversationId: string;
+              questionId: string;
+              answers: AskUserQuestionAnswer[];
+            }) => pending.planModule.answerQuestion(input),
+          },
+          planState,
+        }
+      : undefined;
+    const answerLoopInput: AIChatQueryLoopInput = {
       conversationId: pending.conversationId,
       assistantMessageId: pending.assistantMessageId,
-      conversationMessages: pending.conversationMessages,
-      abortController: pending.abortController,
+      messages: pending.conversationMessages,
+      request: pending.req,
       openAITools: allOpenAITools,
-      planState,
-      isPlanMode: true,
+      abortController: pending.abortController,
+      eventSink: answerEventSink,
+      planContext: answerLoopPlanContext,
       startRound: pending.nextRound,
-    });
+    };
+
+    void answerLoop
+      .run(answerLoopInput)
+      .then((result) =>
+        handleLoopResult({
+          result,
+          event: pending.event,
+          module: pending.module,
+          conversationId: pending.conversationId,
+          assistantMessageId: pending.assistantMessageId,
+        })
+      )
+      .catch((err) => {
+        console.error("[ai-chat-v2] answer-question loop failed:", err);
+      });
   }
 
   return ok({ ok: true });
