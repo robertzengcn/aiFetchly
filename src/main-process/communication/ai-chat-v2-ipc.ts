@@ -229,12 +229,15 @@ async function handleModels(): Promise<CommonMessage<unknown>> {
 }
 
 async function handleConversations(
-  searchQuery?: string
+  data?: string
 ): Promise<CommonMessage<ChatV2ConversationSummary[]>> {
   if (!isAIEnabled()) {
     return denied("AI is not enabled");
   }
   try {
+    const req = data ? JSON.parse(data) : {};
+    const searchQuery =
+      typeof req.searchQuery === "string" ? req.searchQuery : undefined;
     const module = new AIChatV2Module();
     return ok(await module.getConversations(searchQuery));
   } catch (err) {
@@ -1498,9 +1501,8 @@ export function registerAiChatV2IpcHandlers(): void {
       handleResumeToolAfterPermission((data as string) ?? "")
   );
   ipcMain.handle(AI_CHAT_V2_MODELS, async () => handleModels());
-  ipcMain.handle(
-    AI_CHAT_V2_CONVERSATIONS,
-    async (_event, searchQuery?: string) => handleConversations(searchQuery)
+  ipcMain.handle(AI_CHAT_V2_CONVERSATIONS, async (_e, data: unknown) =>
+    handleConversations(data as string)
   );
   ipcMain.handle(AI_CHAT_V2_HISTORY, async (_e, data: unknown) =>
     handleHistory(_e as IpcEventLike, data as string)

@@ -64,7 +64,10 @@ export async function getOpenAIChatModels(): Promise<OpenAIModelsResponse | null
 export async function getChatV2Conversations(
   searchQuery?: string
 ): Promise<ChatV2ConversationSummary[]> {
-  const resp = await windowInvoke(AI_CHAT_V2_CONVERSATIONS, searchQuery);
+  const resp = await windowInvoke(
+    AI_CHAT_V2_CONVERSATIONS,
+    searchQuery ? { searchQuery } : undefined
+  );
   return (resp as ChatV2ConversationSummary[] | null) ?? [];
 }
 
