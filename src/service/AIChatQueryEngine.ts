@@ -7,10 +7,16 @@ import type {
   ToolFunction,
 } from "@/api/aiChatApi";
 import { SkillRegistry } from "@/config/skillsRegistry";
+import { SkillExecutor } from "@/service/SkillExecutor";
 import { buildOpenAITranscript } from "@/service/OpenAIChatTranscriptBuilder";
 import { buildPlanModeSystemPrompt } from "@/service/PlanModePromptBuilder";
 import { PlanModeToolRegistry } from "@/service/PlanModeToolRegistry";
 import type { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
+import {
+  serializeToolResultContent,
+  normalizeToolResult,
+  isPermissionPromptResult,
+} from "@/service/AIChatQueryLoop";
 import { userSafeError } from "@/service/AIChatErrorMapper";
 import type {
   AIChatQueryEventSink,
@@ -280,67 +286,228 @@ export class AIChatQueryEngine {
   }
 
   // -------------------------------------------------------------------------
-  // Accessor methods for pending state (Step 3 compatibility — resume
-  // handlers in IPC use these until Step 4 moves resume into the engine).
+  // Resume methods
   // -------------------------------------------------------------------------
 
-  getPendingPermission(): PendingPermissionTurn | null {
-    return this.pendingPermission;
-  }
+  /**
+   * Resume a paused tool after the user grants permission.
+   * Re-executes the tool with skipPermissionCheck, then re-enters the loop.
+   */
+  async resumeToolAfterPermission(
+    request: ResumeToolAfterPermissionRequest
+  ): Promise<ResumeTurnResult> {
+    const pending = this.pendingPermission;
+    if (!pending || pending.toolCallId !== request.toolId) {
+      return {
+        ok: false,
+        error: "No active permission-gated tool call to continue.",
+      };
+    }
+    if (
+      request.conversationId &&
+      request.conversationId !== pending.conversationId
+    ) {
+      return {
+        ok: false,
+        error: "Conversation mismatch for pending tool call.",
+      };
+    }
 
-  getPendingPlanQuestion(): PendingPlanQuestionTurn | null {
-    return this.pendingPlanQuestion;
-  }
-
-  clearPendingPermission(): void {
     this.pendingPermission = null;
-  }
+    this.currentAbortController = pending.abortController;
+    this.currentConversationId = pending.conversationId;
+    this.currentAssistantMessageId = pending.assistantMessageId;
 
-  clearPendingPlanQuestion(): void {
-    this.pendingPlanQuestion = null;
-  }
+    try {
+      const toolResult = await SkillExecutor.execute(
+        pending.toolName,
+        pending.toolArguments,
+        {
+          conversationId: pending.conversationId,
+          toolCallId: pending.toolCallId,
+          args: pending.toolArguments,
+          skipPermissionCheck: true,
+        }
+      );
 
-  /** Set active turn state from IPC resume handlers (Step 3 compat). */
-  setActiveTurn(params: {
-    conversationId: string;
-    assistantMessageId: string;
-    abortController: AbortController;
-  }): void {
-    this.currentConversationId = params.conversationId;
-    this.currentAssistantMessageId = params.assistantMessageId;
-    this.currentAbortController = params.abortController;
+      const toolPayload = normalizeToolResult(toolResult);
+      const toolContent = serializeToolResultContent(toolPayload);
+
+      pending.eventSink.emit({
+        type: "tool_result",
+        conversationId: pending.conversationId,
+        messageId: pending.assistantMessageId,
+        toolCallId: pending.toolCallId,
+        toolName: pending.toolName,
+        fullContent: toolContent,
+        toolResult: toolPayload,
+        replacesPermissionPromptForToolId: pending.toolCallId,
+      });
+
+      if (isPermissionPromptResult(toolResult)) {
+        this.pendingPermission = pending;
+        return {
+          ok: false,
+          error: "Permission is still required for this tool.",
+        };
+      }
+
+      pending.conversationMessages.push({
+        role: "tool",
+        tool_call_id: pending.toolCallId,
+        content: toolContent,
+      });
+
+      const loopInput: AIChatQueryLoopInput = {
+        conversationId: pending.conversationId,
+        assistantMessageId: pending.assistantMessageId,
+        messages: pending.conversationMessages,
+        request: pending.request,
+        openAITools: pending.openAITools,
+        abortController: pending.abortController,
+        eventSink: pending.eventSink,
+        planContext: pending.planContext,
+        startRound: pending.nextRound,
+      };
+
+      const module = new AIChatV2Module();
+
+      void this.loop
+        .run(loopInput)
+        .then(async (result) => {
+          await this.handleLoopResult(result, module, pending.eventSink);
+        })
+        .catch((err) => {
+          console.error("[ai-chat-v2] resume loop failed:", err);
+          pending.eventSink.emit({
+            type: "error",
+            conversationId: pending.conversationId,
+            messageId: pending.assistantMessageId,
+            errorMessage: userSafeError(err),
+          });
+        });
+
+      return { ok: true };
+    } catch (err) {
+      this.currentAbortController = null;
+      this.currentConversationId = null;
+      this.currentAssistantMessageId = null;
+      return { ok: false, error: userSafeError(err) };
+    }
   }
 
   /**
-   * Handle a loop result from a resume path (tool permission resume or
-   * plan question answer resume). Sets the active turn fields so that
-   * handleLoopResult can persist with the correct IDs, then delegates.
-   *
-   * This is public because IPC's resume handlers call the loop directly
-   * in Step 3. Step 4 will move resume logic into the engine and remove
-   * this method.
+   * Answer a plan-mode question and resume the paused turn.
    */
-  async handleResumeLoopResult(
-    result: AIChatQueryLoopResult,
-    module: AIChatV2Module,
-    eventSink: AIChatQueryEventSink,
-    conversationId: string,
-    assistantMessageId: string
-  ): Promise<void> {
-    this.currentConversationId = conversationId;
-    this.currentAssistantMessageId = assistantMessageId;
+  async answerPlanQuestion(
+    request: AnswerPlanQuestionRequest
+  ): Promise<ResumeTurnResult> {
+    const planModule = new AIChatPlanModule();
+
+    let answered: {
+      question: import("@/entityTypes/aiChatPlanTypes").AIChatPlanQuestionView;
+      planState: AIChatPlanStateView;
+    };
     try {
-      await this.handleLoopResult(result, module, eventSink);
-    } finally {
-      if (
-        this.currentConversationId === conversationId &&
-        !this.pendingPermission &&
-        !this.pendingPlanQuestion
-      ) {
-        this.currentAbortController = null;
-        this.currentConversationId = null;
-      }
+      answered = await planModule.answerQuestion({
+        conversationId: request.conversationId,
+        questionId: request.questionId,
+        answers: request.answers,
+      });
+    } catch (err) {
+      return { ok: false, error: userSafeError(err) };
     }
+
+    const pending = this.pendingPlanQuestion;
+    if (
+      !pending ||
+      pending.questionId !== request.questionId ||
+      pending.conversationId !== request.conversationId
+    ) {
+      return { ok: true };
+    }
+
+    this.pendingPlanQuestion = null;
+
+    const answerContent = serializeToolResultContent({
+      success: true,
+      status: "answered",
+      questionId: answered.question.questionId,
+      answers: request.answers,
+    });
+
+    const toolMsgIndex = pending.conversationMessages.findIndex(
+      (m) => m.role === "tool" && m.tool_call_id === pending.toolCallId
+    );
+    if (toolMsgIndex >= 0) {
+      pending.conversationMessages[toolMsgIndex] = {
+        role: "tool",
+        tool_call_id: pending.toolCallId,
+        content: answerContent,
+      };
+    } else {
+      pending.conversationMessages.push({
+        role: "tool",
+        tool_call_id: pending.toolCallId,
+        content: answerContent,
+      });
+    }
+
+    this.currentAbortController = pending.abortController;
+    this.currentConversationId = pending.conversationId;
+    this.currentAssistantMessageId = pending.assistantMessageId;
+
+    const planState = await planModule.getPlanStateByPlanId(pending.planId);
+    const toolFunctions = await SkillRegistry.getAllToolFunctions();
+    const allOpenAITools = [
+      ...toOpenAITools(toolFunctions),
+      ...PlanModeToolRegistry.toOpenAITools(),
+    ];
+
+    const planContext: AIChatPlanLoopContext | undefined = planState
+      ? {
+          planModule: {
+            saveQuestion: (inp) => planModule.saveQuestion(inp),
+            submitPlanForApproval: (inp) =>
+              planModule.submitPlanForApproval(inp),
+            getPlanStateByPlanId: (planId) =>
+              planModule.getPlanStateByPlanId(planId),
+            answerQuestion: (inp) => planModule.answerQuestion(inp),
+          },
+          planState,
+        }
+      : undefined;
+
+    const loopInput: AIChatQueryLoopInput = {
+      conversationId: pending.conversationId,
+      assistantMessageId: pending.assistantMessageId,
+      messages: pending.conversationMessages,
+      request: pending.request,
+      openAITools: allOpenAITools,
+      abortController: pending.abortController,
+      eventSink: pending.eventSink,
+      planContext,
+      startRound: pending.nextRound,
+    };
+
+    const module = new AIChatV2Module();
+
+    void this.loop
+      .run(loopInput)
+      .then(async (result) => {
+        await this.handleLoopResult(result, module, pending.eventSink);
+      })
+      .catch((err) => {
+        console.error("[ai-chat-v2] answer-question loop failed:", err);
+        pending.eventSink.emit({
+          type: "error",
+          conversationId: pending.conversationId,
+          messageId: pending.assistantMessageId,
+          errorMessage: userSafeError(err),
+        });
+      });
+
+    return { ok: true };
   }
 
   // -------------------------------------------------------------------------
@@ -481,25 +648,5 @@ export class AIChatQueryEngine {
     this.currentAssistantMessageId = null;
     this.pendingPermission = null;
     this.pendingPlanQuestion = null;
-  }
-
-  // -------------------------------------------------------------------------
-  // Resume methods — properly implemented in Step 4.
-  // For Step 3, these throw to indicate they should not be called directly.
-  // IPC resume handlers use the pending state accessors instead.
-  // -------------------------------------------------------------------------
-
-  async resumeToolAfterPermission(
-    request: ResumeToolAfterPermissionRequest
-  ): Promise<ResumeTurnResult> {
-    void request;
-    throw new Error("Not implemented in step 3");
-  }
-
-  async answerPlanQuestion(
-    request: AnswerPlanQuestionRequest
-  ): Promise<ResumeTurnResult> {
-    void request;
-    throw new Error("Not implemented in step 3");
   }
 }

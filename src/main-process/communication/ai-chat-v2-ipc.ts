@@ -1,17 +1,11 @@
 import { ipcMain } from "electron";
 import { Token } from "@/modules/token";
 import { USER_AI_ENABLED } from "@/config/usersetting";
-import { AiChatApi, type OpenAITool, type ToolFunction } from "@/api/aiChatApi";
+import { AiChatApi } from "@/api/aiChatApi";
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { AIChatPlanModule } from "@/modules/AIChatPlanModule";
-import { PlanModeToolRegistry } from "@/service/PlanModeToolRegistry";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import { SkillExecutor } from "@/service/SkillExecutor";
-import {
-  serializeToolResultContent,
-  normalizeToolResult,
-  isPermissionPromptResult,
-} from "@/service/AIChatQueryLoop";
 import { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
 import type { AIChatQueryLoopDeps } from "@/service/AIChatQueryLoop";
 import { AIChatQueryEngine } from "@/service/AIChatQueryEngine";
@@ -19,7 +13,6 @@ import { userSafeError } from "@/service/AIChatErrorMapper";
 import type {
   AIChatQueryEvent,
   AIChatQueryEventSink,
-  AIChatQueryLoopInput,
 } from "@/service/AIChatQueryEvents";
 import {
   AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
@@ -43,8 +36,6 @@ import type {
   AIChatPlanStateView,
   AIChatPlanVersionView,
   AskUserQuestionAnswer,
-  AskUserQuestionPayload,
-  SubmitPlanForApprovalPayload,
 } from "@/entityTypes/aiChatPlanTypes";
 import type { CommonMessage } from "@/entityTypes/commonType";
 import type {
@@ -121,19 +112,6 @@ function sendChunk(
 
 function sendComplete(event: IpcEventLike, chunk: ChatV2StreamChunk): void {
   event.sender.send(AI_CHAT_V2_STREAM_COMPLETE, JSON.stringify(chunk));
-}
-
-function toOpenAITools(toolFunctions: ToolFunction[]): OpenAITool[] {
-  return toolFunctions
-    .filter((tool) => tool.type === "function" && typeof tool.name === "string")
-    .map((tool) => ({
-      type: "function" as const,
-      function: {
-        name: tool.name,
-        description: tool.description,
-        parameters: tool.parameters,
-      },
-    }));
 }
 
 /**
@@ -359,135 +337,11 @@ async function handleResumeToolAfterPermission(
   }
 
   const engine = getQueryEngine();
-  const pending = engine.getPendingPermission();
-  console.log(
-    `[ai-chat-v2] resume requested toolId=${parsed.toolId} conv=${
-      parsed.conversationId
-    } hasPending=${!!pending} pendingToolCallId=${pending?.toolCallId}`
-  );
-  if (!pending || pending.toolCallId !== parsed.toolId) {
-    return ok({
-      ok: false,
-      error: "No active permission-gated tool call to continue.",
-    });
-  }
-
-  if (
-    parsed.conversationId &&
-    parsed.conversationId !== pending.conversationId
-  ) {
-    return ok({
-      ok: false,
-      error: "Conversation mismatch for pending tool call.",
-    });
-  }
-
-  engine.clearPendingPermission();
-  engine.setActiveTurn({
-    conversationId: pending.conversationId,
-    assistantMessageId: pending.assistantMessageId,
-    abortController: pending.abortController,
+  const result = await engine.resumeToolAfterPermission({
+    toolId: parsed.toolId,
+    conversationId: parsed.conversationId,
   });
-
-  try {
-    const toolResult = await SkillExecutor.execute(
-      pending.toolName,
-      pending.toolArguments,
-      {
-        conversationId: pending.conversationId,
-        toolCallId: pending.toolCallId,
-        args: pending.toolArguments,
-        skipPermissionCheck: true,
-      }
-    );
-    const toolPayload = normalizeToolResult(toolResult);
-    const toolContent = serializeToolResultContent(toolPayload);
-
-    pending.eventSink.emit({
-      type: "tool_result",
-      conversationId: pending.conversationId,
-      messageId: pending.assistantMessageId,
-      toolCallId: pending.toolCallId,
-      toolName: pending.toolName,
-      fullContent: toolContent,
-      toolResult: toolPayload,
-      replacesPermissionPromptForToolId: pending.toolCallId,
-    });
-
-    if (isPermissionPromptResult(toolResult)) {
-      // Tool still requires permission even with skipPermissionCheck.
-      // pendingPermission was already cleared above; just return error.
-      return ok({
-        ok: false,
-        error: "Permission is still required for this tool.",
-      });
-    }
-
-    pending.conversationMessages.push({
-      role: "tool",
-      tool_call_id: pending.toolCallId,
-      content: toolContent,
-    });
-
-    console.log(
-      `[ai-chat-v2] resume re-exec ${pending.toolName} ok=${
-        toolResult.success
-      } needsPermission=${isPermissionPromptResult(
-        toolResult
-      )} → resuming stream at round ${pending.nextRound} msgs=${
-        pending.conversationMessages.length
-      }`
-    );
-
-    const resumeLoop = createQueryLoop();
-    const resumeLoopInput: AIChatQueryLoopInput = {
-      conversationId: pending.conversationId,
-      assistantMessageId: pending.assistantMessageId,
-      messages: pending.conversationMessages,
-      request: pending.request,
-      openAITools:
-        pending.planContext !== undefined
-          ? [
-              ...toOpenAITools(await SkillRegistry.getAllToolFunctions()),
-              ...PlanModeToolRegistry.toOpenAITools(),
-            ]
-          : toOpenAITools(await SkillRegistry.getAllToolFunctions()),
-      abortController: pending.abortController,
-      eventSink: pending.eventSink,
-      planContext: pending.planContext,
-      startRound: pending.nextRound,
-    };
-
-    const module = new AIChatV2Module();
-
-    void resumeLoop
-      .run(resumeLoopInput)
-      .then(async (result) => {
-        // Use the engine's handleLoopResult via a wrapper.
-        // The engine stores pending state, persists messages, emits terminal events.
-        await engine.handleResumeLoopResult(
-          result,
-          module,
-          pending.eventSink,
-          pending.conversationId,
-          pending.assistantMessageId
-        );
-      })
-      .catch((err) => {
-        console.error("[ai-chat-v2] resume loop failed:", err);
-        pending.eventSink.emit({
-          type: "error",
-          conversationId: pending.conversationId,
-          messageId: pending.assistantMessageId,
-          errorMessage: userSafeError(err),
-        });
-      });
-
-    return ok({ ok: true });
-  } catch (err) {
-    engine.clearPendingPermission();
-    return ok({ ok: false, error: userSafeError(err) });
-  }
+  return ok(result);
 }
 
 // -------------------------------------------------------------------------
@@ -655,127 +509,13 @@ async function handleAnswerQuestion(
     return denied("answers must be an array");
   }
 
-  const planModule = new AIChatPlanModule();
-  let answered;
-  try {
-    answered = await planModule.answerQuestion({
-      conversationId: parsed.conversationId,
-      questionId: parsed.questionId,
-      answers: parsed.answers,
-    });
-  } catch (err) {
-    return denied(userSafeError(err));
-  }
-
-  // If a stream is paused waiting for this answer, resume it.
   const engine = getQueryEngine();
-  const pending = engine.getPendingPlanQuestion();
-  if (
-    pending &&
-    pending.questionId === parsed.questionId &&
-    (!parsed.conversationId || pending.conversationId === parsed.conversationId)
-  ) {
-    engine.clearPendingPlanQuestion();
-
-    const answerContent = serializeToolResultContent({
-      success: true,
-      status: "answered",
-      questionId: answered.questionId,
-      answers: parsed.answers,
-    });
-    // Replace the synthetic "awaiting_answer" tool result with the real
-    // answer so the model sees the user's decisions.
-    const toolMsgIndex = pending.conversationMessages.findIndex(
-      (m) => m.role === "tool" && m.tool_call_id === pending.toolCallId
-    );
-    if (toolMsgIndex >= 0) {
-      pending.conversationMessages[toolMsgIndex] = {
-        role: "tool",
-        tool_call_id: pending.toolCallId,
-        content: answerContent,
-      };
-    } else {
-      pending.conversationMessages.push({
-        role: "tool",
-        tool_call_id: pending.toolCallId,
-        content: answerContent,
-      });
-    }
-
-    engine.setActiveTurn({
-      conversationId: pending.conversationId,
-      assistantMessageId: pending.assistantMessageId,
-      abortController: pending.abortController,
-    });
-
-    const planState = await planModule.getPlanStateByPlanId(pending.planId);
-    const allOpenAITools = [
-      ...toOpenAITools(await SkillRegistry.getAllToolFunctions()),
-      ...PlanModeToolRegistry.toOpenAITools(),
-    ];
-
-    const answerLoop = createQueryLoop();
-    const answerLoopPlanContext = planState
-      ? {
-          planModule: {
-            saveQuestion: (input: {
-              conversationId: string;
-              planId?: string;
-              payload: AskUserQuestionPayload;
-            }) => planModule.saveQuestion(input),
-            submitPlanForApproval: (input: {
-              conversationId: string;
-              planId?: string;
-              payload: SubmitPlanForApprovalPayload;
-            }) => planModule.submitPlanForApproval(input),
-            getPlanStateByPlanId: (planId: string) =>
-              planModule.getPlanStateByPlanId(planId),
-            answerQuestion: (input: {
-              conversationId: string;
-              questionId: string;
-              answers: AskUserQuestionAnswer[];
-            }) => planModule.answerQuestion(input),
-          },
-          planState,
-        }
-      : undefined;
-    const answerLoopInput: AIChatQueryLoopInput = {
-      conversationId: pending.conversationId,
-      assistantMessageId: pending.assistantMessageId,
-      messages: pending.conversationMessages,
-      request: pending.request,
-      openAITools: allOpenAITools,
-      abortController: pending.abortController,
-      eventSink: pending.eventSink,
-      planContext: answerLoopPlanContext,
-      startRound: pending.nextRound,
-    };
-
-    const module = new AIChatV2Module();
-
-    void answerLoop
-      .run(answerLoopInput)
-      .then(async (result) => {
-        await engine.handleResumeLoopResult(
-          result,
-          module,
-          pending.eventSink,
-          pending.conversationId,
-          pending.assistantMessageId
-        );
-      })
-      .catch((err) => {
-        console.error("[ai-chat-v2] answer-question loop failed:", err);
-        pending.eventSink.emit({
-          type: "error",
-          conversationId: pending.conversationId,
-          messageId: pending.assistantMessageId,
-          errorMessage: userSafeError(err),
-        });
-      });
-  }
-
-  return ok({ ok: true });
+  const result = await engine.answerPlanQuestion({
+    questionId: parsed.questionId,
+    conversationId: parsed.conversationId,
+    answers: parsed.answers,
+  });
+  return ok(result);
 }
 
 async function handleApprovePlan(

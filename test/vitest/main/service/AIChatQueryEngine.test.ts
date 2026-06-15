@@ -12,9 +12,7 @@ import type {
 } from "@/service/AIChatQueryEvents";
 
 // --- Mock AIChatV2Module -----------------------------------------------
-const mockSaveUserMessage = vi
-  .fn()
-  .mockResolvedValue({ messageId: "user-1" });
+const mockSaveUserMessage = vi.fn().mockResolvedValue({ messageId: "user-1" });
 const mockGetConversationMessages = vi.fn().mockResolvedValue([]);
 const mockSaveAssistantMessage = vi.fn().mockResolvedValue({});
 const mockCreateConversationIfNeeded = vi.fn().mockReturnValue("v2-test-conv");
@@ -65,8 +63,7 @@ vi.mock("@/modules/token", () => ({
 
 // --- Mock usersetting --------------------------------------------------
 vi.mock("@/config/usersetting", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("@/config/usersetting")>();
+  const actual = await importOriginal<typeof import("@/config/usersetting")>();
   return { ...actual };
 });
 
@@ -75,9 +72,7 @@ vi.mock("@/config/usersetting", async (importOriginal) => {
  * result.  The fakeRun callback can also inspect the loop input.
  */
 function createEngineWithFakeLoop(
-  fakeRun: (
-    input: AIChatQueryLoopInput
-  ) => Promise<AIChatQueryLoopResult>
+  fakeRun: (input: AIChatQueryLoopInput) => Promise<AIChatQueryLoopResult>
 ): AIChatQueryEngine {
   const fakeLoop = {
     run: fakeRun,
@@ -130,8 +125,9 @@ describe("AIChatQueryEngine", () => {
 
     it("emits start event before loop runs", async () => {
       const callOrder: string[] = [];
-      const fakeRun = vi.fn().mockImplementation(
-        async (input: AIChatQueryLoopInput) => {
+      const fakeRun = vi
+        .fn()
+        .mockImplementation(async (input: AIChatQueryLoopInput) => {
           callOrder.push("loop-run");
           input.eventSink.emit({
             type: "token",
@@ -144,8 +140,7 @@ describe("AIChatQueryEngine", () => {
             fullContent: "hi",
             finishReason: "stop",
           };
-        }
-      );
+        });
 
       const engine = createEngineWithFakeLoop(fakeRun);
       const { sink, events } = makeEventCollector();
@@ -263,58 +258,53 @@ describe("AIChatQueryEngine", () => {
     });
 
     it("emits cancelled for pending permission turn", async () => {
-      // First, run the engine so it pauses for permission.
-      const fakeRun = vi.fn().mockResolvedValue({
-        type: "paused_for_permission" as const,
-        pending: {
-          conversationId: "v2-test-conv",
-          assistantMessageId: "a-1",
-          conversationMessages: [],
-          abortController: new AbortController(),
-          request: { message: "hi" },
-          openAITools: [],
-          nextRound: 1,
-          toolCallId: "call-1",
-          toolName: "scrape",
-          toolArguments: {},
-          eventSink: { emit: vi.fn() },
-        },
-      });
+      // The fake loop returns paused_for_permission using the same eventSink
+      // it received in the input, so stopActiveTurn emits to the same sink.
+      const fakeRun = vi
+        .fn()
+        .mockImplementation(async (input: AIChatQueryLoopInput) => ({
+          type: "paused_for_permission" as const,
+          pending: {
+            conversationId: input.conversationId,
+            assistantMessageId: input.assistantMessageId,
+            conversationMessages: [],
+            abortController: input.abortController,
+            request: input.request,
+            openAITools: input.openAITools,
+            nextRound: 1,
+            toolCallId: "call-1",
+            toolName: "scrape",
+            toolArguments: {},
+            eventSink: input.eventSink,
+          },
+        }));
       const engine = createEngineWithFakeLoop(fakeRun);
-      const { sink } = makeEventCollector();
+      const { sink, events } = makeEventCollector();
 
       await engine.submitMessage({
         request: { message: "hi" },
         eventSink: sink,
       });
 
-      // Verify pending permission exists.
-      expect(engine.getPendingPermission()).not.toBeNull();
+      // After pause, stop the turn. The engine emits cancelled through
+      // the pending turn's eventSink (same sink passed to submitMessage).
+      engine.stopActiveTurn();
 
-      // Replace the pending eventSink with our collector so we can verify.
-      const pending = engine.getPendingPermission();
-      if (pending) {
-        const { sink: cancelSink, events: cancelEvents } =
-          makeEventCollector();
-        pending.eventSink = cancelSink;
-
-        engine.stopActiveTurn();
-
-        const cancelled = cancelEvents.find((e) => e.type === "cancelled");
-        expect(cancelled).toBeDefined();
-      }
-
-      // After stop, pending should be null.
-      expect(engine.getPendingPermission()).toBeNull();
+      const cancelled = events.find((e) => e.type === "cancelled");
+      expect(cancelled).toBeDefined();
     });
   });
 
-  describe("pending state accessors", () => {
-    it("returns null when no pending permission", () => {
+  describe("resumeToolAfterPermission", () => {
+    it("returns ok:false when no pending permission exists", async () => {
       const fakeRun = vi.fn();
       const engine = createEngineWithFakeLoop(fakeRun);
-      expect(engine.getPendingPermission()).toBeNull();
-      expect(engine.getPendingPlanQuestion()).toBeNull();
+      const result = await engine.resumeToolAfterPermission({
+        toolId: "call-1",
+        conversationId: "v2-test",
+      });
+      expect(result.ok).toBe(false);
+      expect(result.error).toBeDefined();
     });
   });
 });
