@@ -86,6 +86,7 @@ vi.mock("@/api/aiChatApi", () => ({
 vi.mock("@/config/skillsRegistry", () => ({
   SkillRegistry: {
     getAllToolFunctions: mockGetAllToolFunctions,
+    getSkill: vi.fn().mockReturnValue(undefined),
   },
 }));
 
@@ -93,6 +94,27 @@ vi.mock("@/service/SkillExecutor", () => ({
   SkillExecutor: {
     execute: mockSkillExecute,
   },
+}));
+
+// Mock plan module
+vi.mock("@/modules/AIChatPlanModule", () => ({
+  AIChatPlanModule: vi.fn().mockImplementation(() => ({
+    getPlanState: vi.fn().mockResolvedValue(null),
+    ensurePlanForConversation: vi.fn().mockResolvedValue(null),
+  })),
+}));
+
+// Mock plan mode helpers
+vi.mock("@/service/PlanModeToolRegistry", () => ({
+  PlanModeToolRegistry: { toOpenAITools: vi.fn().mockReturnValue([]) },
+}));
+
+vi.mock("@/service/PlanModePromptBuilder", () => ({
+  buildPlanModeSystemPrompt: vi.fn().mockReturnValue("plan prompt"),
+}));
+
+vi.mock("@/service/OpenAIChatTranscriptBuilder", () => ({
+  buildOpenAITranscript: vi.fn().mockReturnValue({ messages: [] }),
 }));
 
 import { registerAiChatV2IpcHandlers } from "@/main-process/communication/ai-chat-v2-ipc";
