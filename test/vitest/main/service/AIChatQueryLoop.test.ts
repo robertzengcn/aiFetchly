@@ -82,6 +82,7 @@ describe("AIChatQueryLoop", () => {
           },
         },
         startRound: 0,
+        isActiveTurn: () => true,
       };
       const result = await loop.run(input);
       expect(result.type).toBe("completed");
@@ -137,6 +138,7 @@ describe("AIChatQueryLoop", () => {
         abortController: new AbortController(),
         eventSink: { emit: vi.fn() },
         startRound: 0,
+        isActiveTurn: () => true,
       };
       const result = await loop.run(input);
       expect(result.type).toBe("completed");
@@ -148,11 +150,7 @@ describe("AIChatQueryLoop", () => {
     });
 
     it("returns failed for malformed tool arguments", async () => {
-      const badChunk = makeToolCallChunk(
-        "call-1",
-        "search",
-        "{invalid json"
-      );
+      const badChunk = makeToolCallChunk("call-1", "search", "{invalid json");
       const fakeStream = vi.fn(
         async (
           _req: unknown,
@@ -175,6 +173,7 @@ describe("AIChatQueryLoop", () => {
         abortController: new AbortController(),
         eventSink: { emit: vi.fn() },
         startRound: 0,
+        isActiveTurn: () => true,
       };
       const result = await loop.run(input);
       expect(result.type).toBe("failed");
@@ -211,6 +210,7 @@ describe("AIChatQueryLoop", () => {
         abortController: new AbortController(),
         eventSink: { emit: vi.fn() },
         startRound: 0,
+        isActiveTurn: () => true,
       };
       const result = await loop.run(input);
       expect(result.type).toBe("paused_for_permission");
@@ -263,6 +263,7 @@ describe("AIChatQueryLoop", () => {
           },
         },
         startRound: 0,
+        isActiveTurn: () => true,
       };
       await loop.run(input);
       expect(events).toContain("tool_call");

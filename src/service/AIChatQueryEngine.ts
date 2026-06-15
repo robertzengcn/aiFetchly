@@ -156,8 +156,7 @@ export class AIChatQueryEngine {
       messages = [...transcript.messages];
     } catch (err) {
       console.error("[ai-chat-v2] pre-stream error:", err);
-      this.currentConversationId = null;
-      this.currentAssistantMessageId = null;
+      this.clearActiveTurnState();
       eventSink.emit({
         type: "error",
         conversationId: request.conversationId ?? "",
@@ -226,6 +225,9 @@ export class AIChatQueryEngine {
       eventSink,
       planContext,
       startRound: 0,
+      isActiveTurn: () =>
+        this.currentAssistantMessageId === assistantMessageId &&
+        this.currentConversationId === conversationId,
     };
 
     try {
@@ -368,6 +370,9 @@ export class AIChatQueryEngine {
         eventSink: pending.eventSink,
         planContext: pending.planContext,
         startRound: pending.nextRound,
+        isActiveTurn: () =>
+          this.currentAssistantMessageId === pending.assistantMessageId &&
+          this.currentConversationId === pending.conversationId,
       };
 
       const module = new AIChatV2Module();
@@ -385,6 +390,9 @@ export class AIChatQueryEngine {
             messageId: pending.assistantMessageId,
             errorMessage: userSafeError(err),
           });
+          this.clearActiveTurnState();
+          this.pendingPermission = null;
+          this.pendingPlanQuestion = null;
         });
 
       return { ok: true };
@@ -488,6 +496,9 @@ export class AIChatQueryEngine {
       eventSink: pending.eventSink,
       planContext,
       startRound: pending.nextRound,
+      isActiveTurn: () =>
+        this.currentAssistantMessageId === pending.assistantMessageId &&
+        this.currentConversationId === pending.conversationId,
     };
 
     const module = new AIChatV2Module();
@@ -505,6 +516,9 @@ export class AIChatQueryEngine {
           messageId: pending.assistantMessageId,
           errorMessage: userSafeError(err),
         });
+        this.clearActiveTurnState();
+        this.pendingPermission = null;
+        this.pendingPlanQuestion = null;
       });
 
     return { ok: true };
@@ -523,11 +537,9 @@ export class AIChatQueryEngine {
     module: AIChatV2Module,
     eventSink: AIChatQueryEventSink
   ): Promise<void> {
-    const conversationId = this.currentConversationId ?? "";
-    const assistantMessageId = this.currentAssistantMessageId ?? "";
-
     switch (result.type) {
       case "completed": {
+        const { conversationId, assistantMessageId } = result;
         if (result.fullContent.length > 0) {
           await module.saveAssistantMessage({
             conversationId,
@@ -549,12 +561,11 @@ export class AIChatQueryEngine {
           model: result.model,
           finishReason: result.finishReason,
         });
-        this.currentAbortController = null;
-        this.currentConversationId = null;
-        this.currentAssistantMessageId = null;
+        this.clearActiveTurnState();
         break;
       }
       case "cancelled": {
+        const { conversationId, assistantMessageId } = result;
         if (result.partialContent.length > 0) {
           await module.saveAssistantMessage({
             conversationId,
@@ -576,12 +587,11 @@ export class AIChatQueryEngine {
             result.partialContent.length > 0 ? assistantMessageId : undefined,
           fullContent: result.partialContent,
         });
-        this.currentAbortController = null;
-        this.currentConversationId = null;
-        this.currentAssistantMessageId = null;
+        this.clearActiveTurnState();
         break;
       }
       case "failed": {
+        const { conversationId, assistantMessageId } = result;
         if (result.partialContent.length > 0) {
           await module.saveAssistantMessage({
             conversationId,
@@ -603,9 +613,7 @@ export class AIChatQueryEngine {
             result.partialContent.length > 0 ? assistantMessageId : undefined,
           errorMessage: userSafeError(result.error),
         });
-        this.currentAbortController = null;
-        this.currentConversationId = null;
-        this.currentAssistantMessageId = null;
+        this.clearActiveTurnState();
         this.pendingPermission = null;
         this.pendingPlanQuestion = null;
         break;
@@ -628,6 +636,16 @@ export class AIChatQueryEngine {
   }
 
   /**
+   * Clear active-turn singleton state. Called after terminal results
+   * (completed/cancelled/failed) and on unexpected failures.
+   */
+  private clearActiveTurnState(): void {
+    this.currentAbortController = null;
+    this.currentConversationId = null;
+    this.currentAssistantMessageId = null;
+  }
+
+  /**
    * Handle an unexpected failure during the loop run.
    */
   private handleFailure(
@@ -643,9 +661,7 @@ export class AIChatQueryEngine {
       messageId: assistantMessageId,
       errorMessage: userSafeError(err),
     });
-    this.currentAbortController = null;
-    this.currentConversationId = null;
-    this.currentAssistantMessageId = null;
+    this.clearActiveTurnState();
     this.pendingPermission = null;
     this.pendingPlanQuestion = null;
   }

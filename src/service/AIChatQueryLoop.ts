@@ -142,6 +142,7 @@ export class AIChatQueryLoop {
           },
           (rawChunk) => {
             if (input.abortController.signal.aborted) return;
+            if (!input.isActiveTurn()) return;
             const delta = accumulator.ingest(rawChunk);
             if (delta) {
               eventSink.emit({
@@ -345,6 +346,8 @@ export class AIChatQueryLoop {
       if (input.abortController.signal.aborted) {
         return {
           type: "cancelled",
+          conversationId: input.conversationId,
+          assistantMessageId: input.assistantMessageId,
           partialContent: finalAccumulator?.state.fullContent ?? "",
           model: finalAccumulator?.state.model,
           responseId: finalAccumulator?.state.responseId,
@@ -355,6 +358,8 @@ export class AIChatQueryLoop {
       const finishReason = finalAccumulator?.state.finishReason ?? "stop";
       return {
         type: "completed",
+        conversationId: input.conversationId,
+        assistantMessageId: input.assistantMessageId,
         fullContent,
         finishReason,
         model: finalAccumulator?.state.model,
@@ -364,6 +369,8 @@ export class AIChatQueryLoop {
       if (err instanceof Error && err.name === "AbortError") {
         return {
           type: "cancelled",
+          conversationId: input.conversationId,
+          assistantMessageId: input.assistantMessageId,
           partialContent: activeAccumulator?.state.fullContent ?? "",
           model: activeAccumulator?.state.model,
           responseId: activeAccumulator?.state.responseId,
@@ -371,6 +378,8 @@ export class AIChatQueryLoop {
       }
       return {
         type: "failed",
+        conversationId: input.conversationId,
+        assistantMessageId: input.assistantMessageId,
         error: err,
         partialContent: activeAccumulator?.state.fullContent ?? "",
         model: activeAccumulator?.state.model,
