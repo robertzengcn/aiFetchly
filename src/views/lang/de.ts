@@ -110,7 +110,7 @@ export default {
     parse_proxy: "Proxys stapelweise hochladen",
     search: "Markteinblicke",
     search_scraper: "Markteinblicke-Explorer",
-    search_task_list: "Suchaufgabenliste",
+    search_task_list: "Markteinblicke-Liste",
     search_task_detail: "Suchaufgabendetails",
     edit_search_task: "Suchaufgabe bearbeiten",
     create_search_task: "Suchaufgabe erstellen",

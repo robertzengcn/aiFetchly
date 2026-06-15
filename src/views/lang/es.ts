@@ -110,7 +110,7 @@ export default {
     parse_proxy: "Carga masiva de proxies",
     search: "Información de Mercado",
     search_scraper: "Explorador de Información de Mercado",
-    search_task_list: "Lista de tareas de búsqueda",
+    search_task_list: "Lista de Información de Mercado",
     search_task_detail: "Detalle de tarea de búsqueda",
     edit_search_task: "Editar tarea de búsqueda",
     create_search_task: "Crear tarea de búsqueda",

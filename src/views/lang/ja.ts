@@ -110,7 +110,7 @@ export default {
     parse_proxy: "プロキシ一括アップロード",
     search: "市場インサイト",
     search_scraper: "市場インサイトエクスプローラー",
-    search_task_list: "検索タスク一覧",
+    search_task_list: "市場インサイト一覧",
     search_task_detail: "検索タスク詳細",
     edit_search_task: "検索タスクを編集",
     create_search_task: "検索タスクを作成",
