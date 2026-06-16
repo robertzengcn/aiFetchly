@@ -3,10 +3,7 @@ import { AIChatCompactModule } from "@/modules/AIChatCompactModule";
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { AIChatTokenEstimator } from "@/service/AIChatTokenEstimator";
 import { buildPlanModeSystemPrompt } from "@/service/PlanModePromptBuilder";
-import type {
-  OpenAIChatMessage,
-  OpenAIMessageRole,
-} from "@/api/aiChatApi";
+import type { OpenAIChatMessage, OpenAIMessageRole } from "@/api/aiChatApi";
 import { MessageType } from "@/entityTypes/commonType";
 import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
 
@@ -18,6 +15,7 @@ const COMPACT_PREAMBLE =
 export interface AIChatContextAssembleInput {
   readonly conversationId: string;
   readonly currentUserMessage: string;
+  readonly currentUserMessageId?: string;
   readonly baseSystemPrompt: string;
   readonly mode: "chat" | "plan";
   readonly model?: string;
@@ -85,13 +83,16 @@ export class AIChatContextAssembler {
     // Drop any recent message that is already covered by an active full
     // compact boundary. Session memory is advisory and may overlap with
     // recent history.
+    const withoutCurrent = input.currentUserMessageId
+      ? recent.filter((r) => r.messageId !== input.currentUserMessageId)
+      : recent;
     const trimmedRecent = fullCompact
-      ? recent.filter(
+      ? withoutCurrent.filter(
           (r) =>
             r.timestamp.getTime() >
             new Date(fullCompact.throughTimestamp).getTime()
         )
-      : recent;
+      : withoutCurrent;
 
     const messages: OpenAIChatMessage[] = [];
     messages.push({ role: "system", content: systemPrompt });

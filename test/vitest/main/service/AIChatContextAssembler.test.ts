@@ -170,4 +170,32 @@ describe("AIChatContextAssembler", () => {
     const roles = r.messages.map((m) => m.role + ":" + m.content).join("|");
     expect(roles).toBe("system:sysp|user:a|assistant:b|user:c");
   });
+
+  it("does not duplicate the current user message when it was already saved", async () => {
+    mockGetByConversation.mockResolvedValue(null);
+    mockGetActiveSummary.mockResolvedValue(null);
+    mockGetConversationMessages.mockResolvedValue([
+      row({
+        messageId: "saved-current",
+        role: "user",
+        content: "What is AI?",
+        timestamp: new Date(1),
+      }),
+    ]);
+    const asm = new AIChatContextAssembler();
+    const r = await asm.assemble({
+      conversationId: "v2-x",
+      currentUserMessage: "What is AI?",
+      currentUserMessageId: "saved-current",
+      baseSystemPrompt: "sysp",
+      mode: "chat",
+    });
+    const userMessages = r.messages.filter(
+      (m) => m.role === "user" && m.content === "What is AI?"
+    );
+    expect(userMessages.length).toBe(1);
+    expect(r.messages.map((m) => `${m.role}:${m.content}`).join("|")).toBe(
+      "system:sysp|user:What is AI?"
+    );
+  });
 });
