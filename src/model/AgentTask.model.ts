@@ -18,8 +18,9 @@ export class AgentTaskModel extends BaseDb {
   constructor(dbpath: string) {
     super(dbpath);
     this.repository = this.sqliteDb.connection.getRepository(AgentTaskEntity);
-    this.msgRepo =
-      this.sqliteDb.connection.getRepository(AgentTaskMessageEntity);
+    this.msgRepo = this.sqliteDb.connection.getRepository(
+      AgentTaskMessageEntity
+    );
   }
 
   async create(input: {
@@ -75,7 +76,6 @@ export class AgentTaskModel extends BaseDb {
       { agentTaskId },
       {
         result: result as unknown as Record<string, unknown>,
-        toolCallsCount: result.toolCallsCount,
       }
     );
   }
