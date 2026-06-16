@@ -63,6 +63,7 @@ export class UserController {
 
     return (
       planNameLower.includes("aifetch-plus") ||
+      planNameLower.includes("aifetch-pro") ||
       planNameLower.includes("aifetch-go") ||
       ["BASE", "PLUS", "PRO"].includes(planIdUpper)
     );

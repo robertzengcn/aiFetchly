@@ -118,4 +118,30 @@ describe("UserController", () => {
 
     expect(mockTokenSetValue).toHaveBeenCalledWith(USER_AI_ENABLED, "true");
   });
+
+  test("enables AI for active Pro subscription returned by user info API", async () => {
+    mockState.userInfo = {
+      id: 5,
+      name: "pro@test.com",
+      email: "pro@test.com",
+      roles: null,
+      plans: [
+        {
+          planName: "aifetch-pro-monthly",
+          planId: "ADVANCED",
+          status: "active",
+          startDate: "2026-06-16T09:17:34Z",
+          endDate: "0001-01-01T00:00:00Z",
+          currency: "USD",
+          billingPeriod: "MONTHLY",
+        },
+      ],
+    };
+
+    const userController = new UserController();
+
+    await userController.updateUserInfo();
+
+    expect(mockTokenSetValue).toHaveBeenCalledWith(USER_AI_ENABLED, "true");
+  });
 });
