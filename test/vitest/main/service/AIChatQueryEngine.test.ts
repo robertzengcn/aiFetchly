@@ -5,6 +5,8 @@ import type {
   AIChatQueryLoop,
   AIChatQueryLoopDeps,
 } from "@/service/AIChatQueryLoop";
+import type { OpenAIChatMessage } from "@/api/aiChatApi";
+import type { AIChatContextAssembler } from "@/service/AIChatContextAssembler";
 import type {
   AIChatQueryEvent,
   AIChatQueryLoopInput,
@@ -33,6 +35,18 @@ vi.mock("@/modules/AIChatPlanModule", () => ({
   AIChatPlanModule: vi.fn().mockImplementation(() => ({
     getPlanState: vi.fn().mockResolvedValue(null),
     ensurePlanForConversation: vi.fn().mockResolvedValue(null),
+  })),
+}));
+
+// --- Mock compact modules (used by default AIChatContextAssembler) -----
+vi.mock("@/modules/AIChatSessionMemoryModule", () => ({
+  AIChatSessionMemoryModule: vi.fn().mockImplementation(() => ({
+    getByConversation: vi.fn().mockResolvedValue(null),
+  })),
+}));
+vi.mock("@/modules/AIChatCompactModule", () => ({
+  AIChatCompactModule: vi.fn().mockImplementation(() => ({
+    getActiveSummary: vi.fn().mockResolvedValue(null),
   })),
 }));
 
@@ -316,5 +330,58 @@ describe("AIChatQueryEngine", () => {
       expect(result.ok).toBe(false);
       expect(result.error).toBeDefined();
     });
+  });
+});
+
+describe("AIChatQueryEngine context assembly", () => {
+  it("delegates message building to the context assembler", async () => {
+    const captured: OpenAIChatMessage[][] = [];
+    const fakeAssembler = {
+      assemble: vi.fn(async (input: unknown) => {
+        const msgs: OpenAIChatMessage[] = [
+          { role: "system", content: "custom-sysp" },
+          {
+            role: "user",
+            content: (input as { currentUserMessage: string })
+              .currentUserMessage,
+          },
+        ];
+        captured.push(msgs);
+        return {
+          messages: msgs,
+          tokenEstimate: 10,
+          usedSessionMemory: false,
+          usedFullCompact: false,
+          compactTriggered: false,
+          warnings: [],
+        };
+      }),
+    };
+    const engine = new AIChatQueryEngine(
+      {
+        run: vi.fn().mockResolvedValue({
+          type: "completed",
+          conversationId: "v2-test-conv",
+          assistantMessageId: "assistant-1",
+          fullContent: "ok",
+          finishReason: "stop",
+          model: "m",
+        }),
+      } as unknown as AIChatQueryLoop,
+      {
+        contextAssembler: fakeAssembler as unknown as AIChatContextAssembler,
+      }
+    );
+    const { sink } = makeEventCollector();
+    await engine.submitMessage({
+      request: { message: "hi" },
+      eventSink: sink,
+    });
+
+    expect(fakeAssembler.assemble).toHaveBeenCalledTimes(1);
+    expect(captured[0]).toEqual([
+      { role: "system", content: "custom-sysp" },
+      { role: "user", content: "hi" },
+    ]);
   });
 });
