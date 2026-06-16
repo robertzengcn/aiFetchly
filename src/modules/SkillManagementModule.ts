@@ -43,4 +43,11 @@ export class SkillManagementModule extends BaseModule {
     }
     return removed;
   }
+
+  /** Find all skills owned by a plugin. (Design §5.2) */
+  public async findSkillsByPluginName(
+    pluginName: string
+  ): Promise<InstalledSkillEntity[]> {
+    return this.skillModel.findByPluginName(pluginName);
+  }
 }

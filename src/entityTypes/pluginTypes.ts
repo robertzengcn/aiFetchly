@@ -118,6 +118,7 @@ export type PluginErrorCode =
   | "install-io-failed"
   | "cache-missing"
   | "uninstall-failed"
+  | "missing_files"
   | "unknown";
 
 export interface PluginError {
