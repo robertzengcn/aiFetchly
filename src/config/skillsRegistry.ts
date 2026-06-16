@@ -53,6 +53,7 @@ const registry = new Map<string, SkillDefinition>();
 // ---------------------------------------------------------------------------
 // Built-in skill definitions (statically imported)
 // ---------------------------------------------------------------------------
+import { RUN_SUBAGENT_TOOL } from "@/service/agentTools/runSubagentTool";
 
 const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
@@ -1783,6 +1784,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       };
     },
   },
+  RUN_SUBAGENT_TOOL,
 ];
 
 // Register all built-in skills at module load time
