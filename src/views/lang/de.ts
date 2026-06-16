@@ -1799,7 +1799,7 @@ export default {
     reconnecting: "Verbindung wird wiederhergestellt…",
     reconnect_attempt: "(Versuch {n}/{max})",
     cancelled: "Abgebrochen",
-    ai_disabled: "KI ist nicht aktiviert.",
+    ai_disabled: "KI-Funktionen stehen nur Abonnenten zur Verfügung.",
     model_unavailable: "Ausgewähltes Modell nicht verfügbar.",
     server_unavailable: "Verbindung zum KI-Server nicht möglich.",
     unsupported_tool_call:

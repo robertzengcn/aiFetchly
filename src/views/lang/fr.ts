@@ -1788,7 +1788,7 @@ export default {
     reconnecting: "Reconnexion…",
     reconnect_attempt: "(tentative {n}/{max})",
     cancelled: "Annulé",
-    ai_disabled: "L'IA n'est pas activée.",
+    ai_disabled: "Les fonctionnalités d'IA sont réservées aux abonnés.",
     model_unavailable: "Le modèle sélectionné n'est pas disponible.",
     server_unavailable: "Impossible de se connecter au serveur IA.",
     unsupported_tool_call:

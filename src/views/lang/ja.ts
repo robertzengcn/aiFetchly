@@ -1766,7 +1766,7 @@ export default {
     reconnecting: "再接続中…",
     reconnect_attempt: "({max}回中{n}回目)",
     cancelled: "キャンセルされました",
-    ai_disabled: "AI が有効ではありません。",
+    ai_disabled: "AI機能はサブスクライバー限定です。",
     model_unavailable: "選択したモデルは利用できません。",
     server_unavailable: "AI サーバーに接続できませんでした。",
     unsupported_tool_call: "アシスタントが未対応のツールを要求しました。",

@@ -314,7 +314,7 @@ async function handleStream(event: IpcEventLike, data: string): Promise<void> {
     sendComplete(event, {
       eventType: "error",
       conversationId: "",
-      errorMessage: "AI is not enabled",
+      errorMessage: "AI functionality is only available to subscribers.",
     });
     return;
   }
@@ -359,7 +359,7 @@ async function handleResumeToolAfterPermission(
   data: string
 ): Promise<CommonMessage<{ ok: boolean; error?: string } | null>> {
   if (!isAIEnabled()) {
-    return denied("AI is not enabled");
+    return denied("AI functionality is only available to subscribers.");
   }
 
   const parsed = data
@@ -383,7 +383,7 @@ async function handleResumeToolAfterPermission(
 
 async function handleModels(): Promise<CommonMessage<unknown>> {
   if (!isAIEnabled()) {
-    return denied("AI is not enabled");
+    return denied("AI functionality is only available to subscribers.");
   }
   try {
     const api = new AiChatApi();
@@ -398,7 +398,7 @@ async function handleConversations(
   data?: string
 ): Promise<CommonMessage<ChatV2ConversationSummary[]>> {
   if (!isAIEnabled()) {
-    return denied("AI is not enabled");
+    return denied("AI functionality is only available to subscribers.");
   }
   try {
     const req = data ? JSON.parse(data) : {};
@@ -416,7 +416,7 @@ async function handleHistory(
   data: string
 ): Promise<CommonMessage<ChatV2HistoryResponse | null>> {
   if (!isAIEnabled()) {
-    return denied("AI is not enabled");
+    return denied("AI functionality is only available to subscribers.");
   }
   try {
     const req = JSON.parse(data ?? "{}");
@@ -455,7 +455,7 @@ async function handleClearConversation(
   data: string
 ): Promise<CommonMessage<{ deleted: number } | null>> {
   if (!isAIEnabled()) {
-    return denied("AI is not enabled");
+    return denied("AI functionality is only available to subscribers.");
   }
   try {
     const req = JSON.parse(data ?? "{}");
@@ -485,7 +485,7 @@ async function handleClearAll(): Promise<
   CommonMessage<{ deleted: number } | null>
 > {
   if (!isAIEnabled()) {
-    return denied("AI is not enabled");
+    return denied("AI functionality is only available to subscribers.");
   }
   try {
     const module = new AIChatV2Module();
@@ -504,7 +504,7 @@ async function handlePlanState(
   data: string
 ): Promise<CommonMessage<AIChatPlanStateView | null>> {
   if (!isAIEnabled()) {
-    return denied("AI is not enabled");
+    return denied("AI functionality is only available to subscribers.");
   }
   try {
     const req = data ? JSON.parse(data) : {};
@@ -523,7 +523,7 @@ async function handleAnswerQuestion(
   data: string
 ): Promise<CommonMessage<{ ok: boolean; error?: string } | null>> {
   if (!isAIEnabled()) {
-    return denied("AI is not enabled");
+    return denied("AI functionality is only available to subscribers.");
   }
   const parsed = data
     ? (JSON.parse(data) as {
@@ -555,7 +555,7 @@ async function handleApprovePlan(
   data: string
 ): Promise<CommonMessage<AIChatPlanStateView | null>> {
   if (!isAIEnabled()) {
-    return denied("AI is not enabled");
+    return denied("AI functionality is only available to subscribers.");
   }
   const parsed = data
     ? (JSON.parse(data) as {
@@ -590,7 +590,7 @@ async function handleRejectPlan(
   data: string
 ): Promise<CommonMessage<AIChatPlanStateView | null>> {
   if (!isAIEnabled()) {
-    return denied("AI is not enabled");
+    return denied("AI functionality is only available to subscribers.");
   }
   const parsed = data
     ? (JSON.parse(data) as {
@@ -627,7 +627,7 @@ async function handleRequestPlanChanges(
   data: string
 ): Promise<CommonMessage<AIChatPlanStateView | null>> {
   if (!isAIEnabled()) {
-    return denied("AI is not enabled");
+    return denied("AI functionality is only available to subscribers.");
   }
   const parsed = data
     ? (JSON.parse(data) as {
@@ -667,7 +667,7 @@ async function handlePlanVersions(
   data: string
 ): Promise<CommonMessage<AIChatPlanVersionView[] | null>> {
   if (!isAIEnabled()) {
-    return denied("AI is not enabled");
+    return denied("AI functionality is only available to subscribers.");
   }
   const parsed = data ? (JSON.parse(data) as { planId?: string }) : {};
   if (!parsed.planId) {
@@ -686,7 +686,7 @@ async function handleCompactConversation(
   data: string
 ): Promise<CommonMessage<AIChatCompactSummaryView | null>> {
   if (!isAIEnabled()) {
-    return denied("AI is not enabled");
+    return denied("AI functionality is only available to subscribers.");
   }
   const parsed = data
     ? (JSON.parse(data) as { conversationId?: string; model?: string })
