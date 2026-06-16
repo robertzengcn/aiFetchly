@@ -46,6 +46,10 @@ import { RAGDocumentEntity } from "@/entity/RAGDocument.entity";
 import { RAGChunkEntity } from "@/entity/RAGChunk.entity";
 // import { RAGModelEntity } from "@/entity/RAGModel.entity";
 import { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
+import { AgentDefinitionEntity } from "@/entity/AgentDefinition.entity";
+import { AgentTaskEntity } from "@/entity/AgentTask.entity";
+import { AgentTaskMessageEntity } from "@/entity/AgentTaskMessage.entity";
+import { AgentToolCallEntity } from "@/entity/AgentToolCall.entity";
 import { AIChatPlanEntity } from "@/entity/AIChatPlan.entity";
 import { AIChatPlanVersionEntity } from "@/entity/AIChatPlanVersion.entity";
 import { AIChatPlanQuestionEntity } from "@/entity/AIChatPlanQuestion.entity";
@@ -479,6 +483,10 @@ export class SqliteDb {
           AIChatPlanApprovalEntity,
           AIChatSessionMemoryEntity,
           AIChatCompactSummaryEntity,
+          AgentDefinitionEntity,
+          AgentTaskEntity,
+          AgentTaskMessageEntity,
+          AgentToolCallEntity,
         ],
         synchronize: true,
         migrations: [],
