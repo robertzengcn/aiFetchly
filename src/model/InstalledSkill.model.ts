@@ -64,4 +64,17 @@ export class InstalledSkillModel extends BaseDb {
     const result = await repo.update({ name }, { enabled: enabled ? 1 : 0 });
     return (result.affected ?? 0) > 0;
   }
+
+  /** Find all skills owned by a given plugin. (Design §5.2) */
+  async findByPluginName(pluginName: string): Promise<InstalledSkillEntity[]> {
+    const repo = await this.getRepository();
+    return await repo.find({ where: { pluginName } });
+  }
+
+  /** Delete all skills owned by a given plugin. Used during plugin uninstall. */
+  async deleteByPluginName(pluginName: string): Promise<number> {
+    const repo = await this.getRepository();
+    const result = await repo.delete({ pluginName });
+    return result.affected ?? 0;
+  }
 }

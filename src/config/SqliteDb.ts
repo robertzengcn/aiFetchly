@@ -62,6 +62,7 @@ import { MCPToolEntity } from "@/entity/MCPTool.entity";
 import { TaskEntity } from "@/entity/Task.entity";
 import { ContactInfoEntity } from "@/entity/ContactInfo.entity";
 import { InstalledSkillEntity } from "@/entity/InstalledSkill.entity";
+import { InstalledPluginEntity } from "@/entity/InstalledPlugin.entity";
 import { DependencyInstallAuditEntity } from "@/entity/DependencyInstallAudit";
 import { ShellAuditEntity } from "@/entity/ShellAudit.entity";
 import { GoogleMapsSearchRecordEntity } from "@/entity/GoogleMapsSearchRecord.entity";
@@ -471,6 +472,7 @@ export class SqliteDb {
           TaskEntity,
           ContactInfoEntity,
           InstalledSkillEntity,
+          InstalledPluginEntity,
           DependencyInstallAuditEntity,
           ShellAuditEntity,
           GoogleMapsSearchRecordEntity,

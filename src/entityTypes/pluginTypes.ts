@@ -196,6 +196,7 @@ export interface CreateInstalledPluginInput {
 }
 
 export interface UpdatePluginStateInput {
+  readonly name: string;
   readonly displayName?: string;
   readonly version?: string;
   readonly description?: string;
