@@ -16,7 +16,7 @@ export interface AIChatSessionMemoryView {
   tokenEstimate?: number;
   model?: string;
   failureCount: number;
-  lastError?: string;
+  lastError?: string | null;
   status: AIChatSessionMemoryStatus;
   updatedAt?: string;
 }

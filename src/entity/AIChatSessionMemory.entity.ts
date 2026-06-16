@@ -45,7 +45,7 @@ export class AIChatSessionMemoryEntity extends AuditableEntity {
 
   @Order(9)
   @Column("text", { nullable: true })
-  lastError?: string;
+  lastError?: string | null;
 
   @Order(10)
   @Column("varchar", { length: 30, nullable: false, default: "active" })

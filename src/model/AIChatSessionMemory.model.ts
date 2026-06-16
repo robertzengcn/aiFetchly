@@ -19,8 +19,9 @@ export class AIChatSessionMemoryModel extends BaseDb {
 
   constructor(dbpath: string) {
     super(dbpath);
-    this.repository =
-      this.sqliteDb.connection.getRepository(AIChatSessionMemoryEntity);
+    this.repository = this.sqliteDb.connection.getRepository(
+      AIChatSessionMemoryEntity
+    );
   }
 
   async getByConversation(
@@ -88,7 +89,7 @@ export class AIChatSessionMemoryModel extends BaseDb {
   async resetFailures(conversationId: string): Promise<void> {
     await this.repository.update(
       { conversationId },
-      { failureCount: 0, lastError: undefined as unknown as string }
+      { failureCount: 0, lastError: null }
     );
   }
 

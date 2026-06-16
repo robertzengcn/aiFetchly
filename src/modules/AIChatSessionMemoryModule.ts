@@ -73,7 +73,7 @@ export class AIChatSessionMemoryModule extends BaseModule {
     tokenEstimate?: number;
     model?: string;
     failureCount: number;
-    lastError?: string;
+    lastError?: string | null;
     status: string;
     updatedAt?: Date;
   }): AIChatSessionMemoryView {

@@ -572,10 +572,17 @@ export class AIChatQueryEngine {
           finishReason: result.finishReason,
         });
         if (this.compactAgent) {
-          void this.compactAgent.enqueueSessionMemoryUpdate({
-            conversationId,
-            reason: "assistant_turn_completed",
-          });
+          this.compactAgent
+            .enqueueSessionMemoryUpdate({
+              conversationId,
+              reason: "assistant_turn_completed",
+            })
+            .catch((err) =>
+              console.error(
+                "[ai-chat-compact] session memory update failed:",
+                err
+              )
+            );
         }
         this.clearActiveTurnState();
         break;
