@@ -801,7 +801,10 @@ describe("AiChatApi - OpenAI compatibility fallback", () => {
       .mockRejectedValueOnce(new Error("Not Found"))
       .mockResolvedValueOnce(response);
 
-    const chunks: Array<{ content?: string | null; finishReason?: string | null }> = [];
+    const chunks: Array<{
+      content?: string | null;
+      finishReason?: string | null;
+    }> = [];
     await api.openAIChatCompletionStream(
       {
         model: "gpt-4o-mini",
@@ -839,6 +842,60 @@ describe("AiChatApi - OpenAI compatibility fallback", () => {
     expect(chunks).toEqual([
       { content: "Hello", finishReason: null },
       { content: " world", finishReason: null },
+      { content: undefined, finishReason: "stop" },
+    ]);
+  });
+
+  it("parses OpenAI SSE data lines without a space after the colon", async () => {
+    const encoder = new TextEncoder();
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(
+            encoder.encode(
+              [
+                'data:{"id":"resp-1","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[{"index":0,"delta":{"content":"AI"},"finish_reason":null}]}',
+                "",
+                'data:{"id":"resp-1","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[{"index":0,"delta":{"content":" response"},"finish_reason":null}]}',
+                "",
+                'data:{"id":"resp-1","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}',
+                "",
+                "data:[DONE]",
+                "",
+              ].join("\n")
+            )
+          );
+          controller.close();
+        },
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      }
+    );
+
+    mockPostStreamShared.mockResolvedValueOnce(response);
+
+    const chunks: Array<{
+      content?: string | null;
+      finishReason?: string | null;
+    }> = [];
+    await api.openAIChatCompletionStream(
+      {
+        model: "gpt-test",
+        messages: [{ role: "user", content: "Hi" }],
+      },
+      (chunk) => {
+        chunks.push({
+          content: chunk.choices[0]?.delta?.content,
+          finishReason: chunk.choices[0]?.finish_reason,
+        });
+      }
+    );
+
+    expect(chunks).toEqual([
+      { content: "AI", finishReason: null },
+      { content: " response", finishReason: null },
       { content: undefined, finishReason: "stop" },
     ]);
   });

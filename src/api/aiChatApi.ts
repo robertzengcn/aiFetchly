@@ -2030,13 +2030,12 @@ export class AiChatApi {
           const trimmedLine = line.trim();
           if (!trimmedLine) continue;
 
-          if (trimmedLine === "data: [DONE]") {
-            streamActive = false;
-            break;
-          }
-
-          if (trimmedLine.startsWith("data: ")) {
-            const jsonStr = trimmedLine.substring(6);
+          if (trimmedLine.startsWith("data:")) {
+            const jsonStr = trimmedLine.substring(5).trim();
+            if (jsonStr === "[DONE]") {
+              streamActive = false;
+              break;
+            }
             try {
               const chunk: OpenAIChatCompletionChunk = JSON.parse(jsonStr);
               onChunk(chunk);
@@ -2052,9 +2051,10 @@ export class AiChatApi {
       if (
         trimmedBuffer &&
         trimmedBuffer !== "data: [DONE]" &&
-        trimmedBuffer.startsWith("data: ")
+        trimmedBuffer !== "data:[DONE]" &&
+        trimmedBuffer.startsWith("data:")
       ) {
-        const jsonStr = trimmedBuffer.substring(6);
+        const jsonStr = trimmedBuffer.substring(5).trim();
         try {
           const chunk: OpenAIChatCompletionChunk = JSON.parse(jsonStr);
           onChunk(chunk);

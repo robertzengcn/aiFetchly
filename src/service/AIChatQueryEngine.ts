@@ -152,6 +152,7 @@ export class AIChatQueryEngine {
       const assembled = await this.contextAssembler.assemble({
         conversationId,
         currentUserMessage: request.message,
+        currentUserMessageId: savedUser.messageId,
         baseSystemPrompt: basePrompt,
         mode: isPlanMode ? "plan" : "chat",
         model: request.model,
