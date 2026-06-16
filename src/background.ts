@@ -598,6 +598,17 @@ function initialize() {
         await appDataSource.connection.initialize();
       }
 
+      // Seed built-in agent definitions (marketing subagent system).
+      try {
+        const { AgentDefinitionModule } = await import(
+          "@/modules/AgentDefinitionModule"
+        );
+        const defModule = new AgentDefinitionModule();
+        await defModule.ensureBuiltIns();
+      } catch (err) {
+        log.error("Failed to seed built-in agent definitions:", err);
+      }
+
       // Initialize RAG IPC handlers
       // try {
       //   const ragHandlers = new RAGIpcHandlers(appDataSource);
