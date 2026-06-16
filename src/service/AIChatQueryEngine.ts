@@ -8,8 +8,7 @@ import type {
 } from "@/api/aiChatApi";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import { SkillExecutor } from "@/service/SkillExecutor";
-import { buildOpenAITranscript } from "@/service/OpenAIChatTranscriptBuilder";
-import { buildPlanModeSystemPrompt } from "@/service/PlanModePromptBuilder";
+import { AIChatContextAssembler } from "@/service/AIChatContextAssembler";
 import { PlanModeToolRegistry } from "@/service/PlanModeToolRegistry";
 import type { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
 import {
@@ -32,9 +31,6 @@ import type {
 import type { ChatV2StreamRequest } from "@/entityTypes/aiChatV2Types";
 import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
 
-const CHAT_V2_PHASE1_MAX_HISTORY_MESSAGES = 30;
-
-/** Check whether a plan state is still active (not completed/cancelled/rejected). */
 function isActivePlanState(plan?: AIChatPlanStateView | null): boolean {
   if (!plan) return false;
   return (
@@ -63,6 +59,11 @@ export interface AIChatQuerySubmitInput {
   request: ChatV2StreamRequest;
 }
 
+export interface AIChatQueryEngineDeps {
+  /** Optional. When omitted, a default AIChatContextAssembler is constructed. */
+  contextAssembler?: AIChatContextAssembler;
+}
+
 /**
  * Owns the conversation lifecycle: setup, persistence, pending state,
  * and stop. The engine delegates the inner model/tool round loop to
@@ -74,8 +75,15 @@ export class AIChatQueryEngine {
   private currentAssistantMessageId: string | null = null;
   private pendingPermission: PendingPermissionTurn | null = null;
   private pendingPlanQuestion: PendingPlanQuestionTurn | null = null;
+  private readonly contextAssembler: AIChatContextAssembler;
 
-  constructor(private readonly loop: AIChatQueryLoop) {}
+  constructor(
+    private readonly loop: AIChatQueryLoop,
+    deps?: AIChatQueryEngineDeps
+  ) {
+    this.contextAssembler =
+      deps?.contextAssembler ?? new AIChatContextAssembler();
+  }
 
   /**
    * Full conversation lifecycle for one user message:
@@ -133,27 +141,23 @@ export class AIChatQueryEngine {
       });
 
       // Load history and build transcript.
-      const history = await module.getConversationMessages(conversationId);
       const basePrompt =
         request.systemPrompt ?? module.getDefaultSystemPrompt();
-      const transcript = buildOpenAITranscript({
-        history: history.filter((r) => r.messageId !== savedUser.messageId),
+      const assembled = await this.contextAssembler.assemble({
+        conversationId,
         currentUserMessage: request.message,
-        systemPrompt: isPlanMode
-          ? buildPlanModeSystemPrompt({
-              baseSystemPrompt: basePrompt,
-              planState,
-            })
-          : basePrompt,
-        filterSource: "chat-v2",
-        maxMessages: CHAT_V2_PHASE1_MAX_HISTORY_MESSAGES,
+        baseSystemPrompt: basePrompt,
+        mode: isPlanMode ? "plan" : "chat",
+        model: request.model,
+        maxTokens: request.maxTokens,
+        planState,
       });
 
       assistantMessageId = `assistant-${Date.now()}-${Math.random()
         .toString(36)
         .slice(2, 8)}`;
       this.currentAssistantMessageId = assistantMessageId;
-      messages = [...transcript.messages];
+      messages = [...assembled.messages];
     } catch (err) {
       console.error("[ai-chat-v2] pre-stream error:", err);
       this.clearActiveTurnState();
