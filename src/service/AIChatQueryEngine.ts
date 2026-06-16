@@ -9,6 +9,7 @@ import type {
 import { SkillRegistry } from "@/config/skillsRegistry";
 import { SkillExecutor } from "@/service/SkillExecutor";
 import { AIChatContextAssembler } from "@/service/AIChatContextAssembler";
+import type { AIChatCompactAgentService } from "@/service/AIChatCompactAgentService";
 import { PlanModeToolRegistry } from "@/service/PlanModeToolRegistry";
 import type { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
 import {
@@ -62,6 +63,9 @@ export interface AIChatQuerySubmitInput {
 export interface AIChatQueryEngineDeps {
   /** Optional. When omitted, a default AIChatContextAssembler is constructed. */
   contextAssembler?: AIChatContextAssembler;
+  /** Optional. When provided, the engine enqueues session memory updates
+   * after each completed assistant turn. */
+  compactAgent?: AIChatCompactAgentService;
 }
 
 /**
@@ -76,6 +80,7 @@ export class AIChatQueryEngine {
   private pendingPermission: PendingPermissionTurn | null = null;
   private pendingPlanQuestion: PendingPlanQuestionTurn | null = null;
   private readonly contextAssembler: AIChatContextAssembler;
+  private readonly compactAgent?: AIChatCompactAgentService;
 
   constructor(
     private readonly loop: AIChatQueryLoop,
@@ -83,6 +88,7 @@ export class AIChatQueryEngine {
   ) {
     this.contextAssembler =
       deps?.contextAssembler ?? new AIChatContextAssembler();
+    this.compactAgent = deps?.compactAgent;
   }
 
   /**
@@ -565,6 +571,12 @@ export class AIChatQueryEngine {
           model: result.model,
           finishReason: result.finishReason,
         });
+        if (this.compactAgent) {
+          void this.compactAgent.enqueueSessionMemoryUpdate({
+            conversationId,
+            reason: "assistant_turn_completed",
+          });
+        }
         this.clearActiveTurnState();
         break;
       }

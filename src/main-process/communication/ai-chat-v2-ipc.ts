@@ -9,6 +9,7 @@ import { SkillExecutor } from "@/service/SkillExecutor";
 import { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
 import type { AIChatQueryLoopDeps } from "@/service/AIChatQueryLoop";
 import { AIChatQueryEngine } from "@/service/AIChatQueryEngine";
+import { AIChatCompactAgentService } from "@/service/AIChatCompactAgentService";
 import { userSafeError } from "@/service/AIChatErrorMapper";
 import type {
   AIChatQueryEvent,
@@ -79,7 +80,12 @@ function createQueryLoop(): AIChatQueryLoop {
 function getQueryEngine(): AIChatQueryEngine {
   if (!queryEngine) {
     const loop = createQueryLoop();
-    queryEngine = new AIChatQueryEngine(loop);
+    const tokenService = new Token();
+    const agent = new AIChatCompactAgentService(tokenService, {
+      completeChat: (request) => new AiChatApi().openAIChatCompletion(request),
+      isEnabled: () => tokenService.getValue(USER_AI_ENABLED) === "true",
+    });
+    queryEngine = new AIChatQueryEngine(loop, { compactAgent: agent });
   }
   return queryEngine;
 }
