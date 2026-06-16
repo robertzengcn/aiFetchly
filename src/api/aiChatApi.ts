@@ -1975,6 +1975,184 @@ export class AiChatApi {
     return response as T;
   }
 
+  private isRecord(value: unknown): value is Record<string, unknown> {
+    return value !== null && typeof value === "object";
+  }
+
+  private getStringField(
+    value: Record<string, unknown>,
+    key: string
+  ): string | undefined {
+    const field = value[key];
+    return typeof field === "string" ? field : undefined;
+  }
+
+  private getNumberField(
+    value: Record<string, unknown>,
+    key: string
+  ): number | undefined {
+    const field = value[key];
+    return typeof field === "number" ? field : undefined;
+  }
+
+  private buildOpenAIStreamChunk(params: {
+    id?: string;
+    created?: number;
+    model?: string;
+    content?: string | null;
+    finishReason?: string | null;
+  }): OpenAIChatCompletionChunk {
+    return {
+      id: params.id ?? `normalized-${Date.now()}`,
+      object: "chat.completion.chunk",
+      created: params.created ?? Math.floor(Date.now() / 1000),
+      model: params.model ?? "",
+      choices: [
+        {
+          index: 0,
+          delta:
+            params.content !== undefined ? { content: params.content } : {},
+          finish_reason: params.finishReason ?? null,
+        },
+      ],
+    };
+  }
+
+  private isTerminalStreamEvent(eventType?: string): boolean {
+    return (
+      eventType === StreamEventType.DONE ||
+      eventType === StreamEventType.COMPLETE ||
+      eventType === StreamEventType.CONVERSATION_END
+    );
+  }
+
+  private normalizeOpenAIStreamPayload(
+    payload: unknown,
+    eventType?: string
+  ): OpenAIChatCompletionChunk | null {
+    if (!this.isRecord(payload)) {
+      return null;
+    }
+
+    const id = this.getStringField(payload, "id");
+    const object = this.getStringField(payload, "object");
+    const created = this.getNumberField(payload, "created");
+    const model = this.getStringField(payload, "model");
+
+    if (Array.isArray(payload.choices)) {
+      const normalizedChoices: OpenAIStreamChoice[] = payload.choices.map(
+        (choice, index) => {
+          if (!this.isRecord(choice)) {
+            return { index, delta: {}, finish_reason: null };
+          }
+          const choiceIndex = this.getNumberField(choice, "index") ?? index;
+          const finishReason =
+            this.getStringField(choice, "finish_reason") ?? null;
+          const delta = choice.delta;
+          if (this.isRecord(delta)) {
+            return {
+              index: choiceIndex,
+              delta: delta as OpenAIStreamDelta,
+              finish_reason: finishReason,
+            };
+          }
+          const message = choice.message;
+          if (this.isRecord(message)) {
+            const content = message.content;
+            return {
+              index: choiceIndex,
+              delta:
+                typeof content === "string" || content === null
+                  ? { content }
+                  : {},
+              finish_reason: finishReason,
+            };
+          }
+          return {
+            index: choiceIndex,
+            delta: {},
+            finish_reason: finishReason,
+          };
+        }
+      );
+      return {
+        id: id ?? `normalized-${Date.now()}`,
+        object:
+          object === "chat.completion.chunk" ? object : "chat.completion.chunk",
+        created: created ?? Math.floor(Date.now() / 1000),
+        model: model ?? "",
+        choices: normalizedChoices,
+      };
+    }
+
+    const directContent = payload.content;
+    if (typeof directContent === "string" || directContent === null) {
+      return this.buildOpenAIStreamChunk({
+        id,
+        created,
+        model,
+        content: directContent,
+        finishReason: this.isTerminalStreamEvent(eventType) ? "stop" : null,
+      });
+    }
+
+    const nestedData = payload.data;
+    if (this.isRecord(nestedData)) {
+      const nestedContent = nestedData.content;
+      if (typeof nestedContent === "string" || nestedContent === null) {
+        return this.buildOpenAIStreamChunk({
+          id,
+          created,
+          model,
+          content: nestedContent,
+          finishReason: this.isTerminalStreamEvent(eventType) ? "stop" : null,
+        });
+      }
+    }
+
+    return null;
+  }
+
+  private describeOpenAIStreamPayload(
+    payload: unknown,
+    eventType?: string
+  ): string {
+    if (!this.isRecord(payload)) {
+      return `event=${eventType ?? "message"} payload=${typeof payload}`;
+    }
+    const keys = Object.keys(payload).slice(0, 8).join(",");
+    const choices = Array.isArray(payload.choices) ? payload.choices : [];
+    const firstChoice = choices[0];
+    const choiceKeys = this.isRecord(firstChoice)
+      ? Object.keys(firstChoice).slice(0, 8).join(",")
+      : "";
+    const delta = this.isRecord(firstChoice) ? firstChoice.delta : undefined;
+    const deltaKeys = this.isRecord(delta)
+      ? Object.keys(delta).slice(0, 8).join(",")
+      : "";
+    const message = this.isRecord(firstChoice)
+      ? firstChoice.message
+      : undefined;
+    const messageContent =
+      this.isRecord(message) && typeof message.content === "string"
+        ? message.content
+        : undefined;
+    const directContent =
+      typeof payload.content === "string" ? payload.content : undefined;
+    const deltaContent =
+      this.isRecord(delta) && typeof delta.content === "string"
+        ? delta.content
+        : undefined;
+    const contentLen =
+      directContent?.length ??
+      deltaContent?.length ??
+      messageContent?.length ??
+      0;
+    return `event=${
+      eventType ?? "message"
+    } keys=[${keys}] choiceKeys=[${choiceKeys}] deltaKeys=[${deltaKeys}] contentLen=${contentLen}`;
+  }
+
   private isNotFoundError(error: unknown): boolean {
     return (
       error instanceof Error && /(^|[\s:])404\b|not found/i.test(error.message)
@@ -1996,6 +2174,37 @@ export class AiChatApi {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    let currentEventType: string | undefined;
+    let loggedPayloadCount = 0;
+
+    const emitPayload = (payload: unknown, eventType?: string): void => {
+      if (loggedPayloadCount < 8) {
+        console.log(
+          `[ai-chat-v2] openai-stream payload ${
+            loggedPayloadCount + 1
+          }: ${this.describeOpenAIStreamPayload(payload, eventType)}`
+        );
+        loggedPayloadCount += 1;
+      }
+      if (eventType === StreamEventType.ERROR) {
+        const message =
+          this.isRecord(payload) && typeof payload.content === "string"
+            ? payload.content
+            : "AI server returned a stream error";
+        throw new Error(message);
+      }
+      const chunk = this.normalizeOpenAIStreamPayload(payload, eventType);
+      if (!chunk) {
+        console.warn(
+          `[ai-chat-v2] openai-stream ignored unrecognized payload: ${this.describeOpenAIStreamPayload(
+            payload,
+            eventType
+          )}`
+        );
+        return;
+      }
+      onChunk(chunk);
+    };
 
     try {
       let streamActive = true;
@@ -2028,7 +2237,15 @@ export class AiChatApi {
 
         for (const line of lines) {
           const trimmedLine = line.trim();
-          if (!trimmedLine) continue;
+          if (!trimmedLine) {
+            currentEventType = undefined;
+            continue;
+          }
+
+          if (trimmedLine.startsWith("event:")) {
+            currentEventType = trimmedLine.substring(6).trim();
+            continue;
+          }
 
           if (trimmedLine.startsWith("data:")) {
             const jsonStr = trimmedLine.substring(5).trim();
@@ -2037,10 +2254,13 @@ export class AiChatApi {
               break;
             }
             try {
-              const chunk: OpenAIChatCompletionChunk = JSON.parse(jsonStr);
-              onChunk(chunk);
-            } catch {
-              // Ignore parse errors for individual chunks
+              const payload: unknown = JSON.parse(jsonStr);
+              emitPayload(payload, currentEventType);
+            } catch (err) {
+              console.warn(
+                `[ai-chat-v2] openai-stream failed to parse payload length=${jsonStr.length}:`,
+                err
+              );
             }
           }
         }
@@ -2056,10 +2276,13 @@ export class AiChatApi {
       ) {
         const jsonStr = trimmedBuffer.substring(5).trim();
         try {
-          const chunk: OpenAIChatCompletionChunk = JSON.parse(jsonStr);
-          onChunk(chunk);
-        } catch {
-          // Ignore parse errors
+          const payload: unknown = JSON.parse(jsonStr);
+          emitPayload(payload, currentEventType);
+        } catch (err) {
+          console.warn(
+            `[ai-chat-v2] openai-stream failed to parse final payload length=${jsonStr.length}:`,
+            err
+          );
         }
       }
     } finally {

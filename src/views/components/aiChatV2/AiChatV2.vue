@@ -845,7 +845,10 @@ const onSend = async (text: string): Promise<void> => {
         isStreaming.value = false;
         activeAssistantMessageId.value = null;
         retryInfo.value = null;
-        if (complete.fullContent !== undefined) {
+        if (
+          complete.fullContent !== undefined &&
+          complete.fullContent.length > 0
+        ) {
           ensureAssistantAdded();
           assistant.content = complete.fullContent;
           const idx = messages.value.findIndex((m) => m.id === assistant.id);
@@ -855,6 +858,11 @@ const onSend = async (text: string): Promise<void> => {
               content: assistant.content,
             };
           }
+        } else if (!assistantAdded || assistant.content.length === 0) {
+          const emptyMessage =
+            "AI returned an empty response. Check the ai-chat-v2 stream diagnostics in the app log.";
+          streamError.value = emptyMessage;
+          showAssistantError(emptyMessage);
         }
         if (complete.conversationId) {
           activeConversationId.value = complete.conversationId;
