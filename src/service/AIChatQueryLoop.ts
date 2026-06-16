@@ -184,6 +184,16 @@ export class AIChatQueryLoop {
         );
 
         if (
+          accumulator.state.sawToolCallDelta &&
+          accumulator.state.finishReason !== "tool_calls" &&
+          parsedCalls.length === 0
+        ) {
+          throw new Error(
+            "AI server stream ended before returning a complete response."
+          );
+        }
+
+        if (
           accumulator.state.finishReason !== "tool_calls" ||
           parsedCalls.length === 0
         ) {

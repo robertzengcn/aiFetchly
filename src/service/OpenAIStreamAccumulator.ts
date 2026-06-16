@@ -8,6 +8,7 @@ export interface OpenAIStreamTextState {
   model?: string;
   fullContent: string;
   finishReason?: string | null;
+  sawToolCallDelta: boolean;
 }
 
 export interface BufferedOpenAIToolCall {
@@ -31,7 +32,10 @@ export interface ParsedToolCallResult {
  * Pure with respect to external IO; only mutates its own accumulator state.
  */
 export class OpenAIStreamAccumulator {
-  private _state: OpenAIStreamTextState = { fullContent: "" };
+  private _state: OpenAIStreamTextState = {
+    fullContent: "",
+    sawToolCallDelta: false,
+  };
   private _toolCalls: Map<number, BufferedOpenAIToolCall> = new Map();
 
   get state(): OpenAIStreamTextState {
@@ -64,6 +68,7 @@ export class OpenAIStreamAccumulator {
         this._state.finishReason = choice.finish_reason;
       }
       if (delta?.tool_calls) {
+        this._state.sawToolCallDelta = true;
         for (const tc of delta.tool_calls) {
           this._bufferToolCall(tc);
         }

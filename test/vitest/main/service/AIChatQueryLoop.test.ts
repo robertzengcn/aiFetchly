@@ -179,6 +179,65 @@ describe("AIChatQueryLoop", () => {
       expect(result.type).toBe("failed");
     });
 
+    it("returns failed when stream ends after an unusable tool call delta", async () => {
+      const incompleteChunk: OpenAIChatCompletionChunk = {
+        id: "resp-1",
+        object: "chat.completion.chunk",
+        created: 1,
+        model: "test-model",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              role: "assistant",
+              content: "",
+              tool_calls: [
+                {
+                  index: 0,
+                  function: { arguments: "" },
+                },
+              ],
+            },
+            finish_reason: null,
+          },
+        ],
+      };
+      const fakeStream = vi.fn(
+        async (
+          _req: unknown,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          onChunk(incompleteChunk);
+        }
+      );
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: vi.fn(),
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const input: AIChatQueryLoopInput = {
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: { message: "hi" },
+        openAITools: [],
+        abortController: new AbortController(),
+        eventSink: { emit: vi.fn() },
+        startRound: 0,
+        isActiveTurn: () => true,
+      };
+
+      const result = await loop.run(input);
+
+      expect(result.type).toBe("failed");
+      if (result.type === "failed") {
+        expect(result.error).toBeInstanceOf(Error);
+        expect((result.error as Error).message).toContain(
+          "ended before returning a complete response"
+        );
+      }
+    });
+
     it("returns paused_for_permission when tool result needs permission", async () => {
       const toolCallChunk = makeToolCallChunk("call-1", "scrape", "{}");
       const fakeStream = vi.fn(
