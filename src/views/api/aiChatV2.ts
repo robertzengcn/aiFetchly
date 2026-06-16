@@ -99,37 +99,68 @@ export async function streamChatV2Message(
   onComplete: (chunk: ChatV2StreamChunk) => void,
   onError: (error: Error) => void
 ): Promise<void> {
-  const chunkHandler = (raw: string): void => {
-    try {
-      const chunk: ChatV2StreamChunk = JSON.parse(raw);
-      onChunk(chunk);
-    } catch (err) {
-      console.error("aiChatV2: parse chunk error", err);
-    }
-  };
+  return new Promise((resolve, reject) => {
+    const cleanup = (): void => {
+      clearChatV2StreamListeners();
+    };
 
-  const completeHandler = (raw: string): void => {
-    try {
-      const chunk: ChatV2StreamChunk = JSON.parse(raw);
-      if (chunk.eventType === "error" && chunk.errorMessage) {
-        onError(new Error(chunk.errorMessage));
-      } else {
-        onComplete(chunk);
+    const chunkHandler = (raw: string): void => {
+      try {
+        const chunk: ChatV2StreamChunk = JSON.parse(raw);
+        onChunk(chunk);
+      } catch (err) {
+        console.error("aiChatV2: parse chunk error", err);
       }
-    } catch (err) {
-      onError(
-        err instanceof Error ? err : new Error("Stream completion parse error")
-      );
-    }
-    clearChatV2StreamListeners();
-  };
+    };
 
-  clearChatV2StreamListeners();
-  activeChunkHandler = chunkHandler;
-  activeCompleteHandler = completeHandler;
-  windowReceive(AI_CHAT_V2_STREAM_CHUNK, chunkHandler);
-  windowReceive(AI_CHAT_V2_STREAM_COMPLETE, completeHandler);
-  windowSend(AI_CHAT_V2_STREAM, request);
+    const completeHandler = (raw: string): void => {
+      try {
+        const chunk: ChatV2StreamChunk = JSON.parse(raw);
+        if (chunk.eventType === "error" && chunk.errorMessage) {
+          const error = new Error(chunk.errorMessage);
+          onError(error);
+          reject(error);
+        } else {
+          onComplete(chunk);
+          resolve();
+        }
+      } catch (err) {
+        const error =
+          err instanceof Error
+            ? err
+            : new Error("Stream completion parse error");
+        onError(error);
+        reject(error);
+      } finally {
+        cleanup();
+      }
+    };
+
+    try {
+      clearChatV2StreamListeners();
+      activeChunkHandler = chunkHandler;
+      activeCompleteHandler = completeHandler;
+      windowReceive(AI_CHAT_V2_STREAM_CHUNK, chunkHandler);
+      windowReceive(AI_CHAT_V2_STREAM_COMPLETE, completeHandler);
+      void windowSend(AI_CHAT_V2_STREAM, request).catch((err: unknown) => {
+        cleanup();
+        const error =
+          err instanceof Error
+            ? err
+            : new Error("Failed to start AI chat stream");
+        onError(error);
+        reject(error);
+      });
+    } catch (err) {
+      cleanup();
+      const error =
+        err instanceof Error
+          ? err
+          : new Error("Failed to start AI chat stream");
+      onError(error);
+      reject(error);
+    }
+  });
 }
 
 /**
