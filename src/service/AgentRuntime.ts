@@ -307,10 +307,26 @@ export class AgentRuntime {
     }
 
     const outputObj = parseResult.output;
-    const sourceUrls = Array.isArray(outputObj.sourceUrls)
-      ? (outputObj.sourceUrls as string[])
+    // Trust boundary: validate LLM-generated values before persistence.
+    // sourceUrls must be http(s) URLs (PRD §14.4 + SSRF defense for later
+    // milestones that may resolve them). confidence must be a finite number.
+    const rawUrls = Array.isArray(outputObj.sourceUrls)
+      ? (outputObj.sourceUrls as unknown[])
       : [];
-    const confidence = outputObj.confidence as number | undefined;
+    const sourceUrls = rawUrls.filter((u): u is string => {
+      if (typeof u !== "string") return false;
+      try {
+        const parsed = new URL(u);
+        return parsed.protocol === "http:" || parsed.protocol === "https:";
+      } catch {
+        return false;
+      }
+    });
+    const rawConfidence = outputObj.confidence;
+    const confidence =
+      typeof rawConfidence === "number" && Number.isFinite(rawConfidence)
+        ? rawConfidence
+        : undefined;
 
     const result: AgentResult = {
       agentTaskId,
