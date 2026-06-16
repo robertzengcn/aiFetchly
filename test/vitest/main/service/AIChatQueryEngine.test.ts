@@ -7,6 +7,7 @@ import type {
 } from "@/service/AIChatQueryLoop";
 import type { OpenAIChatMessage } from "@/api/aiChatApi";
 import type { AIChatContextAssembler } from "@/service/AIChatContextAssembler";
+import type { AIChatCompactAgentService } from "@/service/AIChatCompactAgentService";
 import type {
   AIChatQueryEvent,
   AIChatQueryLoopInput,
@@ -383,5 +384,82 @@ describe("AIChatQueryEngine context assembly", () => {
       { role: "system", content: "custom-sysp" },
       { role: "user", content: "hi" },
     ]);
+  });
+});
+
+describe("AIChatQueryEngine compact integration", () => {
+  it("enqueues session memory update after a completed turn", async () => {
+    const enqueue = vi.fn().mockResolvedValue(undefined);
+    const fakeAgent = { enqueueSessionMemoryUpdate: enqueue };
+    const engine = new AIChatQueryEngine(
+      {
+        run: vi.fn().mockResolvedValue({
+          type: "completed",
+          conversationId: "v2-test-conv",
+          assistantMessageId: "assistant-1",
+          fullContent: "ok",
+          finishReason: "stop",
+        }),
+      } as unknown as AIChatQueryLoop,
+      {
+        contextAssembler: {
+          assemble: vi.fn().mockResolvedValue({
+            messages: [{ role: "system", content: "x" }],
+            tokenEstimate: 0,
+            usedSessionMemory: false,
+            usedFullCompact: false,
+            compactTriggered: false,
+            warnings: [],
+          }),
+        } as unknown as AIChatContextAssembler,
+        compactAgent: fakeAgent as unknown as AIChatCompactAgentService,
+      }
+    );
+    const { sink } = makeEventCollector();
+    await engine.submitMessage({
+      request: { message: "hi" },
+      eventSink: sink,
+    });
+
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    expect(enqueue.mock.calls[0][0]).toEqual({
+      conversationId: "v2-test-conv",
+      reason: "assistant_turn_completed",
+    });
+  });
+
+  it("does not enqueue after a cancelled turn", async () => {
+    const enqueue = vi.fn().mockResolvedValue(undefined);
+    const fakeAgent = { enqueueSessionMemoryUpdate: enqueue };
+    const engine = new AIChatQueryEngine(
+      {
+        run: vi.fn().mockResolvedValue({
+          type: "cancelled",
+          conversationId: "v2-test-conv",
+          assistantMessageId: "assistant-1",
+          partialContent: "",
+        }),
+      } as unknown as AIChatQueryLoop,
+      {
+        contextAssembler: {
+          assemble: vi.fn().mockResolvedValue({
+            messages: [{ role: "system", content: "x" }],
+            tokenEstimate: 0,
+            usedSessionMemory: false,
+            usedFullCompact: false,
+            compactTriggered: false,
+            warnings: [],
+          }),
+        } as unknown as AIChatContextAssembler,
+        compactAgent: fakeAgent as unknown as AIChatCompactAgentService,
+      }
+    );
+    const { sink } = makeEventCollector();
+    await engine.submitMessage({
+      request: { message: "hi" },
+      eventSink: sink,
+    });
+
+    expect(enqueue).not.toHaveBeenCalled();
   });
 });
