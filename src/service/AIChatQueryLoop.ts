@@ -174,29 +174,22 @@ export class AIChatQueryLoop {
           .tryParseToolCallArguments()
           .filter((call) => call.name && call.id);
 
+        // Some OpenAI-compatible servers emit finish_reason="stop" (or omit
+        // it entirely) even when tool-call deltas were streamed. The
+        // presence of valid parsed tool calls is the reliable signal that
+        // the model wants tools executed — not finish_reason.
+        const willContinue = parsedCalls.length > 0;
         console.log(
-          `[ai-chat-v2] round ${round} ← finishReason=${
-            accumulator.state.finishReason
-          } parsedCalls=${parsedCalls.length} willContinue=${
-            accumulator.state.finishReason === "tool_calls" &&
-            parsedCalls.length > 0
-          }`
+          `[ai-chat-v2] round ${round} ← finishReason=${accumulator.state.finishReason} sawToolCallDelta=${accumulator.state.sawToolCallDelta} parsedCalls=${parsedCalls.length} willContinue=${willContinue}`
         );
 
-        if (
-          accumulator.state.sawToolCallDelta &&
-          accumulator.state.finishReason !== "tool_calls" &&
-          parsedCalls.length === 0
-        ) {
+        if (accumulator.state.sawToolCallDelta && parsedCalls.length === 0) {
           throw new Error(
             "AI server stream ended before returning a complete response."
           );
         }
 
-        if (
-          accumulator.state.finishReason !== "tool_calls" ||
-          parsedCalls.length === 0
-        ) {
+        if (!willContinue) {
           break;
         }
 
