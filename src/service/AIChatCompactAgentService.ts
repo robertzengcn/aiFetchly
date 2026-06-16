@@ -23,10 +23,9 @@ import type { AIChatCompactSummaryView } from "@/entityTypes/aiChatCompactTypes"
 const V2_PREFIX = "v2-";
 const MIN_DELTA_MESSAGES = 2;
 const FAILURE_CIRCUIT_THRESHOLD = 3;
+const CIRCUIT_BREAKER_COOLDOWN_MS = 10 * 60 * 1000;
 
-function isMessageRow(row: {
-  messageType?: MessageType;
-}): boolean {
+function isMessageRow(row: { messageType?: MessageType }): boolean {
   return row.messageType === MessageType.MESSAGE;
 }
 
@@ -67,10 +66,7 @@ export class AIChatCompactAgentService {
   async enqueueSessionMemoryUpdate(
     input: SessionMemoryUpdateInput
   ): Promise<void> {
-    if (
-      !input.conversationId ||
-      !input.conversationId.startsWith(V2_PREFIX)
-    ) {
+    if (!input.conversationId || !input.conversationId.startsWith(V2_PREFIX)) {
       console.log(
         `[ai-chat-compact] session update skipped (invalid conversationId) reason=${input.reason}`
       );
@@ -104,14 +100,22 @@ export class AIChatCompactAgentService {
       const existing = await this.memory.getByConversation(
         input.conversationId
       );
-      if (
-        existing &&
-        existing.failureCount >= FAILURE_CIRCUIT_THRESHOLD
-      ) {
-        console.log(
-          `[ai-chat-compact] session update skipped (circuit broken) conv=${input.conversationId} failures=${existing.failureCount}`
-        );
-        return;
+      if (existing && existing.failureCount >= FAILURE_CIRCUIT_THRESHOLD) {
+        // Time-based reset: if the last failure was long ago, give it another try.
+        const lastFailureAt = existing.updatedAt
+          ? new Date(existing.updatedAt).getTime()
+          : 0;
+        if (Date.now() - lastFailureAt > CIRCUIT_BREAKER_COOLDOWN_MS) {
+          console.log(
+            `[ai-chat-compact] circuit breaker cooldown expired conv=${input.conversationId} — retrying`
+          );
+          await this.memory.resetFailures(input.conversationId);
+        } else {
+          console.log(
+            `[ai-chat-compact] session update skipped (circuit broken) conv=${input.conversationId} failures=${existing.failureCount}`
+          );
+          return;
+        }
       }
 
       const allRows = await this.v2.getConversationMessages(
@@ -178,7 +182,11 @@ export class AIChatCompactAgentService {
       });
       await this.memory.resetFailures(input.conversationId);
       console.log(
-        `[ai-chat-compact] session update completed conv=${input.conversationId} msgs=${newRows.length} tokens=${tokenEstimate} elapsed=${Date.now() - startedAt}ms`
+        `[ai-chat-compact] session update completed conv=${
+          input.conversationId
+        } msgs=${newRows.length} tokens=${tokenEstimate} elapsed=${
+          Date.now() - startedAt
+        }ms`
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -208,12 +216,10 @@ export class AIChatCompactAgentService {
       throw new Error("AI is not enabled");
     }
     const rows = await this.v2.getConversationMessages(input.conversationId);
-    const sorted = [...rows]
-      .filter(isMessageRow)
-      .sort((a, b) => {
-        const t = a.timestamp.getTime() - b.timestamp.getTime();
-        return t !== 0 ? t : a.id - b.id;
-      });
+    const sorted = [...rows].filter(isMessageRow).sort((a, b) => {
+      const t = a.timestamp.getTime() - b.timestamp.getTime();
+      return t !== 0 ? t : a.id - b.id;
+    });
     if (sorted.length === 0) {
       throw new Error("No messages to compact");
     }
@@ -259,7 +265,9 @@ export class AIChatCompactAgentService {
       status: "active",
     });
     console.log(
-      `[ai-chat-compact] full compact completed conv=${input.conversationId} elapsed=${Date.now() - startedAt}ms`
+      `[ai-chat-compact] full compact completed conv=${
+        input.conversationId
+      } elapsed=${Date.now() - startedAt}ms`
     );
     return view;
   }

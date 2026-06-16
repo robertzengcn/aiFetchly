@@ -22,8 +22,9 @@ export class AIChatCompactSummaryModel extends BaseDb {
 
   constructor(dbpath: string) {
     super(dbpath);
-    this.repository =
-      this.sqliteDb.connection.getRepository(AIChatCompactSummaryEntity);
+    this.repository = this.sqliteDb.connection.getRepository(
+      AIChatCompactSummaryEntity
+    );
   }
 
   async getActiveSummary(
@@ -47,25 +48,34 @@ export class AIChatCompactSummaryModel extends BaseDb {
   async saveFullCompact(
     input: CompactSummarySaveInput
   ): Promise<AIChatCompactSummaryEntity> {
-    if (input.status === "active") {
-      await this.markSuperseded(input.conversationId);
-    }
-    const entity = new AIChatCompactSummaryEntity();
-    entity.compactId = input.compactId;
-    entity.conversationId = input.conversationId;
-    entity.summary = input.summary;
-    entity.throughMessageId = input.throughMessageId;
-    entity.throughTimestamp = input.throughTimestamp;
-    entity.sourceMessageCount = input.sourceMessageCount;
-    entity.status = input.status;
-    if (input.fromMessageId !== undefined)
-      entity.fromMessageId = input.fromMessageId;
-    if (input.inputTokenEstimate !== undefined)
-      entity.inputTokenEstimate = input.inputTokenEstimate;
-    if (input.outputTokenEstimate !== undefined)
-      entity.outputTokenEstimate = input.outputTokenEstimate;
-    if (input.model !== undefined) entity.model = input.model;
-    return this.repository.save(entity);
+    return this.sqliteDb.connection.transaction(async (manager) => {
+      const repo = manager.getRepository(AIChatCompactSummaryEntity);
+      if (input.status === "active") {
+        // Supersede existing actives within the same transaction.
+        const actives = await repo.find({
+          where: { conversationId: input.conversationId, status: "active" },
+        });
+        for (const a of actives) {
+          await repo.update({ id: a.id }, { status: "superseded" });
+        }
+      }
+      const entity = new AIChatCompactSummaryEntity();
+      entity.compactId = input.compactId;
+      entity.conversationId = input.conversationId;
+      entity.summary = input.summary;
+      entity.throughMessageId = input.throughMessageId;
+      entity.throughTimestamp = input.throughTimestamp;
+      entity.sourceMessageCount = input.sourceMessageCount;
+      entity.status = input.status;
+      if (input.fromMessageId !== undefined)
+        entity.fromMessageId = input.fromMessageId;
+      if (input.inputTokenEstimate !== undefined)
+        entity.inputTokenEstimate = input.inputTokenEstimate;
+      if (input.outputTokenEstimate !== undefined)
+        entity.outputTokenEstimate = input.outputTokenEstimate;
+      if (input.model !== undefined) entity.model = input.model;
+      return repo.save(entity);
+    });
   }
 
   async markSuperseded(
