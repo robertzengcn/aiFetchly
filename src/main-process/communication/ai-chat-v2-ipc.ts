@@ -32,6 +32,7 @@ import {
   AI_CHAT_V2_REJECT_PLAN,
   AI_CHAT_V2_REQUEST_PLAN_CHANGES,
   AI_CHAT_V2_PLAN_VERSIONS,
+  AI_CHAT_V2_COMPACT_CONVERSATION,
 } from "@/config/channellist";
 import type {
   AIChatPlanStateView,
@@ -39,6 +40,7 @@ import type {
   AskUserQuestionAnswer,
 } from "@/entityTypes/aiChatPlanTypes";
 import type { CommonMessage } from "@/entityTypes/commonType";
+import type { AIChatCompactSummaryView } from "@/entityTypes/aiChatCompactTypes";
 import type {
   ChatV2StreamRequest,
   ChatV2StreamChunk,
@@ -61,6 +63,7 @@ type IpcEventLike = {
 // -------------------------------------------------------------------------
 
 let queryEngine: AIChatQueryEngine | null = null;
+let compactAgent: AIChatCompactAgentService | null = null;
 
 /** Build the production AIChatQueryLoop with real service deps. */
 function createQueryLoop(): AIChatQueryLoop {
@@ -77,15 +80,23 @@ function createQueryLoop(): AIChatQueryLoop {
   return new AIChatQueryLoop(deps);
 }
 
-function getQueryEngine(): AIChatQueryEngine {
-  if (!queryEngine) {
-    const loop = createQueryLoop();
+function getCompactAgent(): AIChatCompactAgentService {
+  if (!compactAgent) {
     const tokenService = new Token();
-    const agent = new AIChatCompactAgentService(tokenService, {
+    compactAgent = new AIChatCompactAgentService(tokenService, {
       completeChat: (request) => new AiChatApi().openAIChatCompletion(request),
       isEnabled: () => tokenService.getValue(USER_AI_ENABLED) === "true",
     });
-    queryEngine = new AIChatQueryEngine(loop, { compactAgent: agent });
+  }
+  return compactAgent;
+}
+
+function getQueryEngine(): AIChatQueryEngine {
+  if (!queryEngine) {
+    const loop = createQueryLoop();
+    queryEngine = new AIChatQueryEngine(loop, {
+      compactAgent: getCompactAgent(),
+    });
   }
   return queryEngine;
 }
@@ -655,6 +666,32 @@ async function handlePlanVersions(
   }
 }
 
+async function handleCompactConversation(
+  data: string
+): Promise<CommonMessage<AIChatCompactSummaryView | null>> {
+  if (!isAIEnabled()) {
+    return denied("AI is not enabled");
+  }
+  const parsed = data
+    ? (JSON.parse(data) as { conversationId?: string; model?: string })
+    : {};
+  if (!parsed.conversationId) {
+    return denied("conversationId is required");
+  }
+  if (!parsed.conversationId.startsWith("v2-")) {
+    return denied("conversationId must be a v2- conversation id");
+  }
+  try {
+    const summary = await getCompactAgent().runFullCompact({
+      conversationId: parsed.conversationId,
+      model: parsed.model,
+    });
+    return ok(summary);
+  } catch (err) {
+    return denied(userSafeError(err));
+  }
+}
+
 function parseMetadata(raw?: string | null): ChatV2MessageMetadata | undefined {
   if (!raw) {
     return undefined;
@@ -704,6 +741,9 @@ export function registerAiChatV2IpcHandlers(): void {
   );
   ipcMain.handle(AI_CHAT_V2_PLAN_VERSIONS, async (_e, data: unknown) =>
     handlePlanVersions((data as string) ?? "")
+  );
+  ipcMain.handle(AI_CHAT_V2_COMPACT_CONVERSATION, async (_e, data: unknown) =>
+    handleCompactConversation((data as string) ?? "")
   );
   ipcMain.on(AI_CHAT_V2_STREAM, async (event, data: unknown) => {
     try {
