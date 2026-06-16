@@ -4,7 +4,9 @@
     <div class="v2-shell__header">
       <div class="v2-shell__header-left">
         <v-icon class="mr-2">mdi-robot</v-icon>
-        <span class="v2-shell__title">{{ t("aiChatV2.title") || "AI Assistant" }}</span>
+        <span class="v2-shell__title">{{
+          t("aiChatV2.title") || "AI Assistant"
+        }}</span>
         <AiChatV2PlanStatusBadge
           v-if="planState"
           :status="planState.status"
@@ -70,7 +72,10 @@
       />
 
       <!-- Plan Mode active cards (question card only; approval card renders inline) -->
-      <div v-if="mode === 'plan' && pendingQuestion" class="v2-shell__plan-panel">
+      <div
+        v-if="mode === 'plan' && pendingQuestion"
+        class="v2-shell__plan-panel"
+      >
         <AiChatV2QuestionCard
           :question="pendingQuestion"
           @answered="handleQuestionAnswered"
@@ -95,8 +100,15 @@
     <v-dialog v-model="showConversationsDialog" max-width="500" scrollable>
       <v-card>
         <v-card-title class="d-flex align-center justify-space-between">
-          <span>{{ t("aiChatV2.conversation_history") || "Conversation History" }}</span>
-          <v-btn icon size="small" variant="text" @click="showConversationsDialog = false">
+          <span>{{
+            t("aiChatV2.conversation_history") || "Conversation History"
+          }}</span>
+          <v-btn
+            icon
+            size="small"
+            variant="text"
+            @click="showConversationsDialog = false"
+          >
             <v-icon>mdi-close</v-icon>
           </v-btn>
         </v-card-title>
@@ -104,7 +116,9 @@
         <div class="px-3 pt-3">
           <v-text-field
             v-model="conversationSearch"
-            :placeholder="t('aiChatV2.search_conversations') || 'Search conversations...'"
+            :placeholder="
+              t('aiChatV2.search_conversations') || 'Search conversations...'
+            "
             prepend-inner-icon="mdi-magnify"
             density="compact"
             variant="outlined"
@@ -120,8 +134,11 @@
             class="mt-1"
           />
         </div>
-        <v-card-text style="padding: 0;">
-          <div v-if="conversations.length === 0 && !searchingConversations" class="pa-4 text-center">
+        <v-card-text style="padding: 0">
+          <div
+            v-if="conversations.length === 0 && !searchingConversations"
+            class="pa-4 text-center"
+          >
             <v-icon size="48" color="grey-lighten-2">mdi-chat-outline</v-icon>
             <p class="mt-4 text-grey">
               {{
@@ -135,13 +152,18 @@
             <v-list-item
               v-for="conv in conversations"
               :key="conv.conversationId"
-              :class="{ 'bg-primary-lighten-5': conv.conversationId === activeConversationId }"
+              :class="{
+                'bg-primary-lighten-5':
+                  conv.conversationId === activeConversationId,
+              }"
               @click="onSelectConversation(conv.conversationId)"
             >
               <template v-slot:prepend>
                 <v-icon color="primary">mdi-chat</v-icon>
               </template>
-              <v-list-item-title>{{ truncateText(conv.title, 60) }}</v-list-item-title>
+              <v-list-item-title>{{
+                truncateText(conv.title, 60)
+              }}</v-list-item-title>
               <v-list-item-subtitle>
                 <div class="d-flex align-center mt-1">
                   <v-icon size="x-small" class="mr-1">mdi-clock-outline</v-icon>
@@ -157,7 +179,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onBeforeUnmount } from "vue";
+import {
+  ref,
+  computed,
+  watch,
+  nextTick,
+  onMounted,
+  onBeforeUnmount,
+} from "vue";
 import { useI18n } from "vue-i18n";
 import { MessageType } from "@/entityTypes/commonType";
 import type {
@@ -171,7 +200,10 @@ import type {
   AskUserQuestionAnswer,
   ChatV2Mode,
 } from "@/entityTypes/aiChatPlanTypes";
-import { windowInvoke, windowRemoveAllListeners } from "@/views/utils/apirequest";
+import {
+  windowInvoke,
+  windowRemoveAllListeners,
+} from "@/views/utils/apirequest";
 import {
   AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
   AI_CHAT_V2_STREAM_CHUNK,
@@ -412,7 +444,8 @@ const upsertToolResultMessage = (
     ? messages.value.findIndex(
         (message) =>
           message.messageType === MessageType.TOOL_RESULT &&
-          message.metadata?.toolCallId === chunk.replacesPermissionPromptForToolId
+          message.metadata?.toolCallId ===
+            chunk.replacesPermissionPromptForToolId
       )
     : -1;
 
@@ -430,7 +463,8 @@ const upsertToolResultMessage = (
       typeof toolResult.executionTimeMs === "number"
         ? toolResult.executionTimeMs
         : undefined,
-    summary: typeof toolResult.summary === "string" ? toolResult.summary : undefined,
+    summary:
+      typeof toolResult.summary === "string" ? toolResult.summary : undefined,
     error: typeof toolResult.error === "string" ? toolResult.error : undefined,
   };
 
@@ -585,11 +619,7 @@ const handleQuestionAnswered = async (
 ): Promise<void> => {
   if (!activeConversationId.value) return;
   try {
-    await answerChatV2Question(
-      activeConversationId.value,
-      questionId,
-      answers
-    );
+    await answerChatV2Question(activeConversationId.value, questionId, answers);
     pendingQuestion.value = null;
     // Refresh plan state to reflect the updated status.
     planState.value = await getChatV2PlanState(activeConversationId.value);
@@ -695,128 +725,161 @@ const onSend = async (text: string): Promise<void> => {
     messages.value = [...messages.value, assistant];
     assistantAdded = true;
   };
+  const showAssistantError = (message: string): void => {
+    ensureAssistantAdded();
+    assistant.content = message;
+    assistant.metadata = {
+      source: "chat-v2",
+      error: message,
+    };
+    const idx = messages.value.findIndex((m) => m.id === assistant.id);
+    if (idx !== -1) {
+      messages.value[idx] = {
+        ...messages.value[idx],
+        content: assistant.content,
+        metadata: assistant.metadata,
+      };
+    }
+  };
 
   isStreaming.value = true;
   receivedFirstResponse.value = false;
   retryInfo.value = null;
 
-  await streamChatV2Message(
-    {
-      conversationId: activeConversationId.value ?? undefined,
-      message: text,
-      mode: mode.value,
-      // model omitted → backend picks default
-    },
-    (chunk: ChatV2StreamChunk) => {
-      if (chunk.eventType === "start") {
-        if (chunk.conversationId) {
-          activeConversationId.value = chunk.conversationId;
-          tempUser.conversationId = chunk.conversationId;
-          assistant.conversationId = chunk.conversationId;
+  await nextTick();
+
+  try {
+    await streamChatV2Message(
+      {
+        conversationId: activeConversationId.value ?? undefined,
+        message: text,
+        mode: mode.value,
+        // model omitted → backend picks default
+      },
+      (chunk: ChatV2StreamChunk) => {
+        if (chunk.eventType === "start") {
+          if (chunk.conversationId) {
+            activeConversationId.value = chunk.conversationId;
+            tempUser.conversationId = chunk.conversationId;
+            assistant.conversationId = chunk.conversationId;
+          }
+          if (chunk.messageId) {
+            assistant.id = chunk.messageId;
+            activeAssistantMessageId.value = chunk.messageId;
+          }
+          // `start` is metadata only; keep showing the typing indicator.
+        } else if (chunk.eventType === "retry_connect") {
+          // Connection to AI server is being retried. Show the reconnect
+          // indicator but don't treat it as the first AI response.
+          if (
+            typeof chunk.retryAttempt === "number" &&
+            typeof chunk.retryMaxAttempts === "number"
+          ) {
+            retryInfo.value = {
+              attempt: chunk.retryAttempt,
+              maxAttempts: chunk.retryMaxAttempts,
+              delayMs: chunk.retryDelayMs ?? 0,
+            };
+          }
+        } else {
+          // Any non-start/non-retry chunk means the AI has started responding.
+          receivedFirstResponse.value = true;
+          retryInfo.value = null;
+          if (chunk.eventType === "token" && chunk.contentDelta) {
+            ensureAssistantAdded();
+            assistant.content += chunk.contentDelta;
+            const idx = messages.value.findIndex((m) => m.id === assistant.id);
+            if (idx !== -1) {
+              messages.value[idx] = {
+                ...messages.value[idx],
+                content: assistant.content,
+              };
+            }
+          } else if (chunk.eventType === ("ask_user_question" as never)) {
+            // Plan Mode: show question card, stream may pause
+            const planChunk = chunk as ChatV2StreamChunk;
+            if (planChunk.question) {
+              pendingQuestion.value = planChunk.question;
+            }
+            if (planChunk.planState) {
+              planState.value = planChunk.planState;
+            }
+          } else if (chunk.eventType === ("plan_submitted" as never)) {
+            const planChunk = chunk as ChatV2StreamChunk;
+            if (planChunk.planState) {
+              planState.value = planChunk.planState;
+              upsertPlanMessage(planChunk.planState);
+            }
+          } else if (chunk.eventType === ("plan_blocked_tool" as never)) {
+            // Tool was blocked by plan policy — surface as a tool result message
+            const planChunk = chunk as ChatV2StreamChunk;
+            upsertToolResultMessage(
+              planChunk,
+              planChunk.conversationId || activeConversationId.value || ""
+            );
+          } else if (chunk.eventType === "tool_call") {
+            messages.value.push({
+              id: `tool-call-${chunk.toolCallId || Date.now()}`,
+              conversationId:
+                chunk.conversationId || activeConversationId.value || "",
+              role: "assistant",
+              content: "",
+              timestamp: new Date().toISOString(),
+              messageType: MessageType.TOOL_CALL,
+              metadata: {
+                source: "chat-v2",
+                toolCallId: chunk.toolCallId,
+                toolName: chunk.toolName,
+                toolArguments: chunk.toolArguments,
+              },
+            });
+          } else if (chunk.eventType === "tool_result") {
+            upsertToolResultMessage(
+              chunk,
+              chunk.conversationId || activeConversationId.value || ""
+            );
+          }
         }
-        if (chunk.messageId) {
-          assistant.id = chunk.messageId;
-          activeAssistantMessageId.value = chunk.messageId;
-        }
-        // `start` is metadata only; keep showing the typing indicator.
-      } else if (chunk.eventType === "retry_connect") {
-        // Connection to AI server is being retried. Show the reconnect
-        // indicator but don't treat it as the first AI response.
-        if (
-          typeof chunk.retryAttempt === "number" &&
-          typeof chunk.retryMaxAttempts === "number"
-        ) {
-          retryInfo.value = {
-            attempt: chunk.retryAttempt,
-            maxAttempts: chunk.retryMaxAttempts,
-            delayMs: chunk.retryDelayMs ?? 0,
-          };
-        }
-      } else {
-        // Any non-start/non-retry chunk means the AI has started responding.
-        receivedFirstResponse.value = true;
+      },
+      (complete: ChatV2StreamChunk) => {
+        isStreaming.value = false;
+        activeAssistantMessageId.value = null;
         retryInfo.value = null;
-        if (chunk.eventType === "token" && chunk.contentDelta) {
+        if (complete.fullContent !== undefined) {
           ensureAssistantAdded();
-          assistant.content += chunk.contentDelta;
+          assistant.content = complete.fullContent;
           const idx = messages.value.findIndex((m) => m.id === assistant.id);
           if (idx !== -1) {
-            messages.value[idx] = { ...messages.value[idx], content: assistant.content };
+            messages.value[idx] = {
+              ...messages.value[idx],
+              content: assistant.content,
+            };
           }
-        } else if (chunk.eventType === "ask_user_question" as never) {
-          // Plan Mode: show question card, stream may pause
-          const planChunk = chunk as ChatV2StreamChunk;
-          if (planChunk.question) {
-            pendingQuestion.value = planChunk.question;
-          }
-          if (planChunk.planState) {
-            planState.value = planChunk.planState;
-          }
-        } else if (chunk.eventType === "plan_submitted" as never) {
-          const planChunk = chunk as ChatV2StreamChunk;
-          if (planChunk.planState) {
-            planState.value = planChunk.planState;
-            upsertPlanMessage(planChunk.planState);
-          }
-        } else if (chunk.eventType === "plan_blocked_tool" as never) {
-          // Tool was blocked by plan policy — surface as a tool result message
-          const planChunk = chunk as ChatV2StreamChunk;
-          upsertToolResultMessage(
-            planChunk,
-            planChunk.conversationId || activeConversationId.value || ""
-          );
-        } else if (chunk.eventType === "tool_call") {
-          messages.value.push({
-            id: `tool-call-${chunk.toolCallId || Date.now()}`,
-            conversationId: chunk.conversationId || activeConversationId.value || "",
-            role: "assistant",
-            content: "",
-            timestamp: new Date().toISOString(),
-            messageType: MessageType.TOOL_CALL,
-            metadata: {
-              source: "chat-v2",
-              toolCallId: chunk.toolCallId,
-              toolName: chunk.toolName,
-              toolArguments: chunk.toolArguments,
-            },
-          });
-        } else if (chunk.eventType === "tool_result") {
-          upsertToolResultMessage(
-            chunk,
-            chunk.conversationId || activeConversationId.value || ""
-          );
         }
+        if (complete.conversationId) {
+          activeConversationId.value = complete.conversationId;
+        }
+        messages.value = [...messages.value];
+        void loadConversations();
+      },
+      (error: Error) => {
+        isStreaming.value = false;
+        activeAssistantMessageId.value = null;
+        retryInfo.value = null;
+        streamError.value = error.message;
+        showAssistantError(error.message);
       }
-    },
-    (complete: ChatV2StreamChunk) => {
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!streamError.value) {
       isStreaming.value = false;
       activeAssistantMessageId.value = null;
       retryInfo.value = null;
-      if (complete.fullContent !== undefined) {
-        ensureAssistantAdded();
-        assistant.content = complete.fullContent;
-        const idx = messages.value.findIndex((m) => m.id === assistant.id);
-        if (idx !== -1) {
-          messages.value[idx] = { ...messages.value[idx], content: assistant.content };
-        }
-      }
-      if (complete.conversationId) {
-        activeConversationId.value = complete.conversationId;
-      }
-      messages.value = [...messages.value];
-      void loadConversations();
-    },
-    (error: Error) => {
-      isStreaming.value = false;
-      activeAssistantMessageId.value = null;
-      retryInfo.value = null;
-      streamError.value = error.message;
-      // Only remove if the placeholder was actually added and is still empty.
-      if (assistantAdded && assistant.content.length === 0) {
-        messages.value = messages.value.filter((m) => m.id !== assistant.id);
-      }
+      streamError.value = message;
+      showAssistantError(message);
     }
-  );
+  }
 };
 
 onMounted(() => {
