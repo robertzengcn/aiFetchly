@@ -34,7 +34,7 @@ export type PluginManifestLoadResult =
 
 const MAX_DESCRIPTION_LENGTH = 500;
 
-function fail(errors: PluginError[]): PluginManifestFailure {
+function fail(errors: readonly PluginError[]): PluginManifestFailure {
   return { success: false, errors };
 }
 
@@ -72,10 +72,7 @@ function validateManifest(
   const errors: PluginError[] = [];
 
   // Required string fields
-  if (
-    typeof m.name !== "string" ||
-    !PLUGIN_NAME_REGEX.test(m.name)
-  ) {
+  if (typeof m.name !== "string" || !PLUGIN_NAME_REGEX.test(m.name)) {
     errors.push({
       code: "manifest-schema-invalid",
       message:
@@ -87,8 +84,7 @@ function validateManifest(
   if (typeof m.version !== "string" || !PLUGIN_SEMVER_REGEX.test(m.version)) {
     errors.push({
       code: "plugin-version-invalid",
-      message:
-        'Invalid or missing "version". Must be semver (e.g. "1.0.0").',
+      message: 'Invalid or missing "version". Must be semver (e.g. "1.0.0").',
       recoverable: false,
     });
   }
@@ -108,10 +104,7 @@ function validateManifest(
   }
 
   // Optional typed fields
-  if (
-    m.displayName !== undefined &&
-    typeof m.displayName !== "string"
-  ) {
+  if (m.displayName !== undefined && typeof m.displayName !== "string") {
     errors.push({
       code: "manifest-schema-invalid",
       message: '"displayName" must be a string when present.',
@@ -157,8 +150,7 @@ function validateManifest(
   if (skills.length === 0 && mcpServers.length === 0) {
     errors.push({
       code: "manifest-schema-invalid",
-      message:
-        'At least one of "skills" or "mcpServers" must be non-empty.',
+      message: 'At least one of "skills" or "mcpServers" must be non-empty.',
       recoverable: false,
     });
   }

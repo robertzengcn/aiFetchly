@@ -1799,10 +1799,36 @@ for (const skill of BUILT_IN_SKILLS) {
 /**
  * Get all registered skills as LLM-facing ToolFunction[].
  * Merges built-in skills with dynamically discovered MCP tools.
+ *
+ * Effective enablement for plugin-owned skills: a skill registered with
+ * `pluginOwner` is only included when its owning plugin is enabled.
+ * (Design §8.3)
  */
 async function getAllToolFunctions(): Promise<ToolFunction[]> {
+  // Resolve enabled plugin names once per catalog build.
+  let enabledPluginNames: Set<string> | null = null;
+  try {
+    const { PluginManagementModule } = await import(
+      "@/modules/PluginManagementModule"
+    );
+    const mod = new PluginManagementModule();
+    const enabledPlugins = await mod.listEnabledPlugins();
+    enabledPluginNames = new Set(enabledPlugins.map((p) => p.name));
+  } catch {
+    // Plugin module unavailable (e.g. during early boot / tests) — treat as
+    // no enabled plugins, which suppresses plugin-owned skills safely.
+    enabledPluginNames = new Set();
+  }
+
   const builtInTools: ToolFunction[] = [];
   for (const skill of registry.values()) {
+    if (
+      skill.pluginOwner &&
+      enabledPluginNames &&
+      !enabledPluginNames.has(skill.pluginOwner)
+    ) {
+      continue; // owning plugin is disabled — hide from catalog
+    }
     builtInTools.push(skillDefinitionToToolFunction(skill));
   }
 

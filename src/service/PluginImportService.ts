@@ -11,13 +11,10 @@ import {
   normalizeMcpDeclaration,
   type NormalizedMcpServer,
 } from "@/service/PluginMcpDeclaration";
-import {
-  getPluginInstallRoot,
-} from "@/service/pluginPaths";
+import { getPluginInstallRoot } from "@/service/pluginPaths";
 import {
   resolvePluginRelativePath,
   type PluginError,
-  type PluginManifest,
   type PluginSummary,
   type PluginSource,
 } from "@/entityTypes/pluginTypes";
@@ -420,7 +417,7 @@ export class PluginImportService {
         health: "healthy",
       });
     } catch (e: unknown) {
-      rollbackInstall(installPath, manifest.name);
+      rollbackInstall(installPath);
       return {
         success: false,
         errors: [
@@ -438,7 +435,6 @@ export class PluginImportService {
 
     // 9. Persist plugin-owned InstalledSkill rows
     const skillModule = new SkillManagementModule();
-    const insertedSkillNames: string[] = [];
     try {
       for (const { manifest: skillManifest, relManifestPath } of skills) {
         await skillModule.installSkill({
@@ -451,15 +447,9 @@ export class PluginImportService {
           pluginName: manifest.name,
           pluginComponentPath: relManifestPath,
         });
-        insertedSkillNames.push(skillManifest.name);
       }
     } catch (e: unknown) {
-      await rollbackRowsAndFiles(
-        manifest.name,
-        installPath,
-        insertedSkillNames,
-        []
-      );
+      await rollbackRowsAndFiles(manifest.name, installPath);
       return {
         success: false,
         errors: [
@@ -477,7 +467,6 @@ export class PluginImportService {
 
     // 10. Persist plugin-owned MCP rows
     const mcpModule = new MCPToolModule();
-    const insertedMcpNames: string[] = [];
     try {
       for (const server of mcpServers) {
         const entity = new MCPToolEntity();
@@ -499,15 +488,9 @@ export class PluginImportService {
         if (server.host) entity.host = server.host;
         if (server.port) entity.port = server.port;
         await mcpModule.saveMCPTool(entity);
-        insertedMcpNames.push(server.serverName);
       }
     } catch (e: unknown) {
-      await rollbackRowsAndFiles(
-        manifest.name,
-        installPath,
-        insertedSkillNames,
-        insertedMcpNames
-      );
+      await rollbackRowsAndFiles(manifest.name, installPath);
       return {
         success: false,
         errors: [
@@ -527,7 +510,9 @@ export class PluginImportService {
     // PluginRuntimeCache.clear is wired in Phase 4 — call via dynamic import
     // to avoid a circular dependency at module load time.
     try {
-      const { PluginRuntimeCache } = await import("@/service/PluginRuntimeCache");
+      const { PluginRuntimeCache } = await import(
+        "@/service/PluginRuntimeCache"
+      );
       PluginRuntimeCache.clear("plugin-import");
     } catch {
       // PluginRuntimeCache not yet registered; safe to ignore during Phase 3.
@@ -552,28 +537,22 @@ export class PluginImportService {
 }
 
 /** Best-effort rollback of files only. */
-function rollbackInstall(installPath: string, _pluginName: string): void {
+function rollbackInstall(installPath: string): void {
   removePath(installPath);
 }
 
 /** Best-effort rollback of inserted rows + files (Design §7.3 rollback). */
 async function rollbackRowsAndFiles(
   pluginName: string,
-  installPath: string,
-  skillNames: readonly string[],
-  _mcpNames: readonly string[]
+  installPath: string
 ): Promise<void> {
   const pluginModule = new PluginManagementModule();
   try {
+    // uninstallPlugin removes the plugin row plus all owned skill and MCP
+    // rows keyed by pluginName.
     await pluginModule.uninstallPlugin(pluginName);
   } catch {
     // best-effort
   }
-  // uninstallPlugin already removes owned skill + MCP rows by pluginName.
-  // If any skill rows were inserted without pluginName set for some reason,
-  // skillNames is available for explicit cleanup — but our insert path
-  // always sets pluginName, so this is redundant. Leaving skillNames param
-  // for future per-row rollback if needed.
-  void skillNames;
   removePath(installPath);
 }
