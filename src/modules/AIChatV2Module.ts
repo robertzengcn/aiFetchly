@@ -1,5 +1,7 @@
 import { BaseModule } from "@/modules/baseModule";
 import { AIChatModule } from "@/modules/AIChatModule";
+import { AIChatSessionMemoryModule } from "@/modules/AIChatSessionMemoryModule";
+import { AIChatCompactModule } from "@/modules/AIChatCompactModule";
 import { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
 import { MessageType } from "@/entityTypes/commonType";
 import type {
@@ -23,10 +25,14 @@ function uuid(): string {
 
 export class AIChatV2Module extends BaseModule {
   private chatModule: AIChatModule;
+  private sessionMemoryModule: AIChatSessionMemoryModule;
+  private compactModule: AIChatCompactModule;
 
   constructor() {
     super();
     this.chatModule = new AIChatModule();
+    this.sessionMemoryModule = new AIChatSessionMemoryModule();
+    this.compactModule = new AIChatCompactModule();
   }
 
   /** Create (or reuse) a v2 conversation id. */
@@ -93,7 +99,25 @@ export class AIChatV2Module extends BaseModule {
   }
 
   async clearConversation(conversationId: string): Promise<number> {
-    return this.chatModule.clearConversation(conversationId);
+    const deleted = await this.chatModule.clearConversation(conversationId);
+    // Cascade compact + session memory clear. Failures are logged, not thrown.
+    try {
+      await this.sessionMemoryModule.deleteByConversation(conversationId);
+    } catch (err) {
+      console.error(
+        "[ai-chat-v2] clearConversation: session memory clear failed:",
+        err
+      );
+    }
+    try {
+      await this.compactModule.deleteByConversation(conversationId);
+    } catch (err) {
+      console.error(
+        "[ai-chat-v2] clearConversation: compact clear failed:",
+        err
+      );
+    }
+    return deleted;
   }
 
   async clearAllV2History(): Promise<number> {
@@ -102,6 +126,22 @@ export class AIChatV2Module extends BaseModule {
     let total = 0;
     for (const s of summaries) {
       total += await this.chatModule.clearConversation(s.conversationId);
+    }
+    try {
+      await this.sessionMemoryModule.deleteAllV2();
+    } catch (err) {
+      console.error(
+        "[ai-chat-v2] clearAllV2History: session memory clearAll failed:",
+        err
+      );
+    }
+    try {
+      await this.compactModule.deleteAllV2();
+    } catch (err) {
+      console.error(
+        "[ai-chat-v2] clearAllV2History: compact clearAll failed:",
+        err
+      );
     }
     return total;
   }
