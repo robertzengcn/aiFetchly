@@ -45,6 +45,9 @@ describe("AgentTaskModule", () => {
       taskPacket: PACKET,
     });
     await m.setStatus(id, "running", { startedAt: new Date() });
+    // toolCallsCount is owned by incrementToolCalls, not saveResult.
+    await m.incrementToolCalls(id);
+    await m.incrementToolCalls(id);
     const result: AgentResult = {
       agentTaskId: id,
       agentId: "agent-lead-researcher",
@@ -60,6 +63,7 @@ describe("AgentTaskModule", () => {
     const snap = await m.getSnapshot(id);
     expect(snap!.status).to.equal("completed");
     expect(snap!.result!.status).to.equal("completed");
+    // saveResult must not clobber the count incremented above.
     expect(snap!.toolCallsCount).to.equal(2);
   });
 
