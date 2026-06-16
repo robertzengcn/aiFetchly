@@ -100,6 +100,7 @@ export async function streamChatV2Message(
   onError: (error: Error) => void
 ): Promise<void> {
   return new Promise((resolve, reject) => {
+    let tokenLogCount = 0;
     const cleanup = (): void => {
       clearChatV2StreamListeners();
     };
@@ -107,6 +108,26 @@ export async function streamChatV2Message(
     const chunkHandler = (raw: string): void => {
       try {
         const chunk: ChatV2StreamChunk = JSON.parse(raw);
+        if (chunk.eventType === "token") {
+          if (tokenLogCount < 5 || tokenLogCount % 25 === 0) {
+            console.debug(
+              `[aiChatV2] token chunk conv=${
+                chunk.conversationId || "(none)"
+              } message=${chunk.messageId || "(none)"} deltaLen=${
+                chunk.contentDelta?.length ?? 0
+              } tokenIndex=${tokenLogCount}`
+            );
+          }
+          tokenLogCount += 1;
+        } else {
+          console.debug(
+            `[aiChatV2] stream chunk event=${chunk.eventType} conv=${
+              chunk.conversationId || "(none)"
+            } message=${chunk.messageId || "(none)"} fullContentLen=${
+              chunk.fullContent?.length ?? 0
+            } error=${chunk.errorMessage ? "yes" : "no"}`
+          );
+        }
         onChunk(chunk);
       } catch (err) {
         console.error("aiChatV2: parse chunk error", err);
@@ -116,6 +137,15 @@ export async function streamChatV2Message(
     const completeHandler = (raw: string): void => {
       try {
         const chunk: ChatV2StreamChunk = JSON.parse(raw);
+        console.debug(
+          `[aiChatV2] stream complete event=${chunk.eventType} conv=${
+            chunk.conversationId || "(none)"
+          } message=${chunk.messageId || "(none)"} fullContentLen=${
+            chunk.fullContent?.length ?? 0
+          } finish=${chunk.finishReason ?? "(none)"} error=${
+            chunk.errorMessage ? "yes" : "no"
+          }`
+        );
         if (chunk.eventType === "error" && chunk.errorMessage) {
           const error = new Error(chunk.errorMessage);
           onError(error);

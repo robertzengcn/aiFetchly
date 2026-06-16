@@ -128,6 +128,15 @@ function sendChunk(
 }
 
 function sendComplete(event: IpcEventLike, chunk: ChatV2StreamChunk): void {
+  console.log(
+    `[ai-chat-v2] IPC complete event=${chunk.eventType} conv=${
+      chunk.conversationId || "(none)"
+    } message=${chunk.messageId || "(none)"} fullContentLen=${
+      chunk.fullContent?.length ?? 0
+    } finish=${chunk.finishReason ?? "(none)"} error=${
+      chunk.errorMessage ? "yes" : "no"
+    }`
+  );
   event.sender.send(AI_CHAT_V2_STREAM_COMPLETE, JSON.stringify(chunk));
 }
 
@@ -137,6 +146,7 @@ function sendComplete(event: IpcEventLike, chunk: ChatV2StreamChunk): void {
  * (start, complete, cancelled, error) since the engine emits these.
  */
 function createEventSink(event: IpcEventLike): AIChatQueryEventSink {
+  let tokenLogCount = 0;
   return {
     emit: (e: AIChatQueryEvent) => {
       switch (e.type) {
@@ -148,6 +158,12 @@ function createEventSink(event: IpcEventLike): AIChatQueryEventSink {
           });
           break;
         case "token":
+          if (tokenLogCount < 5 || tokenLogCount % 25 === 0) {
+            console.log(
+              `[ai-chat-v2] IPC token conv=${e.conversationId} message=${e.messageId} deltaLen=${e.contentDelta.length} tokenIndex=${tokenLogCount}`
+            );
+          }
+          tokenLogCount += 1;
           sendChunk(event, {
             eventType: "token",
             conversationId: e.conversationId,
@@ -291,7 +307,7 @@ function validateStreamRequest(
   }
   return null;
 }
-
+//handleStream is the main function that handles the stream request
 async function handleStream(event: IpcEventLike, data: string): Promise<void> {
   // AI gate FIRST, before parsing request data.
   if (!isAIEnabled()) {
@@ -745,6 +761,7 @@ export function registerAiChatV2IpcHandlers(): void {
   ipcMain.handle(AI_CHAT_V2_COMPACT_CONVERSATION, async (_e, data: unknown) =>
     handleCompactConversation((data as string) ?? "")
   );
+  // Stream handler send message to the AI engine and receive chunks back
   ipcMain.on(AI_CHAT_V2_STREAM, async (event, data: unknown) => {
     try {
       await handleStream(event as IpcEventLike, data as string);
