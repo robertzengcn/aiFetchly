@@ -32,6 +32,7 @@ import { registerSystemDependencyIpcHandlers } from "@/main-process/communicatio
 import { registerGoogleMapsHandlers } from "@/main-process/communication/googleMaps-ipc";
 import { registerYandexMapsHandlers } from "@/main-process/communication/yandexMaps-ipc";
 import { registerAiMessageTaskIpcHandlers } from "@/main-process/communication/aiMessageTask-ipc";
+import { registerAgentRuntimeIpcHandlers } from "@/main-process/communication/agent-runtime-ipc";
 
 type GlobalIpcState = typeof globalThis & {
   __aifetchlyIpcHandlersRegistered?: boolean;
@@ -75,6 +76,7 @@ export function registerCommunicationIpcHandlers(win: BrowserWindow) {
     registerGoogleMapsHandlers();
     registerYandexMapsHandlers();
     registerAiMessageTaskIpcHandlers();
+    registerAgentRuntimeIpcHandlers();
     AsyncMsg();
   } catch (e) {
     console.log("registerCommunicationIpcHandlers error:");
