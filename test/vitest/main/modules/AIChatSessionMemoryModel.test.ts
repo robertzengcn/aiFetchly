@@ -75,8 +75,8 @@ describe("AIChatSessionMemoryModel", () => {
       status: "active",
     });
     const after = await model.recordFailure("v2-fail", "boom");
-    expect(after.failureCount).toBe(1);
-    expect(after.lastError).toBe("boom");
+    expect(after?.failureCount).toBe(1);
+    expect(after?.lastError).toBe("boom");
   });
 
   it("deletes by conversation", async () => {

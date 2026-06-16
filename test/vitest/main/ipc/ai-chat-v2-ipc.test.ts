@@ -117,6 +117,18 @@ vi.mock("@/service/OpenAIChatTranscriptBuilder", () => ({
   buildOpenAITranscript: vi.fn().mockReturnValue({ messages: [] }),
 }));
 
+// Mock compact-related modules used by AIChatContextAssembler (T11/T12).
+vi.mock("@/modules/AIChatSessionMemoryModule", () => ({
+  AIChatSessionMemoryModule: vi.fn().mockImplementation(() => ({
+    getByConversation: vi.fn().mockResolvedValue(null),
+  })),
+}));
+vi.mock("@/modules/AIChatCompactModule", () => ({
+  AIChatCompactModule: vi.fn().mockImplementation(() => ({
+    getActiveSummary: vi.fn().mockResolvedValue(null),
+  })),
+}));
+
 import { registerAiChatV2IpcHandlers } from "@/main-process/communication/ai-chat-v2-ipc";
 import {
   AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
