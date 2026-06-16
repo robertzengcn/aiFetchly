@@ -49,22 +49,33 @@ export class UserController {
   // private pass: string;
 
   /**
-   * Check if a plan is a Plus plan (enables AI features)
-   * Plus plans have planName containing "aifetch-plus" (e.g. aifetch-plus-monthly)
+   * Check if a plan enables AI features.
    */
-  private isPlusPlan(plan: UserPlan): boolean {
-    if (!plan || !plan.planName) return false;
-    const planNameLower = plan.planName.toLowerCase();
-    return planNameLower.includes("aifetch-plus");
+  private isAiEnabledPlan(plan: UserPlan): boolean {
+    if (!plan) return false;
+
+    const planNameLower = (plan.planName || "").toLowerCase();
+    const planIdUpper = (plan.planId || "").toUpperCase();
+    const isFreePlan =
+      planNameLower.includes("community") || planNameLower.includes("free");
+
+    if (isFreePlan) return false;
+
+    return (
+      planNameLower.includes("aifetch-plus") ||
+      planNameLower.includes("aifetch-go") ||
+      ["BASE", "PLUS", "PRO"].includes(planIdUpper)
+    );
   }
 
   /**
-   * Check if user has any active Plus plan
+   * Check if user has any active AI-enabled plan.
    */
-  private hasActivePlusPlan(plans: Array<UserPlan>): boolean {
+  private hasActiveAiPlan(plans: Array<UserPlan>): boolean {
     if (!plans || plans.length === 0) return false;
     return plans.some(
-      (plan) => plan.status === "active" && this.isPlusPlan(plan)
+      (plan) =>
+        plan.status.toLowerCase() === "active" && this.isAiEnabledPlan(plan)
     );
   }
 
@@ -382,14 +393,14 @@ export class UserController {
               tokenService.setValue(USERPLANS, JSON.stringify(res.plans));
               log.info("Saved user plans:", res.plans);
 
-              // Check if user has Plus plan and enable AI features
+              // Check if user has an AI-enabled subscription plan.
               const userController = new UserController();
-              const hasPlusPlan = userController.hasActivePlusPlan(res.plans);
+              const hasAiPlan = userController.hasActiveAiPlan(res.plans);
               tokenService.setValue(
                 USER_AI_ENABLED,
-                hasPlusPlan ? "true" : "false"
+                hasAiPlan ? "true" : "false"
               );
-              log.info("AI features enabled:", hasPlusPlan);
+              log.info("AI features enabled:", hasAiPlan);
             } else {
               // Set default Community plan if no plans returned
               const defaultPlans = [
