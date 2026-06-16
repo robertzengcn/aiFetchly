@@ -1812,7 +1812,7 @@ export default {
     reconnecting: "Reconnecting…",
     reconnect_attempt: "(attempt {n}/{max})",
     cancelled: "Cancelled",
-    ai_disabled: "AI is not enabled.",
+    ai_disabled: "AI functionality is only available to subscribers.",
     model_unavailable: "Selected model is not available.",
     server_unavailable: "Could not connect to the AI server.",
     unsupported_tool_call:

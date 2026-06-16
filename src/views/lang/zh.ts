@@ -1751,7 +1751,7 @@ export default {
     reconnecting: "正在重新连接…",
     reconnect_attempt: "(第 {n}/{max} 次尝试)",
     cancelled: "已取消",
-    ai_disabled: "AI 功能未开启。",
+    ai_disabled: "AI 功能仅对订阅用户开放。",
     model_unavailable: "所选模型不可用。",
     server_unavailable: "无法连接到 AI 服务器。",
     unsupported_tool_call: "助手请求了一个暂不支持的工具。",

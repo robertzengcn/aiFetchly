@@ -209,7 +209,10 @@ describe("AI Chat V2 — AI-disabled gate", () => {
   it("denies conversations when AI is not enabled", async () => {
     mockState.aiEnabled = "false";
     const result = await mockIpcMain.callHandler(AI_CHAT_V2_CONVERSATIONS);
-    expect(result).toMatchObject({ status: false, msg: "AI is not enabled" });
+    expect(result).toMatchObject({
+      status: false,
+      msg: "AI functionality is only available to subscribers.",
+    });
     expect(mockGetConversations).not.toHaveBeenCalled();
   });
 
@@ -224,7 +227,9 @@ describe("AI Chat V2 — AI-disabled gate", () => {
     const payload = findCompletePayload(senderSend);
     expect(payload).toBeDefined();
     expect(payload?.eventType).toBe("error");
-    expect(payload?.errorMessage).toBe("AI is not enabled");
+    expect(payload?.errorMessage).toBe(
+      "AI functionality is only available to subscribers."
+    );
   });
 });
 
