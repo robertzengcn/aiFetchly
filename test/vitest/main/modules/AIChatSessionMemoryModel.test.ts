@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach, afterAll } from "vitest";
+import { describe, expect, it, beforeEach } from "vitest";
 import { AIChatSessionMemoryModel } from "@/model/AIChatSessionMemory.model";
 import { SqliteDb } from "@/config/SqliteDb";
 import path from "node:path";
@@ -8,9 +8,20 @@ import fs from "node:fs";
 const tmpDir = path.join(os.tmpdir(), "aifetchly-compact-mem-model");
 beforeEach(() => {
   if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
-  // fresh singleton per test file process
+  // Delete any on-disk sqlite files left from prior runs.
+  for (const f of fs.readdirSync(tmpDir)) {
+    if (f.startsWith("scraper.db")) {
+      try {
+        fs.unlinkSync(path.join(tmpDir, f));
+      } catch {
+        // ignore
+      }
+    }
+  }
+  // Reset the in-memory singleton.
   (SqliteDb as unknown as { instance: unknown }).instance = null;
-  (SqliteDb as unknown as { currentDbPath: string | null }).currentDbPath = null;
+  (SqliteDb as unknown as { currentDbPath: string | null }).currentDbPath =
+    null;
   (SqliteDb as unknown as { initPromise: unknown }).initPromise = null;
 });
 
