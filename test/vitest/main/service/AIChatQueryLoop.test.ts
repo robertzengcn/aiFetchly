@@ -279,6 +279,79 @@ describe("AIChatQueryLoop", () => {
       }
     });
 
+    it("executes tool calls even when server sends finish_reason=stop with tool_calls delta", async () => {
+      // Some OpenAI-compatible servers emit finish_reason="stop" even when
+      // tool-call deltas were streamed. The loop must still execute the
+      // parsed tool calls — relying on parsedCalls rather than finish_reason.
+      const toolCallChunkWithStop: OpenAIChatCompletionChunk = {
+        id: "resp-1",
+        object: "chat.completion.chunk",
+        created: 1,
+        model: "test-model",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "call-1",
+                  type: "function",
+                  function: { name: "search", arguments: '{"q":"canada"}' },
+                },
+              ],
+            },
+            finish_reason: "stop",
+          },
+        ],
+      };
+      const finalChunk = makeChunk("Found customers.", "stop");
+      let callCount = 0;
+      const fakeStream = vi.fn(
+        async (
+          _req: unknown,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          if (callCount === 0) {
+            onChunk(toolCallChunkWithStop);
+            callCount++;
+          } else {
+            onChunk(finalChunk);
+          }
+        }
+      );
+      const fakeExecute = vi.fn().mockResolvedValue({
+        tool_call_id: "call-1",
+        tool_name: "search",
+        success: true,
+        result: { answer: "found" },
+        execution_time_ms: 10,
+      });
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: fakeExecute,
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const input: AIChatQueryLoopInput = {
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: { message: "find customers in Canada" },
+        openAITools: [],
+        abortController: new AbortController(),
+        eventSink: { emit: vi.fn() },
+        startRound: 0,
+        isActiveTurn: () => true,
+      };
+      const result = await loop.run(input);
+      expect(result.type).toBe("completed");
+      expect(fakeExecute).toHaveBeenCalledWith(
+        "search",
+        { q: "canada" },
+        expect.objectContaining({ toolCallId: "call-1" })
+      );
+    });
+
     it("emits tool_call and tool_result events through eventSink", async () => {
       const toolCallChunk = makeToolCallChunk("call-1", "get_time", "{}");
       const finalChunk = makeChunk("It is noon.", "stop");
