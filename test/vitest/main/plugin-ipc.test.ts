@@ -21,6 +21,63 @@ vi.mock("@/modules/token", () => ({
 }));
 
 // Mock the heavy services to avoid hitting the real DB / filesystem.
+vi.mock("@/modules/PluginManagementModule", () => ({
+  PluginManagementModule: class {
+    async listInstalledPlugins() {
+      return [];
+    }
+    async getPluginByName(name: string) {
+      if (name !== "demo-plugin") return null;
+      return {
+        id: 1,
+        name,
+        displayName: "Demo Plugin",
+        version: "1.0.0",
+        source: "local",
+        enabled: 1,
+        health: "healthy",
+        permissionsJson: "[]",
+        updatedAt: new Date("2026-06-17T00:00:00.000Z"),
+        description: "Demo",
+        author: "Tester",
+        manifestJson: JSON.stringify({ name, version: "1.0.0" }),
+      };
+    }
+    async togglePlugin() {
+      return true;
+    }
+    async uninstallPlugin() {
+      return { removedPlugin: true };
+    }
+  },
+}));
+vi.mock("@/modules/SkillManagementModule", () => ({
+  SkillManagementModule: class {
+    async findSkillsByPluginName() {
+      return [];
+    }
+    async toggleSkill() {
+      return true;
+    }
+  },
+}));
+vi.mock("@/modules/MCPToolModule", () => ({
+  MCPToolModule: class {
+    async findMcpByPluginName() {
+      return [
+        {
+          id: 42,
+          serverName: "demo-mcp",
+          enabled: true,
+          transport: "stdio",
+        },
+      ];
+    }
+    async toggleServerEnabled() {
+      return undefined;
+    }
+  },
+}));
 vi.mock("@/service/PluginImportService", () => ({
   PluginImportService: {
     importFromZip: vi.fn(async () => ({
@@ -70,6 +127,7 @@ vi.mock("@/service/PluginLoaderService", () => ({
 import { registerPluginIpcHandlers } from "@/main-process/communication/plugin-ipc";
 import {
   PLUGIN_LIST,
+  PLUGIN_GET,
   PLUGIN_IMPORT,
   PLUGIN_TOGGLE,
   PLUGIN_UNINSTALL,
@@ -121,5 +179,21 @@ describe("plugin-ipc", () => {
     const fn = handlers.get(PLUGIN_TOGGLE)!;
     const result = await fn({}, { name: "", enabled: true });
     expect(result).toMatchObject({ status: false });
+  });
+
+  it("includes MCP server ids in plugin detail for component toggles", async () => {
+    const fn = handlers.get(PLUGIN_GET)!;
+    const result = await fn({}, { name: "demo-plugin" });
+    expect(result).toMatchObject({
+      status: true,
+      data: {
+        mcpServers: [
+          expect.objectContaining({
+            id: 42,
+            name: "demo-mcp",
+          }),
+        ],
+      },
+    });
   });
 });

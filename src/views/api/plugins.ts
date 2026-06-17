@@ -53,6 +53,7 @@ export interface PluginSkillComponent {
 }
 
 export interface PluginMcpServerComponent {
+  id: number;
   name: string;
   enabled: boolean;
   transport: string;

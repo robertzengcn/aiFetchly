@@ -32,12 +32,10 @@ const emit = defineEmits<{ changed: [] }>();
 const { t } = useI18n();
 
 async function toggleServer(
-  _s: PluginMcpServerComponent,
-  _enabled: boolean
+  s: PluginMcpServerComponent,
+  enabled: boolean
 ): Promise<void> {
-  // Component-level toggling requires a serverId; the detail payload exposes
-  // names but not ids in v1. Disabled state is tracked at the plugin level
-  // until the detail payload carries serverId. Emit changed to refresh.
+  await togglePluginMcpServer(s.id, enabled);
   emit("changed");
 }
 </script>

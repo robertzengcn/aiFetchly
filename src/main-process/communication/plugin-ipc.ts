@@ -178,6 +178,7 @@ export function registerPluginIpcHandlers(): void {
               health: "healthy",
             })),
             mcpServers: mcpServers.map((m) => ({
+              id: m.id,
               name: m.serverName,
               enabled: m.enabled,
               transport: m.transport,

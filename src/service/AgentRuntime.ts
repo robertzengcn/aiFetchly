@@ -128,12 +128,27 @@ export class AgentRuntime {
       deps?.getSkillDefinition ??
       ((name: string) => SkillRegistry.getSkill(name) ?? undefined);
 
+    let executedToolCalls = 0;
     const policyCheckedExecute: AIChatQueryLoopDeps["executeTool"] = async (
       name,
       args,
       ctx
     ) => {
       const startedAt = Date.now();
+      if (executedToolCalls >= definition.maxToolCalls) {
+        const message = `Agent ${definition.id} exceeded max tool calls (${definition.maxToolCalls}).`;
+        await transcript.recordToolCall({
+          agentTaskId,
+          toolCallId: ctx.toolCallId,
+          toolName: name,
+          argumentsSummary: args,
+          status: "blocked",
+          errorMessage: message,
+          durationMs: Date.now() - startedAt,
+        });
+        throw new Error(message);
+      }
+
       const decision = this.policy.checkToolCall({
         definition,
         toolName: name,
@@ -161,6 +176,7 @@ export class AgentRuntime {
           execution_time_ms: Date.now() - startedAt,
         };
       }
+      executedToolCalls += 1;
       const res = await baseExecute(name, args, ctx);
       const summary = res.result.summary;
       await transcript.recordToolCall({
