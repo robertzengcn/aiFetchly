@@ -238,6 +238,17 @@ function createEventSink(event: IpcEventLike): AIChatQueryEventSink {
             planState: e.planState,
           } as ChatV2StreamChunk);
           break;
+        case "usage_update":
+          sendChunk(event, {
+            eventType: "usage_update",
+            conversationId: e.conversationId,
+            messageId: e.messageId,
+            model: e.model,
+            promptTokens: e.promptTokens,
+            completionTokens: e.completionTokens,
+            totalTokens: e.totalTokens,
+          });
+          break;
         case "complete":
           sendComplete(event, {
             eventType: "complete",

@@ -14,6 +14,12 @@
         />
       </div>
       <div class="v2-shell__header-actions">
+        <AiChatV2ContextBadge
+          :percent="contextPercent"
+          :used-tokens="contextUsedTokens"
+          :total-tokens="contextTotalTokens"
+          class="mr-1"
+        />
         <v-btn
           icon
           size="small"
@@ -220,13 +226,26 @@ import {
   approveChatV2Plan,
   rejectChatV2Plan,
   requestChatV2PlanChanges,
+  getOpenAIChatModels,
 } from "@/views/api/aiChatV2";
 import AiChatV2Messages from "./AiChatV2Messages.vue";
 import AiChatV2Composer from "./AiChatV2Composer.vue";
 import AiChatV2ModeSelector from "./AiChatV2ModeSelector.vue";
 import AiChatV2QuestionCard from "./AiChatV2QuestionCard.vue";
 import AiChatV2PlanStatusBadge from "./AiChatV2PlanStatusBadge.vue";
+import AiChatV2ContextBadge from "./AiChatV2ContextBadge.vue";
 import MCPToolManager from "../aiChat/MCPToolManager.vue";
+import {
+  computeContextPercent,
+  resolveContextWindow,
+  DEFAULT_CONTEXT_WINDOW,
+} from "./contextUsageUtil";
+
+/**
+ * Rough chars→tokens ratio used to drive a live-updating estimate while
+ * tokens stream. Real usage from the server overrides this on turn end.
+ */
+const CHARS_PER_TOKEN_ESTIMATE = 4;
 
 type Status = "idle" | "streaming" | "cancelled" | "error";
 
@@ -255,6 +274,70 @@ const showMCPToolManager = ref(false);
 const conversationSearch = ref("");
 const searchingConversations = ref(false);
 let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+// ---------------------------------------------------------------------------
+// Context usage tracking
+// ---------------------------------------------------------------------------
+// Map of model id → context window size (tokens), populated from the models
+// API on mount. Falls back to DEFAULT_CONTEXT_WINDOW when unknown.
+const modelContextWindows = ref<Map<string, number>>(new Map());
+// Last real usage report from the server for the active conversation.
+const lastUsage = ref<{
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  model?: string;
+} | null>(null);
+// Live-running estimate of context tokens; updated on each streamed token
+// delta and snapped back to the real value when usage arrives. This is what
+// the badge displays while a turn is in progress.
+const streamingEstimatedTokens = ref(0);
+// Model id currently in use (tracked from start/usage events), used to look
+// up the context window denominator.
+const activeModel = ref<string | undefined>(undefined);
+
+const resolveContextWindowLocal = (model?: string): number =>
+  resolveContextWindow(modelContextWindows.value, model);
+
+const contextPercent = computed(() =>
+  computeContextPercent({
+    modelContextWindows: modelContextWindows.value,
+    lastTotalTokens: lastUsage.value?.totalTokens,
+    streamingEstimatedTokens: streamingEstimatedTokens.value,
+    model: lastUsage.value?.model || activeModel.value,
+  })
+);
+
+const contextUsedTokens = computed(
+  () =>
+    streamingEstimatedTokens.value ||
+    lastUsage.value?.totalTokens ||
+    0
+);
+
+const contextTotalTokens = computed(() =>
+  resolveContextWindowLocal(lastUsage.value?.model || activeModel.value)
+);
+
+const loadModelContextWindows = async (): Promise<void> => {
+  try {
+    const resp = await getOpenAIChatModels();
+    const data = resp?.data;
+    if (!Array.isArray(data)) return;
+    const map = new Map<string, number>();
+    for (const model of data) {
+      if (!model || typeof model.id !== "string") continue;
+      const window =
+        model.context_window ?? model.context_length ?? DEFAULT_CONTEXT_WINDOW;
+      if (typeof window === "number" && window > 0) {
+        map.set(model.id, window);
+      }
+    }
+    modelContextWindows.value = map;
+  } catch {
+    // non-fatal; denominator falls back to DEFAULT_CONTEXT_WINDOW
+  }
+};
 
 // True only between clicking send and the first visible AI chunk. Auto-clears
 // when streaming ends for any reason (complete/error/stop/permission deny).
@@ -350,6 +433,26 @@ const loadHistory = async (conversationId: string): Promise<void> => {
   try {
     const resp = await getChatV2History(conversationId);
     messages.value = resp?.messages ?? [];
+    // Reset context-usage tracking for the loaded conversation. If any
+    // history rows carry tokensUsed, seed the baseline estimate from the
+    // most recent assistant message; otherwise start at zero until the
+    // next server usage_update arrives.
+    lastUsage.value = null;
+    const latestWithTokens = [...messages.value]
+      .reverse()
+      .find(
+        (m) =>
+          m.role === "assistant" &&
+          typeof m.tokensUsed === "number" &&
+          m.tokensUsed > 0
+      );
+    streamingEstimatedTokens.value =
+      typeof latestWithTokens?.tokensUsed === "number"
+        ? latestWithTokens.tokensUsed
+        : 0;
+    if (latestWithTokens?.model) {
+      activeModel.value = latestWithTokens.model;
+    }
     // Load plan state for this conversation.
     try {
       planState.value = await getChatV2PlanState(conversationId);
@@ -379,6 +482,10 @@ const onNewConversation = (): void => {
   streamError.value = null;
   planState.value = null;
   pendingQuestion.value = null;
+  // Reset context-usage tracking for the new conversation.
+  lastUsage.value = null;
+  streamingEstimatedTokens.value = 0;
+  activeModel.value = undefined;
 };
 
 const onClearMessages = (): void => {
@@ -745,6 +852,10 @@ const onSend = async (text: string): Promise<void> => {
   isStreaming.value = true;
   receivedFirstResponse.value = false;
   retryInfo.value = null;
+  // Seed the live context estimate from the last known server usage; the
+  // incoming token stream will accumulate on top of this baseline and the
+  // next usage_update event will snap it back to ground truth.
+  streamingEstimatedTokens.value = lastUsage.value?.totalTokens ?? 0;
 
   await nextTick();
 
@@ -768,6 +879,25 @@ const onSend = async (text: string): Promise<void> => {
             activeAssistantMessageId.value = chunk.messageId;
           }
           // `start` is metadata only; keep showing the typing indicator.
+        } else if (chunk.eventType === "usage_update") {
+          // Real token counts from the server. Replace the streaming
+          // estimate with ground truth and reset the running counter.
+          if (
+            typeof chunk.totalTokens === "number" &&
+            typeof chunk.promptTokens === "number" &&
+            typeof chunk.completionTokens === "number"
+          ) {
+            lastUsage.value = {
+              promptTokens: chunk.promptTokens,
+              completionTokens: chunk.completionTokens,
+              totalTokens: chunk.totalTokens,
+              model: chunk.model,
+            };
+            if (chunk.model) {
+              activeModel.value = chunk.model;
+            }
+            streamingEstimatedTokens.value = chunk.totalTokens;
+          }
         } else if (chunk.eventType === "retry_connect") {
           // Connection to AI server is being retried. Show the reconnect
           // indicator but don't treat it as the first AI response.
@@ -788,6 +918,13 @@ const onSend = async (text: string): Promise<void> => {
           if (chunk.eventType === "token" && chunk.contentDelta) {
             ensureAssistantAdded();
             assistant.content += chunk.contentDelta;
+            // Live estimate: each streamed delta adds ~chars/4 tokens to the
+            // running context total. The next usage_update event will snap
+            // this back to the server's ground-truth count.
+            const deltaEstimate = Math.ceil(
+              chunk.contentDelta.length / CHARS_PER_TOKEN_ESTIMATE
+            );
+            streamingEstimatedTokens.value += deltaEstimate;
             const idx = messages.value.findIndex((m) => m.id === assistant.id);
             if (idx !== -1) {
               messages.value[idx] = {
@@ -892,6 +1029,7 @@ const onSend = async (text: string): Promise<void> => {
 
 onMounted(() => {
   void loadConversations();
+  void loadModelContextWindows();
 });
 
 onBeforeUnmount(() => {

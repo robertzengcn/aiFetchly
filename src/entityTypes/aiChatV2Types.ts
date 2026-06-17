@@ -112,6 +112,7 @@ export type ChatV2StreamEventType =
   | "plan_blocked_tool"
   | "plan_changes_requested"
   | "retry_connect"
+  | "usage_update"
   | "error"
   | "cancelled"
   | "complete";
@@ -136,4 +137,9 @@ export interface ChatV2StreamChunk {
   retryAttempt?: number;
   retryMaxAttempts?: number;
   retryDelayMs?: number;
+  // Usage fields — present on usage_update chunks emitted at the end of each
+  // model round when the server returns token counts.
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
 }
