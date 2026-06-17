@@ -1,1 +1,1 @@
-/home/robertzeng/project/aiFetchly/.claude/skills/gstack/design-html/SKILL.md
+/home/robertzeng/project/aiFetchly/.claude/worktrees/openai-chat-v2/.claude/skills/gstack/design-html/SKILL.md
