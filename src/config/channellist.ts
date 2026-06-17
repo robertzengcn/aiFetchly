@@ -383,3 +383,18 @@ export const AGENT_TASK_DETAIL = "agent-runtime:task-detail";
 export const AGENT_TASK_TRANSCRIPT = "agent-runtime:task-transcript";
 export const AGENT_RESUME_TOOL_AFTER_PERMISSION =
   "agent-runtime:resume-tool-after-permission";
+
+// ==================== Plugin Management Channels (Design §10) ====================
+export const PLUGIN_IMPORT = "plugin:import";
+export const PLUGIN_VALIDATE_PACKAGE = "plugin:validate-package";
+export const PLUGIN_LIST = "plugin:list";
+export const PLUGIN_GET = "plugin:get";
+export const PLUGIN_TOGGLE = "plugin:toggle";
+export const PLUGIN_UNINSTALL = "plugin:uninstall";
+export const PLUGIN_RELOAD = "plugin:reload";
+export const PLUGIN_EXPORT_DIAGNOSTICS = "plugin:export-diagnostics";
+export const PLUGIN_TOGGLE_SKILL = "plugin:toggle-skill";
+export const PLUGIN_TOGGLE_MCP_SERVER = "plugin:toggle-mcp-server";
+export const PLUGIN_TOGGLE_MCP_TOOL = "plugin:toggle-mcp-tool";
+export const PLUGIN_TEST_MCP_CONNECTION = "plugin:test-mcp-connection";
+export const PLUGIN_DISCOVER_MCP_TOOLS = "plugin:discover-mcp-tools";
