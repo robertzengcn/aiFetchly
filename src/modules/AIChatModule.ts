@@ -7,12 +7,12 @@ import { AIChatAttachmentModule } from "@/modules/AIChatAttachmentModule";
 export interface SaveMessageOptions {
   messageId: string;
   conversationId: string;
-  role: "user" | "assistant" | "system";
+  role: "user" | "assistant" | "system" | "tool";
   content: string;
   timestamp?: Date;
   model?: string;
   tokensUsed?: number;
-  metadata?: any;
+  metadata?: unknown;
   messageType?: MessageType;
 }
 
@@ -30,7 +30,10 @@ export class AIChatModule extends BaseModule {
    * Save a chat message to database
    */
   async saveMessage(options: SaveMessageOptions): Promise<AIChatMessageEntity> {
-    const message = new AIChatMessageEntity();
+    const existing = await this.chatMessageModel.getMessageByMessageId(
+      options.messageId
+    );
+    const message = existing ?? new AIChatMessageEntity();
     message.messageId = options.messageId;
     message.conversationId = options.conversationId;
     message.role = options.role;

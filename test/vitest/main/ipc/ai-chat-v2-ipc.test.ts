@@ -57,6 +57,8 @@ const mockSaveUserMessage = vi
   .mockResolvedValue({ messageId: "user-test-1" });
 const mockGetConversationMessages = vi.fn().mockResolvedValue([]);
 const mockSaveAssistantMessage = vi.fn().mockResolvedValue({});
+const mockSaveToolCallMessage = vi.fn().mockResolvedValue({});
+const mockSaveToolResultMessage = vi.fn().mockResolvedValue({});
 const mockGetDefaultSystemPrompt = vi
   .fn()
   .mockReturnValue("You are a helpful assistant.");
@@ -69,6 +71,8 @@ vi.mock("@/modules/AIChatV2Module", () => ({
     saveUserMessage: mockSaveUserMessage,
     getConversationMessages: mockGetConversationMessages,
     saveAssistantMessage: mockSaveAssistantMessage,
+    saveToolCallMessage: mockSaveToolCallMessage,
+    saveToolResultMessage: mockSaveToolResultMessage,
     getDefaultSystemPrompt: mockGetDefaultSystemPrompt,
   })),
 }));
