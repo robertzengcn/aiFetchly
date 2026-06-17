@@ -399,7 +399,11 @@ export class PluginImportService {
       await tempCleanup();
     }
 
-    // 8. Persist InstalledPlugin row
+    // 8. Persist InstalledPlugin row.
+    // Per Design §15.5, plugin import never prepares Python environments.
+    // Flag the plugin as needs_configuration when any skill uses the Python
+    // runtime so the UI can warn the user before first execution.
+    const hasPythonSkill = skills.some((s) => s.manifest.runtime === "python");
     let pluginId: number | null = null;
     try {
       pluginId = await pluginModule.createPlugin({
@@ -414,7 +418,7 @@ export class PluginImportService {
         permissionsJson: JSON.stringify(manifest.permissions ?? []),
         componentStateJson: "{}",
         enabled: 1,
-        health: "healthy",
+        health: hasPythonSkill ? "needs_configuration" : "healthy",
       });
     } catch (e: unknown) {
       rollbackInstall(installPath);
@@ -518,6 +522,24 @@ export class PluginImportService {
       // PluginRuntimeCache not yet registered; safe to ignore during Phase 3.
     }
 
+    // 11b. Record needs_configuration notice for Python skills (Design §15.5).
+    if (hasPythonSkill) {
+      try {
+        await pluginModule.setLoadErrors(manifest.name, [
+          {
+            code: "dependency-unsatisfied",
+            componentType: "skill",
+            pluginName: manifest.name,
+            message:
+              "Plugin bundles a Python skill. Run the skill once to trigger venv setup, or prepare the environment manually before first use.",
+            recoverable: true,
+          },
+        ]);
+      } catch {
+        // best-effort — health is already set on the row
+      }
+    }
+
     // 12. Return summary
     const summary: PluginSummary = {
       id: pluginId,
@@ -526,7 +548,7 @@ export class PluginImportService {
       version: manifest.version,
       source: (manifest.source ?? "local") as PluginSource,
       enabled: true,
-      health: "healthy",
+      health: hasPythonSkill ? "needs_configuration" : "healthy",
       skillCount: skills.length,
       mcpServerCount: mcpServers.length,
       permissions: manifest.permissions ?? [],
