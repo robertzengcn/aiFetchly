@@ -432,6 +432,7 @@ export interface OpenAIChatCompletionRequest {
   temperature?: number;
   max_tokens?: number;
   stream?: boolean;
+  stream_options?: { include_usage?: boolean };
   tools?: OpenAITool[];
   tool_choice?: OpenAIToolChoice;
   stop?: string | string[];
@@ -444,6 +445,10 @@ export interface OpenAIModel {
   object: string;
   created: number;
   owned_by: string;
+  /** Optional context window size in tokens (OpenAI-compatible servers). */
+  context_window?: number;
+  /** Alias some servers use for context_window. */
+  context_length?: number;
 }
 
 /** OpenAI-compatible models list response */
@@ -497,6 +502,8 @@ export interface OpenAIChatCompletionChunk {
   created: number;
   model: string;
   choices: OpenAIStreamChoice[];
+  /** Present on the final chunk when stream_options.include_usage is true. */
+  usage?: OpenAIUsage;
 }
 
 // ==================== Rerank API Types ====================
@@ -1693,6 +1700,10 @@ export class AiChatApi {
     if (request.user !== undefined) {
       data.user = request.user;
     }
+    // Ask the server to include token usage in the final stream chunk so we
+    // can display live context-usage percentage in the UI. Servers that do
+    // not implement stream_options simply ignore it.
+    data.stream_options = { include_usage: true };
 
     const fetchOptions: RequestInit = {};
     if (options?.signal) {
@@ -2001,8 +2012,9 @@ export class AiChatApi {
     model?: string;
     content?: string | null;
     finishReason?: string | null;
+    usage?: OpenAIUsage;
   }): OpenAIChatCompletionChunk {
-    return {
+    const chunk: OpenAIChatCompletionChunk = {
       id: params.id ?? `normalized-${Date.now()}`,
       object: "chat.completion.chunk",
       created: params.created ?? Math.floor(Date.now() / 1000),
@@ -2015,6 +2027,39 @@ export class AiChatApi {
           finish_reason: params.finishReason ?? null,
         },
       ],
+    };
+    if (params.usage) {
+      chunk.usage = params.usage;
+    }
+    return chunk;
+  }
+
+  /**
+   * Extract usage info from a raw stream payload, if present. Used to surface
+   * token counts from the final chunk emitted when stream_options.include_usage
+   * is true.
+   */
+  private extractUsageFromPayload(
+    payload: Record<string, unknown>
+  ): OpenAIUsage | undefined {
+    const usage = payload.usage;
+    if (!this.isRecord(usage)) {
+      return undefined;
+    }
+    const promptTokens = this.getNumberField(usage, "prompt_tokens");
+    const completionTokens = this.getNumberField(usage, "completion_tokens");
+    const totalTokens = this.getNumberField(usage, "total_tokens");
+    if (
+      promptTokens === undefined ||
+      completionTokens === undefined ||
+      totalTokens === undefined
+    ) {
+      return undefined;
+    }
+    return {
+      prompt_tokens: promptTokens,
+      completion_tokens: completionTokens,
+      total_tokens: totalTokens,
     };
   }
 
@@ -2038,6 +2083,7 @@ export class AiChatApi {
     const object = this.getStringField(payload, "object");
     const created = this.getNumberField(payload, "created");
     const model = this.getStringField(payload, "model");
+    const usage = this.extractUsageFromPayload(payload);
 
     if (Array.isArray(payload.choices)) {
       const normalizedChoices: OpenAIStreamChoice[] = payload.choices.map(
@@ -2075,7 +2121,7 @@ export class AiChatApi {
           };
         }
       );
-      return {
+      const chunk: OpenAIChatCompletionChunk = {
         id: id ?? `normalized-${Date.now()}`,
         object:
           object === "chat.completion.chunk" ? object : "chat.completion.chunk",
@@ -2083,6 +2129,22 @@ export class AiChatApi {
         model: model ?? "",
         choices: normalizedChoices,
       };
+      if (usage) {
+        chunk.usage = usage;
+      }
+      return chunk;
+    }
+
+    // When stream_options.include_usage is true, the server emits a final
+    // chunk with an empty (or missing) choices array and a top-level usage
+    // object. Handle that here so the usage is not dropped.
+    if (usage) {
+      return this.buildOpenAIStreamChunk({
+        id,
+        created,
+        model,
+        usage,
+      });
     }
 
     const directContent = payload.content;

@@ -1,6 +1,7 @@
 import type {
   OpenAIChatCompletionChunk,
   OpenAIStreamToolCallDelta,
+  OpenAIUsage,
 } from "@/api/aiChatApi";
 
 export interface OpenAIStreamTextState {
@@ -9,6 +10,7 @@ export interface OpenAIStreamTextState {
   fullContent: string;
   finishReason?: string | null;
   sawToolCallDelta: boolean;
+  usage?: OpenAIUsage;
 }
 
 export interface BufferedOpenAIToolCall {
@@ -43,7 +45,9 @@ export class OpenAIStreamAccumulator {
   }
 
   getBufferedToolCalls(): BufferedOpenAIToolCall[] {
-    return Array.from(this._toolCalls.values()).sort((a, b) => a.index - b.index);
+    return Array.from(this._toolCalls.values()).sort(
+      (a, b) => a.index - b.index
+    );
   }
 
   /**
@@ -55,6 +59,11 @@ export class OpenAIStreamAccumulator {
     }
     if (chunk.model) {
       this._state.model = chunk.model;
+    }
+    // The final chunk (when stream_options.include_usage is true) carries the
+    // usage object with empty choices. Capture it for downstream reporting.
+    if (chunk.usage) {
+      this._state.usage = chunk.usage;
     }
 
     let contentDelta = "";

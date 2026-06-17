@@ -128,3 +128,4 @@ hyperframes-search-engine-scraping-video/renders/*.mp4
 ./hyperframes-market-insight-explorer-video
 ./hyperframes-search-engine-scraping-video
 *.pyc
+node_modules

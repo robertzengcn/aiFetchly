@@ -117,6 +117,16 @@ export interface AIChatQueryErrorEvent {
   errorMessage: string;
 }
 
+export interface AIChatQueryUsageUpdateEvent {
+  type: "usage_update";
+  conversationId: string;
+  messageId: string;
+  model?: string;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+}
+
 export type AIChatQueryEvent =
   | AIChatQueryStartEvent
   | AIChatQueryTokenEvent
@@ -128,7 +138,8 @@ export type AIChatQueryEvent =
   | AIChatQueryPlanSubmittedEvent
   | AIChatQueryCompleteEvent
   | AIChatQueryCancelledEvent
-  | AIChatQueryErrorEvent;
+  | AIChatQueryErrorEvent
+  | AIChatQueryUsageUpdateEvent;
 
 /**
  * Result returned by AIChatQueryLoop.run().

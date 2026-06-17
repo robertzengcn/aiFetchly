@@ -170,6 +170,23 @@ export class AIChatQueryLoop {
         );
 
         finalAccumulator = accumulator;
+
+        // Surface token usage from this round so the UI can render a live
+        // context-usage indicator. The server emits a usage object on the
+        // final chunk when stream_options.include_usage is true.
+        const roundUsage = accumulator.state.usage;
+        if (roundUsage) {
+          eventSink.emit({
+            type: "usage_update",
+            conversationId: input.conversationId,
+            messageId: input.assistantMessageId,
+            model: accumulator.state.model,
+            promptTokens: roundUsage.prompt_tokens,
+            completionTokens: roundUsage.completion_tokens,
+            totalTokens: roundUsage.total_tokens,
+          });
+        }
+
         const parsedCalls = accumulator
           .tryParseToolCallArguments()
           .filter((call) => call.name && call.id);
