@@ -4,7 +4,8 @@
     <v-form ref="form" @submit.prevent="onSubmit">
     
       
-      <v-select v-model="emailtype" :items="emailTypelist" :label="t('emailextraction.extraction_type') as string" required
+      <v-select
+v-model="emailtype" :items="emailTypelist" :label="t('emailextraction.extraction_type') as string" required
         :readonly="loading" :rules="[rules.required]" class="mt-3"  
         item-title="name"
           item-value="key"
@@ -13,13 +14,14 @@
        <v-textarea class="mt-3" v-model="urls" :label="t('emailextraction.input_urls_hint')" v-if="emailtype?.index==0"></v-textarea> 
        
        <div v-if="emailtype?.index==1" class="mt-3">
-        <SearchResultSelectTable @change="handleSearchtaskChanged" :selectedValue="searchtaskId" />
+        <SearchResultSelectTable @change="handleSearchtaskChanged" :selected-value="searchtaskId" />
       </div>
 
 
       <v-text-field v-model="page_length" :label="t('emailextraction.page_length')" clearable class="mt-3"></v-text-field>
 
-      <v-text-field v-model="concurrent_quantity" :label="t('search.concurrent_quantity')" clearable
+      <v-text-field
+v-model="concurrent_quantity" :label="t('search.concurrent_quantity')" clearable
         class="mt-3"></v-text-field>
         <v-number-input
           :label="t('emailextraction.max_page_number')"
@@ -37,9 +39,10 @@
         :max="20"
           :min="1"
       ></v-number-input>
-        <v-combobox v-model="proxyValue" :items="proxyValue" label="Select proxy" item-title="host" multiple return-object
+        <v-combobox
+v-model="proxyValue" :items="proxyValue" label="Select proxy" item-title="host" multiple return-object
         chips clearable></v-combobox>
-      <v-btn color="primary" @click="showProxytable">{{t('search.choose_proxy')}}</v-btn>
+      <v-btn color="primary" @click="showProxytable">{{ t('search.choose_proxy') }}</v-btn>
 
       <div v-if="proxytableshow" class="mt-3">
         <ProxyTableselected @change="handleSelectedChanged" />
@@ -157,7 +160,7 @@ const loading = ref(false);
 const rules = {
   required: (value) => !!value || "Field is required",
 };
-const processTimeout = ref<number>(10);
+const processTimeout = ref<number>(60);
 const maxPageNumber = ref<number>(100);
 type EmailOption = {
   key: string;

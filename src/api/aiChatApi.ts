@@ -374,11 +374,56 @@ export type OpenAIMessageRole =
   | "function"
   | "tool";
 
+/** OpenAI-compatible tool function definition */
+export interface OpenAIToolFunction {
+  name: string;
+  description?: string;
+  parameters?: Record<string, unknown>;
+}
+
+/** OpenAI-compatible tool definition */
+export interface OpenAITool {
+  type: "function";
+  function: OpenAIToolFunction;
+}
+
+/** OpenAI-compatible tool call function */
+export interface OpenAIToolCallFunction {
+  name: string;
+  arguments: string;
+}
+
+/** OpenAI-compatible tool call in assistant message */
+export interface OpenAIToolCall {
+  id: string;
+  type: "function";
+  function: OpenAIToolCallFunction;
+}
+
+/** OpenAI-compatible streaming tool call delta */
+export interface OpenAIStreamToolCallDelta {
+  index: number;
+  id?: string;
+  type?: string;
+  function?: {
+    name?: string;
+    arguments?: string;
+  };
+}
+
 /** OpenAI-compatible chat message */
 export interface OpenAIChatMessage {
   role: OpenAIMessageRole;
-  content: string;
+  content: string | null;
+  tool_calls?: OpenAIToolCall[];
+  tool_call_id?: string;
 }
+
+/** OpenAI-compatible tool choice */
+export type OpenAIToolChoice =
+  | "auto"
+  | "none"
+  | { type: "function"; function: { name: string } };
 
 /** OpenAI-compatible chat completion request */
 export interface OpenAIChatCompletionRequest {
@@ -387,6 +432,10 @@ export interface OpenAIChatCompletionRequest {
   temperature?: number;
   max_tokens?: number;
   stream?: boolean;
+  tools?: OpenAITool[];
+  tool_choice?: OpenAIToolChoice;
+  stop?: string | string[];
+  user?: string;
 }
 
 /** OpenAI-compatible model object */
@@ -430,7 +479,8 @@ export interface OpenAIChatCompletionResponse {
 /** OpenAI-compatible streaming chunk delta */
 export interface OpenAIStreamDelta {
   role?: string;
-  content?: string;
+  content?: string | null;
+  tool_calls?: OpenAIStreamToolCallDelta[];
 }
 
 /** OpenAI-compatible streaming chunk choice */
@@ -1547,6 +1597,18 @@ export class AiChatApi {
     if (request.max_tokens !== undefined) {
       data.max_tokens = request.max_tokens;
     }
+    if (request.tools && request.tools.length > 0) {
+      data.tools = request.tools;
+    }
+    if (request.tool_choice !== undefined) {
+      data.tool_choice = request.tool_choice;
+    }
+    if (request.stop !== undefined) {
+      data.stop = request.stop;
+    }
+    if (request.user !== undefined) {
+      data.user = request.user;
+    }
     return this._httpClient.postJson("/api/ai/v1/chat/completions", data);
   }
 
@@ -1577,6 +1639,18 @@ export class AiChatApi {
     if (request.max_tokens !== undefined) {
       data.max_tokens = request.max_tokens;
     }
+    if (request.tools && request.tools.length > 0) {
+      data.tools = request.tools;
+    }
+    if (request.tool_choice !== undefined) {
+      data.tool_choice = request.tool_choice;
+    }
+    if (request.stop !== undefined) {
+      data.stop = request.stop;
+    }
+    if (request.user !== undefined) {
+      data.user = request.user;
+    }
 
     const fetchOptions: RequestInit = {};
     if (options?.signal) {
@@ -1584,7 +1658,7 @@ export class AiChatApi {
     }
 
     const response = await this._httpClient.postStream(
-      "/v1/chat/completions",
+      "/api/ai/v1/chat/completions",
       data,
       fetchOptions
     );
