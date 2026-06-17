@@ -107,6 +107,12 @@ export interface SkillDefinition {
    * this skill instead of the generic `read_attachment_content` tool.
    */
   readonly supportedFileTypes?: readonly string[];
+
+  /**
+   * Plugin owner name. When set, the skill is only effective if the owning
+   * plugin is enabled (plugin.enabled && skill.enabled). (Design §8.3)
+   */
+  readonly pluginOwner?: string;
 }
 
 // ---------------------------------------------------------------------------

@@ -53,6 +53,7 @@ const registry = new Map<string, SkillDefinition>();
 // ---------------------------------------------------------------------------
 // Built-in skill definitions (statically imported)
 // ---------------------------------------------------------------------------
+import { RUN_SUBAGENT_TOOL } from "@/service/agentTools/runSubagentTool";
 
 const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
@@ -1783,6 +1784,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       };
     },
   },
+  RUN_SUBAGENT_TOOL,
 ];
 
 // Register all built-in skills at module load time
@@ -1797,10 +1799,36 @@ for (const skill of BUILT_IN_SKILLS) {
 /**
  * Get all registered skills as LLM-facing ToolFunction[].
  * Merges built-in skills with dynamically discovered MCP tools.
+ *
+ * Effective enablement for plugin-owned skills: a skill registered with
+ * `pluginOwner` is only included when its owning plugin is enabled.
+ * (Design §8.3)
  */
 async function getAllToolFunctions(): Promise<ToolFunction[]> {
+  // Resolve enabled plugin names once per catalog build.
+  let enabledPluginNames: Set<string> | null = null;
+  try {
+    const { PluginManagementModule } = await import(
+      "@/modules/PluginManagementModule"
+    );
+    const mod = new PluginManagementModule();
+    const enabledPlugins = await mod.listEnabledPlugins();
+    enabledPluginNames = new Set(enabledPlugins.map((p) => p.name));
+  } catch {
+    // Plugin module unavailable (e.g. during early boot / tests) — treat as
+    // no enabled plugins, which suppresses plugin-owned skills safely.
+    enabledPluginNames = new Set();
+  }
+
   const builtInTools: ToolFunction[] = [];
   for (const skill of registry.values()) {
+    if (
+      skill.pluginOwner &&
+      enabledPluginNames &&
+      !enabledPluginNames.has(skill.pluginOwner)
+    ) {
+      continue; // owning plugin is disabled — hide from catalog
+    }
     builtInTools.push(skillDefinitionToToolFunction(skill));
   }
 
@@ -1856,16 +1884,45 @@ function unregisterSkill(name: string): void {
  * `supportedFileTypes` array containing the lower-cased extension.
  * Documentation-only skills are included so the chat system prompt can route
  * staged uploads to them with `attachment_ref` (see ai-chat-ipc).
+ *
+ * Effective enablement for plugin-owned skills: a skill registered with
+ * `pluginOwner` is only returned when its owning plugin is enabled.
+ * (Design §8.3 — same rule as getAllToolFunctions.)
+ *
  * Returns the first match, or `null` if none found.
  */
-function findSkillForFileExtension(ext: string): SkillDefinition | null {
+async function findSkillForFileExtension(
+  ext: string
+): Promise<SkillDefinition | null> {
   const normalized = ext.toLowerCase();
+
+  // Resolve enabled plugin names once per lookup so plugin-owned skills
+  // whose owner is disabled/uninstalled are hidden from attachment routing.
+  let enabledPluginNames: Set<string> | null = null;
+  try {
+    const { PluginManagementModule } = await import(
+      "@/modules/PluginManagementModule"
+    );
+    const mod = new PluginManagementModule();
+    const enabledPlugins = await mod.listEnabledPlugins();
+    enabledPluginNames = new Set(enabledPlugins.map((p) => p.name));
+  } catch {
+    enabledPluginNames = new Set();
+  }
+
   for (const skill of registry.values()) {
     if (
       skill.source === "user" &&
       skill.supportedFileTypes &&
       skill.supportedFileTypes.includes(normalized)
     ) {
+      if (
+        skill.pluginOwner &&
+        enabledPluginNames &&
+        !enabledPluginNames.has(skill.pluginOwner)
+      ) {
+        continue; // owning plugin is disabled/uninstalled — skip
+      }
       return skill;
     }
   }

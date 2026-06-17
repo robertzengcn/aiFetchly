@@ -8,9 +8,13 @@ import { Token } from "@/modules/token";
 
 // Mock HttpClient: use a single shared instance so tests can assert on postJson calls
 const mockPostJsonShared = vi.fn();
+const mockGetShared = vi.fn();
+const mockPostStreamShared = vi.fn();
 vi.mock("@/modules/lib/httpclient", () => ({
   HttpClient: vi.fn().mockImplementation(() => ({
     postJson: mockPostJsonShared,
+    get: mockGetShared,
+    postStream: mockPostStreamShared,
   })),
 }));
 
@@ -701,5 +705,299 @@ describe("AiChatApi - Page Size Validation", () => {
         (api as any).validatePageSize(content);
       }).toThrow(/51200/);
     });
+  });
+});
+
+describe("AiChatApi - OpenAI compatibility fallback", () => {
+  let api: AiChatApi;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    const MockedToken = vi.mocked(Token);
+    const storeMock = {
+      setValue: vi.fn(),
+      getValue: vi.fn(),
+      deleteValue: vi.fn(),
+      clearStore: vi.fn(),
+    } as unknown as ElectronStoreService;
+    MockedToken.mockImplementation(
+      () =>
+        ({
+          store: storeMock,
+          setValue: vi.fn(),
+          getValue: vi.fn((key: string) => {
+            if (key === "USER_AI_ENABLED" || key === "user_ai_enabled") {
+              return "true";
+            }
+            return "";
+          }),
+        } as unknown as Token)
+    );
+    api = new AiChatApi();
+  });
+
+  it("falls back to legacy model listing when /v1/models is not found", async () => {
+    const notFound = new Error("Not Found");
+    mockGetShared.mockRejectedValueOnce(notFound).mockResolvedValueOnce({
+      models: {
+        "gpt-4o-mini": {
+          name: "gpt-4o-mini",
+          description: "Default chat model",
+          maxTokens: 128000,
+          supportsStreaming: true,
+        },
+      },
+      default_model: "gpt-4o-mini",
+      total_models: 1,
+    });
+
+    const result = await api.listOpenAIModels();
+
+    expect(mockGetShared).toHaveBeenNthCalledWith(1, "/v1/models");
+    expect(mockGetShared).toHaveBeenNthCalledWith(2, "/api/ai/chat/models");
+    expect(result).toEqual({
+      object: "list",
+      data: [
+        {
+          id: "gpt-4o-mini",
+          object: "model",
+          created: 0,
+          owned_by: "legacy-ai-server",
+        },
+      ],
+    });
+  });
+
+  it("falls back to legacy streaming when /v1/chat/completions is not found", async () => {
+    const encoder = new TextEncoder();
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(
+            encoder.encode(
+              [
+                "event: token",
+                'data: {"content":"Hello","timestamp":"2026-06-13T00:00:00.000Z"}',
+                "",
+                "event: token",
+                'data: {"content":" world","timestamp":"2026-06-13T00:00:01.000Z"}',
+                "",
+                "event: done",
+                'data: {"content":"","timestamp":"2026-06-13T00:00:02.000Z"}',
+                "",
+              ].join("\n")
+            )
+          );
+          controller.close();
+        },
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      }
+    );
+
+    mockPostStreamShared
+      .mockRejectedValueOnce(new Error("Not Found"))
+      .mockResolvedValueOnce(response);
+
+    const chunks: Array<{
+      content?: string | null;
+      finishReason?: string | null;
+    }> = [];
+    await api.openAIChatCompletionStream(
+      {
+        model: "gpt-4o-mini",
+        messages: [{ role: "user", content: "Hi" }],
+        temperature: 0.2,
+        max_tokens: 100,
+      },
+      (chunk) => {
+        chunks.push({
+          content: chunk.choices[0]?.delta?.content,
+          finishReason: chunk.choices[0]?.finish_reason,
+        });
+      }
+    );
+
+    expect(mockPostStreamShared).toHaveBeenNthCalledWith(
+      1,
+      "/api/ai/v1/chat/completions",
+      expect.objectContaining({
+        stream: true,
+        model: "gpt-4o-mini",
+        messages: [{ role: "user", content: "Hi" }],
+      }),
+      {}
+    );
+    expect(mockPostStreamShared).toHaveBeenNthCalledWith(
+      2,
+      "/api/ai/ask/stream",
+      expect.objectContaining({
+        message: "User: Hi",
+        model: "gpt-4o-mini",
+      }),
+      {}
+    );
+    expect(chunks).toEqual([
+      { content: "Hello", finishReason: null },
+      { content: " world", finishReason: null },
+      { content: undefined, finishReason: "stop" },
+    ]);
+  });
+
+  it("parses OpenAI SSE data lines without a space after the colon", async () => {
+    const encoder = new TextEncoder();
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(
+            encoder.encode(
+              [
+                'data:{"id":"resp-1","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[{"index":0,"delta":{"content":"AI"},"finish_reason":null}]}',
+                "",
+                'data:{"id":"resp-1","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[{"index":0,"delta":{"content":" response"},"finish_reason":null}]}',
+                "",
+                'data:{"id":"resp-1","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}',
+                "",
+                "data:[DONE]",
+                "",
+              ].join("\n")
+            )
+          );
+          controller.close();
+        },
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      }
+    );
+
+    mockPostStreamShared.mockResolvedValueOnce(response);
+
+    const chunks: Array<{
+      content?: string | null;
+      finishReason?: string | null;
+    }> = [];
+    await api.openAIChatCompletionStream(
+      {
+        model: "gpt-test",
+        messages: [{ role: "user", content: "Hi" }],
+      },
+      (chunk) => {
+        chunks.push({
+          content: chunk.choices[0]?.delta?.content,
+          finishReason: chunk.choices[0]?.finish_reason,
+        });
+      }
+    );
+
+    expect(chunks).toEqual([
+      { content: "AI", finishReason: null },
+      { content: " response", finishReason: null },
+      { content: undefined, finishReason: "stop" },
+    ]);
+  });
+
+  it("normalizes legacy content SSE events returned from the OpenAI stream route", async () => {
+    const encoder = new TextEncoder();
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(
+            encoder.encode(
+              [
+                "event: token",
+                'data: {"content":"AI","timestamp":"2026-06-16T00:00:00.000Z"}',
+                "",
+                "event: token",
+                'data: {"content":" response","timestamp":"2026-06-16T00:00:01.000Z"}',
+                "",
+                "event: done",
+                'data: {"content":"","timestamp":"2026-06-16T00:00:02.000Z"}',
+                "",
+              ].join("\n")
+            )
+          );
+          controller.close();
+        },
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      }
+    );
+
+    mockPostStreamShared.mockResolvedValueOnce(response);
+
+    const chunks: Array<{
+      content?: string | null;
+      finishReason?: string | null;
+    }> = [];
+    await api.openAIChatCompletionStream(
+      {
+        model: "gpt-test",
+        messages: [{ role: "user", content: "Hi" }],
+      },
+      (chunk) => {
+        chunks.push({
+          content: chunk.choices[0]?.delta?.content,
+          finishReason: chunk.choices[0]?.finish_reason,
+        });
+      }
+    );
+
+    expect(chunks).toEqual([
+      { content: "AI", finishReason: null },
+      { content: " response", finishReason: null },
+      { content: "", finishReason: "stop" },
+    ]);
+  });
+
+  it("normalizes non-streaming message choices returned from the OpenAI stream route", async () => {
+    const encoder = new TextEncoder();
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(
+            encoder.encode(
+              [
+                'data: {"id":"resp-1","object":"chat.completion","created":1,"model":"gpt-test","choices":[{"index":0,"message":{"role":"assistant","content":"AI response"},"finish_reason":"stop"}]}',
+                "",
+                "data: [DONE]",
+                "",
+              ].join("\n")
+            )
+          );
+          controller.close();
+        },
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      }
+    );
+
+    mockPostStreamShared.mockResolvedValueOnce(response);
+
+    const chunks: Array<{
+      content?: string | null;
+      finishReason?: string | null;
+    }> = [];
+    await api.openAIChatCompletionStream(
+      {
+        model: "gpt-test",
+        messages: [{ role: "user", content: "Hi" }],
+      },
+      (chunk) => {
+        chunks.push({
+          content: chunk.choices[0]?.delta?.content,
+          finishReason: chunk.choices[0]?.finish_reason,
+        });
+      }
+    );
+
+    expect(chunks).toEqual([{ content: "AI response", finishReason: "stop" }]);
   });
 });

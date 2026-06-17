@@ -75,6 +75,18 @@ export const constantRoutes: RouteRecordRaw[] = [
         component: () => import("@/views/pages/systemsetting/skills.vue"),
         children: [],
       },
+      {
+        path: "plugins",
+        name: "system_setting_plugins",
+        meta: {
+          title: "route.plugins",
+          icon: "mdi-puzzle",
+          keepAlive: false,
+          visible: false,
+        },
+        component: () => import("@/views/pages/systemsetting/plugins.vue"),
+        children: [],
+      },
     ],
   },
 

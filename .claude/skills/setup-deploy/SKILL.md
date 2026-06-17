@@ -1,1 +1,1 @@
-/home/robertzeng/project/aiFetchly/.claude/skills/gstack/setup-deploy/SKILL.md
+/home/robertzeng/project/aiFetchly/.claude/worktrees/openai-chat-v2/.claude/skills/gstack/setup-deploy/SKILL.md

@@ -145,6 +145,86 @@ describe("SqliteDb.ensureInitialized", () => {
   );
 
   test(
+    "deduplicates direct DataSource.initialize calls on the singleton",
+    withResetSingleton(async () => {
+      const sqliteDb = SqliteDb.getInstance("/tmp/aifetchly-dedup-test");
+      let resolveInit: () => void = () => {
+        /* placeholder — reassigned below */
+      };
+      const initializeConnectionMock = vi.fn(
+        () => new Promise<void>((resolve) => (resolveInit = resolve))
+      );
+      const connection = sqliteDb.connection as unknown as {
+        isInitialized: boolean;
+        initialize: () => Promise<void>;
+      };
+
+      Object.defineProperty(sqliteDb, "initializeConnection", {
+        value: initializeConnectionMock,
+      });
+      connection.isInitialized = false;
+
+      const first = sqliteDb.connection.initialize();
+      const second = sqliteDb.connection.initialize();
+
+      expect(initializeConnectionMock).toHaveBeenCalledOnce();
+
+      resolveInit();
+      await Promise.all([first, second]);
+
+      expect(initializeConnectionMock).toHaveBeenCalledOnce();
+    })
+  );
+
+  test(
+    "does not let stale initialization cleanup clear a newer initialization",
+    withResetSingleton(async () => {
+      const firstDb = SqliteDb.getInstance("/tmp/aifetchly-first-init");
+      let resolveFirst: () => void = () => {
+        /* placeholder — reassigned below */
+      };
+      Object.defineProperty(firstDb, "initializeConnection", {
+        value: vi.fn(
+          () => new Promise<void>((resolve) => (resolveFirst = resolve))
+        ),
+      });
+      const firstConnection = firstDb.connection as unknown as {
+        isInitialized: boolean;
+      };
+      firstConnection.isInitialized = false;
+
+      const firstInitialize = firstDb.connection.initialize();
+
+      const secondDb = SqliteDb.getInstance("/tmp/aifetchly-second-init");
+      let resolveSecond: () => void = () => {
+        /* placeholder — reassigned below */
+      };
+      Object.defineProperty(secondDb, "initializeConnection", {
+        value: vi.fn(
+          () => new Promise<void>((resolve) => (resolveSecond = resolve))
+        ),
+      });
+      const secondConnection = secondDb.connection as unknown as {
+        isInitialized: boolean;
+      };
+      secondConnection.isInitialized = false;
+
+      const secondInitialize = secondDb.connection.initialize();
+
+      resolveFirst();
+      await firstInitialize;
+      await Promise.resolve();
+
+      expect(getStaticState().initPromise).not.toBeNull();
+
+      resolveSecond();
+      await secondInitialize;
+
+      expect(getStaticState().initPromise).toBeNull();
+    })
+  );
+
+  test(
     "cleans up initPromise after success so a future re-init is possible",
     withResetSingleton(async () => {
       const { sqliteDb, initializeMock } = createMockSqliteDb({

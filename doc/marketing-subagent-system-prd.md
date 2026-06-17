@@ -21,14 +21,17 @@ The first release should ship built-in workflow agents only. User-created agents
 
 aiFetchly already has several foundations needed for an agent runtime:
 
-- AI chat streaming through `AiChatApi`.
+- AI chat streaming through `AiChatApi`, consumed by the AI Chat V2 pipeline (`AIChatQueryEngine` → `AIChatQueryLoop`).
+- A two-layer query architecture that already implements per-turn abort, pending-state singletons, resume mechanisms, and a typed `AIChatQueryEventSink`. This is the blueprint for `AgentRuntime` (see §12.2).
+- A context assembler (`AIChatContextAssembler`) and session-memory compaction (`AIChatCompactAgentService`) that build self-contained prompts from conversation history — directly reusable for assembling agent task packets (§9.2).
+- A mature **Plan Mode** system (`AIChatPlanModule`, `PlanModeToolRegistry`, plan state with versions, approval/reject/request-changes flows, an interactive `AskUserQuestion` tool, and `plan_blocked_tool` policy events). Plan Mode already solves plan lifecycle, verification gates, and policy-blocked tools for a single assistant turn. The subagent system should treat Plan Mode as a foundation, not reinvent it.
 - Local AI-callable tools through `SkillRegistry`, `SkillExecutor`, and `ToolExecutionService`.
-- Skill permission checks through `SkillPermissionService`.
+- Skill permission checks through `SkillPermissionService`, already wired into the V2 engine via `paused_for_permission` turn state and resume-after-grant.
 - Scheduled AI task configuration and run logs through `AiMessageTaskEntity`, `AiMessageTaskRunEntity`, and related modules.
 - Contact extraction, yellow pages scraping, email marketing, and AI enrichment workflows.
 - Electron main-process IPC architecture, where IPC handlers call Module and Service classes instead of accessing the database directly.
 
-The missing product layer is orchestration. Today, an AI interaction is mostly a single chat or scheduled prompt. A real marketing workflow needs multiple specialists that can work independently, preserve evidence, and produce a verified output that the user can inspect before acting on it.
+The missing product layer is multi-agent orchestration. Today, an AI interaction is mostly a single chat or scheduled prompt. A real marketing workflow needs multiple specialists that can work independently, preserve evidence, and produce a verified output that the user can inspect before acting on it.
 
 ---
 
@@ -390,7 +393,7 @@ Acceptance criteria:
 
 ### FR-2: Agent Runtime
 
-Create a main-process service that runs individual agent tasks.
+Create a main-process service that runs individual agent tasks. This extends the existing `AIChatQueryEngine` / `AIChatQueryLoop` architecture rather than building from scratch — the engine already provides per-turn abort, pending-state singletons, resume mechanisms, and the typed event sink. The agent runtime adds agent-scoped tool policy, task-packet input, and agent-specific persistence on top of that loop.
 
 Recommended service:
 
@@ -509,7 +512,7 @@ Acceptance criteria:
 
 ### FR-8: Permission and Policy
 
-Every agent must run under a scoped policy.
+Every agent must run under a scoped policy. This extends the existing `SkillPermissionService` flow already wired into the V2 engine (`paused_for_permission` turn state, `resumeToolAfterPermission` resume path, and `plan_blocked_tool` policy events from Plan Mode). The agent layer adds per-agent allowlists and headless-mode policy on top of that existing permission pipeline.
 
 Policy fields:
 
@@ -659,36 +662,61 @@ Rationale:
 
 ### 12.2 Main Components
 
+`AgentRuntime` should be modeled on the existing `AIChatQueryEngine` / `AIChatQueryLoop` split:
+
+- `AIChatQueryEngine` owns the conversation lifecycle: per-turn `AbortController`, pending-state singletons (`pendingPermission`, `pendingPlanQuestion`), resume mechanisms (`resumeToolAfterPermission`, `answerPlanQuestion`), and terminal-event discrimination via `AIChatQueryEventSink`.
+- `AIChatQueryLoop` owns the inner model/tool round loop: stream chunks, tool-call dispatch, continue requests after tool results, and the `completed | cancelled | failed | paused_for_permission | paused_for_plan_question` result union.
+
+The subagent `AgentRuntime` is essentially an `AIChatQueryEngine` instance scoped to one agent definition: it reuses the same loop, the same abort/resume machinery, and the same event-sink contract, but layers on agent-scoped tool policy, a task packet instead of a raw user message, and its own persistence targets.
+
 ```text
 Renderer UI
   -> Agent IPC handlers
   -> AgentWorkflowModule / AgentTaskModule
   -> AgentWorkflowRuntime
-  -> AgentRuntime
+  -> AgentRuntime (modeled on AIChatQueryEngine)
+  -> AIChatQueryLoop (reused as-is)
   -> AiChatApi
-  -> AgentToolPolicyService
+  -> AgentToolPolicyService (narrows SkillRegistry per agent)
   -> SkillExecutor / ToolExecutor
   -> Agent transcript persistence
 ```
 
 ### 12.3 IPC Handlers
 
-Suggested channels:
+The existing AI Chat V2 IPC (`ai-chat-v2-ipc.ts`) already implements a typed event taxonomy over two channels: a streaming `*_STREAM_CHUNK` channel for non-terminal events and a `*_STREAM_COMPLETE` channel for terminal events. The subagent IPC should reuse this contract so transcripts and tool calls stream identically.
+
+Existing event types to carry over verbatim:
+
+- `start` — run/task metadata (conversation id, message id).
+- `token` — assistant text deltas.
+- `retry_connect` — AI server reconnect attempts with attempt/max/delay.
+- `tool_call` — tool invocation requested by the model.
+- `tool_result` — tool execution outcome (success/error, summary, duration).
+- `plan_blocked_tool` — tool blocked by plan or agent policy (carries reason).
+- `ask_user_question` — interactive question from a specialist agent.
+- `plan_submitted` — plan/workflow submitted for approval.
+- `complete` / `cancelled` / `error` — terminal events.
+
+Request/response channels (mirror the existing V2 handler set):
 
 - `AGENT_DEFINITION_LIST`
-- `AGENT_WORKFLOW_START`
+- `AGENT_WORKFLOW_START` (streaming — emits the event taxonomy above)
 - `AGENT_WORKFLOW_CANCEL`
 - `AGENT_WORKFLOW_DETAIL`
 - `AGENT_WORKFLOW_LIST`
 - `AGENT_TASK_DETAIL`
 - `AGENT_TASK_TRANSCRIPT`
+- `AGENT_RESUME_TOOL_AFTER_PERMISSION` — mirrors `AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION`.
+- `AGENT_ANSWER_QUESTION` — mirrors `AI_CHAT_V2_ANSWER_QUESTION` for specialist-agent questions.
 
 Requirements:
 
-- Check `USER_AI_ENABLED` first for all AI execution channels.
+- Check `USER_AI_ENABLED` first for all AI execution channels (the V2 handler does this on every entry — agent handlers must match).
 - Validate and sanitize request payloads.
 - Call Module or Service classes.
 - Never access database repositories directly.
+- Stream non-terminal events over the chunk channel; emit exactly one terminal event (`complete | cancelled | error`) over the complete channel per run, matching the existing `createEventSink` adapter.
 
 ### 12.4 Tool Execution Path
 
@@ -993,4 +1021,8 @@ After v1 is stable:
 - Campaign output is draft-only.
 - Verification is required for campaign preparation.
 - Async and scheduled workflows come after the synchronous runtime is proven.
+- `AgentRuntime` extends the existing `AIChatQueryEngine` / `AIChatQueryLoop` architecture rather than introducing a parallel runtime.
+- Agent permission/policy extends the existing `SkillPermissionService` + Plan Mode `plan_blocked_tool` flow rather than introducing a new permission system.
+- Agent task packets reuse `AIChatContextAssembler` and `AIChatCompactAgentService` for self-contained prompt assembly.
+- The subagent IPC adopts the existing AI Chat V2 event taxonomy (`start | token | retry_connect | tool_call | tool_result | plan_blocked_tool | ask_user_question | plan_submitted | complete | cancelled | error`) so transcripts stream consistently with chat.
 

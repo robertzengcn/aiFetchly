@@ -1,5 +1,10 @@
 # Documentation Index
 
+## Marketing Automation Subagent System
+
+- [PRD: Marketing Automation Subagent System](./marketing-subagent-system-prd.md)
+- [Technology Design: Marketing Automation Subagent System](./marketing-subagent-system-technical-design.md)
+
 ## PRD: AI Chat File Operation Recording
 
 ### Overview

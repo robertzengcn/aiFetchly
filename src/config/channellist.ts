@@ -258,6 +258,30 @@ export const AI_FILE_OPERATION = "ai-chat:file-operation";
 export const AI_FILE_OPEN = "ai-chat:file-open";
 export const AI_KEYWORDS_GENERATE = "ai-keywords:generate";
 
+// ==================== AI Chat V2 Channels ====================
+export const AI_CHAT_V2_MODELS = "ai-chat-v2:models";
+export const AI_CHAT_V2_CONVERSATIONS = "ai-chat-v2:conversations";
+export const AI_CHAT_V2_HISTORY = "ai-chat-v2:history";
+export const AI_CHAT_V2_STREAM = "ai-chat-v2:stream";
+export const AI_CHAT_V2_STREAM_STOP = "ai-chat-v2:stream-stop";
+export const AI_CHAT_V2_STREAM_CHUNK = "ai-chat-v2:stream-chunk";
+export const AI_CHAT_V2_STREAM_COMPLETE = "ai-chat-v2:stream-complete";
+export const AI_CHAT_V2_CLEAR_CONVERSATION = "ai-chat-v2:clear-conversation";
+export const AI_CHAT_V2_CLEAR_ALL = "ai-chat-v2:clear-all";
+/** Resume a V2 skill/tool call after the user granted permission in the chat UI. */
+export const AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION =
+  "ai-chat-v2:resume-tool-after-permission";
+// Plan Mode channels
+export const AI_CHAT_V2_PLAN_STATE = "ai-chat-v2:plan-state";
+export const AI_CHAT_V2_ANSWER_QUESTION = "ai-chat-v2:answer-question";
+export const AI_CHAT_V2_APPROVE_PLAN = "ai-chat-v2:approve-plan";
+export const AI_CHAT_V2_REJECT_PLAN = "ai-chat-v2:reject-plan";
+export const AI_CHAT_V2_REQUEST_PLAN_CHANGES =
+  "ai-chat-v2:request-plan-changes";
+export const AI_CHAT_V2_PLAN_VERSIONS = "ai-chat-v2:plan-versions";
+export const AI_CHAT_V2_COMPACT_CONVERSATION =
+  "ai-chat-v2:compact-conversation";
+
 // MCP Tool Management Channels
 export const MCP_TOOL_LIST = "mcp:tool:list";
 export const MCP_TOOL_ADD = "mcp:tool:add";
@@ -352,3 +376,25 @@ export const AI_MESSAGE_TASK_RUN_LIST = "ai-message-task:run-list";
 export const AI_MESSAGE_TASK_RUN_DETAIL = "ai-message-task:run-detail";
 export const AI_MESSAGE_TASK_LIST_AVAILABLE_TOOLS =
   "ai-message-task:list-available-tools";
+
+// ==================== Agent Runtime Channels ====================
+export const AGENT_DEFINITION_LIST = "agent-runtime:definition-list";
+export const AGENT_TASK_DETAIL = "agent-runtime:task-detail";
+export const AGENT_TASK_TRANSCRIPT = "agent-runtime:task-transcript";
+export const AGENT_RESUME_TOOL_AFTER_PERMISSION =
+  "agent-runtime:resume-tool-after-permission";
+
+// ==================== Plugin Management Channels (Design §10) ====================
+export const PLUGIN_IMPORT = "plugin:import";
+export const PLUGIN_VALIDATE_PACKAGE = "plugin:validate-package";
+export const PLUGIN_LIST = "plugin:list";
+export const PLUGIN_GET = "plugin:get";
+export const PLUGIN_TOGGLE = "plugin:toggle";
+export const PLUGIN_UNINSTALL = "plugin:uninstall";
+export const PLUGIN_RELOAD = "plugin:reload";
+export const PLUGIN_EXPORT_DIAGNOSTICS = "plugin:export-diagnostics";
+export const PLUGIN_TOGGLE_SKILL = "plugin:toggle-skill";
+export const PLUGIN_TOGGLE_MCP_SERVER = "plugin:toggle-mcp-server";
+export const PLUGIN_TOGGLE_MCP_TOOL = "plugin:toggle-mcp-tool";
+export const PLUGIN_TEST_MCP_CONNECTION = "plugin:test-mcp-connection";
+export const PLUGIN_DISCOVER_MCP_TOOLS = "plugin:discover-mcp-tools";

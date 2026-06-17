@@ -46,12 +46,23 @@ import { RAGDocumentEntity } from "@/entity/RAGDocument.entity";
 import { RAGChunkEntity } from "@/entity/RAGChunk.entity";
 // import { RAGModelEntity } from "@/entity/RAGModel.entity";
 import { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
+import { AgentDefinitionEntity } from "@/entity/AgentDefinition.entity";
+import { AgentTaskEntity } from "@/entity/AgentTask.entity";
+import { AgentTaskMessageEntity } from "@/entity/AgentTaskMessage.entity";
+import { AgentToolCallEntity } from "@/entity/AgentToolCall.entity";
+import { AIChatPlanEntity } from "@/entity/AIChatPlan.entity";
+import { AIChatPlanVersionEntity } from "@/entity/AIChatPlanVersion.entity";
+import { AIChatPlanQuestionEntity } from "@/entity/AIChatPlanQuestion.entity";
+import { AIChatPlanApprovalEntity } from "@/entity/AIChatPlanApproval.entity";
+import { AIChatSessionMemoryEntity } from "@/entity/AIChatSessionMemory.entity";
+import { AIChatCompactSummaryEntity } from "@/entity/AIChatCompactSummary.entity";
 import { AIChatAttachmentEntity } from "@/entity/AIChatAttachment.entity";
 import { VectorEntity, VectorMetadataEntity } from "@/entity/Vector.entity";
 import { MCPToolEntity } from "@/entity/MCPTool.entity";
 import { TaskEntity } from "@/entity/Task.entity";
 import { ContactInfoEntity } from "@/entity/ContactInfo.entity";
 import { InstalledSkillEntity } from "@/entity/InstalledSkill.entity";
+import { InstalledPluginEntity } from "@/entity/InstalledPlugin.entity";
 import { DependencyInstallAuditEntity } from "@/entity/DependencyInstallAudit";
 import { ShellAuditEntity } from "@/entity/ShellAudit.entity";
 import { GoogleMapsSearchRecordEntity } from "@/entity/GoogleMapsSearchRecord.entity";
@@ -393,6 +404,7 @@ export class SqliteDb {
   private static currentDbPath: string | null = null;
   /** Guards against concurrent initialize() calls on the same DataSource */
   private static initPromise: Promise<void> | null = null;
+  private initializeConnection?: () => Promise<DataSource>;
 
   private constructor(filepath: string) {
     if (filepath.length > 0) {
@@ -461,12 +473,23 @@ export class SqliteDb {
           TaskEntity,
           ContactInfoEntity,
           InstalledSkillEntity,
+          InstalledPluginEntity,
           DependencyInstallAuditEntity,
           ShellAuditEntity,
           GoogleMapsSearchRecordEntity,
           YandexMapsSearchRecordEntity,
           AiMessageTaskEntity,
           AiMessageTaskRunEntity,
+          AIChatPlanEntity,
+          AIChatPlanVersionEntity,
+          AIChatPlanQuestionEntity,
+          AIChatPlanApprovalEntity,
+          AIChatSessionMemoryEntity,
+          AIChatCompactSummaryEntity,
+          AgentDefinitionEntity,
+          AgentTaskEntity,
+          AgentTaskMessageEntity,
+          AgentToolCallEntity,
         ],
         synchronize: true,
         migrations: [],
@@ -506,6 +529,13 @@ export class SqliteDb {
         //     sqlite3: sqlite3
         // }
       });
+      this.initializeConnection = this.connection.initialize.bind(
+        this.connection
+      );
+      this.connection.initialize = async (): Promise<DataSource> => {
+        await SqliteDb.initializeDataSource(this);
+        return this.connection;
+      };
       // try{
       // const driver = this.connection.driver as any;
       // const db = driver.database;
@@ -520,6 +550,35 @@ export class SqliteDb {
       // This will cause errors if instance is used
     }
   }
+
+  private static async initializeDataSource(instance: SqliteDb): Promise<void> {
+    if (instance.connection.isInitialized) {
+      return;
+    }
+
+    const initializeConnection =
+      instance.initializeConnection ??
+      instance.connection.initialize.bind(instance.connection);
+
+    if (SqliteDb.instance !== instance) {
+      await initializeConnection();
+      return;
+    }
+
+    if (!SqliteDb.initPromise) {
+      const guardedPromise = initializeConnection()
+        .then(() => undefined)
+        .finally(() => {
+          if (SqliteDb.initPromise === guardedPromise) {
+            SqliteDb.initPromise = null;
+          }
+        });
+      SqliteDb.initPromise = guardedPromise;
+    }
+
+    await SqliteDb.initPromise;
+  }
+
   public static getInstance(filepath: string): SqliteDb {
     // Validate filepath - don't create/reset with invalid paths
     if (!filepath || filepath.length === 0) {
@@ -549,6 +608,7 @@ export class SqliteDb {
       // Create new instance immediately with new path
       SqliteDb.instance = new SqliteDb(filepath);
       SqliteDb.currentDbPath = filepath;
+      SqliteDb.initPromise = null;
     } else if (!SqliteDb.instance) {
       SqliteDb.instance = new SqliteDb(filepath);
       SqliteDb.currentDbPath = filepath;
@@ -570,18 +630,7 @@ export class SqliteDb {
     if (SqliteDb.instance.connection.isInitialized) {
       return;
     }
-    if (!SqliteDb.initPromise) {
-      SqliteDb.initPromise = SqliteDb.instance.connection
-        .initialize()
-        .catch((err: unknown) => {
-          SqliteDb.initPromise = null;
-          throw err;
-        })
-        .then(() => {
-          SqliteDb.initPromise = null;
-        });
-    }
-    await SqliteDb.initPromise;
+    await SqliteDb.initializeDataSource(SqliteDb.instance);
   }
 
   /**
@@ -620,6 +669,7 @@ export class SqliteDb {
 
     SqliteDb.instance = new SqliteDb(filepath);
     SqliteDb.currentDbPath = filepath;
+    SqliteDb.initPromise = null;
 
     return SqliteDb.instance;
   }

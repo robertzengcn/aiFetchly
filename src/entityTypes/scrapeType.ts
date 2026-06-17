@@ -158,6 +158,7 @@ export type SMstruct = {
   // taskrunId?: number
   save_html?: boolean;
   maxPageNumber?: number;
+  block_assets?: boolean;
 };
 export type SearchDataParam = {
   keywords: Array<string>;

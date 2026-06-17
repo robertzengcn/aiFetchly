@@ -240,7 +240,20 @@ async function handleDeny(): Promise<void> {
 
 .approval-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
+}
+
+/* On very narrow chat boxes, allow individual button text to wrap so a
+   single long button (e.g. "Always allow this session") never overflows. */
+.approval-actions :deep(.v-btn) {
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+.approval-actions :deep(.v-btn__content) {
+  white-space: normal;
+  line-height: 1.1;
 }
 </style>

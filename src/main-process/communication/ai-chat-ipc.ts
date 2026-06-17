@@ -264,7 +264,7 @@ async function buildMessageWithAttachmentReferences(
   for (const ref of stagedReferences) {
     const ext = ref.fileName.toLowerCase().slice(ref.fileName.lastIndexOf("."));
     if (!extToSkillName.has(ext)) {
-      const skill = SkillRegistry.findSkillForFileExtension(ext);
+      const skill = await SkillRegistry.findSkillForFileExtension(ext);
       if (skill) {
         extToSkillName.set(ext, skill.name);
       }

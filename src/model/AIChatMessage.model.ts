@@ -1,190 +1,264 @@
 import { BaseDb } from "@/model/Basedb";
 import { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
-import { Repository } from 'typeorm';
+import { Repository } from "typeorm";
 
 export class AIChatMessageModel extends BaseDb {
-    public repository: Repository<AIChatMessageEntity>;
+  public repository: Repository<AIChatMessageEntity>;
 
-    constructor(dbpath: string) {
-        super(dbpath);
-        this.repository = this.sqliteDb.connection.getRepository(AIChatMessageEntity);
+  constructor(dbpath: string) {
+    super(dbpath);
+    this.repository =
+      this.sqliteDb.connection.getRepository(AIChatMessageEntity);
+  }
+
+  /**
+   * Save a chat message to database
+   */
+  async saveMessage(message: AIChatMessageEntity): Promise<number> {
+    const result = await this.repository.save(message);
+    return result.id;
+  }
+
+  /**
+   * Get messages for a conversation
+   */
+  async getMessagesByConversation(
+    conversationId: string,
+    limit?: number,
+    offset?: number
+  ): Promise<AIChatMessageEntity[]> {
+    const query = this.repository
+      .createQueryBuilder("message")
+      .where("message.conversationId = :conversationId", { conversationId })
+      .orderBy("message.timestamp", "ASC");
+
+    if (limit) {
+      query.take(limit);
+    }
+    if (offset) {
+      query.skip(offset);
     }
 
-    /**
-     * Save a chat message to database
-     */
-    async saveMessage(message: AIChatMessageEntity): Promise<number> {
-        const result = await this.repository.save(message);
-        return result.id;
+    return await query.getMany();
+  }
+
+  /**
+   * Get message by ID
+   */
+  async getMessageById(id: number): Promise<AIChatMessageEntity | null> {
+    return await this.repository.findOne({ where: { id } });
+  }
+
+  /**
+   * Get message by message ID
+   */
+  async getMessageByMessageId(
+    messageId: string
+  ): Promise<AIChatMessageEntity | null> {
+    return await this.repository.findOne({ where: { messageId } });
+  }
+
+  /**
+   * Delete all messages for a conversation
+   */
+  async deleteConversation(conversationId: string): Promise<number> {
+    const result = await this.repository.delete({ conversationId });
+    return result.affected || 0;
+  }
+
+  /**
+   * Delete all chat messages
+   */
+  async deleteAllMessages(): Promise<number> {
+    await this.repository.clear();
+    return 1;
+  }
+
+  /**
+   * Get conversation statistics
+   */
+  async getConversationStats(conversationId?: string): Promise<{
+    totalMessages: number;
+    totalConversations: number;
+    messagesByRole: Record<string, number>;
+  }> {
+    let query = this.repository.createQueryBuilder("message");
+
+    if (conversationId) {
+      query = query.where("message.conversationId = :conversationId", {
+        conversationId,
+      });
     }
 
-    /**
-     * Get messages for a conversation
-     */
-    async getMessagesByConversation(
-        conversationId: string,
-        limit?: number,
-        offset?: number
-    ): Promise<AIChatMessageEntity[]> {
-        const query = this.repository
-            .createQueryBuilder('message')
-            .where('message.conversationId = :conversationId', { conversationId })
-            .orderBy('message.timestamp', 'ASC');
+    const messages = await query.getMany();
+    const totalMessages = messages.length;
 
-        if (limit) {
-            query.take(limit);
-        }
-        if (offset) {
-            query.skip(offset);
-        }
+    // Count unique conversations
+    const conversations = new Set(messages.map((m) => m.conversationId));
+    const totalConversations = conversations.size;
 
-        return await query.getMany();
-    }
+    // Count messages by role
+    const messagesByRole: Record<string, number> = {};
+    messages.forEach((m) => {
+      messagesByRole[m.role] = (messagesByRole[m.role] || 0) + 1;
+    });
 
-    /**
-     * Get message by ID
-     */
-    async getMessageById(id: number): Promise<AIChatMessageEntity | null> {
-        return await this.repository.findOne({ where: { id } });
-    }
+    return {
+      totalMessages,
+      totalConversations,
+      messagesByRole,
+    };
+  }
 
-    /**
-     * Get message by message ID
-     */
-    async getMessageByMessageId(messageId: string): Promise<AIChatMessageEntity | null> {
-        return await this.repository.findOne({ where: { messageId } });
-    }
+  /**
+   * Get all conversation IDs
+   */
+  async getAllConversations(): Promise<string[]> {
+    const result = await this.repository
+      .createQueryBuilder("message")
+      .select("DISTINCT message.conversationId", "conversationId")
+      .getRawMany();
 
-    /**
-     * Delete all messages for a conversation
-     */
-    async deleteConversation(conversationId: string): Promise<number> {
-        const result = await this.repository.delete({ conversationId });
-        return result.affected || 0;
-    }
+    return result.map((r) => r.conversationId);
+  }
 
-    /**
-     * Delete all chat messages
-     */
-    async deleteAllMessages(): Promise<number> {
-        await this.repository.clear();
-        return 1;
-    }
+  /**
+   * Get latest messages across all conversations
+   */
+  async getLatestMessages(limit = 10): Promise<AIChatMessageEntity[]> {
+    return await this.repository
+      .createQueryBuilder("message")
+      .orderBy("message.timestamp", "DESC")
+      .take(limit)
+      .getMany();
+  }
 
-    /**
-     * Get conversation statistics
-     */
-    async getConversationStats(conversationId?: string): Promise<{
-        totalMessages: number;
-        totalConversations: number;
-        messagesByRole: Record<string, number>;
-    }> {
-        let query = this.repository.createQueryBuilder('message');
+  /**
+   * Get all conversations with metadata (last message, timestamp, message count)
+   */
+  async getConversationsWithMetadata(): Promise<
+    Array<{
+      conversationId: string;
+      lastMessage: string;
+      lastMessageTimestamp: Date;
+      messageCount: number;
+      createdAt: Date;
+    }>
+  > {
+    // Get all unique conversation IDs
+    const conversations = await this.repository
+      .createQueryBuilder("message")
+      .select("DISTINCT message.conversationId", "conversationId")
+      .getRawMany();
 
-        if (conversationId) {
-            query = query.where('message.conversationId = :conversationId', { conversationId });
-        }
+    // For each conversation, get the last message and message count
+    const conversationsWithMetadata = await Promise.all(
+      conversations.map(async (conv) => {
+        const conversationId = conv.conversationId;
 
-        const messages = await query.getMany();
-        const totalMessages = messages.length;
+        // Get the last message
+        const lastMessage = await this.repository
+          .createQueryBuilder("message")
+          .where("message.conversationId = :conversationId", { conversationId })
+          .orderBy("message.timestamp", "DESC")
+          .take(1)
+          .getOne();
 
-        // Count unique conversations
-        const conversations = new Set(messages.map(m => m.conversationId));
-        const totalConversations = conversations.size;
+        // Get message count
+        const messageCount = await this.repository
+          .createQueryBuilder("message")
+          .where("message.conversationId = :conversationId", { conversationId })
+          .getCount();
 
-        // Count messages by role
-        const messagesByRole: Record<string, number> = {};
-        messages.forEach(m => {
-            messagesByRole[m.role] = (messagesByRole[m.role] || 0) + 1;
-        });
+        // Get first message timestamp (conversation created time)
+        const firstMessage = await this.repository
+          .createQueryBuilder("message")
+          .where("message.conversationId = :conversationId", { conversationId })
+          .orderBy("message.timestamp", "ASC")
+          .take(1)
+          .getOne();
 
         return {
-            totalMessages,
-            totalConversations,
-            messagesByRole
+          conversationId,
+          lastMessage: lastMessage?.content || "",
+          lastMessageTimestamp: lastMessage?.timestamp || new Date(),
+          messageCount,
+          createdAt: firstMessage?.timestamp || new Date(),
         };
-    }
+      })
+    );
 
-    /**
-     * Get all conversation IDs
-     */
-    async getAllConversations(): Promise<string[]> {
-        const result = await this.repository
-            .createQueryBuilder('message')
-            .select('DISTINCT message.conversationId', 'conversationId')
-            .getRawMany();
+    // Sort by last message timestamp (most recent first)
+    return conversationsWithMetadata.sort(
+      (a, b) =>
+        b.lastMessageTimestamp.getTime() - a.lastMessageTimestamp.getTime()
+    );
+  }
 
-        return result.map(r => r.conversationId);
-    }
+  /**
+   * Search conversations by message content. Returns conversations whose
+   * any message contains the query string (case-insensitive LIKE).
+   */
+  async searchConversationsWithMetadata(query: string): Promise<
+    Array<{
+      conversationId: string;
+      lastMessage: string;
+      lastMessageTimestamp: Date;
+      messageCount: number;
+      createdAt: Date;
+    }>
+  > {
+    // Escape SQL LIKE wildcards in user input to avoid unintended matching.
+    const escapedQuery = query.replace(/[%_]/g, (m) => "\\" + m);
+    const likePattern = `%${escapedQuery}%`;
 
-    /**
-     * Get latest messages across all conversations
-     */
-    async getLatestMessages(limit: number = 10): Promise<AIChatMessageEntity[]> {
-        return await this.repository
-            .createQueryBuilder('message')
-            .orderBy('message.timestamp', 'DESC')
-            .take(limit)
-            .getMany();
-    }
+    // Step 1: Find distinct conversation IDs that contain the search term.
+    const matchingConvos = await this.repository
+      .createQueryBuilder("message")
+      .select("DISTINCT message.conversationId", "conversationId")
+      .where("message.content LIKE :query ESCAPE '\\'", { query: likePattern })
+      .getRawMany();
 
-    /**
-     * Get all conversations with metadata (last message, timestamp, message count)
-     */
-    async getConversationsWithMetadata(): Promise<Array<{
-        conversationId: string;
-        lastMessage: string;
-        lastMessageTimestamp: Date;
-        messageCount: number;
-        createdAt: Date;
-    }>> {
-        // Get all unique conversation IDs
-        const conversations = await this.repository
-            .createQueryBuilder('message')
-            .select('DISTINCT message.conversationId', 'conversationId')
-            .getRawMany();
+    if (matchingConvos.length === 0) return [];
 
-        // For each conversation, get the last message and message count
-        const conversationsWithMetadata = await Promise.all(
-            conversations.map(async (conv) => {
-                const conversationId = conv.conversationId;
-                
-                // Get the last message
-                const lastMessage = await this.repository
-                    .createQueryBuilder('message')
-                    .where('message.conversationId = :conversationId', { conversationId })
-                    .orderBy('message.timestamp', 'DESC')
-                    .take(1)
-                    .getOne();
+    // Step 2: For each matching conversation, fetch full metadata
+    // (total message count, last/first message — not just matching rows).
+    const results = await Promise.all(
+      matchingConvos.map(async (conv) => {
+        const conversationId = conv.conversationId as string;
 
-                // Get message count
-                const messageCount = await this.repository
-                    .createQueryBuilder('message')
-                    .where('message.conversationId = :conversationId', { conversationId })
-                    .getCount();
+        const lastMessage = await this.repository
+          .createQueryBuilder("message")
+          .where("message.conversationId = :conversationId", { conversationId })
+          .orderBy("message.timestamp", "DESC")
+          .take(1)
+          .getOne();
 
-                // Get first message timestamp (conversation created time)
-                const firstMessage = await this.repository
-                    .createQueryBuilder('message')
-                    .where('message.conversationId = :conversationId', { conversationId })
-                    .orderBy('message.timestamp', 'ASC')
-                    .take(1)
-                    .getOne();
+        const messageCount = await this.repository
+          .createQueryBuilder("message")
+          .where("message.conversationId = :conversationId", { conversationId })
+          .getCount();
 
-                return {
-                    conversationId,
-                    lastMessage: lastMessage?.content || '',
-                    lastMessageTimestamp: lastMessage?.timestamp || new Date(),
-                    messageCount,
-                    createdAt: firstMessage?.timestamp || new Date()
-                };
-            })
-        );
+        const firstMessage = await this.repository
+          .createQueryBuilder("message")
+          .where("message.conversationId = :conversationId", { conversationId })
+          .orderBy("message.timestamp", "ASC")
+          .take(1)
+          .getOne();
 
-        // Sort by last message timestamp (most recent first)
-        return conversationsWithMetadata.sort((a, b) => 
-            b.lastMessageTimestamp.getTime() - a.lastMessageTimestamp.getTime()
-        );
-    }
+        return {
+          conversationId,
+          lastMessage: lastMessage?.content || "",
+          lastMessageTimestamp: lastMessage?.timestamp || new Date(),
+          messageCount,
+          createdAt: firstMessage?.timestamp || new Date(),
+        };
+      })
+    );
+
+    return results.sort(
+      (a, b) =>
+        b.lastMessageTimestamp.getTime() - a.lastMessageTimestamp.getTime()
+    );
+  }
 }
-
