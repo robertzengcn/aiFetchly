@@ -31,6 +31,95 @@ export interface MCPToolWithServer {
 }
 
 /**
+ * Build an MCPClient config from a persisted MCPToolEntity. Plugin-owned stdio
+ * servers store command/args/env in dedicated columns; legacy manual servers
+ * store the space-separated command in `host`. (Design §9.2, §9.3)
+ */
+function buildClientConfig(server: MCPToolEntity): {
+  host?: string;
+  port?: number;
+  transport: "stdio" | "sse" | "websocket";
+  authType: "none" | "api_key" | "bearer_token" | "custom";
+  authConfig?: Record<string, unknown>;
+  timeout: number;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+} {
+  const base: {
+    host?: string;
+    port?: number;
+    transport: "stdio" | "sse" | "websocket";
+    authType: "none" | "api_key" | "bearer_token" | "custom";
+    authConfig?: Record<string, unknown>;
+    timeout: number;
+    command?: string;
+    args?: string[];
+    env?: Record<string, string>;
+  } = {
+    transport: server.transport,
+    authType: server.authType,
+    authConfig: server.authConfig
+      ? safeJsonParse(server.authConfig)
+      : undefined,
+    timeout: server.timeout,
+  };
+
+  if (server.transport === "stdio" && server.command) {
+    // Plugin-owned stdio server — use explicit fields.
+    base.command = server.command;
+    base.args = server.argsJson
+      ? safeJsonParseStringArray(server.argsJson)
+      : [];
+    base.env = server.envJson ? safeJsonParseRecord(server.envJson) : undefined;
+  } else {
+    // Legacy manual server or network transport.
+    if (server.host) base.host = server.host;
+    if (server.port !== undefined && server.port !== null) {
+      base.port = server.port;
+    }
+    if (server.transport === "stdio" && server.url) {
+      base.host = server.url;
+    }
+  }
+
+  return base;
+}
+
+function safeJsonParse(value: string): Record<string, unknown> | undefined {
+  try {
+    return JSON.parse(value) as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+}
+
+function safeJsonParseStringArray(value: string): string[] {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed)
+      ? parsed.filter((v): v is string => typeof v === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function safeJsonParseRecord(
+  value: string
+): Record<string, string> | undefined {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, string>;
+    }
+  } catch {
+    // ignore
+  }
+  return undefined;
+}
+
+/**
  * Service for managing MCP tools and servers
  */
 export class MCPToolService {
@@ -41,50 +130,7 @@ export class MCPToolService {
   }
 
   private createClientForServer(server: MCPToolEntity): MCPClient {
-    const host = this.resolveServerHost(server);
-    return new MCPClient({
-      host,
-      port: server.port,
-      transport: server.transport,
-      authType: server.authType,
-      authConfig: server.authConfig ? JSON.parse(server.authConfig) : undefined,
-      timeout: server.timeout,
-    });
-  }
-
-  private resolveServerHost(server: MCPToolEntity): string {
-    if (server.host) {
-      return server.host;
-    }
-
-    if (server.transport === "stdio" && server.command) {
-      const args = this.parseStringArray(server.argsJson);
-      return [server.command, ...args].join(" ");
-    }
-
-    if (
-      (server.transport === "sse" || server.transport === "websocket") &&
-      server.url
-    ) {
-      return server.url;
-    }
-
-    throw new Error(`MCP server ${server.serverName} is missing host`);
-  }
-
-  private parseStringArray(value: string | undefined): string[] {
-    if (!value) {
-      return [];
-    }
-
-    try {
-      const parsed: unknown = JSON.parse(value);
-      return Array.isArray(parsed)
-        ? parsed.filter((item): item is string => typeof item === "string")
-        : [];
-    } catch {
-      return [];
-    }
+    return new MCPClient(buildClientConfig(server));
   }
 
   /**
@@ -348,7 +394,9 @@ export class MCPToolService {
 
       return tools;
     } catch (error) {
-      await client.disconnect().catch(() => { /* best-effort disconnect */ });
+      await client.disconnect().catch(() => {
+        /* best-effort disconnect */
+      });
       throw error;
     }
   }
@@ -436,7 +484,9 @@ export class MCPToolService {
       await client.disconnect();
       return result;
     } catch (error) {
-      await client.disconnect().catch(() => { /* best-effort disconnect */ });
+      await client.disconnect().catch(() => {
+        /* best-effort disconnect */
+      });
       throw error;
     }
   }
@@ -458,7 +508,9 @@ export class MCPToolService {
       await client.disconnect();
       return true;
     } catch (error) {
-      await client.disconnect().catch(() => { /* best-effort disconnect */ });
+      await client.disconnect().catch(() => {
+        /* best-effort disconnect */
+      });
       return false;
     }
   }
