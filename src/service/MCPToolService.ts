@@ -40,6 +40,53 @@ export class MCPToolService {
     this.mcpToolModule = new MCPToolModule();
   }
 
+  private createClientForServer(server: MCPToolEntity): MCPClient {
+    const host = this.resolveServerHost(server);
+    return new MCPClient({
+      host,
+      port: server.port,
+      transport: server.transport,
+      authType: server.authType,
+      authConfig: server.authConfig ? JSON.parse(server.authConfig) : undefined,
+      timeout: server.timeout,
+    });
+  }
+
+  private resolveServerHost(server: MCPToolEntity): string {
+    if (server.host) {
+      return server.host;
+    }
+
+    if (server.transport === "stdio" && server.command) {
+      const args = this.parseStringArray(server.argsJson);
+      return [server.command, ...args].join(" ");
+    }
+
+    if (
+      (server.transport === "sse" || server.transport === "websocket") &&
+      server.url
+    ) {
+      return server.url;
+    }
+
+    throw new Error(`MCP server ${server.serverName} is missing host`);
+  }
+
+  private parseStringArray(value: string | undefined): string[] {
+    if (!value) {
+      return [];
+    }
+
+    try {
+      const parsed: unknown = JSON.parse(value);
+      return Array.isArray(parsed)
+        ? parsed.filter((item): item is string => typeof item === "string")
+        : [];
+    } catch {
+      return [];
+    }
+  }
+
   /**
    * Get all MCP servers with their tools
    */
@@ -237,14 +284,7 @@ export class MCPToolService {
       throw new Error(`MCP server with id ${serverId} not found`);
     }
 
-    const client = new MCPClient({
-      host: server.host,
-      port: server.port,
-      transport: server.transport,
-      authType: server.authType,
-      authConfig: server.authConfig ? JSON.parse(server.authConfig) : undefined,
-      timeout: server.timeout,
-    });
+    const client = this.createClientForServer(server);
 
     try {
       await client.connect();
@@ -388,14 +428,7 @@ export class MCPToolService {
       }
     }
 
-    const client = new MCPClient({
-      host: server.host,
-      port: server.port,
-      transport: server.transport,
-      authType: server.authType,
-      authConfig: server.authConfig ? JSON.parse(server.authConfig) : undefined,
-      timeout: server.timeout,
-    });
+    const client = this.createClientForServer(server);
 
     try {
       await client.connect();
@@ -418,14 +451,7 @@ export class MCPToolService {
       throw new Error(`MCP server with id ${serverId} not found`);
     }
 
-    const client = new MCPClient({
-      host: server.host,
-      port: server.port,
-      transport: server.transport,
-      authType: server.authType,
-      authConfig: server.authConfig ? JSON.parse(server.authConfig) : undefined,
-      timeout: server.timeout,
-    });
+    const client = this.createClientForServer(server);
 
     try {
       await client.connect();

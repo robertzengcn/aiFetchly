@@ -72,12 +72,12 @@ export class AgentTaskModel extends BaseDb {
   }
 
   async saveResult(agentTaskId: string, result: AgentResult): Promise<void> {
-    await this.repository.update(
-      { agentTaskId },
-      {
-        result: result as unknown as Record<string, unknown>,
-      }
-    );
+    const task = await this.repository.findOne({ where: { agentTaskId } });
+    if (!task) {
+      throw new Error(`Agent task not found: ${agentTaskId}`);
+    }
+    task.result = result as unknown as Record<string, unknown>;
+    await this.repository.save(task);
   }
 
   async incrementToolCalls(agentTaskId: string): Promise<void> {
