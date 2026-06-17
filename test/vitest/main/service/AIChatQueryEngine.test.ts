@@ -18,6 +18,8 @@ import type {
 const mockSaveUserMessage = vi.fn().mockResolvedValue({ messageId: "user-1" });
 const mockGetConversationMessages = vi.fn().mockResolvedValue([]);
 const mockSaveAssistantMessage = vi.fn().mockResolvedValue({});
+const mockSaveToolCallMessage = vi.fn().mockResolvedValue({});
+const mockSaveToolResultMessage = vi.fn().mockResolvedValue({});
 const mockCreateConversationIfNeeded = vi.fn().mockReturnValue("v2-test-conv");
 const mockGetDefaultSystemPrompt = vi.fn().mockReturnValue("You are helpful.");
 
@@ -26,6 +28,8 @@ vi.mock("@/modules/AIChatV2Module", () => ({
     saveUserMessage: mockSaveUserMessage,
     getConversationMessages: mockGetConversationMessages,
     saveAssistantMessage: mockSaveAssistantMessage,
+    saveToolCallMessage: mockSaveToolCallMessage,
+    saveToolResultMessage: mockSaveToolResultMessage,
     createConversationIfNeeded: mockCreateConversationIfNeeded,
     getDefaultSystemPrompt: mockGetDefaultSystemPrompt,
   })),
@@ -229,6 +233,61 @@ describe("AIChatQueryEngine", () => {
           model: "gpt-4",
         })
       );
+    });
+
+    it("persists tool call and tool result events for history reload", async () => {
+      const fakeRun = vi
+        .fn()
+        .mockImplementation(async (input: AIChatQueryLoopInput) => {
+          input.eventSink.emit({
+            type: "tool_call",
+            conversationId: input.conversationId,
+            messageId: input.assistantMessageId,
+            toolCallId: "call-1",
+            toolName: "get_time",
+            toolArguments: { timezone: "UTC" },
+          });
+          input.eventSink.emit({
+            type: "tool_result",
+            conversationId: input.conversationId,
+            messageId: input.assistantMessageId,
+            toolCallId: "call-1",
+            toolName: "get_time",
+            fullContent: "{\"success\":true}",
+            toolResult: { success: true, summary: "12:00 UTC" },
+          });
+          return {
+            type: "completed" as const,
+            conversationId: input.conversationId,
+            assistantMessageId: input.assistantMessageId,
+            fullContent: "It is noon.",
+            finishReason: "stop",
+          };
+        });
+      const engine = createEngineWithFakeLoop(fakeRun);
+      const { sink } = makeEventCollector();
+
+      await engine.submitMessage({
+        request: { message: "what time is it?" },
+        eventSink: sink,
+      });
+
+      expect(mockSaveToolCallMessage).toHaveBeenCalledWith({
+        conversationId: "v2-test-conv",
+        assistantMessageId: expect.stringMatching(/^assistant-/),
+        toolCallId: "call-1",
+        toolName: "get_time",
+        toolArguments: { timezone: "UTC" },
+      });
+      expect(mockSaveToolResultMessage).toHaveBeenCalledWith({
+        conversationId: "v2-test-conv",
+        assistantMessageId: expect.stringMatching(/^assistant-/),
+        toolCallId: "call-1",
+        toolName: "get_time",
+        content: "{\"success\":true}",
+        toolResult: { success: true, summary: "12:00 UTC" },
+        replacesPermissionPromptForToolId: undefined,
+      });
     });
 
     it("emits error event when loop returns failed", async () => {

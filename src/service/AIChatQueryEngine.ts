@@ -81,6 +81,10 @@ export class AIChatQueryEngine {
   private pendingPlanQuestion: PendingPlanQuestionTurn | null = null;
   private readonly contextAssembler: AIChatContextAssembler;
   private readonly compactAgent?: AIChatCompactAgentService;
+  private readonly pendingEventSaves = new WeakMap<
+    AIChatQueryEventSink,
+    Promise<unknown>[]
+  >();
 
   constructor(
     private readonly loop: AIChatQueryLoop,
@@ -226,6 +230,7 @@ export class AIChatQueryEngine {
     // ------------------------------------------------------------------
     // 7. Run the loop
     // ------------------------------------------------------------------
+    const streamEventSink = this.createPersistingEventSink(module, eventSink);
     const loopInput: AIChatQueryLoopInput = {
       conversationId,
       assistantMessageId,
@@ -233,7 +238,7 @@ export class AIChatQueryEngine {
       request,
       openAITools: allOpenAITools,
       abortController,
-      eventSink,
+      eventSink: streamEventSink,
       planContext,
       startRound: 0,
       isActiveTurn: () =>
@@ -243,7 +248,7 @@ export class AIChatQueryEngine {
 
     try {
       const result = await this.loop.run(loopInput);
-      await this.handleLoopResult(result, module, eventSink);
+      await this.handleLoopResult(result, module, streamEventSink);
     } catch (err) {
       this.handleFailure(err, conversationId, assistantMessageId, eventSink);
     } finally {
@@ -330,6 +335,8 @@ export class AIChatQueryEngine {
     this.currentAbortController = pending.abortController;
     this.currentConversationId = pending.conversationId;
     this.currentAssistantMessageId = pending.assistantMessageId;
+    const module = new AIChatV2Module();
+    const eventSink = this.createPersistingEventSink(module, pending.eventSink);
 
     try {
       const toolResult = await SkillExecutor.execute(
@@ -346,7 +353,7 @@ export class AIChatQueryEngine {
       const toolPayload = normalizeToolResult(toolResult);
       const toolContent = serializeToolResultContent(toolPayload);
 
-      pending.eventSink.emit({
+      eventSink.emit({
         type: "tool_result",
         conversationId: pending.conversationId,
         messageId: pending.assistantMessageId,
@@ -358,6 +365,7 @@ export class AIChatQueryEngine {
       });
 
       if (isPermissionPromptResult(toolResult)) {
+        await this.flushEventSaves(eventSink);
         this.pendingPermission = pending;
         return {
           ok: false,
@@ -378,7 +386,7 @@ export class AIChatQueryEngine {
         request: pending.request,
         openAITools: pending.openAITools,
         abortController: pending.abortController,
-        eventSink: pending.eventSink,
+        eventSink,
         planContext: pending.planContext,
         startRound: pending.nextRound,
         isActiveTurn: () =>
@@ -386,12 +394,10 @@ export class AIChatQueryEngine {
           this.currentConversationId === pending.conversationId,
       };
 
-      const module = new AIChatV2Module();
-
       void this.loop
         .run(loopInput)
         .then(async (result) => {
-          await this.handleLoopResult(result, module, pending.eventSink);
+          await this.handleLoopResult(result, module, eventSink);
         })
         .catch((err) => {
           console.error("[ai-chat-v2] resume loop failed:", err);
@@ -513,11 +519,12 @@ export class AIChatQueryEngine {
     };
 
     const module = new AIChatV2Module();
+    const eventSink = this.createPersistingEventSink(module, pending.eventSink);
 
     void this.loop
-      .run(loopInput)
+      .run({ ...loopInput, eventSink })
       .then(async (result) => {
-        await this.handleLoopResult(result, module, pending.eventSink);
+        await this.handleLoopResult(result, module, eventSink);
       })
       .catch((err) => {
         console.error("[ai-chat-v2] answer-question loop failed:", err);
@@ -548,6 +555,7 @@ export class AIChatQueryEngine {
     module: AIChatV2Module,
     eventSink: AIChatQueryEventSink
   ): Promise<void> {
+    await this.flushEventSaves(eventSink);
     switch (result.type) {
       case "completed": {
         const { conversationId, assistantMessageId } = result;
@@ -667,6 +675,65 @@ export class AIChatQueryEngine {
     this.currentAbortController = null;
     this.currentConversationId = null;
     this.currentAssistantMessageId = null;
+  }
+
+  private createPersistingEventSink(
+    module: AIChatV2Module,
+    eventSink: AIChatQueryEventSink
+  ): AIChatQueryEventSink {
+    if (this.pendingEventSaves.has(eventSink)) {
+      return eventSink;
+    }
+    const saves: Promise<unknown>[] = [];
+    const wrapped: AIChatQueryEventSink = {
+      emit: (event) => {
+        eventSink.emit(event);
+        if (event.type === "tool_call") {
+          saves.push(
+            module
+              .saveToolCallMessage({
+                conversationId: event.conversationId,
+                assistantMessageId: event.messageId,
+                toolCallId: event.toolCallId,
+                toolName: event.toolName,
+                toolArguments: event.toolArguments,
+              })
+              .catch((err: unknown) => {
+                console.error("[ai-chat-v2] save tool call failed:", err);
+              })
+          );
+        }
+        if (event.type === "tool_result") {
+          saves.push(
+            module
+              .saveToolResultMessage({
+                conversationId: event.conversationId,
+                assistantMessageId: event.messageId,
+                toolCallId: event.toolCallId,
+                toolName: event.toolName,
+                content: event.fullContent,
+                toolResult: event.toolResult,
+                replacesPermissionPromptForToolId:
+                  event.replacesPermissionPromptForToolId,
+              })
+              .catch((err: unknown) => {
+                console.error("[ai-chat-v2] save tool result failed:", err);
+              })
+          );
+        }
+      },
+    };
+    this.pendingEventSaves.set(wrapped, saves);
+    return wrapped;
+  }
+
+  private async flushEventSaves(eventSink: AIChatQueryEventSink): Promise<void> {
+    const saves = this.pendingEventSaves.get(eventSink);
+    if (!saves || saves.length === 0) {
+      return;
+    }
+    await Promise.allSettled(saves);
+    saves.length = 0;
   }
 
   /**

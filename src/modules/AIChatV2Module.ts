@@ -86,6 +86,73 @@ export class AIChatV2Module extends BaseModule {
     });
   }
 
+  async saveToolCallMessage(params: {
+    conversationId: string;
+    assistantMessageId: string;
+    toolCallId: string;
+    toolName: string;
+    toolArguments: Record<string, unknown>;
+    timestamp?: Date;
+  }): Promise<AIChatMessageEntity> {
+    const metadata: ChatV2MessageMetadata = {
+      source: "chat-v2",
+      toolCallId: params.toolCallId,
+      toolName: params.toolName,
+      toolArguments: params.toolArguments,
+    };
+    return this.chatModule.saveMessage({
+      messageId: `tool-call-${params.toolCallId}`,
+      conversationId: params.conversationId,
+      role: "assistant",
+      content: "",
+      timestamp: params.timestamp,
+      metadata,
+      messageType: MessageType.TOOL_CALL,
+    });
+  }
+
+  async saveToolResultMessage(params: {
+    conversationId: string;
+    assistantMessageId: string;
+    toolCallId: string;
+    toolName: string;
+    content: string;
+    toolResult: Record<string, unknown>;
+    replacesPermissionPromptForToolId?: string;
+    timestamp?: Date;
+  }): Promise<AIChatMessageEntity> {
+    const toolResult = params.toolResult;
+    const metadata: ChatV2MessageMetadata = {
+      source: "chat-v2",
+      toolCallId: params.toolCallId,
+      toolName: params.toolName,
+      toolResult,
+      toolResultStatus:
+        toolResult.success === false ? ("error" as const) : ("success" as const),
+      toolResultSummary:
+        typeof toolResult.summary === "string" ? toolResult.summary : undefined,
+      success: toolResult.success !== false,
+      executionTimeMs:
+        typeof toolResult.executionTimeMs === "number"
+          ? toolResult.executionTimeMs
+          : undefined,
+      summary:
+        typeof toolResult.summary === "string" ? toolResult.summary : undefined,
+      error: typeof toolResult.error === "string" ? toolResult.error : undefined,
+    };
+    return this.chatModule.saveMessage({
+      messageId: `tool-result-${
+        params.replacesPermissionPromptForToolId ?? params.toolCallId
+      }`,
+      conversationId: params.conversationId,
+      role: "assistant",
+      content: params.content,
+      timestamp: params.timestamp,
+      metadata,
+      messageType: MessageType.TOOL_RESULT,
+    });
+  }
+
   async getConversationMessages(
     conversationId: string,
     limit?: number,
