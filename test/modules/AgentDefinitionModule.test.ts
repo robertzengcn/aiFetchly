@@ -1,5 +1,6 @@
 // test/modules/AgentDefinitionModule.test.ts
-import { describe, it, expect, before } from "mocha";
+import { expect } from "chai";
+import { describe, it, before } from "mocha";
 import { AgentDefinitionModule } from "@/modules/AgentDefinitionModule";
 
 describe("AgentDefinitionModule", () => {
@@ -12,7 +13,7 @@ describe("AgentDefinitionModule", () => {
   it("seeds all built-in definitions as active", async () => {
     await module.ensureBuiltIns();
     const defs = await module.listActive();
-    expect(defs.length).toBeGreaterThan(0);
+    expect(defs.length).to.be.greaterThan(0);
     const researcher = defs.find((d) => d.id === "agent-lead-researcher");
     expect(researcher).to.not.be.undefined;
     expect(researcher!.status).to.equal("active");

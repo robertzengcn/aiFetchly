@@ -1,5 +1,6 @@
 // test/modules/AgentTaskModule.test.ts
-import { describe, it, expect, before } from "mocha";
+import { expect } from "chai";
+import { describe, it, before } from "mocha";
 import { AgentTaskModule } from "@/modules/AgentTaskModule";
 import type { AgentTaskPacket, AgentResult } from "@/entityTypes/agentTypes";
 

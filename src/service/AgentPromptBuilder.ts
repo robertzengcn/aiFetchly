@@ -10,20 +10,22 @@ export interface BuildPromptInput {
   packet: AgentTaskPacket;
 }
 
+export type AgentPromptMessage = OpenAIChatMessage & { content: string };
+
 export interface BuiltPrompt {
   messages: OpenAIChatMessage[];
-  systemMessage: OpenAIChatMessage;
-  userMessage: OpenAIChatMessage;
+  systemMessage: AgentPromptMessage;
+  userMessage: AgentPromptMessage;
 }
 
 export class AgentPromptBuilder {
   build(input: BuildPromptInput): BuiltPrompt {
-    const systemMessage: OpenAIChatMessage = {
+    const systemMessage: AgentPromptMessage = {
       role: "system",
       content: input.definition.systemPrompt,
     };
     // The packet is the entire context the agent sees — no parent chat history.
-    const userMessage: OpenAIChatMessage = {
+    const userMessage: AgentPromptMessage = {
       role: "user",
       content: JSON.stringify(
         {
