@@ -48,7 +48,17 @@
             </thead>
             <tbody>
               <tr v-for="skill in skills" :key="skill.name">
-                <td>{{ skill.name }}</td>
+                <td>
+                  {{ skill.name }}
+                  <v-chip
+                    v-if="skill.pluginName"
+                    size="x-small"
+                    color="info"
+                    class="ml-2"
+                  >
+                    {{ t("plugins.via_plugin", { name: skill.pluginName }) }}
+                  </v-chip>
+                </td>
                 <td>
                   <v-chip :color="skill.source === 'built-in' ? 'primary' : 'secondary'" size="small">
                     {{ skill.source === 'built-in' ? t('skills.built_in') : t('skills.user_installed') }}
@@ -122,6 +132,7 @@ interface SkillEntry {
   version: string;
   enabled: boolean;
   manifestJson?: string;
+  pluginName?: string;
 }
 
 const isLoading = ref(false);
@@ -140,6 +151,7 @@ async function fetchSkills(): Promise<void> {
         version: String(s.version),
         enabled: s.enabled === 1,
         manifestJson: String(s.manifest_json ?? ""),
+        pluginName: s.pluginName ? String(s.pluginName) : undefined,
       }));
     }
   } finally {
