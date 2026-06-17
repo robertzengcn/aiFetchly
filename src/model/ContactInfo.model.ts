@@ -19,7 +19,7 @@ export class ContactInfoRepository {
      *
      * @throws Error if used in worker process (DATABASE_PATH env var is set)
      */
-    private getRepository(): Repository<ContactInfoEntity> {
+    private async getRepository(): Promise<Repository<ContactInfoEntity>> {
         // Prevent direct database access from worker process
         if (process.env.DATABASE_PATH) {
             throw new Error(
@@ -39,7 +39,7 @@ export class ContactInfoRepository {
 
         // Ensure connection is initialized
         if (!db.connection.isInitialized) {
-            db.connection.initialize();
+            await SqliteDb.ensureInitialized();
         }
 
         return db.connection.getRepository(ContactInfoEntity);
@@ -49,7 +49,7 @@ export class ContactInfoRepository {
      * Find contact info by result ID
      */
     async findByResultId(resultId: number): Promise<ContactInfoEntity | null> {
-        const repository = this.getRepository();
+        const repository = await this.getRepository();
         return repository.findOne({ where: { resultId } as any });
     }
 
@@ -57,7 +57,7 @@ export class ContactInfoRepository {
      * Find multiple contact info by result IDs
      */
     async findByResultIds(resultIds: number[]): Promise<ContactInfoEntity[]> {
-        const repository = this.getRepository();
+        const repository = await this.getRepository();
         return repository.createQueryBuilder('contactInfo')
             .where('contactInfo.resultId IN (:...resultIds)', { resultIds })
             .getMany();
@@ -71,7 +71,7 @@ export class ContactInfoRepository {
         status: 'pending' | 'analyzing' | 'completed' | 'failed',
         error?: string
     ): Promise<void> {
-        const repository = this.getRepository();
+        const repository = await this.getRepository();
         await repository.update(
             { resultId } as any,
             {
@@ -86,7 +86,7 @@ export class ContactInfoRepository {
      * Find by extraction status
      */
     async findByStatus(status: string): Promise<ContactInfoEntity[]> {
-        const repository = this.getRepository();
+        const repository = await this.getRepository();
         return repository.find({ where: { extractionStatus: status } as any });
     }
 
@@ -94,7 +94,7 @@ export class ContactInfoRepository {
      * Find pending extractions (for queue processing)
      */
     async findPendingExtractions(limit = 10): Promise<ContactInfoEntity[]> {
-        const repository = this.getRepository();
+        const repository = await this.getRepository();
         return repository.find({
             where: { extractionStatus: 'pending' } as any,
             take: limit,
@@ -106,7 +106,7 @@ export class ContactInfoRepository {
      * Find failed extractions (for retry)
      */
     async findFailedExtractions(limit = 10): Promise<ContactInfoEntity[]> {
-        const repository = this.getRepository();
+        const repository = await this.getRepository();
         return repository.find({
             where: { extractionStatus: 'failed' } as any,
             take: limit,
@@ -118,7 +118,7 @@ export class ContactInfoRepository {
      * Save or update contact info (upsert)
      */
     async saveOrUpdate(resultId: number, data: Partial<ContactInfoEntity>): Promise<ContactInfoEntity> {
-        const repository = this.getRepository();
+        const repository = await this.getRepository();
         const existing = await this.findByResultId(resultId);
 
         if (existing) {
@@ -134,7 +134,7 @@ export class ContactInfoRepository {
      * Delete contact info by result ID
      */
     async deleteByResultId(resultId: number): Promise<void> {
-        const repository = this.getRepository();
+        const repository = await this.getRepository();
         await repository.delete({ resultId } as any);
     }
 
@@ -148,7 +148,7 @@ export class ContactInfoRepository {
         pending: number;
         analyzing: number;
     }> {
-        const repository = this.getRepository();
+        const repository = await this.getRepository();
 
         const [
             total,
