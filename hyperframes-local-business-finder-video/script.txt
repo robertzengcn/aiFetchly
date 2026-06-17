@@ -1,0 +1,17 @@
+Finding local business leads one by one can eat hours. You search maps, open listings, copy details, check websites, and still end up with a messy spreadsheet.
+
+AiFetchly's Local Business Finder turns that manual work into an organized search. Choose Google Maps for global coverage, or Yandex Maps for Russia, CIS markets, and Turkey.
+
+Start by opening Local Business Finder from the left navigation. In the Search tab, select your data source, then enter the business type you want, like dentist, Italian restaurant, plumber, or marketing agency.
+
+Next, enter the target location. You can use a city, address, zip code, or a wider region. More specific locations usually produce more relevant leads.
+
+Now tune the search. Set the maximum results from 1 to 50, include website URLs if you want outreach-ready records, and turn on reviews only when you need extra detail. Show Browser is usually off, unless you are debugging.
+
+For Yandex searches, set language and region when needed. For higher success rates, you can also select a matching account and rotate proxies, especially for larger searches or regional markets.
+
+Click Start Search. AiFetchly runs the search in the background, shows live progress, and lets you cancel while keeping partial results. You can run up to three searches at the same time.
+
+When the search finishes, the results table gives you names, categories, ratings, review counts, addresses, phone numbers, websites, and map links.
+
+From here, copy everything as JSON, export CSV for spreadsheets, or export JSON for downstream tools. Local Business Finder gives you structured local leads, ready for your next outreach step.
