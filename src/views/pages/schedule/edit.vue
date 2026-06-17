@@ -67,6 +67,7 @@
               :schedule="schedule"
               :is-edit="true"
               :loading="submitting"
+              :ai-message-task-data="aiMessageTask"
               @submit="handleSubmit"
               @cancel="goBack"
             />
@@ -104,13 +105,16 @@ import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import ScheduleForm from './widgets/ScheduleForm.vue'
 import { getScheduleById, updateSchedule } from '@/views/api/schedule'
+import { getAiMessageTaskDetail } from '@/views/api/aiMessageTask'
 import { ScheduleUpdateRequest } from '@/entityTypes/schedule-type'
+import { TaskType } from '@/entity/ScheduleTask.entity'
 
 const route = useRoute()
 const router = useRouter()
 
 // Reactive data
 const schedule = ref<any>(null)
+const aiMessageTask = ref<any>(null)
 const loading = ref(false)
 const submitting = ref(false)
 const error = ref('')
@@ -137,9 +141,21 @@ const loadSchedule = async () => {
   try {
     loading.value = true
     error.value = ''
-    
+
     const data = await getScheduleById(scheduleId)
     schedule.value = data.schedule
+
+    // Load AI message task data if schedule is AI_MESSAGE type
+    if (schedule.value?.task_type === TaskType.AI_MESSAGE && schedule.value?.task_id) {
+      try {
+        const taskResult = await getAiMessageTaskDetail(schedule.value.task_id) as Record<string, unknown> | null | undefined
+        if (taskResult) {
+          aiMessageTask.value = taskResult
+        }
+      } catch (taskErr) {
+        console.error('Failed to load AI message task:', taskErr)
+      }
+    }
   } catch (err) {
     error.value = `Failed to load schedule: ${err}`
   } finally {

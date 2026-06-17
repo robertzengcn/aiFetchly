@@ -147,6 +147,59 @@
           </v-card-text>
         </v-card>
 
+        <!-- AI Message Task Details -->
+        <v-card v-if="schedule.task_type === TaskType.AI_MESSAGE && aiMessageTask" class="mb-4">
+          <v-card-title class="d-flex align-center">
+            <v-icon class="mr-2">mdi-robot</v-icon>
+            {{ t('schedule.ai_message_task') || 'AI Message Task' }}
+          </v-card-title>
+          <v-card-text>
+            <v-row>
+              <v-col cols="12">
+                <div class="mb-3">
+                  <div class="text-caption text-medium-emphasis">{{ t('schedule.ai_message_task_name') || 'Task Name' }}</div>
+                  <div class="text-body-1 font-weight-medium">{{ aiMessageTask.name }}</div>
+                </div>
+                <div class="mb-3">
+                  <div class="text-caption text-medium-emphasis">{{ t('schedule.ai_message_task_message') || 'AI Message' }}</div>
+                  <div class="text-body-2 pa-2 bg-grey-lighten-4 rounded" style="white-space: pre-wrap;">{{ aiMessageTask.message }}</div>
+                </div>
+              </v-col>
+            </v-row>
+            <v-row v-if="aiMessageTaskAllowedTools.length > 0">
+              <v-col cols="12">
+                <div class="text-caption text-medium-emphasis mb-2">{{ t('schedule.ai_message_task_allowed_tools') || 'Allowed Tools' }}</div>
+                <v-chip
+                  v-for="tool in aiMessageTaskAllowedTools"
+                  :key="tool"
+                  size="small"
+                  color="primary"
+                  variant="tonal"
+                  class="mr-1 mb-1"
+                >
+                  {{ tool }}
+                </v-chip>
+              </v-col>
+            </v-row>
+            <v-row>
+              <v-col cols="12" md="4">
+                <div class="text-caption text-medium-emphasis">{{ t('schedule.ai_message_task_auto_approve') || 'Auto-Approve' }}</div>
+                <v-chip :color="aiMessageTask.auto_approve_tools ? 'warning' : 'grey'" size="small">
+                  {{ aiMessageTask.auto_approve_tools ? 'Yes' : 'No' }}
+                </v-chip>
+              </v-col>
+              <v-col cols="12" md="4">
+                <div class="text-caption text-medium-emphasis">{{ t('schedule.ai_message_task_max_tool_calls') || 'Max Tool Calls' }}</div>
+                <div class="text-body-2">{{ aiMessageTask.max_tool_calls }}</div>
+              </v-col>
+              <v-col cols="12" md="4">
+                <div class="text-caption text-medium-emphasis">{{ t('schedule.ai_message_task_max_runtime') || 'Max Runtime' }}</div>
+                <div class="text-body-2">{{ formatRuntime(aiMessageTask.max_runtime_ms) }}</div>
+              </v-col>
+            </v-row>
+          </v-card-text>
+        </v-card>
+
         <!-- Schedule Configuration -->
         <v-card class="mb-4">
           <v-card-title class="d-flex align-center">
@@ -411,6 +464,7 @@ import {
   deleteSchedule as deleteScheduleApi,
   getExecutionHistory
 } from '@/views/api/schedule'
+import { getAiMessageTaskDetail } from '@/views/api/aiMessageTask'
 import { TaskType, TriggerType, DependencyCondition } from '@/entity/ScheduleTask.entity'
 
 const route = useRoute()
@@ -419,11 +473,24 @@ const { t } = useI18n()
 
 // Reactive data
 const schedule = ref<any>(null)
+const aiMessageTask = ref<Record<string, unknown> | null>(null)
 const loading = ref(false)
 const running = ref(false)
 const error = ref('')
 const executionHistory = ref<any[]>([])
 const loadingHistory = ref(false)
+
+// Parse allowed tools from AI task JSON
+const aiMessageTaskAllowedTools = computed(() => {
+  if (!aiMessageTask.value) return [] as string[]
+  const json = aiMessageTask.value.allowed_tools_json as string | undefined
+  if (!json) return [] as string[]
+  try {
+    return JSON.parse(json) as string[]
+  } catch {
+    return [] as string[]
+  }
+})
 const dependencies = ref<{
   children: any[];
   parents: any[];
@@ -478,6 +545,18 @@ const loadSchedule = async () => {
     const data = await getScheduleById(scheduleId)
     schedule.value = data.schedule
     dependencies.value = data.dependencies || { children: [], parents: [] }
+
+    // Load AI message task data if applicable
+    if (schedule.value?.task_type === TaskType.AI_MESSAGE && schedule.value?.task_id) {
+      try {
+        const taskResult = await getAiMessageTaskDetail(schedule.value.task_id) as Record<string, unknown> | null | undefined
+        if (taskResult) {
+          aiMessageTask.value = taskResult
+        }
+      } catch (taskErr) {
+        console.error('Failed to load AI message task:', taskErr)
+      }
+    }
   } catch (err) {
     error.value = `${t('schedule.detail_failed_to_load')}: ${err}`
   } finally {
@@ -677,6 +756,16 @@ const getDependencyConditionLabel = (condition: DependencyCondition): string => 
 const formatDateTime = (dateString: string): string => {
   const date = new Date(dateString)
   return date.toLocaleString()
+}
+
+const formatRuntime = (ms: unknown): string => {
+  const value = typeof ms === 'number' ? ms : 0
+  if (value < 1000) return `${value}ms`
+  const seconds = Math.round(value / 1000)
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  const remainingSeconds = seconds % 60
+  return `${minutes}m ${remainingSeconds}s`
 }
 
 // Lifecycle
