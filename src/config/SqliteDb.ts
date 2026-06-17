@@ -404,6 +404,7 @@ export class SqliteDb {
   private static currentDbPath: string | null = null;
   /** Guards against concurrent initialize() calls on the same DataSource */
   private static initPromise: Promise<void> | null = null;
+  private initializeConnection?: () => Promise<DataSource>;
 
   private constructor(filepath: string) {
     if (filepath.length > 0) {
@@ -528,6 +529,13 @@ export class SqliteDb {
         //     sqlite3: sqlite3
         // }
       });
+      this.initializeConnection = this.connection.initialize.bind(
+        this.connection
+      );
+      this.connection.initialize = async (): Promise<DataSource> => {
+        await SqliteDb.initializeDataSource(this);
+        return this.connection;
+      };
       // try{
       // const driver = this.connection.driver as any;
       // const db = driver.database;
@@ -542,6 +550,35 @@ export class SqliteDb {
       // This will cause errors if instance is used
     }
   }
+
+  private static async initializeDataSource(instance: SqliteDb): Promise<void> {
+    if (instance.connection.isInitialized) {
+      return;
+    }
+
+    const initializeConnection =
+      instance.initializeConnection ??
+      instance.connection.initialize.bind(instance.connection);
+
+    if (SqliteDb.instance !== instance) {
+      await initializeConnection();
+      return;
+    }
+
+    if (!SqliteDb.initPromise) {
+      const guardedPromise = initializeConnection()
+        .then(() => undefined)
+        .finally(() => {
+          if (SqliteDb.initPromise === guardedPromise) {
+            SqliteDb.initPromise = null;
+          }
+        });
+      SqliteDb.initPromise = guardedPromise;
+    }
+
+    await SqliteDb.initPromise;
+  }
+
   public static getInstance(filepath: string): SqliteDb {
     // Validate filepath - don't create/reset with invalid paths
     if (!filepath || filepath.length === 0) {
@@ -571,6 +608,7 @@ export class SqliteDb {
       // Create new instance immediately with new path
       SqliteDb.instance = new SqliteDb(filepath);
       SqliteDb.currentDbPath = filepath;
+      SqliteDb.initPromise = null;
     } else if (!SqliteDb.instance) {
       SqliteDb.instance = new SqliteDb(filepath);
       SqliteDb.currentDbPath = filepath;
@@ -592,18 +630,7 @@ export class SqliteDb {
     if (SqliteDb.instance.connection.isInitialized) {
       return;
     }
-    if (!SqliteDb.initPromise) {
-      SqliteDb.initPromise = SqliteDb.instance.connection
-        .initialize()
-        .catch((err: unknown) => {
-          SqliteDb.initPromise = null;
-          throw err;
-        })
-        .then(() => {
-          SqliteDb.initPromise = null;
-        });
-    }
-    await SqliteDb.initPromise;
+    await SqliteDb.initializeDataSource(SqliteDb.instance);
   }
 
   /**
@@ -642,6 +669,7 @@ export class SqliteDb {
 
     SqliteDb.instance = new SqliteDb(filepath);
     SqliteDb.currentDbPath = filepath;
+    SqliteDb.initPromise = null;
 
     return SqliteDb.instance;
   }

@@ -5,6 +5,7 @@ import {SystemSettingModel} from "@/model/SystemSetting.model"
 import {settinggroupInit, language_preference, embedding_group} from "@/config/settinggroupInit"
 import { SystemSettingEntity } from "@/entity/SystemSetting.entity"
 import {SystemSettingOptionModel} from "@/model/SystemSettingOption.model"
+import { SqliteDb } from "@/config/SqliteDb";
 
 export const deepseeklocalgroup = 'Deepseek-local'
 export class SystemSettingGroupModel extends BaseDb {
@@ -25,7 +26,7 @@ export class SystemSettingGroupModel extends BaseDb {
             // Ensure DataSource is initialized before getting repository
             if (!this.sqliteDb.connection.isInitialized) {
                 try {
-                    await this.sqliteDb.connection.initialize();
+                    await SqliteDb.ensureInitialized();
                     console.log('Database connection initialized in SystemSettingGroupModel');
                 } catch (error) {
                     // Check if error is about already being initialized

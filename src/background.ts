@@ -595,7 +595,7 @@ function initialize() {
       }
       const appDataSource = SqliteDb.getInstance(userdataPath);
       if (!appDataSource.connection.isInitialized) {
-        await appDataSource.connection.initialize();
+        await SqliteDb.ensureInitialized();
       }
 
       // Seed built-in agent definitions (marketing subagent system).
@@ -1047,7 +1047,7 @@ async function handleDeepLink(url: string) {
               let lastError: unknown = null;
               while (retries > 0) {
                 try {
-                  await newDbInstance.connection.initialize();
+                  await SqliteDb.ensureInitialized();
                   log.info("New SqliteDb connection initialized");
                   break;
                 } catch (initError) {

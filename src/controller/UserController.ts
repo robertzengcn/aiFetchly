@@ -419,7 +419,7 @@ export class UserController {
               //scraperModel.init()
               const appDataSource = SqliteDb.getInstance(userdataPath);
               if (!appDataSource.connection.isInitialized) {
-                await appDataSource.connection.initialize();
+                await SqliteDb.ensureInitialized();
               }
               //await runafterbootup()
             } catch (error) {
