@@ -432,6 +432,7 @@ export interface OpenAIChatCompletionRequest {
   temperature?: number;
   max_tokens?: number;
   stream?: boolean;
+  stream_options?: { include_usage?: boolean };
   tools?: OpenAITool[];
   tool_choice?: OpenAIToolChoice;
   stop?: string | string[];
@@ -444,6 +445,10 @@ export interface OpenAIModel {
   object: string;
   created: number;
   owned_by: string;
+  /** Optional context window size in tokens (OpenAI-compatible servers). */
+  context_window?: number;
+  /** Alias some servers use for context_window. */
+  context_length?: number;
 }
 
 /** OpenAI-compatible models list response */
@@ -497,6 +502,8 @@ export interface OpenAIChatCompletionChunk {
   created: number;
   model: string;
   choices: OpenAIStreamChoice[];
+  /** Present on the final chunk when stream_options.include_usage is true. */
+  usage?: OpenAIUsage;
 }
 
 // ==================== Rerank API Types ====================
@@ -591,6 +598,33 @@ const DEFAULT_VALIDATION_CONFIG: AiValidationConfig = {
   maxPageSize: 50 * 1024, // 50KB
   maxErrorLength: 1000,
 };
+
+/**
+ * Information passed to the onRetry callback when a streaming connection
+ * attempt fails and will be retried.
+ */
+export interface StreamRetryInfo {
+  /** Current retry attempt number (1-based). */
+  attempt: number;
+  /** Maximum number of retry attempts allowed. */
+  maxAttempts: number;
+  /** Delay in milliseconds before the next attempt. */
+  delayMs: number;
+  /** Human-readable error that triggered the retry. */
+  error: string;
+}
+
+/**
+ * Maximum number of retry attempts for a streaming connection failure
+ * (so up to maxAttempts + 1 total tries including the initial attempt).
+ */
+const STREAM_RETRY_MAX_ATTEMPTS = 3;
+
+/**
+ * Base delay in milliseconds for the first retry. Subsequent delays use
+ * exponential backoff: base * 2^attempt (1s, 2s, 4s).
+ */
+const STREAM_RETRY_BASE_DELAY_MS = 1000;
 
 export class AiChatApi {
   private _httpClient: HttpClient;
@@ -1570,7 +1604,15 @@ export class AiChatApi {
    */
   async listOpenAIModels(): Promise<OpenAIModelsResponse> {
     this.ensureAIEnabled();
-    return this._httpClient.get("/v1/models");
+    try {
+      return await this._httpClient.get("/v1/models");
+    } catch (error) {
+      if (!this.isNotFoundError(error)) {
+        throw error;
+      }
+      const legacyModels = await this._httpClient.get("/api/ai/chat/models");
+      return this.normalizeLegacyModelsResponse(legacyModels);
+    }
   }
 
   /**
@@ -1618,12 +1660,19 @@ export class AiChatApi {
    *
    * @param request - Chat completion request with messages and optional parameters
    * @param onChunk - Callback invoked for each parsed streaming chunk
-   * @param options - Optional abort signal to cancel the stream
+   * @param options - Optional abort signal and retry callback. When the
+   *   initial connection to the AI server fails (network error, 5xx, or
+   *   429), the client retries up to `STREAM_RETRY_MAX_ATTEMPTS` times with
+   *   exponential backoff. The `onRetry` callback is invoked before each
+   *   retry so callers can surface the reconnection attempt in the UI.
    */
   async openAIChatCompletionStream(
     request: OpenAIChatCompletionRequest,
     onChunk: (chunk: OpenAIChatCompletionChunk) => void,
-    options?: { signal?: AbortSignal }
+    options?: {
+      signal?: AbortSignal;
+      onRetry?: (info: StreamRetryInfo) => void;
+    }
   ): Promise<void> {
     this.ensureAIEnabled();
     const data: OpenAIChatCompletionRequest = {
@@ -1651,17 +1700,86 @@ export class AiChatApi {
     if (request.user !== undefined) {
       data.user = request.user;
     }
+    // Ask the server to include token usage in the final stream chunk so we
+    // can display live context-usage percentage in the UI. Servers that do
+    // not implement stream_options simply ignore it.
+    data.stream_options = { include_usage: true };
 
     const fetchOptions: RequestInit = {};
     if (options?.signal) {
       fetchOptions.signal = options.signal;
     }
 
-    const response = await this._httpClient.postStream(
-      "/api/ai/v1/chat/completions",
-      data,
-      fetchOptions
-    );
+    let response: Response | null = null;
+    let lastError: unknown = null;
+
+    for (let attempt = 0; attempt <= STREAM_RETRY_MAX_ATTEMPTS; attempt += 1) {
+      let res: Response;
+      try {
+        res = await this._httpClient.postStream(
+          "/api/ai/v1/chat/completions",
+          data,
+          fetchOptions
+        );
+      } catch (error) {
+        // 404 → fall back to the legacy streaming endpoint (no retry).
+        if (this.isNotFoundError(error)) {
+          return this.openAIChatCompletionStreamViaLegacyEndpoint(
+            request,
+            onChunk,
+            fetchOptions
+          );
+        }
+        // Never retry user-initiated aborts.
+        if (error instanceof Error && error.name === "AbortError") {
+          throw error;
+        }
+        // Network errors (server unreachable, DNS failure, etc.) are retryable.
+        lastError = error;
+        if (attempt < STREAM_RETRY_MAX_ATTEMPTS) {
+          const delayMs = this.computeStreamRetryDelay(attempt);
+          options?.onRetry?.({
+            attempt: attempt + 1,
+            maxAttempts: STREAM_RETRY_MAX_ATTEMPTS,
+            delayMs,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          await this.sleepWithAbort(delayMs, options?.signal);
+          continue;
+        }
+        throw error;
+      }
+
+      // Retryable HTTP status codes (server errors, rate limiting).
+      if (this.isRetryableStreamStatus(res.status)) {
+        lastError = new Error(`Server returned ${res.status}`);
+        if (attempt < STREAM_RETRY_MAX_ATTEMPTS) {
+          // Drain the body so the connection can be reused/closed cleanly.
+          await res.text().catch(() => undefined);
+          const delayMs = this.computeStreamRetryDelay(attempt);
+          options?.onRetry?.({
+            attempt: attempt + 1,
+            maxAttempts: STREAM_RETRY_MAX_ATTEMPTS,
+            delayMs,
+            error: `HTTP ${res.status}`,
+          });
+          await this.sleepWithAbort(delayMs, options?.signal);
+          continue;
+        }
+        const errorText = await res.text().catch(() => "Unknown error");
+        throw new Error(`Server returned ${res.status}: ${errorText}`);
+      }
+
+      // Non-retryable response — proceed with normal handling.
+      response = res;
+      break;
+    }
+
+    if (!response) {
+      throw lastError instanceof Error
+        ? lastError
+        : new Error("Failed to connect to the AI server after retries");
+    }
 
     if (!response.ok || response.status !== 200) {
       const errorText = await response.text().catch(() => "Unknown error");
@@ -1673,6 +1791,434 @@ export class AiChatApi {
     }
 
     await this._consumeOpenAIStreamResponse(response, onChunk);
+  }
+
+  /**
+   * Determine whether an HTTP status code should trigger a retry.
+   * Server errors (5xx), rate limiting (429), and status 0 (network
+   * failure in some environments) are retryable.
+   */
+  private isRetryableStreamStatus(status: number): boolean {
+    return status === 0 || status === 429 || (status >= 500 && status < 600);
+  }
+
+  /**
+   * Compute the delay before the next retry attempt using exponential
+   * backoff: base * 2^attempt (1s, 2s, 4s).
+   */
+  private computeStreamRetryDelay(attempt: number): number {
+    return STREAM_RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
+  }
+
+  /**
+   * Promise-based delay that rejects immediately if the abort signal fires.
+   * Prevents the retry backoff from blocking a user-initiated cancel.
+   */
+  private sleepWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) {
+      return Promise.reject(
+        new DOMException("The operation was aborted.", "AbortError")
+      );
+    }
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(resolve, ms);
+      if (signal) {
+        signal.addEventListener(
+          "abort",
+          () => {
+            clearTimeout(timer);
+            reject(
+              new DOMException("The operation was aborted.", "AbortError")
+            );
+          },
+          { once: true }
+        );
+      }
+    });
+  }
+
+  private async openAIChatCompletionStreamViaLegacyEndpoint(
+    request: OpenAIChatCompletionRequest,
+    onChunk: (chunk: OpenAIChatCompletionChunk) => void,
+    fetchOptions: RequestInit
+  ): Promise<void> {
+    const legacyRequest = this.buildLegacyChatRequestFromOpenAI(request);
+    const response = await this._httpClient.postStream(
+      "/api/ai/ask/stream",
+      legacyRequest,
+      fetchOptions
+    );
+
+    if (!response.ok || response.status !== 200) {
+      const errorText = await response.text().catch(() => "Unknown error");
+      throw new Error(`Server returned ${response.status}: ${errorText}`);
+    }
+
+    let chunkIndex = 0;
+    const signal = fetchOptions.signal ?? undefined;
+    await this._consumeStreamResponse(
+      response,
+      (event) => {
+        const eventType = String(event.event ?? "");
+        const content =
+          typeof event.data?.content === "string" ? event.data.content : "";
+
+        if (eventType === StreamEventType.TOKEN && content) {
+          onChunk({
+            id: `legacy-${Date.now()}-${chunkIndex}`,
+            object: "chat.completion.chunk",
+            created: Date.now(),
+            model: request.model ?? "",
+            choices: [
+              {
+                index: chunkIndex++,
+                delta: { content },
+                finish_reason: null,
+              },
+            ],
+          });
+          return;
+        }
+
+        if (
+          eventType === StreamEventType.DONE ||
+          eventType === StreamEventType.COMPLETE ||
+          eventType === StreamEventType.CONVERSATION_END
+        ) {
+          onChunk({
+            id: `legacy-${Date.now()}-${chunkIndex}`,
+            object: "chat.completion.chunk",
+            created: Date.now(),
+            model: request.model ?? "",
+            choices: [
+              {
+                index: chunkIndex++,
+                delta: {},
+                finish_reason: "stop",
+              },
+            ],
+          });
+          return;
+        }
+
+        if (eventType === StreamEventType.ERROR) {
+          const errorMessage =
+            content ||
+            (typeof event.data === "object" &&
+            event.data &&
+            "errorMessage" in event.data &&
+            typeof event.data.errorMessage === "string"
+              ? event.data.errorMessage
+              : "Unknown error");
+          throw new Error(errorMessage);
+        }
+      },
+      signal
+    );
+  }
+
+  private buildLegacyChatRequestFromOpenAI(
+    request: OpenAIChatCompletionRequest
+  ): ChatApiRequestData {
+    const systemPrompt = request.messages.find(
+      (m) => m.role === "system"
+    )?.content;
+    const conversationText = request.messages
+      .filter((m) => m.role !== "system")
+      .map((m) =>
+        `${this.getLegacyRoleLabel(m.role)}: ${m.content ?? ""}`.trim()
+      )
+      .join("\n\n");
+
+    return {
+      message: conversationText || request.messages.at(-1)?.content || "",
+      model: request.model,
+      system_prompt:
+        typeof systemPrompt === "string" ? systemPrompt : undefined,
+    };
+  }
+
+  private getLegacyRoleLabel(role: OpenAIMessageRole): string {
+    switch (role) {
+      case "assistant":
+        return "Assistant";
+      case "system":
+        return "System";
+      case "tool":
+        return "Tool";
+      case "function":
+        return "Function";
+      case "user":
+      default:
+        return "User";
+    }
+  }
+
+  private normalizeLegacyModelsResponse(
+    response: unknown
+  ): OpenAIModelsResponse {
+    const payload =
+      this.unwrapLegacyPayload<AvailableChatModelsResponse>(response);
+    const models = Object.entries(payload?.models ?? {}).map(([id, model]) => ({
+      id,
+      object: "model",
+      created: 0,
+      owned_by: "legacy-ai-server",
+      ...("name" in model && typeof model.name === "string" && model.name
+        ? { id: model.name }
+        : {}),
+    }));
+    return {
+      object: "list",
+      data: models,
+    };
+  }
+
+  private unwrapLegacyPayload<T>(response: unknown): T {
+    if (
+      response &&
+      typeof response === "object" &&
+      "data" in response &&
+      (response as { data?: unknown }).data !== undefined
+    ) {
+      return (response as { data: T }).data;
+    }
+    return response as T;
+  }
+
+  private isRecord(value: unknown): value is Record<string, unknown> {
+    return value !== null && typeof value === "object";
+  }
+
+  private getStringField(
+    value: Record<string, unknown>,
+    key: string
+  ): string | undefined {
+    const field = value[key];
+    return typeof field === "string" ? field : undefined;
+  }
+
+  private getNumberField(
+    value: Record<string, unknown>,
+    key: string
+  ): number | undefined {
+    const field = value[key];
+    return typeof field === "number" ? field : undefined;
+  }
+
+  private buildOpenAIStreamChunk(params: {
+    id?: string;
+    created?: number;
+    model?: string;
+    content?: string | null;
+    finishReason?: string | null;
+    usage?: OpenAIUsage;
+  }): OpenAIChatCompletionChunk {
+    const chunk: OpenAIChatCompletionChunk = {
+      id: params.id ?? `normalized-${Date.now()}`,
+      object: "chat.completion.chunk",
+      created: params.created ?? Math.floor(Date.now() / 1000),
+      model: params.model ?? "",
+      choices: [
+        {
+          index: 0,
+          delta:
+            params.content !== undefined ? { content: params.content } : {},
+          finish_reason: params.finishReason ?? null,
+        },
+      ],
+    };
+    if (params.usage) {
+      chunk.usage = params.usage;
+    }
+    return chunk;
+  }
+
+  /**
+   * Extract usage info from a raw stream payload, if present. Used to surface
+   * token counts from the final chunk emitted when stream_options.include_usage
+   * is true.
+   */
+  private extractUsageFromPayload(
+    payload: Record<string, unknown>
+  ): OpenAIUsage | undefined {
+    const usage = payload.usage;
+    if (!this.isRecord(usage)) {
+      return undefined;
+    }
+    const promptTokens = this.getNumberField(usage, "prompt_tokens");
+    const completionTokens = this.getNumberField(usage, "completion_tokens");
+    const totalTokens = this.getNumberField(usage, "total_tokens");
+    if (
+      promptTokens === undefined ||
+      completionTokens === undefined ||
+      totalTokens === undefined
+    ) {
+      return undefined;
+    }
+    return {
+      prompt_tokens: promptTokens,
+      completion_tokens: completionTokens,
+      total_tokens: totalTokens,
+    };
+  }
+
+  private isTerminalStreamEvent(eventType?: string): boolean {
+    return (
+      eventType === StreamEventType.DONE ||
+      eventType === StreamEventType.COMPLETE ||
+      eventType === StreamEventType.CONVERSATION_END
+    );
+  }
+
+  private normalizeOpenAIStreamPayload(
+    payload: unknown,
+    eventType?: string
+  ): OpenAIChatCompletionChunk | null {
+    if (!this.isRecord(payload)) {
+      return null;
+    }
+
+    const id = this.getStringField(payload, "id");
+    const object = this.getStringField(payload, "object");
+    const created = this.getNumberField(payload, "created");
+    const model = this.getStringField(payload, "model");
+    const usage = this.extractUsageFromPayload(payload);
+
+    if (Array.isArray(payload.choices)) {
+      const normalizedChoices: OpenAIStreamChoice[] = payload.choices.map(
+        (choice, index) => {
+          if (!this.isRecord(choice)) {
+            return { index, delta: {}, finish_reason: null };
+          }
+          const choiceIndex = this.getNumberField(choice, "index") ?? index;
+          const finishReason =
+            this.getStringField(choice, "finish_reason") ?? null;
+          const delta = choice.delta;
+          if (this.isRecord(delta)) {
+            return {
+              index: choiceIndex,
+              delta: delta as OpenAIStreamDelta,
+              finish_reason: finishReason,
+            };
+          }
+          const message = choice.message;
+          if (this.isRecord(message)) {
+            const content = message.content;
+            return {
+              index: choiceIndex,
+              delta:
+                typeof content === "string" || content === null
+                  ? { content }
+                  : {},
+              finish_reason: finishReason,
+            };
+          }
+          return {
+            index: choiceIndex,
+            delta: {},
+            finish_reason: finishReason,
+          };
+        }
+      );
+      const chunk: OpenAIChatCompletionChunk = {
+        id: id ?? `normalized-${Date.now()}`,
+        object:
+          object === "chat.completion.chunk" ? object : "chat.completion.chunk",
+        created: created ?? Math.floor(Date.now() / 1000),
+        model: model ?? "",
+        choices: normalizedChoices,
+      };
+      if (usage) {
+        chunk.usage = usage;
+      }
+      return chunk;
+    }
+
+    // When stream_options.include_usage is true, the server emits a final
+    // chunk with an empty (or missing) choices array and a top-level usage
+    // object. Handle that here so the usage is not dropped.
+    if (usage) {
+      return this.buildOpenAIStreamChunk({
+        id,
+        created,
+        model,
+        usage,
+      });
+    }
+
+    const directContent = payload.content;
+    if (typeof directContent === "string" || directContent === null) {
+      return this.buildOpenAIStreamChunk({
+        id,
+        created,
+        model,
+        content: directContent,
+        finishReason: this.isTerminalStreamEvent(eventType) ? "stop" : null,
+      });
+    }
+
+    const nestedData = payload.data;
+    if (this.isRecord(nestedData)) {
+      const nestedContent = nestedData.content;
+      if (typeof nestedContent === "string" || nestedContent === null) {
+        return this.buildOpenAIStreamChunk({
+          id,
+          created,
+          model,
+          content: nestedContent,
+          finishReason: this.isTerminalStreamEvent(eventType) ? "stop" : null,
+        });
+      }
+    }
+
+    return null;
+  }
+
+  private describeOpenAIStreamPayload(
+    payload: unknown,
+    eventType?: string
+  ): string {
+    if (!this.isRecord(payload)) {
+      return `event=${eventType ?? "message"} payload=${typeof payload}`;
+    }
+    const keys = Object.keys(payload).slice(0, 8).join(",");
+    const choices = Array.isArray(payload.choices) ? payload.choices : [];
+    const firstChoice = choices[0];
+    const choiceKeys = this.isRecord(firstChoice)
+      ? Object.keys(firstChoice).slice(0, 8).join(",")
+      : "";
+    const delta = this.isRecord(firstChoice) ? firstChoice.delta : undefined;
+    const deltaKeys = this.isRecord(delta)
+      ? Object.keys(delta).slice(0, 8).join(",")
+      : "";
+    const message = this.isRecord(firstChoice)
+      ? firstChoice.message
+      : undefined;
+    const messageContent =
+      this.isRecord(message) && typeof message.content === "string"
+        ? message.content
+        : undefined;
+    const directContent =
+      typeof payload.content === "string" ? payload.content : undefined;
+    const deltaContent =
+      this.isRecord(delta) && typeof delta.content === "string"
+        ? delta.content
+        : undefined;
+    const contentLen =
+      directContent?.length ??
+      deltaContent?.length ??
+      messageContent?.length ??
+      0;
+    return `event=${
+      eventType ?? "message"
+    } keys=[${keys}] choiceKeys=[${choiceKeys}] deltaKeys=[${deltaKeys}] contentLen=${contentLen}`;
+  }
+
+  private isNotFoundError(error: unknown): boolean {
+    return (
+      error instanceof Error && /(^|[\s:])404\b|not found/i.test(error.message)
+    );
   }
 
   /**
@@ -1690,6 +2236,37 @@ export class AiChatApi {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    let currentEventType: string | undefined;
+    let loggedPayloadCount = 0;
+
+    const emitPayload = (payload: unknown, eventType?: string): void => {
+      if (loggedPayloadCount < 8) {
+        console.log(
+          `[ai-chat-v2] openai-stream payload ${
+            loggedPayloadCount + 1
+          }: ${this.describeOpenAIStreamPayload(payload, eventType)}`
+        );
+        loggedPayloadCount += 1;
+      }
+      if (eventType === StreamEventType.ERROR) {
+        const message =
+          this.isRecord(payload) && typeof payload.content === "string"
+            ? payload.content
+            : "AI server returned a stream error";
+        throw new Error(message);
+      }
+      const chunk = this.normalizeOpenAIStreamPayload(payload, eventType);
+      if (!chunk) {
+        console.warn(
+          `[ai-chat-v2] openai-stream ignored unrecognized payload: ${this.describeOpenAIStreamPayload(
+            payload,
+            eventType
+          )}`
+        );
+        return;
+      }
+      onChunk(chunk);
+    };
 
     try {
       let streamActive = true;
@@ -1722,20 +2299,30 @@ export class AiChatApi {
 
         for (const line of lines) {
           const trimmedLine = line.trim();
-          if (!trimmedLine) continue;
-
-          if (trimmedLine === "data: [DONE]") {
-            streamActive = false;
-            break;
+          if (!trimmedLine) {
+            currentEventType = undefined;
+            continue;
           }
 
-          if (trimmedLine.startsWith("data: ")) {
-            const jsonStr = trimmedLine.substring(6);
+          if (trimmedLine.startsWith("event:")) {
+            currentEventType = trimmedLine.substring(6).trim();
+            continue;
+          }
+
+          if (trimmedLine.startsWith("data:")) {
+            const jsonStr = trimmedLine.substring(5).trim();
+            if (jsonStr === "[DONE]") {
+              streamActive = false;
+              break;
+            }
             try {
-              const chunk: OpenAIChatCompletionChunk = JSON.parse(jsonStr);
-              onChunk(chunk);
-            } catch {
-              // Ignore parse errors for individual chunks
+              const payload: unknown = JSON.parse(jsonStr);
+              emitPayload(payload, currentEventType);
+            } catch (err) {
+              console.warn(
+                `[ai-chat-v2] openai-stream failed to parse payload length=${jsonStr.length}:`,
+                err
+              );
             }
           }
         }
@@ -1746,14 +2333,18 @@ export class AiChatApi {
       if (
         trimmedBuffer &&
         trimmedBuffer !== "data: [DONE]" &&
-        trimmedBuffer.startsWith("data: ")
+        trimmedBuffer !== "data:[DONE]" &&
+        trimmedBuffer.startsWith("data:")
       ) {
-        const jsonStr = trimmedBuffer.substring(6);
+        const jsonStr = trimmedBuffer.substring(5).trim();
         try {
-          const chunk: OpenAIChatCompletionChunk = JSON.parse(jsonStr);
-          onChunk(chunk);
-        } catch {
-          // Ignore parse errors
+          const payload: unknown = JSON.parse(jsonStr);
+          emitPayload(payload, currentEventType);
+        } catch (err) {
+          console.warn(
+            `[ai-chat-v2] openai-stream failed to parse final payload length=${jsonStr.length}:`,
+            err
+          );
         }
       }
     } finally {

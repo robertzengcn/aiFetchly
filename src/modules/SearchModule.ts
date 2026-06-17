@@ -634,6 +634,50 @@ export class SearchModule extends BaseModule {
     const enginerName = getEnumValueByNumber(SearhEnginer, enginerNum);
     return enginerName;
   }
+  /**
+   * Validate that the required account with cookies exists for the given search engine.
+   * For Google, requires at least one Google account with valid cookies.
+   * @param engineName The search engine name (e.g., "google")
+   * @throws Error with i18n key if validation fails
+   */
+  public async validateSearchPrerequisites(engineName: string): Promise<void> {
+    const lowerEngine = engineName.toLowerCase();
+    if (lowerEngine !== "google") {
+      return; // Only Google requires an account with cookies for now
+    }
+
+    const platformId = this.convertSEtoPlatformId(engineName);
+    if (!platformId) {
+      return;
+    }
+
+    const accounts = await this.socialAccountModule.getSocialAccountsByPlatform(
+      platformId
+    );
+    if (!accounts || accounts.length === 0) {
+      throw new Error("search.google_account_cookies_required");
+    }
+
+    // Check if any account has valid cookies
+    for (const account of accounts) {
+      const cookies = await this.accountCookiesModule.getAccountCookies(
+        account.id
+      );
+      if (cookies && cookies.cookies) {
+        try {
+          const parsed = JSON.parse(cookies.cookies);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            return; // Found an account with valid cookies
+          }
+        } catch {
+          // Invalid cookies JSON, continue checking other accounts
+        }
+      }
+    }
+
+    throw new Error("search.google_account_cookies_required");
+  }
+
   //convert search engine name to platform ID (for social accounts)
   // Google -> 4, Bing -> 5, Yandex -> 6
   private convertSEtoPlatformId(engineName: string): number | undefined {

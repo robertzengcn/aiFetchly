@@ -49,6 +49,7 @@ export type EmailClusterdata = {
   maxPageLevel: number;
   visited?: Set<string>;
   maxPageNumber?: number;
+  blockAssets?: boolean;
   aiSupportEnabled?: boolean;
   bestCandidate?: EmailAiCandidate;
   aiEnrichmentRequested?: boolean;

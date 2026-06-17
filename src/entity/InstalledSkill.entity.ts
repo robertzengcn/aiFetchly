@@ -24,4 +24,13 @@ export class InstalledSkillEntity extends AuditableEntity {
 
   @Column("integer", { default: 1 })
   enabled: number;
+
+  /** Owner plugin name. null = standalone skill. (Design §5.2) */
+  @Index()
+  @Column("text", { nullable: true })
+  pluginName?: string;
+
+  /** Relative path of the skill component inside the owning plugin. */
+  @Column("text", { nullable: true })
+  pluginComponentPath?: string;
 }

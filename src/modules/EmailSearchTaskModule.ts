@@ -57,6 +57,7 @@ import {
   buildEmailResultDisplay,
   buildEmailSearchResultEntity,
 } from "@/modules/emailSearchResultMapper";
+import { normalizeEmailSearchConcurrency } from "@/modules/emailSearchConcurrency";
 
 export class EmailSearchTaskModule extends BaseModule {
   /** Static map tracking running child processes by taskId */
@@ -108,7 +109,7 @@ export class EmailSearchTaskModule extends BaseModule {
     const data: EmailsControldata = {
       searchResultId: task.search_result_id,
       validUrls: urlsArr,
-      concurrency: task.concurrency,
+      concurrency: normalizeEmailSearchConcurrency(task.concurrency),
       pagelength: task.page_length,
       notShowBrowser: task.notShowBrowser,
       proxys: proxyArr,
@@ -399,7 +400,7 @@ export class EmailSearchTaskModule extends BaseModule {
     task.processTimeout = data.processTimeout;
     task.maxPageNumber = data.maxPageNumber || 0;
     task.page_length = data.pagelength || 0;
-    task.concurrency = data.concurrency || 0;
+    task.concurrency = normalizeEmailSearchConcurrency(data.concurrency);
     task.is_active = true;
     task.notShowBrowser = data.notShowBrowser;
     task.search_result_id = data.searchResultId || 0;
@@ -433,7 +434,7 @@ export class EmailSearchTaskModule extends BaseModule {
    * @param urls - Array of URLs to search for emails
    * @param options - Optional configuration parameters
    * @param options.type - Email extraction type (default: ManualInputUrl)
-   * @param options.concurrency - Number of concurrent requests (default: 1)
+   * @param options.concurrency - Number of concurrent requests (default: 3)
    * @param options.pagelength - Page length limit (default: 0)
    * @param options.notShowBrowser - Whether to hide browser (default: false)
    * @param options.proxys - Array of proxy entities (optional)
@@ -483,7 +484,7 @@ export class EmailSearchTaskModule extends BaseModule {
     const taskData: EmailsControldata = {
       validUrls: validUrls,
       type: options?.type ?? EmailExtractionTypes.ManualInputUrl,
-      concurrency: options?.concurrency ?? 1,
+      concurrency: normalizeEmailSearchConcurrency(options?.concurrency),
       pagelength: options?.pagelength ?? 0,
       notShowBrowser: options?.notShowBrowser ?? false,
       proxys: options?.proxys,
@@ -716,7 +717,7 @@ export class EmailSearchTaskModule extends BaseModule {
     const task = await this.emailsearchTaskdb.getTaskById(taskId);
     if (task) {
       task.search_result_id = data.searchResultId || 0;
-      task.concurrency = data.concurrency || 0;
+      task.concurrency = normalizeEmailSearchConcurrency(data.concurrency);
       task.page_length = data.pagelength || 0;
       task.notShowBrowser = data.notShowBrowser;
       task.type_id = data.type;

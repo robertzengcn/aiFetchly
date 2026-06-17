@@ -66,6 +66,14 @@
               >
                 {{ server.enabled ? 'Enabled' : 'Disabled' }}
               </v-chip>
+              <v-chip
+                v-if="server.pluginName"
+                size="x-small"
+                color="info"
+                class="ml-2"
+              >
+                via plugin: {{ server.pluginName }}
+              </v-chip>
             </v-list-item-title>
 
             <v-list-item-subtitle>
@@ -343,14 +351,14 @@
               rows="12"
               hint="Enter MCP server configuration in JSON format"
               :error-messages="serverFormErrors.jsonInput"
-              placeholder='{
-  "mcpServers": {
-    "server-name": {
-      "command": "uvx",
-      "args": ["blender-mcp"]
+              placeholder="{
+  &quot;mcpServers&quot;: {
+    &quot;server-name&quot;: {
+      &quot;command&quot;: &quot;uvx&quot;,
+      &quot;args&quot;: [&quot;blender-mcp&quot;]
     }
   }
-}'
+}"
             ></v-textarea>
             <v-alert
               v-if="inputMode === 'json'"

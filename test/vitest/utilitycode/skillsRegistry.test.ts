@@ -203,7 +203,7 @@ describe("SkillRegistry", () => {
       }
     });
 
-    test("returns documentation-only user skill when extension matches", () => {
+    test("returns documentation-only user skill when extension matches", async () => {
       SkillRegistry.registerSkill({
         name: docSkillName,
         description: "Doc-only PDF guidance",
@@ -217,12 +217,12 @@ describe("SkillRegistry", () => {
         supportedFileTypes: [".pdf"],
       });
 
-      const hit = SkillRegistry.findSkillForFileExtension(".pdf");
+      const hit = await SkillRegistry.findSkillForFileExtension(".pdf");
       expect(hit).not.toBeNull();
       expect(hit!.name).toBe(docSkillName);
     });
 
-    test("returns null when user skill has no supportedFileTypes", () => {
+    test("returns null when user skill has no supportedFileTypes", async () => {
       SkillRegistry.registerSkill({
         name: noTypesName,
         description: "No types",
@@ -235,7 +235,7 @@ describe("SkillRegistry", () => {
         documentationOnly: true,
       });
 
-      expect(SkillRegistry.findSkillForFileExtension(".pdf")).toBeNull();
+      expect(await SkillRegistry.findSkillForFileExtension(".pdf")).toBeNull();
     });
   });
 });

@@ -172,7 +172,7 @@ export class BackgroundScheduler extends BaseDb {
       let lastError: unknown = null;
       while (retries > 0) {
         try {
-          await newDbInstance.connection.initialize();
+          await SqliteDb.ensureInitialized();
           break;
         } catch (initError) {
           lastError = initError;
