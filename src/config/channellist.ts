@@ -398,3 +398,4 @@ export const PLUGIN_TOGGLE_MCP_SERVER = "plugin:toggle-mcp-server";
 export const PLUGIN_TOGGLE_MCP_TOOL = "plugin:toggle-mcp-tool";
 export const PLUGIN_TEST_MCP_CONNECTION = "plugin:test-mcp-connection";
 export const PLUGIN_DISCOVER_MCP_TOOLS = "plugin:discover-mcp-tools";
+export const PLUGIN_INSTALL_FROM_SOURCE = "plugin:install-from-source";
