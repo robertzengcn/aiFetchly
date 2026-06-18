@@ -120,6 +120,11 @@ export class AIChatQueryLoop {
     // Local mutable copies so EnterPlanMode can swap them mid-run.
     let planContext = input.planContext;
     const currentTools = [...input.openAITools];
+    // Track whether the model auto-entered plan mode this run AND whether it
+    // followed through with plan-tool usage. Used at turn end to cancel orphan
+    // drafts (see completed-return path).
+    let autoEnteredPlanId: string | undefined;
+    let planToolsUsed = false;
 
     try {
       for (
@@ -284,6 +289,7 @@ export class AIChatQueryLoop {
                   currentTools.push(t);
                 }
               }
+              autoEnteredPlanId = transition.newPlanState.planId;
             }
             continue;
           }
@@ -318,6 +324,7 @@ export class AIChatQueryLoop {
 
           // Plan tools are intercepted locally.
           if (planContext && isPlanToolName(call.name)) {
+            planToolsUsed = true;
             if (call.name === "AskUserQuestion") {
               const paused = await this.handlePlanToolAskUserQuestion(
                 input,
@@ -449,6 +456,24 @@ export class AIChatQueryLoop {
 
       const fullContent = finalAccumulator?.state.fullContent ?? "";
       const finishReason = finalAccumulator?.state.finishReason ?? "stop";
+
+      // Orphan-draft cleanup: if the model auto-entered plan mode but ended
+      // the turn without using any plan tools, cancel the auto-created draft
+      // so the UI indicator doesn't get stuck and the DB doesn't accumulate
+      // abandoned drafts. Best-effort: log on error, don't fail the turn.
+      if (autoEnteredPlanId && !planToolsUsed && input.autoPlan) {
+        try {
+          await input.autoPlan.planModule.cancelDraft({
+            planId: autoEnteredPlanId,
+          });
+          console.log(
+            `[ai-chat-v2] auto-entered draft ${autoEnteredPlanId} cancelled (no plan tools used)`
+          );
+        } catch (err) {
+          console.error("[ai-chat-v2] failed to cancel orphan draft:", err);
+        }
+      }
+
       return {
         type: "completed",
         conversationId: input.conversationId,

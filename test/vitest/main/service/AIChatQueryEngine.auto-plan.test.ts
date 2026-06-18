@@ -57,6 +57,7 @@ vi.mock("@/modules/AIChatPlanModule", () => ({
   AIChatPlanModule: vi.fn().mockImplementation(() => ({
     getPlanState: vi.fn().mockResolvedValue(null),
     ensurePlanForConversation: vi.fn().mockResolvedValue(null),
+    cancelDraft: vi.fn(),
     saveQuestion: vi.fn(),
     submitPlanForApproval: vi.fn(),
     getPlanStateByPlanId: vi.fn(),

@@ -259,6 +259,7 @@ export interface AIChatAutoPlanLoopConfig {
       title?: string;
       objective?: string;
     }): Promise<AIChatPlanStateView>;
+    cancelDraft(input: { planId: string }): Promise<void>;
     saveQuestion(input: {
       conversationId: string;
       planId?: string;
