@@ -61,10 +61,7 @@ export class NpmPluginFetcher implements PluginSourceFetcher {
       return {
         success: false,
         errors: [
-          err(
-            "permission-denied",
-            "npmVersion contains invalid characters."
-          ),
+          err("permission-denied", "npmVersion contains invalid characters."),
         ],
       };
     }
@@ -72,12 +69,7 @@ export class NpmPluginFetcher implements PluginSourceFetcher {
     if (registry && !/^https:\/\//i.test(registry)) {
       return {
         success: false,
-        errors: [
-          err(
-            "permission-denied",
-            "npmRegistry must use HTTPS."
-          ),
-        ],
+        errors: [err("permission-denied", "npmRegistry must use HTTPS.")],
       };
     }
 
@@ -116,12 +108,20 @@ export class NpmPluginFetcher implements PluginSourceFetcher {
         }
         resolve({ code, stdout, tarball });
       };
-      const timer = setTimeout(() => finish(1), NPM_TIMEOUT_MS);
       const child = spawn("npm", args, {
         cwd: workdir,
         env: process.env,
         shell: false,
       });
+      const timer = setTimeout(() => {
+        // Don't let a hung npm process outlive the timeout.
+        try {
+          child.kill();
+        } catch {
+          /* best-effort */
+        }
+        finish(1);
+      }, NPM_TIMEOUT_MS);
       child.stdout.on("data", (c: Buffer) => {
         stdout += c.toString();
       });
@@ -157,18 +157,24 @@ export class NpmPluginFetcher implements PluginSourceFetcher {
     fs.mkdirSync(extractDir, { recursive: true });
 
     const extracted = await new Promise<boolean>((resolve) => {
-      const child = spawn(
-        "tar",
-        ["-xzf", tarball, "-C", extractDir],
-        { env: process.env, shell: false }
-      );
+      const child = spawn("tar", ["-xzf", tarball, "-C", extractDir], {
+        env: process.env,
+        shell: false,
+      });
       let done = false;
       const finish = (ok: boolean) => {
         if (done) return;
         done = true;
         resolve(ok);
       };
-      const timer = setTimeout(() => finish(false), NPM_TIMEOUT_MS);
+      const timer = setTimeout(() => {
+        try {
+          child.kill();
+        } catch {
+          /* best-effort */
+        }
+        finish(false);
+      }, NPM_TIMEOUT_MS);
       child.on("close", (c) => {
         clearTimeout(timer);
         finish(c === 0);

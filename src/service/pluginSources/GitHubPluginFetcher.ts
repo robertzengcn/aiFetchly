@@ -58,11 +58,7 @@ export function classifyGitHubUrl(raw: string): GitHubClass {
       asset: parts[5],
     };
   }
-  if (
-    parts.length === 4 &&
-    parts[2] === "releases" &&
-    parts[3] === "latest"
-  ) {
+  if (parts.length === 4 && parts[2] === "releases" && parts[3] === "latest") {
     return { type: "latest", owner, repo };
   }
   // Anything else with 2 segments (or extras like /tree/<ref>) is treated as
@@ -78,48 +74,53 @@ async function downloadZip(url: string, dest: string): Promise<void> {
     let redirects = 0;
     let aborted = false;
     const req = (target: string) => {
-      const r = https.get(
-        target,
-        { timeout: 60_000 },
-        (res) => {
-          if (
-            res.statusCode &&
-            res.statusCode >= 300 &&
-            res.statusCode < 400 &&
-            res.headers.location
-          ) {
-            if (++redirects > 5) {
-              reject(new Error("Too many redirects"));
-              return;
-            }
-            res.destroy();
-            req(res.headers.location);
+      const r = https.get(target, { timeout: 60_000 }, (res) => {
+        if (
+          res.statusCode &&
+          res.statusCode >= 300 &&
+          res.statusCode < 400 &&
+          res.headers.location
+        ) {
+          if (++redirects > 5) {
+            reject(new Error("Too many redirects"));
             return;
           }
-          if (!res.statusCode || res.statusCode !== 200) {
-            res.destroy();
-            reject(new Error(`HTTP ${res.statusCode}`));
-            return;
-          }
-          const out = fs.createWriteStream(dest);
-          let size = 0;
-          res.on("data", (c: Buffer) => {
-            size += c.length;
-            if (size > PLUGIN_PACKAGE_LIMITS.maxZipBytes && !aborted) {
-              aborted = true;
-              r.destroy();
-              out.destroy();
-              fs.rmSync(dest, { force: true });
-              reject(new Error("Package exceeds max size"));
-            }
-          });
-          res.pipe(out);
-          out.on("finish", () => resolve());
-          out.on("error", (e) => {
-            if (!aborted) reject(e);
-          });
+          res.destroy();
+          req(res.headers.location);
+          return;
         }
-      );
+        if (!res.statusCode || res.statusCode !== 200) {
+          res.destroy();
+          reject(new Error(`HTTP ${res.statusCode}`));
+          return;
+        }
+        const out = fs.createWriteStream(dest);
+        let size = 0;
+        res.on("data", (c: Buffer) => {
+          size += c.length;
+          if (size > PLUGIN_PACKAGE_LIMITS.maxZipBytes && !aborted) {
+            aborted = true;
+            r.destroy();
+            out.destroy();
+            fs.rmSync(dest, { force: true });
+            reject(new Error("Package exceeds max size"));
+          }
+        });
+        res.pipe(out);
+        out.on("finish", () => resolve());
+        out.on("error", (e) => {
+          if (!aborted) reject(e);
+        });
+      });
+      // The `timeout` option only emits a 'timeout' event — it does not
+      // abort the request. Without this handler a stalled server hangs the
+      // install forever.
+      r.on("timeout", () => {
+        if (!aborted) {
+          aborted = true;
+          r.destroy(new Error("Request timed out"));
+        }
+      });
       r.on("error", (e) => {
         if (!aborted) reject(e);
       });
