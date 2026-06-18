@@ -245,7 +245,6 @@ function createEventSink(event: IpcEventLike): AIChatQueryEventSink {
             messageId: e.messageId,
             planState: e.planState,
             autoEntered: e.autoEntered,
-            rationale: e.rationale,
           } as ChatV2StreamChunk);
           break;
         case "usage_update":
