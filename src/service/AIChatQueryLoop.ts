@@ -28,7 +28,10 @@ import {
   checkPlanModeToolPolicy,
   isPlanToolName,
 } from "@/service/PlanModeToolPolicy";
-import { sanitizeEnterPlanModeArgs } from "@/service/EnterPlanModeTool";
+import {
+  isEnterPlanModeToolName,
+  sanitizeEnterPlanModeArgs,
+} from "@/service/EnterPlanModeTool";
 
 /** Max model→tool→model rounds per user turn. */
 const CHAT_V2_MAX_TOOL_ROUNDS = 8;
@@ -249,7 +252,11 @@ export class AIChatQueryLoop {
           });
 
           // Model-initiated Plan Mode entry (chat mode only).
-          if (call.name === "EnterPlanMode" && !planContext && input.autoPlan) {
+          if (
+            isEnterPlanModeToolName(call.name) &&
+            !planContext &&
+            input.autoPlan
+          ) {
             const transition = await this.handleEnterPlanMode(
               input,
               messages,
@@ -282,7 +289,7 @@ export class AIChatQueryLoop {
           }
 
           if (
-            call.name === "EnterPlanMode" &&
+            isEnterPlanModeToolName(call.name) &&
             (!input.autoPlan || planContext)
           ) {
             const reason = planContext

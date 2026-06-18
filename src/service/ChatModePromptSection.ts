@@ -1,7 +1,7 @@
 /**
  * Builds the "Auto Plan Mode" awareness block appended to the default chat
- * system prompt when USER_AI_AUTO_PLAN === 'true'. Returns the section as a
- * string (no leading newline; caller decides spacing).
+ * system prompt when USER_AI_AUTO_PLAN is not explicitly "false" (default-on).
+ * Returns the section as a string (no leading newline; caller decides spacing).
  */
 export function buildAutoPlanPromptSection(): string {
   return `# Auto Plan Mode
