@@ -11,7 +11,10 @@ import { PluginDiagnosticsService } from "@/service/PluginDiagnosticsService";
 import { PluginLoaderService } from "@/service/PluginLoaderService";
 import { getPluginInstallRoot } from "@/service/pluginPaths";
 import type { CommonMessage } from "@/entityTypes/commonType";
-import type { PluginSummary } from "@/entityTypes/pluginTypes";
+import type {
+  PluginSummary,
+  PluginSourceKind,
+} from "@/entityTypes/pluginTypes";
 import {
   PLUGIN_IMPORT,
   PLUGIN_VALIDATE_PACKAGE,
@@ -26,6 +29,7 @@ import {
   PLUGIN_TOGGLE_MCP_TOOL,
   PLUGIN_TEST_MCP_CONNECTION,
   PLUGIN_DISCOVER_MCP_TOOLS,
+  PLUGIN_INSTALL_FROM_SOURCE,
 } from "@/config/channellist";
 
 /**
@@ -187,6 +191,9 @@ export function registerPluginIpcHandlers(): void {
             })),
             errors: [],
             manifest,
+            sourceKind: plugin.sourceKind,
+            sourceUri: plugin.sourceUri,
+            sourceRef: plugin.sourceRef,
           },
         };
       } catch (error: unknown) {
@@ -236,6 +243,107 @@ export function registerPluginIpcHandlers(): void {
           status: true,
           msg: "Plugin imported",
           data: result.plugin,
+        };
+      } catch (error: unknown) {
+        return {
+          status: false,
+          msg: error instanceof Error ? error.message : "Unknown error",
+          data: null,
+        };
+      }
+    }
+  );
+
+  // Install a plugin from a remote or local source (git, github, npm, url,
+  // local-folder, local-zip). Single entry point for multi-source install.
+  // Source of truth: Spec §8.
+  ipcMain.handle(
+    PLUGIN_INSTALL_FROM_SOURCE,
+    async (
+      ...args: unknown[]
+    ): Promise<CommonMessage<PluginSummary | null>> => {
+      const notEnabled = checkAiEnabled();
+      if (notEnabled) return notEnabled;
+
+      const data = extractData<{
+        kind: string;
+        overwrite?: boolean;
+        zipPath?: string;
+        folderPath?: string;
+        uri?: string;
+        ref?: string;
+        npmPackage?: string;
+        npmVersion?: string;
+        npmRegistry?: string;
+        npmAuthScope?: string;
+        npmAuthToken?: string;
+      }>(args);
+
+      const ALLOWED_KINDS = [
+        "local-zip",
+        "local-folder",
+        "git",
+        "github",
+        "npm",
+        "url",
+      ];
+      if (!ALLOWED_KINDS.includes(data?.kind)) {
+        return {
+          status: false,
+          msg: "Invalid or missing source kind.",
+          data: null,
+        };
+      }
+      // Reject CRLF / control chars in any string field that may reach spawn.
+      const stringFields = [
+        data.uri,
+        data.zipPath,
+        data.folderPath,
+        data.npmPackage,
+        data.npmVersion,
+        data.npmRegistry,
+        data.npmAuthScope,
+        data.ref,
+      ];
+      for (const v of stringFields) {
+        if (typeof v === "string" && /[\r\n]/.test(v)) {
+          return {
+            status: false,
+            msg: "Invalid characters in source field.",
+            data: null,
+          };
+        }
+      }
+
+      try {
+        const { PluginInstallService } = await import(
+          "@/service/PluginInstallService"
+        );
+        const svc = new PluginInstallService();
+        const r = await svc.installFromSource({
+          kind: data.kind as PluginSourceKind,
+          overwrite: data.overwrite === true,
+          zipPath: data.zipPath,
+          folderPath: data.folderPath,
+          uri: data.uri,
+          ref: data.ref,
+          npmPackage: data.npmPackage,
+          npmVersion: data.npmVersion,
+          npmRegistry: data.npmRegistry,
+          npmAuthScope: data.npmAuthScope,
+          npmAuthToken: data.npmAuthToken,
+        });
+        if (!r.success) {
+          return {
+            status: false,
+            msg: r.errors.map((e) => e.message).join("; "),
+            data: null,
+          };
+        }
+        return {
+          status: true,
+          msg: "Plugin installed",
+          data: r.plugin,
         };
       } catch (error: unknown) {
         return {
