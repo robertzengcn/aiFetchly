@@ -17,6 +17,7 @@ import {
   type PluginError,
   type PluginSummary,
   type PluginSource,
+  type PluginSourceProvenance,
 } from "@/entityTypes/pluginTypes";
 import { SkillImportService } from "@/service/SkillImportService";
 import type { SkillManifest } from "@/entityTypes/skillTypes";
@@ -275,15 +276,38 @@ export class PluginImportService {
     if (!extract.success) {
       return { success: false, errors: extract.errors };
     }
-    const tempRoot = extract.tempRoot;
-    const tempCleanup = extract.cleanup;
+    try {
+      return await this.installFromLocalRoot(extract.tempRoot, {
+        overwrite,
+        provenance: { sourceKind: "local-zip" },
+      });
+    } finally {
+      await extract.cleanup();
+    }
+  }
+
+  /**
+   * Run the existing manifest → skill → MCP → persist pipeline against a
+   * local directory that already contains the plugin root (e.g. an
+   * extracted zip, a cloned git repo, an unpacked npm tarball).
+   *
+   * Caller owns `localRoot` and is responsible for cleanup. This method
+   * performs compensating rollback only on persisted rows and the copied
+   * install path — it never deletes the caller's `localRoot`.
+   *
+   * Source of truth: Spec §4.2 and Design §7.3.
+   */
+  static async installFromLocalRoot(
+    localRoot: string,
+    opts: { overwrite?: boolean; provenance?: PluginSourceProvenance } = {}
+  ): Promise<PluginImportResult> {
+    const { overwrite = false, provenance } = opts;
 
     // 3. Load + validate plugin manifest
     const manifestResult = await PluginManifestService.loadFromDirectory(
-      tempRoot
+      localRoot
     );
     if (!manifestResult.success) {
-      await tempCleanup();
       return { success: false, errors: manifestResult.errors };
     }
     const manifest = manifestResult.manifest;
@@ -292,7 +316,6 @@ export class PluginImportService {
     const pluginModule = new PluginManagementModule();
     const existing = await pluginModule.getPluginByName(manifest.name);
     if (existing && !overwrite) {
-      await tempCleanup();
       return {
         success: false,
         errors: [
@@ -319,7 +342,7 @@ export class PluginImportService {
     }> = [];
     const skillErrors: PluginError[] = [];
     for (const skillPath of skillPaths) {
-      const r = readPluginSkillManifest(tempRoot, skillPath);
+      const r = readPluginSkillManifest(localRoot, skillPath);
       if (!r.ok) {
         skillErrors.push(r.error);
       } else {
@@ -330,7 +353,6 @@ export class PluginImportService {
       }
     }
     if (skillErrors.length > 0) {
-      await tempCleanup();
       return { success: false, errors: toErrors(skillErrors) };
     }
 
@@ -339,7 +361,7 @@ export class PluginImportService {
     const mcpServers: NormalizedMcpServer[] = [];
     const mcpErrors: PluginError[] = [];
     for (const mcpPath of mcpPaths) {
-      const r = readPluginMcpServers(tempRoot, mcpPath);
+      const r = readPluginMcpServers(localRoot, mcpPath);
       if (!r.ok) {
         mcpErrors.push(...r.errors);
       } else {
@@ -347,7 +369,6 @@ export class PluginImportService {
       }
     }
     if (mcpErrors.length > 0) {
-      await tempCleanup();
       return { success: false, errors: toErrors(mcpErrors) };
     }
 
@@ -357,7 +378,6 @@ export class PluginImportService {
     try {
       fs.mkdirSync(parentDir, { recursive: true });
     } catch (e: unknown) {
-      await tempCleanup();
       return {
         success: false,
         errors: [
@@ -374,14 +394,13 @@ export class PluginImportService {
     }
     const stagingDir = `${installPath}.staging-${Date.now()}`;
     try {
-      copyDirSync(tempRoot, stagingDir);
+      copyDirSync(localRoot, stagingDir);
       // Remove any pre-existing install path (shouldn't exist after overwrite
       // handling, but be safe).
       removePath(installPath);
       fs.renameSync(stagingDir, installPath);
     } catch (e: unknown) {
       removePath(stagingDir);
-      await tempCleanup();
       return {
         success: false,
         errors: [
@@ -395,8 +414,6 @@ export class PluginImportService {
           },
         ],
       };
-    } finally {
-      await tempCleanup();
     }
 
     // 8. Persist InstalledPlugin row.
@@ -419,6 +436,12 @@ export class PluginImportService {
         componentStateJson: "{}",
         enabled: 1,
         health: hasPythonSkill ? "needs_configuration" : "healthy",
+        sourceKind: provenance?.sourceKind,
+        sourceUri: provenance?.sourceUri,
+        sourceRef: provenance?.sourceRef,
+        sourceMetaJson: provenance?.sourceMeta
+          ? JSON.stringify(provenance.sourceMeta)
+          : "{}",
       });
     } catch (e: unknown) {
       rollbackInstall(installPath);
@@ -510,16 +533,14 @@ export class PluginImportService {
       };
     }
 
-    // 11. Cache invalidation (best-effort; loader service added in Phase 4)
-    // PluginRuntimeCache.clear is wired in Phase 4 — call via dynamic import
-    // to avoid a circular dependency at module load time.
+    // 11. Cache invalidation (best-effort).
     try {
       const { PluginRuntimeCache } = await import(
         "@/service/PluginRuntimeCache"
       );
       PluginRuntimeCache.clear("plugin-import");
     } catch {
-      // PluginRuntimeCache not yet registered; safe to ignore during Phase 3.
+      // PluginRuntimeCache not yet registered; safe to ignore.
     }
 
     // 11b. Record needs_configuration notice for Python skills (Design §15.5).
