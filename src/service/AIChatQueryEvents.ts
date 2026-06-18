@@ -94,6 +94,16 @@ export interface AIChatQueryPlanSubmittedEvent {
   planState: AIChatPlanStateView;
 }
 
+export interface AIChatQueryPlanStateEvent {
+  type: "plan_state";
+  conversationId: string;
+  messageId: string;
+  planState: AIChatPlanStateView;
+  /** Present when the transition was initiated by EnterPlanMode. */
+  autoEntered?: boolean;
+  rationale?: string;
+}
+
 export interface AIChatQueryCompleteEvent {
   type: "complete";
   conversationId: string;
@@ -136,6 +146,7 @@ export type AIChatQueryEvent =
   | AIChatQueryPlanBlockedToolEvent
   | AIChatQueryAskUserQuestionEvent
   | AIChatQueryPlanSubmittedEvent
+  | AIChatQueryPlanStateEvent
   | AIChatQueryCompleteEvent
   | AIChatQueryCancelledEvent
   | AIChatQueryErrorEvent
@@ -238,6 +249,40 @@ export interface AIChatPlanLoopContext {
   planState: AIChatPlanStateView;
 }
 
+/**
+ * Configuration that enables model-initiated Plan Mode entry.
+ */
+export interface AIChatAutoPlanLoopConfig {
+  planModule: {
+    ensurePlanForConversation(input: {
+      conversationId: string;
+      title?: string;
+      objective?: string;
+    }): Promise<AIChatPlanStateView>;
+    saveQuestion(input: {
+      conversationId: string;
+      planId?: string;
+      payload: AskUserQuestionPayload;
+    }): Promise<AIChatPlanQuestionView>;
+    submitPlanForApproval(input: {
+      conversationId: string;
+      planId?: string;
+      payload: SubmitPlanForApprovalPayload;
+    }): Promise<AIChatPlanStateView>;
+    getPlanStateByPlanId(planId: string): Promise<AIChatPlanStateView | null>;
+    answerQuestion(input: {
+      conversationId: string;
+      questionId: string;
+      answers: AskUserQuestionAnswer[];
+    }): Promise<{
+      question: AIChatPlanQuestionView;
+      planState: AIChatPlanStateView;
+    }>;
+  };
+  /** Plan-mode tools to add to the registry after EnterPlanMode is called. */
+  planTools: OpenAITool[];
+}
+
 /** Loop input assembled by the engine. */
 export interface AIChatQueryLoopInput {
   conversationId: string;
@@ -248,6 +293,12 @@ export interface AIChatQueryLoopInput {
   abortController: AbortController;
   eventSink: AIChatQueryEventSink;
   planContext?: AIChatPlanLoopContext;
+  /**
+   * When set, the loop registers the EnterPlanMode tool and will transition
+   * into Plan Mode mid-turn if the model calls it. Engine populates this
+   * only when USER_AI_AUTO_PLAN === 'true' and AI is enabled.
+   */
+  autoPlan?: AIChatAutoPlanLoopConfig;
   startRound: number;
   /**
    * Returns false when this turn is no longer the active turn on the engine
