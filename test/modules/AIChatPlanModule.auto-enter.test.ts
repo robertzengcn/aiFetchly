@@ -134,3 +134,82 @@ describe("AIChatPlanModule.ensurePlanForConversation idempotency", function () {
     expect(threw).to.be.true;
   });
 });
+
+describe("AIChatPlanModule.cancelDraft", function () {
+  this.timeout(5000);
+
+  let mod: AIChatPlanModule;
+
+  beforeEach(function () {
+    sinon.restore();
+    mod = new AIChatPlanModule();
+  });
+
+  afterEach(function () {
+    sinon.restore();
+  });
+
+  it("transitions a draft plan to cancelled status", async function () {
+    const fakePlan = {
+      planId: "plan-cancel-draft-001",
+      conversationId: "v2-test-cancel",
+      status: "draft",
+      title: "Orphan",
+      objective: "O",
+      currentVersion: 0,
+      approvedAt: null,
+      rejectedAt: null,
+    } as unknown as AIChatPlanEntity;
+
+    sinon.stub(AIChatPlanModel.prototype, "getByPlanId").resolves(fakePlan);
+    const updateStatusStub = sinon
+      .stub(AIChatPlanModel.prototype, "updateStatus")
+      .resolves();
+
+    await mod.cancelDraft({ planId: "plan-cancel-draft-001" });
+
+    expect(updateStatusStub.calledOnce).to.be.true;
+    const callArgs = updateStatusStub.firstCall.args[0];
+    expect(callArgs.planId).to.equal("plan-cancel-draft-001");
+    expect(callArgs.status).to.equal("cancelled");
+  });
+
+  it("is a no-op when plan is not in draft status", async function () {
+    const fakePlan = {
+      planId: "plan-noop-002",
+      conversationId: "v2-test-noop",
+      status: "awaiting_approval",
+      title: "Advanced",
+      objective: "O",
+      currentVersion: 1,
+      approvedAt: null,
+      rejectedAt: null,
+    } as unknown as AIChatPlanEntity;
+
+    sinon.stub(AIChatPlanModel.prototype, "getByPlanId").resolves(fakePlan);
+    const updateStatusStub = sinon
+      .stub(AIChatPlanModel.prototype, "updateStatus")
+      .resolves();
+
+    await mod.cancelDraft({ planId: "plan-noop-002" });
+
+    expect(updateStatusStub.called).to.be.false;
+  });
+
+  it("throws when plan is not found", async function () {
+    sinon.stub(AIChatPlanModel.prototype, "getByPlanId").resolves(null);
+    const updateStatusStub = sinon
+      .stub(AIChatPlanModel.prototype, "updateStatus")
+      .resolves();
+
+    let threw = false;
+    try {
+      await mod.cancelDraft({ planId: "plan-missing-003" });
+    } catch (err) {
+      threw = true;
+      expect((err as Error).message).to.contain("Plan not found");
+    }
+    expect(threw).to.be.true;
+    expect(updateStatusStub.called).to.be.false;
+  });
+});
