@@ -30,7 +30,7 @@ describe("applyDirectoryLimits", () => {
     }
     const r = applyDirectoryLimits(tmp, {
       maxFiles: 5,
-      maxExtractedBytes: 10n ** 9n,
+      maxExtractedBytes: BigInt(1_000_000_000),
     });
     expect(r.ok).toBe(false);
     if (!r.ok) {
@@ -42,7 +42,7 @@ describe("applyDirectoryLimits", () => {
     fs.writeFileSync(path.join(tmp, "big.bin"), Buffer.alloc(2 * 1024 * 1024));
     const r = applyDirectoryLimits(tmp, {
       maxFiles: 5000,
-      maxExtractedBytes: 1024n,
+      maxExtractedBytes: BigInt(1024),
     });
     expect(r.ok).toBe(false);
     if (!r.ok) {

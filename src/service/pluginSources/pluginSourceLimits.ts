@@ -30,7 +30,7 @@ export function applyDirectoryLimits(
   }
 ): DirectoryLimitsResult {
   let fileCount = 0;
-  let totalBytes = 0n;
+  let totalBytes = BigInt(0);
 
   const walk = (dir: string): DirectoryLimitsResult | null => {
     const entries = fs.readdirSync(dir, { withFileTypes: true });
