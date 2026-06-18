@@ -1,6 +1,7 @@
 import { windowInvoke } from "@/views/utils/apirequest";
 import {
   PLUGIN_IMPORT,
+  PLUGIN_INSTALL_FROM_SOURCE,
   PLUGIN_VALIDATE_PACKAGE,
   PLUGIN_LIST,
   PLUGIN_GET,
@@ -69,6 +70,31 @@ export interface PluginDetail extends PluginSummary {
   mcpServers: PluginMcpServerComponent[];
   errors: Array<{ code: string; message: string; recoverable: boolean }>;
   manifest: Record<string, unknown>;
+  sourceKind?: PluginSourceKind;
+  sourceUri?: string;
+  sourceRef?: string;
+}
+
+export type PluginSourceKind =
+  | "local-zip"
+  | "local-folder"
+  | "git"
+  | "github"
+  | "npm"
+  | "url";
+
+export interface PluginInstallSourceRequest {
+  kind: PluginSourceKind;
+  overwrite?: boolean;
+  zipPath?: string;
+  folderPath?: string;
+  uri?: string;
+  ref?: string;
+  npmPackage?: string;
+  npmVersion?: string;
+  npmRegistry?: string;
+  npmAuthScope?: string;
+  npmAuthToken?: string;
 }
 
 export interface PluginValidationResult {
@@ -106,6 +132,12 @@ export async function importPlugin(
   overwrite = false
 ): Promise<PluginSummary | null> {
   return await windowInvoke(PLUGIN_IMPORT, { zipPath, overwrite });
+}
+
+export async function installPluginFromSource(
+  req: PluginInstallSourceRequest
+): Promise<PluginSummary | null> {
+  return await windowInvoke(PLUGIN_INSTALL_FROM_SOURCE, req);
 }
 
 export async function validatePluginPackage(
