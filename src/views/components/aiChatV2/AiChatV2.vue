@@ -947,6 +947,14 @@ const onSend = async (text: string): Promise<void> => {
               planState.value = planChunk.planState;
               upsertPlanMessage(planChunk.planState);
             }
+          } else if (chunk.eventType === ("plan_state" as never)) {
+            // Model auto-entered Plan Mode via EnterPlanMode. Light up the
+            // Plan Mode indicator; do not render a plan message yet (the
+            // plan content does not exist until SubmitPlanForApproval).
+            const planChunk = chunk as ChatV2StreamChunk;
+            if (planChunk.planState) {
+              planState.value = planChunk.planState;
+            }
           } else if (chunk.eventType === ("plan_blocked_tool" as never)) {
             // Tool was blocked by plan policy — surface as a tool result message
             const planChunk = chunk as ChatV2StreamChunk;
