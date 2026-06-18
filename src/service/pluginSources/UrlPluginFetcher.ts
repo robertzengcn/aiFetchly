@@ -172,6 +172,14 @@ function downloadTo(url: string, dest: string): Promise<boolean> {
         out.on("error", () => done(false));
       });
       r.on("error", () => done(false));
+      // The `timeout` option only emits a 'timeout' event — without this
+      // handler a stalled server hangs the install forever.
+      r.on("timeout", () => {
+        if (!aborted) {
+          aborted = true;
+          r.destroy(new Error("Request timed out"));
+        }
+      });
     };
     req(url);
   });

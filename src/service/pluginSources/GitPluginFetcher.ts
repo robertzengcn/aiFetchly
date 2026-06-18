@@ -27,6 +27,7 @@ export interface SpawnChildLike {
   on(event: "error", cb: (e: Error) => void): unknown;
   stderr: { on(ev: "data", cb: (chunk: Buffer) => void): unknown };
   stdout: { on(ev: "data", cb: (chunk: Buffer) => void): unknown };
+  kill(signal?: NodeJS.Signals): boolean;
 }
 
 export type SpawnFn = (
@@ -168,7 +169,15 @@ function runUntilSettled(
         resolve();
       }
     };
-    const timer = setTimeout(finish, timeoutMs);
+    const timer = setTimeout(() => {
+      // Don't let a hung git process outlive the timeout.
+      try {
+        child.kill();
+      } catch {
+        /* best-effort */
+      }
+      finish();
+    }, timeoutMs);
     // Capture stderr so it never reaches the renderer or logs unfiltered,
     // but we deliberately ignore the content here.
     child.stderr?.on("data", () => {
