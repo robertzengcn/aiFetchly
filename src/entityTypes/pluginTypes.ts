@@ -173,6 +173,9 @@ export interface PluginDetail extends PluginSummary {
   readonly mcpServers: readonly PluginMcpServerComponent[];
   readonly errors: readonly PluginError[];
   readonly manifest: Record<string, unknown>;
+  readonly sourceKind?: PluginSourceKind;
+  readonly sourceUri?: string;
+  readonly sourceRef?: string;
 }
 
 export interface PluginValidationResult {
@@ -194,6 +197,29 @@ export interface CreateInstalledPluginInput {
   readonly componentStateJson?: string;
   readonly enabled?: number;
   readonly health?: PluginHealth;
+  readonly sourceKind?: PluginSourceKind;
+  readonly sourceUri?: string;
+  readonly sourceRef?: string;
+  readonly sourceMetaJson?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Multi-source install provenance (Spec §4.1, §6.1)
+// ---------------------------------------------------------------------------
+
+export type PluginSourceKind =
+  | "local-zip"
+  | "local-folder"
+  | "git"
+  | "github"
+  | "npm"
+  | "url";
+
+export interface PluginSourceProvenance {
+  readonly sourceKind: PluginSourceKind;
+  readonly sourceUri?: string;
+  readonly sourceRef?: string;
+  readonly sourceMeta?: Record<string, unknown>;
 }
 
 export interface UpdatePluginStateInput {
