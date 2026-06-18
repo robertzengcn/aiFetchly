@@ -742,6 +742,28 @@ export const constantRoutes: RouteRecordRaw[] = [
     ],
   },
   {
+    path: "/plugins",
+    name: "Plugins",
+    meta: {
+      visible: true,
+      title: "route.plugins",
+      icon: "mdi-puzzle",
+    },
+    component: Layout,
+    children: [
+      {
+        path: "management",
+        component: () => import("@/views/pages/systemsetting/plugins.vue"),
+        name: "PluginsManagement",
+        meta: {
+          visible: true,
+          title: "route.plugins",
+          icon: "mdi-puzzle",
+        },
+      },
+    ],
+  },
+  {
     path: "/socialaccount",
     name: "Socialaccount",
     meta: {
