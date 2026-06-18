@@ -28,6 +28,10 @@ import {
   checkPlanModeToolPolicy,
   isPlanToolName,
 } from "@/service/PlanModeToolPolicy";
+import {
+  isEnterPlanModeToolName,
+  sanitizeEnterPlanModeArgs,
+} from "@/service/EnterPlanModeTool";
 
 /** Max model→tool→model rounds per user turn. */
 const CHAT_V2_MAX_TOOL_ROUNDS = 8;
@@ -113,6 +117,15 @@ export class AIChatQueryLoop {
     let finalAccumulator: OpenAIStreamAccumulator | null = null;
     const messages = input.messages;
 
+    // Local mutable copies so EnterPlanMode can swap them mid-run.
+    let planContext = input.planContext;
+    const currentTools = [...input.openAITools];
+    // Track whether the model auto-entered plan mode this run AND whether it
+    // followed through with plan-tool usage. Used at turn end to cancel orphan
+    // drafts (see completed-return path).
+    let autoEnteredPlanId: string | undefined;
+    let planToolsUsed = false;
+
     try {
       for (
         let round = input.startRound;
@@ -126,7 +139,7 @@ export class AIChatQueryLoop {
           `[ai-chat-v2] round ${round} → POST /chat/completions msgs=${
             messages.length
           } roles=[${messages.map((m) => m.role).join(",")}] tools=${
-            input.openAITools.length
+            currentTools.length
           }`
         );
 
@@ -137,8 +150,8 @@ export class AIChatQueryLoop {
             temperature: input.request.temperature,
             max_tokens: input.request.maxTokens,
             stream: true,
-            tools: input.openAITools.length > 0 ? input.openAITools : undefined,
-            tool_choice: input.openAITools.length > 0 ? "auto" : undefined,
+            tools: currentTools.length > 0 ? currentTools : undefined,
+            tool_choice: currentTools.length > 0 ? "auto" : undefined,
           },
           (rawChunk) => {
             if (input.abortController.signal.aborted) return;
@@ -243,8 +256,75 @@ export class AIChatQueryLoop {
             toolArguments: call.arguments ?? {},
           });
 
+          // Model-initiated Plan Mode entry (chat mode only).
+          if (
+            isEnterPlanModeToolName(call.name) &&
+            !planContext &&
+            input.autoPlan
+          ) {
+            const transition = await this.handleEnterPlanMode(
+              input,
+              messages,
+              call,
+              eventSink
+            );
+            if (transition.status === "transitioned") {
+              planContext = {
+                planModule: input.autoPlan.planModule,
+                planState: transition.newPlanState,
+              };
+              input.planContext = planContext;
+              // Keep input.openAITools in sync so helper-built pending turns
+              // (e.g. paused_for_plan_question) carry the post-transition tool
+              // set. The local `currentTools` is the source of truth inside
+              // run(); this just keeps the input object consistent for helpers
+              // that still read input.openAITools.
+              input.openAITools = currentTools;
+              for (const t of input.autoPlan.planTools) {
+                if (
+                  !currentTools.some(
+                    (ct) => ct.function.name === t.function.name
+                  )
+                ) {
+                  currentTools.push(t);
+                }
+              }
+              autoEnteredPlanId = transition.newPlanState.planId;
+            }
+            continue;
+          }
+
+          if (
+            isEnterPlanModeToolName(call.name) &&
+            (!input.autoPlan || planContext)
+          ) {
+            const reason = planContext
+              ? "Already in Plan Mode; EnterPlanMode is not available."
+              : "EnterPlanMode is not available. Plan Mode auto-entry is disabled.";
+            const errContent = serializeToolResultContent({
+              success: false,
+              error: reason,
+            });
+            eventSink.emit({
+              type: "tool_result",
+              conversationId: input.conversationId,
+              messageId: input.assistantMessageId,
+              toolCallId: call.id,
+              toolName: call.name,
+              fullContent: errContent,
+              toolResult: { success: false, error: reason },
+            });
+            messages.push({
+              role: "tool",
+              tool_call_id: call.id,
+              content: errContent,
+            });
+            continue;
+          }
+
           // Plan tools are intercepted locally.
-          if (input.planContext && isPlanToolName(call.name)) {
+          if (planContext && isPlanToolName(call.name)) {
+            planToolsUsed = true;
             if (call.name === "AskUserQuestion") {
               const paused = await this.handlePlanToolAskUserQuestion(
                 input,
@@ -270,14 +350,14 @@ export class AIChatQueryLoop {
           }
 
           // Plan-mode policy gate.
-          if (input.planContext && input.planContext.planState) {
+          if (planContext && planContext.planState) {
             const skillDef = this.deps.getSkillDefinition(call.name);
             const policyDecision = checkPlanModeToolPolicy({
               toolName: call.name,
               skillPermissionCategory: skillDef?.permissionCategory,
               context: {
                 conversationId: input.conversationId,
-                planState: input.planContext.planState,
+                planState: planContext.planState,
               },
             });
             if (!policyDecision.allowed) {
@@ -341,12 +421,12 @@ export class AIChatQueryLoop {
                 conversationMessages: messages,
                 abortController: input.abortController,
                 request: input.request,
-                openAITools: input.openAITools,
+                openAITools: currentTools,
                 nextRound: round + 1,
                 toolCallId: call.id,
                 toolName: call.name,
                 toolArguments: call.arguments ?? {},
-                planContext: input.planContext,
+                planContext,
                 eventSink: eventSink,
               },
             };
@@ -376,6 +456,24 @@ export class AIChatQueryLoop {
 
       const fullContent = finalAccumulator?.state.fullContent ?? "";
       const finishReason = finalAccumulator?.state.finishReason ?? "stop";
+
+      // Orphan-draft cleanup: if the model auto-entered plan mode but ended
+      // the turn without using any plan tools, cancel the auto-created draft
+      // so the UI indicator doesn't get stuck and the DB doesn't accumulate
+      // abandoned drafts. Best-effort: log on error, don't fail the turn.
+      if (autoEnteredPlanId && !planToolsUsed && input.autoPlan) {
+        try {
+          await input.autoPlan.planModule.cancelDraft({
+            planId: autoEnteredPlanId,
+          });
+          console.log(
+            `[ai-chat-v2] auto-entered draft ${autoEnteredPlanId} cancelled (no plan tools used)`
+          );
+        } catch (err) {
+          console.error("[ai-chat-v2] failed to cancel orphan draft:", err);
+        }
+      }
+
       return {
         type: "completed",
         conversationId: input.conversationId,
@@ -543,5 +641,110 @@ export class AIChatQueryLoop {
       tool_call_id: call.id,
       content: ackContent,
     });
+  }
+
+  /**
+   * Handle a model-initiated EnterPlanMode tool call. Creates plan state,
+   * emits plan_state, injects a system reminder, and pushes the tool result.
+   * Returns "transitioned" on success or "error" (with an error tool result
+   * already pushed to messages) on failure.
+   */
+  private async handleEnterPlanMode(
+    input: AIChatQueryLoopInput,
+    messages: OpenAIChatMessage[],
+    call: {
+      id?: string;
+      name?: string;
+      arguments?: Record<string, unknown>;
+    },
+    eventSink: AIChatQueryEventSink
+  ): Promise<
+    | { status: "transitioned"; newPlanState: AIChatPlanStateView }
+    | { status: "error" }
+  > {
+    if (!input.autoPlan || !call.id) {
+      return { status: "error" };
+    }
+    const args = sanitizeEnterPlanModeArgs(call.arguments ?? {});
+    const objective = args.objective ?? input.request.message.slice(0, 500);
+    const title = input.request.message.slice(0, 80) || "New plan";
+
+    let planState: AIChatPlanStateView;
+    try {
+      planState = await input.autoPlan.planModule.ensurePlanForConversation({
+        conversationId: input.conversationId,
+        title,
+        objective,
+      });
+    } catch (err) {
+      console.error("[ai-chat-v2] EnterPlanMode ensurePlan failed:", err);
+      const errContent = serializeToolResultContent({
+        success: false,
+        error:
+          err instanceof Error ? err.message : "Failed to enter Plan Mode.",
+      });
+      messages.push({
+        role: "tool",
+        tool_call_id: call.id,
+        content: errContent,
+      });
+      return { status: "error" };
+    }
+
+    if (planState.status === "approved") {
+      const errContent = serializeToolResultContent({
+        success: false,
+        error: "Plan is already approved; cannot re-enter Plan Mode.",
+      });
+      messages.push({
+        role: "tool",
+        tool_call_id: call.id,
+        content: errContent,
+      });
+      return { status: "error" };
+    }
+
+    eventSink.emit({
+      type: "plan_state",
+      conversationId: input.conversationId,
+      messageId: input.assistantMessageId,
+      planState,
+      autoEntered: true,
+      rationale: args.rationale,
+    });
+
+    // System-role reminder — OpenAI Chat Completions API permits system
+    // messages anywhere in the transcript.
+    messages.push({
+      role: "system",
+      content:
+        "Plan mode is now active. Follow the plan-mode workflow:\n" +
+        "Understand → Explore → Clarify → Design → Submit.\n" +
+        "High-impact tools (email, social posting, campaign mutation, shell, " +
+        "filesystem writes, bulk scraping) are BLOCKED until the user approves " +
+        "the plan via SubmitPlanForApproval.\n" +
+        `Current plan state: status=${planState.status} planId=${planState.planId}`,
+    });
+
+    const ackContent = serializeToolResultContent({
+      success: true,
+      status: "plan_mode_entered",
+      planId: planState.planId,
+      rationale: args.rationale,
+      nextSteps: [
+        "Understand — restate the objective",
+        "Explore — use read-only tools if needed",
+        "Clarify — call AskUserQuestion for user-only info",
+        "Design — produce a structured plan",
+        "Submit — call SubmitPlanForApproval",
+      ],
+    });
+    messages.push({
+      role: "tool",
+      tool_call_id: call.id,
+      content: ackContent,
+    });
+
+    return { status: "transitioned", newPlanState: planState };
   }
 }

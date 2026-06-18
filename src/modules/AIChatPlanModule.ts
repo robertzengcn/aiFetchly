@@ -317,6 +317,28 @@ export class AIChatPlanModule extends BaseModule {
     return (await this.buildStateView(plan.planId))!;
   }
 
+  /**
+   * Cancel a plan that is still in draft status. Used by the query loop to
+   * clean up orphan drafts created by EnterPlanMode when the model never
+   * follows through with a plan tool (AskUserQuestion or SubmitPlanForApproval).
+   *
+   * No-op when the plan is in any status other than "draft" — we must not
+   * undo progress the user or model has already made.
+   */
+  async cancelDraft(input: { planId: string }): Promise<void> {
+    const plan = await this.planModel.getByPlanId(input.planId);
+    if (!plan) throw new Error("Plan not found");
+    // Only cancel plans that are still in draft. Any other status means the
+    // user or model has advanced the workflow — don't undo their progress.
+    if (plan.status !== "draft") {
+      return;
+    }
+    await this.planModel.updateStatus({
+      planId: plan.planId,
+      status: "cancelled",
+    });
+  }
+
   async rejectPlan(input: {
     conversationId: string;
     planId: string;
