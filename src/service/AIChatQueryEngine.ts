@@ -18,6 +18,9 @@ import {
   isPermissionPromptResult,
 } from "@/service/AIChatQueryLoop";
 import { userSafeError } from "@/service/AIChatErrorMapper";
+import { Token } from "@/modules/token";
+import { USER_AI_AUTO_PLAN, USER_AI_ENABLED } from "@/config/usersetting";
+import { ENTER_PLAN_MODE_TOOL } from "@/service/EnterPlanModeTool";
 import type {
   AIChatQueryEventSink,
   AIChatQueryLoopInput,
@@ -185,8 +188,21 @@ export class AIChatQueryEngine {
     // ------------------------------------------------------------------
     const toolFunctions = await SkillRegistry.getAllToolFunctions();
     const openAITools = toOpenAITools(toolFunctions);
+
+    // Resolve auto-plan config. Only active in plain chat mode (not when the
+    // conversation is already in plan mode), only when AI is enabled, and only
+    // when USER_AI_AUTO_PLAN is not explicitly "false" (default-on).
+    const tokenService = new Token();
+    const autoPlanEnabled =
+      !isPlanMode &&
+      tokenService.getValue(USER_AI_ENABLED) === "true" &&
+      tokenService.getValue(USER_AI_AUTO_PLAN) !== "false";
+
+    const planTools = PlanModeToolRegistry.toOpenAITools();
     const allOpenAITools = isPlanMode
-      ? [...openAITools, ...PlanModeToolRegistry.toOpenAITools()]
+      ? [...openAITools, ...planTools]
+      : autoPlanEnabled
+      ? [...openAITools, ENTER_PLAN_MODE_TOOL]
       : openAITools;
 
     // ------------------------------------------------------------------
@@ -240,6 +256,12 @@ export class AIChatQueryEngine {
       abortController,
       eventSink: streamEventSink,
       planContext,
+      autoPlan: autoPlanEnabled
+        ? {
+            planModule: new AIChatPlanModule(),
+            planTools,
+          }
+        : undefined,
       startRound: 0,
       isActiveTurn: () =>
         this.currentAssistantMessageId === assistantMessageId &&
@@ -727,7 +749,9 @@ export class AIChatQueryEngine {
     return wrapped;
   }
 
-  private async flushEventSaves(eventSink: AIChatQueryEventSink): Promise<void> {
+  private async flushEventSaves(
+    eventSink: AIChatQueryEventSink
+  ): Promise<void> {
     const saves = this.pendingEventSaves.get(eventSink);
     if (!saves || saves.length === 0) {
       return;
