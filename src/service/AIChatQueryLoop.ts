@@ -262,6 +262,12 @@ export class AIChatQueryLoop {
                 planState: transition.newPlanState,
               };
               input.planContext = planContext;
+              // Keep input.openAITools in sync so helper-built pending turns
+              // (e.g. paused_for_plan_question) carry the post-transition tool
+              // set. The local `currentTools` is the source of truth inside
+              // run(); this just keeps the input object consistent for helpers
+              // that still read input.openAITools.
+              input.openAITools = currentTools;
               for (const t of input.autoPlan.planTools) {
                 if (
                   !currentTools.some(
