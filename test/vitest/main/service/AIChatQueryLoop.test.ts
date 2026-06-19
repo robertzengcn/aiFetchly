@@ -117,6 +117,76 @@ describe("AIChatQueryLoop", () => {
   });
 
   describe("tool calls", () => {
+    it("submits an immediate approval plan when explicit submit-now plan mode gets an empty model response", async () => {
+      const fakeStream = vi.fn(
+        async (
+          _req: unknown,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          onChunk(makeChunk("", "stop"));
+        }
+      );
+      const events: unknown[] = [];
+      const submittedPlan = {
+        planId: "plan-immediate",
+        conversationId: "v2-test",
+        status: "awaiting_approval",
+        title: "Immediate approval plan",
+        objective: "Submit a plan now",
+        currentVersion: 1,
+      };
+      const submitPlanForApproval = vi.fn().mockResolvedValue(submittedPlan);
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: vi.fn(),
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+
+      const result = await loop.run({
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: {
+          message:
+            "Create an approval plan. Do not ask questions. Submit the plan for approval now.",
+          mode: "plan",
+        },
+        openAITools: [],
+        abortController: new AbortController(),
+        eventSink: { emit: (event) => events.push(event) },
+        planContext: {
+          planModule: {
+            saveQuestion: vi.fn(),
+            submitPlanForApproval,
+            getPlanStateByPlanId: vi.fn(),
+            answerQuestion: vi.fn(),
+          },
+          planState: {
+            planId: "plan-immediate",
+            conversationId: "v2-test",
+            status: "draft",
+            title: "Immediate approval plan",
+            objective: "Submit a plan now",
+            currentVersion: 0,
+          } as never,
+        },
+        startRound: 0,
+        isActiveTurn: () => true,
+      });
+
+      expect(result.type).toBe("completed");
+      expect(submitPlanForApproval).toHaveBeenCalled();
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "plan_submitted",
+          planState: submittedPlan,
+        })
+      );
+      if (result.type === "completed") {
+        expect(result.fullContent).toContain("submitted for approval");
+      }
+    });
+
     it("executes tool and continues to next round when finish_reason is tool_calls", async () => {
       const toolCallChunk = makeToolCallChunk(
         "call-1",
