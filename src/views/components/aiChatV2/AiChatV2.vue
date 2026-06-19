@@ -117,6 +117,13 @@
     <!-- MCP Tool Manager Dialog -->
     <MCPToolManager v-model="showMCPToolManager" />
 
+    <v-snackbar v-model="compactNotice" timeout="3000" location="bottom">
+      {{
+        t("aiChatV2.compact_completed") ||
+        "Conversation compacted into memory."
+      }}
+    </v-snackbar>
+
     <!-- Conversation history dialog -->
     <v-dialog v-model="showConversationsDialog" max-width="500" scrollable>
       <v-card>
@@ -286,6 +293,7 @@ const retryInfo = ref<{
 const showConversationsDialog = ref(false);
 const showMCPToolManager = ref(false);
 const isCompacting = ref(false);
+const compactNotice = ref(false);
 
 // Conversation search state
 const conversationSearch = ref("");
@@ -377,6 +385,18 @@ const showTypingIndicator = computed(() => {
 const mode = ref<ChatV2Mode>("chat");
 const planState = ref<AIChatPlanStateView | null>(null);
 const pendingQuestion = ref<AIChatPlanQuestionView | null>(null);
+
+const applyPlanState = (state: AIChatPlanStateView | null): void => {
+  planState.value = state;
+  if (
+    state &&
+    state.status !== "completed" &&
+    state.status !== "cancelled" &&
+    state.status !== "rejected"
+  ) {
+    mode.value = "plan";
+  }
+};
 
 const streamStatus = computed<Status>(() => {
   if (isStreaming.value) return "streaming";
@@ -472,7 +492,7 @@ const loadHistory = async (conversationId: string): Promise<void> => {
     }
     // Load plan state for this conversation.
     try {
-      planState.value = await getChatV2PlanState(conversationId);
+      applyPlanState(await getChatV2PlanState(conversationId));
       if (planState.value?.pendingQuestion) {
         pendingQuestion.value = planState.value.pendingQuestion;
       } else {
@@ -484,7 +504,7 @@ const loadHistory = async (conversationId: string): Promise<void> => {
         upsertPlanMessage(planState.value);
       }
     } catch {
-      planState.value = null;
+      applyPlanState(null);
       pendingQuestion.value = null;
     }
   } catch (err) {
@@ -497,7 +517,7 @@ const onNewConversation = (): void => {
   activeConversationId.value = null;
   messages.value = [];
   streamError.value = null;
-  planState.value = null;
+  applyPlanState(null);
   pendingQuestion.value = null;
   // Reset context-usage tracking for the new conversation.
   lastUsage.value = null;
@@ -746,7 +766,7 @@ const handleQuestionAnswered = async (
     await answerChatV2Question(activeConversationId.value, questionId, answers);
     pendingQuestion.value = null;
     // Refresh plan state to reflect the updated status.
-    planState.value = await getChatV2PlanState(activeConversationId.value);
+    applyPlanState(await getChatV2PlanState(activeConversationId.value));
   } catch (err) {
     streamError.value = err instanceof Error ? err.message : String(err);
   }
@@ -762,7 +782,7 @@ const handleApprovePlan = async (): Promise<void> => {
       planState.value.currentVersion
     );
     if (updated) {
-      planState.value = updated;
+      applyPlanState(updated);
       upsertPlanMessage(updated);
     }
 
@@ -789,7 +809,7 @@ const handleRejectPlan = async (feedback: string): Promise<void> => {
       feedback
     );
     if (updated) {
-      planState.value = updated;
+      applyPlanState(updated);
       upsertPlanMessage(updated);
     }
   } catch (err) {
@@ -807,7 +827,7 @@ const handleRequestPlanChanges = async (feedback: string): Promise<void> => {
       feedback
     );
     if (updated) {
-      planState.value = updated;
+      applyPlanState(updated);
       upsertPlanMessage(updated);
     }
   } catch (err) {
@@ -832,6 +852,7 @@ const handleCompactConversation = async (): Promise<void> => {
       if (summary.model) {
         activeModel.value = summary.model;
       }
+      compactNotice.value = true;
     }
   } catch (err) {
     streamError.value = err instanceof Error ? err.message : String(err);
@@ -981,12 +1002,12 @@ const onSend = async (text: string): Promise<void> => {
               pendingQuestion.value = planChunk.question;
             }
             if (planChunk.planState) {
-              planState.value = planChunk.planState;
+              applyPlanState(planChunk.planState);
             }
           } else if (chunk.eventType === ("plan_submitted" as never)) {
             const planChunk = chunk as ChatV2StreamChunk;
             if (planChunk.planState) {
-              planState.value = planChunk.planState;
+              applyPlanState(planChunk.planState);
               upsertPlanMessage(planChunk.planState);
             }
           } else if (chunk.eventType === ("plan_state" as never)) {
@@ -995,7 +1016,7 @@ const onSend = async (text: string): Promise<void> => {
             // plan content does not exist until SubmitPlanForApproval).
             const planChunk = chunk as ChatV2StreamChunk;
             if (planChunk.planState) {
-              planState.value = planChunk.planState;
+              applyPlanState(planChunk.planState);
             }
           } else if (chunk.eventType === ("plan_blocked_tool" as never)) {
             // Tool was blocked by plan policy — surface as a tool result message
