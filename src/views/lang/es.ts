@@ -1859,6 +1859,7 @@ export default {
   plugins: {
     title: "Complementos",
     import_button: "Importar complemento",
+    install_button: "Instalar",
     validate_button: "Validar paquete",
     reload_button: "Recargar",
     column_plugin: "Complemento",

@@ -1864,6 +1864,7 @@ export default {
   plugins: {
     title: "Plugins",
     import_button: "Import Plugin",
+    install_button: "Install",
     validate_button: "Validate Package",
     reload_button: "Reload",
     column_plugin: "Plugin",

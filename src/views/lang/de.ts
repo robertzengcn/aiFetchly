@@ -1853,6 +1853,7 @@ export default {
   plugins: {
     title: "Plugins",
     import_button: "Plugin importieren",
+    install_button: "Installieren",
     validate_button: "Paket validieren",
     reload_button: "Neu laden",
     column_plugin: "Plugin",
