@@ -292,6 +292,21 @@ import {
   EMAIL_SEARCH_TASK_START,
   UPDATEEMAILSEARCHTASK,
   DELETEEMAILSEARCHTASK,
+  // Plugin Management Channels
+  PLUGIN_IMPORT,
+  PLUGIN_INSTALL_FROM_SOURCE,
+  PLUGIN_VALIDATE_PACKAGE,
+  PLUGIN_LIST,
+  PLUGIN_GET,
+  PLUGIN_TOGGLE,
+  PLUGIN_UNINSTALL,
+  PLUGIN_RELOAD,
+  PLUGIN_EXPORT_DIAGNOSTICS,
+  PLUGIN_TOGGLE_SKILL,
+  PLUGIN_TOGGLE_MCP_SERVER,
+  PLUGIN_TOGGLE_MCP_TOOL,
+  PLUGIN_TEST_MCP_CONNECTION,
+  PLUGIN_DISCOVER_MCP_TOOLS,
 } from "@/config/channellist";
 
 // window.ipcRenderer = ipcRenderer
@@ -760,6 +775,21 @@ contextBridge.exposeInMainWorld("api", {
       // Email Search Task Edit/Delete Channels
       UPDATEEMAILSEARCHTASK,
       DELETEEMAILSEARCHTASK,
+      // Plugin Management Channels
+      PLUGIN_IMPORT,
+      PLUGIN_INSTALL_FROM_SOURCE,
+      PLUGIN_VALIDATE_PACKAGE,
+      PLUGIN_LIST,
+      PLUGIN_GET,
+      PLUGIN_TOGGLE,
+      PLUGIN_UNINSTALL,
+      PLUGIN_RELOAD,
+      PLUGIN_EXPORT_DIAGNOSTICS,
+      PLUGIN_TOGGLE_SKILL,
+      PLUGIN_TOGGLE_MCP_SERVER,
+      PLUGIN_TOGGLE_MCP_TOOL,
+      PLUGIN_TEST_MCP_CONNECTION,
+      PLUGIN_DISCOVER_MCP_TOOLS,
     ];
     if (validChannels.includes(channel)) {
       return ipcRenderer.invoke(channel, data);
