@@ -1,16 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  AI_CHAT_V2_COMPACT_CONVERSATION,
   AI_CHAT_V2_STREAM,
   AI_CHAT_V2_STREAM_CHUNK,
   AI_CHAT_V2_STREAM_COMPLETE,
 } from "@/config/channellist";
-import { streamChatV2Message } from "@/views/api/aiChatV2";
+import {
+  compactChatV2Conversation,
+  streamChatV2Message,
+} from "@/views/api/aiChatV2";
 
 type ReceiveHandler = (raw: string) => void;
 
 describe("aiChatV2 renderer API", () => {
   const handlers = new Map<string, ReceiveHandler>();
   const send = vi.fn();
+  const invoke = vi.fn();
   const receive = vi.fn((channel: string, handler: ReceiveHandler) => {
     handlers.set(channel, handler);
   });
@@ -26,6 +31,7 @@ describe("aiChatV2 renderer API", () => {
         window: {
           api: {
             send: typeof send;
+            invoke: typeof invoke;
             receive: typeof receive;
             removeAllListeners: typeof removeAllListeners;
           };
@@ -34,6 +40,7 @@ describe("aiChatV2 renderer API", () => {
     ).window = {
       api: {
         send,
+        invoke,
         receive,
         removeAllListeners,
       },
@@ -102,5 +109,30 @@ describe("aiChatV2 renderer API", () => {
     expect(onError).toHaveBeenCalledWith(new Error("send failed"));
     expect(removeAllListeners).toHaveBeenCalledWith(AI_CHAT_V2_STREAM_CHUNK);
     expect(removeAllListeners).toHaveBeenCalledWith(AI_CHAT_V2_STREAM_COMPLETE);
+  });
+
+  it("invokes the compact conversation channel with the active conversation id", async () => {
+    const compactSummary = {
+      compactId: "compact-1",
+      conversationId: "v2-1",
+      summary: "# Compact Summary",
+      throughMessageId: "m-3",
+      throughTimestamp: "2026-06-19T00:00:00.000Z",
+      sourceMessageCount: 3,
+      status: "active",
+    };
+    invoke.mockResolvedValueOnce({
+      status: true,
+      msg: "ok",
+      data: compactSummary,
+    });
+
+    const result = await compactChatV2Conversation("v2-1");
+
+    expect(invoke).toHaveBeenCalledWith(
+      AI_CHAT_V2_COMPACT_CONVERSATION,
+      JSON.stringify({ conversationId: "v2-1" })
+    );
+    expect(result).toEqual(compactSummary);
   });
 });

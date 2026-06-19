@@ -24,6 +24,21 @@
           icon
           size="small"
           variant="text"
+          :loading="isCompacting"
+          :disabled="
+            !activeConversationId || messages.length === 0 || isStreaming
+          "
+          @click="handleCompactConversation"
+          :title="
+            t('aiChatV2.compact_conversation') || 'Compact conversation'
+          "
+        >
+          <v-icon size="small">mdi-arrow-collapse</v-icon>
+        </v-btn>
+        <v-btn
+          icon
+          size="small"
+          variant="text"
           @click="showConversationsDialog = true"
           :title="t('aiChatV2.conversation_history') || 'Conversation history'"
         >
@@ -222,6 +237,7 @@ import {
   streamChatV2Message,
   stopChatV2Stream,
   getChatV2PlanState,
+  compactChatV2Conversation,
   answerChatV2Question,
   approveChatV2Plan,
   rejectChatV2Plan,
@@ -269,6 +285,7 @@ const retryInfo = ref<{
 } | null>(null);
 const showConversationsDialog = ref(false);
 const showMCPToolManager = ref(false);
+const isCompacting = ref(false);
 
 // Conversation search state
 const conversationSearch = ref("");
@@ -795,6 +812,31 @@ const handleRequestPlanChanges = async (feedback: string): Promise<void> => {
     }
   } catch (err) {
     streamError.value = err instanceof Error ? err.message : String(err);
+  }
+};
+
+const handleCompactConversation = async (): Promise<void> => {
+  if (!activeConversationId.value || isStreaming.value || isCompacting.value) {
+    return;
+  }
+  isCompacting.value = true;
+  streamError.value = null;
+  try {
+    const summary = await compactChatV2Conversation(activeConversationId.value);
+    if (summary) {
+      const tokenEstimate =
+        summary.outputTokenEstimate ??
+        Math.ceil(summary.summary.length / CHARS_PER_TOKEN_ESTIMATE);
+      streamingEstimatedTokens.value = tokenEstimate;
+      lastUsage.value = null;
+      if (summary.model) {
+        activeModel.value = summary.model;
+      }
+    }
+  } catch (err) {
+    streamError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    isCompacting.value = false;
   }
 };
 

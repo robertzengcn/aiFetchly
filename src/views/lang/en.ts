@@ -1806,6 +1806,7 @@ export default {
     clear_conversation: "Clear conversation",
     clear_all: "Clear all",
     clear_chat: "Clear chat",
+    compact_conversation: "Compact conversation",
     context_usage: "Context",
     context_usage_tooltip: "{used} / {total} tokens ({percent}%)",
     loading_models: "Loading models…",
