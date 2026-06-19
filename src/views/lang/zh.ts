@@ -1746,6 +1746,7 @@ export default {
     clear_all: "全部清空",
     clear_chat: "清空聊天",
     compact_conversation: "压缩对话",
+    compact_completed: "对话已压缩到记忆中。",
     context_usage: "上下文",
     context_usage_tooltip: "{used} / {total} tokens ({percent}%)",
     loading_models: "正在加载模型…",

@@ -1801,6 +1801,7 @@ export default {
     clear_all: "Borrar todo",
     clear_chat: "Borrar chat",
     compact_conversation: "Compactar conversación",
+    compact_completed: "Conversación compactada en memoria.",
     context_usage: "Contexto",
     context_usage_tooltip: "{used} / {total} tokens ({percent}%)",
     loading_models: "Cargando modelos…",

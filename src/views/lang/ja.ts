@@ -1761,6 +1761,7 @@ export default {
     clear_all: "すべて消去",
     clear_chat: "チャットを消去",
     compact_conversation: "会話を圧縮",
+    compact_completed: "会話をメモリに圧縮しました。",
     context_usage: "コンテキスト",
     context_usage_tooltip: "{used} / {total} トークン ({percent}%)",
     loading_models: "モデルを読み込み中…",

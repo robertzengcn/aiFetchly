@@ -5,6 +5,7 @@ import type {
   OpenAIChatMessage,
   OpenAITool,
   OpenAIToolCall,
+  OpenAIToolChoice,
   ToolExecutionResult,
   StreamRetryInfo,
 } from "@/api/aiChatApi";
@@ -35,6 +36,72 @@ import {
 
 /** Max model→tool→model rounds per user turn. */
 const CHAT_V2_MAX_TOOL_ROUNDS = 8;
+
+/** Bound foreground tool calls so the UI does not spin indefinitely. */
+export const CHAT_V2_TOOL_TIMEOUT_MS = 90_000;
+
+interface LastFailedToolInfo {
+  name: string;
+  error: string;
+}
+
+export function shouldForceSubmitPlanForApproval(message: string): boolean {
+  const normalized = message.toLowerCase().replace(/\s+/g, " ").trim();
+  if (!normalized) return false;
+
+  const asksForSubmit =
+    normalized.includes("submit the plan") ||
+    normalized.includes("submit plan") ||
+    normalized.includes("approval plan") ||
+    normalized.includes("plan for approval") ||
+    normalized.includes("for approval now");
+  const asksForNoQuestions =
+    normalized.includes("do not ask") ||
+    normalized.includes("don't ask") ||
+    normalized.includes("no more questions") ||
+    normalized.includes("without asking") ||
+    normalized.includes("submit") ||
+    normalized.includes("now");
+
+  return asksForSubmit && asksForNoQuestions;
+}
+
+export function resolveToolChoiceForRound(input: {
+  message: string;
+  hasTools: boolean;
+  isPlanMode: boolean;
+  round: number;
+  startRound: number;
+}): OpenAIToolChoice | undefined {
+  if (!input.hasTools) return undefined;
+  if (
+    input.isPlanMode &&
+    input.round === input.startRound &&
+    shouldForceSubmitPlanForApproval(input.message)
+  ) {
+    return {
+      type: "function",
+      function: { name: "SubmitPlanForApproval" },
+    };
+  }
+  return "auto";
+}
+
+function extractToolError(payload: Record<string, unknown>): string {
+  const error = payload.error;
+  if (typeof error === "string" && error.trim().length > 0) {
+    return error.trim();
+  }
+  const message = payload.message;
+  if (typeof message === "string" && message.trim().length > 0) {
+    return message.trim();
+  }
+  return "The tool did not complete successfully.";
+}
+
+function buildFailedToolFallbackMessage(info: LastFailedToolInfo): string {
+  return `The tool \`${info.name}\` did not complete successfully: ${info.error}`;
+}
 
 /** Dependencies injected into the loop for testability. */
 export interface AIChatQueryLoopDeps {
@@ -116,6 +183,7 @@ export class AIChatQueryLoop {
     let activeAccumulator: OpenAIStreamAccumulator | null = null;
     let finalAccumulator: OpenAIStreamAccumulator | null = null;
     const messages = input.messages;
+    let lastFailedTool: LastFailedToolInfo | null = null;
 
     // Local mutable copies so EnterPlanMode can swap them mid-run.
     let planContext = input.planContext;
@@ -151,7 +219,13 @@ export class AIChatQueryLoop {
             max_tokens: input.request.maxTokens,
             stream: true,
             tools: currentTools.length > 0 ? currentTools : undefined,
-            tool_choice: currentTools.length > 0 ? "auto" : undefined,
+            tool_choice: resolveToolChoiceForRound({
+              message: input.request.message,
+              hasTools: currentTools.length > 0,
+              isPlanMode: Boolean(planContext),
+              round,
+              startRound: input.startRound,
+            }),
           },
           (rawChunk) => {
             if (input.abortController.signal.aborted) return;
@@ -385,16 +459,24 @@ export class AIChatQueryLoop {
             }
           }
 
-          const toolResult = await this.deps.executeTool(
-            call.name,
-            call.arguments ?? {},
-            {
-              conversationId: input.conversationId,
-              toolCallId: call.id,
-              args: call.arguments,
-            }
+          const executableCall = {
+            id: call.id,
+            name: call.name,
+            arguments: call.arguments,
+          };
+          const toolResult = await this.executeToolWithTimeout(
+            input,
+            executableCall
           );
           const toolPayload = normalizeToolResult(toolResult);
+          if (toolResult.success) {
+            lastFailedTool = null;
+          } else {
+            lastFailedTool = {
+              name: call.name,
+              error: extractToolError(toolPayload),
+            };
+          }
           const toolContent = serializeToolResultContent(toolPayload);
           console.log(
             `[ai-chat-v2] tool ${call.name} ok=${
@@ -454,7 +536,10 @@ export class AIChatQueryLoop {
         };
       }
 
-      const fullContent = finalAccumulator?.state.fullContent ?? "";
+      let fullContent = finalAccumulator?.state.fullContent ?? "";
+      if (fullContent.trim().length === 0 && lastFailedTool) {
+        fullContent = buildFailedToolFallbackMessage(lastFailedTool);
+      }
       const finishReason = finalAccumulator?.state.finishReason ?? "stop";
 
       // Orphan-draft cleanup: if the model auto-entered plan mode but ended
@@ -582,6 +667,48 @@ export class AIChatQueryLoop {
         eventSink: eventSink,
       },
     };
+  }
+
+  private async executeToolWithTimeout(
+    input: AIChatQueryLoopInput,
+    call: {
+      id: string;
+      name: string;
+      arguments?: Record<string, unknown>;
+    }
+  ): Promise<ToolExecutionResult> {
+    const startedAt = Date.now();
+    const executePromise = this.deps.executeTool(
+      call.name,
+      call.arguments ?? {},
+      {
+        conversationId: input.conversationId,
+        toolCallId: call.id,
+        args: call.arguments,
+      }
+    );
+
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<ToolExecutionResult>((resolve) => {
+      timeoutId = setTimeout(() => {
+        resolve({
+          tool_call_id: call.id,
+          tool_name: call.name,
+          success: false,
+          result: {
+            error: `Tool "${call.name}" timed out after ${CHAT_V2_TOOL_TIMEOUT_MS}ms.`,
+            timedOut: true,
+          },
+          execution_time_ms: Date.now() - startedAt,
+        });
+      }, CHAT_V2_TOOL_TIMEOUT_MS);
+    });
+
+    try {
+      return await Promise.race([executePromise, timeoutPromise]);
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
+    }
   }
 
   private async handlePlanToolSubmitForApproval(

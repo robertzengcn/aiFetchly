@@ -1794,6 +1794,7 @@ export default {
     clear_all: "Alles löschen",
     clear_chat: "Chat löschen",
     compact_conversation: "Unterhaltung komprimieren",
+    compact_completed: "Unterhaltung wurde in den Speicher komprimiert.",
     context_usage: "Kontext",
     context_usage_tooltip: "{used} / {total} Tokens ({percent}%)",
     loading_models: "Modelle werden geladen…",
