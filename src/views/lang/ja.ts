@@ -1760,6 +1760,7 @@ export default {
     clear_conversation: "会話を消去",
     clear_all: "すべて消去",
     clear_chat: "チャットを消去",
+    compact_conversation: "会話を圧縮",
     context_usage: "コンテキスト",
     context_usage_tooltip: "{used} / {total} トークン ({percent}%)",
     loading_models: "モデルを読み込み中…",

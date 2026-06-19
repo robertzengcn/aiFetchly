@@ -10,6 +10,7 @@ import type {
   ChatV2HistoryResponse,
   ChatV2ConversationSummary,
 } from "@/entityTypes/aiChatV2Types";
+import type { AIChatCompactSummaryView } from "@/entityTypes/aiChatCompactTypes";
 import type {
   AIChatPlanStateView,
   AIChatPlanVersionView,
@@ -26,6 +27,7 @@ import {
   AI_CHAT_V2_STREAM_COMPLETE,
   AI_CHAT_V2_CLEAR_CONVERSATION,
   AI_CHAT_V2_CLEAR_ALL,
+  AI_CHAT_V2_COMPACT_CONVERSATION,
   AI_CHAT_V2_PLAN_STATE,
   AI_CHAT_V2_ANSWER_QUESTION,
   AI_CHAT_V2_APPROVE_PLAN,
@@ -221,6 +223,19 @@ export async function clearAllChatV2History(): Promise<{
 } | null> {
   const resp = await windowInvoke(AI_CHAT_V2_CLEAR_ALL);
   return (resp as { deleted: number } | null) ?? null;
+}
+
+/**
+ * Run a full compact for the selected v2 conversation and return the active
+ * compact summary saved by the main process.
+ */
+export async function compactChatV2Conversation(
+  conversationId: string
+): Promise<AIChatCompactSummaryView | null> {
+  const resp = await windowInvoke(AI_CHAT_V2_COMPACT_CONVERSATION, {
+    conversationId,
+  });
+  return (resp as AIChatCompactSummaryView | null) ?? null;
 }
 
 // ---------------------------------------------------------------------------

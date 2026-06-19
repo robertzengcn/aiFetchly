@@ -1782,6 +1782,7 @@ export default {
     clear_conversation: "Effacer la conversation",
     clear_all: "Tout effacer",
     clear_chat: "Effacer le chat",
+    compact_conversation: "Compacter la conversation",
     context_usage: "Contexte",
     context_usage_tooltip: "{used} / {total} tokens ({percent}%)",
     loading_models: "Chargement des modèles…",

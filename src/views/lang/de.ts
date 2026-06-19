@@ -1793,6 +1793,7 @@ export default {
     clear_conversation: "Unterhaltung löschen",
     clear_all: "Alles löschen",
     clear_chat: "Chat löschen",
+    compact_conversation: "Unterhaltung komprimieren",
     context_usage: "Kontext",
     context_usage_tooltip: "{used} / {total} Tokens ({percent}%)",
     loading_models: "Modelle werden geladen…",
