@@ -1799,6 +1799,7 @@ export default {
   plugins: {
     title: "插件",
     import_button: "导入插件",
+    install_button: "安装",
     validate_button: "验证包",
     reload_button: "重新加载",
     column_plugin: "插件",

@@ -1816,6 +1816,7 @@ export default {
   plugins: {
     title: "プラグイン",
     import_button: "プラグインをインポート",
+    install_button: "インストール",
     validate_button: "パッケージを検証",
     reload_button: "再読み込み",
     column_plugin: "プラグイン",
