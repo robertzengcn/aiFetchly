@@ -736,7 +736,53 @@ describe("AiChatApi - OpenAI compatibility fallback", () => {
     api = new AiChatApi();
   });
 
-  it("falls back to legacy model listing when /v1/models is not found", async () => {
+  it("normalizes the /api/ai/v1/models response into OpenAI shape", async () => {
+    mockGetShared.mockResolvedValueOnce({
+      models: [
+        {
+          name: "agnes-2.0-flash",
+          available: true,
+          max_tokens: 0,
+          context_size: 256000,
+          description: null,
+        },
+        {
+          name: "gemini-3-pro-preview",
+          available: true,
+          max_tokens: 0,
+          context_size: 1000000,
+          description: null,
+        },
+      ],
+      default_model: "agnes-2.0-flash",
+      total_count: 2,
+    });
+
+    const result = await api.listOpenAIModels();
+
+    expect(mockGetShared).toHaveBeenCalledWith("/api/ai/v1/models");
+    expect(result).toEqual({
+      object: "list",
+      data: [
+        {
+          id: "agnes-2.0-flash",
+          object: "model",
+          created: 0,
+          owned_by: "ai-server",
+          context_size: 256000,
+        },
+        {
+          id: "gemini-3-pro-preview",
+          object: "model",
+          created: 0,
+          owned_by: "ai-server",
+          context_size: 1000000,
+        },
+      ],
+    });
+  });
+
+  it("falls back to legacy model listing when /api/ai/v1/models is not found", async () => {
     const notFound = new Error("Not Found");
     mockGetShared.mockRejectedValueOnce(notFound).mockResolvedValueOnce({
       models: {
@@ -753,7 +799,7 @@ describe("AiChatApi - OpenAI compatibility fallback", () => {
 
     const result = await api.listOpenAIModels();
 
-    expect(mockGetShared).toHaveBeenNthCalledWith(1, "/v1/models");
+    expect(mockGetShared).toHaveBeenNthCalledWith(1, "/api/ai/v1/models");
     expect(mockGetShared).toHaveBeenNthCalledWith(2, "/api/ai/chat/models");
     expect(result).toEqual({
       object: "list",
