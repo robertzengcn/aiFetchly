@@ -449,6 +449,14 @@ export interface OpenAIModel {
   context_window?: number;
   /** Alias some servers use for context_window. */
   context_length?: number;
+  /**
+   * Context window size in tokens, as reported by the AI server's
+   * `/api/ai/v1/models` endpoint (new format). Preferred source for the
+   * context-usage badge because the server's response uses this field name.
+   */
+  context_size?: number;
+  /** Max output tokens, when reported by the server. */
+  max_tokens?: number;
 }
 
 /** OpenAI-compatible models list response */
@@ -1597,15 +1605,25 @@ export class AiChatApi {
   // ==================== OpenAI-Compatible API Methods ====================
 
   /**
-   * List available models from the OpenAI-compatible API.
-   * GET /v1/models
+   * List available models from the AI server.
+   * GET /api/ai/v1/models
+   *
+   * The server returns a custom shape:
+   * `{ models: [{ name, available, max_tokens, context_size, description }], default_model, total_count }`
+   * which we normalize into the OpenAI-compatible `OpenAIModelsResponse`
+   * so the rest of the app can keep treating `data[].id` as the model id and
+   * read context-window size from `context_size`/`context_window`/`context_length`.
+   *
+   * Falls back to the legacy `/api/ai/chat/models` endpoint when the primary
+   * endpoint is not found (e.g. older server builds).
    *
    * @returns Promise resolving to models list in OpenAI format
    */
   async listOpenAIModels(): Promise<OpenAIModelsResponse> {
     this.ensureAIEnabled();
     try {
-      return await this._httpClient.get("/v1/models");
+      const raw = await this._httpClient.get("/api/ai/v1/models");
+      return this.normalizeModelsResponse(raw);
     } catch (error) {
       if (!this.isNotFoundError(error)) {
         throw error;
@@ -1613,6 +1631,58 @@ export class AiChatApi {
       const legacyModels = await this._httpClient.get("/api/ai/chat/models");
       return this.normalizeLegacyModelsResponse(legacyModels);
     }
+  }
+
+  /**
+   * Normalize the AI server's model-listing response into the canonical
+   * OpenAI-compatible shape. Handles three input shapes defensively:
+   *   1. New server format: `{ models: [...], default_model, total_count }`
+   *      where each entry has `name` and `context_size`.
+   *   2. OpenAI format (pass-through): `{ object, data: [...] }`.
+   *   3. Anything else → empty list.
+   *
+   * `name` becomes `id` because the server uses `name` as the model identifier
+   * in chat-completion requests. `context_size` is preserved so the frontend
+   * context-usage badge can read it directly.
+   */
+  private normalizeModelsResponse(response: unknown): OpenAIModelsResponse {
+    if (!this.isRecord(response)) {
+      return { object: "list", data: [] };
+    }
+    // Pass-through when already OpenAI-shaped.
+    if (Array.isArray((response as { data?: unknown }).data)) {
+      const obj = response as { object?: unknown; data: unknown[] };
+      return {
+        object: typeof obj.object === "string" ? obj.object : "list",
+        data: obj.data as OpenAIModel[],
+      };
+    }
+    const modelsRaw = (response as { models?: unknown }).models;
+    if (!Array.isArray(modelsRaw)) {
+      return { object: "list", data: [] };
+    }
+    const data: OpenAIModel[] = [];
+    for (const entry of modelsRaw) {
+      if (!this.isRecord(entry)) continue;
+      const name = this.getStringField(entry, "name");
+      if (!name) continue;
+      const contextSize = this.getNumberField(entry, "context_size");
+      const maxTokens = this.getNumberField(entry, "max_tokens");
+      const model: OpenAIModel = {
+        id: name,
+        object: "model",
+        created: 0,
+        owned_by: "ai-server",
+      };
+      if (typeof contextSize === "number" && contextSize > 0) {
+        model.context_size = contextSize;
+      }
+      if (typeof maxTokens === "number" && maxTokens > 0) {
+        model.max_tokens = maxTokens;
+      }
+      data.push(model);
+    }
+    return { object: "list", data };
   }
 
   /**

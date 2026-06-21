@@ -352,8 +352,13 @@ const loadModelContextWindows = async (): Promise<void> => {
     const map = new Map<string, number>();
     for (const model of data) {
       if (!model || typeof model.id !== "string") continue;
+      // The AI server reports context size as `context_size`; older
+      // OpenAI-compatible servers use `context_window` or `context_length`.
       const window =
-        model.context_window ?? model.context_length ?? DEFAULT_CONTEXT_WINDOW;
+        model.context_size ??
+        model.context_window ??
+        model.context_length ??
+        DEFAULT_CONTEXT_WINDOW;
       if (typeof window === "number" && window > 0) {
         map.set(model.id, window);
       }
