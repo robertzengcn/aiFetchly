@@ -1795,6 +1795,9 @@ export default {
     cancelled: "Annulé",
     ai_disabled: "Les fonctionnalités d'IA sont réservées aux abonnés.",
     model_unavailable: "Le modèle sélectionné n'est pas disponible.",
+    model_selector_label: "Modèle",
+    model_loading: "Chargement des modèles…",
+    model_none_available: "Aucun modèle disponible",
     server_unavailable: "Impossible de se connecter au serveur IA.",
     unsupported_tool_call:
       "L'assistant a demandé un outil non encore pris en charge.",
