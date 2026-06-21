@@ -463,6 +463,12 @@ export interface OpenAIModel {
 export interface OpenAIModelsResponse {
   object: string;
   data: OpenAIModel[];
+  /**
+   * Server's recommended default model id, when reported. The AI server's
+   * `/api/ai/v1/models` endpoint returns this alongside the models list;
+   * the frontend uses it to seed the model selector on first use.
+   */
+  default_model?: string;
 }
 
 /** OpenAI-compatible chat completion choice (non-streaming) */
@@ -1682,7 +1688,12 @@ export class AiChatApi {
       }
       data.push(model);
     }
-    return { object: "list", data };
+    const defaultModel = this.getStringField(response, "default_model");
+    const result: OpenAIModelsResponse = { object: "list", data };
+    if (defaultModel) {
+      result.default_model = defaultModel;
+    }
+    return result;
   }
 
   /**

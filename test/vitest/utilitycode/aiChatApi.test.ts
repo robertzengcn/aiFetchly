@@ -779,6 +779,7 @@ describe("AiChatApi - OpenAI compatibility fallback", () => {
           context_size: 1000000,
         },
       ],
+      default_model: "agnes-2.0-flash",
     });
   });
 

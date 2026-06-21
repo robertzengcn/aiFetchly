@@ -1814,6 +1814,9 @@ export default {
     ai_disabled:
       "La funcionalidad de IA solo está disponible para suscriptores.",
     model_unavailable: "El modelo seleccionado no está disponible.",
+    model_selector_label: "Modelo",
+    model_loading: "Cargando modelos…",
+    model_none_available: "No hay modelos disponibles",
     server_unavailable: "No se pudo conectar al servidor de IA.",
     unsupported_tool_call:
       "El asistente solicitó una herramienta que aún no se admite.",

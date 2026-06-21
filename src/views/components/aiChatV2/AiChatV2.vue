@@ -110,6 +110,13 @@
       >
         <template #prepend>
           <AiChatV2ModeSelector v-model="mode" :disabled="isStreaming" />
+          <AiChatV2ModelSelector
+            v-model="selectedModel"
+            :items="availableModels"
+            :disabled="isStreaming"
+            :loading="availableModels.length === 0"
+            class="ml-2"
+          />
         </template>
       </AiChatV2Composer>
     </div>
@@ -254,10 +261,12 @@ import {
 import AiChatV2Messages from "./AiChatV2Messages.vue";
 import AiChatV2Composer from "./AiChatV2Composer.vue";
 import AiChatV2ModeSelector from "./AiChatV2ModeSelector.vue";
+import AiChatV2ModelSelector from "./AiChatV2ModelSelector.vue";
 import AiChatV2QuestionCard from "./AiChatV2QuestionCard.vue";
 import AiChatV2PlanStatusBadge from "./AiChatV2PlanStatusBadge.vue";
 import AiChatV2ContextBadge from "./AiChatV2ContextBadge.vue";
 import MCPToolManager from "../aiChat/MCPToolManager.vue";
+import type { OpenAIModel } from "@/api/aiChatApi";
 import {
   computeContextPercent,
   resolveContextWindow,
@@ -321,6 +330,18 @@ const streamingEstimatedTokens = ref(0);
 // up the context window denominator.
 const activeModel = ref<string | undefined>(undefined);
 
+// ---------------------------------------------------------------------------
+// Model selector
+// ---------------------------------------------------------------------------
+// localStorage key for the user's last-chosen model. Survives app restarts.
+const LAST_MODEL_STORAGE_KEY = "ai-chat-v2-last-model";
+// Available models for the dropdown. Populated from the same /api/ai/v1/models
+// call that feeds modelContextWindows, so we only fetch once.
+const availableModels = ref<OpenAIModel[]>([]);
+// User's selected model id. Sent on every stream request. Resolved on mount
+// via: saved localStorage choice → server default_model → first model id.
+const selectedModel = ref<string | undefined>(undefined);
+
 const resolveContextWindowLocal = (model?: string): number =>
   resolveContextWindow(modelContextWindows.value, model);
 
@@ -349,8 +370,12 @@ const loadModelContextWindows = async (): Promise<void> => {
     const resp = await getOpenAIChatModels();
     const data = resp?.data;
     if (!Array.isArray(data)) return;
+    const validModels = data.filter(
+      (m) => m && typeof m.id === "string" && m.id.length > 0
+    );
+    availableModels.value = validModels;
     const map = new Map<string, number>();
-    for (const model of data) {
+    for (const model of validModels) {
       if (!model || typeof model.id !== "string") continue;
       // The AI server reports context size as `context_size`; older
       // OpenAI-compatible servers use `context_window` or `context_length`.
@@ -364,10 +389,53 @@ const loadModelContextWindows = async (): Promise<void> => {
       }
     }
     modelContextWindows.value = map;
+    // Resolve the initial model selection once the list is available. Don't
+    // override a selection that was already made (e.g. restored from storage
+    // before this async load completed, or changed by the user).
+    if (selectedModel.value === undefined) {
+      selectedModel.value = resolveInitialModel(validModels, resp?.default_model);
+    }
   } catch {
     // non-fatal; denominator falls back to DEFAULT_CONTEXT_WINDOW
   }
 };
+
+/**
+ * Pick the initial model for the selector. Priority:
+ *   1. Saved localStorage choice, if still present in the available list.
+ *   2. Server-reported default_model, if present in the list.
+ *   3. First available model id.
+ * Returns undefined only when the list is empty.
+ */
+const resolveInitialModel = (
+  models: OpenAIModel[],
+  serverDefault?: string
+): string | undefined => {
+  if (models.length === 0) return undefined;
+  const ids = new Set(models.map((m) => m.id));
+  try {
+    const saved = window.localStorage.getItem(LAST_MODEL_STORAGE_KEY);
+    if (typeof saved === "string" && saved.length > 0 && ids.has(saved)) {
+      return saved;
+    }
+  } catch {
+    // localStorage may be unavailable (private mode, etc.) — ignore.
+  }
+  if (typeof serverDefault === "string" && serverDefault.length > 0 && ids.has(serverDefault)) {
+    return serverDefault;
+  }
+  return models[0]?.id;
+};
+
+// Persist the user's model choice so it survives app restarts.
+watch(selectedModel, (val) => {
+  if (typeof val !== "string" || val.length === 0) return;
+  try {
+    window.localStorage.setItem(LAST_MODEL_STORAGE_KEY, val);
+  } catch {
+    // non-fatal; selection still works for the session
+  }
+});
 
 // True only between clicking send and the first visible AI chunk. Auto-clears
 // when streaming ends for any reason (complete/error/stop/permission deny).
@@ -933,7 +1001,7 @@ const onSend = async (text: string): Promise<void> => {
         conversationId: activeConversationId.value ?? undefined,
         message: text,
         mode: mode.value,
-        // model omitted → backend picks default
+        model: selectedModel.value,
       },
       (chunk: ChatV2StreamChunk) => {
         if (chunk.eventType === "start") {

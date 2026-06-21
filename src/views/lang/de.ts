@@ -1806,6 +1806,9 @@ export default {
     cancelled: "Abgebrochen",
     ai_disabled: "KI-Funktionen stehen nur Abonnenten zur Verfügung.",
     model_unavailable: "Ausgewähltes Modell nicht verfügbar.",
+    model_selector_label: "Modell",
+    model_loading: "Modelle werden geladen…",
+    model_none_available: "Keine Modelle verfügbar",
     server_unavailable: "Verbindung zum KI-Server nicht möglich.",
     unsupported_tool_call:
       "Der Assistent hat ein noch nicht unterstütztes Werkzeug angefordert.",
