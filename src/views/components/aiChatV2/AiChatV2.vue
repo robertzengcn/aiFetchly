@@ -26,7 +26,7 @@
           variant="text"
           :loading="isCompacting"
           :disabled="
-            !activeConversationId || messages.length === 0 || isStreaming
+            !activeConversationId || messages.length === 0 || chatIsRunning
           "
           @click="handleCompactConversation"
           :title="
@@ -83,7 +83,7 @@
         :stream-status="streamStatus"
         :error-message="streamError ?? undefined"
         :show-typing-indicator="showTypingIndicator"
-        :is-streaming="isStreaming"
+        :is-streaming="chatIsRunning"
         :retry-info="retryInfo"
         @grant-permission="handleSkillPermissionGrant"
         @deny-permission="handleSkillPermissionDeny"
@@ -104,17 +104,17 @@
       </div>
 
       <AiChatV2Composer
-        :is-streaming="isStreaming"
+        :is-streaming="chatIsRunning"
         @send="onSend"
         @stop="onStop"
       >
         <template #prepend>
-          <AiChatV2ModeSelector v-model="mode" :disabled="isStreaming" />
+          <AiChatV2ModeSelector v-model="mode" :disabled="chatIsRunning" />
           <AiChatV2ModelSelector
             v-model="selectedModel"
             :items="availableModels"
             :default-model="defaultModelId"
-            :disabled="isStreaming"
+            :disabled="chatIsRunning"
             :loading="availableModels.length === 0"
             class="ml-2"
           />
@@ -270,6 +270,7 @@ import {
   resolveContextWindow,
   DEFAULT_CONTEXT_WINDOW,
 } from "./contextUsageUtil";
+import { hasPendingToolExecution } from "./toolExecutionStateUtil";
 
 /**
  * Rough chars→tokens ratio used to drive a live-updating estimate while
@@ -309,6 +310,7 @@ const showConversationsDialog = ref(false);
 const showMCPToolManager = ref(false);
 const isCompacting = ref(false);
 const compactNotice = ref(false);
+const stoppedPendingToolConversationIds = ref<Set<string>>(new Set());
 
 // Conversation search state
 const conversationSearch = ref("");
@@ -470,11 +472,25 @@ watch(selectedModel, (val) => {
   }
 });
 
+const hasLoadedPendingToolExecution = computed(() => {
+  const conversationId = activeConversationId.value;
+  if (!conversationId) return false;
+  if (stoppedPendingToolConversationIds.value.has(conversationId)) {
+    return false;
+  }
+  return hasPendingToolExecution(messages.value);
+});
+
+const chatIsRunning = computed(
+  () => isStreaming.value || hasLoadedPendingToolExecution.value
+);
+
 // True only between clicking send and the first visible AI chunk. Auto-clears
 // when streaming ends for any reason (complete/error/stop/permission deny).
 // Also shows during tool execution rounds (after tool_call/tool_result, before
 // the next text token) so the user sees the AI is still working.
 const showTypingIndicator = computed(() => {
+  if (hasLoadedPendingToolExecution.value) return true;
   if (!isStreaming.value) return false;
   if (!receivedFirstResponse.value) return true;
   // Between tool rounds: last message is a tool call/result with no
@@ -505,7 +521,7 @@ const applyPlanState = (state: AIChatPlanStateView | null): void => {
 };
 
 const streamStatus = computed<Status>(() => {
-  if (isStreaming.value) return "streaming";
+  if (chatIsRunning.value) return "streaming";
   if (streamError.value) return "error";
   const last = messages.value[messages.value.length - 1];
   if (last?.metadata?.cancelled) return "cancelled";
@@ -656,6 +672,13 @@ const onStop = (): void => {
   stopChatV2Stream();
   clearChatV2StreamListeners();
   isStreaming.value = false;
+  const conversationId = activeConversationId.value;
+  if (conversationId) {
+    stoppedPendingToolConversationIds.value = new Set([
+      ...stoppedPendingToolConversationIds.value,
+      conversationId,
+    ]);
+  }
 };
 
 const resolveToolIdForPermissionMessage = (
@@ -882,7 +905,7 @@ const handleQuestionAnswered = async (
 
 const handleApprovePlan = async (): Promise<void> => {
   if (!planState.value || !activeConversationId.value) return;
-  if (isStreaming.value) return;
+  if (chatIsRunning.value) return;
   try {
     const updated = await approveChatV2Plan(
       activeConversationId.value,
@@ -944,7 +967,11 @@ const handleRequestPlanChanges = async (feedback: string): Promise<void> => {
 };
 
 const handleCompactConversation = async (): Promise<void> => {
-  if (!activeConversationId.value || isStreaming.value || isCompacting.value) {
+  if (
+    !activeConversationId.value ||
+    chatIsRunning.value ||
+    isCompacting.value
+  ) {
     return;
   }
   isCompacting.value = true;
@@ -970,8 +997,13 @@ const handleCompactConversation = async (): Promise<void> => {
 };
 
 const onSend = async (text: string): Promise<void> => {
-  if (isStreaming.value) return;
+  if (chatIsRunning.value) return;
   streamError.value = null;
+  if (activeConversationId.value) {
+    const nextStopped = new Set(stoppedPendingToolConversationIds.value);
+    nextStopped.delete(activeConversationId.value);
+    stoppedPendingToolConversationIds.value = nextStopped;
+  }
 
   const nowIso = new Date().toISOString();
   const tempUser: ChatV2MessageView = {
