@@ -238,12 +238,9 @@ import type {
 } from "@/entityTypes/aiChatPlanTypes";
 import {
   windowInvoke,
-  windowRemoveAllListeners,
 } from "@/views/utils/apirequest";
 import {
   AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
-  AI_CHAT_V2_STREAM_CHUNK,
-  AI_CHAT_V2_STREAM_COMPLETE,
 } from "@/config/channellist";
 import {
   clearChatV2StreamListeners,
@@ -622,7 +619,7 @@ const loadHistory = async (conversationId: string): Promise<void> => {
 };
 
 const onNewConversation = (): void => {
-  stopIfStreaming();
+  detachActiveStreamView();
   activeConversationId.value = null;
   messages.value = [];
   streamError.value = null;
@@ -639,17 +636,19 @@ const onClearMessages = (): void => {
 };
 
 const onSelectConversation = (conversationId: string): void => {
-  stopIfStreaming();
+  detachActiveStreamView();
   activeConversationId.value = conversationId;
   streamError.value = null;
   showConversationsDialog.value = false;
   void loadHistory(conversationId);
 };
 
-const stopIfStreaming = (): void => {
+const detachActiveStreamView = (): void => {
   if (isStreaming.value) {
-    stopChatV2Stream();
+    clearChatV2StreamListeners();
     isStreaming.value = false;
+    activeAssistantMessageId.value = null;
+    retryInfo.value = null;
   }
 };
 
@@ -1213,10 +1212,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
-  stopIfStreaming();
-  clearChatV2StreamListeners();
-  windowRemoveAllListeners(AI_CHAT_V2_STREAM_CHUNK);
-  windowRemoveAllListeners(AI_CHAT_V2_STREAM_COMPLETE);
+  detachActiveStreamView();
   if (searchDebounceTimer) {
     clearTimeout(searchDebounceTimer);
     searchDebounceTimer = null;
