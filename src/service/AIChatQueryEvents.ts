@@ -111,6 +111,9 @@ export interface AIChatQueryCompleteEvent {
   fullContent: string;
   model?: string;
   finishReason?: string | null;
+  totalTokens?: number;
+  promptTokens?: number;
+  completionTokens?: number;
 }
 
 export interface AIChatQueryCancelledEvent {
@@ -165,6 +168,13 @@ export type AIChatQueryLoopResult =
       finishReason: string;
       model?: string;
       responseId?: string;
+      /** Server-reported token usage from the final model round, if the
+       * server supports stream_options.include_usage. Persisted on the
+       * assistant message row so the CTX badge can render a meaningful
+       * baseline when a conversation is reloaded. */
+      totalTokens?: number;
+      promptTokens?: number;
+      completionTokens?: number;
     }
   | {
       type: "cancelled";
@@ -173,6 +183,9 @@ export type AIChatQueryLoopResult =
       partialContent: string;
       model?: string;
       responseId?: string;
+      totalTokens?: number;
+      promptTokens?: number;
+      completionTokens?: number;
     }
   | {
       type: "paused_for_permission";

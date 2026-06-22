@@ -1817,6 +1817,8 @@ export default {
     model_selector_label: "Modelo",
     model_loading: "Cargando modelos…",
     model_none_available: "No hay modelos disponibles",
+    model_auto: "Automático",
+    model_auto_default: "Predeterminado",
     server_unavailable: "No se pudo conectar al servidor de IA.",
     unsupported_tool_call:
       "El asistente solicitó una herramienta que aún no se admite.",
@@ -1837,6 +1839,8 @@ export default {
       "No se pudo continuar la herramienta después de conceder el permiso.",
     permission_resume_no_tool_id:
       "Falta la información de la llamada de herramienta; no se puede continuar.",
+    quota_exhausted:
+      "Los tokens de IA incluidos en su plan de suscripción se han agotado. Recargue su cuenta para seguir utilizando las funciones de IA.",
   },
   aiChatV2Plan: {
     mode_chat: "Chat",

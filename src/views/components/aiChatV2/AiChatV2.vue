@@ -26,7 +26,7 @@
           variant="text"
           :loading="isCompacting"
           :disabled="
-            !activeConversationId || messages.length === 0 || isStreaming
+            !activeConversationId || messages.length === 0 || chatIsRunning
           "
           @click="handleCompactConversation"
           :title="
@@ -83,7 +83,7 @@
         :stream-status="streamStatus"
         :error-message="streamError ?? undefined"
         :show-typing-indicator="showTypingIndicator"
-        :is-streaming="isStreaming"
+        :is-streaming="chatIsRunning"
         :retry-info="retryInfo"
         @grant-permission="handleSkillPermissionGrant"
         @deny-permission="handleSkillPermissionDeny"
@@ -104,16 +104,17 @@
       </div>
 
       <AiChatV2Composer
-        :is-streaming="isStreaming"
+        :is-streaming="chatIsRunning"
         @send="onSend"
         @stop="onStop"
       >
         <template #prepend>
-          <AiChatV2ModeSelector v-model="mode" :disabled="isStreaming" />
+          <AiChatV2ModeSelector v-model="mode" :disabled="chatIsRunning" />
           <AiChatV2ModelSelector
             v-model="selectedModel"
             :items="availableModels"
-            :disabled="isStreaming"
+            :default-model="defaultModelId"
+            :disabled="chatIsRunning"
             :loading="availableModels.length === 0"
             class="ml-2"
           />
@@ -237,12 +238,9 @@ import type {
 } from "@/entityTypes/aiChatPlanTypes";
 import {
   windowInvoke,
-  windowRemoveAllListeners,
 } from "@/views/utils/apirequest";
 import {
   AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
-  AI_CHAT_V2_STREAM_CHUNK,
-  AI_CHAT_V2_STREAM_COMPLETE,
 } from "@/config/channellist";
 import {
   clearChatV2StreamListeners,
@@ -272,12 +270,22 @@ import {
   resolveContextWindow,
   DEFAULT_CONTEXT_WINDOW,
 } from "./contextUsageUtil";
+import { hasPendingToolExecution } from "./toolExecutionStateUtil";
+import { QUOTA_EXHAUSTED_SENTINEL } from "@/service/AIChatErrorMapper";
 
 /**
  * Rough chars→tokens ratio used to drive a live-updating estimate while
  * tokens stream. Real usage from the server overrides this on turn end.
  */
 const CHARS_PER_TOKEN_ESTIMATE = 4;
+
+/**
+ * Sentinel value used in the model selector for the "Auto" option.
+ * When selected, the actual model sent to the server resolves to the
+ * API's `default_model`, and the context badge reads the default model's
+ * context_size from the model list.
+ */
+const AUTO_MODEL_VALUE = "auto";
 
 type Status = "idle" | "streaming" | "cancelled" | "error";
 
@@ -303,6 +311,7 @@ const showConversationsDialog = ref(false);
 const showMCPToolManager = ref(false);
 const isCompacting = ref(false);
 const compactNotice = ref(false);
+const stoppedPendingToolConversationIds = ref<Set<string>>(new Set());
 
 // Conversation search state
 const conversationSearch = ref("");
@@ -329,6 +338,10 @@ const streamingEstimatedTokens = ref(0);
 // Model id currently in use (tracked from start/usage events), used to look
 // up the context window denominator.
 const activeModel = ref<string | undefined>(undefined);
+// Server-reported default model id from /api/ai/v1/models. Used to resolve
+// the "Auto" selector option to a concrete model for stream requests and
+// for context-window lookup.
+const defaultModelId = ref<string | undefined>(undefined);
 
 // ---------------------------------------------------------------------------
 // Model selector
@@ -345,12 +358,27 @@ const selectedModel = ref<string | undefined>(undefined);
 const resolveContextWindowLocal = (model?: string): number =>
   resolveContextWindow(modelContextWindows.value, model);
 
+/**
+ * The concrete model id used for context-window lookup. Prefers the model
+ * the server actually used (reported via usage_update/start); falls back to
+ * the user's explicit selection; finally resolves "Auto" to the server's
+ * default_model so the badge shows a meaningful denominator before the
+ * first response arrives.
+ */
+const effectiveModel = computed(() => {
+  if (lastUsage.value?.model) return lastUsage.value.model;
+  if (activeModel.value) return activeModel.value;
+  const sel = selectedModel.value;
+  if (sel && sel !== AUTO_MODEL_VALUE) return sel;
+  return defaultModelId.value;
+});
+
 const contextPercent = computed(() =>
   computeContextPercent({
     modelContextWindows: modelContextWindows.value,
     lastTotalTokens: lastUsage.value?.totalTokens,
     streamingEstimatedTokens: streamingEstimatedTokens.value,
-    model: lastUsage.value?.model || activeModel.value,
+    model: effectiveModel.value,
   })
 );
 
@@ -362,7 +390,7 @@ const contextUsedTokens = computed(
 );
 
 const contextTotalTokens = computed(() =>
-  resolveContextWindowLocal(lastUsage.value?.model || activeModel.value)
+  resolveContextWindowLocal(effectiveModel.value)
 );
 
 const loadModelContextWindows = async (): Promise<void> => {
@@ -374,6 +402,7 @@ const loadModelContextWindows = async (): Promise<void> => {
       (m) => m && typeof m.id === "string" && m.id.length > 0
     );
     availableModels.value = validModels;
+    defaultModelId.value = resp?.default_model;
     const map = new Map<string, number>();
     for (const model of validModels) {
       if (!model || typeof model.id !== "string") continue;
@@ -393,7 +422,7 @@ const loadModelContextWindows = async (): Promise<void> => {
     // override a selection that was already made (e.g. restored from storage
     // before this async load completed, or changed by the user).
     if (selectedModel.value === undefined) {
-      selectedModel.value = resolveInitialModel(validModels, resp?.default_model);
+      selectedModel.value = resolveInitialModel(validModels);
     }
   } catch {
     // non-fatal; denominator falls back to DEFAULT_CONTEXT_WINDOW
@@ -402,29 +431,36 @@ const loadModelContextWindows = async (): Promise<void> => {
 
 /**
  * Pick the initial model for the selector. Priority:
- *   1. Saved localStorage choice, if still present in the available list.
- *   2. Server-reported default_model, if present in the list.
- *   3. First available model id.
- * Returns undefined only when the list is empty.
+ *   1. Saved localStorage choice — "auto" is always valid; a concrete id
+ *      must still be present in the available list.
+ *   2. "Auto" — lets the server pick default_model for us.
  */
-const resolveInitialModel = (
-  models: OpenAIModel[],
-  serverDefault?: string
-): string | undefined => {
-  if (models.length === 0) return undefined;
+const resolveInitialModel = (models: OpenAIModel[]): string => {
   const ids = new Set(models.map((m) => m.id));
   try {
     const saved = window.localStorage.getItem(LAST_MODEL_STORAGE_KEY);
+    if (saved === AUTO_MODEL_VALUE) return AUTO_MODEL_VALUE;
     if (typeof saved === "string" && saved.length > 0 && ids.has(saved)) {
       return saved;
     }
   } catch {
     // localStorage may be unavailable (private mode, etc.) — ignore.
   }
-  if (typeof serverDefault === "string" && serverDefault.length > 0 && ids.has(serverDefault)) {
-    return serverDefault;
+  return AUTO_MODEL_VALUE;
+};
+
+/**
+ * Resolve the model id to send in stream requests. A concrete selection is
+ * passed through; "Auto" resolves to the server's default_model. If the
+ * default is unknown (e.g. models API failed), undefined is sent so the
+ * server falls back to its own default.
+ */
+const resolveModelForRequest = (): string | undefined => {
+  const sel = selectedModel.value;
+  if (typeof sel === "string" && sel.length > 0 && sel !== AUTO_MODEL_VALUE) {
+    return sel;
   }
-  return models[0]?.id;
+  return defaultModelId.value;
 };
 
 // Persist the user's model choice so it survives app restarts.
@@ -437,11 +473,25 @@ watch(selectedModel, (val) => {
   }
 });
 
+const hasLoadedPendingToolExecution = computed(() => {
+  const conversationId = activeConversationId.value;
+  if (!conversationId) return false;
+  if (stoppedPendingToolConversationIds.value.has(conversationId)) {
+    return false;
+  }
+  return hasPendingToolExecution(messages.value);
+});
+
+const chatIsRunning = computed(
+  () => isStreaming.value || hasLoadedPendingToolExecution.value
+);
+
 // True only between clicking send and the first visible AI chunk. Auto-clears
 // when streaming ends for any reason (complete/error/stop/permission deny).
 // Also shows during tool execution rounds (after tool_call/tool_result, before
 // the next text token) so the user sees the AI is still working.
 const showTypingIndicator = computed(() => {
+  if (hasLoadedPendingToolExecution.value) return true;
   if (!isStreaming.value) return false;
   if (!receivedFirstResponse.value) return true;
   // Between tool rounds: last message is a tool call/result with no
@@ -472,7 +522,7 @@ const applyPlanState = (state: AIChatPlanStateView | null): void => {
 };
 
 const streamStatus = computed<Status>(() => {
-  if (isStreaming.value) return "streaming";
+  if (chatIsRunning.value) return "streaming";
   if (streamError.value) return "error";
   const last = messages.value[messages.value.length - 1];
   if (last?.metadata?.cancelled) return "cancelled";
@@ -490,6 +540,22 @@ const formatTimestamp = (iso: string): string => {
   } catch {
     return "";
   }
+};
+
+/**
+ * Map a backend-mapped error string to a user-facing, translated message.
+ * The backend {@link userSafeError} returns sentinel codes for known error
+ * classes (e.g. QUOTA_EXHAUSTED for HTTP 402); unknown strings pass through
+ * verbatim so ad-hoc server messages still surface.
+ */
+const mapStreamErrorMessage = (raw: string): string => {
+  if (raw === QUOTA_EXHAUSTED_SENTINEL) {
+    return (
+      t("aiChatV2.quota_exhausted") ||
+      "The AI tokens included in your subscription plan have been exhausted. Please recharge your account to continue using AI features."
+    );
+  }
+  return raw;
 };
 
 const loadConversations = async (): Promise<void> => {
@@ -586,7 +652,7 @@ const loadHistory = async (conversationId: string): Promise<void> => {
 };
 
 const onNewConversation = (): void => {
-  stopIfStreaming();
+  detachActiveStreamView();
   activeConversationId.value = null;
   messages.value = [];
   streamError.value = null;
@@ -603,17 +669,19 @@ const onClearMessages = (): void => {
 };
 
 const onSelectConversation = (conversationId: string): void => {
-  stopIfStreaming();
+  detachActiveStreamView();
   activeConversationId.value = conversationId;
   streamError.value = null;
   showConversationsDialog.value = false;
   void loadHistory(conversationId);
 };
 
-const stopIfStreaming = (): void => {
+const detachActiveStreamView = (): void => {
   if (isStreaming.value) {
-    stopChatV2Stream();
+    clearChatV2StreamListeners();
     isStreaming.value = false;
+    activeAssistantMessageId.value = null;
+    retryInfo.value = null;
   }
 };
 
@@ -621,6 +689,13 @@ const onStop = (): void => {
   stopChatV2Stream();
   clearChatV2StreamListeners();
   isStreaming.value = false;
+  const conversationId = activeConversationId.value;
+  if (conversationId) {
+    stoppedPendingToolConversationIds.value = new Set([
+      ...stoppedPendingToolConversationIds.value,
+      conversationId,
+    ]);
+  }
 };
 
 const resolveToolIdForPermissionMessage = (
@@ -847,7 +922,7 @@ const handleQuestionAnswered = async (
 
 const handleApprovePlan = async (): Promise<void> => {
   if (!planState.value || !activeConversationId.value) return;
-  if (isStreaming.value) return;
+  if (chatIsRunning.value) return;
   try {
     const updated = await approveChatV2Plan(
       activeConversationId.value,
@@ -909,7 +984,11 @@ const handleRequestPlanChanges = async (feedback: string): Promise<void> => {
 };
 
 const handleCompactConversation = async (): Promise<void> => {
-  if (!activeConversationId.value || isStreaming.value || isCompacting.value) {
+  if (
+    !activeConversationId.value ||
+    chatIsRunning.value ||
+    isCompacting.value
+  ) {
     return;
   }
   isCompacting.value = true;
@@ -935,8 +1014,13 @@ const handleCompactConversation = async (): Promise<void> => {
 };
 
 const onSend = async (text: string): Promise<void> => {
-  if (isStreaming.value) return;
+  if (chatIsRunning.value) return;
   streamError.value = null;
+  if (activeConversationId.value) {
+    const nextStopped = new Set(stoppedPendingToolConversationIds.value);
+    nextStopped.delete(activeConversationId.value);
+    stoppedPendingToolConversationIds.value = nextStopped;
+  }
 
   const nowIso = new Date().toISOString();
   const tempUser: ChatV2MessageView = {
@@ -988,10 +1072,16 @@ const onSend = async (text: string): Promise<void> => {
   isStreaming.value = true;
   receivedFirstResponse.value = false;
   retryInfo.value = null;
-  // Seed the live context estimate from the last known server usage; the
-  // incoming token stream will accumulate on top of this baseline and the
-  // next usage_update event will snap it back to ground truth.
-  streamingEstimatedTokens.value = lastUsage.value?.totalTokens ?? 0;
+  // Seed the live context estimate from the last known server usage. If no
+  // usage_update has arrived yet this session, fall back to the existing
+  // streaming estimate (e.g. seeded from persisted tokensUsed on history
+  // load) so the badge keeps a meaningful baseline instead of resetting
+  // to 0 on every turn.
+  const usageBaseline = lastUsage.value?.totalTokens;
+  streamingEstimatedTokens.value =
+    typeof usageBaseline === "number" && usageBaseline > 0
+      ? usageBaseline
+      : streamingEstimatedTokens.value;
 
   await nextTick();
 
@@ -1001,7 +1091,7 @@ const onSend = async (text: string): Promise<void> => {
         conversationId: activeConversationId.value ?? undefined,
         message: text,
         mode: mode.value,
-        model: selectedModel.value,
+        model: resolveModelForRequest(),
       },
       (chunk: ChatV2StreamChunk) => {
         if (chunk.eventType === "start") {
@@ -1126,6 +1216,27 @@ const onSend = async (text: string): Promise<void> => {
         isStreaming.value = false;
         activeAssistantMessageId.value = null;
         retryInfo.value = null;
+        // Snap to ground-truth usage carried by the complete event so the
+        // badge reflects the real context size even if usage_update chunks
+        // didn't fire during the stream (some servers only report usage on
+        // the final chunk, which the accumulator captures but emits after
+        // the last token round).
+        if (
+          typeof complete.totalTokens === "number" &&
+          typeof complete.promptTokens === "number" &&
+          typeof complete.completionTokens === "number"
+        ) {
+          lastUsage.value = {
+            promptTokens: complete.promptTokens,
+            completionTokens: complete.completionTokens,
+            totalTokens: complete.totalTokens,
+            model: complete.model ?? lastUsage.value?.model,
+          };
+          streamingEstimatedTokens.value = complete.totalTokens;
+          if (complete.model) {
+            activeModel.value = complete.model;
+          }
+        }
         if (
           complete.fullContent !== undefined &&
           complete.fullContent.length > 0
@@ -1155,18 +1266,20 @@ const onSend = async (text: string): Promise<void> => {
         isStreaming.value = false;
         activeAssistantMessageId.value = null;
         retryInfo.value = null;
-        streamError.value = error.message;
-        showAssistantError(error.message);
+        const displayMessage = mapStreamErrorMessage(error.message);
+        streamError.value = displayMessage;
+        showAssistantError(displayMessage);
       }
     );
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const rawMessage = err instanceof Error ? err.message : String(err);
     if (!streamError.value) {
+      const displayMessage = mapStreamErrorMessage(rawMessage);
       isStreaming.value = false;
       activeAssistantMessageId.value = null;
       retryInfo.value = null;
-      streamError.value = message;
-      showAssistantError(message);
+      streamError.value = displayMessage;
+      showAssistantError(displayMessage);
     }
   }
 };
@@ -1177,10 +1290,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
-  stopIfStreaming();
-  clearChatV2StreamListeners();
-  windowRemoveAllListeners(AI_CHAT_V2_STREAM_CHUNK);
-  windowRemoveAllListeners(AI_CHAT_V2_STREAM_COMPLETE);
+  detachActiveStreamView();
   if (searchDebounceTimer) {
     clearTimeout(searchDebounceTimer);
     searchDebounceTimer = null;

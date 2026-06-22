@@ -1798,6 +1798,8 @@ export default {
     model_selector_label: "Modèle",
     model_loading: "Chargement des modèles…",
     model_none_available: "Aucun modèle disponible",
+    model_auto: "Auto",
+    model_auto_default: "Par défaut",
     server_unavailable: "Impossible de se connecter au serveur IA.",
     unsupported_tool_call:
       "L'assistant a demandé un outil non encore pris en charge.",
@@ -1819,6 +1821,8 @@ export default {
       "Impossible de reprendre l'outil après l'autorisation.",
     permission_resume_no_tool_id:
       "Informations d'appel d'outil manquantes ; impossible de continuer.",
+    quota_exhausted:
+      "Les jetons IA inclus dans votre abonnement sont épuisés. Veuillez recharger votre compte pour continuer à utiliser les fonctions IA.",
   },
   aiChatV2Plan: {
     mode_chat: "Chat",
