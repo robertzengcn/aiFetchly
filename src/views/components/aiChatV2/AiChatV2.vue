@@ -113,6 +113,7 @@
           <AiChatV2ModelSelector
             v-model="selectedModel"
             :items="availableModels"
+            :default-model="defaultModelId"
             :disabled="isStreaming"
             :loading="availableModels.length === 0"
             class="ml-2"
@@ -279,6 +280,14 @@ import {
  */
 const CHARS_PER_TOKEN_ESTIMATE = 4;
 
+/**
+ * Sentinel value used in the model selector for the "Auto" option.
+ * When selected, the actual model sent to the server resolves to the
+ * API's `default_model`, and the context badge reads the default model's
+ * context_size from the model list.
+ */
+const AUTO_MODEL_VALUE = "auto";
+
 type Status = "idle" | "streaming" | "cancelled" | "error";
 
 const { t } = useI18n();
@@ -329,6 +338,10 @@ const streamingEstimatedTokens = ref(0);
 // Model id currently in use (tracked from start/usage events), used to look
 // up the context window denominator.
 const activeModel = ref<string | undefined>(undefined);
+// Server-reported default model id from /api/ai/v1/models. Used to resolve
+// the "Auto" selector option to a concrete model for stream requests and
+// for context-window lookup.
+const defaultModelId = ref<string | undefined>(undefined);
 
 // ---------------------------------------------------------------------------
 // Model selector
@@ -345,12 +358,27 @@ const selectedModel = ref<string | undefined>(undefined);
 const resolveContextWindowLocal = (model?: string): number =>
   resolveContextWindow(modelContextWindows.value, model);
 
+/**
+ * The concrete model id used for context-window lookup. Prefers the model
+ * the server actually used (reported via usage_update/start); falls back to
+ * the user's explicit selection; finally resolves "Auto" to the server's
+ * default_model so the badge shows a meaningful denominator before the
+ * first response arrives.
+ */
+const effectiveModel = computed(() => {
+  if (lastUsage.value?.model) return lastUsage.value.model;
+  if (activeModel.value) return activeModel.value;
+  const sel = selectedModel.value;
+  if (sel && sel !== AUTO_MODEL_VALUE) return sel;
+  return defaultModelId.value;
+});
+
 const contextPercent = computed(() =>
   computeContextPercent({
     modelContextWindows: modelContextWindows.value,
     lastTotalTokens: lastUsage.value?.totalTokens,
     streamingEstimatedTokens: streamingEstimatedTokens.value,
-    model: lastUsage.value?.model || activeModel.value,
+    model: effectiveModel.value,
   })
 );
 
@@ -362,7 +390,7 @@ const contextUsedTokens = computed(
 );
 
 const contextTotalTokens = computed(() =>
-  resolveContextWindowLocal(lastUsage.value?.model || activeModel.value)
+  resolveContextWindowLocal(effectiveModel.value)
 );
 
 const loadModelContextWindows = async (): Promise<void> => {
@@ -374,6 +402,7 @@ const loadModelContextWindows = async (): Promise<void> => {
       (m) => m && typeof m.id === "string" && m.id.length > 0
     );
     availableModels.value = validModels;
+    defaultModelId.value = resp?.default_model;
     const map = new Map<string, number>();
     for (const model of validModels) {
       if (!model || typeof model.id !== "string") continue;
@@ -393,7 +422,7 @@ const loadModelContextWindows = async (): Promise<void> => {
     // override a selection that was already made (e.g. restored from storage
     // before this async load completed, or changed by the user).
     if (selectedModel.value === undefined) {
-      selectedModel.value = resolveInitialModel(validModels, resp?.default_model);
+      selectedModel.value = resolveInitialModel(validModels);
     }
   } catch {
     // non-fatal; denominator falls back to DEFAULT_CONTEXT_WINDOW
@@ -402,29 +431,36 @@ const loadModelContextWindows = async (): Promise<void> => {
 
 /**
  * Pick the initial model for the selector. Priority:
- *   1. Saved localStorage choice, if still present in the available list.
- *   2. Server-reported default_model, if present in the list.
- *   3. First available model id.
- * Returns undefined only when the list is empty.
+ *   1. Saved localStorage choice — "auto" is always valid; a concrete id
+ *      must still be present in the available list.
+ *   2. "Auto" — lets the server pick default_model for us.
  */
-const resolveInitialModel = (
-  models: OpenAIModel[],
-  serverDefault?: string
-): string | undefined => {
-  if (models.length === 0) return undefined;
+const resolveInitialModel = (models: OpenAIModel[]): string => {
   const ids = new Set(models.map((m) => m.id));
   try {
     const saved = window.localStorage.getItem(LAST_MODEL_STORAGE_KEY);
+    if (saved === AUTO_MODEL_VALUE) return AUTO_MODEL_VALUE;
     if (typeof saved === "string" && saved.length > 0 && ids.has(saved)) {
       return saved;
     }
   } catch {
     // localStorage may be unavailable (private mode, etc.) — ignore.
   }
-  if (typeof serverDefault === "string" && serverDefault.length > 0 && ids.has(serverDefault)) {
-    return serverDefault;
+  return AUTO_MODEL_VALUE;
+};
+
+/**
+ * Resolve the model id to send in stream requests. A concrete selection is
+ * passed through; "Auto" resolves to the server's default_model. If the
+ * default is unknown (e.g. models API failed), undefined is sent so the
+ * server falls back to its own default.
+ */
+const resolveModelForRequest = (): string | undefined => {
+  const sel = selectedModel.value;
+  if (typeof sel === "string" && sel.length > 0 && sel !== AUTO_MODEL_VALUE) {
+    return sel;
   }
-  return models[0]?.id;
+  return defaultModelId.value;
 };
 
 // Persist the user's model choice so it survives app restarts.
@@ -1001,7 +1037,7 @@ const onSend = async (text: string): Promise<void> => {
         conversationId: activeConversationId.value ?? undefined,
         message: text,
         mode: mode.value,
-        model: selectedModel.value,
+        model: resolveModelForRequest(),
       },
       (chunk: ChatV2StreamChunk) => {
         if (chunk.eventType === "start") {

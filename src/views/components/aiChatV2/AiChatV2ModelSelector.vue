@@ -22,7 +22,13 @@
       <template #item="{ item, props }">
         <v-list-item v-bind="props">
           <v-list-item-subtitle
-            v-if="item.raw.contextSize"
+            v-if="item.raw.subtitle"
+            class="text-caption text-grey"
+          >
+            {{ item.raw.subtitle }}
+          </v-list-item-subtitle>
+          <v-list-item-subtitle
+            v-else-if="item.raw.contextSize"
             class="text-caption text-grey"
           >
             {{ formatContextSize(item.raw.contextSize) }}
@@ -41,6 +47,8 @@ import type { OpenAIModel } from "@/api/aiChatApi";
 const props = defineProps<{
   modelValue: string | undefined;
   items: OpenAIModel[];
+  /** Server-reported default model id; shown as the resolved target of "Auto". */
+  defaultModel?: string;
   disabled?: boolean;
   loading?: boolean;
 }>();
@@ -53,17 +61,38 @@ interface ModelSelectItem {
   value: string;
   title: string;
   contextSize?: number;
+  subtitle?: string;
 }
 
-const selectItems = computed<ModelSelectItem[]>(() =>
-  (props.items ?? [])
+/** Sentinel matching the parent's AUTO_MODEL_VALUE. */
+const AUTO_MODEL_VALUE = "auto";
+
+const selectItems = computed<ModelSelectItem[]>(() => {
+  const modelItems = (props.items ?? [])
     .filter((m) => m && typeof m.id === "string" && m.id.length > 0)
     .map((m) => ({
       value: m.id,
       title: m.id,
       contextSize: m.context_size,
-    }))
-);
+    }));
+  // Resolve the context size for "Auto" from the default model's entry so
+  // the dropdown shows the same context info as the concrete model.
+  const defaultEntry = props.defaultModel
+    ? (props.items ?? []).find((m) => m.id === props.defaultModel)
+    : undefined;
+  const autoSubtitle = props.defaultModel
+    ? `${t("aiChatV2.model_auto_default") || "Default"}: ${props.defaultModel}`
+    : t("aiChatV2.model_auto") || "Auto";
+  return [
+    {
+      value: AUTO_MODEL_VALUE,
+      title: t("aiChatV2.model_auto") || "Auto",
+      subtitle: autoSubtitle,
+      contextSize: defaultEntry?.context_size,
+    },
+    ...modelItems,
+  ];
+});
 
 const onChange = (value: unknown): void => {
   if (typeof value === "string" && value.length > 0) {
