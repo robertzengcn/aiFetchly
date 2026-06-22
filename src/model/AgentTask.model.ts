@@ -23,6 +23,28 @@ export class AgentTaskModel extends BaseDb {
     );
   }
 
+  /**
+   * Returns completed agent tasks ordered by most-recent first. Used by the
+   * auto-dream source collector to find recent transcripts for consolidation.
+   * `since` is optional; when omitted, returns the most recent tasks overall.
+   */
+  async listFinishedAfter(
+    since: Date | null,
+    limit: number
+  ): Promise<AgentTaskEntity[]> {
+    const qb = this.repository.createQueryBuilder("t");
+    qb.where("t.status = :status", { status: "completed" });
+    if (since) {
+      qb.andWhere("(t.finishedAt > :since OR t.updatedAt > :since)", {
+        since,
+      });
+    }
+    qb.orderBy("t.finishedAt", "DESC", "NULLS LAST").take(
+      Math.max(1, Math.min(limit, 100))
+    );
+    return qb.getMany();
+  }
+
   async create(input: {
     agentTaskId: string;
     workflowRunId?: string;
