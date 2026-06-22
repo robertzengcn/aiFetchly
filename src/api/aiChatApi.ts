@@ -449,12 +449,26 @@ export interface OpenAIModel {
   context_window?: number;
   /** Alias some servers use for context_window. */
   context_length?: number;
+  /**
+   * Context window size in tokens, as reported by the AI server's
+   * `/api/ai/v1/models` endpoint (new format). Preferred source for the
+   * context-usage badge because the server's response uses this field name.
+   */
+  context_size?: number;
+  /** Max output tokens, when reported by the server. */
+  max_tokens?: number;
 }
 
 /** OpenAI-compatible models list response */
 export interface OpenAIModelsResponse {
   object: string;
   data: OpenAIModel[];
+  /**
+   * Server's recommended default model id, when reported. The AI server's
+   * `/api/ai/v1/models` endpoint returns this alongside the models list;
+   * the frontend uses it to seed the model selector on first use.
+   */
+  default_model?: string;
 }
 
 /** OpenAI-compatible chat completion choice (non-streaming) */
@@ -727,6 +741,68 @@ export class AiChatApi {
   }
 
   /**
+   * When the AICHAT_DEBUG_REQUEST env var is set (e.g. "1" or "true"), log
+   * the request endpoint and payload being sent to the AI server. Sensitive
+   * fields (attachments / screenshots) are truncated to keep logs readable.
+   * Enabled via launch.json env block for debugging only.
+   */
+  private _debugLogRequest(endpoint: string, data: unknown): void {
+    if (
+      process.env.AICHAT_DEBUG_REQUEST !== "true" &&
+      process.env.AICHAT_DEBUG_REQUEST !== "1"
+    ) {
+      return;
+    }
+    try {
+      const safe = this._redactDebugPayload(data);
+      console.log(
+        `[ai-chat-debug] -> ${endpoint}\n` + JSON.stringify(safe, null, 2)
+      );
+    } catch (err) {
+      console.warn(
+        `[ai-chat-debug] failed to serialize payload for ${endpoint}`,
+        err
+      );
+    }
+  }
+
+  /**
+   * Return a copy of the payload with large base64 fields replaced by a
+   * placeholder so request logs stay readable. Does not mutate the original
+   * request payload (immutability rule).
+   */
+  private _redactDebugPayload(data: unknown): unknown {
+    if (data === null || typeof data !== "object") {
+      return data;
+    }
+    if (Array.isArray(data)) {
+      return data.map((item) => this._redactDebugPayload(item));
+    }
+    const redacted: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(
+      data as Record<string, unknown>
+    )) {
+      if (
+        (key === "screenshot" || key === "attachments") &&
+        typeof value === "string" &&
+        value.length > 200
+      ) {
+        redacted[key] = `<base64 len=${value.length}>`;
+      } else if (typeof value === "string" && value.length > 4096) {
+        redacted[key] = `<string len=${value.length}> ${value.slice(
+          0,
+          120
+        )}...`;
+      } else if (value !== null && typeof value === "object") {
+        redacted[key] = this._redactDebugPayload(value);
+      } else {
+        redacted[key] = value;
+      }
+    }
+    return redacted;
+  }
+
+  /**
    * Send a chat message to the remote AI service
    *
    * @param request - Chat request containing message and optional parameters
@@ -757,6 +833,7 @@ export class AiChatApi {
       data.model = request.model;
     }
 
+    this._debugLogRequest("/api/ai/chat/message", data);
     return this._httpClient.postJson("/api/ai/chat/message", data);
   }
 
@@ -809,6 +886,7 @@ export class AiChatApi {
       fetchOptions.signal = options.signal;
     }
 
+    this._debugLogRequest("/api/ai/ask/stream", data);
     const response = await this._httpClient.postStream(
       "/api/ai/ask/stream",
       data,
@@ -852,6 +930,7 @@ export class AiChatApi {
       templateType: request.templateType,
       messageOverride: options?.messageOverride ?? undefined,
     };
+    this._debugLogRequest("/api/ai/email-template/stream", body);
     const response = await this._httpClient.postStream(
       "/api/ai/email-template/stream",
       body
@@ -1064,6 +1143,7 @@ export class AiChatApi {
     requests: BatchKeywordGenerationRequestItem[]
   ): Promise<CommonApiresp<BatchKeywordGenerationResponse>> {
     this.ensureAIEnabled();
+    this._debugLogRequest("/api/ai/keywords/generate/batch", requests);
     return this._httpClient.postJson(
       "/api/ai/keywords/generate/batch",
       requests
@@ -1108,6 +1188,7 @@ export class AiChatApi {
       data.temperature = request.temperature;
     }
 
+    this._debugLogRequest("/api/ai/website/analyze", data);
     return this._httpClient.postJson("/api/ai/website/analyze", data);
   }
 
@@ -1149,6 +1230,7 @@ export class AiChatApi {
       fetchOptions.signal = options.signal;
     }
 
+    this._debugLogRequest("/api/ai/ask/continue", data);
     const response = await this._httpClient.postStream(
       "/api/ai/ask/continue",
       data,
@@ -1367,6 +1449,7 @@ export class AiChatApi {
         : `data:image/png;base64,${screen}`;
     }
 
+    this._debugLogRequest("/api/ai/contact/extract", data);
     return this._httpClient.postJson("/api/ai/contact/extract", data);
   }
 
@@ -1390,6 +1473,7 @@ export class AiChatApi {
     if (ttlSeconds != null) {
       body.ttl_seconds = ttlSeconds;
     }
+    this._debugLogRequest("/api/ai/scrape/screenshot/upload", body);
     return this._httpClient.postJson("/api/ai/scrape/screenshot/upload", body);
   }
 
@@ -1459,6 +1543,7 @@ export class AiChatApi {
         : `data:image/png;base64,${screenshot}`;
     }
 
+    this._debugLogRequest("/api/ai/scrape/assist", data);
     return this._httpClient.postJson("/api/ai/scrape/assist", data);
   }
 
@@ -1540,6 +1625,7 @@ export class AiChatApi {
     if (params.errorInfo != null && params.errorInfo !== "") {
       data.error_info = params.errorInfo;
     }
+    this._debugLogRequest("/api/ai/scrape/observe", data);
     return this._httpClient.postJson("/api/ai/scrape/observe", data);
   }
 
@@ -1551,10 +1637,9 @@ export class AiChatApi {
     success = true
   ): Promise<CommonApiresp<unknown>> {
     this.ensureAIEnabled();
-    return this._httpClient.postJson("/api/ai/scrape/complete", {
-      session_id: sessionId,
-      success,
-    });
+    const payload = { session_id: sessionId, success };
+    this._debugLogRequest("/api/ai/scrape/complete", payload);
+    return this._httpClient.postJson("/api/ai/scrape/complete", payload);
   }
 
   /**
@@ -1589,6 +1674,7 @@ export class AiChatApi {
         : `data:image/png;base64,${request.screenshot}`;
     }
 
+    this._debugLogRequest("/api/ai/puppeteer/recovery", { data });
     return this._httpClient.postJson("/api/ai/puppeteer/recovery", {
       data,
     });
@@ -1597,15 +1683,25 @@ export class AiChatApi {
   // ==================== OpenAI-Compatible API Methods ====================
 
   /**
-   * List available models from the OpenAI-compatible API.
-   * GET /v1/models
+   * List available models from the AI server.
+   * GET /api/ai/v1/models
+   *
+   * The server returns a custom shape:
+   * `{ models: [{ name, available, max_tokens, context_size, description }], default_model, total_count }`
+   * which we normalize into the OpenAI-compatible `OpenAIModelsResponse`
+   * so the rest of the app can keep treating `data[].id` as the model id and
+   * read context-window size from `context_size`/`context_window`/`context_length`.
+   *
+   * Falls back to the legacy `/api/ai/chat/models` endpoint when the primary
+   * endpoint is not found (e.g. older server builds).
    *
    * @returns Promise resolving to models list in OpenAI format
    */
   async listOpenAIModels(): Promise<OpenAIModelsResponse> {
     this.ensureAIEnabled();
     try {
-      return await this._httpClient.get("/v1/models");
+      const raw = await this._httpClient.get("/api/ai/v1/models");
+      return this.normalizeModelsResponse(raw);
     } catch (error) {
       if (!this.isNotFoundError(error)) {
         throw error;
@@ -1613,6 +1709,63 @@ export class AiChatApi {
       const legacyModels = await this._httpClient.get("/api/ai/chat/models");
       return this.normalizeLegacyModelsResponse(legacyModels);
     }
+  }
+
+  /**
+   * Normalize the AI server's model-listing response into the canonical
+   * OpenAI-compatible shape. Handles three input shapes defensively:
+   *   1. New server format: `{ models: [...], default_model, total_count }`
+   *      where each entry has `name` and `context_size`.
+   *   2. OpenAI format (pass-through): `{ object, data: [...] }`.
+   *   3. Anything else → empty list.
+   *
+   * `name` becomes `id` because the server uses `name` as the model identifier
+   * in chat-completion requests. `context_size` is preserved so the frontend
+   * context-usage badge can read it directly.
+   */
+  private normalizeModelsResponse(response: unknown): OpenAIModelsResponse {
+    if (!this.isRecord(response)) {
+      return { object: "list", data: [] };
+    }
+    // Pass-through when already OpenAI-shaped.
+    if (Array.isArray((response as { data?: unknown }).data)) {
+      const obj = response as { object?: unknown; data: unknown[] };
+      return {
+        object: typeof obj.object === "string" ? obj.object : "list",
+        data: obj.data as OpenAIModel[],
+      };
+    }
+    const modelsRaw = (response as { models?: unknown }).models;
+    if (!Array.isArray(modelsRaw)) {
+      return { object: "list", data: [] };
+    }
+    const data: OpenAIModel[] = [];
+    for (const entry of modelsRaw) {
+      if (!this.isRecord(entry)) continue;
+      const name = this.getStringField(entry, "name");
+      if (!name) continue;
+      const contextSize = this.getNumberField(entry, "context_size");
+      const maxTokens = this.getNumberField(entry, "max_tokens");
+      const model: OpenAIModel = {
+        id: name,
+        object: "model",
+        created: 0,
+        owned_by: "ai-server",
+      };
+      if (typeof contextSize === "number" && contextSize > 0) {
+        model.context_size = contextSize;
+      }
+      if (typeof maxTokens === "number" && maxTokens > 0) {
+        model.max_tokens = maxTokens;
+      }
+      data.push(model);
+    }
+    const defaultModel = this.getStringField(response, "default_model");
+    const result: OpenAIModelsResponse = { object: "list", data };
+    if (defaultModel) {
+      result.default_model = defaultModel;
+    }
+    return result;
   }
 
   /**
@@ -1651,6 +1804,7 @@ export class AiChatApi {
     if (request.user !== undefined) {
       data.user = request.user;
     }
+    this._debugLogRequest("/api/ai/v1/chat/completions", data);
     return this._httpClient.postJson("/api/ai/v1/chat/completions", data);
   }
 
@@ -1716,6 +1870,12 @@ export class AiChatApi {
     for (let attempt = 0; attempt <= STREAM_RETRY_MAX_ATTEMPTS; attempt += 1) {
       let res: Response;
       try {
+        this._debugLogRequest(
+          `/api/ai/v1/chat/completions${
+            attempt > 0 ? ` (retry ${attempt})` : ""
+          }`,
+          data
+        );
         res = await this._httpClient.postStream(
           "/api/ai/v1/chat/completions",
           data,
@@ -1843,6 +2003,10 @@ export class AiChatApi {
     fetchOptions: RequestInit
   ): Promise<void> {
     const legacyRequest = this.buildLegacyChatRequestFromOpenAI(request);
+    this._debugLogRequest(
+      "/api/ai/ask/stream (legacy fallback)",
+      legacyRequest
+    );
     const response = await this._httpClient.postStream(
       "/api/ai/ask/stream",
       legacyRequest,
@@ -2376,6 +2540,7 @@ export class AiChatApi {
     if (request.return_documents !== undefined) {
       data.return_documents = request.return_documents;
     }
+    this._debugLogRequest("/api/ai/v1/rerank", data);
     return this._httpClient.postJson("/api/ai/v1/rerank", data);
   }
 }

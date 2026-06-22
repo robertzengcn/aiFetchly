@@ -40,12 +40,24 @@ export const windowSendBinary = async (channel: string, data?: any) => {
 };
 
 //receive async message
-export const windowReceive = (channel: string, cb: (value: any) => void) => {
-  window.api.receive(channel, (evnet) => {
+export const windowReceive = <T = unknown>(
+  channel: string,
+  cb: (value: T) => void
+): ((value: T) => void) => {
+  const listener = (evnet: T): void => {
     // console.log(evnet)
     //console.log(evnet.data)
     cb(evnet);
-  });
+  };
+  window.api.receive(channel, listener);
+  return listener;
+};
+
+export const windowRemoveListener = (
+  channel: string,
+  cb: (value: unknown) => void
+) => {
+  window.api.removeListener(channel, cb);
 };
 
 export const windowRemoveAllListeners = (channel: string) => {

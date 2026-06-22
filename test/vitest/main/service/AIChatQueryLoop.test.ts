@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
+import {
+  AIChatQueryLoop,
+  resolveToolChoiceForRound,
+} from "@/service/AIChatQueryLoop";
 import type { AIChatQueryLoopInput } from "@/service/AIChatQueryEvents";
 import type { OpenAIChatCompletionChunk } from "@/api/aiChatApi";
 
@@ -52,6 +55,24 @@ function makeToolCallChunk(
 }
 
 describe("AIChatQueryLoop", () => {
+  describe("tool choice", () => {
+    it("forces SubmitPlanForApproval on explicit submit-now plan requests", () => {
+      expect(
+        resolveToolChoiceForRound({
+          message:
+            "Do not ask more questions; submit the plan for approval now.",
+          hasTools: true,
+          isPlanMode: true,
+          round: 0,
+          startRound: 0,
+        })
+      ).toEqual({
+        type: "function",
+        function: { name: "SubmitPlanForApproval" },
+      });
+    });
+  });
+
   describe("normal streaming", () => {
     it("returns completed with full content when model finishes without tool calls", async () => {
       const emitted: string[] = [];
@@ -96,6 +117,76 @@ describe("AIChatQueryLoop", () => {
   });
 
   describe("tool calls", () => {
+    it("submits an immediate approval plan when explicit submit-now plan mode gets an empty model response", async () => {
+      const fakeStream = vi.fn(
+        async (
+          _req: unknown,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          onChunk(makeChunk("", "stop"));
+        }
+      );
+      const events: unknown[] = [];
+      const submittedPlan = {
+        planId: "plan-immediate",
+        conversationId: "v2-test",
+        status: "awaiting_approval",
+        title: "Immediate approval plan",
+        objective: "Submit a plan now",
+        currentVersion: 1,
+      };
+      const submitPlanForApproval = vi.fn().mockResolvedValue(submittedPlan);
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: vi.fn(),
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+
+      const result = await loop.run({
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: {
+          message:
+            "Create an approval plan. Do not ask questions. Submit the plan for approval now.",
+          mode: "plan",
+        },
+        openAITools: [],
+        abortController: new AbortController(),
+        eventSink: { emit: (event) => events.push(event) },
+        planContext: {
+          planModule: {
+            saveQuestion: vi.fn(),
+            submitPlanForApproval,
+            getPlanStateByPlanId: vi.fn(),
+            answerQuestion: vi.fn(),
+          },
+          planState: {
+            planId: "plan-immediate",
+            conversationId: "v2-test",
+            status: "draft",
+            title: "Immediate approval plan",
+            objective: "Submit a plan now",
+            currentVersion: 0,
+          } as never,
+        },
+        startRound: 0,
+        isActiveTurn: () => true,
+      });
+
+      expect(result.type).toBe("completed");
+      expect(submitPlanForApproval).toHaveBeenCalled();
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "plan_submitted",
+          planState: submittedPlan,
+        })
+      );
+      if (result.type === "completed") {
+        expect(result.fullContent).toContain("submitted for approval");
+      }
+    });
+
     it("executes tool and continues to next round when finish_reason is tool_calls", async () => {
       const toolCallChunk = makeToolCallChunk(
         "call-1",
@@ -400,6 +491,57 @@ describe("AIChatQueryLoop", () => {
       await loop.run(input);
       expect(events).toContain("tool_call");
       expect(events).toContain("tool_result");
+    });
+
+    it("returns a clear fallback message when a failed tool is followed by an empty model response", async () => {
+      const toolCallChunk = makeToolCallChunk(
+        "call-1",
+        "run_subagent",
+        '{"agentId":"agent-lead-researcher"}'
+      );
+      let callCount = 0;
+      const fakeStream = vi.fn(
+        async (
+          _req: unknown,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          if (callCount === 0) {
+            callCount += 1;
+            onChunk(toolCallChunk);
+            return;
+          }
+          onChunk(makeChunk("", "stop"));
+        }
+      );
+      const fakeExecute = vi.fn().mockResolvedValue({
+        tool_call_id: "call-1",
+        tool_name: "run_subagent",
+        success: false,
+        result: { error: "Agent task timed out." },
+        execution_time_ms: 180000,
+      });
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: fakeExecute,
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const result = await loop.run({
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: { message: "run a subagent" },
+        openAITools: [],
+        abortController: new AbortController(),
+        eventSink: { emit: vi.fn() },
+        startRound: 0,
+        isActiveTurn: () => true,
+      });
+
+      expect(result.type).toBe("completed");
+      if (result.type === "completed") {
+        expect(result.fullContent).toContain("run_subagent");
+        expect(result.fullContent).toContain("Agent task timed out.");
+      }
     });
   });
 });

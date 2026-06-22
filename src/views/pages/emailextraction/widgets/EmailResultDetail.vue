@@ -269,7 +269,7 @@ const initialize = async () => {
 }
 onMounted(() => {
   initialize();
-  // startAutoRefresh();
+  startAutoRefresh();
 });
 
 onUnmounted(() => {

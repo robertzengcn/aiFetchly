@@ -1,6 +1,14 @@
 // src/service/AIChatErrorMapper.ts
 
 /**
+ * Sentinel returned by {@link userSafeError} when the AI server reports
+ * HTTP 402 / "Payment Required" — i.e. the user's subscription token quota
+ * is exhausted. The renderer detects this and shows a translated, actionable
+ * recharge prompt instead of the raw sentinel.
+ */
+export const QUOTA_EXHAUSTED_SENTINEL = "QUOTA_EXHAUSTED";
+
+/**
  * Map unknown errors to user-safe messages.
  * Raw server bodies, stack traces, and sensitive request details
  * are logged but never surfaced to the renderer.
@@ -11,6 +19,13 @@ export function userSafeError(err: unknown): string {
       return "Generation stopped.";
     }
     const msg = err.message || "Unknown error";
+    if (
+      /402|Payment Required|insufficient_quota|quota_exceeded|insufficient balance/i.test(
+        msg
+      )
+    ) {
+      return QUOTA_EXHAUSTED_SENTINEL;
+    }
     if (/401|403/.test(msg)) {
       return "Please sign in again.";
     }

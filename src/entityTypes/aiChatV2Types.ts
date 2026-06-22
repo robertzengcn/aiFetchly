@@ -132,6 +132,10 @@ export interface ChatV2StreamChunk {
   toolResult?: Record<string, unknown>;
   replacesPermissionPromptForToolId?: string;
   planState?: AIChatPlanStateView;
+  /** Present on plan_state chunks when transition was auto-initiated by EnterPlanMode. */
+  autoEntered?: boolean;
+  /** Rationale supplied by the model when calling EnterPlanMode. */
+  rationale?: string;
   question?: AIChatPlanQuestionView;
   planVersion?: AIChatPlanVersionView;
   retryAttempt?: number;

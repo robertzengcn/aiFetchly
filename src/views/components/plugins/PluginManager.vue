@@ -17,6 +17,16 @@
             <v-icon left>mdi-upload</v-icon>
             {{ t("plugins.import_button") }}
           </v-btn>
+          <v-btn
+            color="primary"
+            variant="tonal"
+            @click="showInstallSource = true"
+          >
+            <v-icon left>mdi-source-branch</v-icon>
+            {{
+              t("plugins.install_source.button") || "Install from Source"
+            }}
+          </v-btn>
         </div>
       </v-card-title>
       <v-divider></v-divider>
@@ -100,6 +110,11 @@
       @imported="onImported"
     />
 
+    <PluginInstallSourceDialog
+      v-model="showInstallSource"
+      @imported="onImported"
+    />
+
     <v-dialog v-model="showUninstall" max-width="500">
       <v-card>
         <v-card-title>{{ t("plugins.uninstall_button") }}</v-card-title>
@@ -128,6 +143,7 @@ import {
 } from "@/views/api/plugins";
 import PluginDetailPanel from "./PluginDetailPanel.vue";
 import PluginImportDialog from "./PluginImportDialog.vue";
+import PluginInstallSourceDialog from "./PluginInstallSourceDialog.vue";
 
 const { t } = useI18n();
 const plugins = ref<PluginSummary[]>([]);
@@ -135,6 +151,7 @@ const isLoading = ref(false);
 const reloading = ref(false);
 const selectedName = ref<string | null>(null);
 const showImport = ref(false);
+const showInstallSource = ref(false);
 const uninstallTarget = ref<string | null>(null);
 const showUninstall = ref(false);
 

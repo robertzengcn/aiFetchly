@@ -1806,6 +1806,8 @@ export default {
     clear_conversation: "Clear conversation",
     clear_all: "Clear all",
     clear_chat: "Clear chat",
+    compact_conversation: "Compact conversation",
+    compact_completed: "Conversation compacted into memory.",
     context_usage: "Context",
     context_usage_tooltip: "{used} / {total} tokens ({percent}%)",
     loading_models: "Loading models…",
@@ -1817,6 +1819,11 @@ export default {
     cancelled: "Cancelled",
     ai_disabled: "AI functionality is only available to subscribers.",
     model_unavailable: "Selected model is not available.",
+    model_selector_label: "Model",
+    model_loading: "Loading models…",
+    model_none_available: "No models available",
+    model_auto: "Auto",
+    model_auto_default: "Default",
     server_unavailable: "Could not connect to the AI server.",
     unsupported_tool_call:
       "This assistant requested a tool that is not supported yet.",
@@ -1837,6 +1844,8 @@ export default {
       "Could not continue the tool after permission was granted.",
     permission_resume_no_tool_id:
       "Missing tool call information; cannot continue execution.",
+    quota_exhausted:
+      "The AI tokens included in your subscription plan have been exhausted. Please recharge your account to continue using AI features.",
   },
   aiChatV2Plan: {
     mode_chat: "Chat",
@@ -1863,6 +1872,7 @@ export default {
   plugins: {
     title: "Plugins",
     import_button: "Import Plugin",
+    install_button: "Install",
     validate_button: "Validate Package",
     reload_button: "Reload",
     column_plugin: "Plugin",
@@ -1904,5 +1914,34 @@ export default {
     diagnostics_copied: "Diagnostics copied to clipboard",
     enabled_label: "Enabled",
     via_plugin: "via plugin: {name}",
+    install_source: {
+      button: "Install from Source",
+      title: "Install Plugin from Source",
+      kind_label: "Source type",
+      kind_local_zip: "Local Zip",
+      kind_local_folder: "Local Folder",
+      kind_git: "Git",
+      kind_github: "GitHub",
+      kind_npm: "npm",
+      kind_url: "URL",
+      zip_label: "Choose .zip",
+      folder_label: "Choose folder",
+      folder_hint:
+        "Your source folder will be copied into the plugins cache and never modified.",
+      git_url: "Git URL (https or ssh)",
+      git_ref: "Branch / tag / commit (optional)",
+      github_url: "GitHub repo or release asset URL",
+      github_ref: "Branch / tag (optional)",
+      npm_package: "Package name (e.g. @scope/pkg)",
+      npm_version: "Version (optional)",
+      npm_registry: "Registry URL (optional, HTTPS)",
+      npm_token: "Auth token (optional, not stored)",
+      npm_token_hint: "Used once for this install; not persisted.",
+      url_label: "URL (.zip, git, or GitHub URL)",
+      url_hint:
+        "Auto-detected: .zip downloads, git URLs clone, GitHub URLs use the release flow.",
+      install_failed: "Install failed.",
+      source_kind: "Install source",
+    },
   },
 };
