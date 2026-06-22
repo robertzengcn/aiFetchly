@@ -1817,6 +1817,8 @@ export default {
     model_selector_label: "Modelo",
     model_loading: "Cargando modelos…",
     model_none_available: "No hay modelos disponibles",
+    model_auto: "Automático",
+    model_auto_default: "Predeterminado",
     server_unavailable: "No se pudo conectar al servidor de IA.",
     unsupported_tool_call:
       "El asistente solicitó una herramienta que aún no se admite.",
