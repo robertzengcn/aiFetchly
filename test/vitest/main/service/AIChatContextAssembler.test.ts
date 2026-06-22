@@ -6,6 +6,7 @@ import { MessageType } from "@/entityTypes/commonType";
 const mockGetByConversation = vi.fn();
 const mockGetActiveSummary = vi.fn();
 const mockGetConversationMessages = vi.fn();
+const mockDurableRetrieve = vi.fn();
 
 vi.mock("@/modules/AIChatSessionMemoryModule", () => ({
   AIChatSessionMemoryModule: vi.fn().mockImplementation(() => ({
@@ -22,6 +23,12 @@ vi.mock("@/modules/AIChatCompactModule", () => ({
 vi.mock("@/modules/AIChatV2Module", () => ({
   AIChatV2Module: vi.fn().mockImplementation(() => ({
     getConversationMessages: mockGetConversationMessages,
+  })),
+}));
+
+vi.mock("@/service/AIUserMemoryRetrievalService", () => ({
+  AIUserMemoryRetrievalService: vi.fn().mockImplementation(() => ({
+    retrieve: mockDurableRetrieve,
   })),
 }));
 
@@ -44,6 +51,11 @@ function row(opts: Partial<AIChatMessageEntity>): AIChatMessageEntity {
 describe("AIChatContextAssembler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockDurableRetrieve.mockResolvedValue({
+      memories: [],
+      tokenEstimate: 0,
+      contextBlock: "",
+    });
   });
 
   it("puts system prompt first and current user message last", async () => {
@@ -197,5 +209,68 @@ describe("AIChatContextAssembler", () => {
     expect(r.messages.map((m) => `${m.role}:${m.content}`).join("|")).toBe(
       "system:sysp|user:What is AI?"
     );
+  });
+
+  it("injects durable memory before compact context", async () => {
+    mockGetByConversation.mockResolvedValue({
+      summary: "session",
+      coveredThroughMessageId: "old",
+    });
+    mockGetActiveSummary.mockResolvedValue(null);
+    mockGetConversationMessages.mockResolvedValue([]);
+    mockDurableRetrieve.mockResolvedValue({
+      memories: [{ memoryId: "mem-1" }],
+      tokenEstimate: 10,
+      contextBlock: "Durable user memory:\ntest durable block",
+    });
+    const asm = new AIChatContextAssembler();
+    const r = await asm.assemble({
+      conversationId: "v2-x",
+      currentUserMessage: "hi",
+      baseSystemPrompt: "sysp",
+      mode: "chat",
+    });
+    const durableIdx = r.messages.findIndex(
+      (m) =>
+        m.role === "system" &&
+        typeof m.content === "string" &&
+        m.content.startsWith("Durable user memory")
+    );
+    const sessionIdx = r.messages.findIndex(
+      (m) =>
+        m.role === "system" &&
+        typeof m.content === "string" &&
+        m.content.includes("Conversation compact")
+    );
+    expect(durableIdx).toBeGreaterThanOrEqual(0);
+    expect(sessionIdx).toBeGreaterThan(durableIdx);
+    expect(r.usedDurableMemory).toBe(true);
+    expect(r.durableMemoryCount).toBe(1);
+  });
+
+  it("does not inject durable memory when retrieval returns empty", async () => {
+    mockGetByConversation.mockResolvedValue(null);
+    mockGetActiveSummary.mockResolvedValue(null);
+    mockGetConversationMessages.mockResolvedValue([]);
+    mockDurableRetrieve.mockResolvedValue({
+      memories: [],
+      tokenEstimate: 0,
+      contextBlock: "",
+    });
+    const asm = new AIChatContextAssembler();
+    const r = await asm.assemble({
+      conversationId: "v2-x",
+      currentUserMessage: "hi",
+      baseSystemPrompt: "sysp",
+      mode: "chat",
+    });
+    const durable = r.messages.find(
+      (m) =>
+        m.role === "system" &&
+        typeof m.content === "string" &&
+        m.content.startsWith("Durable user memory")
+    );
+    expect(durable).toBeUndefined();
+    expect(r.usedDurableMemory).toBe(false);
   });
 });
