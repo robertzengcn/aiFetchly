@@ -122,6 +122,9 @@ hyperframes-search-engine-scraping-video/renders/aifetchly-search-engine-scrapin
 .claude/skills/gstack/make-pdf/dist/
 .claude/skills/gstack/bin/gstack-global-discover
 
+# Claude Code isolated worktrees (full nested checkouts, not project artifacts)
+.claude/worktrees/
+
 # Generated tutorial video renders
 hyperframes-search-engine-scraping-video/renders/*.mp4
 .gstack/
