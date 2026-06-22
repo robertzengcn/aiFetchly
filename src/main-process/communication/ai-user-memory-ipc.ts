@@ -1,6 +1,8 @@
 import { ipcMain } from "electron";
 import { Token } from "@/modules/token";
-import { USER_AI_ENABLED, USER_AI_AUTO_DREAM } from "@/config/usersetting";
+import { USER_AI_ENABLED } from "@/config/usersetting";
+import { SystemSettingModule } from "@/modules/SystemSettingModule";
+import { ai_auto_dream_enabled } from "@/config/settinggroupInit";
 import { AIUserMemoryService } from "@/service/AIUserMemoryService";
 import { AIAutoDreamService } from "@/service/AIAutoDreamService";
 import { AiChatApi } from "@/api/aiChatApi";
@@ -42,11 +44,24 @@ function getAutoDreamService(): AIAutoDreamService {
   if (!autoDreamService) {
     const tokenService = new Token();
     autoDreamService = new AIAutoDreamService({
-      completeChat: (request) =>
-        new AiChatApi().openAIChatCompletion(request),
+      completeChat: (request) => new AiChatApi().openAIChatCompletion(request),
       isAIEnabled: () => tokenService.getValue(USER_AI_ENABLED) === "true",
-      isAutoDreamEnabled: () =>
-        tokenService.getValue(USER_AI_AUTO_DREAM) === "true",
+      // Reads the user-controllable toggle from the system_setting table.
+      // Default-on when the row is absent.
+      isAutoDreamEnabled: async () => {
+        try {
+          const v = await new SystemSettingModule().getSettingValue(
+            ai_auto_dream_enabled
+          );
+          return v !== "false";
+        } catch (err) {
+          console.error(
+            "[ai-auto-dream] failed to read system_setting toggle:",
+            err
+          );
+          return true;
+        }
+      },
     });
   }
   return autoDreamService;
@@ -77,8 +92,8 @@ export function _resetAIUserMemorySingletonsForTesting(): void {
 export function registerAIUserMemoryIpcHandlers(): void {
   ipcMain.handle(AI_USER_MEMORY_LIST, async (_e, data: unknown) => {
     try {
-      const input =
-        (safeParse<AIUserMemorySearchInput>(data) ?? {}) as AIUserMemorySearchInput;
+      const input = (safeParse<AIUserMemorySearchInput>(data) ??
+        {}) as AIUserMemorySearchInput;
       const result = await getMemoryService().list(input);
       return ok(result);
     } catch (err) {

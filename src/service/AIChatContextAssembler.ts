@@ -4,8 +4,8 @@ import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { AIChatTokenEstimator } from "@/service/AIChatTokenEstimator";
 import { AIUserMemoryRetrievalService } from "@/service/AIUserMemoryRetrievalService";
 import { buildPlanModeSystemPrompt } from "@/service/PlanModePromptBuilder";
-import { Token } from "@/modules/token";
-import { USER_AI_MEMORY_INJECTION } from "@/config/usersetting";
+import { SystemSettingModule } from "@/modules/SystemSettingModule";
+import { ai_memory_injection_enabled } from "@/config/settinggroupInit";
 import type { OpenAIChatMessage, OpenAIMessageRole } from "@/api/aiChatApi";
 import { MessageType } from "@/entityTypes/commonType";
 import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
@@ -55,6 +55,7 @@ export class AIChatContextAssembler {
   private readonly v2 = new AIChatV2Module();
   private readonly estimator = new AIChatTokenEstimator();
   private readonly durableMemory = new AIUserMemoryRetrievalService();
+  private readonly systemSettings = new SystemSettingModule();
 
   async assemble(
     input: AIChatContextAssembleInput
@@ -103,11 +104,21 @@ export class AIChatContextAssembler {
     const messages: OpenAIChatMessage[] = [];
     messages.push({ role: "system", content: systemPrompt });
 
-    // Durable user memory injection. Gated by USER_AI_MEMORY_INJECTION
-    // (default-on unless explicitly set to "false"). Placed before compact
+    // Durable user memory injection. Reads the user-controllable toggle from
+    // the system_setting table (default-on when absent). Placed before compact
     // context so recent conversation history wins when they conflict.
-    const injectionEnabled =
-      new Token().getValue(USER_AI_MEMORY_INJECTION) !== "false";
+    let injectionEnabled = true;
+    try {
+      const v = await this.systemSettings.getSettingValue(
+        ai_memory_injection_enabled
+      );
+      injectionEnabled = v !== "false";
+    } catch (err) {
+      console.error(
+        "[ai-chat-context] failed to read memory injection toggle:",
+        err
+      );
+    }
     let durableContextBlock = "";
     let durableMemoryCount = 0;
     if (injectionEnabled) {

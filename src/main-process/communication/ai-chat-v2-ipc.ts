@@ -1,6 +1,8 @@
 import { ipcMain } from "electron";
 import { Token } from "@/modules/token";
-import { USER_AI_ENABLED, USER_AI_AUTO_DREAM } from "@/config/usersetting";
+import { USER_AI_ENABLED } from "@/config/usersetting";
+import { SystemSettingModule } from "@/modules/SystemSettingModule";
+import { ai_auto_dream_enabled } from "@/config/settinggroupInit";
 import { AiChatApi } from "@/api/aiChatApi";
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { AIChatPlanModule } from "@/modules/AIChatPlanModule";
@@ -110,8 +112,22 @@ function getAutoDreamService(): AIAutoDreamService {
     autoDreamService = new AIAutoDreamService({
       completeChat: (request) => new AiChatApi().openAIChatCompletion(request),
       isAIEnabled: () => tokenService.getValue(USER_AI_ENABLED) === "true",
-      isAutoDreamEnabled: () =>
-        tokenService.getValue(USER_AI_AUTO_DREAM) === "true",
+      // Reads the user-controllable toggle from the system_setting table.
+      // Default-on when the row is absent (matches the seeded default).
+      isAutoDreamEnabled: async () => {
+        try {
+          const v = await new SystemSettingModule().getSettingValue(
+            ai_auto_dream_enabled
+          );
+          return v !== "false";
+        } catch (err) {
+          console.error(
+            "[ai-auto-dream] failed to read system_setting toggle:",
+            err
+          );
+          return true;
+        }
+      },
     });
   }
   return autoDreamService;

@@ -53,7 +53,7 @@ function makeService(opts: {
   return new AIAutoDreamService({
     completeChat: mockCompleteChat,
     isAIEnabled: () => opts.aiEnabled,
-    isAutoDreamEnabled: () => opts.autoDreamEnabled,
+    isAutoDreamEnabled: async () => opts.autoDreamEnabled,
   });
 }
 

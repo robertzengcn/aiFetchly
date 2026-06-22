@@ -13,5 +13,3 @@ export const USERROLES = "user_roles";
 export const USERID = "user_id";
 export const USERPLANS = "user_plans";
 export const USER_AI_ENABLED = "user_ai_enabled";
-export const USER_AI_AUTO_DREAM = "user_ai_auto_dream";
-export const USER_AI_MEMORY_INJECTION = "user_ai_memory_injection";
