@@ -182,6 +182,12 @@ export class AIChatQueryLoop {
     const { eventSink } = input;
     let activeAccumulator: OpenAIStreamAccumulator | null = null;
     let finalAccumulator: OpenAIStreamAccumulator | null = null;
+    // Tracks the most recent server-reported usage across all rounds so the
+    // engine can persist tokensUsed even when the final round had no usage
+    // (e.g. immediate plan submission path).
+    let lastReportedUsage:
+      | { totalTokens: number; promptTokens: number; completionTokens: number }
+      | undefined;
     const messages = input.messages;
     let lastFailedTool: LastFailedToolInfo | null = null;
     let immediatePlanSubmissionContent: string | null = null;
@@ -264,6 +270,11 @@ export class AIChatQueryLoop {
         // final chunk when stream_options.include_usage is true.
         const roundUsage = accumulator.state.usage;
         if (roundUsage) {
+          lastReportedUsage = {
+            totalTokens: roundUsage.total_tokens,
+            promptTokens: roundUsage.prompt_tokens,
+            completionTokens: roundUsage.completion_tokens,
+          };
           eventSink.emit({
             type: "usage_update",
             conversationId: input.conversationId,
@@ -549,14 +560,14 @@ export class AIChatQueryLoop {
           partialContent: finalAccumulator?.state.fullContent ?? "",
           model: finalAccumulator?.state.model,
           responseId: finalAccumulator?.state.responseId,
+          totalTokens: lastReportedUsage?.totalTokens,
+          promptTokens: lastReportedUsage?.promptTokens,
+          completionTokens: lastReportedUsage?.completionTokens,
         };
       }
 
       let fullContent = finalAccumulator?.state.fullContent ?? "";
-      if (
-        fullContent.trim().length === 0 &&
-        immediatePlanSubmissionContent
-      ) {
+      if (fullContent.trim().length === 0 && immediatePlanSubmissionContent) {
         fullContent = immediatePlanSubmissionContent;
       }
       if (fullContent.trim().length === 0 && lastFailedTool) {
@@ -589,6 +600,9 @@ export class AIChatQueryLoop {
         finishReason,
         model: finalAccumulator?.state.model,
         responseId: finalAccumulator?.state.responseId,
+        totalTokens: lastReportedUsage?.totalTokens,
+        promptTokens: lastReportedUsage?.promptTokens,
+        completionTokens: lastReportedUsage?.completionTokens,
       };
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {

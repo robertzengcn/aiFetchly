@@ -1780,6 +1780,8 @@ export default {
     permission_denied: "权限被拒绝。该工具不会执行。",
     permission_resume_failed: "授权后无法继续执行该工具。",
     permission_resume_no_tool_id: "缺少工具调用信息，无法继续执行。",
+    quota_exhausted:
+      "您的订阅计划中包含的 AI 代币已用尽。请充值以继续使用 AI 功能。",
   },
   aiChatV2Plan: {
     mode_chat: "聊天",

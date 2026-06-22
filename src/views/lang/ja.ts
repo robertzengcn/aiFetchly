@@ -1796,6 +1796,8 @@ export default {
     permission_resume_failed: "許可後にツールを再開できませんでした。",
     permission_resume_no_tool_id:
       "ツール呼び出し情報が不足しているため、続行できません。",
+    quota_exhausted:
+      "サブスクリプションプランに含まれるAIトークンが尽きました。AI機能を続けてご利用いただくには、アカウントをチャージしてください。",
   },
   aiChatV2Plan: {
     mode_chat: "チャット",

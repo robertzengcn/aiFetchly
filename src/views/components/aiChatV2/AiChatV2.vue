@@ -271,6 +271,7 @@ import {
   DEFAULT_CONTEXT_WINDOW,
 } from "./contextUsageUtil";
 import { hasPendingToolExecution } from "./toolExecutionStateUtil";
+import { QUOTA_EXHAUSTED_SENTINEL } from "@/service/AIChatErrorMapper";
 
 /**
  * Rough chars→tokens ratio used to drive a live-updating estimate while
@@ -539,6 +540,22 @@ const formatTimestamp = (iso: string): string => {
   } catch {
     return "";
   }
+};
+
+/**
+ * Map a backend-mapped error string to a user-facing, translated message.
+ * The backend {@link userSafeError} returns sentinel codes for known error
+ * classes (e.g. QUOTA_EXHAUSTED for HTTP 402); unknown strings pass through
+ * verbatim so ad-hoc server messages still surface.
+ */
+const mapStreamErrorMessage = (raw: string): string => {
+  if (raw === QUOTA_EXHAUSTED_SENTINEL) {
+    return (
+      t("aiChatV2.quota_exhausted") ||
+      "The AI tokens included in your subscription plan have been exhausted. Please recharge your account to continue using AI features."
+    );
+  }
+  return raw;
 };
 
 const loadConversations = async (): Promise<void> => {
@@ -1055,10 +1072,16 @@ const onSend = async (text: string): Promise<void> => {
   isStreaming.value = true;
   receivedFirstResponse.value = false;
   retryInfo.value = null;
-  // Seed the live context estimate from the last known server usage; the
-  // incoming token stream will accumulate on top of this baseline and the
-  // next usage_update event will snap it back to ground truth.
-  streamingEstimatedTokens.value = lastUsage.value?.totalTokens ?? 0;
+  // Seed the live context estimate from the last known server usage. If no
+  // usage_update has arrived yet this session, fall back to the existing
+  // streaming estimate (e.g. seeded from persisted tokensUsed on history
+  // load) so the badge keeps a meaningful baseline instead of resetting
+  // to 0 on every turn.
+  const usageBaseline = lastUsage.value?.totalTokens;
+  streamingEstimatedTokens.value =
+    typeof usageBaseline === "number" && usageBaseline > 0
+      ? usageBaseline
+      : streamingEstimatedTokens.value;
 
   await nextTick();
 
@@ -1193,6 +1216,27 @@ const onSend = async (text: string): Promise<void> => {
         isStreaming.value = false;
         activeAssistantMessageId.value = null;
         retryInfo.value = null;
+        // Snap to ground-truth usage carried by the complete event so the
+        // badge reflects the real context size even if usage_update chunks
+        // didn't fire during the stream (some servers only report usage on
+        // the final chunk, which the accumulator captures but emits after
+        // the last token round).
+        if (
+          typeof complete.totalTokens === "number" &&
+          typeof complete.promptTokens === "number" &&
+          typeof complete.completionTokens === "number"
+        ) {
+          lastUsage.value = {
+            promptTokens: complete.promptTokens,
+            completionTokens: complete.completionTokens,
+            totalTokens: complete.totalTokens,
+            model: complete.model ?? lastUsage.value?.model,
+          };
+          streamingEstimatedTokens.value = complete.totalTokens;
+          if (complete.model) {
+            activeModel.value = complete.model;
+          }
+        }
         if (
           complete.fullContent !== undefined &&
           complete.fullContent.length > 0
@@ -1222,18 +1266,20 @@ const onSend = async (text: string): Promise<void> => {
         isStreaming.value = false;
         activeAssistantMessageId.value = null;
         retryInfo.value = null;
-        streamError.value = error.message;
-        showAssistantError(error.message);
+        const displayMessage = mapStreamErrorMessage(error.message);
+        streamError.value = displayMessage;
+        showAssistantError(displayMessage);
       }
     );
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const rawMessage = err instanceof Error ? err.message : String(err);
     if (!streamError.value) {
+      const displayMessage = mapStreamErrorMessage(rawMessage);
       isStreaming.value = false;
       activeAssistantMessageId.value = null;
       retryInfo.value = null;
-      streamError.value = message;
-      showAssistantError(message);
+      streamError.value = displayMessage;
+      showAssistantError(displayMessage);
     }
   }
 };

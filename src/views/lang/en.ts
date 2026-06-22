@@ -1844,6 +1844,8 @@ export default {
       "Could not continue the tool after permission was granted.",
     permission_resume_no_tool_id:
       "Missing tool call information; cannot continue execution.",
+    quota_exhausted:
+      "The AI tokens included in your subscription plan have been exhausted. Please recharge your account to continue using AI features.",
   },
   aiChatV2Plan: {
     mode_chat: "Chat",
