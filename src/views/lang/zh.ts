@@ -1761,6 +1761,8 @@ export default {
     model_selector_label: "模型",
     model_loading: "正在加载模型…",
     model_none_available: "没有可用模型",
+    model_auto: "自动",
+    model_auto_default: "默认",
     server_unavailable: "无法连接到 AI 服务器。",
     unsupported_tool_call: "助手请求了一个暂不支持的工具。",
     conversation_history: "对话历史",
@@ -1778,6 +1780,8 @@ export default {
     permission_denied: "权限被拒绝。该工具不会执行。",
     permission_resume_failed: "授权后无法继续执行该工具。",
     permission_resume_no_tool_id: "缺少工具调用信息，无法继续执行。",
+    quota_exhausted:
+      "您的订阅计划中包含的 AI 代币已用尽。请充值以继续使用 AI 功能。",
   },
   aiChatV2Plan: {
     mode_chat: "聊天",

@@ -587,6 +587,7 @@ export class AIChatQueryEngine {
             content: result.fullContent,
             messageId: assistantMessageId,
             model: result.model,
+            tokensUsed: result.totalTokens,
             metadata: {
               source: "chat-v2",
               openaiResponseId: result.responseId,
@@ -601,6 +602,9 @@ export class AIChatQueryEngine {
           fullContent: result.fullContent,
           model: result.model,
           finishReason: result.finishReason,
+          totalTokens: result.totalTokens,
+          promptTokens: result.promptTokens,
+          completionTokens: result.completionTokens,
         });
         if (this.compactAgent) {
           this.compactAgent

@@ -1809,6 +1809,8 @@ export default {
     model_selector_label: "Modell",
     model_loading: "Modelle werden geladen…",
     model_none_available: "Keine Modelle verfügbar",
+    model_auto: "Automatisch",
+    model_auto_default: "Standard",
     server_unavailable: "Verbindung zum KI-Server nicht möglich.",
     unsupported_tool_call:
       "Der Assistent hat ein noch nicht unterstütztes Werkzeug angefordert.",
@@ -1831,6 +1833,8 @@ export default {
       "Das Werkzeug konnte nach der Freigabe nicht fortgesetzt werden.",
     permission_resume_no_tool_id:
       "Werkzeugaufrufinformationen fehlen; Fortsetzung nicht möglich.",
+    quota_exhausted:
+      "Die in Ihrem Abonnement enthaltenen KI-Token sind aufgebraucht. Bitte laden Sie Ihr Konto auf, um die KI-Funktionen weiterhin zu nutzen.",
   },
   aiChatV2Plan: {
     mode_chat: "Chat",

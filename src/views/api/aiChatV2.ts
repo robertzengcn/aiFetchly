@@ -2,7 +2,7 @@ import {
   windowInvoke,
   windowSend,
   windowReceive,
-  windowRemoveAllListeners,
+  windowRemoveListener,
 } from "@/views/utils/apirequest";
 import type {
   ChatV2StreamRequest,
@@ -36,16 +36,28 @@ import {
   AI_CHAT_V2_PLAN_VERSIONS,
 } from "@/config/channellist";
 
-let activeChunkHandler: ((raw: string) => void) | null = null;
-let activeCompleteHandler: ((raw: string) => void) | null = null;
+let activeChunkHandler: ((raw: unknown) => void) | null = null;
+let activeCompleteHandler: ((raw: unknown) => void) | null = null;
+let activeDetachedResolve: (() => void) | null = null;
 
-export function clearChatV2StreamListeners(): void {
-  if (activeChunkHandler || activeCompleteHandler) {
-    windowRemoveAllListeners(AI_CHAT_V2_STREAM_CHUNK);
-    windowRemoveAllListeners(AI_CHAT_V2_STREAM_COMPLETE);
+const detachChatV2StreamListeners = (resolvePending: boolean): void => {
+  if (activeChunkHandler) {
+    windowRemoveListener(AI_CHAT_V2_STREAM_CHUNK, activeChunkHandler);
   }
+  if (activeCompleteHandler) {
+    windowRemoveListener(AI_CHAT_V2_STREAM_COMPLETE, activeCompleteHandler);
+  }
+  const resolve = activeDetachedResolve;
   activeChunkHandler = null;
   activeCompleteHandler = null;
+  activeDetachedResolve = null;
+  if (resolvePending) {
+    resolve?.();
+  }
+};
+
+export function clearChatV2StreamListeners(): void {
+  detachChatV2StreamListeners(true);
 }
 
 /**
@@ -104,12 +116,12 @@ export async function streamChatV2Message(
   return new Promise((resolve, reject) => {
     let tokenLogCount = 0;
     const cleanup = (): void => {
-      clearChatV2StreamListeners();
+      detachChatV2StreamListeners(false);
     };
 
-    const chunkHandler = (raw: string): void => {
+    const chunkHandler = (raw: unknown): void => {
       try {
-        const chunk: ChatV2StreamChunk = JSON.parse(raw);
+        const chunk: ChatV2StreamChunk = JSON.parse(String(raw));
         if (chunk.eventType === "token") {
           if (tokenLogCount < 5 || tokenLogCount % 25 === 0) {
             console.debug(
@@ -136,9 +148,9 @@ export async function streamChatV2Message(
       }
     };
 
-    const completeHandler = (raw: string): void => {
+    const completeHandler = (raw: unknown): void => {
       try {
-        const chunk: ChatV2StreamChunk = JSON.parse(raw);
+        const chunk: ChatV2StreamChunk = JSON.parse(String(raw));
         console.debug(
           `[aiChatV2] stream complete event=${chunk.eventType} conv=${
             chunk.conversationId || "(none)"
@@ -170,10 +182,12 @@ export async function streamChatV2Message(
 
     try {
       clearChatV2StreamListeners();
-      activeChunkHandler = chunkHandler;
-      activeCompleteHandler = completeHandler;
-      windowReceive(AI_CHAT_V2_STREAM_CHUNK, chunkHandler);
-      windowReceive(AI_CHAT_V2_STREAM_COMPLETE, completeHandler);
+      activeDetachedResolve = resolve;
+      activeChunkHandler = windowReceive(AI_CHAT_V2_STREAM_CHUNK, chunkHandler);
+      activeCompleteHandler = windowReceive(
+        AI_CHAT_V2_STREAM_COMPLETE,
+        completeHandler
+      );
       void windowSend(AI_CHAT_V2_STREAM, request).catch((err: unknown) => {
         cleanup();
         const error =

@@ -266,6 +266,9 @@ function createEventSink(event: IpcEventLike): AIChatQueryEventSink {
             fullContent: e.fullContent,
             model: e.model,
             finishReason: e.finishReason,
+            promptTokens: e.promptTokens,
+            completionTokens: e.completionTokens,
+            totalTokens: e.totalTokens,
           });
           break;
         case "cancelled":
