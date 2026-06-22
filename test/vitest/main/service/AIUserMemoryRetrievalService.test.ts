@@ -33,7 +33,9 @@ function mem(opts: Partial<AIUserMemoryView>): AIUserMemoryView {
 }
 
 describe("AIUserMemoryRetrievalService", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
 
   it("excludes archived/contradicted memories (module returns active only)", async () => {
     mockListActive.mockResolvedValue([mem({ memoryId: "m1" })]);

@@ -80,7 +80,9 @@ export class AIUserMemoryModel extends BaseDb {
     memoryId: string,
     updates: Partial<AIUserMemoryEntity>
   ): Promise<AIUserMemoryEntity> {
-    await this.repository.update({ memoryId }, updates);
+    // Cast through unknown to avoid TypeORM QueryDeepPartialEntity's
+    // well-known friction with simple-json metadata columns.
+    await this.repository.update({ memoryId }, updates as unknown as never);
     const next = await this.getByMemoryId(memoryId);
     if (!next) throw new Error(`Memory not found: ${memoryId}`);
     return next;
