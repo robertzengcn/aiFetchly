@@ -741,6 +741,68 @@ export class AiChatApi {
   }
 
   /**
+   * When the AICHAT_DEBUG_REQUEST env var is set (e.g. "1" or "true"), log
+   * the request endpoint and payload being sent to the AI server. Sensitive
+   * fields (attachments / screenshots) are truncated to keep logs readable.
+   * Enabled via launch.json env block for debugging only.
+   */
+  private _debugLogRequest(endpoint: string, data: unknown): void {
+    if (
+      process.env.AICHAT_DEBUG_REQUEST !== "true" &&
+      process.env.AICHAT_DEBUG_REQUEST !== "1"
+    ) {
+      return;
+    }
+    try {
+      const safe = this._redactDebugPayload(data);
+      console.log(
+        `[ai-chat-debug] -> ${endpoint}\n` + JSON.stringify(safe, null, 2)
+      );
+    } catch (err) {
+      console.warn(
+        `[ai-chat-debug] failed to serialize payload for ${endpoint}`,
+        err
+      );
+    }
+  }
+
+  /**
+   * Return a copy of the payload with large base64 fields replaced by a
+   * placeholder so request logs stay readable. Does not mutate the original
+   * request payload (immutability rule).
+   */
+  private _redactDebugPayload(data: unknown): unknown {
+    if (data === null || typeof data !== "object") {
+      return data;
+    }
+    if (Array.isArray(data)) {
+      return data.map((item) => this._redactDebugPayload(item));
+    }
+    const redacted: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(
+      data as Record<string, unknown>
+    )) {
+      if (
+        (key === "screenshot" || key === "attachments") &&
+        typeof value === "string" &&
+        value.length > 200
+      ) {
+        redacted[key] = `<base64 len=${value.length}>`;
+      } else if (typeof value === "string" && value.length > 4096) {
+        redacted[key] = `<string len=${value.length}> ${value.slice(
+          0,
+          120
+        )}...`;
+      } else if (value !== null && typeof value === "object") {
+        redacted[key] = this._redactDebugPayload(value);
+      } else {
+        redacted[key] = value;
+      }
+    }
+    return redacted;
+  }
+
+  /**
    * Send a chat message to the remote AI service
    *
    * @param request - Chat request containing message and optional parameters
@@ -771,6 +833,7 @@ export class AiChatApi {
       data.model = request.model;
     }
 
+    this._debugLogRequest("/api/ai/chat/message", data);
     return this._httpClient.postJson("/api/ai/chat/message", data);
   }
 
@@ -823,6 +886,7 @@ export class AiChatApi {
       fetchOptions.signal = options.signal;
     }
 
+    this._debugLogRequest("/api/ai/ask/stream", data);
     const response = await this._httpClient.postStream(
       "/api/ai/ask/stream",
       data,
@@ -866,6 +930,7 @@ export class AiChatApi {
       templateType: request.templateType,
       messageOverride: options?.messageOverride ?? undefined,
     };
+    this._debugLogRequest("/api/ai/email-template/stream", body);
     const response = await this._httpClient.postStream(
       "/api/ai/email-template/stream",
       body
@@ -1078,6 +1143,7 @@ export class AiChatApi {
     requests: BatchKeywordGenerationRequestItem[]
   ): Promise<CommonApiresp<BatchKeywordGenerationResponse>> {
     this.ensureAIEnabled();
+    this._debugLogRequest("/api/ai/keywords/generate/batch", requests);
     return this._httpClient.postJson(
       "/api/ai/keywords/generate/batch",
       requests
@@ -1122,6 +1188,7 @@ export class AiChatApi {
       data.temperature = request.temperature;
     }
 
+    this._debugLogRequest("/api/ai/website/analyze", data);
     return this._httpClient.postJson("/api/ai/website/analyze", data);
   }
 
@@ -1163,6 +1230,7 @@ export class AiChatApi {
       fetchOptions.signal = options.signal;
     }
 
+    this._debugLogRequest("/api/ai/ask/continue", data);
     const response = await this._httpClient.postStream(
       "/api/ai/ask/continue",
       data,
@@ -1381,6 +1449,7 @@ export class AiChatApi {
         : `data:image/png;base64,${screen}`;
     }
 
+    this._debugLogRequest("/api/ai/contact/extract", data);
     return this._httpClient.postJson("/api/ai/contact/extract", data);
   }
 
@@ -1404,6 +1473,7 @@ export class AiChatApi {
     if (ttlSeconds != null) {
       body.ttl_seconds = ttlSeconds;
     }
+    this._debugLogRequest("/api/ai/scrape/screenshot/upload", body);
     return this._httpClient.postJson("/api/ai/scrape/screenshot/upload", body);
   }
 
@@ -1473,6 +1543,7 @@ export class AiChatApi {
         : `data:image/png;base64,${screenshot}`;
     }
 
+    this._debugLogRequest("/api/ai/scrape/assist", data);
     return this._httpClient.postJson("/api/ai/scrape/assist", data);
   }
 
@@ -1554,6 +1625,7 @@ export class AiChatApi {
     if (params.errorInfo != null && params.errorInfo !== "") {
       data.error_info = params.errorInfo;
     }
+    this._debugLogRequest("/api/ai/scrape/observe", data);
     return this._httpClient.postJson("/api/ai/scrape/observe", data);
   }
 
@@ -1565,10 +1637,9 @@ export class AiChatApi {
     success = true
   ): Promise<CommonApiresp<unknown>> {
     this.ensureAIEnabled();
-    return this._httpClient.postJson("/api/ai/scrape/complete", {
-      session_id: sessionId,
-      success,
-    });
+    const payload = { session_id: sessionId, success };
+    this._debugLogRequest("/api/ai/scrape/complete", payload);
+    return this._httpClient.postJson("/api/ai/scrape/complete", payload);
   }
 
   /**
@@ -1603,6 +1674,7 @@ export class AiChatApi {
         : `data:image/png;base64,${request.screenshot}`;
     }
 
+    this._debugLogRequest("/api/ai/puppeteer/recovery", { data });
     return this._httpClient.postJson("/api/ai/puppeteer/recovery", {
       data,
     });
@@ -1732,6 +1804,7 @@ export class AiChatApi {
     if (request.user !== undefined) {
       data.user = request.user;
     }
+    this._debugLogRequest("/api/ai/v1/chat/completions", data);
     return this._httpClient.postJson("/api/ai/v1/chat/completions", data);
   }
 
@@ -1797,6 +1870,12 @@ export class AiChatApi {
     for (let attempt = 0; attempt <= STREAM_RETRY_MAX_ATTEMPTS; attempt += 1) {
       let res: Response;
       try {
+        this._debugLogRequest(
+          `/api/ai/v1/chat/completions${
+            attempt > 0 ? ` (retry ${attempt})` : ""
+          }`,
+          data
+        );
         res = await this._httpClient.postStream(
           "/api/ai/v1/chat/completions",
           data,
@@ -1924,6 +2003,10 @@ export class AiChatApi {
     fetchOptions: RequestInit
   ): Promise<void> {
     const legacyRequest = this.buildLegacyChatRequestFromOpenAI(request);
+    this._debugLogRequest(
+      "/api/ai/ask/stream (legacy fallback)",
+      legacyRequest
+    );
     const response = await this._httpClient.postStream(
       "/api/ai/ask/stream",
       legacyRequest,
@@ -2457,6 +2540,7 @@ export class AiChatApi {
     if (request.return_documents !== undefined) {
       data.return_documents = request.return_documents;
     }
+    this._debugLogRequest("/api/ai/v1/rerank", data);
     return this._httpClient.postJson("/api/ai/v1/rerank", data);
   }
 }

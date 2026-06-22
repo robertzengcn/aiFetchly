@@ -16,7 +16,8 @@
       ],
       "cwd": "${workspaceFolder}",
       "env": {
-        "DISPLAY": ":0"
+        "DISPLAY": ":0",
+        "AICHAT_DEBUG_REQUEST": "1"
       },
       "outFiles": [
         "${workspaceFolder}/.vite/build/**/*.js"
