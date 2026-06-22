@@ -1,6 +1,6 @@
 import { ipcMain } from "electron";
 import { Token } from "@/modules/token";
-import { USER_AI_ENABLED } from "@/config/usersetting";
+import { USER_AI_ENABLED, USER_AI_AUTO_DREAM } from "@/config/usersetting";
 import { AiChatApi } from "@/api/aiChatApi";
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { AIChatPlanModule } from "@/modules/AIChatPlanModule";
@@ -10,6 +10,7 @@ import { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
 import type { AIChatQueryLoopDeps } from "@/service/AIChatQueryLoop";
 import { AIChatQueryEngine } from "@/service/AIChatQueryEngine";
 import { AIChatCompactAgentService } from "@/service/AIChatCompactAgentService";
+import { AIAutoDreamService } from "@/service/AIAutoDreamService";
 import { userSafeError } from "@/service/AIChatErrorMapper";
 import type {
   AIChatQueryEvent,
@@ -64,6 +65,7 @@ type IpcEventLike = {
 
 let queryEngine: AIChatQueryEngine | null = null;
 let compactAgent: AIChatCompactAgentService | null = null;
+let autoDreamService: AIAutoDreamService | null = null;
 
 /** Build the production AIChatQueryLoop with real service deps. */
 function createQueryLoop(): AIChatQueryLoop {
@@ -96,9 +98,23 @@ function getQueryEngine(): AIChatQueryEngine {
     const loop = createQueryLoop();
     queryEngine = new AIChatQueryEngine(loop, {
       compactAgent: getCompactAgent(),
+      autoDreamService: getAutoDreamService(),
     });
   }
   return queryEngine;
+}
+
+function getAutoDreamService(): AIAutoDreamService {
+  if (!autoDreamService) {
+    const tokenService = new Token();
+    autoDreamService = new AIAutoDreamService({
+      completeChat: (request) => new AiChatApi().openAIChatCompletion(request),
+      isAIEnabled: () => tokenService.getValue(USER_AI_ENABLED) === "true",
+      isAutoDreamEnabled: () =>
+        tokenService.getValue(USER_AI_AUTO_DREAM) === "true",
+    });
+  }
+  return autoDreamService;
 }
 
 // -------------------------------------------------------------------------

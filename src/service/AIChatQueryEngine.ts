@@ -10,6 +10,7 @@ import { SkillRegistry } from "@/config/skillsRegistry";
 import { SkillExecutor } from "@/service/SkillExecutor";
 import { AIChatContextAssembler } from "@/service/AIChatContextAssembler";
 import type { AIChatCompactAgentService } from "@/service/AIChatCompactAgentService";
+import type { AIAutoDreamService } from "@/service/AIAutoDreamService";
 import { PlanModeToolRegistry } from "@/service/PlanModeToolRegistry";
 import type { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
 import {
@@ -66,6 +67,9 @@ export interface AIChatQueryEngineDeps {
   /** Optional. When provided, the engine enqueues session memory updates
    * after each completed assistant turn. */
   compactAgent?: AIChatCompactAgentService;
+  /** Optional. When provided, the engine triggers auto-dream consolidation
+   * after each completed assistant turn. Failures are logged and swallowed. */
+  autoDreamService?: AIAutoDreamService;
 }
 
 /**
@@ -81,6 +85,7 @@ export class AIChatQueryEngine {
   private pendingPlanQuestion: PendingPlanQuestionTurn | null = null;
   private readonly contextAssembler: AIChatContextAssembler;
   private readonly compactAgent?: AIChatCompactAgentService;
+  private readonly autoDreamService?: AIAutoDreamService;
   private readonly pendingEventSaves = new WeakMap<
     AIChatQueryEventSink,
     Promise<unknown>[]
@@ -93,6 +98,7 @@ export class AIChatQueryEngine {
     this.contextAssembler =
       deps?.contextAssembler ?? new AIChatContextAssembler();
     this.compactAgent = deps?.compactAgent;
+    this.autoDreamService = deps?.autoDreamService;
   }
 
   /**
@@ -593,6 +599,16 @@ export class AIChatQueryEngine {
               )
             );
         }
+        if (this.autoDreamService) {
+          this.autoDreamService
+            .evaluateAfterChatTurn({
+              conversationId,
+              reason: "assistant_turn_completed",
+            })
+            .catch((err) =>
+              console.error("[ai-auto-dream] chat trigger failed:", err)
+            );
+        }
         this.clearActiveTurnState();
         break;
       }
@@ -727,7 +743,9 @@ export class AIChatQueryEngine {
     return wrapped;
   }
 
-  private async flushEventSaves(eventSink: AIChatQueryEventSink): Promise<void> {
+  private async flushEventSaves(
+    eventSink: AIChatQueryEventSink
+  ): Promise<void> {
     const saves = this.pendingEventSaves.get(eventSink);
     if (!saves || saves.length === 0) {
       return;
