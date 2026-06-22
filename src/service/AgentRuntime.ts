@@ -13,6 +13,7 @@ import { AgentPromptBuilder } from "@/service/AgentPromptBuilder";
 import { AgentOutputParser } from "@/service/AgentOutputParser";
 import { AgentTranscriptService } from "@/service/AgentTranscriptService";
 import { AgentToolPolicyService } from "@/service/AgentToolPolicyService";
+import type { AIAutoDreamService } from "@/service/AIAutoDreamService";
 import type {
   AgentDefinitionView,
   AgentResult,
@@ -43,6 +44,9 @@ export interface AgentRuntimeDeps {
   getSkillDefinition?: AIChatQueryLoopDeps["getSkillDefinition"];
   /** Inject an event sink for streaming (foreground only). */
   eventSink?: AIChatQueryEventSink;
+  /** Optional. When provided, the runtime triggers auto-dream consolidation
+   * after a completed task. Failures are logged and swallowed. */
+  autoDreamService?: AIAutoDreamService;
 }
 
 /**
@@ -361,6 +365,16 @@ export class AgentRuntime {
     });
     const snap = await this.taskModule.getSnapshot(agentTaskId);
     result.toolCallsCount = snap?.toolCallsCount ?? 0;
+    if (deps?.autoDreamService) {
+      deps.autoDreamService
+        .evaluateAfterAgentTask({
+          agentTaskId,
+          reason: "agent_task_completed",
+        })
+        .catch((err) =>
+          console.error("[ai-auto-dream] agent trigger failed:", err)
+        );
+    }
     return result;
   }
 
