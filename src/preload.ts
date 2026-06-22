@@ -292,6 +292,14 @@ import {
   EMAIL_SEARCH_TASK_START,
   UPDATEEMAILSEARCHTASK,
   DELETEEMAILSEARCHTASK,
+  // AI user memory (durable cross-session memory)
+  AI_USER_MEMORY_LIST,
+  AI_USER_MEMORY_CREATE,
+  AI_USER_MEMORY_UPDATE,
+  AI_USER_MEMORY_ARCHIVE,
+  AI_USER_MEMORY_DELETE,
+  AI_USER_MEMORY_RUN_AUTO_DREAM,
+  AI_USER_MEMORY_AUTO_DREAM_STATUS,
 } from "@/config/channellist";
 
 // window.ipcRenderer = ipcRenderer
@@ -760,6 +768,14 @@ contextBridge.exposeInMainWorld("api", {
       // Email Search Task Edit/Delete Channels
       UPDATEEMAILSEARCHTASK,
       DELETEEMAILSEARCHTASK,
+      // AI user memory (durable cross-session memory)
+      AI_USER_MEMORY_LIST,
+      AI_USER_MEMORY_CREATE,
+      AI_USER_MEMORY_UPDATE,
+      AI_USER_MEMORY_ARCHIVE,
+      AI_USER_MEMORY_DELETE,
+      AI_USER_MEMORY_RUN_AUTO_DREAM,
+      AI_USER_MEMORY_AUTO_DREAM_STATUS,
     ];
     if (validChannels.includes(channel)) {
       return ipcRenderer.invoke(channel, data);
