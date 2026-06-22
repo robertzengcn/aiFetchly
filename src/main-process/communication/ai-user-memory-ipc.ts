@@ -1,11 +1,8 @@
 import { ipcMain } from "electron";
 import { Token } from "@/modules/token";
 import { USER_AI_ENABLED } from "@/config/usersetting";
-import { SystemSettingModule } from "@/modules/SystemSettingModule";
-import { ai_auto_dream_enabled } from "@/config/settinggroupInit";
 import { AIUserMemoryService } from "@/service/AIUserMemoryService";
-import { AIAutoDreamService } from "@/service/AIAutoDreamService";
-import { AiChatApi } from "@/api/aiChatApi";
+import { getSharedAutoDreamService } from "@/service/AIAutoDreamFactory";
 import {
   AI_USER_MEMORY_LIST,
   AI_USER_MEMORY_CREATE,
@@ -31,40 +28,12 @@ function denied<T>(msg: string): CommonMessage<T> {
 }
 
 let memoryService: AIUserMemoryService | null = null;
-let autoDreamService: AIAutoDreamService | null = null;
 
 function getMemoryService(): AIUserMemoryService {
   if (!memoryService) {
     memoryService = new AIUserMemoryService();
   }
   return memoryService;
-}
-
-function getAutoDreamService(): AIAutoDreamService {
-  if (!autoDreamService) {
-    const tokenService = new Token();
-    autoDreamService = new AIAutoDreamService({
-      completeChat: (request) => new AiChatApi().openAIChatCompletion(request),
-      isAIEnabled: () => tokenService.getValue(USER_AI_ENABLED) === "true",
-      // Reads the user-controllable toggle from the system_setting table.
-      // Default-on when the row is absent.
-      isAutoDreamEnabled: async () => {
-        try {
-          const v = await new SystemSettingModule().getSettingValue(
-            ai_auto_dream_enabled
-          );
-          return v !== "false";
-        } catch (err) {
-          console.error(
-            "[ai-auto-dream] failed to read system_setting toggle:",
-            err
-          );
-          return true;
-        }
-      },
-    });
-  }
-  return autoDreamService;
 }
 
 function isAIEnabled(): boolean {
@@ -81,12 +50,11 @@ function safeParse<T = unknown>(data: unknown): T | null {
 }
 
 /**
- * Test-only: drop the cached service singletons so the next handler call
- * rebuilds them against freshly installed mocks. Never call from production.
+ * Test-only: drop the cached memory service singleton so the next handler
+ * call rebuilds it against freshly installed mocks. Never call from production.
  */
 export function _resetAIUserMemorySingletonsForTesting(): void {
   memoryService = null;
-  autoDreamService = null;
 }
 
 export function registerAIUserMemoryIpcHandlers(): void {
@@ -157,7 +125,7 @@ export function registerAIUserMemoryIpcHandlers(): void {
       const req = (safeParse<{ force?: boolean }>(data) ?? {}) as {
         force?: boolean;
       };
-      const result = await getAutoDreamService().runNow({
+      const result = await getSharedAutoDreamService().runNow({
         force: req.force === true,
         reason: "manual_ipc",
       });
@@ -169,7 +137,7 @@ export function registerAIUserMemoryIpcHandlers(): void {
 
   ipcMain.handle(AI_USER_MEMORY_AUTO_DREAM_STATUS, async () => {
     try {
-      const result = await getAutoDreamService().getStatus();
+      const result = await getSharedAutoDreamService().getStatus();
       return ok(result);
     } catch (err) {
       return denied(err instanceof Error ? err.message : "status failed");

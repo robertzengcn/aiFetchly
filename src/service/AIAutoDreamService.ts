@@ -6,7 +6,10 @@ import {
   buildAutoDreamUserPrompt,
   parseAutoDreamModelOutput,
 } from "@/service/AIAutoDreamPromptBuilder";
-import type { AIMemoryConsolidationRunView } from "@/entityTypes/aiUserMemoryTypes";
+import type {
+  AIMemoryConsolidationRunView,
+  AIAutoDreamStatusView,
+} from "@/entityTypes/aiUserMemoryTypes";
 import type {
   OpenAIChatCompletionRequest,
   OpenAIChatCompletionResponse,
@@ -24,13 +27,6 @@ export interface AIAutoDreamServiceDeps {
   /** Resolves to the user-controllable auto-dream toggle. Reads from the
    * system_setting table; defaults to enabled when the row is absent. */
   isAutoDreamEnabled(): Promise<boolean>;
-}
-
-export interface AIAutoDreamStatusView {
-  aiEnabled: boolean;
-  autoDreamEnabled: boolean;
-  latestRun?: AIMemoryConsolidationRunView;
-  runningRun?: AIMemoryConsolidationRunView;
 }
 
 export class AIAutoDreamService {
