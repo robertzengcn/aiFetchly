@@ -1,8 +1,6 @@
 import { ipcMain } from "electron";
 import { Token } from "@/modules/token";
 import { USER_AI_ENABLED } from "@/config/usersetting";
-import { SystemSettingModule } from "@/modules/SystemSettingModule";
-import { ai_auto_dream_enabled } from "@/config/settinggroupInit";
 import { AiChatApi } from "@/api/aiChatApi";
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { AIChatPlanModule } from "@/modules/AIChatPlanModule";
@@ -12,7 +10,7 @@ import { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
 import type { AIChatQueryLoopDeps } from "@/service/AIChatQueryLoop";
 import { AIChatQueryEngine } from "@/service/AIChatQueryEngine";
 import { AIChatCompactAgentService } from "@/service/AIChatCompactAgentService";
-import { AIAutoDreamService } from "@/service/AIAutoDreamService";
+import { getSharedAutoDreamService } from "@/service/AIAutoDreamFactory";
 import { userSafeError } from "@/service/AIChatErrorMapper";
 import type {
   AIChatQueryEvent,
@@ -67,7 +65,6 @@ type IpcEventLike = {
 
 let queryEngine: AIChatQueryEngine | null = null;
 let compactAgent: AIChatCompactAgentService | null = null;
-let autoDreamService: AIAutoDreamService | null = null;
 
 /** Build the production AIChatQueryLoop with real service deps. */
 function createQueryLoop(): AIChatQueryLoop {
@@ -100,37 +97,10 @@ function getQueryEngine(): AIChatQueryEngine {
     const loop = createQueryLoop();
     queryEngine = new AIChatQueryEngine(loop, {
       compactAgent: getCompactAgent(),
-      autoDreamService: getAutoDreamService(),
+      autoDreamService: getSharedAutoDreamService(),
     });
   }
   return queryEngine;
-}
-
-function getAutoDreamService(): AIAutoDreamService {
-  if (!autoDreamService) {
-    const tokenService = new Token();
-    autoDreamService = new AIAutoDreamService({
-      completeChat: (request) => new AiChatApi().openAIChatCompletion(request),
-      isAIEnabled: () => tokenService.getValue(USER_AI_ENABLED) === "true",
-      // Reads the user-controllable toggle from the system_setting table.
-      // Default-on when the row is absent (matches the seeded default).
-      isAutoDreamEnabled: async () => {
-        try {
-          const v = await new SystemSettingModule().getSettingValue(
-            ai_auto_dream_enabled
-          );
-          return v !== "false";
-        } catch (err) {
-          console.error(
-            "[ai-auto-dream] failed to read system_setting toggle:",
-            err
-          );
-          return true;
-        }
-      },
-    });
-  }
-  return autoDreamService;
 }
 
 // -------------------------------------------------------------------------

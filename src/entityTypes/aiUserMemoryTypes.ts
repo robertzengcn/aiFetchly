@@ -49,13 +49,15 @@ export const MEMORY_RUN_STATUSES: readonly AIMemoryConsolidationStatus[] = [
 
 export function isAIUserMemoryType(v: unknown): v is AIUserMemoryType {
   return (
-    typeof v === "string" && (AI_USER_MEMORY_TYPES as readonly string[]).includes(v)
+    typeof v === "string" &&
+    (AI_USER_MEMORY_TYPES as readonly string[]).includes(v)
   );
 }
 
 export function isAIUserMemoryStatus(v: unknown): v is AIUserMemoryStatus {
   return (
-    typeof v === "string" && (AI_USER_MEMORY_STATUSES as readonly string[]).includes(v)
+    typeof v === "string" &&
+    (AI_USER_MEMORY_STATUSES as readonly string[]).includes(v)
   );
 }
 
@@ -140,4 +142,11 @@ export interface AIMemoryInjectionResult {
   memories: AIUserMemoryView[];
   tokenEstimate: number;
   contextBlock: string;
+}
+
+export interface AIAutoDreamStatusView {
+  aiEnabled: boolean;
+  autoDreamEnabled: boolean;
+  latestRun?: AIMemoryConsolidationRunView;
+  runningRun?: AIMemoryConsolidationRunView;
 }

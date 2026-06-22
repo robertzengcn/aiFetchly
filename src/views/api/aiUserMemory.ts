@@ -4,6 +4,7 @@ import type {
   AIUserMemorySearchInput,
   AIUserMemoryView,
   AIMemoryConsolidationRunView,
+  AIAutoDreamStatusView,
 } from "@/entityTypes/aiUserMemoryTypes";
 import type { CommonMessage } from "@/entityTypes/commonType";
 
@@ -64,10 +65,11 @@ export const aiUserMemoryApi = {
     call<AIUserMemoryView>(CH.CREATE, input),
   update: (input: AIUserMemoryUpdateInput) =>
     call<AIUserMemoryView>(CH.UPDATE, input),
-  archive: (memoryId: string) => call<null>(CH.ARCHIVE, JSON.stringify(memoryId)),
+  archive: (memoryId: string) =>
+    call<null>(CH.ARCHIVE, JSON.stringify(memoryId)),
   delete: (memoryId: string) =>
     call<number>(CH.DELETE, JSON.stringify(memoryId)),
   runAutoDream: (input: { force?: boolean } = {}) =>
     call<AIMemoryConsolidationRunView>(CH.RUN_AUTO_DREAM, input),
-  autoDreamStatus: () => call<unknown>(CH.AUTO_DREAM_STATUS),
+  autoDreamStatus: () => call<AIAutoDreamStatusView>(CH.AUTO_DREAM_STATUS),
 };

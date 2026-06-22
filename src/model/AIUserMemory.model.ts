@@ -60,7 +60,10 @@ export class AIUserMemoryModel extends BaseDb {
       qb.andWhere("m.sourceKind = :sk", { sk: input.sourceKind });
     if (input.query) {
       const like = `%${escapeLike(input.query)}%`;
-      qb.andWhere("(m.title LIKE :q OR m.content LIKE :q)", { q: like });
+      qb.andWhere(
+        "(m.title LIKE :q ESCAPE '\\' OR m.content LIKE :q ESCAPE '\\')",
+        { q: like }
+      );
     }
     const limit = clampLimit(input.limit, 50, 200);
     const offset = Math.max(0, input.offset ?? 0);

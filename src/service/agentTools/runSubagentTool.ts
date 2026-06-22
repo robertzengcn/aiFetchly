@@ -1,6 +1,9 @@
 // src/service/agentTools/runSubagentTool.ts
 import type { SkillDefinition } from "@/entityTypes/skillTypes";
-import { AgentRuntimeRegistry } from "@/service/AgentRuntimeRegistry";
+import {
+  AgentRuntimeRegistry,
+  getDefaultAgentRuntimeDeps,
+} from "@/service/AgentRuntimeRegistry";
 import type {
   AgentTaskPacket,
   RunAgentRequest,
@@ -62,7 +65,7 @@ export const RUN_SUBAGENT_TOOL: SkillDefinition = {
         | undefined,
     };
     const runtime = AgentRuntimeRegistry.getRuntime();
-    const result = await runtime.runSync(request);
+    const result = await runtime.runSync(request, getDefaultAgentRuntimeDeps());
     return {
       success: result.status === "completed",
       result: {
