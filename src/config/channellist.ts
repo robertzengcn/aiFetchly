@@ -398,6 +398,7 @@ export const PLUGIN_TOGGLE_MCP_SERVER = "plugin:toggle-mcp-server";
 export const PLUGIN_TOGGLE_MCP_TOOL = "plugin:toggle-mcp-tool";
 export const PLUGIN_TEST_MCP_CONNECTION = "plugin:test-mcp-connection";
 export const PLUGIN_DISCOVER_MCP_TOOLS = "plugin:discover-mcp-tools";
+export const PLUGIN_INSTALL_FROM_SOURCE = "plugin:install-from-source";
 
 // AI user memory (durable cross-session memory)
 export const AI_USER_MEMORY_LIST = "ai:user-memory:list";
@@ -406,4 +407,5 @@ export const AI_USER_MEMORY_UPDATE = "ai:user-memory:update";
 export const AI_USER_MEMORY_ARCHIVE = "ai:user-memory:archive";
 export const AI_USER_MEMORY_DELETE = "ai:user-memory:delete";
 export const AI_USER_MEMORY_RUN_AUTO_DREAM = "ai:user-memory:auto-dream:run";
-export const AI_USER_MEMORY_AUTO_DREAM_STATUS = "ai:user-memory:auto-dream:status";
+export const AI_USER_MEMORY_AUTO_DREAM_STATUS =
+  "ai:user-memory:auto-dream:status";

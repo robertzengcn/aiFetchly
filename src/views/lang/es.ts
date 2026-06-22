@@ -1800,6 +1800,8 @@ export default {
     clear_conversation: "Borrar conversación",
     clear_all: "Borrar todo",
     clear_chat: "Borrar chat",
+    compact_conversation: "Compactar conversación",
+    compact_completed: "Conversación compactada en memoria.",
     context_usage: "Contexto",
     context_usage_tooltip: "{used} / {total} tokens ({percent}%)",
     loading_models: "Cargando modelos…",
@@ -1812,6 +1814,11 @@ export default {
     ai_disabled:
       "La funcionalidad de IA solo está disponible para suscriptores.",
     model_unavailable: "El modelo seleccionado no está disponible.",
+    model_selector_label: "Modelo",
+    model_loading: "Cargando modelos…",
+    model_none_available: "No hay modelos disponibles",
+    model_auto: "Automático",
+    model_auto_default: "Predeterminado",
     server_unavailable: "No se pudo conectar al servidor de IA.",
     unsupported_tool_call:
       "El asistente solicitó una herramienta que aún no se admite.",
@@ -1832,6 +1839,8 @@ export default {
       "No se pudo continuar la herramienta después de conceder el permiso.",
     permission_resume_no_tool_id:
       "Falta la información de la llamada de herramienta; no se puede continuar.",
+    quota_exhausted:
+      "Los tokens de IA incluidos en su plan de suscripción se han agotado. Recargue su cuenta para seguir utilizando las funciones de IA.",
   },
   aiChatV2Plan: {
     mode_chat: "Chat",
@@ -1858,6 +1867,7 @@ export default {
   plugins: {
     title: "Complementos",
     import_button: "Importar complemento",
+    install_button: "Instalar",
     validate_button: "Validar paquete",
     reload_button: "Recargar",
     column_plugin: "Complemento",
@@ -1883,12 +1893,14 @@ export default {
     tab_permissions: "Permisos",
     tab_diagnostics: "Diagnóstico",
     tab_manifest: "Manifiesto",
-    uninstall_confirm: "¿Desinstalar este complemento? Se eliminan sus habilidades y servidores MCP.",
+    uninstall_confirm:
+      "¿Desinstalar este complemento? Se eliminan sus habilidades y servidores MCP.",
     uninstall_button: "Desinstalar",
     import_validation_failed: "Validación del paquete fallida",
     import_success: "Complemento importado",
     import_failed: "Importación fallida",
-    empty_state: "No hay complementos instalados. Haz clic en Importar complemento.",
+    empty_state:
+      "No hay complementos instalados. Haz clic en Importar complemento.",
     select_zip: "Selecciona un archivo .zip de complemento",
     validating: "Validando…",
     discover_tools: "Descubrir herramientas",
@@ -1897,5 +1909,35 @@ export default {
     diagnostics_copied: "Diagnóstico copiado al portapapeles",
     enabled_label: "Habilitado",
     via_plugin: "vía complemento: {name}",
+    install_source: {
+      button: "Instalar desde origen",
+      title: "Instalar complemento desde origen",
+      kind_label: "Tipo de origen",
+      kind_local_zip: "Zip local",
+      kind_local_folder: "Carpeta local",
+      kind_git: "Git",
+      kind_github: "GitHub",
+      kind_npm: "npm",
+      kind_url: "URL",
+      zip_label: "Elegir .zip",
+      folder_label: "Elegir carpeta",
+      folder_hint:
+        "Tu carpeta de origen se copiará a la caché de complementos y nunca se modificará.",
+      git_url: "URL de Git (https o ssh)",
+      git_ref: "Rama / etiqueta / commit (opcional)",
+      github_url: "URL de repositorio o asset de release de GitHub",
+      github_ref: "Rama / etiqueta (opcional)",
+      npm_package: "Nombre del paquete (p. ej. @scope/pkg)",
+      npm_version: "Versión (opcional)",
+      npm_registry: "URL del registro (opcional, HTTPS)",
+      npm_token: "Token de autenticación (opcional, no se guarda)",
+      npm_token_hint:
+        "Se usa una sola vez para esta instalación; no se persiste.",
+      url_label: "URL (.zip, git o URL de GitHub)",
+      url_hint:
+        "Detección automática: descarga .zip, clona URLs git, las URLs de GitHub usan el flujo de releases.",
+      install_failed: "Falló la instalación.",
+      source_kind: "Origen de instalación",
+    },
   },
 };

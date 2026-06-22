@@ -65,4 +65,20 @@ export class InstalledPluginEntity extends AuditableEntity {
   @Order(13)
   @Column("text", { default: "[]" })
   lastLoadErrorsJson: string;
+
+  @Order(14)
+  @Column("text", { default: "local-zip" })
+  sourceKind: string; // PluginSourceKind
+
+  @Order(15)
+  @Column("text", { nullable: true })
+  sourceUri?: string;
+
+  @Order(16)
+  @Column("text", { nullable: true })
+  sourceRef?: string;
+
+  @Order(17)
+  @Column("text", { default: "{}" })
+  sourceMetaJson: string;
 }

@@ -132,6 +132,7 @@ import {
   PLUGIN_TOGGLE,
   PLUGIN_UNINSTALL,
   PLUGIN_RELOAD,
+  PLUGIN_INSTALL_FROM_SOURCE,
 } from "@/config/channellist";
 
 describe("plugin-ipc", () => {
@@ -147,6 +148,7 @@ describe("plugin-ipc", () => {
     expect(handlers.has(PLUGIN_TOGGLE)).toBe(true);
     expect(handlers.has(PLUGIN_UNINSTALL)).toBe(true);
     expect(handlers.has(PLUGIN_RELOAD)).toBe(true);
+    expect(handlers.has(PLUGIN_INSTALL_FROM_SOURCE)).toBe(true);
   });
 
   it("returns AI-not-enabled envelope when AI is disabled", async () => {
@@ -194,6 +196,50 @@ describe("plugin-ipc", () => {
           }),
         ],
       },
+    });
+  });
+
+  it("PLUGIN_INSTALL_FROM_SOURCE rejects an invalid kind", async () => {
+    aiEnabledValue = "true";
+    const fn = handlers.get(PLUGIN_INSTALL_FROM_SOURCE)!;
+    const result = await fn({}, { kind: "marketplace-typo" });
+    expect(result).toMatchObject({
+      status: false,
+      msg: expect.stringContaining("kind"),
+    });
+  });
+
+  it("PLUGIN_INSTALL_FROM_SOURCE rejects missing kind", async () => {
+    aiEnabledValue = "true";
+    const fn = handlers.get(PLUGIN_INSTALL_FROM_SOURCE)!;
+    const result = await fn({}, {});
+    expect(result).toMatchObject({ status: false });
+  });
+
+  it("PLUGIN_INSTALL_FROM_SOURCE rejects CRLF in uri", async () => {
+    aiEnabledValue = "true";
+    const fn = handlers.get(PLUGIN_INSTALL_FROM_SOURCE)!;
+    const result = await fn(
+      {},
+      {
+        kind: "git",
+        uri: "https://example.com/x.git\r\n--upload-pack=evil",
+      }
+    );
+    expect(result).toMatchObject({
+      status: false,
+      msg: expect.stringContaining("Invalid characters"),
+    });
+  });
+
+  it("PLUGIN_INSTALL_FROM_SOURCE returns AI-not-enabled when AI disabled", async () => {
+    aiEnabledValue = "false";
+    const fn = handlers.get(PLUGIN_INSTALL_FROM_SOURCE)!;
+    const result = await fn({}, { kind: "local-folder", folderPath: "/tmp" });
+    expect(result).toEqual({
+      status: false,
+      msg: expect.stringContaining("not enabled"),
+      data: null,
     });
   });
 });

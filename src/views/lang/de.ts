@@ -1793,6 +1793,8 @@ export default {
     clear_conversation: "Unterhaltung löschen",
     clear_all: "Alles löschen",
     clear_chat: "Chat löschen",
+    compact_conversation: "Unterhaltung komprimieren",
+    compact_completed: "Unterhaltung wurde in den Speicher komprimiert.",
     context_usage: "Kontext",
     context_usage_tooltip: "{used} / {total} Tokens ({percent}%)",
     loading_models: "Modelle werden geladen…",
@@ -1804,6 +1806,11 @@ export default {
     cancelled: "Abgebrochen",
     ai_disabled: "KI-Funktionen stehen nur Abonnenten zur Verfügung.",
     model_unavailable: "Ausgewähltes Modell nicht verfügbar.",
+    model_selector_label: "Modell",
+    model_loading: "Modelle werden geladen…",
+    model_none_available: "Keine Modelle verfügbar",
+    model_auto: "Automatisch",
+    model_auto_default: "Standard",
     server_unavailable: "Verbindung zum KI-Server nicht möglich.",
     unsupported_tool_call:
       "Der Assistent hat ein noch nicht unterstütztes Werkzeug angefordert.",
@@ -1826,6 +1833,8 @@ export default {
       "Das Werkzeug konnte nach der Freigabe nicht fortgesetzt werden.",
     permission_resume_no_tool_id:
       "Werkzeugaufrufinformationen fehlen; Fortsetzung nicht möglich.",
+    quota_exhausted:
+      "Die in Ihrem Abonnement enthaltenen KI-Token sind aufgebraucht. Bitte laden Sie Ihr Konto auf, um die KI-Funktionen weiterhin zu nutzen.",
   },
   aiChatV2Plan: {
     mode_chat: "Chat",
@@ -1852,6 +1861,7 @@ export default {
   plugins: {
     title: "Plugins",
     import_button: "Plugin importieren",
+    install_button: "Installieren",
     validate_button: "Paket validieren",
     reload_button: "Neu laden",
     column_plugin: "Plugin",
@@ -1877,12 +1887,14 @@ export default {
     tab_permissions: "Berechtigungen",
     tab_diagnostics: "Diagnose",
     tab_manifest: "Manifest",
-    uninstall_confirm: "Dieses Plugin deinstallieren? Skills und MCP-Server werden entfernt.",
+    uninstall_confirm:
+      "Dieses Plugin deinstallieren? Skills und MCP-Server werden entfernt.",
     uninstall_button: "Deinstallieren",
     import_validation_failed: "Paketvalidierung fehlgeschlagen",
     import_success: "Plugin importiert",
     import_failed: "Import fehlgeschlagen",
-    empty_state: "Keine Plugins installiert. Klicken Sie auf „Plugin importieren“.",
+    empty_state:
+      "Keine Plugins installiert. Klicken Sie auf „Plugin importieren“.",
     select_zip: "Plugin-.zip-Datei auswählen",
     validating: "Validiere…",
     discover_tools: "Werkzeuge erkennen",
@@ -1891,5 +1903,35 @@ export default {
     diagnostics_copied: "Diagnose in Zwischenablage kopiert",
     enabled_label: "Aktiviert",
     via_plugin: "über Plugin: {name}",
+    install_source: {
+      button: "Aus Quelle installieren",
+      title: "Plugin aus Quelle installieren",
+      kind_label: "Quelltyp",
+      kind_local_zip: "Lokales Zip",
+      kind_local_folder: "Lokaler Ordner",
+      kind_git: "Git",
+      kind_github: "GitHub",
+      kind_npm: "npm",
+      kind_url: "URL",
+      zip_label: ".zip wählen",
+      folder_label: "Ordner wählen",
+      folder_hint:
+        "Ihr Quellordner wird in den Plugin-Cache kopiert und nie verändert.",
+      git_url: "Git-URL (https oder ssh)",
+      git_ref: "Branch / Tag / Commit (optional)",
+      github_url: "GitHub-Repo- oder Release-Asset-URL",
+      github_ref: "Branch / Tag (optional)",
+      npm_package: "Paketname (z. B. @scope/pkg)",
+      npm_version: "Version (optional)",
+      npm_registry: "Registry-URL (optional, HTTPS)",
+      npm_token: "Authentifizierungs-Token (optional, wird nicht gespeichert)",
+      npm_token_hint:
+        "Wird nur für diese Installation verwendet; nicht dauerhaft gespeichert.",
+      url_label: "URL (.zip, git oder GitHub-URL)",
+      url_hint:
+        "Automatische Erkennung: .zip wird heruntergeladen, git-URLs geklont, GitHub-URLs nutzen den Release-Flow.",
+      install_failed: "Installation fehlgeschlagen.",
+      source_kind: "Installationsquelle",
+    },
   },
 };

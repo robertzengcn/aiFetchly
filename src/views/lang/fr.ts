@@ -1782,6 +1782,8 @@ export default {
     clear_conversation: "Effacer la conversation",
     clear_all: "Tout effacer",
     clear_chat: "Effacer le chat",
+    compact_conversation: "Compacter la conversation",
+    compact_completed: "Conversation compactée en mémoire.",
     context_usage: "Contexte",
     context_usage_tooltip: "{used} / {total} tokens ({percent}%)",
     loading_models: "Chargement des modèles…",
@@ -1793,6 +1795,11 @@ export default {
     cancelled: "Annulé",
     ai_disabled: "Les fonctionnalités d'IA sont réservées aux abonnés.",
     model_unavailable: "Le modèle sélectionné n'est pas disponible.",
+    model_selector_label: "Modèle",
+    model_loading: "Chargement des modèles…",
+    model_none_available: "Aucun modèle disponible",
+    model_auto: "Auto",
+    model_auto_default: "Par défaut",
     server_unavailable: "Impossible de se connecter au serveur IA.",
     unsupported_tool_call:
       "L'assistant a demandé un outil non encore pris en charge.",
@@ -1814,6 +1821,8 @@ export default {
       "Impossible de reprendre l'outil après l'autorisation.",
     permission_resume_no_tool_id:
       "Informations d'appel d'outil manquantes ; impossible de continuer.",
+    quota_exhausted:
+      "Les jetons IA inclus dans votre abonnement sont épuisés. Veuillez recharger votre compte pour continuer à utiliser les fonctions IA.",
   },
   aiChatV2Plan: {
     mode_chat: "Chat",
@@ -1840,6 +1849,7 @@ export default {
   plugins: {
     title: "Plugins",
     import_button: "Importer un plugin",
+    install_button: "Installer",
     validate_button: "Valider le paquet",
     reload_button: "Recharger",
     column_plugin: "Plugin",
@@ -1865,7 +1875,8 @@ export default {
     tab_permissions: "Permissions",
     tab_diagnostics: "Diagnostics",
     tab_manifest: "Manifeste",
-    uninstall_confirm: "Désinstaller ce plugin ? Ses compétences et serveurs MCP seront supprimés.",
+    uninstall_confirm:
+      "Désinstaller ce plugin ? Ses compétences et serveurs MCP seront supprimés.",
     uninstall_button: "Désinstaller",
     import_validation_failed: "Validation du paquet échouée",
     import_success: "Plugin importé",
@@ -1879,5 +1890,35 @@ export default {
     diagnostics_copied: "Diagnostics copiés dans le presse-papiers",
     enabled_label: "Activé",
     via_plugin: "via plugin : {name}",
+    install_source: {
+      button: "Installer depuis la source",
+      title: "Installer le plugin depuis la source",
+      kind_label: "Type de source",
+      kind_local_zip: "Zip local",
+      kind_local_folder: "Dossier local",
+      kind_git: "Git",
+      kind_github: "GitHub",
+      kind_npm: "npm",
+      kind_url: "URL",
+      zip_label: "Choisir un .zip",
+      folder_label: "Choisir un dossier",
+      folder_hint:
+        "Votre dossier source sera copié dans le cache des plugins et ne sera jamais modifié.",
+      git_url: "URL Git (https ou ssh)",
+      git_ref: "Branche / tag / commit (optionnel)",
+      github_url: "URL de dépôt ou d'asset de release GitHub",
+      github_ref: "Branche / tag (optionnel)",
+      npm_package: "Nom du paquet (ex. @scope/pkg)",
+      npm_version: "Version (optionnel)",
+      npm_registry: "URL du registre (optionnel, HTTPS)",
+      npm_token: "Jeton d'authentification (optionnel, non stocké)",
+      npm_token_hint:
+        "Utilisé une seule fois pour cette installation ; non persisté.",
+      url_label: "URL (.zip, git ou URL GitHub)",
+      url_hint:
+        "Détection auto : .zip téléchargé, URL git clonée, les URLs GitHub passent par le flux release.",
+      install_failed: "Échec de l'installation.",
+      source_kind: "Source d'installation",
+    },
   },
 };
