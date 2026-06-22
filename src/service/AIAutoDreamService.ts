@@ -21,7 +21,9 @@ export interface AIAutoDreamServiceDeps {
     request: OpenAIChatCompletionRequest
   ): Promise<OpenAIChatCompletionResponse>;
   isAIEnabled(): boolean;
-  isAutoDreamEnabled(): boolean;
+  /** Resolves to the user-controllable auto-dream toggle. Reads from the
+   * system_setting table; defaults to enabled when the row is absent. */
+  isAutoDreamEnabled(): Promise<boolean>;
 }
 
 export interface AIAutoDreamStatusView {
@@ -80,13 +82,14 @@ export class AIAutoDreamService {
   }
 
   async getStatus(): Promise<AIAutoDreamStatusView> {
-    const [latest, running] = await Promise.all([
+    const [latest, running, autoDreamEnabled] = await Promise.all([
       this.runModule.getLatestSuccessfulRun(),
       this.runModule.getRunningRun(),
+      this.deps.isAutoDreamEnabled(),
     ]);
     return {
       aiEnabled: this.deps.isAIEnabled(),
-      autoDreamEnabled: this.deps.isAutoDreamEnabled(),
+      autoDreamEnabled,
       latestRun: latest ?? undefined,
       runningRun: running ?? undefined,
     };
@@ -111,7 +114,7 @@ export class AIAutoDreamService {
     reason: string;
   }): Promise<AIMemoryConsolidationRunView | null> {
     if (!this.deps.isAIEnabled()) return null;
-    if (!this.deps.isAutoDreamEnabled() && !input.force) return null;
+    if (!(await this.deps.isAutoDreamEnabled()) && !input.force) return null;
 
     const staleBefore = new Date(Date.now() - RUNNING_STALE_MS);
     await this.runModule.recoverStaleRunningRuns(staleBefore);
@@ -123,8 +126,7 @@ export class AIAutoDreamService {
     if (!input.force) {
       const latest = await this.runModule.getLatestSuccessfulRun();
       if (latest?.finishedAt) {
-        const elapsedMs =
-          Date.now() - new Date(latest.finishedAt).getTime();
+        const elapsedMs = Date.now() - new Date(latest.finishedAt).getTime();
         if (elapsedMs < MIN_HOURS_BETWEEN_RUNS * 60 * 60 * 1000) return null;
       }
       if (latest?.reviewedThrough) {

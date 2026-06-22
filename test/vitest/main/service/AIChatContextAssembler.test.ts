@@ -32,6 +32,13 @@ vi.mock("@/service/AIUserMemoryRetrievalService", () => ({
   })),
 }));
 
+const mockGetSettingValue = vi.fn();
+vi.mock("@/modules/SystemSettingModule", () => ({
+  SystemSettingModule: vi.fn().mockImplementation(() => ({
+    getSettingValue: mockGetSettingValue,
+  })),
+}));
+
 vi.mock("@/modules/token", () => ({
   Token: vi.fn().mockImplementation(() => ({ getValue: vi.fn() })),
 }));
@@ -56,6 +63,8 @@ describe("AIChatContextAssembler", () => {
       tokenEstimate: 0,
       contextBlock: "",
     });
+    // Memory injection defaults to enabled (system_setting absent → true).
+    mockGetSettingValue.mockResolvedValue(null);
   });
 
   it("puts system prompt first and current user message last", async () => {
@@ -271,6 +280,22 @@ describe("AIChatContextAssembler", () => {
         m.content.startsWith("Durable user memory")
     );
     expect(durable).toBeUndefined();
+    expect(r.usedDurableMemory).toBe(false);
+  });
+
+  it("does not inject durable memory when user has disabled the setting", async () => {
+    mockGetByConversation.mockResolvedValue(null);
+    mockGetActiveSummary.mockResolvedValue(null);
+    mockGetConversationMessages.mockResolvedValue([]);
+    mockGetSettingValue.mockResolvedValue("false");
+    const asm = new AIChatContextAssembler();
+    const r = await asm.assemble({
+      conversationId: "v2-x",
+      currentUserMessage: "hi",
+      baseSystemPrompt: "sysp",
+      mode: "chat",
+    });
+    expect(mockDurableRetrieve).not.toHaveBeenCalled();
     expect(r.usedDurableMemory).toBe(false);
   });
 });
