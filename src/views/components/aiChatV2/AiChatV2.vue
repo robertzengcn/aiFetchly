@@ -206,6 +206,20 @@
                   <span>{{ formatTimestamp(conv.lastMessageTimestamp) }}</span>
                 </div>
               </v-list-item-subtitle>
+              <template v-slot:append>
+                <v-progress-circular
+                  v-if="isConversationRunning(conv.conversationId)"
+                  indeterminate
+                  size="16"
+                  width="2"
+                  color="primary"
+                  class="ml-2"
+                  :title="
+                    t('aiChatV2.conversation_running') ||
+                    'Conversation is running'
+                  "
+                />
+              </template>
             </v-list-item>
           </v-list>
         </v-card-text>
@@ -485,6 +499,14 @@ const hasLoadedPendingToolExecution = computed(() => {
 const chatIsRunning = computed(
   () => isStreaming.value || hasLoadedPendingToolExecution.value
 );
+
+/**
+ * A conversation shows a "running" indicator when it is the active conversation
+ * and the chat is currently streaming or waiting on a pending tool execution.
+ * Other conversations in the list are idle (no background work happens on them).
+ */
+const isConversationRunning = (conversationId: string): boolean =>
+  chatIsRunning.value && conversationId === activeConversationId.value;
 
 // True only between clicking send and the first visible AI chunk. Auto-clears
 // when streaming ends for any reason (complete/error/stop/permission deny).

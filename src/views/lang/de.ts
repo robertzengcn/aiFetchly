@@ -1815,6 +1815,7 @@ export default {
     unsupported_tool_call:
       "Der Assistent hat ein noch nicht unterstütztes Werkzeug angefordert.",
     conversation_history: "Unterhaltungsverlauf",
+    conversation_running: "Unterhaltung läuft",
     manage_mcp_tools: "MCP-Tools verwalten",
     no_conversations: "Noch keine Unterhaltungen",
     search_conversations: "Unterhaltungen suchen...",
