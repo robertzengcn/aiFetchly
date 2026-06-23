@@ -246,6 +246,32 @@ describe("StreamEventProcessor + hooks integration", () => {
     expect(skillExecutorMock).toHaveBeenCalledTimes(1);
   });
 
+  test("hook permissionDecision deny blocks even without continue:false (PRD §Stream Integration)", async () => {
+    skillRegistryState.registered.add("stub_skill");
+    permissionStateHolder.status = "granted"; // would normally auto-run
+    HookRegistry.registerBuiltinHook({
+      id: "denier",
+      eventName: "PreToolUse",
+      source: "builtin",
+      enabled: true,
+      trusted: true,
+      type: "callback",
+      matcher: "stub_skill",
+      // Deny only — no continue:false. Must still block.
+      callback: () => ({ permissionDecision: "deny" }),
+    });
+    await runToolCall(proc, "t1", "stub_skill", { x: 1 });
+    expect(skillExecutorMock).not.toHaveBeenCalled();
+    const send = (
+      event.sender.send as unknown as { mock: { calls: unknown[][] } }
+    ).mock.calls;
+    const toolResultChunk = send
+      .map((c) => String(c[1] ?? ""))
+      .find((s) => s.includes("blockedByHook"));
+    expect(toolResultChunk).toBeDefined();
+    expect(toolResultChunk).toContain("denied by hook policy");
+  });
+
   test("PostToolUse additionalContext is attached to the result", async () => {
     skillRegistryState.registered.add("stub_skill");
     HookRegistry.registerBuiltinHook({

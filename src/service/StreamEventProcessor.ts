@@ -497,7 +497,12 @@ export class StreamEventProcessor {
       );
 
       let toolResult: Record<string, unknown>;
-      if (preAggregate.blocked) {
+      // PRD §Stream Integration / PreToolUse: a hook `permissionDecision:
+      // "deny"` must be treated as blocked. `ask` is honored via the
+      // existing SkillExecutor needsPrompt path for unknown-permission
+      // skills; forcing ask on already-granted skills is a Phase 4 follow-up.
+      const deniedByHook = preAggregate.permissionDecision === "deny";
+      if (preAggregate.blocked || deniedByHook) {
         toolResult = this.buildHookBlockedToolResult(preAggregate);
       } else {
         const effectiveParams = preAggregate.updatedInput ?? toolParams;
@@ -844,9 +849,14 @@ export class StreamEventProcessor {
   private buildHookBlockedToolResult(
     aggregate: AggregatedHookResult
   ): Record<string, unknown> {
+    const reason =
+      aggregate.blockReason ??
+      (aggregate.permissionDecision === "deny"
+        ? "Tool denied by hook policy"
+        : "Tool blocked by hook policy");
     return {
       success: false,
-      error: aggregate.blockReason ?? "Tool blocked by hook policy",
+      error: reason,
       blockedByHook: true,
       hookMessages: [...aggregate.systemMessages],
       hookContexts: [...aggregate.additionalContexts],
