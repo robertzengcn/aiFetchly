@@ -31,6 +31,22 @@
       </v-col>
     </v-row>
 
+    <!-- AI Model -->
+    <v-row>
+      <v-col cols="12">
+        <div class="text-caption text-medium-emphasis mb-1">
+          {{ t('schedule.ai_message_task_model') || 'AI Model' }}
+        </div>
+        <AiChatV2ModelSelector
+          v-model="formState.model"
+          :items="availableModels"
+          :default-model="defaultModelId"
+          :loading="modelsLoading"
+          @update:model-value="emitChange"
+        />
+      </v-col>
+    </v-row>
+
     <!-- Allowed Tools -->
     <v-row>
       <v-col cols="12">
@@ -155,8 +171,11 @@
 import { ref, onMounted, reactive, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { listAvailableAiMessageTaskTools } from "@/views/api/aiMessageTask";
+import { getOpenAIChatModels } from "@/views/api/aiChatV2";
 import { AI_MESSAGE_TASK_DEFAULTS } from "@/entityTypes/aiMessageTaskTypes";
 import type { SchedulableAiToolSummary } from "@/entityTypes/aiMessageTaskTypes";
+import type { OpenAIModel } from "@/api/aiChatApi";
+import AiChatV2ModelSelector from "@/views/components/aiChatV2/AiChatV2ModelSelector.vue";
 
 const { t } = useI18n();
 
@@ -210,7 +229,7 @@ const formState = reactive<AiMessageTaskFormState>({
   name: props.initialTaskData?.name ?? "",
   message: props.initialTaskData?.message ?? "",
   systemPrompt: props.initialTaskData?.system_prompt ?? "",
-  model: props.initialTaskData?.model ?? "",
+  model: props.initialTaskData?.model ?? AI_MESSAGE_TASK_DEFAULTS.model,
   autoApproveTools: props.initialTaskData?.auto_approve_tools ?? AI_MESSAGE_TASK_DEFAULTS.autoApproveTools,
   allowedTools: parseAllowedTools(props.initialTaskData?.allowed_tools_json),
   maxToolCalls: props.initialTaskData?.max_tool_calls ?? AI_MESSAGE_TASK_DEFAULTS.maxToolCalls,
@@ -224,7 +243,7 @@ watch(() => props.initialTaskData, (newData) => {
     formState.name = newData.name ?? ''
     formState.message = newData.message ?? ''
     formState.systemPrompt = newData.system_prompt ?? ''
-    formState.model = newData.model ?? ''
+    formState.model = newData.model ?? AI_MESSAGE_TASK_DEFAULTS.model
     formState.autoApproveTools = newData.auto_approve_tools ?? AI_MESSAGE_TASK_DEFAULTS.autoApproveTools
     formState.allowedTools = parseAllowedTools(newData.allowed_tools_json)
     formState.maxToolCalls = newData.max_tool_calls ?? AI_MESSAGE_TASK_DEFAULTS.maxToolCalls
@@ -237,6 +256,11 @@ watch(() => props.initialTaskData, (newData) => {
 // Tools catalog
 const schedulableTools = ref<SchedulableAiToolSummary[]>([]);
 const toolsLoading = ref(false);
+
+// Models catalog
+const availableModels = ref<OpenAIModel[]>([]);
+const defaultModelId = ref<string | undefined>(undefined);
+const modelsLoading = ref(false);
 
 // Validation
 const rules = {
@@ -283,6 +307,21 @@ onMounted(async (): Promise<void> => {
   } finally {
     toolsLoading.value = false;
   }
+
+  // Load models catalog
+  modelsLoading.value = true;
+  try {
+    const resp = await getOpenAIChatModels();
+    if (resp) {
+      availableModels.value = resp.data ?? [];
+      defaultModelId.value = resp.default_model;
+    }
+  } catch (error) {
+    console.error("Failed to load models catalog:", error);
+  } finally {
+    modelsLoading.value = false;
+  }
+
   // Emit initial state if pre-populated from edit mode
   if (props.initialTaskData) {
     emitChange();

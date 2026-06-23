@@ -1436,7 +1436,8 @@ export default {
     ai_message_task_system_prompt_hint:
       "Optionale Systemanweisungen für die KI",
     ai_message_task_model: "KI-Modell",
-    ai_message_task_model_hint: "Zu verwendendes Modell (z.B. gpt-4o)",
+    ai_message_task_model_hint:
+      "'Auto' verwendet das Standardmodell des Servers. Wähle ein spezifisches Modell zum Überschreiben.",
     ai_message_task_allowed_tools: "Erlaubte Werkzeuge",
     ai_message_task_allowed_tools_hint:
       "Wählen Sie integrierte Werkzeuge, die die KI bei unbeaufsichtigten Ausführungen verwenden darf",
