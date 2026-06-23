@@ -90,6 +90,14 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
             "Whether to show the browser window during scraping (default: false, headless)",
           default: false,
         },
+        account: {
+          type: "number",
+          description:
+            "Social account ID to use for authenticated scraping. " +
+            "REQUIRED when search_engine is 'google' or 'yandex' (these engines require login cookies). " +
+            "Ignored for 'bing' and 'baidu'. The account must have valid cookies stored; " +
+            "otherwise the call fails and the user must add account cookies first.",
+        },
       },
       required: ["search_engine", "query"],
     },
@@ -98,6 +106,58 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     permissionCategory: "network",
     source: "built-in",
     execute: async (args, context) => {
+      const engineRaw =
+        typeof args.search_engine === "string"
+          ? args.search_engine.trim().toLowerCase()
+          : "";
+      const requiresAccount = engineRaw === "google" || engineRaw === "yandex";
+      const accountId =
+        typeof args.account === "number"
+          ? args.account
+          : typeof args.account === "string" && args.account.trim() !== ""
+          ? Number(args.account)
+          : NaN;
+
+      if (requiresAccount) {
+        if (!Number.isFinite(accountId) || accountId <= 0) {
+          return {
+            success: false,
+            result: {
+              error:
+                `An account (social account ID) is required when search_engine is "${engineRaw}". ` +
+                "Please provide the 'account' parameter and retry.",
+            },
+          };
+        }
+        // Verify the account has cookies stored; if not, ask the user to add them.
+        try {
+          const { AccountCookiesModule } = await import(
+            "@/modules/accountCookiesModule"
+          );
+          const cookiesModule = new AccountCookiesModule();
+          const cookies = await cookiesModule.getAccountCookies(accountId);
+          if (!cookies || !cookies.cookies) {
+            return {
+              success: false,
+              result: {
+                error:
+                  `No cookies found for account ID ${accountId}. ` +
+                  `Please add account cookies for this ${engineRaw} account in the account management page and retry.`,
+              },
+            };
+          }
+        } catch (error: unknown) {
+          return {
+            success: false,
+            result: {
+              error:
+                "Failed to verify account cookies: " +
+                (error instanceof Error ? error.message : String(error)),
+            },
+          };
+        }
+      }
+
       const result = await ToolExecutor.execute(
         "scrape_urls_from_search_engine",
         args,
