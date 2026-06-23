@@ -21,7 +21,7 @@
 | `src/service/AIChatContextAssembler.ts` | Modify | Read setting and inject as system message |
 | `src/views/pages/systemsetting/index.vue` | Modify | Render `v-textarea` for `'textarea'` type |
 | `src/views/lang/en.ts`, `zh.ts`, `es.ts`, `fr.ts`, `de.ts`, `ja.ts` | Modify | 2 new keys × 6 files |
-| `test/vitest/main/AIChatContextAssembler.test.ts` | Create | Unit tests for injection behavior |
+| `test/vitest/main/service/AIChatContextAssembler.test.ts` | Modify | Add new `describe` block to existing file (file already exists — do NOT create a new top-level test file) |
 
 ---
 
@@ -87,17 +87,105 @@ git commit -m "feat(setting): add 'textarea' type and ai_custom_context_directiv
 ## Task 2: Write failing tests for the injection behavior (TDD red phase)
 
 **Files:**
-- Create: `test/vitest/main/AIChatContextAssembler.test.ts`
+- Modify: `test/vitest/main/service/AIChatContextAssembler.test.ts` (existing file — append new `describe` block)
 
-- [ ] **Step 1: Verify vitest config picks up `test/vitest/main/*.test.ts`**
+> **Important:** Do NOT create a new top-level test file. The file `test/vitest/main/service/AIChatContextAssembler.test.ts` already exists with working `vi.mock` factory infrastructure. Add a new `describe(...)` block at the end of the file that reuses the existing mocks (`mockGetByConversation`, `mockGetActiveSummary`, `mockGetConversationMessages`, `mockDurableRetrieve`, `mockGetSettingValue`). Do not introduce `vi.spyOn(Class.prototype, ...)` — the project convention is the `vi.mock` factory pattern, and the existing file already wires up everything we need.
 
-Run: `cat /home/robertzeng/project/aiFetchly/vitest.config.ts 2>/dev/null || cat /home/robertzeng/project/aiFetchly/vite.config.ts 2>/dev/null | head -40`
+- [ ] **Step 1: Verify vitest config picks up the path**
 
-Confirm the include glob covers `test/vitest/main/**/*.test.ts`. If it does not, ask the user how tests in that directory are typically run before continuing.
+The existing file already runs under `yarn testmain` (alias for `vitest --config vite.main.config.mjs`). Confirm by running: `yarn testmain --run test/vitest/main/service/AIChatContextAssembler.test.ts`. The existing tests should pass before any edits.
 
-- [ ] **Step 2: Write the test file with three cases (inject / empty / whitespace)**
+- [ ] **Step 2: Append a new `describe` block with three test cases**
 
-Create `test/vitest/main/AIChatContextAssembler.test.ts`:
+At the bottom of `test/vitest/main/service/AIChatContextAssembler.test.ts`, add:
+
+```typescript
+import { ai_custom_context_directive } from "@/config/settinggroupInit";
+
+// (Place this describe block at the end of the file. It reuses the mocks
+//  already declared at the top: mockGetByConversation, mockGetActiveSummary,
+//  mockGetConversationMessages, mockDurableRetrieve, mockGetSettingValue.)
+//
+// Note on the length-based skip assertions: they assume the background state
+// produced by the default mocks (no durable memory block, no compact/session
+// memory). If those defaults ever change, the length-2 expectation will need
+// updating — that's intentional coupling, not a bug.
+describe("AIChatContextAssembler — custom context directive", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockDurableRetrieve.mockResolvedValue({ memories: [], tokenEstimate: 0, contextBlock: "" });
+    mockGetByConversation.mockResolvedValue(null);
+    mockGetActiveSummary.mockResolvedValue(null);
+    mockGetConversationMessages.mockResolvedValue([]);
+    // Discriminate by key so memory-injection toggle stays at its default
+    // (null → enabled, but retrieve returns empty) while the directive's
+    // value is controlled per-test.
+    mockGetSettingValue.mockImplementation((key: string) => {
+      if (key === ai_custom_context_directive) return Promise.resolve("");
+      return Promise.resolve(null);
+    });
+  });
+
+  it("injects directive as a system message right after the base system prompt", async () => {
+    mockGetSettingValue.mockImplementation((key: string) => {
+      if (key === ai_custom_context_directive) return Promise.resolve("Always answer concisely.");
+      return Promise.resolve(null);
+    });
+
+    const assembler = new AIChatContextAssembler();
+    const result = await assembler.assemble({
+      conversationId: "conv-test",
+      currentUserMessage: "hello",
+      baseSystemPrompt: "you are helpful",
+      mode: "chat",
+    });
+
+    expect(result.messages[0]).toEqual({ role: "system", content: "you are helpful" });
+    expect(result.messages[1]).toEqual({ role: "system", content: "Always answer concisely." });
+    // And the getSettingValue call targeted the new key
+    expect(mockGetSettingValue).toHaveBeenCalledWith(ai_custom_context_directive);
+    // And the user's message is still present at the end (not replaced by the directive)
+    expect(result.messages[result.messages.length - 1]).toEqual({ role: "user", content: "hello" });
+  });
+
+  it("skips injection when the setting value is empty", async () => {
+    mockGetSettingValue.mockImplementation((key: string) => {
+      if (key === ai_custom_context_directive) return Promise.resolve("");
+      return Promise.resolve(null);
+    });
+
+    const assembler = new AIChatContextAssembler();
+    const result = await assembler.assemble({
+      conversationId: "conv-test",
+      currentUserMessage: "hello",
+      baseSystemPrompt: "you are helpful",
+      mode: "chat",
+    });
+
+    expect(result.messages).toHaveLength(2); // base prompt + user message
+    expect(result.messages[0]).toEqual({ role: "system", content: "you are helpful" });
+    expect(result.messages[1]).toEqual({ role: "user", content: "hello" });
+  });
+
+  it("skips injection when the setting value is whitespace-only", async () => {
+    mockGetSettingValue.mockImplementation((key: string) => {
+      if (key === ai_custom_context_directive) return Promise.resolve("   \n  ");
+      return Promise.resolve(null);
+    });
+
+    const assembler = new AIChatContextAssembler();
+    const result = await assembler.assemble({
+      conversationId: "conv-test",
+      currentUserMessage: "hello",
+      baseSystemPrompt: "you are helpful",
+      mode: "chat",
+    });
+
+    expect(result.messages).toHaveLength(2);
+    expect(result.messages[1]).toEqual({ role: "user", content: "hello" });
+  });
+});
+```
 
 ```typescript
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -180,14 +268,14 @@ describe("AIChatContextAssembler — custom context directive", () => {
 
 - [ ] **Step 3: Run the tests to confirm they fail**
 
-Run: `yarn vitest run test/vitest/main/AIChatContextAssembler.test.ts`
+Run: `yarn testmain --run test/vitest/main/service/AIChatContextAssembler.test.ts`
 
-Expected: **FAIL**. The first test will fail because `messages[1]` will be the user message (`"hello"`), not the directive (it's not yet injected). The other two tests may pass coincidentally — that's fine; the first test failure proves the feature isn't implemented yet.
+Expected: **FAIL** on the new "injects directive..." test. The two skip-tests will pass coincidentally (since the current code already produces a length-2 array when the directive is empty/whitespace). The first test failure proves the feature isn't implemented yet.
 
 - [ ] **Step 4: Commit the failing test**
 
 ```bash
-git add test/vitest/main/AIChatContextAssembler.test.ts
+git add test/vitest/main/service/AIChatContextAssembler.test.ts
 git commit -m "test(ai-context): add failing tests for custom context directive injection"
 ```
 
@@ -243,7 +331,7 @@ In `src/service/AIChatContextAssembler.ts`, immediately after line 105 (`message
 
 - [ ] **Step 3: Run the tests to confirm they pass**
 
-Run: `yarn vitest run test/vitest/main/AIChatContextAssembler.test.ts`
+Run: `yarn testmain --run test/vitest/main/service/AIChatContextAssembler.test.ts`
 
 Expected: **PASS** — all 3 tests green.
 
@@ -264,11 +352,11 @@ git commit -m "feat(ai-context): inject custom context directive as system messa
 ## Task 4: Extend tests with error-path coverage
 
 **Files:**
-- Modify: `test/vitest/main/AIChatContextAssembler.test.ts`
+- Modify: `test/vitest/main/service/AIChatContextAssembler.test.ts` (the `describe("AIChatContextAssembler — custom context directive", ...)` block added in Task 2)
 
 - [ ] **Step 1: Add a fourth test for the read-failure path**
 
-Append inside the `describe` block in `test/vitest/main/AIChatContextAssembler.test.ts`:
+Append inside the `describe("AIChatContextAssembler — custom context directive", ...)` block added in Task 2:
 
 ```typescript
   it("skips injection and does not throw when the setting read fails", async () => {
@@ -287,14 +375,14 @@ Append inside the `describe` block in `test/vitest/main/AIChatContextAssembler.t
 
 - [ ] **Step 2: Run the tests**
 
-Run: `yarn vitest run test/vitest/main/AIChatContextAssembler.test.ts`
+Run: `yarn testmain --run test/vitest/main/service/AIChatContextAssembler.test.ts`
 
 Expected: **PASS** — all 4 tests green. The error-path test passes because the implementation wraps the read in try/catch.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add test/vitest/main/AIChatContextAssembler.test.ts
+git add test/vitest/main/service/AIChatContextAssembler.test.ts
 git commit -m "test(ai-context): cover custom directive read-failure path"
 ```
 
