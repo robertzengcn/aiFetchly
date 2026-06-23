@@ -88,7 +88,7 @@ export default ({ mode }) => {
 
         },
         test: {
-            include: ['test/vitest/utilitycode/*.test.ts'],
+            include: ['test/vitest/utilitycode/**/*.test.ts'],
         }
       
     })
