@@ -40,9 +40,63 @@ const CHAT_V2_MAX_TOOL_ROUNDS = 8;
 /** Bound foreground tool calls so the UI does not spin indefinitely. */
 export const CHAT_V2_TOOL_TIMEOUT_MS = 90_000;
 
+/**
+ * Approximate characters per token used for local usage estimation when the
+ * AI server does not report token usage in its stream response. This is the
+ * same ratio used by the frontend context-usage badge.
+ */
+const CHARS_PER_TOKEN_ESTIMATE = 4;
+
+/**
+ * Per-message token overhead accounting for role framing, delimiters, and
+ * structural tokens added by the chat completion API. The OpenAI spec adds
+ * roughly 3-4 tokens of framing per message; we round up to be conservative.
+ */
+const TOKENS_PER_MESSAGE_OVERHEAD = 4;
+
 interface LastFailedToolInfo {
   name: string;
   error: string;
+}
+
+/**
+ * Estimate token usage locally from the prompt messages and completion text.
+ * Used as a fallback when the AI server ignores `stream_options.include_usage`
+ * and never reports actual token counts. The estimate uses the standard
+ * ~4 chars/token heuristic plus a small per-message overhead.
+ */
+function estimateTokenUsage(
+  messages: OpenAIChatMessage[],
+  completionContent: string
+): {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+} {
+  let promptChars = 0;
+  for (const msg of messages) {
+    if (msg.content) {
+      promptChars += msg.content.length;
+    }
+    if (msg.tool_calls) {
+      promptChars += JSON.stringify(msg.tool_calls).length;
+    }
+    promptChars += TOKENS_PER_MESSAGE_OVERHEAD * CHARS_PER_TOKEN_ESTIMATE;
+  }
+  const completionChars = completionContent.length;
+  const promptTokens = Math.max(
+    1,
+    Math.ceil(promptChars / CHARS_PER_TOKEN_ESTIMATE)
+  );
+  const completionTokens = Math.max(
+    1,
+    Math.ceil(completionChars / CHARS_PER_TOKEN_ESTIMATE)
+  );
+  return {
+    promptTokens,
+    completionTokens,
+    totalTokens: promptTokens + completionTokens,
+  };
 }
 
 export function shouldForceSubmitPlanForApproval(message: string): boolean {
@@ -592,6 +646,25 @@ export class AIChatQueryLoop {
         }
       }
 
+      // Fallback: many OpenAI-compatible servers ignore
+      // stream_options.include_usage and never report token counts in the
+      // stream. Without this fallback, tokensUsed stays null in the database
+      // and the context-usage badge has no denominator. Estimate locally from
+      // the prompt messages + completion content using the standard
+      // chars/4 heuristic.
+      if (!lastReportedUsage) {
+        const estimated = estimateTokenUsage(input.messages, fullContent);
+        lastReportedUsage = estimated;
+        eventSink.emit({
+          type: "usage_update",
+          conversationId: input.conversationId,
+          messageId: input.assistantMessageId,
+          model: finalAccumulator?.state.model,
+          promptTokens: estimated.promptTokens,
+          completionTokens: estimated.completionTokens,
+          totalTokens: estimated.totalTokens,
+        });
+      }
       return {
         type: "completed",
         conversationId: input.conversationId,
