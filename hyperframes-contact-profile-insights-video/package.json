@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "npx --yes hyperframes@0.6.88 preview",
     "check": "npx --yes hyperframes@0.6.88 lint && npx --yes hyperframes@0.6.88 validate && npx --yes hyperframes@0.6.88 inspect --samples 18",
-    "tts": "npx --yes hyperframes@0.6.88 tts script.txt --voice bf_emma --speed 0.82 --output media/contact-profile-insights-voiceover.wav",
+    "tts": "say -v Samantha -r 145 -o media/contact-profile-insights-voiceover.aiff -f script.txt && ffmpeg -y -i media/contact-profile-insights-voiceover.aiff media/contact-profile-insights-voiceover.wav",
     "render": "npx --yes hyperframes@0.6.88 render --output renders/contact-profile-insights-tutorial.mp4 --quality standard"
   }
 }
