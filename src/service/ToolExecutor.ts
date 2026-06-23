@@ -334,6 +334,21 @@ export class ToolExecutor {
     // Calculate num_pages based on num_results (assuming ~10 results per page)
     const numPages = Math.ceil(numResults / 10);
 
+    // Resolve optional account selector. When the caller (e.g. the
+    // scrape_urls_from_search_engine skill) has already validated an account,
+    // forward it so SearchModule uses that specific account instead of falling
+    // back to a random one. Coerce robustly — LLMs sometimes send numbers as
+    // strings. Invalid/non-positive values are dropped (treated as "no account").
+    const rawAccount = toolParams.account;
+    const accountNum =
+      typeof rawAccount === "number"
+        ? rawAccount
+        : typeof rawAccount === "string" && rawAccount.trim() !== ""
+        ? Number(rawAccount)
+        : NaN;
+    const accounts =
+      Number.isFinite(accountNum) && accountNum > 0 ? [accountNum] : undefined;
+
     // Execute search (notShowBrowser: true when show_browser is false, i.e. headless by default)
     const taskId = await searchModule.searchByKeywordAndEngine(
       [query],
@@ -342,6 +357,7 @@ export class ToolExecutor {
         num_pages: numPages,
         concurrency: 1,
         notShowBrowser: !showBrowser,
+        ...(accounts ? { accounts } : {}),
       }
     );
 
