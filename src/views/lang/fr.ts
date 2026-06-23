@@ -1243,7 +1243,8 @@ export default {
     ai_message_task_system_prompt_hint:
       "Instructions système optionnelles pour l'IA",
     ai_message_task_model: "Modèle IA",
-    ai_message_task_model_hint: "Modèle à utiliser (ex. gpt-4o)",
+    ai_message_task_model_hint:
+      "'Auto' utilise le modèle par défaut du serveur. Choisissez un modèle spécifique pour remplacer.",
     ai_message_task_allowed_tools: "Outils autorisés",
     ai_message_task_allowed_tools_hint:
       "Sélectionnez les outils intégrés que l'IA peut utiliser",

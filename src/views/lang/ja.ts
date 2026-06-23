@@ -1407,7 +1407,8 @@ export default {
     ai_message_task_system_prompt: "システムプロンプト",
     ai_message_task_system_prompt_hint: "AIのオプションのシステム指示",
     ai_message_task_model: "AIモデル",
-    ai_message_task_model_hint: "使用するモデル（例：gpt-4o）",
+    ai_message_task_model_hint:
+      "「自動」はサーバーのデフォルトモデルを使用します。特定のモデルを選択で上書きできます。",
     ai_message_task_allowed_tools: "許可されたツール",
     ai_message_task_allowed_tools_hint:
       "無人実行中にAIが使用できる組み込みツールを選択",
