@@ -5,7 +5,10 @@ import { AIChatTokenEstimator } from "@/service/AIChatTokenEstimator";
 import { AIUserMemoryRetrievalService } from "@/service/AIUserMemoryRetrievalService";
 import { buildPlanModeSystemPrompt } from "@/service/PlanModePromptBuilder";
 import { SystemSettingModule } from "@/modules/SystemSettingModule";
-import { ai_memory_injection_enabled } from "@/config/settinggroupInit";
+import {
+  ai_memory_injection_enabled,
+  ai_custom_context_directive,
+} from "@/config/settinggroupInit";
 import type { OpenAIChatMessage, OpenAIMessageRole } from "@/api/aiChatApi";
 import { MessageType } from "@/entityTypes/commonType";
 import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
@@ -103,6 +106,24 @@ export class AIChatContextAssembler {
 
     const messages: OpenAIChatMessage[] = [];
     messages.push({ role: "system", content: systemPrompt });
+
+    // User-defined custom context directive (CLAUDE.md-style).
+    // Placed right after the base system prompt so static user instructions
+    // win over conversation-specific retrieved memories. Read failures must
+    // never break the AI chat — degrade to no-injection.
+    try {
+      const customDirective = await this.systemSettings.getSettingValue(
+        ai_custom_context_directive
+      );
+      if (customDirective && customDirective.trim().length > 0) {
+        messages.push({ role: "system", content: customDirective });
+      }
+    } catch (err) {
+      console.error(
+        "[ai-chat-context] failed to read custom context directive:",
+        err
+      );
+    }
 
     // Durable user memory injection. Reads the user-controllable toggle from
     // the system_setting table (default-on when absent). Placed before compact
