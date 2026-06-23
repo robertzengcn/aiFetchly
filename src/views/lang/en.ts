@@ -871,6 +871,7 @@ export default {
     no_valid_urls: "No valid URLs found",
     ai_support_enabled: "Enable AI Enrichment",
     ai_support_hint: "Extract phone, address, social links using AI",
+    ai_support_upgrade_hint: "Upgrade your plan to enable AI Enrichment.",
     ai_enrichment_status: "AI Status",
     ai_status_none: "Not enriched",
     ai_status_pending: "Processing",

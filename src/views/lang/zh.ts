@@ -838,6 +838,7 @@ export default {
     no_valid_urls: "未找到有效URL",
     ai_support_enabled: "启用AI智能补充",
     ai_support_hint: "使用AI提取电话号码、地址和社交链接",
+    ai_support_upgrade_hint: "升级您的套餐以启用AI智能补充。",
     ai_enrichment_status: "AI状态",
     ai_status_none: "未补充",
     ai_status_pending: "处理中",

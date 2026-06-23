@@ -873,6 +873,10 @@ export default {
     update_error: "Error al actualizar la tarea",
     load_task_error: "Error al cargar datos de la tarea",
     no_valid_urls: "No se encontraron URLs válidas",
+    ai_support_enabled: "Habilitar enriquecimiento con IA",
+    ai_support_hint: "Extraer teléfono, dirección y enlaces sociales con IA",
+    ai_support_upgrade_hint:
+      "Actualice su plan para habilitar el enriquecimiento con IA.",
     confirm_kill: "¿Está seguro de que desea detener esta tarea?",
     kill_task: "Detener Tarea",
     kill_success: "Tarea detenida exitosamente",

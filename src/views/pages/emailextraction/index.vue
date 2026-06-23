@@ -60,12 +60,14 @@ v-model="proxyValue" :items="proxyValue" label="Select proxy" item-title="host" 
       </v-btn-toggle>
 
       <v-switch
-        v-if="aiOptionVisible"
         v-model="aiSupportEnabled"
+        :disabled="!aiOptionVisible"
         :label="t('emailextraction.ai_support_enabled') || 'Enable AI Enrichment'"
-        :hint="t('emailextraction.ai_support_hint') || 'Extract phone, address, social links using AI'"
+        :hint="aiOptionVisible
+          ? (t('emailextraction.ai_support_hint') || 'Extract phone, address, social links using AI')
+          : (t('emailextraction.ai_support_upgrade_hint') || 'Upgrade your plan to enable AI Enrichment.')"
         persistent-hint
-        color="primary"
+        :color="aiOptionVisible ? 'primary' : 'grey-lighten-1'"
         class="mt-3"
       ></v-switch>
 
@@ -268,9 +270,19 @@ onMounted(async () => {
     const userInfo = await windowInvoke(QUERY_USER_INFO) as UserInfoType | undefined;
     if (userInfo?.aiEnabled) {
       aiOptionVisible.value = true;
+      // Default AI Enrichment to ON for new tasks when AI is enabled
+      if (!isEditMode.value) {
+        aiSupportEnabled.value = true;
+      }
+    } else {
+      // AI not enabled - keep switch visible but greyed out and OFF
+      aiOptionVisible.value = false;
+      aiSupportEnabled.value = false;
     }
   } catch (e) {
     console.error('Failed to check AI enabled status:', e);
+    aiOptionVisible.value = false;
+    aiSupportEnabled.value = false;
   }
   if (isEditMode.value) {
     loadTaskData();
