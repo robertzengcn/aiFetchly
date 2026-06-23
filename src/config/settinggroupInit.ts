@@ -243,6 +243,14 @@ export const settinggroupInit: Array<SystemSettingGroupdf> = [
         description: "ai-memory-injection-description",
         type: "toggle",
       },
+      {
+        // User-authored static instructions injected into every AI chat
+        // request. Empty by default = no injection. Mirrors CLAUDE.md.
+        key: ai_custom_context_directive,
+        value: "",
+        description: "ai-custom-context-directive-description",
+        type: "textarea",
+      },
     ],
   },
 ];
