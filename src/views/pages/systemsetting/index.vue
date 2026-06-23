@@ -124,6 +124,25 @@ v-for="(opt, idx) in setting.options || []" :key="idx" :label="opt.optionLabel"
                     <v-divider></v-divider>
                   </div>
 
+                  <div v-else-if="setting.type === 'textarea'">
+                    <!-- NOTE: textarea saves on @blur, not on every keystroke.
+                         The 'input' type uses @update:model-value which would
+                         fire IPC on every char for a textarea — too noisy. -->
+                    <v-textarea
+                      :model-value="setting.value"
+                      :placeholder="t('system_settings.ai-custom-context-directive-placeholder') || 'Static instructions prepended to every AI chat request (like CLAUDE.md)...'"
+                      variant="outlined"
+                      density="comfortable"
+                      rows="6"
+                      auto-grow
+                      counter
+                      maxlength="8000"
+                      hide-details="auto"
+                      :loading="loadingSettings[setting.id]"
+                      @blur="updateSetting(setting.id, $event.target.value)"
+                    ></v-textarea>
+                    <v-divider></v-divider>
+                  </div>
 
                   <!-- Default to text input if the type is unrecognized -->
                   <div v-else>
