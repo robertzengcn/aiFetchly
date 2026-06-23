@@ -1766,6 +1766,7 @@ export default {
     server_unavailable: "无法连接到 AI 服务器。",
     unsupported_tool_call: "助手请求了一个暂不支持的工具。",
     conversation_history: "对话历史",
+    conversation_running: "对话进行中",
     manage_mcp_tools: "管理 MCP 工具",
     no_conversations: "暂无对话",
     search_conversations: "搜索对话...",

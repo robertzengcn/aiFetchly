@@ -1823,6 +1823,7 @@ export default {
     unsupported_tool_call:
       "El asistente solicitó una herramienta que aún no se admite.",
     conversation_history: "Historial de conversaciones",
+    conversation_running: "Conversación en ejecución",
     manage_mcp_tools: "Gestionar herramientas MCP",
     no_conversations: "Sin conversaciones aún",
     search_conversations: "Buscar conversaciones...",

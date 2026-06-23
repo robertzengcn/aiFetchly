@@ -1781,6 +1781,7 @@ export default {
     server_unavailable: "AI サーバーに接続できませんでした。",
     unsupported_tool_call: "アシスタントが未対応のツールを要求しました。",
     conversation_history: "会話履歴",
+    conversation_running: "会話を実行中",
     manage_mcp_tools: "MCP ツールを管理",
     no_conversations: "まだ会話がありません",
     search_conversations: "会話を検索...",

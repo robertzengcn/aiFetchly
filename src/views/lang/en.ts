@@ -1828,6 +1828,7 @@ export default {
     unsupported_tool_call:
       "This assistant requested a tool that is not supported yet.",
     conversation_history: "Conversation History",
+    conversation_running: "Conversation is running",
     manage_mcp_tools: "Manage MCP Tools",
     no_conversations: "No conversations yet",
     search_conversations: "Search conversations...",
