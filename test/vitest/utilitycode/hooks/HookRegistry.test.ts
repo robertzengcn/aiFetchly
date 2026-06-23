@@ -1,8 +1,14 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { HookRegistry } from "@/service/hooks/HookRegistry";
-import { CallbackHookDefinition, CommandHookDefinition } from "@/entityTypes/hookTypes";
+import {
+  CallbackHookDefinition,
+  CommandHookDefinition,
+} from "@/entityTypes/hookTypes";
 
-function cb(id: string, overrides: Partial<CallbackHookDefinition> = {}): CallbackHookDefinition {
+function cb(
+  id: string,
+  overrides: Partial<CallbackHookDefinition> = {}
+): CallbackHookDefinition {
   return {
     id,
     eventName: "PreToolUse",
@@ -15,7 +21,10 @@ function cb(id: string, overrides: Partial<CallbackHookDefinition> = {}): Callba
   };
 }
 
-function cmd(id: string, overrides: Partial<CommandHookDefinition> = {}): CommandHookDefinition {
+function cmd(
+  id: string,
+  overrides: Partial<CommandHookDefinition> = {}
+): CommandHookDefinition {
   return {
     id,
     eventName: "PreToolUse",
@@ -35,14 +44,20 @@ describe("HookRegistry", () => {
 
   it("registers and returns built-in hooks", () => {
     HookRegistry.registerBuiltinHook(cb("a"));
-    const matched = HookRegistry.getMatchingHooks({ eventName: "PreToolUse", matchQuery: "shell_execute" });
+    const matched = HookRegistry.getMatchingHooks({
+      eventName: "PreToolUse",
+      matchQuery: "shell_execute",
+    });
     expect(matched.map((h) => h.id)).toEqual(["a"]);
   });
 
   it("matches by glob against matchQuery", () => {
     HookRegistry.registerBuiltinHook(cb("mcp", { matcher: "mcp_*" }));
     HookRegistry.registerBuiltinHook(cb("shell", { matcher: "shell_execute" }));
-    const matched = HookRegistry.getMatchingHooks({ eventName: "PreToolUse", matchQuery: "mcp_foo" });
+    const matched = HookRegistry.getMatchingHooks({
+      eventName: "PreToolUse",
+      matchQuery: "mcp_foo",
+    });
     expect(matched.map((h) => h.id)).toEqual(["mcp"]);
   });
 
@@ -60,13 +75,19 @@ describe("HookRegistry", () => {
   });
 
   it("filters untrusted command hooks", () => {
-    HookRegistry.registerBuiltinHook(cb("safe-cb", { trusted: false })); // callback: trusted flag irrelevant
-    HookRegistry.registerBuiltinHook({
-      ...cmd("cmd-untrusted"),
-      source: "builtin",
-      trusted: false,
-    } as CommandHookDefinition);
-    const matched = HookRegistry.getMatchingHooks({ eventName: "PreToolUse" });
+    // Callback hook: trusted flag is not consulted by the registry
+    // (trust is a command-hook concern).
+    HookRegistry.registerBuiltinHook(cb("safe-cb", { trusted: false }));
+    // Untrusted command hook registered via the session API (built-in
+    // registration is callback-only by design).
+    HookRegistry.registerSessionHook(
+      "s1",
+      cmd("cmd-untrusted", { source: "session", trusted: false })
+    );
+    const matched = HookRegistry.getMatchingHooks({
+      eventName: "PreToolUse",
+      sessionId: "s1",
+    });
     expect(matched.map((h) => h.id)).toEqual(["safe-cb"]);
   });
 
@@ -102,9 +123,15 @@ describe("HookRegistry", () => {
   });
 
   it("returns source-priority order regardless of registration order", () => {
-    HookRegistry.registerSessionHook("s1", cb("user", { source: "user" as never }));
+    HookRegistry.registerSessionHook(
+      "s1",
+      cb("user", { source: "user" as never })
+    );
     HookRegistry.registerBuiltinHook(cb("builtin"));
-    HookRegistry.registerSessionHook("s1", cb("session", { source: "session" }));
+    HookRegistry.registerSessionHook(
+      "s1",
+      cb("session", { source: "session" })
+    );
     const matched = HookRegistry.getMatchingHooks({
       eventName: "PreToolUse",
       sessionId: "s1",

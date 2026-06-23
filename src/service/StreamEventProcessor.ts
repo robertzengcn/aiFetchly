@@ -35,6 +35,13 @@ import {
 import { SystemDependencyRetryService } from "./SystemDependencyRetryService";
 import type { RetryContext } from "./SystemDependencyRetryService";
 import { SkillDiagnosticsService } from "./SkillDiagnosticsService";
+import { SkillPermissionService } from "./SkillPermissionService";
+import { HookDispatcher } from "./hooks/HookDispatcher";
+import {
+  AggregatedHookResult,
+  EMPTY_AGGREGATE,
+  HookToolDescriptor,
+} from "@/entityTypes/hookTypes";
 
 /**
  * Configuration constants for plan execution
@@ -476,82 +483,141 @@ export class StreamEventProcessor {
   ): Promise<void> {
     const toolStartMs = Date.now();
     try {
-      // Use SkillExecutor for registry-known skills, fall back to ToolExecutor for MCP/legacy
+      const descriptor = this.resolveHookToolDescriptor(toolId, toolName);
+
+      // === PreToolUse hooks ===
+      // Runs before the executor. A blocked aggregate short-circuits
+      // straight to a synthesized failure result; the AI server still
+      // receives a structured tool failure so it can recover. A hook
+      // `allow` decision does NOT bypass SkillExecutor / permission
+      // checks — those still run in the executor branch below.
+      const preAggregate = await this.runPreToolUseHooks(
+        descriptor,
+        toolParams
+      );
+
       let toolResult: Record<string, unknown>;
-      if (SkillRegistry.isRegistered(toolName)) {
-        const skillResult = await SkillExecutor.execute(toolName, toolParams, {
-          conversationId: this.state.streamConversationId,
-          toolCallId: toolId,
-        });
-        // Convert ToolExecutionResult to the format expected by sendToolResult
-        toolResult = skillResult.success
-          ? (skillResult.result as Record<string, unknown>)
-          : {
-              ...(skillResult.result as Record<string, unknown>),
-              success: false,
-            };
+      if (preAggregate.blocked) {
+        toolResult = this.buildHookBlockedToolResult(preAggregate);
+      } else {
+        const effectiveParams = preAggregate.updatedInput ?? toolParams;
 
-        // Check if the skill failed due to a missing system dependency
-        // and prompt the user for approval before installing (FR-006).
-        if (
-          toolResult.success === false &&
-          SkillRegistry.isRegistered(toolName)
-        ) {
-          const errorStr =
-            typeof toolResult.error === "string"
-              ? toolResult.error
-              : JSON.stringify(toolResult);
-          const diagnosis = SkillDiagnosticsService.diagnoseStderr(errorStr);
-
-          if (
-            diagnosis.cause === "missing_system_tool" &&
-            diagnosis.dependency_id
-          ) {
-            console.log(
-              `Detected missing system dependency "${diagnosis.dependency_id}" for tool ${toolName}, prompting user for approval`
-            );
-
-            const retryContext: RetryContext = {
-              toolName,
-              toolParams,
+        // Use SkillExecutor for registry-known skills, fall back to ToolExecutor for MCP/legacy
+        if (SkillRegistry.isRegistered(toolName)) {
+          const skillResult = await SkillExecutor.execute(
+            toolName,
+            effectiveParams,
+            {
               conversationId: this.state.streamConversationId,
               toolCallId: toolId,
-              stderr: errorStr,
-            };
-            const resolveResult =
-              SystemDependencyRetryService.resolveOnly(retryContext);
+            }
+          );
+          // Convert ToolExecutionResult to the format expected by sendToolResult
+          toolResult = skillResult.success
+            ? (skillResult.result as Record<string, unknown>)
+            : {
+                ...(skillResult.result as Record<string, unknown>),
+                success: false,
+              };
 
-            if (resolveResult.isDependencyError && resolveResult.resolution) {
-              // Save pending state so the IPC handler can resume after user responds
-              this.pendingDependencyByToolId.set(toolId, {
-                resolution: resolveResult.resolution,
-                reason: resolveResult.message,
-                context: retryContext,
-                toolStartMs,
-              });
+          // Check if the skill failed due to a missing system dependency
+          // and prompt the user for approval before installing (FR-006).
+          if (
+            toolResult.success === false &&
+            SkillRegistry.isRegistered(toolName)
+          ) {
+            const errorStr =
+              typeof toolResult.error === "string"
+                ? toolResult.error
+                : JSON.stringify(toolResult);
+            const diagnosis = SkillDiagnosticsService.diagnoseStderr(errorStr);
 
-              // Prompt the renderer to show DependencyInstallDialog
-              this.event.sender.send(SYSTEM_DEPENDENCY_PROMPT, {
-                toolId,
+            if (
+              diagnosis.cause === "missing_system_tool" &&
+              diagnosis.dependency_id
+            ) {
+              console.log(
+                `Detected missing system dependency "${diagnosis.dependency_id}" for tool ${toolName}, prompting user for approval`
+              );
+
+              const retryContext: RetryContext = {
                 toolName,
+                toolParams: effectiveParams,
                 conversationId: this.state.streamConversationId,
-                resolution: resolveResult.resolution,
-                reason: resolveResult.message,
-              });
+                toolCallId: toolId,
+                stderr: errorStr,
+              };
+              const resolveResult =
+                SystemDependencyRetryService.resolveOnly(retryContext);
 
-              // Mark as deferred — execution will resume when user responds
-              // via SYSTEM_DEPENDENCY_PROMPT_RESPONSE IPC handler
-              return;
+              if (resolveResult.isDependencyError && resolveResult.resolution) {
+                // Save pending state so the IPC handler can resume after user responds
+                this.pendingDependencyByToolId.set(toolId, {
+                  resolution: resolveResult.resolution,
+                  reason: resolveResult.message,
+                  context: retryContext,
+                  toolStartMs,
+                });
+
+                // Prompt the renderer to show DependencyInstallDialog
+                this.event.sender.send(SYSTEM_DEPENDENCY_PROMPT, {
+                  toolId,
+                  toolName,
+                  conversationId: this.state.streamConversationId,
+                  resolution: resolveResult.resolution,
+                  reason: resolveResult.message,
+                });
+
+                // Mark as deferred — execution will resume when user responds
+                // via SYSTEM_DEPENDENCY_PROMPT_RESPONSE IPC handler
+                return;
+              }
             }
           }
+        } else {
+          // MCP tools and legacy tools still go through ToolExecutor
+          toolResult = await ToolExecutor.execute(
+            toolName,
+            effectiveParams,
+            this.state.streamConversationId
+          );
         }
-      } else {
-        // MCP tools and legacy tools still go through ToolExecutor
-        toolResult = await ToolExecutor.execute(
-          toolName,
-          toolParams,
-          this.state.streamConversationId
-        );
+
+        // === PostToolUse / PostToolUseFailure hooks ===
+        // Skip when the result is a deferred-permission pause — that
+        // is not an execution failure, and running failure hooks on
+        // it would mis-classify. We also do not let PostToolUseFailure
+        // flip a failure into a success in MVP.
+        if (!isDeferredSkillPermissionResult(toolResult)) {
+          const successFlag =
+            typeof toolResult.success === "boolean" ? toolResult.success : true;
+          const postAggregate = successFlag
+            ? await this.runPostToolUseHooks(
+                descriptor,
+                effectiveParams,
+                toolResult,
+                Date.now() - toolStartMs
+              )
+            : await this.runPostToolUseFailureHooks(
+                descriptor,
+                effectiveParams,
+                toolResult,
+                Date.now() - toolStartMs
+              );
+          if (successFlag && postAggregate.updatedToolOutput) {
+            toolResult = { ...toolResult, ...postAggregate.updatedToolOutput };
+          }
+          if (
+            postAggregate.systemMessages.length > 0 ||
+            postAggregate.additionalContexts.length > 0
+          ) {
+            toolResult = {
+              ...toolResult,
+              hookMessages: [...postAggregate.systemMessages],
+              hookContexts: [...postAggregate.additionalContexts],
+            };
+          }
+        }
       }
 
       // Save tool result to database
@@ -622,6 +688,169 @@ export class StreamEventProcessor {
 
       await this.handleToolError(toolId, toolName, errorMessage, toolStartMs);
     }
+  }
+
+  /**
+   * Build the HookToolDescriptor for the current tool. Uses
+   * SkillRegistry to distinguish registry skills from MCP and legacy
+   * tools; the `mcp_` prefix is the existing convention.
+   */
+  private resolveHookToolDescriptor(
+    toolId: string,
+    toolName: string
+  ): HookToolDescriptor {
+    if (SkillRegistry.isRegistered(toolName)) {
+      const skill = SkillRegistry.getSkill(toolName);
+      return {
+        id: toolId,
+        name: toolName,
+        source: "skill-registry",
+        permissionCategory: skill?.permissionCategory,
+      };
+    }
+    if (toolName.startsWith("mcp_")) {
+      return { id: toolId, name: toolName, source: "mcp" };
+    }
+    return { id: toolId, name: toolName, source: "legacy-tool" };
+  }
+
+  /**
+   * Snapshot of SkillPermissionService state to pass to PreToolUse
+   * hooks. Hooks can use this to make stricter decisions but cannot
+   * use it to bypass the eventual SkillExecutor check.
+   */
+  private snapshotPermissionState(toolName: string): {
+    allowed: boolean;
+    needsPrompt: boolean;
+    reason?: string;
+  } {
+    if (!SkillRegistry.isRegistered(toolName)) {
+      // MCP/legacy tools are not governed by SkillPermissionService.
+      return { allowed: true, needsPrompt: false };
+    }
+    const status = SkillPermissionService.getPermissionStatus(toolName);
+    if (status === "granted") return { allowed: true, needsPrompt: false };
+    if (status === "denied")
+      return {
+        allowed: false,
+        needsPrompt: false,
+        reason: "Permission denied",
+      };
+    return { allowed: false, needsPrompt: true, reason: "Permission required" };
+  }
+
+  private async runPreToolUseHooks(
+    descriptor: HookToolDescriptor,
+    input: Record<string, unknown>
+  ): Promise<AggregatedHookResult> {
+    try {
+      return await HookDispatcher.executeHooks({
+        eventName: "PreToolUse",
+        input: {
+          eventName: "PreToolUse",
+          hookRunId: `hookrun-pre-${descriptor.id}-${Date.now()}`,
+          source: "ai-chat-v2",
+          conversationId: this.state.streamConversationId,
+          messageId: this.state.assistantMessageId,
+          timestamp: new Date().toISOString(),
+          tool: descriptor,
+          input,
+          permissionState: this.snapshotPermissionState(descriptor.name),
+        },
+        matchQuery: descriptor.name,
+        abortSignal: this.state.abortSignal,
+      });
+    } catch (err) {
+      console.error("PreToolUse hook dispatch failed:", err);
+      return EMPTY_AGGREGATE;
+    }
+  }
+
+  private async runPostToolUseHooks(
+    descriptor: HookToolDescriptor,
+    input: Record<string, unknown>,
+    output: Record<string, unknown>,
+    executionTimeMs: number
+  ): Promise<AggregatedHookResult> {
+    try {
+      return await HookDispatcher.executeHooks({
+        eventName: "PostToolUse",
+        input: {
+          eventName: "PostToolUse",
+          hookRunId: `hookrun-post-${descriptor.id}-${Date.now()}`,
+          source: "ai-chat-v2",
+          conversationId: this.state.streamConversationId,
+          messageId: this.state.assistantMessageId,
+          timestamp: new Date().toISOString(),
+          tool: descriptor,
+          input,
+          output,
+          executionTimeMs,
+        },
+        matchQuery: descriptor.name,
+        abortSignal: this.state.abortSignal,
+      });
+    } catch (err) {
+      console.error("PostToolUse hook dispatch failed:", err);
+      return EMPTY_AGGREGATE;
+    }
+  }
+
+  private async runPostToolUseFailureHooks(
+    descriptor: HookToolDescriptor,
+    input: Record<string, unknown>,
+    toolResult: Record<string, unknown>,
+    executionTimeMs: number
+  ): Promise<AggregatedHookResult> {
+    const message =
+      typeof toolResult.error === "string"
+        ? toolResult.error
+        : (() => {
+            try {
+              return JSON.stringify(toolResult);
+            } catch {
+              return "Tool execution failed";
+            }
+          })();
+    try {
+      return await HookDispatcher.executeHooks({
+        eventName: "PostToolUseFailure",
+        input: {
+          eventName: "PostToolUseFailure",
+          hookRunId: `hookrun-fail-${descriptor.id}-${Date.now()}`,
+          source: "ai-chat-v2",
+          conversationId: this.state.streamConversationId,
+          messageId: this.state.assistantMessageId,
+          timestamp: new Date().toISOString(),
+          tool: descriptor,
+          input,
+          error: { message },
+          executionTimeMs,
+        },
+        matchQuery: descriptor.name,
+        abortSignal: this.state.abortSignal,
+      });
+    } catch (err) {
+      console.error("PostToolUseFailure hook dispatch failed:", err);
+      return EMPTY_AGGREGATE;
+    }
+  }
+
+  /**
+   * Synthesize a structured failure result when PreToolUse blocks.
+   * Mirrors the shape from the technical design §Hook Blocked Tool
+   * Result so the AI server and UI can both render the block reason.
+   */
+  private buildHookBlockedToolResult(
+    aggregate: AggregatedHookResult
+  ): Record<string, unknown> {
+    return {
+      success: false,
+      error: aggregate.blockReason ?? "Tool blocked by hook policy",
+      blockedByHook: true,
+      hookMessages: [...aggregate.systemMessages],
+      hookContexts: [...aggregate.additionalContexts],
+    };
   }
 
   /**

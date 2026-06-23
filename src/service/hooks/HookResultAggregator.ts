@@ -23,7 +23,7 @@ const PERMISSION_RANK: Record<HookPermissionDecision, number> = {
   allow: 1,
   ask: 2,
   deny: 3,
-}
+};
 
 function defaultFailureMode(hook: HookDefinition): HookFailureMode {
   // Built-in policy callbacks opt into block explicitly; default to warn.
@@ -82,7 +82,10 @@ export function aggregateResults(
     // Permission: stricter wins.
     if (out.permissionDecision) {
       const cand = out.permissionDecision;
-      if (!permissionDecision || PERMISSION_RANK[cand] > PERMISSION_RANK[permissionDecision]) {
+      if (
+        !permissionDecision ||
+        PERMISSION_RANK[cand] > PERMISSION_RANK[permissionDecision]
+      ) {
         permissionDecision = cand;
       }
     }
@@ -109,16 +112,15 @@ export function aggregateResults(
     }
   }
 
-  const aggregate: AggregatedHookResult = {
+  return {
     blocked,
+    blockReason,
+    permissionDecision,
+    updatedInput,
+    updatedToolOutput,
     additionalContexts,
     systemMessages,
     hookErrors,
     executedHookIds,
   };
-  if (blockReason !== undefined) aggregate.blockReason = blockReason;
-  if (permissionDecision !== undefined) aggregate.permissionDecision = permissionDecision;
-  if (updatedInput !== undefined) aggregate.updatedInput = updatedInput;
-  if (updatedToolOutput !== undefined) aggregate.updatedToolOutput = updatedToolOutput;
-  return aggregate;
 }

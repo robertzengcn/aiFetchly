@@ -32,6 +32,8 @@ function utf8Bytes(value: unknown): number {
   return Buffer.byteLength(JSON.stringify(value) ?? "", "utf8");
 }
 
+class ValidationError extends Error {}
+
 function capString(
   value: unknown,
   max: number,
@@ -39,10 +41,10 @@ function capString(
 ): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "string") {
-    throw new Error(`${field} must be a string when present`);
+    throw new ValidationError(`${field} must be a string when present`);
   }
   if (value.length > max) {
-    throw new Error(`${field} exceeded max length ${max}`);
+    throw new ValidationError(`${field} exceeded max length ${max}`);
   }
   return value;
 }
@@ -62,68 +64,79 @@ export function validateHookOutput(
   const obj = raw as Record<string, unknown>;
 
   try {
-    const out: HookOutput = {};
-
-    if (obj.continue !== undefined) {
-      if (typeof obj.continue !== "boolean") {
-        throw new Error("continue must be a boolean when present");
-      }
-      out.continue = obj.continue;
-    }
-
-    out.reason = capString(obj.reason, MAX_REASON, "reason");
-
-    out.systemMessage = capString(
-      obj.systemMessage,
-      MAX_SYS,
-      "systemMessage"
-    );
-
-    if (obj.suppressOutput !== undefined) {
-      if (typeof obj.suppressOutput !== "boolean") {
-        throw new Error("suppressOutput must be a boolean when present");
-      }
-      out.suppressOutput = obj.suppressOutput;
-    }
-
-    if (obj.updatedInput !== undefined) {
-      if (!isPlainObject(obj.updatedInput)) {
-        throw new Error("updatedInput must be a non-null object");
-      }
-      if (utf8Bytes(obj.updatedInput) > MAX_IN_BYTES) {
-        throw new Error("updatedInput exceeded max serialized size");
-      }
-      out.updatedInput = obj.updatedInput as Record<string, unknown>;
-    }
-
-    if (obj.updatedToolOutput !== undefined) {
-      if (!isPlainObject(obj.updatedToolOutput)) {
-        throw new Error("updatedToolOutput must be a non-null object");
-      }
-      if (utf8Bytes(obj.updatedToolOutput) > MAX_OUT_BYTES) {
-        throw new Error("updatedToolOutput exceeded max serialized size");
-      }
-      out.updatedToolOutput = obj.updatedToolOutput as Record<string, unknown>;
-    }
-
-    out.additionalContext = capString(
-      obj.additionalContext,
-      MAX_CTX,
-      "additionalContext"
-    );
-
-    if (obj.permissionDecision !== undefined) {
-      if (!PERMISSION_DECISIONS.includes(obj.permissionDecision as HookPermissionDecision)) {
-        throw new Error(
-          "permissionDecision must be 'allow', 'ask', or 'deny' when present"
-        );
-      }
-      out.permissionDecision = obj.permissionDecision as HookPermissionDecision;
-    }
-
-    return { valid: true, output: out };
+    const output: HookOutput = {
+      ...(obj.continue !== undefined
+        ? pickBoolean(obj.continue, "continue")
+        : {}),
+      ...(obj.reason !== undefined
+        ? { reason: capString(obj.reason, MAX_REASON, "reason") }
+        : {}),
+      ...(obj.systemMessage !== undefined
+        ? { systemMessage: capString(obj.systemMessage, MAX_SYS, "systemMessage") }
+        : {}),
+      ...(obj.suppressOutput !== undefined
+        ? pickBoolean(obj.suppressOutput, "suppressOutput")
+        : {}),
+      ...(obj.updatedInput !== undefined
+        ? pickObject(obj.updatedInput, "updatedInput", MAX_IN_BYTES)
+        : {}),
+      ...(obj.updatedToolOutput !== undefined
+        ? pickObject(obj.updatedToolOutput, "updatedToolOutput", MAX_OUT_BYTES)
+        : {}),
+      ...(obj.additionalContext !== undefined
+        ? {
+            additionalContext: capString(
+              obj.additionalContext,
+              MAX_CTX,
+              "additionalContext"
+            ),
+          }
+        : {}),
+      ...(obj.permissionDecision !== undefined
+        ? pickPermission(obj.permissionDecision)
+        : {}),
+    };
+    return { valid: true, output };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message =
+      err instanceof ValidationError ? err.message : String(err);
     return { valid: false, error: message };
   }
+}
+
+function pickBoolean(
+  value: unknown,
+  field: string
+): { [K in typeof field]: boolean } {
+  if (typeof value !== "boolean") {
+    throw new ValidationError(`${field} must be a boolean when present`);
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return { [field]: value } as any;
+}
+
+function pickObject(
+  value: unknown,
+  field: string,
+  maxBytes: number
+): Record<string, unknown> {
+  if (!isPlainObject(value)) {
+    throw new ValidationError(`${field} must be a non-null object`);
+  }
+  if (utf8Bytes(value) > maxBytes) {
+    throw new ValidationError(`${field} exceeded max serialized size`);
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return { [field]: value } as any;
+}
+
+function pickPermission(
+  value: unknown
+): { permissionDecision: HookPermissionDecision } {
+  if (!PERMISSION_DECISIONS.includes(value as HookPermissionDecision)) {
+    throw new ValidationError(
+      "permissionDecision must be 'allow', 'ask', or 'deny' when present"
+    );
+  }
+  return { permissionDecision: value as HookPermissionDecision };
 }
