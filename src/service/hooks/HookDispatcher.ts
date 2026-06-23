@@ -7,10 +7,8 @@ import {
 import { HookRegistry } from "./HookRegistry";
 import { aggregateResults, HookSingleResult } from "./HookResultAggregator";
 import { executeCallback } from "./executors/CallbackHookExecutor";
-import {
-  buildAuditEntry,
-  getHookAuditLogger,
-} from "./HookAuditService";
+import { executeCommand } from "./executors/CommandHookExecutor";
+import { buildAuditEntry, getHookAuditLogger } from "./HookAuditService";
 
 /**
  * Public dispatcher API. `executeHooks` is the single entry point
@@ -84,19 +82,8 @@ class HookDispatcherImpl implements HookDispatcherApi {
       if (hook.type === "callback") {
         result = await executeCallback(hook, input, abortSignal);
       } else {
-        // Command hooks are wired in the next step. Until
-        // CommandHookExecutor lands we record them as a structured
-        // error so they cannot accidentally act as "allow".
-        const start = Date.now();
-        result = {
-          hook,
-          durationMs: Date.now() - start,
-          error: {
-            hookId: hook.id,
-            source: hook.source,
-            message: "Command hook executor is not available",
-          },
-        };
+        const cmd = await executeCommand({ hook, input, abortSignal });
+        result = cmd.result;
       }
 
       audit.log(
