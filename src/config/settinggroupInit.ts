@@ -42,6 +42,7 @@ export const ai_preferences = "ai_preferences";
 export const ai_preferences_description = "ai-preferences-group-description";
 export const ai_auto_dream_enabled = "user_ai_auto_dream";
 export const ai_memory_injection_enabled = "user_ai_memory_injection";
+export const ai_custom_context_directive = "user_ai_custom_context_directive";
 export const settinggroupInit: Array<SystemSettingGroupdf> = [
   {
     name: deepseeklocalgroup,
