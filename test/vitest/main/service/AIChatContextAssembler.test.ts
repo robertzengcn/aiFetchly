@@ -397,4 +397,24 @@ describe("AIChatContextAssembler — custom context directive", () => {
     expect(result.messages).toHaveLength(2);
     expect(result.messages[1]).toEqual({ role: "user", content: "hello" });
   });
+
+  it("skips injection and does not throw when the setting read fails", async () => {
+    mockGetSettingValue.mockImplementation((key: string) => {
+      if (key === ai_custom_context_directive)
+        return Promise.reject(new Error("sqlite locked"));
+      return Promise.resolve(null);
+    });
+
+    const assembler = new AIChatContextAssembler();
+    const result = await assembler.assemble({
+      conversationId: "conv-test",
+      currentUserMessage: "hello",
+      baseSystemPrompt: "you are helpful",
+      mode: "chat",
+    });
+
+    // Should not throw, should not inject the directive
+    expect(result.messages).toHaveLength(2);
+    expect(result.messages[1]).toEqual({ role: "user", content: "hello" });
+  });
 });
