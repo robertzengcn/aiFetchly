@@ -1098,6 +1098,11 @@ export default {
     mcp_tools: "MCP工具",
     manage_mcp_tools: "管理MCP工具",
     manage_skills: "管理技能",
+    user_ai_custom_context_directive: "自定义上下文指令",
+    "ai-custom-context-directive-description":
+      "在每次 AI 聊天请求中注入的静态文本（位于系统提示词之后）。清空输入框即可停用。",
+    "ai-custom-context-directive-placeholder":
+      "例如：始终简洁回答。优先使用要点。我们面向美国客户销售鞋类。",
   },
   skills: {
     title: "技能管理",
