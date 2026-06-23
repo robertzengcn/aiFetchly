@@ -13,6 +13,7 @@ import installExtension, { VUEJS3_DEVTOOLS } from "electron-devtools-installer";
 import { registerCommunicationIpcHandlers } from "./main-process/communication/";
 import { SkillImportService } from "@/service/SkillImportService";
 import { FileOperationTracker } from "@/service/FileOperationTracker";
+import { registerBuiltinHooks } from "@/service/hooks/builtinHooks";
 import * as path from "path";
 import { Token } from "@/modules/token";
 import { MenuManager } from "@/main-process/menu/MenuManager";
@@ -563,6 +564,15 @@ function initialize() {
   (app as any).whenReady().then(async () => {
     // Configure Content Security Policy (must be called after app is ready)
     configureContentSecurityPolicy();
+
+    // Register built-in lifecycle hooks (disabled by default; flip
+    // them on at runtime via HookRegistry for manual QA). See
+    // src/service/hooks/builtinHooks.ts.
+    try {
+      registerBuiltinHooks();
+    } catch (err) {
+      log.error(`Failed to register built-in hooks: ${err}`);
+    }
 
     const tokenService = new Token();
 
