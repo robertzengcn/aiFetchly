@@ -2,6 +2,7 @@ import { describe, expect, it, beforeEach, vi } from "vitest";
 import { AIChatContextAssembler } from "@/service/AIChatContextAssembler";
 import type { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
 import { MessageType } from "@/entityTypes/commonType";
+import { ai_custom_context_directive } from "@/config/settinggroupInit";
 
 const mockGetByConversation = vi.fn();
 const mockGetActiveSummary = vi.fn();
@@ -297,5 +298,103 @@ describe("AIChatContextAssembler", () => {
     });
     expect(mockDurableRetrieve).not.toHaveBeenCalled();
     expect(r.usedDurableMemory).toBe(false);
+  });
+});
+
+// Note on the length-based skip assertions below: they assume the background
+// state produced by the default mocks (no durable memory block, no compact/session
+// memory). If those defaults ever change, the length-2 expectation will need
+// updating — that's intentional coupling, not a bug.
+describe("AIChatContextAssembler — custom context directive", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockDurableRetrieve.mockResolvedValue({
+      memories: [],
+      tokenEstimate: 0,
+      contextBlock: "",
+    });
+    mockGetByConversation.mockResolvedValue(null);
+    mockGetActiveSummary.mockResolvedValue(null);
+    mockGetConversationMessages.mockResolvedValue([]);
+    // Discriminate by key so memory-injection toggle stays at its default
+    // (null → enabled, but retrieve returns empty) while the directive's
+    // value is controlled per-test.
+    mockGetSettingValue.mockImplementation((key: string) => {
+      if (key === ai_custom_context_directive) return Promise.resolve("");
+      return Promise.resolve(null);
+    });
+  });
+
+  it("injects directive as a system message right after the base system prompt", async () => {
+    mockGetSettingValue.mockImplementation((key: string) => {
+      if (key === ai_custom_context_directive)
+        return Promise.resolve("Always answer concisely.");
+      return Promise.resolve(null);
+    });
+
+    const assembler = new AIChatContextAssembler();
+    const result = await assembler.assemble({
+      conversationId: "conv-test",
+      currentUserMessage: "hello",
+      baseSystemPrompt: "you are helpful",
+      mode: "chat",
+    });
+
+    expect(result.messages[0]).toEqual({
+      role: "system",
+      content: "you are helpful",
+    });
+    expect(result.messages[1]).toEqual({
+      role: "system",
+      content: "Always answer concisely.",
+    });
+    expect(mockGetSettingValue).toHaveBeenCalledWith(
+      ai_custom_context_directive
+    );
+    expect(result.messages[result.messages.length - 1]).toEqual({
+      role: "user",
+      content: "hello",
+    });
+  });
+
+  it("skips injection when the setting value is empty", async () => {
+    mockGetSettingValue.mockImplementation((key: string) => {
+      if (key === ai_custom_context_directive) return Promise.resolve("");
+      return Promise.resolve(null);
+    });
+
+    const assembler = new AIChatContextAssembler();
+    const result = await assembler.assemble({
+      conversationId: "conv-test",
+      currentUserMessage: "hello",
+      baseSystemPrompt: "you are helpful",
+      mode: "chat",
+    });
+
+    expect(result.messages).toHaveLength(2);
+    expect(result.messages[0]).toEqual({
+      role: "system",
+      content: "you are helpful",
+    });
+    expect(result.messages[1]).toEqual({ role: "user", content: "hello" });
+  });
+
+  it("skips injection when the setting value is whitespace-only", async () => {
+    mockGetSettingValue.mockImplementation((key: string) => {
+      if (key === ai_custom_context_directive)
+        return Promise.resolve("   \n  ");
+      return Promise.resolve(null);
+    });
+
+    const assembler = new AIChatContextAssembler();
+    const result = await assembler.assemble({
+      conversationId: "conv-test",
+      currentUserMessage: "hello",
+      baseSystemPrompt: "you are helpful",
+      mode: "chat",
+    });
+
+    expect(result.messages).toHaveLength(2);
+    expect(result.messages[1]).toEqual({ role: "user", content: "hello" });
   });
 });
