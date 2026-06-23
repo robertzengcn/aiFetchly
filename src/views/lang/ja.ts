@@ -1110,6 +1110,11 @@ export default {
     mcp_tools: "MCPツール",
     manage_mcp_tools: "MCPツールを管理",
     manage_skills: "スキルを管理",
+    user_ai_custom_context_directive: "カスタムコンテキスト指示",
+    "ai-custom-context-directive-description":
+      "AI チャットリクエストに毎回注入される静的テキスト（システムプロンプトの後）。無効にするには入力欄を空にしてください。",
+    "ai-custom-context-directive-placeholder":
+      "例：常に簡潔に答える。箇条書きを優先。米国顾客に靴を販売。",
   },
   skills: {
     title: "スキル管理",

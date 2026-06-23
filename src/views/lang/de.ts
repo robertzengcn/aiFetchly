@@ -1132,6 +1132,11 @@ export default {
     mcp_tools: "MCP-Tools",
     manage_mcp_tools: "MCP-Tools verwalten",
     manage_skills: "Fähigkeiten verwalten",
+    user_ai_custom_context_directive: "Benutzerdefinierte Kontext-Direktive",
+    "ai-custom-context-directive-description":
+      "Statischer Text, der in jede KI-Chat-Anfrage eingefügt wird, nach dem System-Prompt. Feld leeren, um zu deaktivieren.",
+    "ai-custom-context-directive-placeholder":
+      "z.B. Antworte immer prägnant. Bevorzuge Aufzählungspunkte. Wir verkaufen Schuhe an US-Kunden.",
   },
   skills: {
     title: "Fähigkeiten verwalten",

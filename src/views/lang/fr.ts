@@ -1125,6 +1125,11 @@ export default {
     mcp_tools: "MCP Tools",
     manage_mcp_tools: "Manage MCP Tools",
     manage_skills: "Gérer les compétences",
+    user_ai_custom_context_directive: "Directive de Contexte Personnalisée",
+    "ai-custom-context-directive-description":
+      "Texte statique injecté dans chaque requête de chat IA, après le prompt système. Videz le champ pour désactiver.",
+    "ai-custom-context-directive-placeholder":
+      "ex. Réponds toujours concis. Préfère les puces. Nous vendons des chaussures aux clients américains.",
   },
   skills: {
     title: "Gestion des Compétences",

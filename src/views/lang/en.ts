@@ -1141,6 +1141,11 @@ export default {
     mcp_tools: "MCP Tools",
     manage_mcp_tools: "Manage MCP Tools",
     manage_skills: "Manage Skills",
+    user_ai_custom_context_directive: "Custom Context Directive",
+    "ai-custom-context-directive-description":
+      "Static text injected into every AI chat request, after the system prompt. Clear the box to disable.",
+    "ai-custom-context-directive-placeholder":
+      "e.g. Always answer concisely. Prefer bullet points. We sell shoes to US customers.",
   },
   skills: {
     title: "Skills Management",
