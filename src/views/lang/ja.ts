@@ -850,6 +850,10 @@ export default {
     update_error: "タスクの更新に失敗しました",
     load_task_error: "タスクデータの読み込みに失敗しました",
     no_valid_urls: "有効なURLが見つかりません",
+    ai_support_enabled: "AIエンリッチメントを有効化",
+    ai_support_hint: "AIを使用して電話番号、住所、ソーシャルリンクを抽出",
+    ai_support_upgrade_hint:
+      "AIエンリッチメントを有効にするにはプランをアップグレードしてください。",
     confirm_kill: "このタスクを停止してもよろしいですか？",
     kill_task: "タスクを停止",
     kill_success: "タスクが正常に停止されました",

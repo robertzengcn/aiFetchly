@@ -868,6 +868,10 @@ export default {
     update_error: "Aufgabe konnte nicht aktualisiert werden",
     load_task_error: "Aufgabendaten konnten nicht geladen werden",
     no_valid_urls: "Keine gültigen URLs gefunden",
+    ai_support_enabled: "KI-Anreicherung aktivieren",
+    ai_support_hint: "Telefon, Adresse und Social-Links mit KI extrahieren",
+    ai_support_upgrade_hint:
+      "Upgrade Ihren Plan, um die KI-Anreicherung zu aktivieren.",
     confirm_kill: "Sind Sie sicher, dass Sie diese Aufgabe stoppen möchten?",
     kill_task: "Aufgabe stoppen",
     kill_success: "Aufgabe erfolgreich gestoppt",

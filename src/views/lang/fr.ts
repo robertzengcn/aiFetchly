@@ -862,6 +862,10 @@ export default {
     update_error: "Failed to update task",
     load_task_error: "Failed to load task data",
     no_valid_urls: "No valid URLs found",
+    ai_support_enabled: "Activer l'enrichissement IA",
+    ai_support_hint: "Extraire téléphone, adresse et liens sociaux avec l'IA",
+    ai_support_upgrade_hint:
+      "Mettez à niveau votre forfait pour activer l'enrichissement IA.",
     confirm_kill: "Êtes-vous sûr de vouloir arrêter cette tâche ?",
     kill_task: "Arrêter la tâche",
     kill_success: "Tâche arrêtée avec succès",
