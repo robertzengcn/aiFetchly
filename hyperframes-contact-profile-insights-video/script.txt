@@ -1,0 +1,21 @@
+Contact Profile Insights helps when public contact details are scattered across websites, directories, and search results. Checking every page by hand is slow, and it is easy to miss an email address, phone number, or social profile.
+
+With Contact Profile Insights, AiFetchly turns a list of URLs into structured contact profiles. It visits each website, scans public pages for email addresses, follows useful internal links when needed, and can use AI to enrich each result with phone numbers, addresses, and social links.
+
+To begin, open Contact Profile Insights from the left navigation menu. You will land on the task list, where you can review previous jobs or open results. To start a new job, click Create New Task.
+
+Now choose where the URLs should come from. Select Manual Input when you already have a custom list of websites. Paste one URL per line, and make sure each one starts with http or https. Select Search Results when you want to reuse URLs collected by Market Insight Explorer.
+
+Next, configure how deeply AiFetchly should review each website. Page Length controls how many pages to inspect per URL. Concurrency controls how many URLs run at the same time. Max Page Number protects you from very large websites, and Process Timeout limits each URL.
+
+For normal production runs, keep Show in Browser turned off. Turn it on only when you need to debug. For larger batches, click Choose Proxy and select proxies that match your target region.
+
+If AI Enrichment is available on your plan, leave Enable AI Enrichment on when you want fuller profiles. AiFetchly will try to add phone numbers, addresses, and social links.
+
+Click Submit to create the task. AiFetchly starts the background process and returns you to the task list. While the task is running, you can monitor status, stop it if needed, or review logs.
+
+When the task is complete, click View Results. The results table shows each source URL, record time, enriched phone, address, social links, and AI status. Completed rows mean enrichment finished successfully. Skipped or failed rows usually mean there was not enough useful page content.
+
+Click a result row to expand it. Here you can see the emails found for that website, copy the email list, and review enriched profile fields.
+
+Finally, click Export to download the results as a CSV file. Use the exported profiles in spreadsheets, outreach campaigns, or follow-up review. Contact Profile Insights gives you a repeatable way to turn public web pages into organized contact data.
