@@ -1394,7 +1394,8 @@ export default {
     ai_message_task_system_prompt: "系统提示词",
     ai_message_task_system_prompt_hint: "AI的可选系统指令",
     ai_message_task_model: "AI模型",
-    ai_message_task_model_hint: "使用的模型（例如 gpt-4o）",
+    ai_message_task_model_hint:
+      "“自动”使用服务器默认模型，可选择指定模型覆盖。",
     ai_message_task_allowed_tools: "允许的工具",
     ai_message_task_allowed_tools_hint:
       "选择AI在无人值守运行期间可以使用的内置工具",

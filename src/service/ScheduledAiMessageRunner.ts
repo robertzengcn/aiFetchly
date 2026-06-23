@@ -173,7 +173,7 @@ export class ScheduledAiMessageRunner {
         {
           message: task.message,
           conversationId: task.conversation_id ?? undefined,
-          model: task.model ?? undefined,
+          model: task.model && task.model !== "auto" ? task.model : undefined,
           systemPrompt: task.system_prompt ?? undefined,
           functions: clientTools,
         },

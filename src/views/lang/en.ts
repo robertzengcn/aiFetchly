@@ -1451,7 +1451,8 @@ export default {
     ai_message_task_system_prompt_hint:
       "Optional system instructions for the AI",
     ai_message_task_model: "AI Model",
-    ai_message_task_model_hint: "Model to use (e.g. gpt-4o)",
+    ai_message_task_model_hint:
+      "'Auto' uses the server's default model. Choose a specific model to override.",
     ai_message_task_allowed_tools: "Allowed Tools",
     ai_message_task_allowed_tools_hint:
       "Select built-in tools the AI can use during unattended runs",
