@@ -1016,7 +1016,10 @@ const handleCompactConversation = async (): Promise<void> => {
   isCompacting.value = true;
   streamError.value = null;
   try {
-    const summary = await compactChatV2Conversation(activeConversationId.value);
+    const summary = await compactChatV2Conversation(
+      activeConversationId.value,
+      resolveModelForRequest()
+    );
     if (summary) {
       const tokenEstimate =
         summary.outputTokenEstimate ??

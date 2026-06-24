@@ -617,6 +617,7 @@ export class AIChatQueryEngine {
             .enqueueSessionMemoryUpdate({
               conversationId,
               reason: "assistant_turn_completed",
+              model: result.model,
             })
             .catch((err) =>
               console.error(
