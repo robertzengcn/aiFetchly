@@ -51,6 +51,8 @@ export interface SessionMemoryUpdateInput {
   /** Real prompt-token count from the API usage event. When provided,
    * enables token-based threshold gating. */
   promptTokens?: number;
+  /** Model used by the triggering chat turn; forwarded to the compact request. */
+  model?: string;
 }
 
 export interface FullCompactInput {
@@ -214,6 +216,7 @@ export class AIChatCompactAgentService {
         content: r.content,
       }));
       const req: OpenAIChatCompletionRequest = {
+        model: input.model,
         messages: [
           { role: "system", content: buildSessionMemorySystemPrompt() },
           {

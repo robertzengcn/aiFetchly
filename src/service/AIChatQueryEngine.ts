@@ -618,6 +618,7 @@ export class AIChatQueryEngine {
               conversationId,
               reason: "assistant_turn_completed",
               promptTokens: result.promptTokens,
+              model: result.model,
             })
             .catch((err) =>
               console.error(
@@ -728,9 +729,19 @@ export class AIChatQueryEngine {
       return eventSink;
     }
     const saves: Promise<unknown>[] = [];
+    // Track the latest server-reported usage so it can be attributed to
+    // intermediate tool_call messages. Without this, every tool_call row
+    // is persisted with null tokensUsed/model, losing per-round cost data.
+    let latestUsage: { totalTokens: number; model?: string } | undefined;
     const wrapped: AIChatQueryEventSink = {
       emit: (event) => {
         eventSink.emit(event);
+        if (event.type === "usage_update") {
+          latestUsage = {
+            totalTokens: event.totalTokens,
+            model: event.model,
+          };
+        }
         if (event.type === "tool_call") {
           saves.push(
             module
@@ -740,6 +751,8 @@ export class AIChatQueryEngine {
                 toolCallId: event.toolCallId,
                 toolName: event.toolName,
                 toolArguments: event.toolArguments,
+                model: latestUsage?.model,
+                tokensUsed: latestUsage?.totalTokens,
               })
               .catch((err: unknown) => {
                 console.error("[ai-chat-v2] save tool call failed:", err);

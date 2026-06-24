@@ -1791,6 +1791,8 @@ export default {
     permission_resume_no_tool_id: "缺少工具调用信息，无法继续执行。",
     quota_exhausted:
       "您的订阅计划中包含的 AI 代币已用尽。请充值以继续使用 AI 功能。",
+    empty_response_error:
+      "AI 返回了空响应。这通常是临时的服务器问题（速率限制、超时或 502 错误）。请重新发送您的消息。",
   },
   aiChatV2Plan: {
     mode_chat: "聊天",
