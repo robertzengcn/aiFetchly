@@ -34,6 +34,9 @@ export class UserSecretKeyService {
       this.inflight = this.fetchKey()
         .then((key) => {
           this.cachedKey = key;
+          // Clear the in-flight handle on success so the next call sees the
+          // cache (not a stale resolved promise).
+          this.inflight = null;
           return key;
         })
         .catch((err) => {
@@ -45,13 +48,6 @@ export class UserSecretKeyService {
                 "Failed to load secret key from backend",
                 err
               );
-        })
-        .finally(() => {
-          // Keep the resolved promise from blocking retries — the cachedKey
-          // is already set on success, so we can drop the in-flight handle.
-          if (this.cachedKey) {
-            this.inflight = null;
-          }
         });
     }
     return this.inflight;
@@ -63,6 +59,11 @@ export class UserSecretKeyService {
    * may have a different secret key) and on logout/login transitions.
    */
   invalidate(): void {
+    // Zero the key buffer before dropping the reference so the bytes do not
+    // linger in the heap until GC. Standard hygiene for symmetric key material.
+    if (this.cachedKey) {
+      this.cachedKey.fill(0);
+    }
     this.cachedKey = null;
     this.inflight = null;
   }
