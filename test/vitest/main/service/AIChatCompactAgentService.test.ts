@@ -266,4 +266,209 @@ describe("AIChatCompactAgentService", () => {
     await Promise.all([p1, p2]);
     expect(completeChat).toHaveBeenCalledTimes(1);
   });
+
+  describe("threshold gate", () => {
+    beforeEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("skips when below token threshold and within time window", async () => {
+      // Prime lastSessionMemoryAt with a successful update so the time-based
+      // gate is closed. (On a fresh agent, lastSessionMemoryAt defaults to 0
+      // and Date.now() - 0 > 60 min, so the gate opens on the first call —
+      // this is the documented "first turn after restart" edge case.)
+      mockGetByConversation.mockResolvedValue(null);
+      mockGetConversationMessages.mockResolvedValue([
+        {
+          messageId: "m1",
+          conversationId: "v2-gate-skip",
+          role: "user",
+          content: "x",
+          timestamp: new Date(1),
+          messageType: "message",
+        },
+        {
+          messageId: "m2",
+          conversationId: "v2-gate-skip",
+          role: "assistant",
+          content: "y",
+          timestamp: new Date(2),
+          messageType: "message",
+        },
+      ]);
+      mockUpsertMemory.mockResolvedValue({ failureCount: 0 });
+      const completeChat = vi
+        .fn()
+        .mockResolvedValue(
+          makeCompletion("# Session Memory\n## Current Goal\nx")
+        );
+      const agent = makeAgent({ completeChat });
+
+      // First call opens the gate (epoch=0 -> stale), runs the update, and
+      // sets lastSessionMemoryAt = now.
+      await agent.enqueueSessionMemoryUpdate({
+        conversationId: "v2-gate-skip",
+        reason: "test",
+        promptTokens: 1000,
+      });
+      expect(completeChat).toHaveBeenCalledTimes(1);
+      mockGetByConversation.mockClear();
+
+      // Second call: low tokens + fresh timer -> gate must skip.
+      await agent.enqueueSessionMemoryUpdate({
+        conversationId: "v2-gate-skip",
+        reason: "test",
+        promptTokens: 1000,
+      });
+      // DB read must NOT have been issued on the skipped call.
+      expect(mockGetByConversation).not.toHaveBeenCalled();
+    });
+
+    it("triggers when promptTokens >= 80% of context window", async () => {
+      mockGetByConversation.mockResolvedValue(null);
+      mockGetConversationMessages.mockResolvedValue([
+        {
+          messageId: "m1",
+          conversationId: "v2-gate-tokens",
+          role: "user",
+          content: "x",
+          timestamp: new Date(1),
+          messageType: "message",
+        },
+        {
+          messageId: "m2",
+          conversationId: "v2-gate-tokens",
+          role: "assistant",
+          content: "y",
+          timestamp: new Date(2),
+          messageType: "message",
+        },
+      ]);
+      mockUpsertMemory.mockResolvedValue({ failureCount: 0 });
+      const completeChat = vi
+        .fn()
+        .mockResolvedValue(
+          makeCompletion("# Session Memory\n## Current Goal\nx")
+        );
+      const agent = makeAgent({ completeChat });
+
+      // 0.8 * 128_000 = 102_400. 103_000 must trip the gate.
+      await agent.enqueueSessionMemoryUpdate({
+        conversationId: "v2-gate-tokens",
+        reason: "test",
+        promptTokens: 103_000,
+      });
+
+      expect(mockGetByConversation).toHaveBeenCalledWith("v2-gate-tokens");
+      expect(completeChat).toHaveBeenCalled();
+      expect(mockUpsertMemory).toHaveBeenCalled();
+    });
+
+    it("triggers when >60 min passed since last update", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+      try {
+        mockGetByConversation.mockResolvedValue(null);
+        mockGetConversationMessages.mockResolvedValue([
+          {
+            messageId: "m1",
+            conversationId: "v2-gate-time",
+            role: "user",
+            content: "x",
+            timestamp: new Date(1),
+            messageType: "message",
+          },
+          {
+            messageId: "m2",
+            conversationId: "v2-gate-time",
+            role: "assistant",
+            content: "y",
+            timestamp: new Date(2),
+            messageType: "message",
+          },
+        ]);
+        mockUpsertMemory.mockResolvedValue({ failureCount: 0 });
+        const completeChat = vi
+          .fn()
+          .mockResolvedValue(
+            makeCompletion("# Session Memory\n## Current Goal\nx")
+          );
+        const agent = makeAgent({ completeChat });
+
+        // First call: low tokens, lastSessionMemoryAt defaults to 0 -> epoch
+        // time is way more than 60 min ago -> gate opens. After a successful
+        // run, lastSessionMemoryAt is set to now.
+        await agent.enqueueSessionMemoryUpdate({
+          conversationId: "v2-gate-time",
+          reason: "test",
+          promptTokens: 1000,
+        });
+        expect(completeChat).toHaveBeenCalledTimes(1);
+
+        // Immediate second call: skipped (gate closed).
+        await agent.enqueueSessionMemoryUpdate({
+          conversationId: "v2-gate-time",
+          reason: "test",
+          promptTokens: 1000,
+        });
+        expect(completeChat).toHaveBeenCalledTimes(1);
+
+        // Advance past 60 min -> gate reopens.
+        vi.setSystemTime(new Date("2026-01-01T01:01:00Z"));
+        await agent.enqueueSessionMemoryUpdate({
+          conversationId: "v2-gate-time",
+          reason: "test",
+          promptTokens: 1000,
+        });
+        expect(completeChat).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("resets the timer on success so an immediate second call is skipped", async () => {
+      mockGetByConversation.mockResolvedValue(null);
+      mockGetConversationMessages.mockResolvedValue([
+        {
+          messageId: "m1",
+          conversationId: "v2-gate-reset",
+          role: "user",
+          content: "x",
+          timestamp: new Date(1),
+          messageType: "message",
+        },
+        {
+          messageId: "m2",
+          conversationId: "v2-gate-reset",
+          role: "assistant",
+          content: "y",
+          timestamp: new Date(2),
+          messageType: "message",
+        },
+      ]);
+      mockUpsertMemory.mockResolvedValue({ failureCount: 0 });
+      const completeChat = vi
+        .fn()
+        .mockResolvedValue(
+          makeCompletion("# Session Memory\n## Current Goal\nx")
+        );
+      const agent = makeAgent({ completeChat });
+
+      // Gate opens on the first call because lastSessionMemoryAt defaults to 0.
+      await agent.enqueueSessionMemoryUpdate({
+        conversationId: "v2-gate-reset",
+        reason: "test",
+        promptTokens: 1000,
+      });
+      expect(completeChat).toHaveBeenCalledTimes(1);
+
+      // Second call immediately after success: low tokens + fresh timer -> skip.
+      await agent.enqueueSessionMemoryUpdate({
+        conversationId: "v2-gate-reset",
+        reason: "test",
+        promptTokens: 1000,
+      });
+      expect(completeChat).toHaveBeenCalledTimes(1);
+    });
+  });
 });
