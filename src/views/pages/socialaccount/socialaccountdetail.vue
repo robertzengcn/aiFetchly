@@ -270,7 +270,7 @@ const initialize = async () => {
     isEdit.value = true;
     FakeAPI.fetch(parseInt(socialaccountId.value.toString())).then((res) => {
       user.value = res.user;
-      pass.value = res.pass;
+      pass.value = res.pass ?? "";
       status.value = res.status;
       name.value = res.name;
       phone.value = res.phone;
