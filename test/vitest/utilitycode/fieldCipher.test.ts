@@ -106,14 +106,15 @@ import {
   userSecretKeyService,
 } from "@/modules/fieldCipher/UserSecretKeyService";
 import { SecretKeyUnavailableError } from "@/modules/fieldCipher/SecretKeyUnavailableError";
+import { HttpClient } from "@/modules/lib/httpclient";
 
 // A 32-byte base64-encoded key, matching the backend response shape.
 const VALID_B64_KEY = Buffer.alloc(32, 0x42).toString("base64");
 
-function makeMockedHttpClient(getImpl: () => Promise<unknown>) {
+function makeMockedHttpClient(getImpl: () => Promise<unknown>): HttpClient {
   return {
     get: vi.fn().mockImplementation(getImpl),
-  } as unknown as ConstructorParameters<typeof UserSecretKeyService>[0];
+  } as unknown as HttpClient;
 }
 
 describe("UserSecretKeyService.getKey", () => {
