@@ -177,6 +177,18 @@ describe("UserSecretKeyService.getKey", () => {
     );
   });
 
+  it("throws SecretKeyUnavailableError when backend returns status:false envelope", async () => {
+    const mock = makeMockedHttpClient(async () => ({
+      status: false,
+      msg: "user_not_login",
+      data: null,
+    }));
+    const service = new UserSecretKeyService(mock);
+    await expect(service.getKey()).rejects.toBeInstanceOf(
+      SecretKeyUnavailableError
+    );
+  });
+
   it("throws SecretKeyUnavailableError when key is not 32 bytes", async () => {
     const tooShort = Buffer.alloc(31, 0x42).toString("base64");
     const mock = makeMockedHttpClient(async () => ({
