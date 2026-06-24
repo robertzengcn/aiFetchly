@@ -40,6 +40,8 @@ export interface AIChatCompactAgentDeps {
 export interface SessionMemoryUpdateInput {
   conversationId: string;
   reason: string;
+  /** Model used by the triggering chat turn; forwarded to the compact request. */
+  model?: string;
 }
 
 export interface FullCompactInput {
@@ -145,6 +147,7 @@ export class AIChatCompactAgentService {
         content: r.content,
       }));
       const req: OpenAIChatCompletionRequest = {
+        model: input.model,
         messages: [
           { role: "system", content: buildSessionMemorySystemPrompt() },
           {
