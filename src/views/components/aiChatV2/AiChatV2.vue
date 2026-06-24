@@ -1287,7 +1287,8 @@ const onSend = async (text: string): Promise<void> => {
           }
         } else if (!assistantAdded || assistant.content.length === 0) {
           const emptyMessage =
-            "AI returned an empty response. Check the ai-chat-v2 stream diagnostics in the app log.";
+            t("aiChatV2.empty_response_error") ||
+            "The AI returned an empty response. This is typically a transient server issue (rate limit, timeout, or 502). Please try sending your message again.";
           streamError.value = emptyMessage;
           showAssistantError(emptyMessage);
         }

@@ -1849,6 +1849,8 @@ export default {
       "Missing tool call information; cannot continue execution.",
     quota_exhausted:
       "The AI tokens included in your subscription plan have been exhausted. Please recharge your account to continue using AI features.",
+    empty_response_error:
+      "The AI returned an empty response. This is typically a transient server issue (rate limit, timeout, or 502). Please try sending your message again.",
   },
   aiChatV2Plan: {
     mode_chat: "Chat",

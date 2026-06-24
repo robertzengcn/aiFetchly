@@ -1841,6 +1841,8 @@ export default {
       "Werkzeugaufrufinformationen fehlen; Fortsetzung nicht möglich.",
     quota_exhausted:
       "Die in Ihrem Abonnement enthaltenen KI-Token sind aufgebraucht. Bitte laden Sie Ihr Konto auf, um die KI-Funktionen weiterhin zu nutzen.",
+    empty_response_error:
+      "Die KI hat eine leere Antwort zurückgegeben. Dies ist in der Regel ein vorübergehendes Serverproblem (Ratenbegrenzung, Zeitüberschreitung oder 502-Fehler). Bitte senden Sie Ihre Nachricht erneut.",
   },
   aiChatV2Plan: {
     mode_chat: "Chat",

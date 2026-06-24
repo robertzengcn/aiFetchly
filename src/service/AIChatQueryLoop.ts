@@ -367,6 +367,27 @@ export class AIChatQueryLoop {
         }
 
         if (!willContinue) {
+          // Detect truncated/empty responses: the server closed the stream
+          // without delivering content, a complete tool call, or a
+          // finish_reason. This typically indicates a transient server-side
+          // issue (502, timeout, rate limit). Surface it as an error so the
+          // user knows to retry, rather than silently completing with empty
+          // content. Skip when the user explicitly forced plan submission
+          // (empty content is expected in that path).
+          if (
+            accumulator.state.fullContent.trim().length === 0 &&
+            !accumulator.state.finishReason &&
+            !(
+              planContext &&
+              shouldForceSubmitPlanForApproval(input.request.message)
+            )
+          ) {
+            throw new Error(
+              "AI server returned an empty response with no finish reason. " +
+                "This is typically a transient server issue (rate limit, timeout, or 502). " +
+                "Please try sending your message again."
+            );
+          }
           if (
             planContext &&
             accumulator.state.fullContent.trim().length === 0 &&
