@@ -87,10 +87,13 @@ export class SocialAccountModule extends BaseModule {
     entities: SocialAccountEntity[]
   ): Promise<SocialAccountEntity[]> {
     return Promise.all(
-      entities.map(async (e) => ({
-        ...e,
-        pass: await this.decryptPass(e.pass, e.id),
-      }))
+      entities.map(async (e) => {
+        const decrypted = new SocialAccountEntity();
+        Object.assign(decrypted, e, {
+          pass: await this.decryptPass(e.pass, e.id),
+        });
+        return decrypted;
+      })
     );
   }
 
