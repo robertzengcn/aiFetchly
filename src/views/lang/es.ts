@@ -695,6 +695,8 @@ export default {
     select_account_hint:
       "Seleccione una cuenta haciendo clic en el botón de cambiar cuenta, seleccione una cuenta con cookies existentes",
     change_account: "Cambiar cuenta",
+    encryption_unavailable:
+      "El servicio de cifrado de cuentas no está disponible. Comprueba tu conexión e inténtalo de nuevo.",
   },
   search: {
     google: "Google",
