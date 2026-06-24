@@ -1211,21 +1211,34 @@ const onSend = async (text: string): Promise<void> => {
               planChunk.conversationId || activeConversationId.value || ""
             );
           } else if (chunk.eventType === "tool_call") {
-            messages.value.push({
-              id: `tool-call-${chunk.toolCallId || Date.now()}`,
-              conversationId:
-                chunk.conversationId || activeConversationId.value || "",
-              role: "assistant",
-              content: "",
-              timestamp: new Date().toISOString(),
-              messageType: MessageType.TOOL_CALL,
-              metadata: {
-                source: "chat-v2",
-                toolCallId: chunk.toolCallId,
-                toolName: chunk.toolName,
-                toolArguments: chunk.toolArguments,
-              },
-            });
+            const toolCallId = chunk.toolCallId;
+            // Defensive dedup: if the same tool_call event is delivered twice
+            // (IPC re-delivery, listener cleanup race, or history already
+            // loaded), avoid rendering a duplicate card.
+            const alreadyRendered = toolCallId
+              ? messages.value.some(
+                  (m) =>
+                    m.messageType === MessageType.TOOL_CALL &&
+                    m.metadata?.toolCallId === toolCallId
+                )
+              : false;
+            if (!alreadyRendered) {
+              messages.value.push({
+                id: `tool-call-${toolCallId || Date.now()}`,
+                conversationId:
+                  chunk.conversationId || activeConversationId.value || "",
+                role: "assistant",
+                content: "",
+                timestamp: new Date().toISOString(),
+                messageType: MessageType.TOOL_CALL,
+                metadata: {
+                  source: "chat-v2",
+                  toolCallId,
+                  toolName: chunk.toolName,
+                  toolArguments: chunk.toolArguments,
+                },
+              });
+            }
           } else if (chunk.eventType === "tool_result") {
             upsertToolResultMessage(
               chunk,
