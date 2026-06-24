@@ -244,10 +244,12 @@ export async function clearAllChatV2History(): Promise<{
  * compact summary saved by the main process.
  */
 export async function compactChatV2Conversation(
-  conversationId: string
+  conversationId: string,
+  model?: string
 ): Promise<AIChatCompactSummaryView | null> {
   const resp = await windowInvoke(AI_CHAT_V2_COMPACT_CONVERSATION, {
     conversationId,
+    model,
   });
   return (resp as AIChatCompactSummaryView | null) ?? null;
 }
