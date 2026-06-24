@@ -688,6 +688,8 @@ export default {
     select_account_hint:
       "Select account by click the change account button, please select account with cookies exist",
     change_account: "change account",
+    encryption_unavailable:
+      "Account encryption service is unavailable. Please check your connection and try again.",
   },
   search: {
     google: "Google",

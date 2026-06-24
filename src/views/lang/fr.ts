@@ -686,6 +686,8 @@ export default {
     select_account_hint:
       "Select account by click the change account button, please select account with cookies exist",
     change_account: "change account",
+    encryption_unavailable:
+      "Le service de chiffrement des comptes est indisponible. Vérifiez votre connexion et réessayez.",
   },
   search: {
     google: "Google",

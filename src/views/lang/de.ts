@@ -692,6 +692,8 @@ export default {
     select_account_hint:
       "Konto auswählen durch Klick auf den Konto-wechseln-Button, bitte Konto mit vorhandenen Cookies auswählen",
     change_account: "Konto wechseln",
+    encryption_unavailable:
+      "Der Kontoverschlüsselungsdienst ist nicht verfügbar. Bitte überprüfen Sie Ihre Verbindung und versuchen Sie es erneut.",
   },
   search: {
     google: "Google",

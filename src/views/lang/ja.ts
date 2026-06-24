@@ -675,6 +675,8 @@ export default {
     select_account_hint:
       "アカウント変更ボタンをクリックしてアカウントを選択してください。Cookieが存在するアカウントを選択してください",
     change_account: "アカウントを変更",
+    encryption_unavailable:
+      "アカウント暗号化サービスを利用できません。接続を確認して再試行してください。",
   },
   search: {
     google: "Google",

@@ -660,6 +660,7 @@ export default {
     cookies_exist: "存在Cookies",
     select_account_hint: "Select an account for the source channel",
     change_account: "更换账户",
+    encryption_unavailable: "账号加密服务不可用，请检查网络连接后重试。",
   },
   search: {
     google: "Google",
