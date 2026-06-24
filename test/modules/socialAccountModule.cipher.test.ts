@@ -362,6 +362,81 @@ describe("SocialAccountModule crypto wiring", function () {
     });
   });
 
+  describe("getAccountDetail", function () {
+    it("decrypts the encrypted pass field to plaintext", async function () {
+      stubKeySuccess();
+
+      const encryptedPass = FieldCipher.encrypt("plain-detail", TEST_KEY);
+      const mod = new SocialAccountModule();
+      (
+        mod as unknown as {
+          socialAccountModel: {
+            getSocialAccountById: (
+              id: number
+            ) => Promise<SocialAccountEntity | null>;
+          };
+        }
+      ).socialAccountModel = {
+        async getSocialAccountById() {
+          return makeEntity({ id: 7, pass: encryptedPass });
+        },
+      };
+
+      const result = await mod.getAccountDetail(7);
+      expect(result.status).to.equal("success");
+      expect(result.data.pass).to.equal("plain-detail");
+    });
+
+    it("returns legacy plaintext pass as-is (lazy migration)", async function () {
+      stubKeySuccess();
+
+      const mod = new SocialAccountModule();
+      (
+        mod as unknown as {
+          socialAccountModel: {
+            getSocialAccountById: (
+              id: number
+            ) => Promise<SocialAccountEntity | null>;
+          };
+        }
+      ).socialAccountModel = {
+        async getSocialAccountById() {
+          return makeEntity({ id: 7, pass: "legacy-detail-pw" });
+        },
+      };
+
+      const result = await mod.getAccountDetail(7);
+      expect(result.status).to.equal("success");
+      expect(result.data.pass).to.equal("legacy-detail-pw");
+    });
+
+    it("returns null pass when secret key is unavailable (fail-soft)", async function () {
+      stubKeyFailure();
+
+      const mod = new SocialAccountModule();
+      (
+        mod as unknown as {
+          socialAccountModel: {
+            getSocialAccountById: (
+              id: number
+            ) => Promise<SocialAccountEntity | null>;
+          };
+        }
+      ).socialAccountModel = {
+        async getSocialAccountById() {
+          return makeEntity({
+            id: 7,
+            pass: FieldCipher.encrypt("plain-detail", TEST_KEY),
+          });
+        },
+      };
+
+      const result = await mod.getAccountDetail(7);
+      expect(result.status).to.equal("success");
+      expect(result.data.pass).to.be(null);
+    });
+  });
+
   describe("entity-array read methods (decryptPasses chokepoint)", function () {
     /**
      * Builds a SocialAccountModule whose Model returns one encrypted row
