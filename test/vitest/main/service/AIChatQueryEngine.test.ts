@@ -8,6 +8,7 @@ import type {
 import type { OpenAIChatMessage } from "@/api/aiChatApi";
 import type { AIChatContextAssembler } from "@/service/AIChatContextAssembler";
 import type { AIChatCompactAgentService } from "@/service/AIChatCompactAgentService";
+import type { SessionMemoryUpdateInput } from "@/service/AIChatCompactAgentService";
 import type {
   AIChatQueryEvent,
   AIChatQueryLoopInput,
@@ -91,12 +92,13 @@ vi.mock("@/config/usersetting", async (importOriginal) => {
  * result.  The fakeRun callback can also inspect the loop input.
  */
 function createEngineWithFakeLoop(
-  fakeRun: (input: AIChatQueryLoopInput) => Promise<AIChatQueryLoopResult>
+  fakeRun: (input: AIChatQueryLoopInput) => Promise<AIChatQueryLoopResult>,
+  deps?: ConstructorParameters<typeof AIChatQueryEngine>[1]
 ): AIChatQueryEngine {
   const fakeLoop = {
     run: fakeRun,
   } as unknown as AIChatQueryLoop;
-  return new AIChatQueryEngine(fakeLoop);
+  return new AIChatQueryEngine(fakeLoop, deps);
 }
 
 /** Collect event types emitted into a sink. */
@@ -209,6 +211,37 @@ describe("AIChatQueryEngine", () => {
       }
     });
 
+    it("forwards promptTokens from the loop result to the compact agent", async () => {
+      const fakeRun = vi.fn().mockResolvedValue({
+        type: "completed" as const,
+        conversationId: "v2-test-conv",
+        assistantMessageId: "assistant-test",
+        fullContent: "Hello!",
+        finishReason: "stop",
+        promptTokens: 99_999,
+      });
+      const enqueueSpy = vi.fn().mockResolvedValue(undefined) as (
+        input: SessionMemoryUpdateInput
+      ) => Promise<void>;
+      const compactAgent = {
+        enqueueSessionMemoryUpdate: enqueueSpy,
+      } as unknown as AIChatCompactAgentService;
+      const engine = createEngineWithFakeLoop(fakeRun, { compactAgent });
+      const { sink } = makeEventCollector();
+
+      await engine.submitMessage({
+        request: { message: "hello" },
+        eventSink: sink,
+      });
+
+      expect(enqueueSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          conversationId: "v2-test-conv",
+          promptTokens: 99_999,
+        })
+      );
+    });
+
     it("saves assistant message when loop completes with content", async () => {
       const fakeRun = vi.fn().mockResolvedValue({
         type: "completed" as const,
@@ -253,7 +286,7 @@ describe("AIChatQueryEngine", () => {
             messageId: input.assistantMessageId,
             toolCallId: "call-1",
             toolName: "get_time",
-            fullContent: "{\"success\":true}",
+            fullContent: '{"success":true}',
             toolResult: { success: true, summary: "12:00 UTC" },
           });
           return {
@@ -284,7 +317,7 @@ describe("AIChatQueryEngine", () => {
         assistantMessageId: expect.stringMatching(/^assistant-/),
         toolCallId: "call-1",
         toolName: "get_time",
-        content: "{\"success\":true}",
+        content: '{"success":true}',
         toolResult: { success: true, summary: "12:00 UTC" },
         replacesPermissionPromptForToolId: undefined,
       });
