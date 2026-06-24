@@ -79,7 +79,8 @@ describe("FieldCipher.decrypt", () => {
     const encrypted = FieldCipher.encrypt("secret", TEST_KEY);
     // Flip the last chars of the ciphertext portion.
     const parts = encrypted.split(":");
-    const tampered = parts[2].slice(0, -2) + (parts[2].slice(-2) === "AA" ? "BB" : "AA");
+    const tampered =
+      parts[2].slice(0, -2) + (parts[2].slice(-2) === "AA" ? "BB" : "AA");
     const malformed = `${parts[0]}:${parts[1]}:${tampered}`;
     expect(() => FieldCipher.decrypt(malformed, TEST_KEY)).toThrow();
   });
@@ -96,5 +97,121 @@ describe("FieldCipher.decrypt", () => {
     const encrypted = FieldCipher.encrypt("x", TEST_KEY);
     const shortKey = Buffer.alloc(31, 0xab);
     expect(() => FieldCipher.decrypt(encrypted, shortKey)).toThrow();
+  });
+});
+
+import { beforeEach, vi } from "vitest";
+import {
+  UserSecretKeyService,
+  userSecretKeyService,
+} from "@/modules/fieldCipher/UserSecretKeyService";
+import { SecretKeyUnavailableError } from "@/modules/fieldCipher/SecretKeyUnavailableError";
+
+// A 32-byte base64-encoded key, matching the backend response shape.
+const VALID_B64_KEY = Buffer.alloc(32, 0x42).toString("base64");
+
+function makeMockedHttpClient(getImpl: () => Promise<unknown>) {
+  return {
+    get: vi.fn().mockImplementation(getImpl),
+  } as unknown as ConstructorParameters<typeof UserSecretKeyService>[0];
+}
+
+describe("UserSecretKeyService.getKey", () => {
+  beforeEach(() => {
+    userSecretKeyService.invalidate();
+  });
+
+  it("returns a 32-byte buffer on first call", async () => {
+    const mock = makeMockedHttpClient(async () => ({
+      status: true,
+      data: { secretKey: VALID_B64_KEY },
+    }));
+    const service = new UserSecretKeyService(mock);
+    const key = await service.getKey();
+    expect(key).toBeInstanceOf(Buffer);
+    expect(key.length).toBe(32);
+    expect(mock.get).toHaveBeenCalledTimes(1);
+  });
+
+  it("caches the key — second call does not hit the network", async () => {
+    const mock = makeMockedHttpClient(async () => ({
+      status: true,
+      data: { secretKey: VALID_B64_KEY },
+    }));
+    const service = new UserSecretKeyService(mock);
+    await service.getKey();
+    await service.getKey();
+    expect(mock.get).toHaveBeenCalledTimes(1);
+  });
+
+  it("invalidate() forces re-fetch on next call", async () => {
+    const mock = makeMockedHttpClient(async () => ({
+      status: true,
+      data: { secretKey: VALID_B64_KEY },
+    }));
+    const service = new UserSecretKeyService(mock);
+    await service.getKey();
+    service.invalidate();
+    await service.getKey();
+    expect(mock.get).toHaveBeenCalledTimes(2);
+  });
+
+  it("throws SecretKeyUnavailableError on network failure", async () => {
+    const mock = makeMockedHttpClient(async () => {
+      throw new Error("network down");
+    });
+    const service = new UserSecretKeyService(mock);
+    await expect(service.getKey()).rejects.toBeInstanceOf(
+      SecretKeyUnavailableError
+    );
+  });
+
+  it("throws SecretKeyUnavailableError when response is missing data.secretKey", async () => {
+    const mock = makeMockedHttpClient(async () => ({
+      status: true,
+      data: {},
+    }));
+    const service = new UserSecretKeyService(mock);
+    await expect(service.getKey()).rejects.toBeInstanceOf(
+      SecretKeyUnavailableError
+    );
+  });
+
+  it("throws SecretKeyUnavailableError when key is not 32 bytes", async () => {
+    const tooShort = Buffer.alloc(31, 0x42).toString("base64");
+    const mock = makeMockedHttpClient(async () => ({
+      status: true,
+      data: { secretKey: tooShort },
+    }));
+    const service = new UserSecretKeyService(mock);
+    await expect(service.getKey()).rejects.toBeInstanceOf(
+      SecretKeyUnavailableError
+    );
+  });
+
+  it("dedups concurrent first calls into one HTTP fetch", async () => {
+    const mock = makeMockedHttpClient(async () => ({
+      status: true,
+      data: { secretKey: VALID_B64_KEY },
+    }));
+    const service = new UserSecretKeyService(mock);
+    const [a, b] = await Promise.all([service.getKey(), service.getKey()]);
+    expect(a.equals(b)).toBe(true);
+    expect(mock.get).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears the in-flight promise after a failed fetch so the next call retries", async () => {
+    let calls = 0;
+    const mock = makeMockedHttpClient(async () => {
+      calls++;
+      if (calls === 1) throw new Error("first fails");
+      return { status: true, data: { secretKey: VALID_B64_KEY } };
+    });
+    const service = new UserSecretKeyService(mock);
+    await expect(service.getKey()).rejects.toBeInstanceOf(
+      SecretKeyUnavailableError
+    );
+    const key = await service.getKey();
+    expect(key.length).toBe(32);
   });
 });
