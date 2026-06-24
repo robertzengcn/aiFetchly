@@ -1847,6 +1847,8 @@ export default {
       "Falta la información de la llamada de herramienta; no se puede continuar.",
     quota_exhausted:
       "Los tokens de IA incluidos en su plan de suscripción se han agotado. Recargue su cuenta para seguir utilizando las funciones de IA.",
+    empty_response_error:
+      "La IA devolvió una respuesta vacía. Esto suele ser un problema temporal del servidor (límite de tasa, tiempo de espera o error 502). Intente enviar su mensaje nuevamente.",
   },
   aiChatV2Plan: {
     mode_chat: "Chat",
