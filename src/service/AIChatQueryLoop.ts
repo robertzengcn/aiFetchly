@@ -34,8 +34,15 @@ import {
   sanitizeEnterPlanModeArgs,
 } from "@/service/EnterPlanModeTool";
 
-/** Max model→tool→model rounds per user turn. */
-const CHAT_V2_MAX_TOOL_ROUNDS = 8;
+/**
+ * Max model→tool→model rounds per user turn. Must be high enough to
+ * accommodate plan-mode flows where each AskUserQuestion pauses and
+ * resumes (consuming one round per question). A typical planning turn
+ * uses 1 (EnterPlanMode) + N (AskUserQuestion) + 1 (SubmitPlanForApproval)
+ * + execution rounds. 8 was too low and dead-ended conversations after
+ * ~7 questions.
+ */
+const CHAT_V2_MAX_TOOL_ROUNDS = 30;
 
 /** Bound foreground tool calls so the UI does not spin indefinitely. */
 export const CHAT_V2_TOOL_TIMEOUT_MS = 90_000;

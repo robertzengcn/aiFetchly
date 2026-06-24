@@ -96,6 +96,8 @@ export class AIChatV2Module extends BaseModule {
     toolName: string;
     toolArguments: Record<string, unknown>;
     timestamp?: Date;
+    model?: string;
+    tokensUsed?: number;
   }): Promise<AIChatMessageEntity> {
     const metadata: ChatV2MessageMetadata = {
       source: "chat-v2",
@@ -109,6 +111,8 @@ export class AIChatV2Module extends BaseModule {
       role: "assistant",
       content: "",
       timestamp: params.timestamp,
+      model: params.model,
+      tokensUsed: params.tokensUsed,
       metadata,
       messageType: MessageType.TOOL_CALL,
     });
