@@ -11,6 +11,7 @@ import { TOKENNAME, REFRESHTOKEN } from "@/config/usersetting";
 import { User } from "@/modules/user";
 import { TokenRefreshService } from "@/modules/tokenRefresh";
 import { resolveViteLoginBase } from "@/config/viteLoginUrl";
+import { userSecretKeyService } from "@/modules/fieldCipher";
 
 // export type RemoteResp = {
 //   status: boolean,
@@ -130,6 +131,9 @@ export class HttpClient {
           "Authorization",
           "Bearer " + refreshResult.data.accessToken
         );
+
+        // The new session may have a different secret key; drop the cached one.
+        userSecretKeyService.invalidate();
 
         // Retry the original request with new token
         return this._fetchJSON(endpoint, options);
@@ -425,6 +429,9 @@ export class HttpClient {
               "Authorization",
               "Bearer " + refreshResult.data.accessToken
             );
+
+            // The new session may have a different secret key; drop the cached one.
+            userSecretKeyService.invalidate();
 
             // Retry the original request with new token
             return this.postStream(endpoint, data, options, true);
