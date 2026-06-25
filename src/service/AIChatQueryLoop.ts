@@ -25,6 +25,7 @@ import type {
   AIChatQueryLoopResult,
 } from "@/service/AIChatQueryEvents";
 import { OpenAIStreamAccumulator } from "@/service/OpenAIStreamAccumulator";
+import { ToolExecutor } from "@/service/ToolExecutor";
 import {
   checkPlanModeToolPolicy,
   isPlanToolName,
@@ -867,7 +868,26 @@ export class AIChatQueryLoop {
 
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
     const timeoutPromise = new Promise<ToolExecutionResult>((resolve) => {
-      timeoutId = setTimeout(() => {
+      timeoutId = setTimeout(async () => {
+        // When the skill supports partial results, try to return whatever
+        // data was collected before the deadline.
+        if (skill?.supportsPartialResult) {
+          const snapshot = await ToolExecutor.requestPartialSnapshot(call.id);
+          if (snapshot && snapshot.collectedCount > 0) {
+            resolve({
+              tool_call_id: call.id,
+              tool_name: call.name,
+              success: true,
+              result: snapshot.data,
+              partial: true,
+              collectedCount: snapshot.collectedCount,
+              expectedCount: snapshot.expectedCount,
+              timedOutAfterMs: effectiveTimeoutMs,
+              execution_time_ms: Date.now() - startedAt,
+            });
+            return;
+          }
+        }
         resolve({
           tool_call_id: call.id,
           tool_name: call.name,
@@ -885,6 +905,7 @@ export class AIChatQueryLoop {
       return await Promise.race([executePromise, timeoutPromise]);
     } finally {
       if (timeoutId) clearTimeout(timeoutId);
+      ToolExecutor.unregisterPartialSnapshot(call.id);
     }
   }
 

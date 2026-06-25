@@ -112,6 +112,13 @@ export interface SkillDefinition {
   ) => ToolTimeoutClass;
 
   /**
+   * When true, the runtime may request whatever partial data the tool has
+   * collected when the timeout fires. The tool's execute() must return
+   * promptly when its cancellation signal is set.
+   */
+  readonly supportsPartialResult?: boolean;
+
+  /**
    * True when the imported skill is derived from SKILL.md guidance only and
    * does not provide a real executable entrypoint for side-effect operations.
    */

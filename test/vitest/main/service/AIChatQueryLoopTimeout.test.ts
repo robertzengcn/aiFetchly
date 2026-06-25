@@ -111,3 +111,27 @@ describe("SkillExecutionContext emitProgress contract", () => {
     expect(received[0].expectedCount).to.equal(20);
   });
 });
+
+import { ToolExecutor } from "@/service/ToolExecutor";
+
+describe("partial-result snapshot API", () => {
+  it("stores and retrieves partial snapshots by toolCallId", async () => {
+    const id = "tc-partial-1";
+    ToolExecutor.updatePartialSnapshot(id, {
+      collectedCount: 5,
+      expectedCount: 20,
+      data: { businesses: [{ name: "A" }] },
+    });
+    const snap = await ToolExecutor.requestPartialSnapshot(id);
+    expect(snap).to.not.equal(null);
+    expect(snap!.collectedCount).to.equal(5);
+    ToolExecutor.unregisterPartialSnapshot(id);
+    expect(await ToolExecutor.requestPartialSnapshot(id)).to.equal(null);
+  });
+
+  it("returns null when no snapshot is registered", async () => {
+    expect(await ToolExecutor.requestPartialSnapshot("never-set")).to.equal(
+      null
+    );
+  });
+});
