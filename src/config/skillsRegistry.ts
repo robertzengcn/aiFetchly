@@ -320,7 +320,12 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     requiresConfirmation: false,
     permissionCategory: "automation",
     source: "built-in",
-    timeoutClass: "browser",
+    resolveTimeoutClass: (args) =>
+      (args.max_results as number) > 20 || args.include_website === true
+        ? "async"
+        : "browser",
+    resolveAsync: (args) =>
+      (args.max_results as number) > 20 || args.include_website === true,
     supportsPartialResult: true,
     execute: async (args, context) => {
       const result = await ToolExecutor.execute(

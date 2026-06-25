@@ -119,6 +119,24 @@ export interface SkillDefinition {
   readonly supportsPartialResult?: boolean;
 
   /**
+   * When true (or when resolveAsync returns true for the specific call),
+   * the tool runs asynchronously via the ToolJobRegistry instead of
+   * blocking the query loop. The loop returns immediately with a
+   * `{ async: true, job_id }` envelope; the model polls for completion
+   * via the companion `check_tool_job_status` tool.
+   */
+  readonly async?: boolean;
+
+  /**
+   * Argument-driven async dispatch resolver. When this returns true (or
+   * when the static `async` flag is true), the runtime dispatches the
+   * call through the async job path. Use this to route heavy argument
+   * combinations (e.g. `max_results > 20`) to the async path while
+   * keeping light calls synchronous.
+   */
+  readonly resolveAsync?: (args: Record<string, unknown>) => boolean;
+
+  /**
    * True when the imported skill is derived from SKILL.md guidance only and
    * does not provide a real executable entrypoint for side-effect operations.
    */
