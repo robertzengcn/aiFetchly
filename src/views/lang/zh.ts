@@ -1804,6 +1804,10 @@ export default {
     request_changes: "请求修改",
     approved: "已批准",
     approved_continue_message: "计划已批准。请立即开始执行该计划。",
+    rejected_continue_message:
+      "计划已拒绝。请根据以下反馈修改计划并重新提交审批。",
+    changes_requested_continue_message:
+      "已请求修改计划。请根据以下反馈更新计划并重新提交审批。",
     reject_feedback: "拒绝原因",
     changes_feedback: "需要修改什么？",
     no_plan_yet: "尚无计划内容。",

@@ -1862,6 +1862,10 @@ export default {
     approved: "Genehmigt",
     approved_continue_message:
       "Plan genehmigt. Bitte beginnen Sie jetzt mit der Ausführung des Plans.",
+    rejected_continue_message:
+      "Plan abgelehnt. Bitte überarbeiten Sie den Plan basierend auf dem folgenden Feedback und reichen Sie ihn erneut zur Genehmigung ein.",
+    changes_requested_continue_message:
+      "Planänderungen angefordert. Bitte aktualisieren Sie den Plan basierend auf dem folgenden Feedback und reichen Sie ihn erneut zur Genehmigung ein.",
     reject_feedback: "Grund für Ablehnung",
     changes_feedback: "Was muss geändert werden?",
     no_plan_yet: "Noch kein Planinhalt.",

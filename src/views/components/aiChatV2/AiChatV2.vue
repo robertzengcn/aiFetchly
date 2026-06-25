@@ -988,6 +988,7 @@ const handleApprovePlan = async (): Promise<void> => {
 
 const handleRejectPlan = async (feedback: string): Promise<void> => {
   if (!planState.value || !activeConversationId.value) return;
+  if (chatIsRunning.value) return;
   try {
     const updated = await rejectChatV2Plan(
       activeConversationId.value,
@@ -999,6 +1000,16 @@ const handleRejectPlan = async (feedback: string): Promise<void> => {
       applyPlanState(updated);
       upsertPlanMessage(updated);
     }
+
+    // After rejection, send the feedback to the LLM so it can revise
+    // the plan or respond accordingly.
+    const prefix =
+      t("aiChatV2Plan.rejected_continue_message") ||
+      "Plan rejected. Please revise the plan based on the following feedback and resubmit for approval.";
+    const continueText = feedback
+      ? `${prefix}\n\nFeedback: ${feedback}`
+      : prefix;
+    await onSend(continueText);
   } catch (err) {
     streamError.value = err instanceof Error ? err.message : String(err);
   }
@@ -1006,6 +1017,7 @@ const handleRejectPlan = async (feedback: string): Promise<void> => {
 
 const handleRequestPlanChanges = async (feedback: string): Promise<void> => {
   if (!planState.value || !activeConversationId.value) return;
+  if (chatIsRunning.value) return;
   try {
     const updated = await requestChatV2PlanChanges(
       activeConversationId.value,
@@ -1017,6 +1029,16 @@ const handleRequestPlanChanges = async (feedback: string): Promise<void> => {
       applyPlanState(updated);
       upsertPlanMessage(updated);
     }
+
+    // After requesting changes, send the feedback to the LLM so it can
+    // update the plan accordingly.
+    const prefix =
+      t("aiChatV2Plan.changes_requested_continue_message") ||
+      "Plan changes requested. Please update the plan based on the following feedback and resubmit for approval.";
+    const continueText = feedback
+      ? `${prefix}\n\nFeedback: ${feedback}`
+      : prefix;
+    await onSend(continueText);
   } catch (err) {
     streamError.value = err instanceof Error ? err.message : String(err);
   }
