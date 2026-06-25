@@ -116,9 +116,58 @@ class RateLimiterManager {
 }
 
 /**
+ * Partial snapshot collected by a tool that supports partial results.
+ * Stored in the registry so the timeout branch can return whatever data
+ * the tool managed to collect before the deadline.
+ */
+export interface PartialSnapshot {
+  collectedCount: number;
+  expectedCount: number;
+  data: Record<string, unknown>;
+}
+
+/**
  * Execute tools called by the AI
  */
 export class ToolExecutor {
+  // -------------------------------------------------------------------------
+  // Partial-snapshot API — used by executeToolWithTimeout to return partial
+  // data when a supporting tool hits the timeout ceiling.
+  // -------------------------------------------------------------------------
+
+  private static partialSnapshots = new Map<string, PartialSnapshot>();
+
+  /**
+   * Register (or replace) the partial snapshot for a given tool call.
+   * Worker modules call this continuously as they scrape.
+   */
+  static updatePartialSnapshot(
+    toolCallId: string,
+    snapshot: PartialSnapshot
+  ): void {
+    ToolExecutor.partialSnapshots.set(toolCallId, snapshot);
+  }
+
+  /**
+   * Retrieve the current partial snapshot for a tool call.
+   * Returns null when no snapshot has been registered.
+   */
+  static async requestPartialSnapshot(
+    toolCallId: string
+  ): Promise<PartialSnapshot | null> {
+    return Promise.resolve(
+      ToolExecutor.partialSnapshots.get(toolCallId) ?? null
+    );
+  }
+
+  /**
+   * Remove the partial snapshot entry. Called in the finally block of
+   * executeToolWithTimeout so the map does not leak.
+   */
+  static unregisterPartialSnapshot(toolCallId: string): void {
+    ToolExecutor.partialSnapshots.delete(toolCallId);
+  }
+
   /**
    * Execute a tool by name with rate limiting
    */

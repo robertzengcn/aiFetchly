@@ -244,6 +244,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     permissionCategory: "network",
     source: "built-in",
     timeoutClass: "network",
+    supportsPartialResult: true,
     execute: async (args, context) => {
       const result = await ToolExecutor.execute(
         "search_yellow_pages",
@@ -320,6 +321,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     permissionCategory: "automation",
     source: "built-in",
     timeoutClass: "browser",
+    supportsPartialResult: true,
     execute: async (args, context) => {
       const result = await ToolExecutor.execute(
         "search_maps_businesses",
@@ -389,6 +391,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     permissionCategory: "network",
     source: "built-in",
     timeoutClass: "network",
+    supportsPartialResult: true,
     execute: async (args, context) => {
       const result = await ToolExecutor.execute(
         "analyze_website",
@@ -611,6 +614,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     permissionCategory: "automation",
     source: "built-in",
     timeoutClass: "browser",
+    supportsPartialResult: true,
     execute: async (args, context) => {
       const result = await ToolExecutor.execute(
         "extract_contact_info",
