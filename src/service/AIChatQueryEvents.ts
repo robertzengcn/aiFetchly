@@ -319,7 +319,7 @@ export interface AIChatQueryLoopInput {
    * When absent, the loop falls back to name-based inference.
    */
   readonly skillRegistry?: {
-    get(name: string): SkillDefinition | undefined;
+    getSkill(name: string): SkillDefinition | null | undefined;
   };
   startRound: number;
   /**

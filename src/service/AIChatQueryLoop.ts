@@ -829,7 +829,7 @@ export class AIChatQueryLoop {
 
     // Resolve the timeout class. Explicit declaration on the skill wins;
     // argument-driven resolver wins over static field; otherwise infer by name.
-    const skill = input.skillRegistry?.get(call.name);
+    const skill = input.skillRegistry?.getSkill(call.name);
     const cls: ToolTimeoutClass =
       skill?.resolveTimeoutClass?.(call.arguments ?? {}) ??
       skill?.timeoutClass ??

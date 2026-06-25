@@ -261,6 +261,7 @@ export class AIChatQueryEngine {
       openAITools: allOpenAITools,
       abortController,
       eventSink: streamEventSink,
+      skillRegistry: SkillRegistry,
       planContext,
       autoPlan: autoPlanEnabled
         ? {
@@ -415,6 +416,7 @@ export class AIChatQueryEngine {
         openAITools: pending.openAITools,
         abortController: pending.abortController,
         eventSink,
+        skillRegistry: SkillRegistry,
         planContext: pending.planContext,
         startRound: pending.nextRound,
         isActiveTurn: () =>
@@ -539,6 +541,7 @@ export class AIChatQueryEngine {
       openAITools: allOpenAITools,
       abortController: pending.abortController,
       eventSink: pending.eventSink,
+      skillRegistry: SkillRegistry,
       planContext,
       startRound: pending.nextRound,
       isActiveTurn: () =>
