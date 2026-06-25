@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript, TypeORM + better-sqlite3, Vitest (main-process + utility tests), Electron IPC, OpenAI-compatible streaming via `AiChatApi`.
 
-**Reference docs:** `doc/marketing-subagent-system-prd.md`, `doc/marketing-subagent-system-technical-design.md`.
+**Reference docs:** `docs/marketing-subagent-system-prd.md`, `docs/marketing-subagent-system-technical-design.md`.
 
 ---
 

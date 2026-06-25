@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-This document translates `doc/ai-chat-query-engine-prd.md` into an implementation-facing technical design.
+This document translates `docs/ai-chat-query-engine-prd.md` into an implementation-facing technical design.
 
 The goal is to extract the current AI chat v2 orchestration from `src/main-process/communication/ai-chat-v2-ipc.ts` into a small query-engine layer while preserving current behavior.
 

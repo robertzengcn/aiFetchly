@@ -53,7 +53,7 @@ aiFetchly/                          # Project root
 │   ├── 001-dashboard-statistics/
 │   ├── 001-install-system-dependency/
 │   └── 001-skill-system/
-├── doc/                            # Design documents
+├── docs/                           # Documentation (design docs, PRDs, plans, specs, test docs)
 ├── dist/                           # Build output
 ├── out/                            # Electron Forge package output
 ├── logs/                           # Application logs
@@ -288,8 +288,8 @@ HTTP API clients for remote server communication.
 - Generated: Yes (by GSD workflow)
 - Committed: Yes
 
-### `doc/`
-- Purpose: Design documents, technology research, PRD files
+### `docs/`
+- Purpose: Documentation hub — design documents, technology research, PRD files, plans, specs, and manual test docs (formerly split between `doc/` and `docs/`)
 - Generated: Partially
 - Committed: Yes
 

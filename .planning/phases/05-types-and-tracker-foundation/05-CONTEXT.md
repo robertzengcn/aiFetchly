@@ -42,7 +42,7 @@ Create the FileOperationRecord type definition, FileOperationTracker static serv
 <specifics>
 ## Specific Ideas
 
-- PRD doc at `doc/README.md` provides the full feature spec with data model, IPC channel design, and FileOperationTracker class sketch. Follow its architecture closely.
+- PRD doc at `docs/README.md` provides the full feature spec with data model, IPC channel design, and FileOperationTracker class sketch. Follow its architecture closely.
 - Research findings confirm zero new npm dependencies needed.
 
 </specifics>
@@ -53,7 +53,7 @@ Create the FileOperationRecord type definition, FileOperationTracker static serv
 **Downstream agents MUST read these before planning or implementing.**
 
 ### Feature Specification
-- `doc/README.md` — Full PRD for AI Chat File Operation Recording: data model (FileOperationRecord), IPC channel design, FileOperationTracker class sketch, security requirements, error handling, testing strategy, rollout plan
+- `docs/README.md` — Full PRD for AI Chat File Operation Recording: data model (FileOperationRecord), IPC channel design, FileOperationTracker class sketch, security requirements, error handling, testing strategy, rollout plan
 
 ### Research
 - `.planning/research/SUMMARY.md` — Synthesized research: stack, features, architecture, pitfalls

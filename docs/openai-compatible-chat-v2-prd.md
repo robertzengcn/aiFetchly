@@ -12,8 +12,8 @@ The target user experience should use Nuxt UI Chat as a product interaction refe
 
 ### 1.1.1 Companion Documents
 
-- Technical design: `doc/openai-compatible-chat-v2-technical-design.md`
-- Local memory design: `doc/ai-chat-local-memory-design.md`
+- Technical design: `docs/openai-compatible-chat-v2-technical-design.md`
+- Local memory design: `docs/ai-chat-local-memory-design.md`
 
 ### 1.2 Goals
 
@@ -48,7 +48,7 @@ That design works, but it mixes several responsibilities:
 - tool execution continuation
 - UI rendering state
 
-The AI server now exposes an OpenAI-compatible API. That API naturally expects the client to send the complete model context as `messages[]`. The server can then behave as a stateless model gateway for normal chat. This matches the direction already described in `doc/ai-chat-local-memory-design.md`: the local app should own raw transcript storage, summary state, context selection, and request assembly.
+The AI server now exposes an OpenAI-compatible API. That API naturally expects the client to send the complete model context as `messages[]`. The server can then behave as a stateless model gateway for normal chat. This matches the direction already described in `docs/ai-chat-local-memory-design.md`: the local app should own raw transcript storage, summary state, context selection, and request assembly.
 
 Nuxt UI Chat is a useful reference because its documented component model separates chat into the right UI primitives: message list, individual message, prompt, submit/stop button, reasoning block, tool block, and streaming shimmer. Its docs describe chat components for streaming, reasoning, and tool calling, with components such as `ChatMessages`, `ChatMessage`, `ChatPrompt`, `ChatPromptSubmit`, `ChatReasoning`, `ChatTool`, and `ChatShimmer`. See:
 

@@ -293,10 +293,10 @@ All configuration is automatic:
 ## Support & Resources
 
 ### Documentation
-- **Implementation Todo**: `doc/ai-chat-implementation-todo.md`
-- **User Guide**: `doc/ai-chat-user-guide.md`
-- **Technical Docs**: `doc/ai-chat-technical-docs.md`
-- **This Report**: `doc/AI_CHAT_FINAL_REPORT.md`
+- **Implementation Todo**: `docs/ai-chat-implementation-todo.md`
+- **User Guide**: `docs/ai-chat-user-guide.md`
+- **Technical Docs**: `docs/ai-chat-technical-docs.md`
+- **This Report**: `docs/AI_CHAT_FINAL_REPORT.md`
 
 ### Code References
 - **Pattern**: Based on `rag-ipc.ts` and `RagConfigApi.ts`

@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-This document translates `doc/marketing-subagent-system-prd.md` into an implementation-facing technology design for aiFetchly.
+This document translates `docs/marketing-subagent-system-prd.md` into an implementation-facing technology design for aiFetchly.
 
 The goal is to add a built-in marketing subagent runtime that can research leads, enrich contacts, draft campaign copy, verify claims, and persist an auditable workflow trail. The design reuses the current AI Chat V2 runtime, Plan Mode policy machinery, skill execution layer, scheduled AI task patterns, and TypeORM database architecture.
 

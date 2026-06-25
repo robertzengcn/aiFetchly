@@ -3,7 +3,7 @@
 Version: 1.0  
 Date: 2026-06-17  
 Status: Draft  
-Source PRD: `doc/skills/PRD_Plugin_Management_System.md`
+Source PRD: `docs/skills/PRD_Plugin_Management_System.md`
 
 ## 1. Purpose
 

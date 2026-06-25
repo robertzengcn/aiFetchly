@@ -325,10 +325,10 @@ vector_indices/
 **Priority**: Medium  
 **Estimated Effort**: 4 hours
 
-- [ ] Update `/doc/rag_prd.md` - Replace faiss-node references
-- [ ] Update `/doc/rag_api_documentation.md` - Update VectorStoreService docs
-- [ ] Update `/doc/VectorDatabaseRefactoringGuide.md` - Add sqlite-vec section
-- [ ] Update `/doc/rag_todo_list.md` - Mark FAISS tasks complete, add sqlite-vec tasks
+- [ ] Update `/docs/rag_prd.md` - Replace faiss-node references
+- [ ] Update `/docs/rag_api_documentation.md` - Update VectorStoreService docs
+- [ ] Update `/docs/VectorDatabaseRefactoringGuide.md` - Add sqlite-vec section
+- [ ] Update `/docs/rag_todo_list.md` - Mark FAISS tasks complete, add sqlite-vec tasks
 - [ ] Create migration guide for users
 - [ ] Update README if needed
 
@@ -633,7 +633,7 @@ async search(queryVector: number[], k: number): Promise<VectorSearchResult> {
 - `/test/modules/SqliteVecDatabase.test.ts` - Unit tests
 - `/test/integration/vector-store-sqlite.test.ts` - Integration tests
 - `/test/migration/faiss-to-sqlite.test.ts` - Migration tests
-- `/doc/sqlite-vec-migration-guide.md` - User guide
+- `/docs/sqlite-vec-migration-guide.md` - User guide
 
 ### Files to Modify
 - `/src/modules/factories/VectorDatabaseFactory.ts` - Add sqlite-vec support
@@ -643,9 +643,9 @@ async search(queryVector: number[], k: number): Promise<VectorSearchResult> {
 - `/vite.main.config.mjs` - Remove faiss-node external
 - `/forge.config.js` - Remove faiss-node external
 - `/package.json` - Update dependencies and scripts
-- `/doc/rag_prd.md` - Update vector search section
-- `/doc/rag_api_documentation.md` - Update API docs
-- `/doc/VectorDatabaseRefactoringGuide.md` - Add sqlite-vec
+- `/docs/rag_prd.md` - Update vector search section
+- `/docs/rag_api_documentation.md` - Update API docs
+- `/docs/VectorDatabaseRefactoringGuide.md` - Add sqlite-vec
 
 ### Files to Deprecate (Later)
 - `/src/modules/adapters/FaissVectorDatabase.ts` - Mark deprecated, remove later

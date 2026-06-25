@@ -405,4 +405,4 @@ This allows introducing new fields or action types later without breaking older 
 - Current server: `aifetchserver/services/scrape_assist.py`, `aifetchserver/api/scrape_assist.py`
 - Current client: `src/api/aiChatApi.ts`, `src/modules/YellowPagesAiSupportHandler.ts`
 - Related: `aifetchserver/services/puppeteer_recovery.py` for structured action format and safety patterns
-- Existing doc: `doc/AI_PUPPETEER_RECOVERY_ARCHITECTURE.md`
+- Existing doc: `docs/AI_PUPPETEER_RECOVERY_ARCHITECTURE.md`

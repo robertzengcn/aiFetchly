@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-This document translates `doc/openai-compatible-chat-v2-prd.md` into an implementation-facing technical design.
+This document translates `docs/openai-compatible-chat-v2-prd.md` into an implementation-facing technical design.
 
 The goal is to build a new chat stack that:
 
@@ -1553,9 +1553,9 @@ Trade-off:
 
 ## 24. References
 
-- Product requirements: `doc/openai-compatible-chat-v2-prd.md`
-- Local memory design: `doc/ai-chat-local-memory-design.md`
-- Legacy chat docs: `doc/ai-chat-technical-docs.md`
+- Product requirements: `docs/openai-compatible-chat-v2-prd.md`
+- Local memory design: `docs/ai-chat-local-memory-design.md`
+- Legacy chat docs: `docs/ai-chat-technical-docs.md`
 - Client API wrapper: `src/api/aiChatApi.ts`
 - Local chat entity: `src/entity/AIChatMessage.entity.ts`
 - Local chat module: `src/modules/AIChatModule.ts`

@@ -316,11 +316,11 @@ The only remaining step is **manual testing with live remote API server**:
 - [x] Document IPC channel structure
 
 ### Task 9.2: User Documentation ✅
-- [x] Add usage instructions - Created `doc/ai-chat-user-guide.md`
+- [x] Add usage instructions - Created `docs/ai-chat-user-guide.md`
 - [x] Document keyboard shortcuts - Documented in user guide
 - [ ] Create screenshots/GIFs of chat functionality - Requires runtime testing
 - [x] Document configuration options - Included in user guide
-- [x] Create technical documentation - Created `doc/ai-chat-technical-docs.md`
+- [x] Create technical documentation - Created `docs/ai-chat-technical-docs.md`
 
 ### Task 9.3: Final Cleanup ✅
 - [x] Remove console.log statements - Only examples in JSDoc remain
@@ -461,9 +461,9 @@ All essential features have been implemented:
 The AI chat is fully functional and production-ready with advanced features. All tasks from Phases 1-9 have been completed, including database persistence and RAG knowledge base integration.
 
 ### 📚 Documentation Available
-- **Implementation Summary**: `doc/ai-chat-implementation-summary.md` - Complete overview
-- **User Guide**: `doc/ai-chat-user-guide.md` - How to use the chat
-- **Technical Docs**: `doc/ai-chat-technical-docs.md` - Architecture and development
+- **Implementation Summary**: `docs/ai-chat-implementation-summary.md` - Complete overview
+- **User Guide**: `docs/ai-chat-user-guide.md` - How to use the chat
+- **Technical Docs**: `docs/ai-chat-technical-docs.md` - Architecture and development
 
 ### 🧪 Next Steps
 1. **Test with live remote API server** - Ensure endpoints are configured

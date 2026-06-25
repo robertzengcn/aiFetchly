@@ -1,6 +1,6 @@
 # Technology Advice: Knowledge Library Tool Calling and Reranked RAG
 
-This document translates `doc/rag-tool-call-rerank-prd.md` into implementation guidance for aiFetchly's current Electron, TypeScript, SQLite, sqlite-vec, and skill-tool architecture.
+This document translates `docs/rag-tool-call-rerank-prd.md` into implementation guidance for aiFetchly's current Electron, TypeScript, SQLite, sqlite-vec, and skill-tool architecture.
 
 ## 1. Recommended architecture
 

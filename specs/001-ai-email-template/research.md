@@ -7,7 +7,7 @@
 
 ## Overview
 
-This document captures technical research findings and architecture decisions for implementing AI-assisted email template generation in aiFetchly. All decisions align with the tech stack architecture documented in [doc/ai-email-template-tech-stack-architecture.md](../../doc/ai-email-template-tech-stack-architecture.md).
+This document captures technical research findings and architecture decisions for implementing AI-assisted email template generation in aiFetchly. All decisions align with the tech stack architecture documented in [docs/ai-email-template-tech-stack-architecture.md](../../docs/ai-email-template-tech-stack-architecture.md).
 
 ---
 
