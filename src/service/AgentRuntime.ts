@@ -18,6 +18,7 @@ import type {
   AgentDefinitionView,
   AgentResult,
   AgentTaskSnapshot,
+  AgentWorkflowConstraints,
   RunAgentRequest,
 } from "@/entityTypes/agentTypes";
 
@@ -79,6 +80,10 @@ export class AgentRuntime {
     const agentConversationId = `agent-v2-${randomUUID()}`;
     const transcript = new AgentTranscriptService(this.taskModule);
 
+    // Normalize constraints — AI-generated taskPackets may omit this object.
+    const constraints: AgentWorkflowConstraints =
+      request.taskPacket.constraints ?? {};
+
     // 1. Persist task + initial transcript.
     await this.taskModule.createTask({
       agentTaskId,
@@ -114,7 +119,7 @@ export class AgentRuntime {
       availableToolNames: allTools
         .filter((t) => t.type === "function" && typeof t.name === "string")
         .map((t) => t.name),
-      blockedTools: request.taskPacket.constraints.blockedTools,
+      blockedTools: constraints.blockedTools,
     });
     const exposedTools: OpenAITool[] = exposedNames.map((name) => {
       const def = allTools.find((t) => t.name === name);
@@ -158,9 +163,8 @@ export class AgentRuntime {
         toolName: name,
         executionMode: request.executionMode,
         allowInteractivePermissionPrompts:
-          request.taskPacket.constraints.allowInteractivePermissionPrompts ??
-          true,
-        blockedTools: request.taskPacket.constraints.blockedTools,
+          constraints.allowInteractivePermissionPrompts ?? true,
+        blockedTools: constraints.blockedTools,
       });
       if (!decision.allowed) {
         await transcript.recordToolCall({
