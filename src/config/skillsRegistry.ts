@@ -1865,6 +1865,92 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       };
     },
   },
+  {
+    name: "check_tool_job_status",
+    description:
+      "Check the status of an async tool job. Returns one of: running, queued, completed, failed, cancelled, not_found, rate_limited. When return_partial_if_running=true, includes partial results collected so far. Poll at most once every 5 seconds per job_id.",
+    parameters: {
+      type: "object",
+      properties: {
+        job_id: {
+          type: "string",
+          description: "The job_id returned from an async tool call.",
+        },
+        return_partial_if_running: {
+          type: "boolean",
+          description:
+            "If true and the job is still running, include partial results in the response.",
+          default: false,
+        },
+      },
+      required: ["job_id"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "network",
+    source: "built-in",
+    timeoutClass: "fast",
+    execute: async (args, context) => {
+      const { getDefaultToolJobRegistry } = await import(
+        "@/service/ToolJobRegistry"
+      );
+      const reg = getDefaultToolJobRegistry();
+      const jobId = String(args.job_id ?? "");
+      const wantPartial = args.return_partial_if_running === true;
+      const snap = reg.getStatusForConversation(jobId, context.conversationId);
+      const result: Record<string, unknown> = {
+        job_id: jobId,
+        status: snap.status,
+        progress: snap.progress,
+        started_at: snap.startedAt,
+        completed_at: snap.completedAt,
+      };
+      if (wantPartial && snap.partial) {
+        result.partial = snap.partial;
+      }
+      if (snap.status === "completed") result.result = snap.result;
+      if (snap.status === "failed") result.error = snap.error;
+      if (snap.retryAfterMs) result.retry_after_ms = snap.retryAfterMs;
+      return { success: true, result };
+    },
+  },
+  {
+    name: "cancel_tool_job",
+    description:
+      "Cancel a running async tool job. Returns { cancelled: true } on success or { cancelled: false, reason } when the job has already completed or does not exist.",
+    parameters: {
+      type: "object",
+      properties: {
+        job_id: {
+          type: "string",
+          description: "The job_id to cancel.",
+        },
+      },
+      required: ["job_id"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "network",
+    source: "built-in",
+    timeoutClass: "fast",
+    execute: async (args, context) => {
+      const { getDefaultToolJobRegistry } = await import(
+        "@/service/ToolJobRegistry"
+      );
+      const reg = getDefaultToolJobRegistry();
+      const jobId = String(args.job_id ?? "");
+      // Conversation-scoped: verify ownership before cancelling.
+      const snap = reg.getStatusForConversation(jobId, context.conversationId);
+      if (snap.status === "not_found") {
+        return {
+          success: true,
+          result: { cancelled: false, reason: "not_found" },
+        };
+      }
+      const result = reg.cancel(jobId);
+      return { success: true, result };
+    },
+  },
   RUN_SUBAGENT_TOOL,
 ];
 
