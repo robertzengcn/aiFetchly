@@ -27,6 +27,8 @@ export interface ParsedToolCallResult {
   name?: string;
   ok: boolean;
   arguments?: Record<string, unknown>;
+  /** The raw accumulated JSON string, for diagnostic logging and error feedback. */
+  rawArgumentsJson: string;
 }
 
 /**
@@ -110,6 +112,7 @@ export class OpenAIStreamAccumulator {
   /**
    * Attempt to parse buffered tool-call arguments. Returns ok=false for any
    * malformed JSON so callers can treat arguments as untrusted model output.
+   * Empty arguments are treated as valid {} since many tools take no args.
    */
   tryParseToolCallArguments(): ParsedToolCallResult[] {
     return this.getBufferedToolCalls().map((call) => {
@@ -118,17 +121,23 @@ export class OpenAIStreamAccumulator {
         id: call.id,
         name: call.name,
         ok: false,
+        rawArgumentsJson: call.argumentsJson ?? "",
       };
-      if (call.argumentsJson) {
-        try {
-          const parsed = JSON.parse(call.argumentsJson);
-          if (parsed && typeof parsed === "object") {
-            result.ok = true;
-            result.arguments = parsed as Record<string, unknown>;
-          }
-        } catch {
-          result.ok = false;
+      // Empty arguments are valid — many tools legitimately take no args.
+      // The model may omit the arguments field entirely or send "".
+      if (!call.argumentsJson || call.argumentsJson.trim().length === 0) {
+        result.ok = true;
+        result.arguments = {};
+        return result;
+      }
+      try {
+        const parsed = JSON.parse(call.argumentsJson);
+        if (parsed && typeof parsed === "object") {
+          result.ok = true;
+          result.arguments = parsed as Record<string, unknown>;
         }
+      } catch {
+        result.ok = false;
       }
       return result;
     });

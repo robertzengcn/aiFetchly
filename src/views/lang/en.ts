@@ -1870,6 +1870,10 @@ export default {
     approved: "Approved",
     approved_continue_message:
       "Plan approved. Please begin executing the plan now.",
+    rejected_continue_message:
+      "Plan rejected. Please revise the plan based on the following feedback and resubmit for approval.",
+    changes_requested_continue_message:
+      "Plan changes requested. Please update the plan based on the following feedback and resubmit for approval.",
     reject_feedback: "Reason for rejection",
     changes_feedback: "What needs to change?",
     no_plan_yet: "No plan content yet.",
