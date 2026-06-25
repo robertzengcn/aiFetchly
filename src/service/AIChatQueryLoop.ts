@@ -847,6 +847,21 @@ export class AIChatQueryLoop {
         conversationId: input.conversationId,
         toolCallId: call.id,
         args: call.arguments,
+        emitProgress: (event) => {
+          input.eventSink.emit({
+            type: "tool_progress",
+            conversationId: input.conversationId,
+            messageId: input.assistantMessageId,
+            toolCallId: call.id,
+            toolName: call.name,
+            phase: event.phase,
+            message: event.message,
+            progress: event.progress ?? null,
+            partialCount: event.partialCount ?? null,
+            expectedCount: event.expectedCount ?? null,
+            timestamp: Date.now(),
+          });
+        },
       }
     );
 
