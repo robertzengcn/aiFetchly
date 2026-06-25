@@ -50,6 +50,29 @@ export interface AIChatQueryToolCallEvent {
   toolArguments: Record<string, unknown>;
 }
 
+export type ToolProgressPhase =
+  | "queued"
+  | "running"
+  | "fetching"
+  | "extracting"
+  | "finalizing";
+
+export interface AIChatQueryToolProgressEvent {
+  type: "tool_progress";
+  conversationId: string;
+  messageId: string;
+  toolCallId: string;
+  toolName: string;
+  phase: ToolProgressPhase;
+  /** i18n key or fallback English string. */
+  message: string;
+  /** 0..1 when known, null when indeterminate. */
+  progress: number | null;
+  partialCount: number | null;
+  expectedCount: number | null;
+  timestamp: number;
+}
+
 export interface AIChatQueryToolResultEvent {
   conversationId: string;
   messageId: string;
@@ -146,6 +169,7 @@ export type AIChatQueryEvent =
   | AIChatQueryTokenEvent
   | AIChatQueryRetryEvent
   | AIChatQueryToolCallEvent
+  | AIChatQueryToolProgressEvent
   | AIChatQueryToolResultNormalEvent
   | AIChatQueryPlanBlockedToolEvent
   | AIChatQueryAskUserQuestionEvent

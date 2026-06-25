@@ -28,3 +28,28 @@ describe("executeToolWithTimeout policy integration", () => {
     expect(resolveTimeoutMs("async")).to.equal(null);
   });
 });
+
+import type {
+  AIChatQueryEvent,
+  AIChatQueryToolProgressEvent,
+} from "@/service/AIChatQueryEvents";
+
+describe("tool_progress event contract", () => {
+  it("supports a tool_progress event with phase/message/progress/counts", () => {
+    const event: AIChatQueryToolProgressEvent = {
+      type: "tool_progress",
+      conversationId: "c1",
+      messageId: "m1",
+      toolCallId: "tc1",
+      toolName: "search_maps_businesses",
+      phase: "extracting",
+      message: "progress.maps.found",
+      progress: 0.4,
+      partialCount: 8,
+      expectedCount: 20,
+      timestamp: Date.now(),
+    };
+    const unioned: AIChatQueryEvent = event;
+    expect(unioned.type).to.equal("tool_progress");
+  });
+});
