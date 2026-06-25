@@ -8,6 +8,7 @@ import type {
   AskUserQuestionPayload,
   SubmitPlanForApprovalPayload,
 } from "@/entityTypes/aiChatPlanTypes";
+import type { SkillDefinition } from "@/entityTypes/skillTypes";
 
 /**
  * Sink the engine emits non-terminal and terminal events into.
@@ -313,6 +314,13 @@ export interface AIChatQueryLoopInput {
    * only when USER_AI_AUTO_PLAN === 'true' and AI is enabled.
    */
   autoPlan?: AIChatAutoPlanLoopConfig;
+  /**
+   * Optional skill registry used to look up per-tool timeout class.
+   * When absent, the loop falls back to name-based inference.
+   */
+  readonly skillRegistry?: {
+    get(name: string): SkillDefinition | undefined;
+  };
   startRound: number;
   /**
    * Returns false when this turn is no longer the active turn on the engine
