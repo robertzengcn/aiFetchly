@@ -155,6 +155,19 @@ export interface SkillExecutionContext {
    * permission check and proceed directly to execution.
    */
   readonly skipPermissionCheck?: boolean;
+
+  /**
+   * Emits a progress event for this tool call. Optional — fast tools leave it
+   * undefined. Wired by the caller (e.g. AIChatQueryLoop) to a sink that
+   * emits AIChatQueryToolProgressEvent.
+   */
+  readonly emitProgress?: (event: {
+    phase: "queued" | "running" | "fetching" | "extracting" | "finalizing";
+    message: string;
+    progress?: number | null;
+    partialCount?: number | null;
+    expectedCount?: number | null;
+  }) => void;
 }
 
 // ---------------------------------------------------------------------------

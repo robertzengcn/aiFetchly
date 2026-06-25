@@ -53,3 +53,61 @@ describe("tool_progress event contract", () => {
     expect(unioned.type).to.equal("tool_progress");
   });
 });
+
+import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
+
+describe("SkillExecutionContext emitProgress contract", () => {
+  it("supports an optional emitProgress callback", () => {
+    const ctx: SkillExecutionContext = {
+      conversationId: "c1",
+      toolCallId: "tc1",
+      emitProgress: (e) => {
+        // Contract: phase is one of the 5 known values, message is a string.
+        expect([
+          "queued",
+          "running",
+          "fetching",
+          "extracting",
+          "finalizing",
+        ]).to.include(e.phase);
+        expect(typeof e.message).to.equal("string");
+      },
+    };
+    ctx.emitProgress?.({ phase: "running", message: "test" });
+  });
+
+  it("allows emitProgress to be omitted (fast tools pay no cost)", () => {
+    const ctx: SkillExecutionContext = {
+      conversationId: "c1",
+      toolCallId: "tc1",
+    };
+    expect(ctx.emitProgress).to.equal(undefined);
+  });
+
+  it("passes progress and count fields through when provided", () => {
+    const received: Array<{
+      phase: string;
+      message: string;
+      progress?: number | null;
+      partialCount?: number | null;
+      expectedCount?: number | null;
+    }> = [];
+    const ctx: SkillExecutionContext = {
+      conversationId: "c1",
+      toolCallId: "tc1",
+      emitProgress: (e) => received.push(e),
+    };
+    ctx.emitProgress?.({
+      phase: "fetching",
+      message: "Fetching page 2",
+      progress: 0.5,
+      partialCount: 10,
+      expectedCount: 20,
+    });
+    expect(received).to.have.lengthOf(1);
+    expect(received[0].phase).to.equal("fetching");
+    expect(received[0].progress).to.equal(0.5);
+    expect(received[0].partialCount).to.equal(10);
+    expect(received[0].expectedCount).to.equal(20);
+  });
+});
