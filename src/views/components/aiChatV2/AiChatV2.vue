@@ -18,7 +18,7 @@
           :percent="contextPercent"
           :used-tokens="contextUsedTokens"
           :total-tokens="contextTotalTokens"
-          class="mr-1"
+          class="mx-2"
         />
         <v-btn
           icon
