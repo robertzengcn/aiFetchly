@@ -1850,6 +1850,8 @@ export default {
       "Die in Ihrem Abonnement enthaltenen KI-Token sind aufgebraucht. Bitte laden Sie Ihr Konto auf, um die KI-Funktionen weiterhin zu nutzen.",
     empty_response_error:
       "Die KI hat eine leere Antwort zurückgegeben. Dies ist in der Regel ein vorübergehendes Serverproblem (Ratenbegrenzung, Zeitüberschreitung oder 502-Fehler). Bitte senden Sie Ihre Nachricht erneut.",
+    file_change_one: "Dateiänderung",
+    file_changes_other: "Dateiänderungen",
   },
   aiChatV2Plan: {
     mode_chat: "Chat",
