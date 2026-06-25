@@ -3,7 +3,7 @@
 - **Date:** 2026-06-18
 - **Status:** Approved
 - **Scope:** Extend the existing Plugin Management System to install plugins from `local-zip`, `local-folder`, `git`, `github`, `npm`, and `url` sources.
-- **Depends on:** `doc/skills/PRD_Plugin_Management_System.md`, `doc/skills/Plugin_Management_System_Technical_Design.md`
+- **Depends on:** `docs/skills/PRD_Plugin_Management_System.md`, `docs/skills/Plugin_Management_System_Technical_Design.md`
 - **Implementation branch:** `feature/plugin-multi-source-install`
 
 ## 1. Problem

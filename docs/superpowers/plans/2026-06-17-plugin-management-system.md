@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript 5.x, Electron (main + Vue 3 renderer), TypeORM + better-sqlite3, `adm-zip`, existing `SkillImportService`/`SkillRegistry`/`MCPToolService`/`MCPClient`.
 
-**Source of truth:** `doc/skills/Plugin_Management_System_Technical_Design.md` (all type contracts, validation rules, IPC shapes, security rules live there). This plan references sections by number rather than duplicating contracts.
+**Source of truth:** `docs/skills/Plugin_Management_System_Technical_Design.md` (all type contracts, validation rules, IPC shapes, security rules live there). This plan references sections by number rather than duplicating contracts.
 
 ---
 

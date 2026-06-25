@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-This document translates `doc/contact-profile-ai-enrichment-prd.md` into an implementation design for Contact Profile Insights AI enrichment.
+This document translates `docs/contact-profile-ai-enrichment-prd.md` into an implementation design for Contact Profile Insights AI enrichment.
 
 The core decision is to keep the current email crawler as the primary extraction engine, then use AI only on selected high-value pages. This avoids calling `discoverAndExtractContactInfo(url)` for every page or URL, which would duplicate browser navigation and can trigger multiple AI calls per site.
 

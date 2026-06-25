@@ -246,7 +246,7 @@ await scheduleManager.initializeWithDatabaseStatus();
 **Priority**: Low  
 **Status**: ⏳ Pending  
 **Files**: 
-- `doc/schedule-system-task-list.md`
+- `docs/schedule-system-task-list.md`
 - `README.md`
 
 **Updates**:

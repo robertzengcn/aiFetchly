@@ -129,19 +129,19 @@ All core features **plus advanced capabilities** of the AI Chat Assistant have b
 
 ## 📚 Documentation Created (3 files)
 
-### 1. `doc/ai-chat-implementation-todo.md`
+### 1. `docs/ai-chat-implementation-todo.md`
 - Complete task breakdown
 - Progress tracking
 - Technical notes
 
-### 2. `doc/ai-chat-user-guide.md`
+### 2. `docs/ai-chat-user-guide.md`
 - User-facing documentation
 - How to use the chat
 - Keyboard shortcuts
 - Tips and tricks
 - Troubleshooting
 
-### 3. `doc/ai-chat-technical-docs.md`
+### 3. `docs/ai-chat-technical-docs.md`
 - Architecture overview
 - Data flow diagrams
 - API endpoint documentation
@@ -363,9 +363,9 @@ The AI chat is **fully functional** and ready for integration testing with your 
 3. **Click the chat icon** (💬) in the header to test
 
 ### Documentation
-- **User Guide**: `doc/ai-chat-user-guide.md`
-- **Technical Docs**: `doc/ai-chat-technical-docs.md`
-- **Implementation Tasks**: `doc/ai-chat-implementation-todo.md`
+- **User Guide**: `docs/ai-chat-user-guide.md`
+- **Technical Docs**: `docs/ai-chat-technical-docs.md`
+- **Implementation Tasks**: `docs/ai-chat-implementation-todo.md`
 
 ### Need Help?
 - Review the technical documentation for architecture details

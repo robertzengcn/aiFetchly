@@ -3,7 +3,7 @@ import * as path from "path";
 /**
  * Plugin Management System — shared type contracts.
  *
- * Source of truth: doc/skills/Plugin_Management_System_Technical_Design.md
+ * Source of truth: docs/skills/Plugin_Management_System_Technical_Design.md
  * Sections referenced inline (e.g. Design §4.2).
  */
 

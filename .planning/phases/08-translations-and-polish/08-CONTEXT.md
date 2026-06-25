@@ -42,7 +42,7 @@ Add `fileOperations` translation namespace to all 6 supported language files (en
 **Downstream agents MUST read these before planning or implementing.**
 
 ### Feature Specification
-- `doc/README.md` — Full PRD for AI Chat File Operation Recording
+- `docs/README.md` — Full PRD for AI Chat File Operation Recording
 
 ### Requirements
 - `.planning/REQUIREMENTS.md` — v1.1 requirements with I18N-01..07 for this phase

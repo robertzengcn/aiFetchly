@@ -5,10 +5,10 @@ Date: 2026-06-17
 Status: Draft  
 Owner: aiFetchly Desktop  
 Related docs:
-- `doc/skills/PRD_AI_Skills_System.md`
-- `doc/skills/Skill Permissions and User Trust.md`
-- `doc/skills/Sandboxing TypeScript_JS Skills.md`
-- `doc/mcp-server-prd.md`
+- `docs/skills/PRD_AI_Skills_System.md`
+- `docs/skills/Skill Permissions and User Trust.md`
+- `docs/skills/Sandboxing TypeScript_JS Skills.md`
+- `docs/mcp-server-prd.md`
 - `/home/robertzeng/project/github/claude-code/docs/plugin-system.md`
 
 ## 1. Summary

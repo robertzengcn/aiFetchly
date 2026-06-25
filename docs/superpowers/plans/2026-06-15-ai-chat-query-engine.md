@@ -9,8 +9,8 @@
 **Tech Stack:** TypeScript, Vitest, Electron IPC, OpenAI-compatible streaming API, existing SkillRegistry/SkillExecutor, existing AIChatV2Module/AIChatPlanModule.
 
 **Reference docs:**
-- PRD: `doc/ai-chat-query-engine-prd.md`
-- Technical design: `doc/ai-chat-query-engine-technical-design.md`
+- PRD: `docs/ai-chat-query-engine-prd.md`
+- Technical design: `docs/ai-chat-query-engine-technical-design.md`
 
 ---
 

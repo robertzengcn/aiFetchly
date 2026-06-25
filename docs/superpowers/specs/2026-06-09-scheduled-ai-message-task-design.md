@@ -2,8 +2,8 @@
 
 **Date:** 2026-06-09
 **Status:** Approved
-**PRD:** `doc/skills/ai-message-task-prd/README.md`
-**Tech Advice:** `doc/skills/ai-message-task-prd/technology-advice/README.md`
+**PRD:** `docs/skills/ai-message-task-prd/README.md`
+**Tech Advice:** `docs/skills/ai-message-task-prd/technology-advice/README.md`
 
 ---
 
