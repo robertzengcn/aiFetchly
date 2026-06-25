@@ -25,6 +25,8 @@ import {
 import { GoogleMapsSearchRecordModel } from "@/model/GoogleMapsSearchRecord.model";
 import type { YellowPagesTaskProxyConfig } from "@/entityTypes/yellowPagesTaskProxyType";
 import type { GoogleMapsSearchRecordEntity } from "@/entity/GoogleMapsSearchRecord.entity";
+import type { ModuleExecutionContext } from "@/entityTypes/skillTypes";
+import { ToolExecutor } from "@/service/ToolExecutor";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -133,12 +135,17 @@ export class GoogleMapsModule extends BaseModule {
    * @param externalRequestId Optional request ID from caller (e.g. IPC handler).
    *        When provided, this ID is used for activeSearches so cancelSearch()
    *        can find and kill the worker. When omitted, a new UUID is generated.
+   * @param context Optional execution context for progress emission and
+   *        partial-snapshot registration. When provided, worker `progress`
+   *        messages are forwarded to `context.emitProgress` and the partial
+   *        snapshot is kept up to date via `ToolExecutor.updatePartialSnapshot`.
    */
   async executeSearch(
     input: GoogleMapsSearchInput,
     cookies?: unknown[],
     proxies?: YellowPagesTaskProxyConfig[],
-    externalRequestId?: string
+    externalRequestId?: string,
+    context?: ModuleExecutionContext
   ): Promise<GoogleMapsSearchResult> {
     const maxResults = Math.min(
       Math.max(1, input.max_results ?? GOOGLE_MAPS_DEFAULT_MAX_RESULTS),
@@ -200,6 +207,10 @@ export class GoogleMapsModule extends BaseModule {
           const progress = parseGoogleMapsProgressEvent(data);
           if (search.progressCallback && progress) {
             search.progressCallback(progress);
+          }
+          // Forward to execution context (AI tool-progress pipeline)
+          if (context && progress) {
+            this.emitContextProgress(context, progress);
           }
           return;
         }
@@ -363,6 +374,55 @@ export class GoogleMapsModule extends BaseModule {
   async deleteSearchRecord(id: number): Promise<boolean> {
     await this.ensureConnection();
     return await this.recordModel.deleteById(id);
+  }
+
+  /**
+   * Translate a worker progress event into the context's progress pipeline
+   * and update the partial snapshot so the timeout branch can return
+   * whatever was collected so far.
+   */
+  private emitContextProgress(
+    context: ModuleExecutionContext,
+    progress: GoogleMapsProgressEvent
+  ): void {
+    const phase = this.mapStatusToPhase(progress.status);
+    context.emitProgress?.({
+      phase,
+      message: progress.message,
+      partialCount: progress.current,
+      expectedCount: progress.total,
+    });
+    if (progress.current > 0) {
+      ToolExecutor.updatePartialSnapshot(context.toolCallId, {
+        collectedCount: progress.current,
+        expectedCount: progress.total,
+        data: { results: [] }, // Worker fills data on result, not on progress
+      });
+    }
+  }
+
+  /** Map worker status string to the unified progress phase vocabulary. */
+  private mapStatusToPhase(
+    status: GoogleMapsProgressStatus
+  ): "queued" | "running" | "fetching" | "extracting" | "finalizing" {
+    switch (status) {
+      case "idle":
+      case "validating":
+        return "queued";
+      case "launching":
+      case "navigating":
+      case "loading":
+        return "fetching";
+      case "extracting":
+        return "extracting";
+      case "completed":
+      case "cancelled":
+      case "failed":
+      case "timed_out":
+        return "finalizing";
+      default:
+        return "running";
+    }
   }
 
   /**
