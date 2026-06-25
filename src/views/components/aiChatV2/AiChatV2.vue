@@ -747,7 +747,8 @@ const resolveToolIdForPermissionMessage = (
 
 const upsertToolResultMessage = (
   chunk: ChatV2StreamChunk,
-  conversationId: string
+  conversationId: string,
+  insertBeforeAssistantId?: string
 ): void => {
   const toolResult = chunk.toolResult ?? {};
   const content =
@@ -805,7 +806,7 @@ const upsertToolResultMessage = (
     return;
   }
 
-  messages.value.push({
+  const toolResultMsg: ChatV2MessageView = {
     id: `tool-result-${chunk.toolCallId || Date.now()}`,
     conversationId,
     role: "assistant",
@@ -813,7 +814,23 @@ const upsertToolResultMessage = (
     timestamp: new Date().toISOString(),
     messageType: MessageType.TOOL_RESULT,
     metadata,
-  });
+  };
+  // Insert before the assistant placeholder so tool results always
+  // appear before the assistant's text response.
+  if (insertBeforeAssistantId) {
+    const aIdx = messages.value.findIndex(
+      (m) => m.id === insertBeforeAssistantId
+    );
+    if (aIdx !== -1) {
+      messages.value = [
+        ...messages.value.slice(0, aIdx),
+        toolResultMsg,
+        ...messages.value.slice(aIdx),
+      ];
+      return;
+    }
+  }
+  messages.value = [...messages.value, toolResultMsg];
 };
 
 const handleSkillPermissionGrant = async (
@@ -1221,7 +1238,8 @@ const onSend = async (text: string): Promise<void> => {
             const planChunk = chunk as ChatV2StreamChunk;
             upsertToolResultMessage(
               planChunk,
-              planChunk.conversationId || activeConversationId.value || ""
+              planChunk.conversationId || activeConversationId.value || "",
+              assistantAdded ? assistant.id : undefined
             );
           } else if (chunk.eventType === "tool_call") {
             const toolCallId = chunk.toolCallId;
@@ -1236,7 +1254,7 @@ const onSend = async (text: string): Promise<void> => {
                 )
               : false;
             if (!alreadyRendered) {
-              messages.value.push({
+              const toolCallMsg: ChatV2MessageView = {
                 id: `tool-call-${toolCallId || Date.now()}`,
                 conversationId:
                   chunk.conversationId || activeConversationId.value || "",
@@ -1250,12 +1268,32 @@ const onSend = async (text: string): Promise<void> => {
                   toolName: chunk.toolName,
                   toolArguments: chunk.toolArguments,
                 },
-              });
+              };
+              // Insert before the assistant placeholder if it was already
+              // added (text tokens arrived in an earlier round). This keeps
+              // tool calls visually before the assistant's text response.
+              if (assistantAdded) {
+                const aIdx = messages.value.findIndex(
+                  (m) => m.id === assistant.id
+                );
+                if (aIdx !== -1) {
+                  messages.value = [
+                    ...messages.value.slice(0, aIdx),
+                    toolCallMsg,
+                    ...messages.value.slice(aIdx),
+                  ];
+                } else {
+                  messages.value = [...messages.value, toolCallMsg];
+                }
+              } else {
+                messages.value = [...messages.value, toolCallMsg];
+              }
             }
           } else if (chunk.eventType === "tool_result") {
             upsertToolResultMessage(
               chunk,
-              chunk.conversationId || activeConversationId.value || ""
+              chunk.conversationId || activeConversationId.value || "",
+              assistantAdded ? assistant.id : undefined
             );
           }
         }
@@ -1307,6 +1345,22 @@ const onSend = async (text: string): Promise<void> => {
             "The AI returned an empty response. This is typically a transient server issue (rate limit, timeout, or 502). Please try sending your message again.";
           streamError.value = emptyMessage;
           showAssistantError(emptyMessage);
+        }
+        // Safety net: ensure the assistant message appears after all tool
+        // calls and tool results from this turn. During multi-round
+        // tool-calling, the placeholder may have been inserted before some
+        // tool calls if text tokens arrived in an earlier round. Moving it
+        // to the end guarantees correct final display order.
+        {
+          const aIdx = messages.value.findIndex(
+            (m) => m.id === assistant.id
+          );
+          if (aIdx !== -1 && aIdx < messages.value.length - 1) {
+            const reordered = [...messages.value];
+            const [assistantMsg] = reordered.splice(aIdx, 1);
+            reordered.push(assistantMsg);
+            messages.value = reordered;
+          }
         }
         if (complete.conversationId) {
           activeConversationId.value = complete.conversationId;

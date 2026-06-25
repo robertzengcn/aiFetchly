@@ -30,7 +30,8 @@ export class AIChatMessageModel extends BaseDb {
     const query = this.repository
       .createQueryBuilder("message")
       .where("message.conversationId = :conversationId", { conversationId })
-      .orderBy("message.timestamp", "ASC");
+      .orderBy("message.timestamp", "ASC")
+      .addOrderBy("message.id", "ASC");
 
     if (limit) {
       query.take(limit);
