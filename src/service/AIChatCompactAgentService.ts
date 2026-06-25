@@ -148,7 +148,16 @@ export class AIChatCompactAgentService {
         reason: `prompt_tokens=${lastTokens}>=${tokenThreshold}`,
       };
     }
-    const lastAt = this.lastSessionMemoryAt.get(input.conversationId) ?? 0;
+    // Lazy-initialize the per-conversation timestamp on first observation.
+    // Using 0 (Unix epoch) as the default would make Date.now() - 0 always
+    // exceed SESSION_MEMORY_MAX_AGE_MS, causing the time gate to fire on
+    // every fresh conversation. Seeding to now ensures the time gate starts
+    // closed and only opens after 60 min of actual inactivity.
+    let lastAt = this.lastSessionMemoryAt.get(input.conversationId);
+    if (lastAt === undefined) {
+      lastAt = Date.now();
+      this.lastSessionMemoryAt.set(input.conversationId, lastAt);
+    }
     const staleByTime = Date.now() - lastAt > SESSION_MEMORY_MAX_AGE_MS;
     if (staleByTime) {
       return {
