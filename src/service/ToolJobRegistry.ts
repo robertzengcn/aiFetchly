@@ -51,14 +51,6 @@ export interface ToolJobLimits {
 
 export interface ToolJobSpawnHandle {
   readonly onCancel: (handler: () => void) => void;
-  readonly onProgress: (handler: (p: ToolJobProgress) => void) => void;
-  readonly onPartial: (
-    handler: (p: {
-      data: unknown;
-      collectedCount: number;
-      expectedCount: number;
-    }) => void
-  ) => void;
   readonly resolve: (result: unknown) => void;
   readonly reject: (error: Error) => void;
 }
@@ -124,22 +116,6 @@ export class ToolJobRegistry {
 
     const handle: ToolJobSpawnHandle = {
       onCancel: (h) => job.cancelHandlers.push(h),
-      onProgress: (h) => {
-        (
-          job as { _progressHandler?: (p: ToolJobProgress) => void }
-        )._progressHandler = h;
-      },
-      onPartial: (h) => {
-        (
-          job as {
-            _partialHandler?: (p: {
-              data: unknown;
-              collectedCount: number;
-              expectedCount: number;
-            }) => void;
-          }
-        )._partialHandler = h;
-      },
       resolve: (result) => {
         if (job.status === "cancelled") return;
         job.status = "completed";

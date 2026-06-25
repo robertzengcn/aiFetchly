@@ -401,6 +401,10 @@ export class YandexMapsModule extends BaseModule {
       expectedCount: progress.total,
     });
     if (progress.current > 0) {
+      // NOTE: Worker files (src/childprocess/) do not yet stream incremental business
+      // data in their `progress` IPC messages. Until they do (deferred Step 9.5),
+      // `collectedCount` is accurate but `data.results` remains empty. The model
+      // still receives a partial-success signal with the count.
       ToolExecutor.updatePartialSnapshot(context.toolCallId, {
         collectedCount: progress.current,
         expectedCount: progress.total,
