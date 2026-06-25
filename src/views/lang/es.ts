@@ -1856,6 +1856,8 @@ export default {
       "Los tokens de IA incluidos en su plan de suscripción se han agotado. Recargue su cuenta para seguir utilizando las funciones de IA.",
     empty_response_error:
       "La IA devolvió una respuesta vacía. Esto suele ser un problema temporal del servidor (límite de tasa, tiempo de espera o error 502). Intente enviar su mensaje nuevamente.",
+    file_change_one: "cambio de archivo",
+    file_changes_other: "cambios de archivo",
   },
   aiChatV2Plan: {
     mode_chat: "Chat",

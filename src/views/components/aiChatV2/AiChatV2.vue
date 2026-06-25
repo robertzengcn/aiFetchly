@@ -114,6 +114,63 @@
         />
       </div>
 
+      <!-- File Operations Summary Panel: lists files created/modified by the
+           AI during tool execution in the active conversation. -->
+      <div v-if="currentFileOps.length > 0" class="v2-shell__file-ops-panel">
+        <div
+          class="v2-shell__file-ops-header"
+          @click="showFileOpsPanel = !showFileOpsPanel"
+        >
+          <v-icon size="small" class="mr-1" color="primary">
+            mdi-file-document-edit-outline
+          </v-icon>
+          <span class="v2-shell__file-ops-summary">
+            {{ currentFileOps.length }}
+            {{
+              currentFileOps.length === 1
+                ? t("aiChatV2.file_change_one") || "file change"
+                : t("aiChatV2.file_changes_other") || "file changes"
+            }}
+          </span>
+          <span class="v2-shell__file-ops-counts">
+            <v-chip
+              v-if="createCount > 0"
+              size="x-small"
+              variant="tonal"
+              color="success"
+              class="ml-1"
+            >
+              +{{ createCount }}
+            </v-chip>
+            <v-chip
+              v-if="editCount > 0"
+              size="x-small"
+              variant="tonal"
+              color="info"
+              class="ml-1"
+            >
+              ~{{ editCount }}
+            </v-chip>
+            <v-chip
+              v-if="overwriteCount > 0"
+              size="x-small"
+              variant="tonal"
+              color="warning"
+              class="ml-1"
+            >
+              ~{{ overwriteCount }}
+            </v-chip>
+          </span>
+          <v-spacer />
+          <v-icon size="small">
+            {{ showFileOpsPanel ? "mdi-chevron-up" : "mdi-chevron-down" }}
+          </v-icon>
+        </div>
+        <div v-if="showFileOpsPanel" class="v2-shell__file-ops-body">
+          <FileOperationBadge :records="currentFileOps" />
+        </div>
+      </div>
+
       <AiChatV2Composer
         :is-streaming="chatIsRunning"
         @send="onSend"
@@ -289,7 +346,13 @@ import AiChatV2QuestionCard from "./AiChatV2QuestionCard.vue";
 import AiChatV2PlanApprovalCard from "./AiChatV2PlanApprovalCard.vue";
 import AiChatV2PlanStatusBadge from "./AiChatV2PlanStatusBadge.vue";
 import AiChatV2ContextBadge from "./AiChatV2ContextBadge.vue";
+import FileOperationBadge from "../aiChat/FileOperationBadge.vue";
 import MCPToolManager from "../aiChat/MCPToolManager.vue";
+import type { FileOperationRecord } from "@/entityTypes/fileOperationTypes";
+import {
+  subscribeToFileOperations,
+  unsubscribeFromFileOperations,
+} from "@/views/api/aiChat";
 import type { OpenAIModel } from "@/api/aiChatApi";
 import {
   computeContextPercent,
@@ -547,6 +610,28 @@ const pendingQuestion = ref<AIChatPlanQuestionView | null>(null);
 // approves/rejects/requests changes, it is moved into the message flow and
 // this ref is cleared.
 const pendingPlanApproval = ref<AIChatPlanStateView | null>(null);
+
+// ---------------------------------------------------------------------------
+// File operation tracking
+// ---------------------------------------------------------------------------
+// Map of conversationId → file operation records emitted via IPC during
+// tool execution (create/overwrite/edit). Shown as a collapsible summary
+// panel above the composer so the user can see what the AI changed.
+const fileOps = ref<Map<string, readonly FileOperationRecord[]>>(new Map());
+const showFileOpsPanel = ref(true);
+const currentFileOps = computed<readonly FileOperationRecord[]>(() => {
+  if (!activeConversationId.value) return [];
+  return fileOps.value.get(activeConversationId.value) ?? [];
+});
+const createCount = computed(
+  () => currentFileOps.value.filter((r) => r.type === "create").length
+);
+const editCount = computed(
+  () => currentFileOps.value.filter((r) => r.type === "edit").length
+);
+const overwriteCount = computed(
+  () => currentFileOps.value.filter((r) => r.type === "overwrite").length
+);
 
 const applyPlanState = (state: AIChatPlanStateView | null): void => {
   planState.value = state;
@@ -1457,10 +1542,21 @@ const onSend = async (text: string): Promise<void> => {
 onMounted(() => {
   void loadConversations();
   void loadModelContextWindows();
+  // Subscribe to file operation events emitted during tool execution.
+  // Records are appended per-conversation so the summary panel reflects
+  // all changes made within the active conversation.
+  subscribeToFileOperations((record: FileOperationRecord) => {
+    const convId = record.conversationId;
+    const current = fileOps.value.get(convId) ?? [];
+    const next = new Map(fileOps.value);
+    next.set(convId, [...current, record]);
+    fileOps.value = next;
+  });
 });
 
 onBeforeUnmount(() => {
   detachActiveStreamView();
+  unsubscribeFromFileOperations();
   if (searchDebounceTimer) {
     clearTimeout(searchDebounceTimer);
     searchDebounceTimer = null;
@@ -1504,5 +1600,32 @@ onBeforeUnmount(() => {
   padding: 0 12px;
   max-height: 300px;
   overflow-y: auto;
+}
+.v2-shell__file-ops-panel {
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+  background: #fafafa;
+}
+.v2-shell__file-ops-header {
+  display: flex;
+  align-items: center;
+  padding: 6px 12px;
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 0.15s ease;
+}
+.v2-shell__file-ops-header:hover {
+  background-color: rgba(0, 0, 0, 0.04);
+}
+.v2-shell__file-ops-summary {
+  font-size: 13px;
+  font-weight: 500;
+}
+.v2-shell__file-ops-counts {
+  display: flex;
+  align-items: center;
+}
+.v2-shell__file-ops-body {
+  padding: 4px 12px 10px;
+  border-top: 1px solid rgba(0, 0, 0, 0.05);
 }
 </style>
