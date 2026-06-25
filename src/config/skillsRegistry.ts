@@ -443,6 +443,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     requiresConfirmation: false,
     permissionCategory: "network",
     source: "built-in",
+    timeoutClass: "network",
     execute: async (args, context) => {
       const result = await ToolExecutor.execute(
         "analyze_website_batch",
@@ -485,6 +486,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     requiresConfirmation: false,
     permissionCategory: "network",
     source: "built-in",
+    timeoutClass: "network",
     execute: async (args, context) => {
       const result = await ToolExecutor.execute(
         "analyze_websites",
