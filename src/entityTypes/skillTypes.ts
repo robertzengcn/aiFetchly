@@ -7,6 +7,7 @@
  */
 
 import type { ToolFunction } from "@/api/aiChatApi";
+import type { ToolTimeoutClass } from "@/service/ToolTimeoutPolicy";
 
 /**
  * Result returned by a skill's execute function.
@@ -94,6 +95,21 @@ export interface SkillDefinition {
 
   /** Origin of the skill. */
   readonly source: SkillSource;
+
+  /**
+   * Timeout class for this tool. If absent, the runtime infers a default
+   * from the tool name via inferTimeoutClassByName.
+   */
+  readonly timeoutClass?: ToolTimeoutClass;
+
+  /**
+   * Dynamic timeout-class resolver. When present, overrides timeoutClass
+   * based on the actual call arguments. Used to route heavy argument
+   * combinations to the async path.
+   */
+  readonly resolveTimeoutClass?: (
+    args: Record<string, unknown>
+  ) => ToolTimeoutClass;
 
   /**
    * True when the imported skill is derived from SKILL.md guidance only and
