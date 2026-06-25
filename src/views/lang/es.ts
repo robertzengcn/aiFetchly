@@ -1868,6 +1868,10 @@ export default {
     approved: "Aprobado",
     approved_continue_message:
       "Plan aprobado. Por favor, comienza a ejecutar el plan ahora.",
+    rejected_continue_message:
+      "Plan rechazado. Por favor, revisa el plan según los siguientes comentarios y vuelve a enviarlo para su aprobación.",
+    changes_requested_continue_message:
+      "Cambios solicitados en el plan. Por favor, actualiza el plan según los siguientes comentarios y vuelve a enviarlo para su aprobación.",
     reject_feedback: "Motivo de rechazo",
     changes_feedback: "¿Qué necesita cambiar?",
     no_plan_yet: "Aún no hay contenido del plan.",

@@ -54,8 +54,17 @@ import { Token } from "@/modules/token";
 const CHAT_V2_MAX_TOOL_ROUNDS = 30;
 
 /**
+ * Maximum consecutive rounds where malformed tool-call arguments are fed
+ * back to the model for self-correction before giving up with a user-facing
+ * error. Prevents infinite burn when a model is fundamentally broken for a
+ * particular tool schema.
+ */
+const MAX_MALFORMED_ARGUMENT_RETRIES = 3;
+
+/**
  * Legacy global timeout ceiling for foreground tool calls.
  *
+ * Bounds foreground tool calls so the UI does not spin indefinitely.
  * Retained for backward compatibility — may be imported elsewhere.
  * The loop now resolves timeouts via ToolTimeoutPolicy
  * (per-tool-class ceilings) instead of using this constant directly.
@@ -276,6 +285,10 @@ export class AIChatQueryLoop {
     // drafts (see completed-return path).
     let autoEnteredPlanId: string | undefined;
     let planToolsUsed = false;
+    // Tracks consecutive rounds where tool-call arguments were malformed.
+    // Reset to 0 whenever a round has no malformed calls. When this exceeds
+    // MAX_MALFORMED_ARGUMENT_RETRIES, the turn fails with a user-facing error.
+    let consecutiveMalformedRounds = 0;
 
     try {
       for (
@@ -421,24 +434,69 @@ export class AIChatQueryLoop {
           break;
         }
 
-        if (parsedCalls.some((call) => !call.ok)) {
-          throw new Error("Tool call arguments were malformed.");
+        const malformedCalls = parsedCalls.filter((c) => !c.ok);
+
+        if (malformedCalls.length > 0) {
+          consecutiveMalformedRounds += 1;
+          if (consecutiveMalformedRounds > MAX_MALFORMED_ARGUMENT_RETRIES) {
+            throw new Error(
+              `Tool call arguments were malformed after ${MAX_MALFORMED_ARGUMENT_RETRIES} consecutive retries. ` +
+                "The model may be unable to generate valid JSON for this tool."
+            );
+          }
+          for (const call of malformedCalls) {
+            console.error(
+              `[ai-chat-v2] malformed tool call args name=${call.name} id=${
+                call.id
+              } rawArgsLen=${call.rawArgumentsJson?.length ?? 0} rawArgs="${(
+                call.rawArgumentsJson ?? ""
+              ).slice(0, 200)}"`
+            );
+          }
+        } else {
+          consecutiveMalformedRounds = 0;
         }
 
         messages.push(
           buildAssistantToolCallMessage(
-            parsedCalls.filter(
-              (
-                call
-              ): call is typeof call & {
-                id: string;
-                name: string;
-                arguments: Record<string, unknown>;
-              } => Boolean(call.id && call.name && call.arguments)
-            ),
+            parsedCalls,
             accumulator.state.fullContent
           )
         );
+
+        // Push error tool results for malformed calls so the model can
+        // self-correct in the next round. The assistant message above
+        // includes ALL calls (valid + malformed) with their tool_call_ids,
+        // so the API expects a tool result for each one.
+        for (const call of malformedCalls) {
+          if (!call.id || !call.name) continue;
+          const isEmpty =
+            !call.rawArgumentsJson || call.rawArgumentsJson.trim().length === 0;
+          const errorDetail = isEmpty
+            ? "No arguments were provided. If this tool requires no arguments, send {}. Otherwise, provide valid JSON arguments."
+            : `Arguments were not valid JSON: "${call.rawArgumentsJson.slice(
+                0,
+                500
+              )}". Please retry with properly formatted JSON arguments.`;
+          const errorContent = serializeToolResultContent({
+            success: false,
+            error: errorDetail,
+          });
+          eventSink.emit({
+            type: "tool_result",
+            conversationId: input.conversationId,
+            messageId: input.assistantMessageId,
+            toolCallId: call.id,
+            toolName: call.name,
+            fullContent: errorContent,
+            toolResult: { success: false, error: errorDetail },
+          });
+          messages.push({
+            role: "tool",
+            tool_call_id: call.id,
+            content: errorContent,
+          });
+        }
 
         for (const call of parsedCalls) {
           if (!call.ok || !call.id || !call.name) {

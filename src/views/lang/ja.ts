@@ -1825,6 +1825,10 @@ export default {
     approved: "承認済み",
     approved_continue_message:
       "計画が承認されました。今すぐ計画の実行を開始してください。",
+    rejected_continue_message:
+      "計画が拒否されました。以下のフィードバックに基づいて計画を修正し、承認のために再提出してください。",
+    changes_requested_continue_message:
+      "計画の変更が要求されました。以下のフィードバックに基づいて計画を更新し、承認のために再提出してください。",
     reject_feedback: "拒否の理由",
     changes_feedback: "何を変更する必要がありますか？",
     no_plan_yet: "計画内容がまだありません。",

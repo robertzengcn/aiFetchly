@@ -92,14 +92,25 @@
         @request-plan-changes="handleRequestPlanChanges"
       />
 
-      <!-- Plan Mode active cards (question card only; approval card renders inline) -->
+      <!-- Pinned action cards: question + plan approval while awaiting user input.
+           After the user approves/rejects/requests changes, the plan card moves
+           into the message flow (see handleApprovePlan et al.). -->
       <div
-        v-if="mode === 'plan' && pendingQuestion"
+        v-if="mode === 'plan' && (pendingQuestion || pendingPlanApproval)"
         class="v2-shell__plan-panel"
       >
         <AiChatV2QuestionCard
+          v-if="pendingQuestion"
           :question="pendingQuestion"
           @answered="handleQuestionAnswered"
+        />
+        <AiChatV2PlanApprovalCard
+          v-if="pendingPlanApproval"
+          :plan-state="pendingPlanApproval"
+          :disabled="chatIsRunning"
+          @approve="handleApprovePlan"
+          @reject="handleRejectPlan"
+          @request-changes="handleRequestPlanChanges"
         />
       </div>
 
@@ -275,6 +286,7 @@ import AiChatV2Composer from "./AiChatV2Composer.vue";
 import AiChatV2ModeSelector from "./AiChatV2ModeSelector.vue";
 import AiChatV2ModelSelector from "./AiChatV2ModelSelector.vue";
 import AiChatV2QuestionCard from "./AiChatV2QuestionCard.vue";
+import AiChatV2PlanApprovalCard from "./AiChatV2PlanApprovalCard.vue";
 import AiChatV2PlanStatusBadge from "./AiChatV2PlanStatusBadge.vue";
 import AiChatV2ContextBadge from "./AiChatV2ContextBadge.vue";
 import MCPToolManager from "../aiChat/MCPToolManager.vue";
@@ -530,6 +542,11 @@ const showTypingIndicator = computed(() => {
 const mode = ref<ChatV2Mode>("chat");
 const planState = ref<AIChatPlanStateView | null>(null);
 const pendingQuestion = ref<AIChatPlanQuestionView | null>(null);
+// While a plan is awaiting the user's decision, its approval card is pinned
+// at the bottom of the chat (alongside the question card). Once the user
+// approves/rejects/requests changes, it is moved into the message flow and
+// this ref is cleared.
+const pendingPlanApproval = ref<AIChatPlanStateView | null>(null);
 
 const applyPlanState = (state: AIChatPlanStateView | null): void => {
   planState.value = state;
@@ -659,14 +676,21 @@ const loadHistory = async (conversationId: string): Promise<void> => {
       } else {
         pendingQuestion.value = null;
       }
-      // If the plan has content (submitted/approved/rejected), render its
-      // card inline within the message flow at the end of the loaded history.
+      // If the plan has content, decide where to render it:
+      //  - awaiting_approval → pin at the bottom so the user can act on it
+      //  - any other status → render inline as part of the history
+      pendingPlanApproval.value = null;
       if (planState.value?.latestVersion) {
-        upsertPlanMessage(planState.value);
+        if (planState.value.status === "awaiting_approval") {
+          pendingPlanApproval.value = planState.value;
+        } else {
+          upsertPlanMessage(planState.value);
+        }
       }
     } catch {
       applyPlanState(null);
       pendingQuestion.value = null;
+      pendingPlanApproval.value = null;
     }
   } catch (err) {
     streamError.value = err instanceof Error ? err.message : String(err);
@@ -680,6 +704,7 @@ const onNewConversation = (): void => {
   streamError.value = null;
   applyPlanState(null);
   pendingQuestion.value = null;
+  pendingPlanApproval.value = null;
   // Reset context-usage tracking for the new conversation.
   lastUsage.value = null;
   streamingEstimatedTokens.value = 0;
@@ -747,7 +772,8 @@ const resolveToolIdForPermissionMessage = (
 
 const upsertToolResultMessage = (
   chunk: ChatV2StreamChunk,
-  conversationId: string
+  conversationId: string,
+  insertBeforeAssistantId?: string
 ): void => {
   const toolResult = chunk.toolResult ?? {};
   const content =
@@ -805,7 +831,7 @@ const upsertToolResultMessage = (
     return;
   }
 
-  messages.value.push({
+  const toolResultMsg: ChatV2MessageView = {
     id: `tool-result-${chunk.toolCallId || Date.now()}`,
     conversationId,
     role: "assistant",
@@ -813,7 +839,23 @@ const upsertToolResultMessage = (
     timestamp: new Date().toISOString(),
     messageType: MessageType.TOOL_RESULT,
     metadata,
-  });
+  };
+  // Insert before the assistant placeholder so tool results always
+  // appear before the assistant's text response.
+  if (insertBeforeAssistantId) {
+    const aIdx = messages.value.findIndex(
+      (m) => m.id === insertBeforeAssistantId
+    );
+    if (aIdx !== -1) {
+      messages.value = [
+        ...messages.value.slice(0, aIdx),
+        toolResultMsg,
+        ...messages.value.slice(aIdx),
+      ];
+      return;
+    }
+  }
+  messages.value = [...messages.value, toolResultMsg];
 };
 
 const handleSkillPermissionGrant = async (
@@ -953,6 +995,8 @@ const handleApprovePlan = async (): Promise<void> => {
     );
     if (updated) {
       applyPlanState(updated);
+      // Move the card out of the pinned panel into the message flow.
+      pendingPlanApproval.value = null;
       upsertPlanMessage(updated);
     }
 
@@ -971,6 +1015,7 @@ const handleApprovePlan = async (): Promise<void> => {
 
 const handleRejectPlan = async (feedback: string): Promise<void> => {
   if (!planState.value || !activeConversationId.value) return;
+  if (chatIsRunning.value) return;
   try {
     const updated = await rejectChatV2Plan(
       activeConversationId.value,
@@ -980,8 +1025,20 @@ const handleRejectPlan = async (feedback: string): Promise<void> => {
     );
     if (updated) {
       applyPlanState(updated);
+      // Move the card out of the pinned panel into the message flow.
+      pendingPlanApproval.value = null;
       upsertPlanMessage(updated);
     }
+
+    // After rejection, send the feedback to the LLM so it can revise
+    // the plan or respond accordingly.
+    const prefix =
+      t("aiChatV2Plan.rejected_continue_message") ||
+      "Plan rejected. Please revise the plan based on the following feedback and resubmit for approval.";
+    const continueText = feedback
+      ? `${prefix}\n\nFeedback: ${feedback}`
+      : prefix;
+    await onSend(continueText);
   } catch (err) {
     streamError.value = err instanceof Error ? err.message : String(err);
   }
@@ -989,6 +1046,7 @@ const handleRejectPlan = async (feedback: string): Promise<void> => {
 
 const handleRequestPlanChanges = async (feedback: string): Promise<void> => {
   if (!planState.value || !activeConversationId.value) return;
+  if (chatIsRunning.value) return;
   try {
     const updated = await requestChatV2PlanChanges(
       activeConversationId.value,
@@ -998,8 +1056,20 @@ const handleRequestPlanChanges = async (feedback: string): Promise<void> => {
     );
     if (updated) {
       applyPlanState(updated);
+      // Move the card out of the pinned panel into the message flow.
+      pendingPlanApproval.value = null;
       upsertPlanMessage(updated);
     }
+
+    // After requesting changes, send the feedback to the LLM so it can
+    // update the plan accordingly.
+    const prefix =
+      t("aiChatV2Plan.changes_requested_continue_message") ||
+      "Plan changes requested. Please update the plan based on the following feedback and resubmit for approval.";
+    const continueText = feedback
+      ? `${prefix}\n\nFeedback: ${feedback}`
+      : prefix;
+    await onSend(continueText);
   } catch (err) {
     streamError.value = err instanceof Error ? err.message : String(err);
   }
@@ -1074,7 +1144,12 @@ const onSend = async (text: string): Promise<void> => {
   let assistantAdded = false;
   const ensureAssistantAdded = (): void => {
     if (assistantAdded) return;
-    messages.value = [...messages.value, assistant];
+    // Push a shallow copy so the array element is an independent object,
+    // not a reference to the raw closure-captured `assistant`. Vue's
+    // reactive proxy fully owns the copy, preventing reactivity gaps
+    // where mutations to `assistant.content` (the raw object) fail to
+    // trigger DOM updates — especially after many tool-call card pushes.
+    messages.value = [...messages.value, { ...assistant }];
     assistantAdded = true;
   };
   const showAssistantError = (message: string): void => {
@@ -1167,6 +1242,11 @@ const onSend = async (text: string): Promise<void> => {
           receivedFirstResponse.value = true;
           retryInfo.value = null;
           if (chunk.eventType === "token" && chunk.contentDelta) {
+            if (!assistantAdded) {
+              console.log(
+                `[ai-chat-v2] first token for assistant message ${assistant.id}, adding placeholder`
+              );
+            }
             ensureAssistantAdded();
             assistant.content += chunk.contentDelta;
             // Live estimate: each streamed delta adds ~chars/4 tokens to the
@@ -1196,7 +1276,10 @@ const onSend = async (text: string): Promise<void> => {
             const planChunk = chunk as ChatV2StreamChunk;
             if (planChunk.planState) {
               applyPlanState(planChunk.planState);
-              upsertPlanMessage(planChunk.planState);
+              // Pin the card at the bottom while awaiting the user's action.
+              // It moves into the message flow only after the user approves,
+              // rejects, or requests changes (see the plan handlers below).
+              pendingPlanApproval.value = planChunk.planState;
             }
           } else if (chunk.eventType === ("plan_state" as never)) {
             // Model auto-entered Plan Mode via EnterPlanMode. Light up the
@@ -1211,7 +1294,8 @@ const onSend = async (text: string): Promise<void> => {
             const planChunk = chunk as ChatV2StreamChunk;
             upsertToolResultMessage(
               planChunk,
-              planChunk.conversationId || activeConversationId.value || ""
+              planChunk.conversationId || activeConversationId.value || "",
+              assistantAdded ? assistant.id : undefined
             );
           } else if (chunk.eventType === "tool_call") {
             const toolCallId = chunk.toolCallId;
@@ -1226,7 +1310,7 @@ const onSend = async (text: string): Promise<void> => {
                 )
               : false;
             if (!alreadyRendered) {
-              messages.value.push({
+              const toolCallMsg: ChatV2MessageView = {
                 id: `tool-call-${toolCallId || Date.now()}`,
                 conversationId:
                   chunk.conversationId || activeConversationId.value || "",
@@ -1240,12 +1324,32 @@ const onSend = async (text: string): Promise<void> => {
                   toolName: chunk.toolName,
                   toolArguments: chunk.toolArguments,
                 },
-              });
+              };
+              // Insert before the assistant placeholder if it was already
+              // added (text tokens arrived in an earlier round). This keeps
+              // tool calls visually before the assistant's text response.
+              if (assistantAdded) {
+                const aIdx = messages.value.findIndex(
+                  (m) => m.id === assistant.id
+                );
+                if (aIdx !== -1) {
+                  messages.value = [
+                    ...messages.value.slice(0, aIdx),
+                    toolCallMsg,
+                    ...messages.value.slice(aIdx),
+                  ];
+                } else {
+                  messages.value = [...messages.value, toolCallMsg];
+                }
+              } else {
+                messages.value = [...messages.value, toolCallMsg];
+              }
             }
           } else if (chunk.eventType === "tool_result") {
             upsertToolResultMessage(
               chunk,
-              chunk.conversationId || activeConversationId.value || ""
+              chunk.conversationId || activeConversationId.value || "",
+              assistantAdded ? assistant.id : undefined
             );
           }
         }
@@ -1282,6 +1386,9 @@ const onSend = async (text: string): Promise<void> => {
           ensureAssistantAdded();
           assistant.content = complete.fullContent;
           const idx = messages.value.findIndex((m) => m.id === assistant.id);
+          console.log(
+            `[ai-chat-v2] stream complete: assistantId=${assistant.id} fullContentLen=${complete.fullContent.length} idxInMessages=${idx} assistantAdded=${assistantAdded} messagesLen=${messages.value.length}`
+          );
           if (idx !== -1) {
             messages.value[idx] = {
               ...messages.value[idx],
@@ -1295,10 +1402,34 @@ const onSend = async (text: string): Promise<void> => {
           streamError.value = emptyMessage;
           showAssistantError(emptyMessage);
         }
+        // Safety net: ensure the assistant message appears after all tool
+        // calls and tool results from this turn. During multi-round
+        // tool-calling, the placeholder may have been inserted before some
+        // tool calls if text tokens arrived in an earlier round. Moving it
+        // to the end guarantees correct final display order.
+        {
+          const aIdx = messages.value.findIndex(
+            (m) => m.id === assistant.id
+          );
+          if (aIdx !== -1 && aIdx < messages.value.length - 1) {
+            const reordered = [...messages.value];
+            const [assistantMsg] = reordered.splice(aIdx, 1);
+            reordered.push(assistantMsg);
+            messages.value = reordered;
+          }
+        }
         if (complete.conversationId) {
           activeConversationId.value = complete.conversationId;
         }
         messages.value = [...messages.value];
+        // Force a second render pass after Vue's render cycle completes.
+        // After many tool-call card pushes followed by the lazy assistant
+        // add + token updates, Vue's render scheduler can miss the final
+        // state of the newly-added assistant element. This nextTick
+        // re-spread guarantees the DOM picks up the final content.
+        void nextTick(() => {
+          messages.value = [...messages.value];
+        });
         void loadConversations();
       },
       (error: Error) => {
