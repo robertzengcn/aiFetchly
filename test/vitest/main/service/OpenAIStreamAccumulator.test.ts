@@ -153,6 +153,36 @@ describe("OpenAIStreamAccumulator", () => {
     const parsed = acc.tryParseToolCallArguments();
     expect(parsed.length).toBe(1);
     expect(parsed[0].ok).toBe(false);
+    expect(parsed[0].rawArgumentsJson).toBe("{bad");
+  });
+
+  it("treats empty arguments as valid {}", () => {
+    const acc = new OpenAIStreamAccumulator();
+    acc.ingest(
+      chunk({
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "c2",
+                  type: "function",
+                  function: { name: "list_items" },
+                },
+              ],
+            },
+            finish_reason: "tool_calls",
+          },
+        ],
+      })
+    );
+    const parsed = acc.tryParseToolCallArguments();
+    expect(parsed.length).toBe(1);
+    expect(parsed[0].ok).toBe(true);
+    expect(parsed[0].arguments).toEqual({});
+    expect(parsed[0].rawArgumentsJson).toBe("");
   });
 
   it("captures usage from the final usage-only chunk", () => {
