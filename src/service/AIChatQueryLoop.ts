@@ -33,6 +33,11 @@ import {
   isEnterPlanModeToolName,
   sanitizeEnterPlanModeArgs,
 } from "@/service/EnterPlanModeTool";
+import {
+  inferTimeoutClassByName,
+  resolveTimeoutMs,
+  type ToolTimeoutClass,
+} from "@/service/ToolTimeoutPolicy";
 
 /**
  * Max model→tool→model rounds per user turn. Must be high enough to
@@ -44,7 +49,13 @@ import {
  */
 const CHAT_V2_MAX_TOOL_ROUNDS = 30;
 
-/** Bound foreground tool calls so the UI does not spin indefinitely. */
+/**
+ * Legacy global timeout ceiling for foreground tool calls.
+ *
+ * Retained for backward compatibility — may be imported elsewhere.
+ * The loop now resolves timeouts via ToolTimeoutPolicy
+ * (per-tool-class ceilings) instead of using this constant directly.
+ */
 export const CHAT_V2_TOOL_TIMEOUT_MS = 90_000;
 
 /**
@@ -815,6 +826,20 @@ export class AIChatQueryLoop {
     }
   ): Promise<ToolExecutionResult> {
     const startedAt = Date.now();
+
+    // Resolve the timeout class. Explicit declaration on the skill wins;
+    // argument-driven resolver wins over static field; otherwise infer by name.
+    const skill = input.skillRegistry?.get(call.name);
+    const cls: ToolTimeoutClass =
+      skill?.resolveTimeoutClass?.(call.arguments ?? {}) ??
+      skill?.timeoutClass ??
+      inferTimeoutClassByName(call.name);
+    const timeoutMs = resolveTimeoutMs(cls);
+
+    // async path is implemented in Phase 3. Until then, fall back to browser
+    // ceiling so the loop still terminates.
+    const effectiveTimeoutMs = timeoutMs ?? resolveTimeoutMs("browser")!;
+
     const executePromise = this.deps.executeTool(
       call.name,
       call.arguments ?? {},
@@ -833,12 +858,12 @@ export class AIChatQueryLoop {
           tool_name: call.name,
           success: false,
           result: {
-            error: `Tool "${call.name}" timed out after ${CHAT_V2_TOOL_TIMEOUT_MS}ms.`,
+            error: `Tool "${call.name}" timed out after ${effectiveTimeoutMs}ms.`,
             timedOut: true,
           },
           execution_time_ms: Date.now() - startedAt,
         });
-      }, CHAT_V2_TOOL_TIMEOUT_MS);
+      }, effectiveTimeoutMs);
     });
 
     try {
