@@ -326,7 +326,11 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       const result = await ToolExecutor.execute(
         "search_maps_businesses",
         args,
-        context.conversationId
+        context.conversationId,
+        {
+          toolCallId: context.toolCallId,
+          emitProgress: context.emitProgress,
+        }
       );
       return { success: true, result };
     },
@@ -619,7 +623,11 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       const result = await ToolExecutor.execute(
         "extract_contact_info",
         args,
-        context.conversationId
+        context.conversationId,
+        {
+          toolCallId: context.toolCallId,
+          emitProgress: context.emitProgress,
+        }
       );
       return { success: true, result };
     },
