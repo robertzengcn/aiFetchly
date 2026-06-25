@@ -97,9 +97,11 @@ describe("SocialAccountModule crypto wiring", function () {
       expect(result.status).to.be(true);
       expect(captured).not.to.be(null);
       expect(
-        FieldCipher.isEncrypted((captured as SocialAccountEntity).pass)
+        FieldCipher.isEncrypted(
+          (captured as unknown as SocialAccountEntity).pass
+        )
       ).to.be(true);
-      expect((captured as SocialAccountEntity).pass).not.to.equal(
+      expect((captured as unknown as SocialAccountEntity).pass).not.to.equal(
         "my-password"
       );
     });
@@ -135,7 +137,9 @@ describe("SocialAccountModule crypto wiring", function () {
       // Wiring skips the assignment entirely when pass is null/undefined,
       // so the entity keeps its default (undefined) and is NOT encrypted.
       expect(
-        FieldCipher.isEncrypted((captured as SocialAccountEntity).pass)
+        FieldCipher.isEncrypted(
+          (captured as unknown as SocialAccountEntity).pass
+        )
       ).to.be(false);
     });
 
