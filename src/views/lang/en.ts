@@ -1956,4 +1956,19 @@ export default {
       source_kind: "Install source",
     },
   },
+  toolProgress: {
+    maps_starting: "Starting map search...",
+    maps_fetching: "Loading results from {platform} Maps...",
+    maps_found: "Found {collected} of {expected} businesses",
+    maps_extracting:
+      "Extracting details for business {collected} of {expected}",
+    maps_finalizing: "Finalizing results...",
+    contact_starting: "Starting contact extraction...",
+    contact_found: "Extracted {collected} of {expected} contacts",
+    contact_finalizing: "Finalizing contacts...",
+    website_analyzing: "Analyzing website content...",
+    website_finalizing: "Finalizing analysis...",
+    partial_result:
+      "Showing partial results ({collected} of {expected}). The tool timed out but returned what it had.",
+  },
 };

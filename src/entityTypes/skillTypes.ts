@@ -178,6 +178,39 @@ export interface SkillExecutionContext {
 }
 
 // ---------------------------------------------------------------------------
+// ModuleExecutionContext — Subset of SkillExecutionContext that modules
+// (GoogleMapsModule, YandexMapsModule, etc.) consume to emit progress.
+// ---------------------------------------------------------------------------
+
+/**
+ * Progress event shape emitted by browser-tool modules.
+ *
+ * `phase` uses the same vocabulary as SkillExecutionContext.emitProgress so
+ * the event can be forwarded verbatim to the UI.
+ */
+export interface ToolProgressEvent {
+  phase: "queued" | "running" | "fetching" | "extracting" | "finalizing";
+  message: string;
+  progress?: number | null;
+  partialCount?: number | null;
+  expectedCount?: number | null;
+}
+
+/**
+ * Context object passed by ToolExecutor to the long-running browser-tool
+ * modules so they can emit progress and register partial snapshots.
+ */
+export interface ModuleExecutionContext {
+  /** Server-assigned tool call ID for correlating request/response. */
+  readonly toolCallId: string;
+  /**
+   * Emits a progress event for this tool call. Optional — when absent the
+   * module should silently skip (no crash, no behavior change).
+   */
+  readonly emitProgress?: (event: ToolProgressEvent) => void;
+}
+
+// ---------------------------------------------------------------------------
 // SkillManifest — JSON structure within a skill package zip
 // ---------------------------------------------------------------------------
 
