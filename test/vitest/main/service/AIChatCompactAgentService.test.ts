@@ -151,6 +151,8 @@ describe("AIChatCompactAgentService", () => {
     await agent.enqueueSessionMemoryUpdate({
       conversationId: "v2-new",
       reason: "assistant_turn_completed",
+      // High tokens open the token-based gate on a fresh conversation.
+      promptTokens: 103_000,
     });
 
     expect(completeChat).toHaveBeenCalled();
@@ -212,6 +214,7 @@ describe("AIChatCompactAgentService", () => {
     await agent.enqueueSessionMemoryUpdate({
       conversationId: "v2-fail",
       reason: "test",
+      promptTokens: 103_000,
     });
 
     expect(mockRecordFailure).toHaveBeenCalledWith(
@@ -255,10 +258,12 @@ describe("AIChatCompactAgentService", () => {
     const p1 = agent.enqueueSessionMemoryUpdate({
       conversationId: "v2-parallel",
       reason: "test",
+      promptTokens: 103_000,
     });
     const p2 = agent.enqueueSessionMemoryUpdate({
       conversationId: "v2-parallel",
       reason: "test",
+      promptTokens: 103_000,
     });
     // Wait for p1 to reach the parked model call; p2 must skip via in-flight check.
     await vi.waitFor(() => expect(completeChat).toHaveBeenCalledTimes(1));
@@ -272,55 +277,30 @@ describe("AIChatCompactAgentService", () => {
       vi.useRealTimers();
     });
 
-    it("skips when below token threshold and within time window", async () => {
-      // Prime lastSessionMemoryAt with a successful update so the time-based
-      // gate is closed. (On a fresh agent, lastSessionMemoryAt defaults to 0
-      // and Date.now() - 0 > 60 min, so the gate opens on the first call —
-      // this is the documented "first turn after restart" edge case.)
-      mockGetByConversation.mockResolvedValue(null);
-      mockGetConversationMessages.mockResolvedValue([
-        {
-          messageId: "m1",
-          conversationId: "v2-gate-skip",
-          role: "user",
-          content: "x",
-          timestamp: new Date(1),
-          messageType: "message",
-        },
-        {
-          messageId: "m2",
-          conversationId: "v2-gate-skip",
-          role: "assistant",
-          content: "y",
-          timestamp: new Date(2),
-          messageType: "message",
-        },
-      ]);
-      mockUpsertMemory.mockResolvedValue({ failureCount: 0 });
-      const completeChat = vi
-        .fn()
-        .mockResolvedValue(
-          makeCompletion("# Session Memory\n## Current Goal\nx")
-        );
-      const agent = makeAgent({ completeChat });
-
-      // First call opens the gate (epoch=0 -> stale), runs the update, and
-      // sets lastSessionMemoryAt = now.
+    it("skips on a fresh conversation when tokens are below threshold", async () => {
+      // Fresh agent: lastSessionMemoryAt is empty. The gate must lazy-init
+      // the per-conversation timestamp to Date.now() and SKIP, rather than
+      // treating the missing entry as epoch 0 (which would always be stale
+      // and cause compaction to fire on every turn).
+      const agent = makeAgent({});
       await agent.enqueueSessionMemoryUpdate({
         conversationId: "v2-gate-skip",
         reason: "test",
         promptTokens: 1000,
       });
-      expect(completeChat).toHaveBeenCalledTimes(1);
-      mockGetByConversation.mockClear();
+      // No DB read, no LLM call.
+      expect(mockGetByConversation).not.toHaveBeenCalled();
+    });
 
-      // Second call: low tokens + fresh timer -> gate must skip.
-      await agent.enqueueSessionMemoryUpdate({
-        conversationId: "v2-gate-skip",
-        reason: "test",
-        promptTokens: 1000,
-      });
-      // DB read must NOT have been issued on the skipped call.
+    it("keeps skipping on subsequent low-token turns within the time window", async () => {
+      const agent = makeAgent({});
+      for (let i = 0; i < 5; i++) {
+        await agent.enqueueSessionMemoryUpdate({
+          conversationId: "v2-gate-skip-multi",
+          reason: "test",
+          promptTokens: 500 + i * 100,
+        });
+      }
       expect(mockGetByConversation).not.toHaveBeenCalled();
     });
 
@@ -352,7 +332,8 @@ describe("AIChatCompactAgentService", () => {
         );
       const agent = makeAgent({ completeChat });
 
-      // 0.8 * 128_000 = 102_400. 103_000 must trip the gate.
+      // 0.8 * 128_000 = 102_400. 103_000 must trip the gate even on a
+      // fresh conversation (token check fires before time check).
       await agent.enqueueSessionMemoryUpdate({
         conversationId: "v2-gate-tokens",
         reason: "test",
@@ -364,7 +345,7 @@ describe("AIChatCompactAgentService", () => {
       expect(mockUpsertMemory).toHaveBeenCalled();
     });
 
-    it("triggers when >60 min passed since last update", async () => {
+    it("triggers when >60 min have passed since the first observation", async () => {
       vi.useFakeTimers();
       vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
       try {
@@ -395,32 +376,22 @@ describe("AIChatCompactAgentService", () => {
           );
         const agent = makeAgent({ completeChat });
 
-        // First call: low tokens, lastSessionMemoryAt defaults to 0 -> epoch
-        // time is way more than 60 min ago -> gate opens. After a successful
-        // run, lastSessionMemoryAt is set to now.
+        // First call: low tokens + fresh timestamp (lazy-init to now) -> skip.
         await agent.enqueueSessionMemoryUpdate({
           conversationId: "v2-gate-time",
           reason: "test",
           promptTokens: 1000,
         });
-        expect(completeChat).toHaveBeenCalledTimes(1);
+        expect(completeChat).not.toHaveBeenCalled();
 
-        // Immediate second call: skipped (gate closed).
-        await agent.enqueueSessionMemoryUpdate({
-          conversationId: "v2-gate-time",
-          reason: "test",
-          promptTokens: 1000,
-        });
-        expect(completeChat).toHaveBeenCalledTimes(1);
-
-        // Advance past 60 min -> gate reopens.
+        // Advance past 60 min -> time gate opens.
         vi.setSystemTime(new Date("2026-01-01T01:01:00Z"));
         await agent.enqueueSessionMemoryUpdate({
           conversationId: "v2-gate-time",
           reason: "test",
           promptTokens: 1000,
         });
-        expect(completeChat).toHaveBeenCalledTimes(2);
+        expect(completeChat).toHaveBeenCalledTimes(1);
       } finally {
         vi.useRealTimers();
       }
@@ -454,11 +425,12 @@ describe("AIChatCompactAgentService", () => {
         );
       const agent = makeAgent({ completeChat });
 
-      // Gate opens on the first call because lastSessionMemoryAt defaults to 0.
+      // Force the gate open via high tokens so the LLM fires and the timer
+      // gets reset on success.
       await agent.enqueueSessionMemoryUpdate({
         conversationId: "v2-gate-reset",
         reason: "test",
-        promptTokens: 1000,
+        promptTokens: 103_000,
       });
       expect(completeChat).toHaveBeenCalledTimes(1);
 

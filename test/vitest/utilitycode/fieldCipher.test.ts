@@ -227,4 +227,56 @@ describe("UserSecretKeyService.getKey", () => {
     const key = await service.getKey();
     expect(key.length).toBe(32);
   });
+
+  it("discards an in-flight key when invalidate() fires during fetch (race fix)", async () => {
+    // Simulate a slow HTTP response that arrives AFTER invalidate() has bumped
+    // the generation. The stale key must be discarded, not cached.
+    let resolveHttp!: (value: unknown) => void;
+    const httpPromise = new Promise<unknown>((resolve) => {
+      resolveHttp = resolve;
+    });
+    const mock = makeMockedHttpClient(() => httpPromise);
+    const service = new UserSecretKeyService(mock);
+
+    // Start the fetch — it's now in-flight.
+    const fetchPromise = service.getKey();
+
+    // While in-flight, invalidate (simulating token refresh / session change).
+    service.invalidate();
+
+    // Now let the stale HTTP response arrive.
+    resolveHttp({
+      status: true,
+      data: { secretKey: VALID_B64_KEY },
+    });
+
+    // The in-flight fetch must reject with SecretKeyUnavailableError because
+    // the response belongs to the previous generation.
+    await expect(fetchPromise).rejects.toBeInstanceOf(
+      SecretKeyUnavailableError
+    );
+
+    // The stale key must NOT be cached — a fresh fetch should fire.
+    const mock2 = makeMockedHttpClient(async () => ({
+      status: true,
+      data: { secretKey: Buffer.alloc(32, 0x99).toString("base64") },
+    }));
+    Object.defineProperty(service, "httpClient", { value: mock2 });
+    const freshKey = await service.getKey();
+    expect(freshKey.length).toBe(32);
+    // The fresh key is the one we just returned, not the stale one.
+    expect(freshKey[0]).toBe(0x99);
+  });
+
+  it("throws SecretKeyUnavailableError when backend returns status:false even if data.secretKey present", async () => {
+    const mock = makeMockedHttpClient(async () => ({
+      status: false,
+      msg: "internal_error",
+      data: { secretKey: VALID_B64_KEY },
+    }));
+    const service = new UserSecretKeyService(mock);
+    await expect(service.getKey()).rejects.toBeInstanceOf(
+      SecretKeyUnavailableError
+    );
+  });
 });

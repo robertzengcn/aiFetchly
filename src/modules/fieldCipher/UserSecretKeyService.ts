@@ -17,6 +17,7 @@ const KEY_LENGTH = 32; // AES-256
 export class UserSecretKeyService {
   private cachedKey: Buffer | null = null;
   private inflight: Promise<Buffer> | null = null;
+  private generation = 0;
 
   constructor(private httpClient: HttpClient = new HttpClient()) {}
 
@@ -31,8 +32,22 @@ export class UserSecretKeyService {
       return this.cachedKey;
     }
     if (!this.inflight) {
+      // Capture the generation at fetch start so the .then() callback can detect
+      // if invalidate() fired while the HTTP request was in flight. If it did,
+      // the returned key is stale (or belongs to a different session) and must
+      // NOT be cached.
+      const fetchGeneration = this.generation;
       this.inflight = this.fetchKey()
         .then((key) => {
+          if (fetchGeneration !== this.generation) {
+            // Stale result — invalidate() bumped the generation while we were
+            // in flight. Zero and discard the key.
+            key.fill(0);
+            this.inflight = null;
+            throw new SecretKeyUnavailableError(
+              "Secret-key response discarded: session changed during fetch"
+            );
+          }
           this.cachedKey = key;
           // Clear the in-flight handle on success so the next call sees the
           // cache (not a stale resolved promise).
@@ -59,6 +74,9 @@ export class UserSecretKeyService {
    * may have a different secret key) and on logout/login transitions.
    */
   invalidate(): void {
+    // Bump the generation so any in-flight fetch's .then() callback can detect
+    // that its result is stale and refuse to cache it.
+    this.generation++;
     // Zero the key buffer before dropping the reference so the bytes do not
     // linger in the heap until GC. Standard hygiene for symmetric key material.
     if (this.cachedKey) {
@@ -82,8 +100,13 @@ export class UserSecretKeyService {
 
     // Backend envelope: { status: true, data: { secretKey: "base64..." } }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const data = (response as any)?.data;
-    const secretKey = data?.secretKey;
+    const r = response as any;
+    if (!r || r.status !== true) {
+      throw new SecretKeyUnavailableError(
+        "Secret-key request rejected by backend"
+      );
+    }
+    const secretKey = r.data?.secretKey;
     if (typeof secretKey !== "string" || secretKey.length === 0) {
       throw new SecretKeyUnavailableError(
         "Secret-key response missing data.secretKey"
