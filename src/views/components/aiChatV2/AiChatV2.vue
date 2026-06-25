@@ -92,14 +92,25 @@
         @request-plan-changes="handleRequestPlanChanges"
       />
 
-      <!-- Plan Mode active cards (question card only; approval card renders inline) -->
+      <!-- Pinned action cards: question + plan approval while awaiting user input.
+           After the user approves/rejects/requests changes, the plan card moves
+           into the message flow (see handleApprovePlan et al.). -->
       <div
-        v-if="mode === 'plan' && pendingQuestion"
+        v-if="mode === 'plan' && (pendingQuestion || pendingPlanApproval)"
         class="v2-shell__plan-panel"
       >
         <AiChatV2QuestionCard
+          v-if="pendingQuestion"
           :question="pendingQuestion"
           @answered="handleQuestionAnswered"
+        />
+        <AiChatV2PlanApprovalCard
+          v-if="pendingPlanApproval"
+          :plan-state="pendingPlanApproval"
+          :disabled="chatIsRunning"
+          @approve="handleApprovePlan"
+          @reject="handleRejectPlan"
+          @request-changes="handleRequestPlanChanges"
         />
       </div>
 
@@ -275,6 +286,7 @@ import AiChatV2Composer from "./AiChatV2Composer.vue";
 import AiChatV2ModeSelector from "./AiChatV2ModeSelector.vue";
 import AiChatV2ModelSelector from "./AiChatV2ModelSelector.vue";
 import AiChatV2QuestionCard from "./AiChatV2QuestionCard.vue";
+import AiChatV2PlanApprovalCard from "./AiChatV2PlanApprovalCard.vue";
 import AiChatV2PlanStatusBadge from "./AiChatV2PlanStatusBadge.vue";
 import AiChatV2ContextBadge from "./AiChatV2ContextBadge.vue";
 import MCPToolManager from "../aiChat/MCPToolManager.vue";
@@ -530,6 +542,11 @@ const showTypingIndicator = computed(() => {
 const mode = ref<ChatV2Mode>("chat");
 const planState = ref<AIChatPlanStateView | null>(null);
 const pendingQuestion = ref<AIChatPlanQuestionView | null>(null);
+// While a plan is awaiting the user's decision, its approval card is pinned
+// at the bottom of the chat (alongside the question card). Once the user
+// approves/rejects/requests changes, it is moved into the message flow and
+// this ref is cleared.
+const pendingPlanApproval = ref<AIChatPlanStateView | null>(null);
 
 const applyPlanState = (state: AIChatPlanStateView | null): void => {
   planState.value = state;
@@ -659,14 +676,21 @@ const loadHistory = async (conversationId: string): Promise<void> => {
       } else {
         pendingQuestion.value = null;
       }
-      // If the plan has content (submitted/approved/rejected), render its
-      // card inline within the message flow at the end of the loaded history.
+      // If the plan has content, decide where to render it:
+      //  - awaiting_approval → pin at the bottom so the user can act on it
+      //  - any other status → render inline as part of the history
+      pendingPlanApproval.value = null;
       if (planState.value?.latestVersion) {
-        upsertPlanMessage(planState.value);
+        if (planState.value.status === "awaiting_approval") {
+          pendingPlanApproval.value = planState.value;
+        } else {
+          upsertPlanMessage(planState.value);
+        }
       }
     } catch {
       applyPlanState(null);
       pendingQuestion.value = null;
+      pendingPlanApproval.value = null;
     }
   } catch (err) {
     streamError.value = err instanceof Error ? err.message : String(err);
@@ -680,6 +704,7 @@ const onNewConversation = (): void => {
   streamError.value = null;
   applyPlanState(null);
   pendingQuestion.value = null;
+  pendingPlanApproval.value = null;
   // Reset context-usage tracking for the new conversation.
   lastUsage.value = null;
   streamingEstimatedTokens.value = 0;
@@ -970,6 +995,8 @@ const handleApprovePlan = async (): Promise<void> => {
     );
     if (updated) {
       applyPlanState(updated);
+      // Move the card out of the pinned panel into the message flow.
+      pendingPlanApproval.value = null;
       upsertPlanMessage(updated);
     }
 
@@ -998,6 +1025,8 @@ const handleRejectPlan = async (feedback: string): Promise<void> => {
     );
     if (updated) {
       applyPlanState(updated);
+      // Move the card out of the pinned panel into the message flow.
+      pendingPlanApproval.value = null;
       upsertPlanMessage(updated);
     }
 
@@ -1027,6 +1056,8 @@ const handleRequestPlanChanges = async (feedback: string): Promise<void> => {
     );
     if (updated) {
       applyPlanState(updated);
+      // Move the card out of the pinned panel into the message flow.
+      pendingPlanApproval.value = null;
       upsertPlanMessage(updated);
     }
 
@@ -1245,7 +1276,10 @@ const onSend = async (text: string): Promise<void> => {
             const planChunk = chunk as ChatV2StreamChunk;
             if (planChunk.planState) {
               applyPlanState(planChunk.planState);
-              upsertPlanMessage(planChunk.planState);
+              // Pin the card at the bottom while awaiting the user's action.
+              // It moves into the message flow only after the user approves,
+              // rejects, or requests changes (see the plan handlers below).
+              pendingPlanApproval.value = planChunk.planState;
             }
           } else if (chunk.eventType === ("plan_state" as never)) {
             // Model auto-entered Plan Mode via EnterPlanMode. Light up the
