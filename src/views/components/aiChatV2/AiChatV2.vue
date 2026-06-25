@@ -1074,7 +1074,12 @@ const onSend = async (text: string): Promise<void> => {
   let assistantAdded = false;
   const ensureAssistantAdded = (): void => {
     if (assistantAdded) return;
-    messages.value = [...messages.value, assistant];
+    // Push a shallow copy so the array element is an independent object,
+    // not a reference to the raw closure-captured `assistant`. Vue's
+    // reactive proxy fully owns the copy, preventing reactivity gaps
+    // where mutations to `assistant.content` (the raw object) fail to
+    // trigger DOM updates — especially after many tool-call card pushes.
+    messages.value = [...messages.value, { ...assistant }];
     assistantAdded = true;
   };
   const showAssistantError = (message: string): void => {
@@ -1167,6 +1172,11 @@ const onSend = async (text: string): Promise<void> => {
           receivedFirstResponse.value = true;
           retryInfo.value = null;
           if (chunk.eventType === "token" && chunk.contentDelta) {
+            if (!assistantAdded) {
+              console.log(
+                `[ai-chat-v2] first token for assistant message ${assistant.id}, adding placeholder`
+              );
+            }
             ensureAssistantAdded();
             assistant.content += chunk.contentDelta;
             // Live estimate: each streamed delta adds ~chars/4 tokens to the
@@ -1282,6 +1292,9 @@ const onSend = async (text: string): Promise<void> => {
           ensureAssistantAdded();
           assistant.content = complete.fullContent;
           const idx = messages.value.findIndex((m) => m.id === assistant.id);
+          console.log(
+            `[ai-chat-v2] stream complete: assistantId=${assistant.id} fullContentLen=${complete.fullContent.length} idxInMessages=${idx} assistantAdded=${assistantAdded} messagesLen=${messages.value.length}`
+          );
           if (idx !== -1) {
             messages.value[idx] = {
               ...messages.value[idx],
@@ -1299,6 +1312,14 @@ const onSend = async (text: string): Promise<void> => {
           activeConversationId.value = complete.conversationId;
         }
         messages.value = [...messages.value];
+        // Force a second render pass after Vue's render cycle completes.
+        // After many tool-call card pushes followed by the lazy assistant
+        // add + token updates, Vue's render scheduler can miss the final
+        // state of the newly-added assistant element. This nextTick
+        // re-spread guarantees the DOM picks up the final content.
+        void nextTick(() => {
+          messages.value = [...messages.value];
+        });
         void loadConversations();
       },
       (error: Error) => {
