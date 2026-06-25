@@ -1887,4 +1887,18 @@ export default {
       source_kind: "安装来源",
     },
   },
+  toolProgress: {
+    maps_starting: "正在开始地图搜索...",
+    maps_fetching: "正在从 {platform} 地图加载结果...",
+    maps_found: "已找到 {expected} 家商家中的 {collected} 家",
+    maps_extracting: "正在提取第 {collected} 家（共 {expected} 家）商家的详情",
+    maps_finalizing: "正在整理结果...",
+    contact_starting: "正在开始联系方式提取...",
+    contact_found: "已提取 {expected} 个联系方式中的 {collected} 个",
+    contact_finalizing: "正在整理联系方式...",
+    website_analyzing: "正在分析网站内容...",
+    website_finalizing: "正在完成分析...",
+    partial_result:
+      "显示部分结果（{collected} / {expected}）。工具已超时，但已返回已获取的数据。",
+  },
 };

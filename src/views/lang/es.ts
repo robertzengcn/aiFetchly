@@ -1955,4 +1955,19 @@ export default {
       source_kind: "Origen de instalación",
     },
   },
+  toolProgress: {
+    maps_starting: "Iniciando búsqueda en mapas...",
+    maps_fetching: "Cargando resultados de {platform} Maps...",
+    maps_found: "Se encontraron {collected} de {expected} negocios",
+    maps_extracting:
+      "Extrayendo detalles del negocio {collected} de {expected}",
+    maps_finalizing: "Finalizando resultados...",
+    contact_starting: "Iniciando extracción de contactos...",
+    contact_found: "Extraídos {collected} de {expected} contactos",
+    contact_finalizing: "Finalizando contactos...",
+    website_analyzing: "Analizando contenido del sitio web...",
+    website_finalizing: "Finalizando análisis...",
+    partial_result:
+      "Mostrando resultados parciales ({collected} de {expected}). La herramienta agotó el tiempo de espera pero devolvió lo que tenía.",
+  },
 };

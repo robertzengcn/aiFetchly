@@ -1936,4 +1936,19 @@ export default {
       source_kind: "Source d'installation",
     },
   },
+  toolProgress: {
+    maps_starting: "Démarrage de la recherche cartographique...",
+    maps_fetching: "Chargement des résultats depuis {platform} Maps...",
+    maps_found: "{collected} sur {expected} entreprises trouvées",
+    maps_extracting:
+      "Extraction des détails pour l'entreprise {collected} sur {expected}",
+    maps_finalizing: "Finalisation des résultats...",
+    contact_starting: "Démarrage de l'extraction des contacts...",
+    contact_found: "{collected} sur {expected} contacts extraits",
+    contact_finalizing: "Finalisation des contacts...",
+    website_analyzing: "Analyse du contenu du site web...",
+    website_finalizing: "Finalisation de l'analyse...",
+    partial_result:
+      "Affichage des résultats partiels ({collected} sur {expected}). L'outil a expiré mais a renvoyé les données collectées.",
+  },
 };
