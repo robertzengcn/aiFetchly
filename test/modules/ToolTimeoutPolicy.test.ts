@@ -47,8 +47,8 @@ describe("ToolTimeoutPolicy", () => {
         "network"
       );
     });
-    it("defaults unknown tools to fast", () => {
-      expect(inferTimeoutClassByName("something_new")).to.equal("fast");
+    it("defaults unknown tools to network (safe ceiling for unannotated I/O tools)", () => {
+      expect(inferTimeoutClassByName("something_new")).to.equal("network");
     });
   });
 });
