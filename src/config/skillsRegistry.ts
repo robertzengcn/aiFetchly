@@ -167,6 +167,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         {
           toolCallId: context.toolCallId,
           emitProgress: context.emitProgress,
+          signal: context.signal,
         }
       );
       return { success: true, result };
@@ -341,6 +342,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         {
           toolCallId: context.toolCallId,
           emitProgress: context.emitProgress,
+          signal: context.signal,
         }
       );
       return { success: true, result };
@@ -670,6 +672,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         {
           toolCallId: context.toolCallId,
           emitProgress: context.emitProgress,
+          signal: context.signal,
         }
       );
       return { success: true, result };

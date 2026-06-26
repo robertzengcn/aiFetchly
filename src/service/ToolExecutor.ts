@@ -185,6 +185,17 @@ export class ToolExecutor {
     conversationId: string,
     context?: ModuleExecutionContext
   ): Promise<Record<string, unknown>> {
+    // Early-abort fast path: if the cancellation signal was already fired
+    // before we even started, return immediately without acquiring the rate
+    // limiter or doing any work.
+    if (context?.signal?.aborted) {
+      return {
+        success: false,
+        error: "Tool call was cancelled before execution",
+        cancelled: true,
+      };
+    }
+
     const rateLimiter = RateLimiterManager.getLimiter(toolName);
 
     try {
