@@ -1373,6 +1373,12 @@ const onSend = async (text: string): Promise<void> => {
             const planChunk = chunk as ChatV2StreamChunk;
             if (planChunk.planState) {
               applyPlanState(planChunk.planState);
+              if (planChunk.planState.status !== "awaiting_approval") {
+                pendingPlanApproval.value = null;
+                if (planChunk.planState.latestVersion) {
+                  upsertPlanMessage(planChunk.planState);
+                }
+              }
             }
           } else if (chunk.eventType === ("plan_blocked_tool" as never)) {
             // Tool was blocked by plan policy — surface as a tool result message
