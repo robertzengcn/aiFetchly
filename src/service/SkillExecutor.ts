@@ -393,6 +393,7 @@ async function executeViaToolExecutor(
       {
         toolCallId: context.toolCallId,
         emitProgress: context.emitProgress,
+        signal: context.signal,
       }
     );
     const execResult: ToolExecutionResult = {
