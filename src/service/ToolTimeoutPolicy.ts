@@ -37,6 +37,17 @@ export function resolveTimeoutMs(
 /**
  * Fallback classifier used when a skill does not declare its timeoutClass.
  * Lets the registry migrate incrementally.
+ *
+ * The default for unrecognized tool names is "network" (90s), NOT "fast".
+ * Rationale: every tier:"main" tool that reached production without an
+ * explicit annotation has historically been an I/O tool (search engines,
+ * subagents, MCP calls). Defaulting unknown tools to "fast" (30s) caused
+ * silent 30s timeouts on `run_subagent` and `scrape_urls_from_search_engine`
+ * before they were annotated. A 90s ceiling is safe for any plausible
+ * main-tier tool and gives developers time to notice the missing annotation
+ * and add an explicit one. Pure/fast tools (file_*, glob_files, grep_files,
+ * read_url_content) are still matched explicitly above so they keep failing
+ * fast when they hang.
  */
 export function inferTimeoutClassByName(name: string): ToolTimeoutClass {
   if (
@@ -47,17 +58,11 @@ export function inferTimeoutClassByName(name: string): ToolTimeoutClass {
   ) {
     return "fast";
   }
-  if (
-    name === "search_maps_businesses" ||
-    name === "extract_contact_info"
-  ) {
+  if (name === "search_maps_businesses" || name === "extract_contact_info") {
     return "browser";
   }
-  if (
-    name === "analyze_website" ||
-    name === "search_yellow_pages"
-  ) {
+  if (name === "analyze_website" || name === "search_yellow_pages") {
     return "network";
   }
-  return "fast";
+  return "network";
 }
