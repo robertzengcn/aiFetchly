@@ -35,11 +35,83 @@ import type {
   GrepCountEntry,
 } from "@/entityTypes/fileToolTypes";
 
+/**
+ * Identity of an active workspace. When provided to FileToolService,
+ * the service runs in strict mode and confines all file operations
+ * to `rootPath`.
+ */
+export interface FileToolServiceWorkspace {
+  readonly id: string;
+  readonly rootPath: string;
+}
+
+/**
+ * Options object accepted by FileToolService in addition to the
+ * legacy `readonly string[]` roots form.
+ *
+ * - `workspace`: when set, the service enters strict mode and uses
+ *   `[workspace.rootPath]` as the sole allowed root.
+ * - `roots`: legacy multi-root form, ignored when `workspace` is set.
+ */
+export interface FileToolServiceOptions {
+  /** Single approved workspace. When set, the service runs in strict mode
+   *  and refuses any path outside this workspace. */
+  readonly workspace?: FileToolServiceWorkspace;
+  /** Legacy multi-root form, ignored when `workspace` is provided. */
+  readonly roots?: readonly string[];
+}
+
+/**
+ * User-defined type guard that reliably narrows `readonly string[]`
+ * away from `FileToolServiceOptions` in the constructor union.
+ * (TypeScript's built-in `Array.isArray` does not always narrow
+ * `readonly` array members in union types.)
+ */
+function isStringArray(
+  value: FileToolServiceOptions | readonly string[]
+): value is readonly string[] {
+  return Array.isArray(value);
+}
+
 export class FileToolService {
   private readonly guard: FilePathGuard;
+  /** Active workspace when in strict mode, else undefined. */
+  readonly workspace: FileToolServiceWorkspace | undefined;
 
-  constructor(roots?: readonly string[]) {
-    this.guard = new FilePathGuard(roots ?? getDefaultWorkspaceRoots());
+  constructor(optsOrRoots?: FileToolServiceOptions | readonly string[]) {
+    if (optsOrRoots === undefined) {
+      // Default: new FileToolService()
+      this.guard = new FilePathGuard(getDefaultWorkspaceRoots());
+      this.workspace = undefined;
+    } else if (isStringArray(optsOrRoots)) {
+      // Legacy custom-roots form: new FileToolService(['path1', 'path2'])
+      this.guard = new FilePathGuard(optsOrRoots);
+      this.workspace = undefined;
+    } else {
+      // Options object form: { workspace: {...} | roots: [...] }
+      const opts = optsOrRoots;
+      if (opts.workspace) {
+        // Strict workspace mode — confine to the single workspace root.
+        this.guard = new FilePathGuard([opts.workspace.rootPath]);
+        this.workspace = opts.workspace;
+      } else if (opts.roots) {
+        // Explicit roots via options object.
+        this.guard = new FilePathGuard(opts.roots);
+        this.workspace = undefined;
+      } else {
+        // Empty options object — fall back to default roots.
+        this.guard = new FilePathGuard(getDefaultWorkspaceRoots());
+        this.workspace = undefined;
+      }
+    }
+  }
+
+  /**
+   * Returns the active workspace when the service is in strict mode,
+   * or undefined when running in legacy/default-roots mode.
+   */
+  getActiveWorkspace(): FileToolServiceWorkspace | undefined {
+    return this.workspace;
   }
 
   /**
