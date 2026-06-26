@@ -1955,4 +1955,19 @@ export default {
       source_kind: "Installationsquelle",
     },
   },
+  toolProgress: {
+    maps_starting: "Kartensuche wird gestartet...",
+    maps_fetching: "Ergebnisse werden von {platform} Maps geladen...",
+    maps_found: "{collected} von {expected} Unternehmen gefunden",
+    maps_extracting:
+      "Details für Unternehmen {collected} von {expected} werden extrahiert",
+    maps_finalizing: "Ergebnisse werden finalisiert...",
+    contact_starting: "Kontaktextraktion wird gestartet...",
+    contact_found: "{collected} von {expected} Kontakte extrahiert",
+    contact_finalizing: "Kontakte werden finalisiert...",
+    website_analyzing: "Website-Inhalte werden analysiert...",
+    website_finalizing: "Analyse wird abgeschlossen...",
+    partial_result:
+      "Teilergebnisse werden angezeigt ({collected} von {expected}). Das Tool hat das Zeitlimit überschritten, aber die bisherigen Daten zurückgegeben.",
+  },
 };

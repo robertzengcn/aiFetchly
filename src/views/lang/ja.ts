@@ -1917,4 +1917,18 @@ export default {
       source_kind: "インストール元",
     },
   },
+  toolProgress: {
+    maps_starting: "マップ検索を開始しています...",
+    maps_fetching: "{platform} マップから結果を読み込んでいます...",
+    maps_found: "{expected} 件中 {collected} 件の事業所が見つかりました",
+    maps_extracting: "事業所 {collected} / {expected} 件の詳細を抽出しています",
+    maps_finalizing: "結果を確定しています...",
+    contact_starting: "連絡先抽出を開始しています...",
+    contact_found: "{expected} 件中 {collected} 件の連絡先を抽出しました",
+    contact_finalizing: "連絡先を確定しています...",
+    website_analyzing: "ウェブサイトの内容を分析しています...",
+    website_finalizing: "分析を完了しています...",
+    partial_result:
+      "部分的な結果を表示中（{collected} / {expected}）。ツールはタイムアウトしましたが、取得済みのデータを返しました。",
+  },
 };

@@ -25,6 +25,7 @@ import type {
   AIChatQueryLoopResult,
 } from "@/service/AIChatQueryEvents";
 import { OpenAIStreamAccumulator } from "@/service/OpenAIStreamAccumulator";
+import { ToolExecutor } from "@/service/ToolExecutor";
 import {
   checkPlanModeToolPolicy,
   isPlanToolName,
@@ -33,6 +34,14 @@ import {
   isEnterPlanModeToolName,
   sanitizeEnterPlanModeArgs,
 } from "@/service/EnterPlanModeTool";
+import {
+  inferTimeoutClassByName,
+  resolveTimeoutMs,
+  type ToolTimeoutClass,
+} from "@/service/ToolTimeoutPolicy";
+import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
+import { USER_AI_ENABLED } from "@/config/usersetting";
+import { Token } from "@/modules/token";
 
 /**
  * Max model→tool→model rounds per user turn. Must be high enough to
@@ -52,7 +61,14 @@ const CHAT_V2_MAX_TOOL_ROUNDS = 30;
  */
 const MAX_MALFORMED_ARGUMENT_RETRIES = 3;
 
-/** Bound foreground tool calls so the UI does not spin indefinitely. */
+/**
+ * Legacy global timeout ceiling for foreground tool calls.
+ *
+ * Bounds foreground tool calls so the UI does not spin indefinitely.
+ * Retained for backward compatibility — may be imported elsewhere.
+ * The loop now resolves timeouts via ToolTimeoutPolicy
+ * (per-tool-class ceilings) instead of using this constant directly.
+ */
 export const CHAT_V2_TOOL_TIMEOUT_MS = 90_000;
 
 /**
@@ -863,6 +879,93 @@ export class AIChatQueryLoop {
     };
   }
 
+  /**
+   * Async tool dispatch path.
+   *
+   * Used when resolveTimeoutMs(cls) === null (i.e. the resolved timeout class
+   * is "async"). Instead of blocking the query loop with a Promise.race, we
+   * register a job in the ToolJobRegistry and return immediately with an
+   * envelope telling the model to poll for completion.
+   *
+   * Defense-in-depth: re-checks the AI-enable gate before starting the job,
+   * matching the project's mandatory rule for AI-feature handlers.
+   */
+  private async executeAsyncTool(
+    input: AIChatQueryLoopInput,
+    call: {
+      id: string;
+      name: string;
+      arguments?: Record<string, unknown>;
+    }
+  ): Promise<ToolExecutionResult> {
+    const startedAt = Date.now();
+
+    // Re-check AI enable gate before starting async work. The IPC layer
+    // already checks this; this is defense-in-depth per the project rule.
+    const aiEnabled = new Token().getValue(USER_AI_ENABLED) === "true";
+    if (!aiEnabled) {
+      return {
+        tool_call_id: call.id,
+        tool_name: call.name,
+        success: false,
+        result: { error: "AI features are not enabled on this plan." },
+        execution_time_ms: Date.now() - startedAt,
+      };
+    }
+
+    const registry = getDefaultToolJobRegistry();
+    const { jobId } = registry.start(
+      call.name,
+      call.arguments ?? {},
+      { conversationId: input.conversationId, toolCallId: call.id },
+      async (handle) => {
+        try {
+          const result = await this.deps.executeTool(
+            call.name,
+            call.arguments ?? {},
+            {
+              conversationId: input.conversationId,
+              toolCallId: call.id,
+              args: call.arguments,
+              emitProgress: (event) => {
+                input.eventSink.emit({
+                  type: "tool_progress",
+                  conversationId: input.conversationId,
+                  messageId: input.assistantMessageId,
+                  toolCallId: call.id,
+                  toolName: call.name,
+                  phase: event.phase,
+                  message: event.message,
+                  progress: event.progress ?? null,
+                  partialCount: event.partialCount ?? null,
+                  expectedCount: event.expectedCount ?? null,
+                  timestamp: Date.now(),
+                });
+              },
+            }
+          );
+          handle.resolve(result);
+        } catch (err) {
+          handle.reject(err instanceof Error ? err : new Error(String(err)));
+        }
+      }
+    );
+
+    return {
+      tool_call_id: call.id,
+      tool_name: call.name,
+      success: true,
+      result: {
+        async: true,
+        job_id: jobId,
+        status: registry.getStatus(jobId).status,
+        message:
+          "Tool is running asynchronously. Poll with check_tool_job_status(job_id) every 15-30s.",
+      },
+      execution_time_ms: Date.now() - startedAt,
+    };
+  }
+
   private async executeToolWithTimeout(
     input: AIChatQueryLoopInput,
     call: {
@@ -872,6 +975,25 @@ export class AIChatQueryLoop {
     }
   ): Promise<ToolExecutionResult> {
     const startedAt = Date.now();
+
+    // Resolve the timeout class. Explicit declaration on the skill wins;
+    // argument-driven resolver wins over static field; otherwise infer by name.
+    const skill = input.skillRegistry?.getSkill(call.name);
+    const cls: ToolTimeoutClass =
+      skill?.resolveTimeoutClass?.(call.arguments ?? {}) ??
+      skill?.timeoutClass ??
+      inferTimeoutClassByName(call.name);
+    const timeoutMs = resolveTimeoutMs(cls);
+
+    // When the resolved class is "async", dispatch to the async job path
+    // instead of running a blocking race. The loop returns immediately
+    // with a { async: true, job_id } envelope; the model polls for
+    // completion via the companion check_tool_job_status tool.
+    if (timeoutMs === null) {
+      return await this.executeAsyncTool(input, call);
+    }
+    const effectiveTimeoutMs = timeoutMs;
+
     const executePromise = this.deps.executeTool(
       call.name,
       call.arguments ?? {},
@@ -879,29 +1001,64 @@ export class AIChatQueryLoop {
         conversationId: input.conversationId,
         toolCallId: call.id,
         args: call.arguments,
+        emitProgress: (event) => {
+          input.eventSink.emit({
+            type: "tool_progress",
+            conversationId: input.conversationId,
+            messageId: input.assistantMessageId,
+            toolCallId: call.id,
+            toolName: call.name,
+            phase: event.phase,
+            message: event.message,
+            progress: event.progress ?? null,
+            partialCount: event.partialCount ?? null,
+            expectedCount: event.expectedCount ?? null,
+            timestamp: Date.now(),
+          });
+        },
       }
     );
 
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
     const timeoutPromise = new Promise<ToolExecutionResult>((resolve) => {
-      timeoutId = setTimeout(() => {
+      timeoutId = setTimeout(async () => {
+        // When the skill supports partial results, try to return whatever
+        // data was collected before the deadline.
+        if (skill?.supportsPartialResult) {
+          const snapshot = await ToolExecutor.requestPartialSnapshot(call.id);
+          if (snapshot && snapshot.collectedCount > 0) {
+            resolve({
+              tool_call_id: call.id,
+              tool_name: call.name,
+              success: true,
+              result: snapshot.data,
+              partial: true,
+              collectedCount: snapshot.collectedCount,
+              expectedCount: snapshot.expectedCount,
+              timedOutAfterMs: effectiveTimeoutMs,
+              execution_time_ms: Date.now() - startedAt,
+            });
+            return;
+          }
+        }
         resolve({
           tool_call_id: call.id,
           tool_name: call.name,
           success: false,
           result: {
-            error: `Tool "${call.name}" timed out after ${CHAT_V2_TOOL_TIMEOUT_MS}ms.`,
+            error: `Tool "${call.name}" timed out after ${effectiveTimeoutMs}ms.`,
             timedOut: true,
           },
           execution_time_ms: Date.now() - startedAt,
         });
-      }, CHAT_V2_TOOL_TIMEOUT_MS);
+      }, effectiveTimeoutMs);
     });
 
     try {
       return await Promise.race([executePromise, timeoutPromise]);
     } finally {
       if (timeoutId) clearTimeout(timeoutId);
+      ToolExecutor.unregisterPartialSnapshot(call.id);
     }
   }
 

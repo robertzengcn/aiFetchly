@@ -7,6 +7,7 @@
  */
 
 import type { ToolFunction } from "@/api/aiChatApi";
+import type { ToolTimeoutClass } from "@/service/ToolTimeoutPolicy";
 
 /**
  * Result returned by a skill's execute function.
@@ -96,6 +97,46 @@ export interface SkillDefinition {
   readonly source: SkillSource;
 
   /**
+   * Timeout class for this tool. If absent, the runtime infers a default
+   * from the tool name via inferTimeoutClassByName.
+   */
+  readonly timeoutClass?: ToolTimeoutClass;
+
+  /**
+   * Dynamic timeout-class resolver. When present, overrides timeoutClass
+   * based on the actual call arguments. Used to route heavy argument
+   * combinations to the async path.
+   */
+  readonly resolveTimeoutClass?: (
+    args: Record<string, unknown>
+  ) => ToolTimeoutClass;
+
+  /**
+   * When true, the runtime may request whatever partial data the tool has
+   * collected when the timeout fires. The tool's execute() must return
+   * promptly when its cancellation signal is set.
+   */
+  readonly supportsPartialResult?: boolean;
+
+  /**
+   * When true (or when resolveAsync returns true for the specific call),
+   * the tool runs asynchronously via the ToolJobRegistry instead of
+   * blocking the query loop. The loop returns immediately with a
+   * `{ async: true, job_id }` envelope; the model polls for completion
+   * via the companion `check_tool_job_status` tool.
+   */
+  readonly async?: boolean;
+
+  /**
+   * Argument-driven async dispatch resolver. When this returns true (or
+   * when the static `async` flag is true), the runtime dispatches the
+   * call through the async job path. Use this to route heavy argument
+   * combinations (e.g. `max_results > 20`) to the async path while
+   * keeping light calls synchronous.
+   */
+  readonly resolveAsync?: (args: Record<string, unknown>) => boolean;
+
+  /**
    * True when the imported skill is derived from SKILL.md guidance only and
    * does not provide a real executable entrypoint for side-effect operations.
    */
@@ -139,6 +180,52 @@ export interface SkillExecutionContext {
    * permission check and proceed directly to execution.
    */
   readonly skipPermissionCheck?: boolean;
+
+  /**
+   * Emits a progress event for this tool call. Optional — fast tools leave it
+   * undefined. Wired by the caller (e.g. AIChatQueryLoop) to a sink that
+   * emits AIChatQueryToolProgressEvent.
+   */
+  readonly emitProgress?: (event: {
+    phase: "queued" | "running" | "fetching" | "extracting" | "finalizing";
+    message: string;
+    progress?: number | null;
+    partialCount?: number | null;
+    expectedCount?: number | null;
+  }) => void;
+}
+
+// ---------------------------------------------------------------------------
+// ModuleExecutionContext — Subset of SkillExecutionContext that modules
+// (GoogleMapsModule, YandexMapsModule, etc.) consume to emit progress.
+// ---------------------------------------------------------------------------
+
+/**
+ * Progress event shape emitted by browser-tool modules.
+ *
+ * `phase` uses the same vocabulary as SkillExecutionContext.emitProgress so
+ * the event can be forwarded verbatim to the UI.
+ */
+export interface ToolProgressEvent {
+  phase: "queued" | "running" | "fetching" | "extracting" | "finalizing";
+  message: string;
+  progress?: number | null;
+  partialCount?: number | null;
+  expectedCount?: number | null;
+}
+
+/**
+ * Context object passed by ToolExecutor to the long-running browser-tool
+ * modules so they can emit progress and register partial snapshots.
+ */
+export interface ModuleExecutionContext {
+  /** Server-assigned tool call ID for correlating request/response. */
+  readonly toolCallId: string;
+  /**
+   * Emits a progress event for this tool call. Optional — when absent the
+   * module should silently skip (no crash, no behavior change).
+   */
+  readonly emitProgress?: (event: ToolProgressEvent) => void;
 }
 
 // ---------------------------------------------------------------------------

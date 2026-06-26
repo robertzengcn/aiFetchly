@@ -42,6 +42,7 @@ import {
   cleanupWebSocketConnection,
 } from "@/main-process/communication/websocket-ipc";
 import { TokenRefreshService } from "@/modules/tokenRefresh";
+import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
 // import { RAGIpcHandlers } from '@/main-process/ragIpcHandlers';
 // import { createProtocol } from 'electron';
 const isDevelopment = process.env.NODE_ENV !== "production";
@@ -508,6 +509,13 @@ function initialize() {
 
   // Handle application shutdown
   (app as any).on("before-quit", async () => {
+    // Terminate running async tool jobs first so workers are signalled early
+    try {
+      getDefaultToolJobRegistry().shutdown();
+    } catch (err) {
+      console.error("[shutdown] ToolJobRegistry shutdown failed", err);
+    }
+
     try {
       const tokenService = new Token();
       const userdataPath = tokenService.getValue(USERSDBPATH);
