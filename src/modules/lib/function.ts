@@ -1,5 +1,5 @@
 import path from "path";
-import { execSync, exec } from "child_process";
+import { execSync, exec, execFile } from "child_process";
 import { app, BrowserWindow } from "electron";
 import { Notification } from "electron";
 // import * as yaml from 'js-yaml';
@@ -156,8 +156,11 @@ export function installPipPackage(
   stdoutCall?: (stdout: string) => void,
   stderrCall?: (stderr: string) => void
 ): void {
-  exec(
-    `pip install ${packageName}==${version}`,
+  // Security: pass arguments as an array to execFile so packageName/version
+  // can never be interpreted as shell syntax (command injection).
+  execFile(
+    "pip",
+    ["install", `${packageName}==${version}`],
     (error: Error | null, stdout: string, stderr: string) => {
       if (error) {
         // console.error(`exec error: ${error}`);
@@ -182,8 +185,11 @@ export function uninstallPipPackage(
   stdoutCall?: (stdout: string) => void,
   stderrCall?: (stderr: string) => void
 ): void {
-  exec(
-    `pip uninstall ${packageName} -y`,
+  // Security: pass arguments as an array to execFile so packageName
+  // can never be interpreted as shell syntax (command injection).
+  execFile(
+    "pip",
+    ["uninstall", packageName, "-y"],
     (error: Error | null, stdout: string, stderr: string) => {
       if (error) {
         console.error(`exec error: ${error}`);
