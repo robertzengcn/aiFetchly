@@ -20,19 +20,53 @@ export function shortErrorStack(
   return [...head, ...frames].join("\n").trim();
 }
 
-const PATH_PATTERN = /(?:\/[\w.\-:@]+)+\/?|[A-Z]:\\(?:[\w.\-:@]+\\?)+/g;
+/**
+ * Matches absolute file paths (Unix or Windows) so they can be redacted.
+ *
+ * Two fixes applied:
+ * - **URL protection**: Because a lookbehind alone cannot distinguish URL
+ *   path segments (`example.com/api/v1`) from real file paths
+ *   (`/home/user/file`), URLs are temporarily replaced with placeholders
+ *   via `URL_PATTERN` before redaction and restored afterwards.
+ * - **Windows spaces**: The Windows character class includes a space
+ *   (`[\w.\-:@ ]+`) so paths like `C:\Program Files\app` are matched.
+ */
+const URL_PATTERN = /[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^\s]+/g;
+const PATH_PATTERN = /(?:\/[\w.\-:@]+)+\/?|[A-Z]:\\(?:[\w.\-:@ ]+\\?)+/g;
+// Delimiter tokens for masking URLs during path redaction. The double angle
+// brackets are extremely unlikely to appear in real error messages.
+const URL_PLACEHOLDER = /<<URL_(\d+)>>/g;
 
 /**
  * Produces a telemetry-safe variant of the error message: absolute file
  * paths are replaced with `<path>` so that internal directory structures
- * are not leaked. The original message is preserved on the returned
- * object so callers can still surface the full text to the user.
+ * are not leaked. URLs are preserved intact. The original message is
+ * preserved on the returned object so callers can still surface the full
+ * text to the user.
  */
 export function splitTelemetryMessage(err: Error): {
   message: string;
   telemetryMessage: string;
 } {
   const message = err.message;
-  const telemetryMessage = message.replace(PATH_PATTERN, "<path>");
+
+  // Step 1: Temporarily mask URLs so their path-like segments are not
+  // mistaken for filesystem paths.
+  const urls: string[] = [];
+  const masked = message.replace(URL_PATTERN, (match) => {
+    const id = urls.length;
+    urls.push(match);
+    return `<<URL_${id}>>`;
+  });
+
+  // Step 2: Redact file paths.
+  let telemetryMessage = masked.replace(PATH_PATTERN, "<path>");
+
+  // Step 3: Restore the original URLs.
+  telemetryMessage = telemetryMessage.replace(
+    URL_PLACEHOLDER,
+    (_, i) => urls[Number(i)] ?? ""
+  );
+
   return { message, telemetryMessage };
 }

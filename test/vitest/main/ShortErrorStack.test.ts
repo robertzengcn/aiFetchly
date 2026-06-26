@@ -66,6 +66,22 @@ describe("splitTelemetryMessage", () => {
     expect(out.telemetryMessage).toContain("Failed to read");
   });
 
+  it("preserves URLs in the message while still stripping file paths", () => {
+    const e = new Error("fetch https://example.com/api/v1 failed");
+    const out = splitTelemetryMessage(e);
+    expect(out.telemetryMessage).toContain("https://example.com/api/v1");
+    expect(out.telemetryMessage).toContain("fetch");
+    expect(out.telemetryMessage).toContain("failed");
+  });
+
+  it("strips Windows paths containing spaces", () => {
+    const e = new Error("Failed to read C:\\Program Files\\app\\src\\index.js");
+    const out = splitTelemetryMessage(e);
+    expect(out.telemetryMessage).not.toContain("Program Files");
+    expect(out.telemetryMessage).not.toContain("index.js");
+    expect(out.telemetryMessage).toContain("Failed to read");
+  });
+
   it("preserves the original message in .message", () => {
     const e = new Error("Failed to read /tmp/x.txt");
     const out = splitTelemetryMessage(e);
