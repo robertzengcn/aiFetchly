@@ -249,29 +249,3 @@ jobs:
         with:
           name: electron-app-macos-v${{ steps.calculate_version.outputs.version }}
           path: ./macos-build
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ steps.calculate_version.outputs.version }}
-          name: Release v${{ steps.calculate_version.outputs.version }}
-          body: |
-            ## What's Changed
-            
-            Auto-generated release for version ${{ steps.calculate_version.outputs.version }}
-            
-            ### Downloads
-            - Windows: Download the Windows installer from the assets below
-            - macOS: Download the macOS app from the assets below
-            
-            ### Build Info
-            - Build Number: ${{ github.run_number }}
-            - Commit: ${{ github.sha }}
-            - Branch: ${{ github.ref_name }}
-          draft: false
-          prerelease: false
-          files: |
-            ./windows-build/**/*
-            ./macos-build/**/*
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
