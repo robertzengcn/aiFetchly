@@ -18,8 +18,29 @@ export class UserSecretKeyService {
   private cachedKey: Buffer | null = null;
   private inflight: Promise<Buffer> | null = null;
   private generation = 0;
+  private httpClient: HttpClient | null;
 
-  constructor(private httpClient: HttpClient = new HttpClient()) {}
+  // Lazy default: defer the `new HttpClient()` call until the first key
+  // fetch. This avoids a circular-init crash at module load time:
+  //   httpclient.ts -> fieldCipher -> UserSecretKeyService -> httpclient
+  // where the default-param form `new HttpClient()` would otherwise run
+  // during the module's top-level singleton instantiation and touch
+  // HttpClient while its class declaration is still in the TDZ.
+  constructor(httpClient?: HttpClient) {
+    this.httpClient = httpClient ?? null;
+  }
+
+  private getHttpClient(): HttpClient {
+    if (!this.httpClient) {
+      // Deferred instantiation. At module-eval time, the constructor only
+      // stores null — so the module-level singleton below does NOT touch
+      // HttpClient during its own initialization (which would re-enter
+      // httpclient.ts mid-load and crash with a TDZ ReferenceError).
+      // By the time getKey() runs here, httpclient.ts has finished loading.
+      this.httpClient = new HttpClient();
+    }
+    return this.httpClient;
+  }
 
   /**
    * Returns the cached 32-byte key, fetching it on first call.
@@ -90,7 +111,7 @@ export class UserSecretKeyService {
     let response: unknown;
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      response = await this.httpClient.get<any>(SECRET_KEY_ENDPOINT);
+      response = await this.getHttpClient().get<any>(SECRET_KEY_ENDPOINT);
     } catch (err) {
       throw new SecretKeyUnavailableError(
         "Failed to reach secret-key endpoint",
