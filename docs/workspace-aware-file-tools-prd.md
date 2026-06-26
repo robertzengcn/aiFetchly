@@ -12,6 +12,10 @@ EPERM: operation not permitted, scandir '/Users/cengjianze/.Trash'
 
 The product problem is not only the error. The deeper issue is that the AI does not know which project folder it is allowed to inspect or modify. AiFetchly needs an explicit workspace selection and approval flow so file tools operate inside a user-approved project boundary.
 
+### 1.1.1 Companion Documents
+
+- Technical design: `docs/workspace-aware-file-tools-technical-design.md`
+
 ### 1.2 Goals
 
 - Make workspace selection explicit before AI file tools run.
@@ -822,4 +826,3 @@ This order keeps the product boundary visible before changing file execution beh
 - All new UI strings are translated across supported languages.
 - Unit and integration tests cover the acceptance criteria.
 - Existing file tool behavior remains available in tests through explicit roots.
-
