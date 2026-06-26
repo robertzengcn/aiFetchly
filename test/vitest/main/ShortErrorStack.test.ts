@@ -87,4 +87,14 @@ describe("splitTelemetryMessage", () => {
     const out = splitTelemetryMessage(e);
     expect(out.message).toBe("Failed to read /tmp/x.txt");
   });
+
+  it("redacts file:// URLs to prevent path leakage", () => {
+    const e = new Error("Failed to open file:///home/robertzeng/.ssh/id_rsa");
+    const out = splitTelemetryMessage(e);
+    expect(out.telemetryMessage).not.toContain("/home/robertzeng");
+    expect(out.telemetryMessage).not.toContain(".ssh");
+    expect(out.telemetryMessage).toContain("<file-url>");
+    // Original message preserved on the .message field
+    expect(out.message).toContain("file:///home/robertzeng/.ssh/id_rsa");
+  });
 });

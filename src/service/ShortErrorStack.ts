@@ -62,11 +62,15 @@ export function splitTelemetryMessage(err: Error): {
   // Step 2: Redact file paths.
   let telemetryMessage = masked.replace(PATH_PATTERN, "<path>");
 
-  // Step 3: Restore the original URLs.
-  telemetryMessage = telemetryMessage.replace(
-    URL_PLACEHOLDER,
-    (_, i) => urls[Number(i)] ?? ""
-  );
+  // Step 3: Restore the original URLs, but redact file:// URLs to prevent
+  // local path leakage in telemetry.
+  telemetryMessage = telemetryMessage.replace(URL_PLACEHOLDER, (_, n) => {
+    const original = urls[Number(n)];
+    if (original.startsWith("file://")) {
+      return "<file-url>";
+    }
+    return original;
+  });
 
   return { message, telemetryMessage };
 }
