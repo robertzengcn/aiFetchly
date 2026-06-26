@@ -56,6 +56,7 @@ describe("ToolTimeoutPolicy", () => {
 import type { SkillDefinition } from "@/entityTypes/skillTypes";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import { RUN_SUBAGENT_TOOL } from "@/service/agentTools/runSubagentTool";
+import { AgentDefinitionRegistry } from "@/service/AgentDefinitionRegistry";
 
 describe("SkillDefinition timeout-class fields", () => {
   it("allows optional static timeoutClass", () => {
@@ -190,6 +191,43 @@ describe("regression: previously-broken tool annotations", () => {
       expect(skill!.resolveTimeoutClass!({ urls: "not-an-array" })).to.equal(
         "browser"
       );
+    });
+  });
+
+  /**
+   * Regression: the inner agent's tool allowlist must include the async-
+   * polling infrastructure tools (check_tool_job_status, cancel_tool_job).
+   *
+   * Without these, when an inner agent calls any async-routed tool
+   * (extract_contact_info with 8+ URLs, run_subagent, etc.) it receives
+   * a { async: true, job_id } envelope from its own tool call but has no
+   * way to poll the result — the whole async-polling architecture is
+   * unreachable from inside the subagent and the agent stalls.
+   *
+   * This test pins the contract for every active agent: if you can call
+   * any tool, you can poll/cancel any async job in the same conversation.
+   */
+  describe("agent allowlists include async-polling infrastructure", () => {
+    const POLLING_TOOLS = ["check_tool_job_status", "cancel_tool_job"];
+
+    AgentDefinitionRegistry.listBuiltIns().forEach((agent) => {
+      it(`${agent.id} allows async-polling tools`, () => {
+        for (const toolName of POLLING_TOOLS) {
+          expect(
+            agent.allowedTools,
+            `${agent.id} must allow ${toolName}`
+          ).to.include(toolName);
+        }
+      });
+
+      it(`${agent.id} has no stale tool references (all allowedTools exist in registry)`, () => {
+        for (const toolName of agent.allowedTools) {
+          expect(
+            SkillRegistry.isRegistered(toolName),
+            `${agent.id} references unknown tool ${toolName}`
+          ).to.equal(true);
+        }
+      });
     });
   });
 });
