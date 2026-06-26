@@ -1,4 +1,5 @@
 import { spawn, ChildProcess } from "child_process";
+import { MCP_CONNECT_TIMEOUT_MS } from "@/config/mcpConfig";
 import type { EventEmitter } from "events";
 import type { WebSocket as WSWebSocket } from "ws";
 
@@ -54,13 +55,68 @@ export class MCPClient {
   }
 
   /**
-   * Establish connection based on transport type
+   * Establish connection based on transport type.
+   *
+   * Race-protects the underlying `doConnect()` with `MCP_CONNECT_TIMEOUT_MS`
+   * so a dead MCP server fails fast instead of eating the entire call budget.
+   *
+   * If the timeout fires, `doConnect()` may still be running in the
+   * background (e.g., a stdio child process that hasn't completed the
+   * handshake). We force-disconnect to clean up any spawned process and
+   * avoid leaving `this.connected = true` on an abandoned client.
    */
   async connect(): Promise<void> {
     if (this.connected) {
       return;
     }
 
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error("MCP connection timeout")),
+        MCP_CONNECT_TIMEOUT_MS
+      );
+    });
+
+    try {
+      await Promise.race([this.doConnect(), timeoutPromise]);
+    } catch (err) {
+      if (err instanceof Error && err.message === "MCP connection timeout") {
+        // Force-kill any spawned connection directly — disconnect() would
+        // no-op because this.connected is still false (doConnect hasn't
+        // completed). We must bypass the guard.
+        try {
+          if (
+            this.config.transport === "stdio" &&
+            this.connection &&
+            "kill" in this.connection
+          ) {
+            (this.connection as ChildProcess).kill("SIGKILL");
+          } else if (
+            (this.config.transport === "websocket" ||
+              this.config.transport === "sse") &&
+            this.connection
+          ) {
+            // Best-effort close for socket-like connections
+            const conn = this.connection as { close?: () => void };
+            if (typeof conn.close === "function") conn.close();
+          }
+        } catch {
+          /* best-effort cleanup */
+        }
+        this.connection = null;
+      }
+      throw err;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  /**
+   * Actual connection logic — dispatched by connect() which wraps it in a
+   * race timeout. Sets `this.connected = true` on success.
+   */
+  private async doConnect(): Promise<void> {
     switch (this.config.transport) {
       case "stdio":
         await this.connectStdio();
