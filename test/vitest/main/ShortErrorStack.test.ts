@@ -42,14 +42,27 @@ describe("shortErrorStack", () => {
 
 describe("splitTelemetryMessage", () => {
   it("returns the message unchanged when there are no file paths", () => {
-    expect(splitTelemetryMessage(new Error("Network error")).telemetryMessage)
-      .toBe("Network error");
+    expect(
+      splitTelemetryMessage(new Error("Network error")).telemetryMessage
+    ).toBe("Network error");
   });
 
   it("strips absolute file paths from the message", () => {
-    const e = new Error("Failed to read /home/robertzeng/project/aiFetchly/secret.txt");
+    const e = new Error(
+      "Failed to read /home/robertzeng/project/aiFetchly/secret.txt"
+    );
     const out = splitTelemetryMessage(e);
     expect(out.telemetryMessage).not.toContain("/home/robertzeng");
+    expect(out.telemetryMessage).toContain("Failed to read");
+  });
+
+  it("strips Windows absolute file paths from the message", () => {
+    const e = new Error(
+      "Failed to read C:\\Users\\robertzeng\\project\\secret.txt"
+    );
+    const out = splitTelemetryMessage(e);
+    expect(out.telemetryMessage).not.toContain("C:\\Users");
+    expect(out.telemetryMessage).not.toContain("secret.txt");
     expect(out.telemetryMessage).toContain("Failed to read");
   });
 
