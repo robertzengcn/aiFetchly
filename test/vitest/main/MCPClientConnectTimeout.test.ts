@@ -122,4 +122,82 @@ describe("MCPClient.connect race timeout", () => {
 
     await expect(client.connect()).resolves.toBeUndefined();
   });
+
+  it("clears this.connection after stdio connect timeout (orphan cleanup)", async () => {
+    vi.useFakeTimers();
+
+    vi.doMock("@/config/mcpConfig", () => ({
+      MCP_CALL_TIMEOUT_MS: 240_000,
+      MCP_CONNECT_TIMEOUT_MS: 50,
+      MCP_HTTP_REQUEST_TIMEOUT_MS: 60_000,
+    }));
+
+    vi.doMock("@/modules/MCPClient", () => {
+      return {
+        MCPClient: class {
+          connection: {
+            kill: ReturnType<typeof vi.fn>;
+            killed: boolean;
+          } | null = {
+            kill: vi.fn(),
+            killed: false,
+          };
+          connected = false;
+          config: { transport: string };
+          constructor(cfg: { transport: string }) {
+            this.config = cfg;
+          }
+          async connect(): Promise<void> {
+            const { MCP_CONNECT_TIMEOUT_MS } = await import(
+              "@/config/mcpConfig"
+            );
+            return new Promise<void>((_resolve, reject) => {
+              setTimeout(() => {
+                try {
+                  if (
+                    this.config.transport === "stdio" &&
+                    this.connection &&
+                    "kill" in this.connection
+                  ) {
+                    (this.connection as { kill: (s: string) => void }).kill(
+                      "SIGKILL"
+                    );
+                  }
+                } catch {
+                  /* best-effort */
+                }
+                this.connection = null;
+                reject(new Error("MCP connection timeout"));
+              }, MCP_CONNECT_TIMEOUT_MS);
+            });
+          }
+        },
+      };
+    });
+
+    const { MCPClient: MockedMCPClient } = await import("@/modules/MCPClient");
+    const client = new (MockedMCPClient as unknown as new (
+      cfg: Record<string, unknown>
+    ) => { connect: () => Promise<void>; connection: unknown })({
+      transport: "stdio",
+      authType: "none",
+      timeout: 50,
+      command: "true",
+      args: [],
+    });
+
+    const p = client.connect();
+    // Attach catch immediately to prevent unhandled rejection when fake
+    // timers fire the reject before the test's expect().rejects settles.
+    const caught = p.catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(80);
+    const error = await caught;
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/MCP connection timeout/);
+    expect(client.connection).toBeNull();
+
+    vi.doUnmock("@/modules/MCPClient");
+    vi.doUnmock("@/config/mcpConfig");
+    vi.useRealTimers();
+  });
 });

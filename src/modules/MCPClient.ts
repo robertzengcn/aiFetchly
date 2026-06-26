@@ -81,14 +81,30 @@ export class MCPClient {
     try {
       await Promise.race([this.doConnect(), timeoutPromise]);
     } catch (err) {
-      // If the timeout fired, doConnect() may still be running in the
-      // background (e.g., a stdio child process that hasn't completed the
-      // handshake). Force-disconnect to clean up any spawned process and
-      // avoid leaving this.connected = true on an abandoned client.
       if (err instanceof Error && err.message === "MCP connection timeout") {
-        await this.disconnect().catch(() => {
-          /* best-effort disconnect */
-        });
+        // Force-kill any spawned connection directly — disconnect() would
+        // no-op because this.connected is still false (doConnect hasn't
+        // completed). We must bypass the guard.
+        try {
+          if (
+            this.config.transport === "stdio" &&
+            this.connection &&
+            "kill" in this.connection
+          ) {
+            (this.connection as ChildProcess).kill("SIGKILL");
+          } else if (
+            (this.config.transport === "websocket" ||
+              this.config.transport === "sse") &&
+            this.connection
+          ) {
+            // Best-effort close for socket-like connections
+            const conn = this.connection as { close?: () => void };
+            if (typeof conn.close === "function") conn.close();
+          }
+        } catch {
+          /* best-effort cleanup */
+        }
+        this.connection = null;
       }
       throw err;
     } finally {
