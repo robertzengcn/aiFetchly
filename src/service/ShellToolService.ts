@@ -324,6 +324,7 @@ async function runShell(
     });
 
     child.on("close", (code: number | null) => {
+      if (detained) return; // backgrounded — registry takes over; skip dead-code path
       clearTimeout(timer);
       const durationMs = Date.now() - startTime;
 
