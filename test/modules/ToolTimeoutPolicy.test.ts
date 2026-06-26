@@ -108,11 +108,25 @@ describe("regression: previously-broken tool annotations", () => {
     expect(skill?.supportsPartialResult).to.equal(true);
   });
 
-  it("run_subagent is registered with timeoutClass browser", () => {
-    expect(RUN_SUBAGENT_TOOL.timeoutClass).to.equal("browser");
+  it("run_subagent routes unconditionally to async (no synchronous ceiling)", () => {
+    // Previously declared timeoutClass: "browser" (240s). That caused the
+    // outer executeToolWithTimeout to race the subagent and orphan inner
+    // work when the subagent's own tool calls took the wall-clock past
+    // 240s. Now resolveTimeoutClass always returns "async" so the loop
+    // dispatches via executeAsyncTool and returns { async, job_id }.
+    expect(RUN_SUBAGENT_TOOL.resolveTimeoutClass).to.be.a("function");
+    expect(RUN_SUBAGENT_TOOL.resolveTimeoutClass!({})).to.equal("async");
+    expect(
+      RUN_SUBAGENT_TOOL.resolveTimeoutClass!({
+        agentId: "agent-lead-researcher",
+        prompt: "anything",
+        taskPacket: { lead: {} },
+      })
+    ).to.equal("async");
+    expect(RUN_SUBAGENT_TOOL.async).to.equal(true);
     const skill = SkillRegistry.getSkill("run_subagent");
     expect(skill).to.not.equal(undefined);
-    expect(skill?.timeoutClass).to.equal("browser");
+    expect(skill?.resolveTimeoutClass!({})).to.equal("async");
   });
 
   it("legacy scrape_urls_from_google/bing/yandex/baidu route through the same skill", () => {

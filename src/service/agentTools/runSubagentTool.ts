@@ -12,18 +12,38 @@ import type {
 /**
  * Timeout class for run_subagent.
  *
- * A specialist subagent runs its own model→tool→model loop, which routinely
- * takes 1–4 minutes when it scrapes, extracts contacts, or paginates. The
- * outer AIChatQueryLoop.executeToolWithTimeout races this against the
- * resolved class ceiling; without this declaration the fallback classifier
- * returns "network" (90s), which is too short for a multi-tool subagent
- * turn and was previously "fast" (30s) — guaranteeing a timeout on any
- * non-trivial research task.
+ * A specialist subagent runs its own model→tool→model loop. Inner-agent
+ * work routinely takes 1–3 minutes (lead-researcher default cap is
+ * maxRuntimeMs=180000ms via AgentDefinitionRegistry), and a subagent
+ * that internally calls another async tool (e.g. extract_contact_info
+ * with 8+ URLs) can take longer still.
  *
- * "browser" (240s = 4 min) is the right ceiling today. The long-term plan
- * (see docs/superpowers/specs/2026-06-25-ai-tool-timeout-resilience-prd.md
- * Phase 3) is to switch run_subagent to the async ToolJobRegistry path so
- * the outer loop never blocks on it at all.
+ * Previously this was declared "browser" (240s synchronous), which caused
+ * two coupled problems:
+ *
+ *   1. Outer race: executeToolWithTimeout raced run_subagent against a
+ *      240s ceiling. Any subagent whose maxRuntimeMs was raised above
+ *      240s — or whose wall-clock pushed past 240s with overhead — hit
+ *      the outer race and returned an opaque timedOut error, even though
+ *      the inner agent would have completed.
+ *
+ *   2. Inner-cascade: the inner agent's tool calls (e.g. a 10-URL
+ *      extract_contact_info) go through their own executeToolWithTimeout.
+ *      If the inner tool is itself long-running, the OUTER 240s race
+ *      fires first and orphans the still-running inner work.
+ *
+ * Routing unconditionally to "async" eliminates both:
+ *   - The outer loop returns { async: true, job_id } within ~2s and the
+ *     model polls check_tool_job_status every 15-30s.
+ *   - The inner agent's own maxRuntimeMs (via abortController at
+ *     AgentRuntime.ts:221) becomes the real upper bound on subagent
+ *     work. The outer race is unreachable.
+ *
+ * Why unconditional (not argument-driven like extract_contact_info):
+ *   Unlike URLs or max_results, nothing in the run_subagent args
+ *   (agentId, prompt, taskPacket) reliably predicts runtime. Even
+ *   trivial subagent tasks take 30-60s. Always-async makes the contract
+ *   uniform — the model always polls, no conditional description logic.
  */
 
 const PARAMETERS = {
@@ -55,13 +75,20 @@ const PARAMETERS = {
 export const RUN_SUBAGENT_TOOL: SkillDefinition = {
   name: "run_subagent",
   description:
-    "Run a built-in marketing specialist agent (e.g. lead researcher) synchronously and return its structured result. Use this to delegate a focused research/enrichment task to a specialist with its own narrowed tools.",
+    "Run a built-in marketing specialist agent (e.g. lead researcher) and return its structured result. Use this to delegate a focused research/enrichment task to a specialist with its own narrowed tools. " +
+    "This tool ALWAYS runs ASYNCHRONOUSLY: it returns { async: true, job_id } within ~2 seconds and continues working in the background. " +
+    "Poll the result with check_tool_job_status(job_id) every 15-30 seconds until status is 'completed' or 'failed'. " +
+    "Do not call run_subagent again while a job is running. Use cancel_tool_job(job_id) if the user wants to stop the specialist early.",
   parameters: PARAMETERS,
   tier: "main",
   requiresConfirmation: false,
   permissionCategory: "pure",
   source: "built-in",
-  timeoutClass: "browser",
+  // Always route to the async ToolJobRegistry path. See the block-level
+  // comment above for why this is unconditional and what cascades it
+  // prevents. resolveTimeoutClass wins over any static timeoutClass.
+  resolveTimeoutClass: () => "async",
+  async: true,
   execute: async (args, context) => {
     const agentId = args.agentId as string;
     const prompt = args.prompt as string;
