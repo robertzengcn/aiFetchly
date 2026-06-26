@@ -613,7 +613,9 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "extract_contact_info",
     description:
-      "Extract contact information (emails, phones, address, social links) from one or more website URLs. Uses AI-assisted discovery and regex fallback. Call this when the user wants to find contact details for given website URLs.",
+      "Extract contact information (emails, phones, address, social links) from one or more website URLs. Uses AI-assisted discovery and regex fallback. Call this when the user wants to find contact details for given website URLs. " +
+      "When the urls array contains 8 or more entries, this tool runs ASYNCHRONOUSLY: it returns { async: true, job_id } within ~2 seconds and continues working in the background. " +
+      "Poll the result with check_tool_job_status(job_id) every 15-30 seconds until status is 'completed' or 'failed'. Do not retry the call while a job is running.",
     parameters: {
       type: "object",
       properties: {
@@ -630,7 +632,35 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     requiresConfirmation: false,
     permissionCategory: "automation",
     source: "built-in",
-    timeoutClass: "browser",
+    // extract_contact_info processes a urls[] batch sequentially through a
+    // child-process worker (extractContactFromUrls). Per-URL cost is
+    // ~10-40s (Puppeteer nav + content scrape + regex/AI extraction), so
+    // the total runtime scales linearly with urls.length.
+    //
+    // - < ASYNC_URL_THRESHOLD  → run synchronously under the "browser"
+    //   ceiling (240s). Bounded batches finish well under 4 minutes and
+    //   the model gets the full result in one turn.
+    // - >= ASYNC_URL_THRESHOLD → route to the async ToolJobRegistry path
+    //   (resolveTimeoutMs("async") === null, no synchronous ceiling). The
+    //   loop returns { async: true, job_id } within ~2s and the model
+    //   polls with check_tool_job_status every 15-30s. This matches the
+    //   search_maps_businesses pattern (see lines ~329).
+    //
+    // Before this routing, large URL batches hit the 240s browser ceiling
+    // even though the inner worker (URL_EXTRACTION_TIMEOUT_MS = 300s)
+    // would have finished — the outer race always fired first and the
+    // orphaned worker kept consuming CPU.
+    //
+    // The threshold is calibrated to ~30s/URL average: 7 URLs ≈ 210s
+    // (safe synchronous), 8+ crosses 240s (must be async). Conservative.
+    resolveTimeoutClass: (args) => {
+      const urlCount = Array.isArray(args.urls) ? args.urls.length : 0;
+      return urlCount >= 8 ? "async" : "browser";
+    },
+    resolveAsync: (args) => {
+      const urlCount = Array.isArray(args.urls) ? args.urls.length : 0;
+      return urlCount >= 8;
+    },
     supportsPartialResult: true,
     execute: async (args, context) => {
       const result = await ToolExecutor.execute(

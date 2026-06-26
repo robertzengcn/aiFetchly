@@ -129,4 +129,53 @@ describe("regression: previously-broken tool annotations", () => {
       expect(inferTimeoutClassByName(legacy)).to.not.equal("fast");
     }
   });
+
+  /**
+   * Regression: extract_contact_info was hard-coded to timeoutClass "browser"
+   * (240s) with no dynamic routing. For url batches >= 8 the worker routinely
+   * runs longer than 240s (its own inner ceiling is 300s), so the outer race
+   * always fired first and orphaned the worker. This test pins the routing
+   * that sends heavy batches to the async path.
+   */
+  describe("extract_contact_info dynamic async routing", () => {
+    const skill = SkillRegistry.getSkill("extract_contact_info");
+
+    it("is registered", () => {
+      expect(skill).to.not.equal(undefined);
+    });
+
+    it("routes batches of 7 or fewer URLs to browser (synchronous, 240s ceiling)", () => {
+      expect(skill?.resolveTimeoutClass).to.be.a("function");
+      for (const count of [0, 1, 3, 5, 7]) {
+        const urls = Array.from(
+          { length: count },
+          (_, i) => `https://example.com/${i}`
+        );
+        expect(
+          skill!.resolveTimeoutClass!({ urls }),
+          `for ${count} urls`
+        ).to.equal("browser");
+      }
+    });
+
+    it("routes batches of 8 or more URLs to async (no synchronous ceiling)", () => {
+      for (const count of [8, 12, 20, 50]) {
+        const urls = Array.from(
+          { length: count },
+          (_, i) => `https://example.com/${i}`
+        );
+        expect(
+          skill!.resolveTimeoutClass!({ urls }),
+          `for ${count} urls`
+        ).to.equal("async");
+      }
+    });
+
+    it("treats missing urls as a small batch (browser, not async)", () => {
+      expect(skill!.resolveTimeoutClass!({})).to.equal("browser");
+      expect(skill!.resolveTimeoutClass!({ urls: "not-an-array" })).to.equal(
+        "browser"
+      );
+    });
+  });
 });
