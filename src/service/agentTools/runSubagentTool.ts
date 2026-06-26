@@ -9,6 +9,23 @@ import type {
   RunAgentRequest,
 } from "@/entityTypes/agentTypes";
 
+/**
+ * Timeout class for run_subagent.
+ *
+ * A specialist subagent runs its own model→tool→model loop, which routinely
+ * takes 1–4 minutes when it scrapes, extracts contacts, or paginates. The
+ * outer AIChatQueryLoop.executeToolWithTimeout races this against the
+ * resolved class ceiling; without this declaration the fallback classifier
+ * returns "network" (90s), which is too short for a multi-tool subagent
+ * turn and was previously "fast" (30s) — guaranteeing a timeout on any
+ * non-trivial research task.
+ *
+ * "browser" (240s = 4 min) is the right ceiling today. The long-term plan
+ * (see docs/superpowers/specs/2026-06-25-ai-tool-timeout-resilience-prd.md
+ * Phase 3) is to switch run_subagent to the async ToolJobRegistry path so
+ * the outer loop never blocks on it at all.
+ */
+
 const PARAMETERS = {
   type: "object",
   properties: {
@@ -44,6 +61,7 @@ export const RUN_SUBAGENT_TOOL: SkillDefinition = {
   requiresConfirmation: false,
   permissionCategory: "pure",
   source: "built-in",
+  timeoutClass: "browser",
   execute: async (args, context) => {
     const agentId = args.agentId as string;
     const prompt = args.prompt as string;
