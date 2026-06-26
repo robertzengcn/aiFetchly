@@ -107,8 +107,10 @@ describe("ShellToolService — cwd guard", () => {
 
 describe("ShellToolService — timeout enforcement", () => {
   it("kills command exceeding timeout and returns timed_out result", async () => {
+    // Explicitly disable auto-background so this test exercises the
+    // kill-on-timeout path. (Default is now auto-background = true.)
     const result = await executeShellCommand(
-      { command: "sleep 120", timeout_ms: 2000 },
+      { command: "sleep 120", timeout_ms: 2000, autoBackground: false },
       CONVERSATION_ID
     );
 
@@ -122,10 +124,13 @@ describe("ShellToolService — timeout enforcement", () => {
   });
 
   it("captures partial output before timeout", async () => {
+    // Explicitly disable auto-background so this test exercises the
+    // kill-on-timeout path.
     const result = await executeShellCommand(
       {
         command: "echo 'partial output' && sleep 120",
         timeout_ms: 2000,
+        autoBackground: false,
       },
       CONVERSATION_ID
     );

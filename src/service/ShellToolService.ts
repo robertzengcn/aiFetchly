@@ -25,7 +25,9 @@ import {
   SHELL_STDERR_MAX_CHARS,
   SHELL_DENYLIST_PATTERNS,
   SHELL_ENV_ALLOWLIST,
+  SHELL_AUTO_BACKGROUND_DEFAULT,
 } from "@/config/shellToolConfig";
+import { getDefaultBackgroundShellRegistry } from "@/service/BackgroundShellRegistry";
 import { ShellExecutionRequestSchema } from "@/entityTypes/shellTypes";
 import type {
   ShellExecutionResult,
@@ -77,6 +79,10 @@ export async function executeShellCommand(
   // 4. Resolve timeout (clamp to allowed range)
   const timeoutMs = clampTimeout(request.timeout_ms);
 
+  // 4b. Resolve auto-background flag (caller can explicitly disable)
+  const autoBackground =
+    request.autoBackground ?? SHELL_AUTO_BACKGROUND_DEFAULT;
+
   // 5. Select shell interpreter
   const interpreter = resolveInterpreter(request.shell);
 
@@ -90,7 +96,8 @@ export async function executeShellCommand(
     cwdResult.path,
     env,
     timeoutMs,
-    startTime
+    startTime,
+    autoBackground
   );
 
   // Attach validated fields for audit logging
@@ -227,7 +234,8 @@ async function runShell(
   cwd: string,
   env: NodeJS.ProcessEnv,
   timeoutMs: number,
-  startTime: number
+  startTime: number,
+  autoBackground: boolean
 ): Promise<ShellExecutionResult> {
   return new Promise<ShellExecutionResult>((resolve) => {
     let stdout = "";
@@ -235,6 +243,9 @@ async function runShell(
     let stdoutTruncated = false;
     let stderrTruncated = false;
     let timedOut = false;
+    // Once the child is handed to the registry, local stdout/stderr
+    // collection must stop to avoid double-buffering.
+    let detained = false;
 
     const child = spawn(interpreter.command, [...interpreter.args, command], {
       cwd,
@@ -247,30 +258,53 @@ async function runShell(
 
     const timer = setTimeout(() => {
       timedOut = true;
-      killProcessTree(child.pid, cwd);
+      if (autoBackground) {
+        // Mark as detained BEFORE calling registry.detain so the data
+        // handlers below no-op from this point forward. The registry
+        // attaches its own listeners to take over collection.
+        detained = true;
+        const shellId = getDefaultBackgroundShellRegistry().detain(child, {
+          command,
+        });
+        resolve({
+          success: true,
+          exit_code: null,
+          stdout,
+          stderr,
+          duration_ms: Date.now() - startTime,
+          stdout_truncated: stdoutTruncated,
+          stderr_truncated: stderrTruncated,
+          timed_out: false, // not a timeout failure — moved to background
+          backgrounded: true,
+          shell_id: shellId,
+          background_message:
+            "Command exceeded the timeout and was moved to the background. " +
+            "Poll with check_shell_status(shell_id) to retrieve full output.",
+        });
+      } else {
+        killProcessTree(child.pid, cwd);
+      }
     }, timeoutMs);
 
     child.stdout.on("data", (chunk: Buffer) => {
-      if (!stdoutTruncated) {
-        const appended = stdout + chunk.toString("utf-8");
-        if (appended.length > SHELL_STDOUT_MAX_CHARS) {
-          stdout = appended.slice(0, SHELL_STDOUT_MAX_CHARS);
-          stdoutTruncated = true;
-        } else {
-          stdout = appended;
-        }
+      if (detained || stdoutTruncated) return;
+      const appended = stdout + chunk.toString("utf-8");
+      if (appended.length > SHELL_STDOUT_MAX_CHARS) {
+        stdout = appended.slice(0, SHELL_STDOUT_MAX_CHARS);
+        stdoutTruncated = true;
+      } else {
+        stdout = appended;
       }
     });
 
     child.stderr.on("data", (chunk: Buffer) => {
-      if (!stderrTruncated) {
-        const appended = stderr + chunk.toString("utf-8");
-        if (appended.length > SHELL_STDERR_MAX_CHARS) {
-          stderr = appended.slice(0, SHELL_STDERR_MAX_CHARS);
-          stderrTruncated = true;
-        } else {
-          stderr = appended;
-        }
+      if (detained || stderrTruncated) return;
+      const appended = stderr + chunk.toString("utf-8");
+      if (appended.length > SHELL_STDERR_MAX_CHARS) {
+        stderr = appended.slice(0, SHELL_STDERR_MAX_CHARS);
+        stderrTruncated = true;
+      } else {
+        stderr = appended;
       }
     });
 
