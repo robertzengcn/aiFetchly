@@ -1024,6 +1024,13 @@ export class AIChatQueryLoop {
       }
     );
 
+    // Swallow late rejection from the abandoned executePromise when abort wins
+    // the race. The loop has already moved on by the time a non-cooperative
+    // tool gets around to rejecting.
+    executePromise.catch(() => {
+      /* intentionally swallowed: see comment above */
+    });
+
     // Race the execute promise against the abort signal. For tools that
     // observe the signal, they will reject promptly when aborted; for
     // non-cooperative tools, this promise still resolves first so the
