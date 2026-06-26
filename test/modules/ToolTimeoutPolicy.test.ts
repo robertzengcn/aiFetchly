@@ -56,6 +56,7 @@ describe("ToolTimeoutPolicy", () => {
 import type { SkillDefinition } from "@/entityTypes/skillTypes";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import { RUN_SUBAGENT_TOOL } from "@/service/agentTools/runSubagentTool";
+import { AgentDefinitionRegistry } from "@/service/AgentDefinitionRegistry";
 
 describe("SkillDefinition timeout-class fields", () => {
   it("allows optional static timeoutClass", () => {
@@ -190,6 +191,29 @@ describe("regression: previously-broken tool annotations", () => {
       expect(skill!.resolveTimeoutClass!({ urls: "not-an-array" })).to.equal(
         "browser"
       );
+    });
+  });
+
+  /**
+   * Regression: every active agent's allowedTools must reference skills that
+   * actually exist in the registry. Catches stale references like the old
+   * "google_search" entry (the real skill is scrape_urls_from_search_engine).
+   *
+   * Auto-injection of async-polling tools (check_tool_job_status,
+   * cancel_tool_job) is now structural in AgentToolPolicyService, so those
+   * no longer need to appear in allowedTools — see
+   * test/vitest/utilitycode/agentToolPolicyService.test.ts for that contract.
+   */
+  describe("agent allowlists reference only registered skills", () => {
+    AgentDefinitionRegistry.listBuiltIns().forEach((agent) => {
+      it(`${agent.id} has no stale tool references (all allowedTools exist in registry)`, () => {
+        for (const toolName of agent.allowedTools) {
+          expect(
+            SkillRegistry.isRegistered(toolName),
+            `${agent.id} references unknown tool ${toolName}`
+          ).to.equal(true);
+        }
+      });
     });
   });
 });

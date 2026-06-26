@@ -45,6 +45,50 @@ function isActivePlanState(plan?: AIChatPlanStateView | null): boolean {
   );
 }
 
+function isTypedPlanApproval(message: string): boolean {
+  const normalized = message.toLowerCase().replace(/\s+/g, " ").trim();
+  if (!normalized) return false;
+
+  const negativeSignals = [
+    "do not approve",
+    "don't approve",
+    "not approved",
+    "reject",
+    "rejected",
+    "request changes",
+    "changes requested",
+  ];
+  if (negativeSignals.some((signal) => normalized.includes(signal))) {
+    return false;
+  }
+
+  const explicitApprovalSignals = [
+    "plan approved",
+    "approve the plan",
+    "approved the plan",
+    "i approve",
+  ];
+  if (explicitApprovalSignals.some((signal) => normalized.includes(signal))) {
+    return true;
+  }
+
+  const looksGoodSignals = [
+    "looks good",
+    "looks fine",
+    "looks correct",
+  ];
+  const executionSignals = [
+    "begin executing",
+    "start executing",
+    "please execute",
+    "execute the plan",
+  ];
+  return (
+    looksGoodSignals.some((signal) => normalized.includes(signal)) &&
+    executionSignals.some((signal) => normalized.includes(signal))
+  );
+}
+
 /** Convert ToolFunction[] to OpenAITool[] format. */
 function toOpenAITools(toolFunctions: ToolFunction[]): OpenAITool[] {
   return toolFunctions
@@ -133,6 +177,7 @@ export class AIChatQueryEngine {
     let conversationId: string;
     let assistantMessageId: string;
     let messages: OpenAIChatMessage[];
+    let textApprovedPlanState: AIChatPlanStateView | null = null;
 
     try {
       conversationId = module.createConversationIfNeeded(
@@ -150,6 +195,17 @@ export class AIChatQueryEngine {
           });
         } else if (planState.conversationId !== conversationId) {
           planState = await planModule.getPlanState(conversationId);
+        }
+        if (
+          planState?.status === "awaiting_approval" &&
+          isTypedPlanApproval(request.message)
+        ) {
+          planState = await planModule.approvePlan({
+            conversationId,
+            planId: planState.planId,
+            version: planState.currentVersion,
+          });
+          textApprovedPlanState = planState;
         }
       }
 
@@ -230,6 +286,14 @@ export class AIChatQueryEngine {
       conversationId,
       messageId: assistantMessageId,
     });
+    if (textApprovedPlanState) {
+      eventSink.emit({
+        type: "plan_state",
+        conversationId,
+        messageId: assistantMessageId,
+        planState: textApprovedPlanState,
+      });
+    }
 
     // ------------------------------------------------------------------
     // 6. Build plan context if in plan mode

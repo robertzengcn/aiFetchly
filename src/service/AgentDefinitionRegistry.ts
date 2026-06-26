@@ -37,9 +37,15 @@ const BUILT_INS: AgentDefinitionView[] = [
     version: 1,
     systemPrompt: LEAD_RESEARCHER_PROMPT,
     // Tool names are the upper bound; AgentToolPolicyService intersects
-    // these with the actually-registered skills at runtime.
+    // these with the actually-registered skills at runtime. The policy
+    // service also auto-injects mandatory infrastructure tools
+    // (check_tool_job_status, cancel_tool_job) for any agent with a
+    // non-empty allowlist — they do NOT need to be declared here. See
+    // MANDATORY_INFRASTRUCTURE_TOOLS in AgentToolPolicyService.ts.
     allowedTools: [
-      "google_search",
+      // Stale "google_search" reference removed — no skill by that name
+      // exists in the registry. The actual search tool is
+      // scrape_urls_from_search_engine, listed next.
       "scrape_urls_from_search_engine",
       "knowledge_library_search",
     ],
