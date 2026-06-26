@@ -1454,6 +1454,35 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     },
   },
   {
+    name: "check_shell_status",
+    description:
+      "Poll the status of a shell command that was auto-backgrounded due to timeout. " +
+      "Returns { status: 'running' | 'completed' | 'failed' | 'killed', stdout, stderr, exit_code }. " +
+      "Use the shell_id returned from the original shell_execute call that was backgrounded.",
+    parameters: {
+      type: "object",
+      properties: {
+        shell_id: {
+          type: "string",
+          description:
+            "The shell_id returned from a shell_execute call that was auto-backgrounded.",
+        },
+      },
+      required: ["shell_id"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "pure",
+    source: "built-in",
+    execute: async (args) => {
+      const { handleCheckShellStatus } = await import(
+        "@/service/agentTools/checkShellStatusTool"
+      );
+      const res = await handleCheckShellStatus(args);
+      return { success: res.success, result: res.result };
+    },
+  },
+  {
     name: "knowledge_library_search",
     description:
       "Search the local knowledge library for factual information from uploaded documents. " +
