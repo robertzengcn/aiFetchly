@@ -227,7 +227,11 @@ export class ToolExecutor {
       case "scrape_urls_from_yandex":
       case "scrape_urls_from_baidu":
       case "scrape_urls_from_search_engine":
-        return await this.executeSearchEngineTool(toolName, toolParams);
+        return await this.executeSearchEngineTool(
+          toolName,
+          toolParams,
+          context
+        );
 
       case "search_yellow_pages":
         return await this.executeYellowPagesSearch(toolParams);
@@ -375,10 +379,18 @@ export class ToolExecutor {
 
   /**
    * Execute search engine tool (Google, Bing, Yandex, Baidu)
+   *
+   * Emits a partial snapshot into ToolExecutor.partialSnapshots every
+   * ~5s while polling so that, when the outer executeToolWithTimeout
+   * races this call against the network timeout ceiling (90s), the
+   * loop's partial-result recovery branch can still return whatever
+   * the worker has scraped so far instead of a hard `timedOut: true`
+   * error. Also forwards progress events for UI visibility.
    */
   private static async executeSearchEngineTool(
     toolName: string,
-    toolParams: Record<string, unknown>
+    toolParams: Record<string, unknown>,
+    context?: ModuleExecutionContext
   ): Promise<Record<string, unknown>> {
     const searchModule = new SearchModule();
     const query = typeof toolParams.query === "string" ? toolParams.query : "";
@@ -425,11 +437,20 @@ export class ToolExecutor {
       }
     );
 
-    // Poll task status until complete or error (max 10 minutes)
+    // Poll task status until complete or error (max 10 minutes).
+    //
+    // Every `partialSnapshotInterval` iterations we also query whatever
+    // results the worker has produced so far and register them via
+    // ToolExecutor.updatePartialSnapshot. The outer timeout race reads
+    // this snapshot if the network ceiling fires before the worker
+    // finishes, letting the model reason over partial SERP data instead
+    // of getting an opaque timedOut error.
     let taskStatus: SearchTaskStatus | null = null;
     const maxWaitTime = 600000; // 10 minutes
     const pollInterval = 1000; // 1 second
+    const partialSnapshotInterval = 5; // every ~5s
     const startTime = Date.now();
+    let pollIter = 0;
 
     while (Date.now() - startTime < maxWaitTime) {
       taskStatus = await searchModule.getTaskStatus(taskId);
@@ -442,6 +463,20 @@ export class ToolExecutor {
       ) {
         break;
       }
+      if (
+        context?.toolCallId &&
+        pollIter > 0 &&
+        pollIter % partialSnapshotInterval === 0
+      ) {
+        await this.registerSearchPartialSnapshot(
+          taskId,
+          query,
+          engineName,
+          numResults,
+          context
+        );
+      }
+      pollIter += 1;
       await new Promise((resolve) => setTimeout(resolve, pollInterval));
     }
 
@@ -474,6 +509,70 @@ export class ToolExecutor {
       // Clean structured data (no HTML blobs or messy metadata)
       results: cleanResults,
     };
+  }
+
+  /**
+   * Query whatever the search worker has produced so far and register it
+   * as the partial snapshot for the given toolCallId. Called periodically
+   * from the executeSearchEngineTool poll loop so the outer timeout race
+   * can return partial SERP data on timeout.
+   *
+   * Failures are swallowed deliberately: partial-snapshot emission is a
+   * best-effort UX affordance, not a correctness path. If the worker
+   * hasn't populated any rows yet, or the DB query hiccups, we'd rather
+   * skip this snapshot than crash the real scrape.
+   */
+  private static async registerSearchPartialSnapshot(
+    taskId: number,
+    query: string,
+    engineName: string,
+    numResults: number,
+    context: ModuleExecutionContext
+  ): Promise<void> {
+    try {
+      const searchModule = new SearchModule();
+      const partial = await searchModule.listSearchResult(
+        taskId,
+        1,
+        numResults
+      );
+      if (!partial || partial.length === 0) {
+        return;
+      }
+      const cleanPartial = ToolExecutionService.extractCleanResults(partial);
+      if (cleanPartial.length === 0) {
+        return;
+      }
+      ToolExecutor.updatePartialSnapshot(context.toolCallId, {
+        collectedCount: cleanPartial.length,
+        expectedCount: numResults,
+        data: {
+          success: true,
+          partial: true,
+          taskId,
+          query,
+          engine: engineName,
+          collectedCount: cleanPartial.length,
+          expectedCount: numResults,
+          totalResults: cleanPartial.length,
+          summary: ToolExecutionService.formatSearchResultsForLLM(cleanPartial),
+          results: cleanPartial,
+          message: `Collected ${cleanPartial.length} of ${numResults} results before the timeout ceiling fired.`,
+        },
+      });
+      context.emitProgress?.({
+        phase: "extracting",
+        message: `Scraping ${engineName} — ${cleanPartial.length} of ${numResults} results collected`,
+        progress: Math.min(1, cleanPartial.length / Math.max(1, numResults)),
+        partialCount: cleanPartial.length,
+        expectedCount: numResults,
+      });
+    } catch (err) {
+      console.warn(
+        `[ToolExecutor] partial snapshot for search task ${taskId} failed:`,
+        err
+      );
+    }
   }
 
   /**
