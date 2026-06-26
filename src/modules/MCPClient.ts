@@ -59,6 +59,11 @@ export class MCPClient {
    *
    * Race-protects the underlying `doConnect()` with `MCP_CONNECT_TIMEOUT_MS`
    * so a dead MCP server fails fast instead of eating the entire call budget.
+   *
+   * If the timeout fires, `doConnect()` may still be running in the
+   * background (e.g., a stdio child process that hasn't completed the
+   * handshake). We force-disconnect to clean up any spawned process and
+   * avoid leaving `this.connected = true` on an abandoned client.
    */
   async connect(): Promise<void> {
     if (this.connected) {
@@ -75,6 +80,17 @@ export class MCPClient {
 
     try {
       await Promise.race([this.doConnect(), timeoutPromise]);
+    } catch (err) {
+      // If the timeout fired, doConnect() may still be running in the
+      // background (e.g., a stdio child process that hasn't completed the
+      // handshake). Force-disconnect to clean up any spawned process and
+      // avoid leaving this.connected = true on an abandoned client.
+      if (err instanceof Error && err.message === "MCP connection timeout") {
+        await this.disconnect().catch(() => {
+          /* best-effort disconnect */
+        });
+      }
+      throw err;
     } finally {
       if (timer) clearTimeout(timer);
     }
