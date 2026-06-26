@@ -259,3 +259,162 @@ in 3 phases.
 | §4.2 blank input | Subagent failure |
 | §5.1 long essay | Context badge color tones |
 | §6.3 combined | Auto-plan + subagent integration |
+| §7.1 single create | File ops panel — create chip, open file, collapse toggle |
+| §7.2 edit existing file | File ops panel — edit chip, diff preview toggle |
+| §7.4 mixed operations | File ops panel — aggregate counts (+/~ chips) |
+| §7.5 two conversations | File ops panel — per-conversation isolation |
+| §7.6 bad path | File ops panel — failed operation rendering |
+| §7.7 60-line rewrite | File ops panel — large diff truncation |
+| §7.8 5-file burst | File ops panel — reactivity under rapid IPC events |
+
+---
+
+## 7. File Operations Panel Tests
+
+The file operations summary panel sits above the composer and lists files
+created / edited / overwritten by the AI during tool execution. It
+subscribes to `AI_FILE_OPERATION` IPC events and groups records by the
+active conversation.
+
+**Replace `[path]` below with an absolute path the AI has permission to write to.**
+
+### 7.1 Single file create (smoke test)
+
+```
+Create a new markdown file at [path]/test-create.md with the following
+content:
+
+# Hello
+This is a test file created by the AI.
+```
+
+### 7.2 Single file edit (diff preview)
+
+**Setup:** Create `[path]/test-edit.txt` on disk first:
+
+```
+Line 1: original
+Line 2: original
+Line 3: original
+```
+
+Then send:
+
+```
+Edit the file [path]/test-edit.txt. Replace "Line 2: original" with
+"Line 2: updated by AI". Keep all other lines unchanged.
+```
+
+### 7.3 File overwrite (orange chip)
+
+**Setup:** Ensure `[path]/test-overwrite.txt` already exists with any content. Then send:
+
+```
+Overwrite the file [path]/test-overwrite.txt with this exact content:
+
+REPLACED CONTENT
+done
+```
+
+### 7.4 Multiple files — mixed operations (aggregate counts)
+
+```
+Do all three of these in order:
+1. Create [path]/multi-a.md with content "created"
+2. Create [path]/multi-b.md with content "created"
+3. Edit [path]/test-edit.txt and append a new line "Line 4: added by AI"
+```
+
+### 7.5 Per-conversation isolation
+
+1. New conversation → send §7.1 for `[path]/conv-a.md`.
+2. Open history → start a **second new conversation** → send §7.1 for `[path]/conv-b.md`.
+3. Switch back and forth between the two conversations.
+
+### 7.6 Failed operation (error rendering)
+
+```
+Create a file at /this/path/does/not/exist/anywhere/bad.md with
+content "should fail".
+```
+
+### 7.7 Large diff truncation (>50 lines)
+
+**Setup:** Create `[path]/big.txt` with 60 distinct lines (`Line 01` ... `Line 60`). Then send:
+
+```
+Edit [path]/big.txt and rewrite every line so it says "Line XX - edited"
+where XX is the original line number.
+```
+
+### 7.8 Burst of creates (reactivity under rapid events)
+
+```
+Create 5 markdown files in [path]/ named burst-1.md through burst-5.md.
+Each file should contain its own number, e.g. burst-3.md contains "# 3".
+Do them as quickly as you can.
+```
+
+### 7.9 Coexistence with plan mode
+
+```
+Enter plan mode. I want to create three markdown notes in [path]/:
+release-notes.md, todo.md, and ideas.md. Plan it out first.
+```
+
+*Approve the plan when the card appears; the AI should execute and create the files.*
+
+| Test ID | Action | Expected |
+|---------|--------|----------|
+| 7.1.1 | Send §7.1 create prompt | Panel appears above the composer after the tool result arrives |
+| 7.1.2 | Read the header | "1 file change" label and a green `+1` chip |
+| 7.1.3 | Click the file chip | OS opens `test-create.md` in the default editor |
+| 7.1.4 | Click the header row | Body collapses; chevron flips from ▲ to ▼ |
+| 7.1.5 | Click the header row again | Body expands; FileOperationBadge re-renders |
+| 7.2.1 | Send §7.2 edit prompt after setup | Panel appears, blue `~1` chip |
+| 7.2.2 | Click the diff toggle next to the chip | Diff preview shows `- Line 2: original` (red) / `+ Line 2: updated by AI` (green) |
+| 7.2.3 | Click the diff toggle again | Diff collapses |
+| 7.3.1 | Send §7.3 overwrite prompt after setup | Panel appears, orange `~1` chip, "1 file change" |
+| 7.4.1 | Send §7.4 mixed prompt | Panel reads "3 file changes" |
+| 7.4.2 | Read the count chips | Green `+2` and blue `~1`, no orange chip |
+| 7.4.3 | Expand body | Three FileOperationBadge chips, each clickable to open |
+| 7.5.1 | Switch conv 1 → conv 2 → conv 1 | Each shows only its own files; counts don't leak |
+| 7.5.2 | Clear conversation 1 | Panel hides (no records) for that conversation |
+| 7.6.1 | Send §7.6 bad-path prompt | Panel appears with the failed file; red chip, alert-circle icon |
+| 7.6.2 | Look under the chip | Error message text from the tool result is shown |
+| 7.7.1 | Expand the diff for §7.7 | First 50 lines shown; "Show full diff (120 lines)" link appears |
+| 7.7.2 | Click "Show full diff" | Full diff renders; link switches to "Collapse diff" |
+| 7.7.3 | Click "Collapse diff" | Snaps back to 50-line truncated view |
+| 7.8.1 | Send §7.8 burst prompt | Count climbs 1→2→3→4→5 as each tool result arrives |
+| 7.8.2 | After all 5 complete | Header reads "5 file changes", green `+5` chip, no duplicates |
+| 7.9.1 | Send §7.9 plan prompt | Plan approval card renders in the pinned plan panel |
+| 7.9.2 | Approve the plan | Plan card moves into message flow; files created during execution |
+| 7.9.3 | After execution | File ops panel and in-flow plan card both visible; no layout overlap; composer usable |
+| 7.10.1 | New conversation, send a chat-only message ("hi") | Panel stays hidden — only file ops trigger it |
+| 7.10.2 | Unmount V2 view (navigate away and back) | No `AI_FILE_OPERATION` listener leak; new ops still register |
+
+### 7.x i18n label check
+
+Switch the app language, then trigger a single file op (§7.1) and a
+two-file op (§7.4) to check singular / plural forms.
+
+| Test ID | Language | 1 file | 2+ files |
+|---------|----------|--------|----------|
+| 7.i.1 | English (en) | "1 file change" | "2 file changes" |
+| 7.i.2 | Chinese (zh) | "1 个文件更改" | "2 个文件更改" |
+| 7.i.3 | Spanish (es) | "1 cambio de archivo" | "2 cambios de archivo" |
+| 7.i.4 | French (fr) | "1 modification de fichier" | "2 modifications de fichier" |
+| 7.i.5 | German (de) | "1 Dateiänderung" | "2 Dateiänderungen" |
+| 7.i.6 | Japanese (ja) | "1 件のファイル変更" | "2 件のファイル変更" |
+
+*If English appears in a non-English locale, check `aiChatV2.file_change_one` / `file_changes_other` in that lang file.*
+
+### Smoke test order (if short on time)
+
+Run these five in order — together they prove the feature end-to-end:
+
+1. **§7.1** — single create (panel appears, chip renders)
+2. **§7.4** — mixed multi-file (counts aggregate correctly)
+3. **§7.5** — per-conversation isolation (no cross-talk)
+4. **§7.6** — failed operation (error rendering)
+5. **§7.i.1** — English labels (i18n keys wired)
