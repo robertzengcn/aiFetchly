@@ -14,6 +14,7 @@ import type {
   AIChatQueryLoopInput,
   AIChatQueryLoopResult,
 } from "@/service/AIChatQueryEvents";
+import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
 
 // --- Mock AIChatV2Module -----------------------------------------------
 const mockSaveUserMessage = vi.fn().mockResolvedValue({ messageId: "user-1" });
@@ -37,10 +38,15 @@ vi.mock("@/modules/AIChatV2Module", () => ({
 }));
 
 // --- Mock AIChatPlanModule ---------------------------------------------
+const mockGetPlanState = vi.fn().mockResolvedValue(null);
+const mockEnsurePlanForConversation = vi.fn().mockResolvedValue(null);
+const mockApprovePlan = vi.fn();
+
 vi.mock("@/modules/AIChatPlanModule", () => ({
   AIChatPlanModule: vi.fn().mockImplementation(() => ({
-    getPlanState: vi.fn().mockResolvedValue(null),
-    ensurePlanForConversation: vi.fn().mockResolvedValue(null),
+    getPlanState: mockGetPlanState,
+    ensurePlanForConversation: mockEnsurePlanForConversation,
+    approvePlan: mockApprovePlan,
   })),
 }));
 
@@ -116,6 +122,9 @@ function makeEventCollector(): {
 describe("AIChatQueryEngine", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetPlanState.mockResolvedValue(null);
+    mockEnsurePlanForConversation.mockResolvedValue(null);
+    mockApprovePlan.mockReset();
   });
 
   describe("submitMessage", () => {
@@ -364,6 +373,51 @@ describe("AIChatQueryEngine", () => {
       // Error event should have been emitted.
       const errorEvent = events.find((e) => e.type === "error");
       expect(errorEvent).toBeDefined();
+    });
+
+    it("treats typed approval as approval before running plan tools", async () => {
+      const awaitingPlan: AIChatPlanStateView = {
+        planId: "plan-1",
+        conversationId: "v2-test-conv",
+        status: "awaiting_approval",
+        title: "Campaign plan",
+        objective: "Create campaign files",
+        currentVersion: 2,
+      };
+      const approvedPlan: AIChatPlanStateView = {
+        ...awaitingPlan,
+        status: "approved",
+        approvedAt: new Date().toISOString(),
+      };
+      mockGetPlanState.mockResolvedValue(awaitingPlan);
+      mockApprovePlan.mockResolvedValue(approvedPlan);
+      const fakeRun = vi.fn().mockResolvedValue({
+        type: "completed" as const,
+        conversationId: "v2-test-conv",
+        assistantMessageId: "assistant-test",
+        fullContent: "ok",
+        finishReason: "stop",
+      });
+      const engine = createEngineWithFakeLoop(fakeRun);
+      const { sink } = makeEventCollector();
+
+      await engine.submitMessage({
+        request: {
+          conversationId: "v2-test-conv",
+          mode: "plan",
+          message: "Plan approved. Please begin executing the plan now.",
+        },
+        eventSink: sink,
+      });
+
+      expect(mockApprovePlan).toHaveBeenCalledWith({
+        conversationId: "v2-test-conv",
+        planId: "plan-1",
+        version: 2,
+      });
+      expect(fakeRun).toHaveBeenCalledOnce();
+      const loopInput = fakeRun.mock.calls[0][0] as AIChatQueryLoopInput;
+      expect(loopInput.planContext?.planState.status).toBe("approved");
     });
   });
 
