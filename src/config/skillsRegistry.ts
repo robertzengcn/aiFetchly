@@ -163,7 +163,11 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       const result = await ToolExecutor.execute(
         "scrape_urls_from_search_engine",
         args,
-        context.conversationId
+        context.conversationId,
+        {
+          toolCallId: context.toolCallId,
+          emitProgress: context.emitProgress,
+        }
       );
       return { success: true, result };
     },
