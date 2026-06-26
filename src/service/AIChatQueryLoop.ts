@@ -1086,6 +1086,11 @@ export class AIChatQueryLoop {
       throw err;
     } finally {
       token.clearTimer();
+      // Abort to clean up the abortPromise listener ({ once: true }) and to
+      // signal any still-running cooperative tool that its result is unneeded.
+      if (!token.signal.aborted) {
+        token.abort("cancel");
+      }
       ToolExecutor.unregisterPartialSnapshot(call.id);
     }
   }
