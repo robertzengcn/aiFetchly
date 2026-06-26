@@ -1,5 +1,8 @@
 import type { ChildProcess } from "child_process";
 
+const MAX_BACKGROUND_SHELL_OUTPUT_CHARS = 200_000; // ~200KB cap per stream
+const COMPLETED_SHELL_TTL_MS = 30 * 60 * 1000; // 30 minutes
+
 /**
  * Lifecycle status of a detained background shell.
  *
@@ -58,15 +61,27 @@ export class BackgroundShellRegistry {
   private readonly children = new Map<string, ChildProcess>();
 
   /**
-   * Detain a spawned child process under a new unique shell_id.
-   *
-   * The registry attaches listeners to stdout/stderr to buffer output, and a
-   * `close`/`error` handler to transition the state to a terminal status.
-   *
-   * @returns the newly-allocated shell_id.
+   * Remove completed/failed/killed shells that have been idle longer than
+   * {@link COMPLETED_SHELL_TTL_MS}. Called on every detain() to amortize cost.
    */
+  private sweepStale(): void {
+    const now = Date.now();
+    for (const [id, state] of this.shells) {
+      if (
+        state.status !== "running" &&
+        state.endedAt !== null &&
+        now - state.endedAt > COMPLETED_SHELL_TTL_MS
+      ) {
+        this.shells.delete(id);
+      }
+    }
+  }
+
   detain(child: ChildProcess, meta: DetainMeta): string {
-    const shellId = `sh_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    this.sweepStale();
+    const shellId = `sh_${Date.now()}_${Math.random()
+      .toString(36)
+      .slice(2, 8)}`;
     const state: BackgroundShellState = {
       shellId,
       command: meta.command,
@@ -81,10 +96,18 @@ export class BackgroundShellRegistry {
     this.children.set(shellId, child);
 
     child.stdout?.on("data", (b: Buffer) => {
-      state.stdout += b.toString("utf-8");
+      if (state.stdout.length < MAX_BACKGROUND_SHELL_OUTPUT_CHARS) {
+        state.stdout += b
+          .toString("utf-8")
+          .slice(0, MAX_BACKGROUND_SHELL_OUTPUT_CHARS - state.stdout.length);
+      }
     });
     child.stderr?.on("data", (b: Buffer) => {
-      state.stderr += b.toString("utf-8");
+      if (state.stderr.length < MAX_BACKGROUND_SHELL_OUTPUT_CHARS) {
+        state.stderr += b
+          .toString("utf-8")
+          .slice(0, MAX_BACKGROUND_SHELL_OUTPUT_CHARS - state.stderr.length);
+      }
     });
     child.on("close", (code: number | null) => {
       // Don't overwrite "killed" status if kill() already set it.

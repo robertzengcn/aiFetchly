@@ -61,6 +61,23 @@ describe("BackgroundShellRegistry", () => {
     const id2 = registry.detain(child2, { command: "true" });
     expect(id1).not.toBe(id2);
   });
+
+  it("caps stdout accumulation at MAX_BACKGROUND_SHELL_OUTPUT_CHARS", async () => {
+    // Generate enough output to exceed the cap without making the test slow.
+    // Emit 10 chunks of 50KB each = 500KB total, exceeds 200KB cap.
+    const child = spawn("sh", [
+      "-c",
+      "for i in $(seq 1 10); do head -c 50000 /dev/urandom | base64; done",
+    ]);
+    const id = registry.detain(child, { command: "noise" });
+
+    // Wait for the process to finish and buffers to settle.
+    await new Promise((r) => setTimeout(r, 500));
+
+    const state = registry.poll(id);
+    expect(state).toBeDefined();
+    expect(state!.stdout.length).toBeLessThanOrEqual(200_000);
+  });
 });
 
 describe("getDefaultBackgroundShellRegistry", () => {
