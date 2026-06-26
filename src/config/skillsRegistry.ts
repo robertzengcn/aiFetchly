@@ -1471,8 +1471,8 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       required: ["shell_id"],
     },
     tier: "main",
-    requiresConfirmation: false,
-    permissionCategory: "pure",
+    requiresConfirmation: true,
+    permissionCategory: "shell",
     source: "built-in",
     execute: async (args) => {
       const { handleCheckShellStatus } = await import(
