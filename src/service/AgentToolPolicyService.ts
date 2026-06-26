@@ -14,7 +14,10 @@ const V1_BLOCKED_PATTERNS: ReadonlyArray<{
     pattern: /(^|_)(shell|exec|spawn|cmd|bash)($|_)/i,
     reason: "Shell tools are blocked for v1 agents.",
   },
-  { pattern: /send_?email/i, reason: "Sending email is blocked for v1 agents." },
+  {
+    pattern: /send_?email/i,
+    reason: "Sending email is blocked for v1 agents.",
+  },
   {
     pattern: /post_?social|send_?social|send_?message/i,
     reason: "Social posting is blocked for v1 agents.",
@@ -24,6 +27,32 @@ const V1_BLOCKED_PATTERNS: ReadonlyArray<{
     reason: "File mutation tools are blocked for v1 agents.",
   },
 ];
+
+/**
+ * Mandatory infrastructure tools auto-injected into every agent's exposed
+ * tool set (as long as the agent has at least one tool of its own).
+ *
+ * Rationale: the async-tool polling architecture requires the inner agent
+ * to be able to poll/cancel any job it spawns. If a tool routes to "async"
+ * (run_subagent, extract_contact_info with 8+ URLs, etc.), the agent
+ * receives a { async: true, job_id } envelope and must call
+ * check_tool_job_status to observe progress and cancel_tool_job to give up.
+ * Declaring these per-agent was fragile — an omission was silent and the
+ * inner agent stalled. Listing them here makes the contract structural:
+ * any present or future agent with any tool access can poll its own jobs.
+ *
+ * These tools are conversation-scoped and read-only/cleanup, so exposing
+ * them broadly carries no privilege-escalation risk. They still pass
+ * through the v1 denylist and explicit blockedTools filters below.
+ */
+const MANDATORY_INFRASTRUCTURE_TOOLS: ReadonlyArray<string> = [
+  "check_tool_job_status",
+  "cancel_tool_job",
+];
+
+function isMandatoryInfrastructureTool(name: string): boolean {
+  return MANDATORY_INFRASTRUCTURE_TOOLS.includes(name);
+}
 
 export interface ToolPolicyCheckInput {
   definition: AgentDefinitionView;
@@ -69,7 +98,15 @@ export class AgentToolPolicyService {
       };
     }
 
-    if (!input.definition.allowedTools.includes(toolName)) {
+    // Allow mandatory infrastructure tools (async-polling lifecycle) even
+    // when not statically declared, as long as the agent has at least one
+    // tool of its own. An intentionally tool-less agent (empty allowlist)
+    // does not get them auto-injected — preserves "explicit zero means zero".
+    const inAllowlist = input.definition.allowedTools.includes(toolName);
+    const isInfra =
+      input.definition.allowedTools.length > 0 &&
+      isMandatoryInfrastructureTool(toolName);
+    if (!inAllowlist && !isInfra) {
       return {
         allowed: false,
         reason: `Tool ${toolName} is not allowed for ${input.definition.id}.`,
@@ -92,11 +129,19 @@ export class AgentToolPolicyService {
 
   /**
    * Intersect the agent allowlist with the set of actually-registered tools,
-   * minus globally-blocked patterns and explicit blockedTools.
+   * minus globally-blocked patterns and explicit blockedTools. Mandatory
+   * infrastructure tools (async-polling lifecycle) are unioned in for any
+   * agent with a non-empty allowlist; see MANDATORY_INFRASTRUCTURE_TOOLS.
    */
   filterExposedToolNames(input: FilterExposedInput): string[] {
+    // Tool-less agent: preserve "explicit zero means zero".
+    if (input.allowedTools.length === 0) return [];
+
     const blocked = new Set(input.blockedTools ?? []);
-    const allowed = new Set(input.allowedTools);
+    const allowed = new Set<string>([
+      ...input.allowedTools,
+      ...MANDATORY_INFRASTRUCTURE_TOOLS,
+    ]);
     const out: string[] = [];
     for (const name of input.availableToolNames) {
       if (!allowed.has(name)) continue;
