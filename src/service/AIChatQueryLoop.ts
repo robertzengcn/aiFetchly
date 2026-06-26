@@ -39,6 +39,7 @@ import {
   resolveTimeoutMs,
   type ToolTimeoutClass,
 } from "@/service/ToolTimeoutPolicy";
+import { CancellationToken } from "@/service/CancellationToken";
 import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
 import { USER_AI_ENABLED } from "@/config/usersetting";
 import { Token } from "@/modules/token";
@@ -992,7 +993,9 @@ export class AIChatQueryLoop {
     if (timeoutMs === null) {
       return await this.executeAsyncTool(input, call);
     }
-    const effectiveTimeoutMs = timeoutMs;
+
+    const token = new CancellationToken(timeoutMs);
+    token.startTimer();
 
     const executePromise = this.deps.executeTool(
       call.name,
@@ -1001,7 +1004,9 @@ export class AIChatQueryLoop {
         conversationId: input.conversationId,
         toolCallId: call.id,
         args: call.arguments,
+        signal: token.signal,
         emitProgress: (event) => {
+          if (token.signal.aborted) return; // drop progress after abort
           input.eventSink.emit({
             type: "tool_progress",
             conversationId: input.conversationId,
@@ -1019,15 +1024,40 @@ export class AIChatQueryLoop {
       }
     );
 
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
-    const timeoutPromise = new Promise<ToolExecutionResult>((resolve) => {
-      timeoutId = setTimeout(async () => {
-        // When the skill supports partial results, try to return whatever
-        // data was collected before the deadline.
+    // Swallow late rejection from the abandoned executePromise when abort wins
+    // the race. The loop has already moved on by the time a non-cooperative
+    // tool gets around to rejecting.
+    executePromise.catch(() => {
+      /* intentionally swallowed: see comment above */
+    });
+
+    // Race the execute promise against the abort signal. For tools that
+    // observe the signal, they will reject promptly when aborted; for
+    // non-cooperative tools, this promise still resolves first so the
+    // loop doesn't hang.
+    const abortPromise = new Promise<never>((_, reject) => {
+      if (token.signal.aborted) {
+        reject(new Error(`__ABORTED__:${token.reason}`));
+        return;
+      }
+      token.signal.addEventListener(
+        "abort",
+        () => {
+          reject(new Error(`__ABORTED__:${token.reason}`));
+        },
+        { once: true }
+      );
+    });
+
+    try {
+      return await Promise.race([executePromise, abortPromise]);
+    } catch (err) {
+      // If the abort fired, return a timeout result (with optional partial snapshot).
+      if (token.signal.aborted) {
         if (skill?.supportsPartialResult) {
           const snapshot = await ToolExecutor.requestPartialSnapshot(call.id);
           if (snapshot && snapshot.collectedCount > 0) {
-            resolve({
+            return {
               tool_call_id: call.id,
               tool_name: call.name,
               success: true,
@@ -1035,29 +1065,32 @@ export class AIChatQueryLoop {
               partial: true,
               collectedCount: snapshot.collectedCount,
               expectedCount: snapshot.expectedCount,
-              timedOutAfterMs: effectiveTimeoutMs,
+              timedOutAfterMs: timeoutMs,
               execution_time_ms: Date.now() - startedAt,
-            });
-            return;
+            };
           }
         }
-        resolve({
+        return {
           tool_call_id: call.id,
           tool_name: call.name,
           success: false,
           result: {
-            error: `Tool "${call.name}" timed out after ${effectiveTimeoutMs}ms.`,
+            error: `Tool "${call.name}" timed out after ${timeoutMs}ms.`,
             timedOut: true,
+            abortReason: token.reason,
           },
           execution_time_ms: Date.now() - startedAt,
-        });
-      }, effectiveTimeoutMs);
-    });
-
-    try {
-      return await Promise.race([executePromise, timeoutPromise]);
+        };
+      }
+      // Non-abort error: rethrow to be handled by the outer try/catch in the caller.
+      throw err;
     } finally {
-      if (timeoutId) clearTimeout(timeoutId);
+      token.clearTimer();
+      // Abort to clean up the abortPromise listener ({ once: true }) and to
+      // signal any still-running cooperative tool that its result is unneeded.
+      if (!token.signal.aborted) {
+        token.abort("cancel");
+      }
       ToolExecutor.unregisterPartialSnapshot(call.id);
     }
   }
