@@ -4,10 +4,10 @@
  *  - approved: user confirmed access to this folder
  *  - revoked: user removed access; tools must refuse further use
  */
-export type WorkspaceApprovalState = 'pending' | 'approved' | 'revoked';
+export type WorkspaceApprovalState = "pending" | "approved" | "revoked";
 
 export interface WorkspaceRecord {
-  readonly id: string;
+  readonly id: number;
   readonly conversationId: string;
   readonly rootPath: string;
   readonly label: string | null;
@@ -19,7 +19,7 @@ export interface WorkspaceRecord {
 
 /** Trimmed view returned to the renderer. */
 export interface WorkspaceSummary {
-  readonly id: string;
+  readonly id: number;
   readonly conversationId: string;
   readonly rootPath: string;
   readonly label: string | null;
