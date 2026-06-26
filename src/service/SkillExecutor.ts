@@ -389,7 +389,11 @@ async function executeViaToolExecutor(
     const result = await ToolExecutor.execute(
       name,
       args,
-      context.conversationId
+      context.conversationId,
+      {
+        toolCallId: context.toolCallId,
+        emitProgress: context.emitProgress,
+      }
     );
     const execResult: ToolExecutionResult = {
       tool_call_id: context.toolCallId,

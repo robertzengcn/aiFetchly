@@ -27,6 +27,7 @@ import { GoogleMapsModule } from "@/modules/GoogleMapsModule";
 import { YandexMapsModule } from "@/modules/YandexMapsModule";
 import { FileOperationTracker } from "@/service/FileOperationTracker";
 import type { FileOperationRecord } from "@/entityTypes/fileOperationTypes";
+import type { ModuleExecutionContext } from "@/entityTypes/skillTypes";
 
 /**
  * Rate limiting configuration for tool execution
@@ -116,16 +117,73 @@ class RateLimiterManager {
 }
 
 /**
+ * Partial snapshot collected by a tool that supports partial results.
+ * Stored in the registry so the timeout branch can return whatever data
+ * the tool managed to collect before the deadline.
+ */
+export interface PartialSnapshot {
+  collectedCount: number;
+  expectedCount: number;
+  data: Record<string, unknown>;
+}
+
+/**
  * Execute tools called by the AI
  */
 export class ToolExecutor {
+  // -------------------------------------------------------------------------
+  // Partial-snapshot API — used by executeToolWithTimeout to return partial
+  // data when a supporting tool hits the timeout ceiling.
+  // -------------------------------------------------------------------------
+
+  private static partialSnapshots = new Map<string, PartialSnapshot>();
+
+  /**
+   * Register (or replace) the partial snapshot for a given tool call.
+   * Worker modules call this continuously as they scrape.
+   */
+  static updatePartialSnapshot(
+    toolCallId: string,
+    snapshot: PartialSnapshot
+  ): void {
+    ToolExecutor.partialSnapshots.set(toolCallId, snapshot);
+  }
+
+  /**
+   * Retrieve the current partial snapshot for a tool call.
+   * Returns null when no snapshot has been registered.
+   */
+  static async requestPartialSnapshot(
+    toolCallId: string
+  ): Promise<PartialSnapshot | null> {
+    return Promise.resolve(
+      ToolExecutor.partialSnapshots.get(toolCallId) ?? null
+    );
+  }
+
+  /**
+   * Remove the partial snapshot entry. Called in the finally block of
+   * executeToolWithTimeout so the map does not leak.
+   */
+  static unregisterPartialSnapshot(toolCallId: string): void {
+    ToolExecutor.partialSnapshots.delete(toolCallId);
+  }
+
   /**
    * Execute a tool by name with rate limiting
+   *
+   * @param toolName Name of the tool to execute
+   * @param toolParams Tool input parameters
+   * @param conversationId Conversation ID for context
+   * @param context Optional module execution context for progress emission
+   *        and partial-snapshot registration. Forwarded only to long-running
+   *        browser-tool modules (maps, contact extraction, website analysis).
    */
   static async execute(
     toolName: string,
     toolParams: Record<string, unknown>,
-    conversationId: string
+    conversationId: string,
+    context?: ModuleExecutionContext
   ): Promise<Record<string, unknown>> {
     const rateLimiter = RateLimiterManager.getLimiter(toolName);
 
@@ -137,7 +195,12 @@ export class ToolExecutor {
       const status = rateLimiter.getStatus();
       console.log(`Executing tool '${toolName}' - Rate limit status:`, status);
 
-      return await this.executeInternal(toolName, toolParams, conversationId);
+      return await this.executeInternal(
+        toolName,
+        toolParams,
+        conversationId,
+        context
+      );
     } finally {
       // Always release the rate limit slot
       rateLimiter.release();
@@ -150,7 +213,8 @@ export class ToolExecutor {
   private static async executeInternal(
     toolName: string,
     toolParams: Record<string, unknown>,
-    conversationId: string
+    conversationId: string,
+    context?: ModuleExecutionContext
   ): Promise<Record<string, unknown>> {
     // Check if this is an MCP tool (format: mcp_<serverId>_<toolName>)
     if (toolName.startsWith("mcp_")) {
@@ -190,10 +254,10 @@ export class ToolExecutor {
         return await this.executeGenerateKeywords(toolParams);
 
       case "extract_contact_info":
-        return await this.executeContactExtraction(toolParams);
+        return await this.executeContactExtraction(toolParams, context);
 
       case "search_maps_businesses":
-        return await this.executeMapsSearch(toolParams);
+        return await this.executeMapsSearch(toolParams, context);
 
       case "read_attachment_content":
         return await this.executeReadAttachmentContent(
@@ -1144,7 +1208,8 @@ export class ToolExecutor {
    * Execute extract_contact_info: extract contact info (emails, phones, address, social links) from URLs.
    */
   private static async executeContactExtraction(
-    toolParams: Record<string, unknown>
+    toolParams: Record<string, unknown>,
+    context?: ModuleExecutionContext
   ): Promise<Record<string, unknown>> {
     const urls = Array.isArray(toolParams.urls)
       ? toolParams.urls.filter(
@@ -1159,7 +1224,7 @@ export class ToolExecutor {
       );
     }
 
-    const results = await extractContactFromUrls(urls);
+    const results = await extractContactFromUrls(urls, context);
     const successful = results.filter((r) => r.success);
     const failed = results.filter((r) => !r.success);
 
@@ -1222,7 +1287,8 @@ export class ToolExecutor {
    * Execute Maps business search — dispatches to Google or Yandex based on platform param.
    */
   private static async executeMapsSearch(
-    toolParams: Record<string, unknown>
+    toolParams: Record<string, unknown>,
+    context?: ModuleExecutionContext
   ): Promise<Record<string, unknown>> {
     const platform =
       typeof toolParams.platform === "string" ? toolParams.platform : "google";
@@ -1246,13 +1312,14 @@ export class ToolExecutor {
     }
 
     if (platform === "yandex") {
-      return this.executeYandexMapsSearch(toolParams);
+      return this.executeYandexMapsSearch(toolParams, context);
     }
-    return this.executeGoogleMapsSearch(toolParams);
+    return this.executeGoogleMapsSearch(toolParams, context);
   }
 
   private static async executeGoogleMapsSearch(
-    toolParams: Record<string, unknown>
+    toolParams: Record<string, unknown>,
+    context?: ModuleExecutionContext
   ): Promise<Record<string, unknown>> {
     const query = typeof toolParams.query === "string" ? toolParams.query : "";
     const location =
@@ -1269,23 +1336,29 @@ export class ToolExecutor {
 
     try {
       const module = new GoogleMapsModule();
-      const result = await module.executeSearch({
-        query: query.trim(),
-        location: location.trim(),
-        max_results: clampedMaxResults,
-        include_website:
-          typeof toolParams.include_website === "boolean"
-            ? toolParams.include_website
-            : true,
-        include_reviews:
-          typeof toolParams.include_reviews === "boolean"
-            ? toolParams.include_reviews
-            : false,
-        show_browser:
-          typeof toolParams.show_browser === "boolean"
-            ? toolParams.show_browser
-            : false,
-      });
+      const result = await module.executeSearch(
+        {
+          query: query.trim(),
+          location: location.trim(),
+          max_results: clampedMaxResults,
+          include_website:
+            typeof toolParams.include_website === "boolean"
+              ? toolParams.include_website
+              : true,
+          include_reviews:
+            typeof toolParams.include_reviews === "boolean"
+              ? toolParams.include_reviews
+              : false,
+          show_browser:
+            typeof toolParams.show_browser === "boolean"
+              ? toolParams.show_browser
+              : false,
+        },
+        undefined, // cookies
+        undefined, // proxies
+        undefined, // externalRequestId
+        context
+      );
 
       return result as unknown as Record<string, unknown>;
     } catch (error) {
@@ -1305,7 +1378,8 @@ export class ToolExecutor {
    * for Puppeteer-based Yandex Maps scraping.
    */
   private static async executeYandexMapsSearch(
-    toolParams: Record<string, unknown>
+    toolParams: Record<string, unknown>,
+    context?: ModuleExecutionContext
   ): Promise<Record<string, unknown>> {
     const query = typeof toolParams.query === "string" ? toolParams.query : "";
     const location =
@@ -1322,29 +1396,34 @@ export class ToolExecutor {
 
     try {
       const module = new YandexMapsModule();
-      const result = await module.executeSearch({
-        query: query.trim(),
-        location: location.trim(),
-        max_results: clampedMaxResults,
-        include_website:
-          typeof toolParams.include_website === "boolean"
-            ? toolParams.include_website
-            : true,
-        include_reviews:
-          typeof toolParams.include_reviews === "boolean"
-            ? toolParams.include_reviews
-            : false,
-        show_browser:
-          typeof toolParams.show_browser === "boolean"
-            ? toolParams.show_browser
-            : false,
-        language:
-          typeof toolParams.language === "string"
-            ? toolParams.language
-            : undefined,
-        region:
-          typeof toolParams.region === "string" ? toolParams.region : undefined,
-      });
+      const result = await module.executeSearch(
+        {
+          query: query.trim(),
+          location: location.trim(),
+          max_results: clampedMaxResults,
+          include_website:
+            typeof toolParams.include_website === "boolean"
+              ? toolParams.include_website
+              : true,
+          include_reviews:
+            typeof toolParams.include_reviews === "boolean"
+              ? toolParams.include_reviews
+              : false,
+          show_browser:
+            typeof toolParams.show_browser === "boolean"
+              ? toolParams.show_browser
+              : false,
+          language:
+            typeof toolParams.language === "string"
+              ? toolParams.language
+              : undefined,
+          region:
+            typeof toolParams.region === "string"
+              ? toolParams.region
+              : undefined,
+        },
+        { context }
+      );
 
       return result as unknown as Record<string, unknown>;
     } catch (error) {

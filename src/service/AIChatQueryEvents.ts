@@ -8,6 +8,7 @@ import type {
   AskUserQuestionPayload,
   SubmitPlanForApprovalPayload,
 } from "@/entityTypes/aiChatPlanTypes";
+import type { SkillDefinition } from "@/entityTypes/skillTypes";
 
 /**
  * Sink the engine emits non-terminal and terminal events into.
@@ -47,6 +48,29 @@ export interface AIChatQueryToolCallEvent {
   toolCallId: string;
   toolName: string;
   toolArguments: Record<string, unknown>;
+}
+
+export type ToolProgressPhase =
+  | "queued"
+  | "running"
+  | "fetching"
+  | "extracting"
+  | "finalizing";
+
+export interface AIChatQueryToolProgressEvent {
+  type: "tool_progress";
+  conversationId: string;
+  messageId: string;
+  toolCallId: string;
+  toolName: string;
+  phase: ToolProgressPhase;
+  /** i18n key or fallback English string. */
+  message: string;
+  /** 0..1 when known, null when indeterminate. */
+  progress: number | null;
+  partialCount: number | null;
+  expectedCount: number | null;
+  timestamp: number;
 }
 
 export interface AIChatQueryToolResultEvent {
@@ -145,6 +169,7 @@ export type AIChatQueryEvent =
   | AIChatQueryTokenEvent
   | AIChatQueryRetryEvent
   | AIChatQueryToolCallEvent
+  | AIChatQueryToolProgressEvent
   | AIChatQueryToolResultNormalEvent
   | AIChatQueryPlanBlockedToolEvent
   | AIChatQueryAskUserQuestionEvent
@@ -313,6 +338,13 @@ export interface AIChatQueryLoopInput {
    * only when USER_AI_AUTO_PLAN === 'true' and AI is enabled.
    */
   autoPlan?: AIChatAutoPlanLoopConfig;
+  /**
+   * Optional skill registry used to look up per-tool timeout class.
+   * When absent, the loop falls back to name-based inference.
+   */
+  readonly skillRegistry?: {
+    getSkill(name: string): SkillDefinition | null | undefined;
+  };
   startRound: number;
   /**
    * Returns false when this turn is no longer the active turn on the engine

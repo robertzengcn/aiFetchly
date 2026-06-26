@@ -92,6 +92,14 @@ export interface ToolExecutionResult {
   success: boolean;
   result: Record<string, unknown>;
   execution_time_ms: number;
+  /** True when the result contains partial data returned after a timeout. */
+  readonly partial?: boolean;
+  /** How many items the tool collected before returning (partial context). */
+  readonly collectedCount?: number;
+  /** How many items the tool was aiming for (partial context). */
+  readonly expectedCount?: number;
+  /** Timeout ceiling that fired, in ms, when partial === true. */
+  readonly timedOutAfterMs?: number;
 }
 
 /**
