@@ -512,17 +512,15 @@ export class MCPToolService {
    */
   private assertToolEnabled(server: MCPToolEntity, toolName: string): void {
     if (!server.toolConfig) return;
+    let toolConfig: Record<string, { enabled?: boolean }>;
     try {
-      const toolConfig: Record<string, { enabled?: boolean }> = JSON.parse(
-        server.toolConfig
-      );
-      if (toolConfig[toolName]?.enabled === false) {
-        throw new Error(`Tool ${toolName} is disabled`);
-      }
-    } catch (e) {
-      // Re-throw only if it's the "disabled" guard we threw above.
-      if (e instanceof Error && e.message.includes("disabled")) throw e;
+      toolConfig = JSON.parse(server.toolConfig);
+    } catch {
       console.warn("Failed to parse toolConfig for tool check");
+      return;
+    }
+    if (toolConfig[toolName]?.enabled === false) {
+      throw new Error(`Tool ${toolName} is disabled`);
     }
   }
 
