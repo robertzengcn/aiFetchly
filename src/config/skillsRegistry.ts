@@ -105,6 +105,8 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     requiresConfirmation: false,
     permissionCategory: "network",
     source: "built-in",
+    timeoutClass: "network",
+    supportsPartialResult: true,
     execute: async (args, context) => {
       const engineRaw =
         typeof args.search_engine === "string"
