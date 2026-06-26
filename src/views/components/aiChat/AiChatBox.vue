@@ -2528,11 +2528,30 @@ function getStepStatusColor(status: PlanStepStatus): string {
 }
 
 /**
+ * Escape HTML special characters to prevent XSS when rendering via v-html.
+ * Must run BEFORE markdown replacements so user content is neutralized first.
+ */
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  })[char] as string);
+}
+
+/**
  * Format message content (convert markdown, line breaks, etc.)
+ *
+ * Security: content is HTML-escaped first, then we re-introduce ONLY a fixed
+ * set of safe tags (<br>, <code>, <strong>, <em>) via controlled regex. No
+ * user-controlled attributes (href, src, onerror, ...) can ever appear in the
+ * output. This is safe to render with v-html.
  */
 function formatMessage(content: string): string {
-  // Basic formatting - can be enhanced with markdown library
-  return content
+  const escaped = escapeHtml(content);
+  return escaped
     .replace(/\n/g, '<br>')
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
