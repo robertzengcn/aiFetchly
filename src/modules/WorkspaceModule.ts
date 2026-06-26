@@ -1,4 +1,4 @@
-import { BaseModule } from "@/modules/BaseModule";
+import { BaseModule } from "@/modules/baseModule";
 import { WorkspaceModel } from "@/model/Workspace.model";
 import {
   WorkspaceRecord,
@@ -53,9 +53,7 @@ export class WorkspaceModule extends BaseModule {
     return this.model().setApprovalState(id, "revoked");
   }
 
-  async listWorkspaces(
-    conversationId: string
-  ): Promise<WorkspaceSummary[]> {
+  async listWorkspaces(conversationId: string): Promise<WorkspaceSummary[]> {
     await this.ensureConnection();
     return this.model().listByConversation(conversationId);
   }
