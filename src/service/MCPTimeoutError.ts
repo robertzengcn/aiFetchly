@@ -10,6 +10,7 @@ export class MCPTimeoutError extends Error {
     super(
       `MCP server '${serverName}' tool '${toolName}' timed out after ${timeoutMs}ms`
     );
+    Object.setPrototypeOf(this, MCPTimeoutError.prototype);
     this.name = "MCPTimeoutError";
     this.serverName = serverName;
     this.toolName = toolName;
