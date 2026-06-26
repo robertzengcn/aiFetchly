@@ -1,4 +1,5 @@
 import { spawn, ChildProcess } from "child_process";
+import { MCP_CONNECT_TIMEOUT_MS } from "@/config/mcpConfig";
 import type { EventEmitter } from "events";
 import type { WebSocket as WSWebSocket } from "ws";
 
@@ -54,13 +55,36 @@ export class MCPClient {
   }
 
   /**
-   * Establish connection based on transport type
+   * Establish connection based on transport type.
+   *
+   * Race-protects the underlying `doConnect()` with `MCP_CONNECT_TIMEOUT_MS`
+   * so a dead MCP server fails fast instead of eating the entire call budget.
    */
   async connect(): Promise<void> {
     if (this.connected) {
       return;
     }
 
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error("MCP connection timeout")),
+        MCP_CONNECT_TIMEOUT_MS
+      );
+    });
+
+    try {
+      await Promise.race([this.doConnect(), timeoutPromise]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  /**
+   * Actual connection logic — dispatched by connect() which wraps it in a
+   * race timeout. Sets `this.connected = true` on success.
+   */
+  private async doConnect(): Promise<void> {
     switch (this.config.transport) {
       case "stdio":
         await this.connectStdio();
