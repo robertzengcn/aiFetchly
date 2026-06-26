@@ -14,6 +14,26 @@ export interface PathValidationResult {
   readonly safe: boolean;
   readonly resolvedPath: string;
   readonly error?: string;
+  /** Stable error code for programmatic handling. */
+  readonly code?:
+    | "OUTSIDE_ROOTS"
+    | "NOT_ABSOLUTE"
+    | "DOTPATH_TRAVERSAL"
+    | "DENY_LISTED"
+    | "SYMLINK_ESCAPES"
+    | "MALFORMED_INPUT"
+    | "REALPATH_FAILED"
+    | "OK";
+  /** The matching root the path was confined to, when safe. */
+  readonly rootPath?: string;
+  /** Path relative to the matching root, when safe. */
+  readonly relativePath?: string;
+}
+
+export interface FileToolWorkspaceMetadata {
+  readonly workspaceId: string;
+  readonly rootPath: string;
+  readonly relativePath: string;
 }
 
 // ---------------------------------------------------------------------------
