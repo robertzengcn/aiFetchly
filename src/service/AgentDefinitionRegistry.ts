@@ -37,28 +37,17 @@ const BUILT_INS: AgentDefinitionView[] = [
     version: 1,
     systemPrompt: LEAD_RESEARCHER_PROMPT,
     // Tool names are the upper bound; AgentToolPolicyService intersects
-    // these with the actually-registered skills at runtime.
-    //
-    // Note on async-polling tools: check_tool_job_status and cancel_tool_job
-    // MUST be in every specialist agent's allowlist now that the agent may
-    // invoke any async-routed tool (extract_contact_info with 8+ URLs,
-    // run_subagent, etc.). Without these, the inner agent receives a
-    // { async: true, job_id } envelope from its own tool call but has no
-    // way to poll the result — the whole async-polling architecture is
-    // unreachable from inside the subagent and the agent stalls.
+    // these with the actually-registered skills at runtime. The policy
+    // service also auto-injects mandatory infrastructure tools
+    // (check_tool_job_status, cancel_tool_job) for any agent with a
+    // non-empty allowlist — they do NOT need to be declared here. See
+    // MANDATORY_INFRASTRUCTURE_TOOLS in AgentToolPolicyService.ts.
     allowedTools: [
       // Stale "google_search" reference removed — no skill by that name
       // exists in the registry. The actual search tool is
       // scrape_urls_from_search_engine, listed next.
       "scrape_urls_from_search_engine",
       "knowledge_library_search",
-      // Async-polling infrastructure tools. Required because
-      // extract_contact_info (which the lead researcher may call indirectly
-      // via run_subagent or directly if the allowlist is broadened) routes
-      // to async for batches of 8+ URLs. These tools are conversation-scoped
-      // and read-only/cleanup, so they are safe to expose to any specialist.
-      "check_tool_job_status",
-      "cancel_tool_job",
     ],
     mode: "specialist",
     maxToolCalls: 8,
