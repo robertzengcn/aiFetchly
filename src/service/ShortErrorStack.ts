@@ -20,7 +20,7 @@ export function shortErrorStack(
   return [...head, ...frames].join("\n").trim();
 }
 
-const PATH_PATTERN = /(?:\/[\w.\-:@]+)+\/?|[A-Z]:\\[\w.\-:@]+\\?/g;
+const PATH_PATTERN = /(?:\/[\w.\-:@]+)+\/?|[A-Z]:\\(?:[\w.\-:@]+\\?)+/g;
 
 /**
  * Produces a telemetry-safe variant of the error message: absolute file
