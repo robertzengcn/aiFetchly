@@ -1,107 +1,60 @@
-import { ipcMain } from 'electron';
-// IpcMainInvokeEvent type - use unknown for event parameter
-type IpcMainInvokeEvent = unknown;
-import { ANALYZE_WEBSITE, ANALYZE_WEBSITE_PROGRESS } from '@/config/channellist';
-import { WebsiteAnalysisService } from '@/service/WebsiteAnalysisService';
-import { CommonMessage } from '@/entityTypes/commonType';
-
-interface AnalyzeWebsiteBatchRequest {
-    items: Array<{
-        resultId: number;
-        url: string;
-    }>;
-    clientBusiness: string;
-    temperature?: number;
-}
+import {
+  ANALYZE_WEBSITE,
+  ANALYZE_WEBSITE_PROGRESS,
+} from "@/config/channellist";
+import { WebsiteAnalysisService } from "@/service/WebsiteAnalysisService";
+import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
+import { analyzeWebsiteBatchInputSchema } from "@/schemas/ipc/searchResult";
 
 interface QueueProgress {
-    completed: number;
-    total: number;
-    current?: string;
+  completed: number;
+  total: number;
+  current?: string;
 }
 
 /**
- * Register IPC handlers for search result operations
+ * Register IPC handlers for search result operations.
+ *
+ * ANALYZE_WEBSITE now goes through registerValidatedHandler:
+ *  - input validated by analyzeWebsiteBatchInputSchema (zod) at boundary
+ *  - removes manual "items array non-empty" + "clientBusiness non-empty" guards
+ *  - schema guarantees every item has a positive int resultId, so the
+ *    original filter step is gone
+ *  - handler returns ONLY the data payload; the wrapper wraps it in
+ *    {status: true, msg: 'ok', data: <return value>}, matching the
+ *    pre-refactor envelope so the frontend is unchanged
  */
 export function registerSearchResultIpcHandlers(): void {
-    /**
-     * Handle batch website analysis request
-     * Uses queue system to process multiple URLs concurrently
-     */
-    ipcMain.handle(ANALYZE_WEBSITE, async (event: IpcMainInvokeEvent, data: unknown): Promise<CommonMessage<{
-        batchId: string;
-        total: number;
-    } | null>> => {
-        try {
-            // Parse data if it's a string
-            const requestData: AnalyzeWebsiteBatchRequest = typeof data === 'string' ? JSON.parse(data) : (data as AnalyzeWebsiteBatchRequest);
-            
-            // Validate input
-            if (!requestData.items || !Array.isArray(requestData.items) || requestData.items.length === 0) {
-                return {
-                    status: false,
-                    msg: 'Missing or empty items array',
-                    data: null
-                };
-            }
+  registerValidatedHandler(
+    ANALYZE_WEBSITE,
+    analyzeWebsiteBatchInputSchema,
+    async (input, event) => {
+      const resultIds = input.items.map((item) => item.resultId);
 
-            if (!requestData.clientBusiness || requestData.clientBusiness.trim().length === 0) {
-                return {
-                    status: false,
-                    msg: 'Missing required field: clientBusiness',
-                    data: null
-                };
-            }
-
-            // Extract result IDs from items
-            const resultIds = requestData.items
-                .map(item => item.resultId)
-                .filter((id): id is number => typeof id === 'number' && id > 0);
-
-            if (resultIds.length === 0) {
-                return {
-                    status: false,
-                    msg: 'No valid result IDs found in items array',
-                    data: null
-                };
-            }
-
-            // Set up progress callback to send updates via IPC
-            let batchId: string | null = null;
-            const progressCallback = (progress: QueueProgress) => {
-                if (batchId) {
-                    (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(ANALYZE_WEBSITE_PROGRESS, JSON.stringify({
-                        batchId: batchId,
-                        ...progress
-                    }));
-                }
-            };
-
-            // Start batch analysis using service
-            const batchInfo = await WebsiteAnalysisService.startBatchAnalysis({
-                resultIds,
-                clientBusiness: requestData.clientBusiness,
-                temperature: requestData.temperature,
-                onProgress: progressCallback
-            });
-
-            batchId = batchInfo.batchId;
-
-            return {
-                status: true,
-                msg: 'Batch analysis started',
-                data: {
-                    batchId: batchInfo.batchId,
-                    total: batchInfo.total
-                }
-            };
-        } catch (error) {
-            console.error('Error in analyze website handler:', error);
-            return {
-                status: false,
-                msg: error instanceof Error ? error.message : 'Unknown error occurred',
-                data: null
-            };
+      let batchId: string | null = null;
+      const progressCallback = (progress: QueueProgress): void => {
+        if (batchId) {
+          event.sender.send(
+            ANALYZE_WEBSITE_PROGRESS,
+            JSON.stringify({ batchId, ...progress })
+          );
         }
-    });
+      };
+
+      const batchInfo = await WebsiteAnalysisService.startBatchAnalysis({
+        resultIds,
+        clientBusiness: input.clientBusiness,
+        temperature: input.temperature,
+        onProgress: progressCallback,
+      });
+
+      batchId = batchInfo.batchId;
+
+      // Wrapper wraps this in the standard {status, msg, data} envelope.
+      return {
+        batchId: batchInfo.batchId,
+        total: batchInfo.total,
+      };
+    }
+  );
 }
