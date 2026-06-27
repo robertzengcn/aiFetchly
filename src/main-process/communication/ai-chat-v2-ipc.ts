@@ -184,6 +184,22 @@ function createEventSink(event: IpcEventLike): AIChatQueryEventSink {
             retryDelayMs: e.retryDelayMs,
           });
           break;
+        case "tool_progress":
+          sendChunk(event, {
+            eventType: "tool_progress",
+            conversationId: e.conversationId,
+            messageId: e.messageId,
+            toolCallId: e.toolCallId,
+            toolName: e.toolName,
+            phase: e.phase,
+            progressMessage: e.message,
+            progressFraction:
+              typeof e.progress === "number" ? e.progress : undefined,
+            partialCount: e.partialCount ?? undefined,
+            expectedCount: e.expectedCount ?? undefined,
+            progressTimestamp: e.timestamp,
+          });
+          break;
         case "tool_call":
           sendChunk(event, {
             eventType: "tool_call",
