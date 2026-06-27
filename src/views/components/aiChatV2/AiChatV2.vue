@@ -171,6 +171,21 @@
         </div>
       </div>
 
+      <!-- Workspace badge + required card: pinned above the composer so the
+           user can see/set the workspace for the active conversation. The
+           badge shows the current workspace path (or "No workspace set"),
+           and the required card prompts the user to pick a folder when no
+           workspace exists yet. -->
+      <div class="v2-shell__workspace-panel">
+        <WorkspaceBadge :workspace="activeWorkspace" class="mb-1" />
+        <WorkspaceRequiredCard
+          v-if="showWorkspaceRequired && activeConversationId"
+          :conversation-id="activeConversationId"
+          @approved="onWorkspaceApproved"
+          @cancel="showWorkspaceRequired = false"
+        />
+      </div>
+
       <AiChatV2Composer
         :is-streaming="chatIsRunning"
         @send="onSend"
@@ -348,6 +363,10 @@ import AiChatV2PlanStatusBadge from "./AiChatV2PlanStatusBadge.vue";
 import AiChatV2ContextBadge from "./AiChatV2ContextBadge.vue";
 import FileOperationBadge from "../aiChat/FileOperationBadge.vue";
 import MCPToolManager from "../aiChat/MCPToolManager.vue";
+import WorkspaceBadge from "./WorkspaceBadge.vue";
+import WorkspaceRequiredCard from "./WorkspaceRequiredCard.vue";
+import { getWorkspace } from "@/views/api/workspace";
+import type { WorkspaceSummary } from "@/entityTypes/workspaceTypes";
 import type { FileOperationRecord } from "@/entityTypes/fileOperationTypes";
 import {
   subscribeToFileOperations,
@@ -401,6 +420,68 @@ const showMCPToolManager = ref(false);
 const isCompacting = ref(false);
 const compactNotice = ref(false);
 const stoppedPendingToolConversationIds = ref<Set<string>>(new Set());
+
+// ---------------------------------------------------------------------------
+// Workspace tracking
+// ---------------------------------------------------------------------------
+// Active workspace for the current conversation. Null when no conversation is
+// selected or the conversation has no workspace yet. Drives the badge.
+const activeWorkspace = ref<WorkspaceSummary | null>(null);
+// True when the active conversation has no workspace — shows the pick card.
+const showWorkspaceRequired = ref(false);
+
+/**
+ * Fetch the workspace (if any) for the given conversation and update the
+ * badge/required-card state. Called on mount and whenever the active
+ * conversation changes.
+ */
+async function refreshWorkspace(conversationId: string | null): Promise<void> {
+  if (!conversationId) {
+    activeWorkspace.value = null;
+    showWorkspaceRequired.value = false;
+    return;
+  }
+  try {
+    const ws = await getWorkspace(conversationId);
+    activeWorkspace.value = ws
+      ? {
+          id: ws.id,
+          conversationId: ws.conversationId,
+          rootPath: ws.rootPath,
+          label: ws.label,
+          approvalState: ws.approvalState,
+        }
+      : null;
+    showWorkspaceRequired.value = !activeWorkspace.value;
+  } catch {
+    // non-fatal; treat as no workspace
+    activeWorkspace.value = null;
+    showWorkspaceRequired.value = true;
+  }
+}
+
+/**
+ * Handler for the WorkspaceRequiredCard's `approved` event. Updates the badge
+ * to reflect the newly-created + approved workspace and hides the card.
+ */
+function onWorkspaceApproved(
+  workspaceId: number,
+  rootPath: string
+): void {
+  activeWorkspace.value = {
+    id: workspaceId,
+    conversationId: activeConversationId.value ?? "",
+    rootPath,
+    label: null,
+    approvalState: "approved",
+  };
+  showWorkspaceRequired.value = false;
+}
+
+// Refresh the workspace badge whenever the active conversation changes.
+watch(activeConversationId, (id) => {
+  void refreshWorkspace(id);
+});
 
 // Conversation search state
 const conversationSearch = ref("");
@@ -1606,6 +1687,9 @@ onBeforeUnmount(() => {
   padding: 0 12px;
   max-height: 300px;
   overflow-y: auto;
+}
+.v2-shell__workspace-panel {
+  padding: 4px 12px;
 }
 .v2-shell__file-ops-panel {
   border-top: 1px solid rgba(0, 0, 0, 0.08);
