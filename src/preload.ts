@@ -315,6 +315,14 @@ import {
   AI_USER_MEMORY_DELETE,
   AI_USER_MEMORY_RUN_AUTO_DREAM,
   AI_USER_MEMORY_AUTO_DREAM_STATUS,
+  // Workspace Management Channels
+  AI_WORKSPACE_SET,
+  AI_WORKSPACE_GET,
+  AI_WORKSPACE_APPROVE,
+  AI_WORKSPACE_REVOKE,
+  AI_WORKSPACE_LIST,
+  // Dialog Channels
+  DIALOG_PICK_FOLDER,
 } from "@/config/channellist";
 
 // window.ipcRenderer = ipcRenderer
@@ -806,6 +814,14 @@ contextBridge.exposeInMainWorld("api", {
       AI_USER_MEMORY_DELETE,
       AI_USER_MEMORY_RUN_AUTO_DREAM,
       AI_USER_MEMORY_AUTO_DREAM_STATUS,
+      // Workspace Management Channels
+      AI_WORKSPACE_SET,
+      AI_WORKSPACE_GET,
+      AI_WORKSPACE_APPROVE,
+      AI_WORKSPACE_REVOKE,
+      AI_WORKSPACE_LIST,
+      // Dialog Channels
+      DIALOG_PICK_FOLDER,
     ];
     if (validChannels.includes(channel)) {
       return ipcRenderer.invoke(channel, data);

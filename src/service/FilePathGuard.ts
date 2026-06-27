@@ -50,6 +50,7 @@ export class FilePathGuard {
         safe: false,
         resolvedPath: "",
         error: "Path contains null bytes",
+        code: "MALFORMED_INPUT" as const,
       };
     }
     // eslint-disable-next-line no-control-regex
@@ -58,6 +59,7 @@ export class FilePathGuard {
         safe: false,
         resolvedPath: "",
         error: "Path contains control characters",
+        code: "MALFORMED_INPUT" as const,
       };
     }
 
@@ -87,6 +89,7 @@ export class FilePathGuard {
         safe: false,
         resolvedPath: "",
         error: "Failed to resolve real path",
+        code: "REALPATH_FAILED" as const,
       };
     }
 
@@ -99,6 +102,7 @@ export class FilePathGuard {
         safe: false,
         resolvedPath: "",
         error: "Path is outside the allowed workspace roots",
+        code: "OUTSIDE_ROOTS" as const,
       };
     }
 
@@ -110,11 +114,21 @@ export class FilePathGuard {
           safe: false,
           resolvedPath: "",
           error: `Access denied by security policy: ${this.denyList[i].description}`,
+          code: "DENY_LISTED" as const,
         };
       }
     }
 
-    return { safe: true, resolvedPath: resolved };
+    const matchedRoot = this.findMatchingRoot(resolved);
+    return {
+      safe: true,
+      resolvedPath: resolved,
+      code: "OK" as const,
+      rootPath: matchedRoot ?? undefined,
+      relativePath: matchedRoot
+        ? this.relativeToRoot(resolved, matchedRoot)
+        : undefined,
+    };
   }
 
   /** Get the configured workspace roots. */
@@ -139,5 +153,31 @@ export class FilePathGuard {
       }
     }
     return resolved;
+  }
+
+  /**
+   * Find the first configured root that contains `resolved`.
+   * Returns the matching root string, or null if none match.
+   */
+  private findMatchingRoot(resolved: string): string | null {
+    for (const root of this.roots) {
+      if (resolved === root) return root;
+      const rootWithSep = root.endsWith(path.sep) ? root : root + path.sep;
+      if (resolved.startsWith(rootWithSep)) return root;
+    }
+    return null;
+  }
+
+  /**
+   * Compute the platform-native relative path from `root` to `resolved`.
+   * Returns empty string if `resolved` is the root itself or not under it.
+   */
+  private relativeToRoot(resolved: string, root: string): string {
+    if (resolved === root) return "";
+    const rootWithSep = root.endsWith(path.sep) ? root : root + path.sep;
+    if (resolved.startsWith(rootWithSep)) {
+      return resolved.slice(rootWithSep.length);
+    }
+    return "";
   }
 }

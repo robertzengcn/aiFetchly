@@ -409,3 +409,13 @@ export const AI_USER_MEMORY_DELETE = "ai:user-memory:delete";
 export const AI_USER_MEMORY_RUN_AUTO_DREAM = "ai:user-memory:auto-dream:run";
 export const AI_USER_MEMORY_AUTO_DREAM_STATUS =
   "ai:user-memory:auto-dream:status";
+
+// Workspace Management Channels
+export const AI_WORKSPACE_SET = "ai-workspace:set";
+export const AI_WORKSPACE_GET = "ai-workspace:get";
+export const AI_WORKSPACE_APPROVE = "ai-workspace:approve";
+export const AI_WORKSPACE_REVOKE = "ai-workspace:revoke";
+export const AI_WORKSPACE_LIST = "ai-workspace:list";
+
+// Dialog Channels
+export const DIALOG_PICK_FOLDER = "dialog:pick-folder";

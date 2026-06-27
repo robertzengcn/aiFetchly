@@ -1908,4 +1908,21 @@ export default {
     partial_result:
       "显示部分结果（{collected} / {expected}）。工具已超时，但已返回已获取的数据。",
   },
+  workspace: {
+    title: "工作区",
+    badgeLabel: "工作区",
+    notSet: "未设置工作区",
+    selectFolder: "选择文件夹",
+    changeFolder: "更换文件夹",
+    approve: "批准工作区",
+    revoke: "撤销工作区",
+    rootPath: "根目录",
+    description: "AI 文件工具仅在被批准的工作区内运行。",
+    required: {
+      title: "请选择工作区文件夹",
+      body: "选择一个文件夹用于 AI 文件工具的读写操作。此文件夹之外的内容不会被访问。",
+      pick: "选择文件夹",
+      cancel: "取消",
+    },
+  },
 };

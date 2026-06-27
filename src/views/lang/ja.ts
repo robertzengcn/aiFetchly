@@ -1932,4 +1932,22 @@ export default {
     partial_result:
       "部分的な結果を表示中（{collected} / {expected}）。ツールはタイムアウトしましたが、取得済みのデータを返しました。",
   },
+  workspace: {
+    title: "ワークスペース",
+    badgeLabel: "ワークスペース",
+    notSet: "ワークスペース未設定",
+    selectFolder: "フォルダを選択",
+    changeFolder: "フォルダを変更",
+    approve: "ワークスペースを承認",
+    revoke: "ワークスペースを取り消し",
+    rootPath: "ルートパス",
+    description:
+      "AI ファイルツールは承認されたワークスペース内でのみ動作します。",
+    required: {
+      title: "ワークスペースフォルダを選択",
+      body: "AI ファイルツールが読み書きできるフォルダを選択してください。このフォルダ外には触れません。",
+      pick: "フォルダを選択",
+      cancel: "キャンセル",
+    },
+  },
 };

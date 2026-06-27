@@ -14,6 +14,7 @@ import { AiChatApi, BatchKeywordGenerationRequestItem } from "@/api/aiChatApi";
 import { extractContactFromUrls } from "@/main-process/communication/contactExtraction-ipc";
 import { DocumentService } from "@/service/DocumentService";
 import { FileToolService } from "@/service/FileToolService";
+import { WorkspaceResolver } from "@/service/WorkspaceResolver";
 import { FILE_TOOL_RATE_LIMITS } from "@/config/fileToolConfig";
 import {
   GOOGLE_MAPS_DEFAULT_MAX_RESULTS,
@@ -1614,16 +1615,44 @@ export class ToolExecutor {
   }
 
   /**
-   * Execute a file tool by delegating to FileToolService.
-   * M2 fix — reuse a cached instance instead of creating per call.
+   * Per-workspace FileToolService cache, keyed by workspace root path.
+   * Replaces the previous single global singleton so that each
+   * approved workspace gets its own strict-mode service instance.
    */
-  private static fileToolService: FileToolService | null = null;
+  private static fileToolServices: Map<string, FileToolService> = new Map();
 
-  private static getFileToolService(): FileToolService {
-    if (!ToolExecutor.fileToolService) {
-      ToolExecutor.fileToolService = new FileToolService();
+  /**
+   * Legacy fallback service used when no workspace has been resolved
+   * (e.g. conversations without an approved workspace). Runs in
+   * default-roots soft mode so existing skills keep working.
+   */
+  private static fallbackFileToolService: FileToolService | null = null;
+
+  /**
+   * Returns a FileToolService scoped to the given workspace root.
+   * When no root is provided, returns the legacy default-roots
+   * service so non-workspace callers keep working.
+   */
+  private static getFileToolService(workspaceRoot?: string): FileToolService {
+    if (!workspaceRoot) {
+      if (!ToolExecutor.fallbackFileToolService) {
+        ToolExecutor.fallbackFileToolService = new FileToolService();
+      }
+      return ToolExecutor.fallbackFileToolService;
     }
-    return ToolExecutor.fileToolService;
+    const key = workspaceRoot;
+    let service = ToolExecutor.fileToolServices.get(key);
+    if (!service) {
+      service = new FileToolService({
+        workspace: {
+          // id is metadata-only; synthesize a stable value from the root.
+          id: "resolved:" + key,
+          rootPath: key,
+        },
+      });
+      ToolExecutor.fileToolServices.set(key, service);
+    }
+    return service;
   }
 
   private static async executeFileTool(
@@ -1631,16 +1660,39 @@ export class ToolExecutor {
     toolParams: Record<string, unknown>,
     conversationId: string
   ): Promise<Record<string, unknown>> {
+    // Resolve the active workspace (if any) for this conversation so
+    // the FileToolService runs in strict mode when a workspace is set.
+    // Falls back to the legacy default-roots service otherwise.
+    let workspaceRoot: string | undefined;
     try {
-      const result = await ToolExecutor.getFileToolService().execute(
-        toolName,
-        toolParams
+      const resolver = new WorkspaceResolver();
+      const resolved = await resolver.resolve(conversationId);
+      if (resolved) {
+        workspaceRoot = resolved.rootPath;
+      }
+    } catch {
+      // Resolver failures must not block tool execution; fall back to
+      // the default-roots service. A later hardening task can decide
+      // whether to refuse outright.
+      workspaceRoot = undefined;
+    }
+    if (!workspaceRoot) {
+      console.warn(
+        `executeFileTool: no approved workspace for conversation ${conversationId}; ` +
+          "falling back to legacy default-roots service."
       );
+    }
+
+    const service = ToolExecutor.getFileToolService(workspaceRoot);
+
+    try {
+      const result = await service.execute(toolName, toolParams);
 
       // EXEC-05: Only emit records for mutation tools
       if (toolName === "file_write" || toolName === "file_edit") {
         const filePath =
           (result.path as string) ?? (toolParams.path as string) ?? "";
+        const ws = service.getActiveWorkspace();
         const record: Omit<FileOperationRecord, "id" | "timestamp"> = {
           type:
             toolName === "file_write"
@@ -1661,6 +1713,14 @@ export class ToolExecutor {
           ...(toolName === "file_write" && {
             sizeBytes: result.bytesWritten as number,
           }),
+          // Workspace metadata — only present in strict mode.
+          ...(ws && {
+            workspaceId: ws.id,
+            workspaceRoot: ws.rootPath,
+            relativePath: filePath.startsWith(ws.rootPath)
+              ? filePath.slice(ws.rootPath.length).replace(/^[/\\]+/, "")
+              : filePath,
+          }),
         };
         FileOperationTracker.emit(record);
       }
@@ -1672,6 +1732,7 @@ export class ToolExecutor {
         const errorMessage =
           error instanceof Error ? error.message : String(error);
         const filePath = (toolParams.path as string) ?? "";
+        const ws = service.getActiveWorkspace();
         FileOperationTracker.emit({
           // Note: On failure we can't know if file_write intended "create" vs "overwrite".
           // Defaulting to "overwrite" is reasonable since the file likely exists already.
@@ -1681,6 +1742,14 @@ export class ToolExecutor {
           conversationId,
           skillName: toolName,
           error: errorMessage,
+          // Workspace metadata — only present in strict mode.
+          ...(ws && {
+            workspaceId: ws.id,
+            workspaceRoot: ws.rootPath,
+            relativePath: filePath.startsWith(ws.rootPath)
+              ? filePath.slice(ws.rootPath.length).replace(/^[/\\]+/, "")
+              : filePath,
+          }),
         });
       }
       // EXEC-06: Re-throw -- tracking must not swallow errors
