@@ -1840,6 +1840,7 @@ export default {
       "L'IA a renvoyé une réponse vide. Il s'agit généralement d'un problème temporaire du serveur (limite de débit, délai d'attente ou erreur 502). Veuillez renvoyer votre message.",
     file_change_one: "modification de fichier",
     file_changes_other: "modifications de fichier",
+    tool_running: "En cours...",
   },
   aiChatV2Plan: {
     mode_chat: "Chat",

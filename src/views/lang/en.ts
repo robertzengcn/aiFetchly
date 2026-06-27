@@ -1860,6 +1860,7 @@ export default {
       "The AI returned an empty response. This is typically a transient server issue (rate limit, timeout, or 502). Please try sending your message again.",
     file_change_one: "file change",
     file_changes_other: "file changes",
+    tool_running: "Running...",
   },
   aiChatV2Plan: {
     mode_chat: "Chat",
