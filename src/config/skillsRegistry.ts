@@ -683,7 +683,8 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     description:
       "Read the contents of a file within the allowed workspace. Returns text content with line numbers, " +
       "or binary metadata if the file is not text. Supports offset/limit for reading specific line ranges. " +
-      "Files are truncated if they exceed the size limit.",
+      "Files are truncated if they exceed the size limit. " +
+      "Workspace required: operates only inside the conversation's approved workspace folder.",
     parameters: {
       type: "object",
       properties: {
@@ -728,7 +729,8 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     name: "glob_files",
     description:
       "Find files matching a glob pattern within the allowed workspace. " +
-      "Returns matched file paths with support for ignore patterns and result limiting.",
+      "Returns matched file paths with support for ignore patterns and result limiting. " +
+      "Workspace required: operates only inside the conversation's approved workspace folder.",
     parameters: {
       type: "object",
       properties: {
@@ -775,7 +777,8 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     description:
       "Search file contents by regex pattern within the allowed workspace. " +
       "Supports multiple output modes: content (matching lines), files_with_matches (file list), " +
-      "and count (match counts per file). Includes context line support.",
+      "and count (match counts per file). Includes context line support. " +
+      "Workspace required: operates only inside the conversation's approved workspace folder.",
     parameters: {
       type: "object",
       properties: {
@@ -849,7 +852,8 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       "Perform a precise string replacement in an existing file within the allowed workspace. " +
       "Requires the exact old_string to find and new_string to replace it with. " +
       "Fails if old_string appears multiple times unless replace_all is true. " +
-      "User confirmation is required before any edit is applied.",
+      "User confirmation is required before any edit is applied. " +
+      "Workspace required: operates only inside the conversation's approved workspace folder.",
     parameters: {
       type: "object",
       properties: {
@@ -894,7 +898,8 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     description:
       "Create a new file or overwrite an existing file within the allowed workspace. " +
       "In 'create' mode, fails if the file already exists. In 'overwrite' mode, replaces the file. " +
-      "Parent directories are created automatically. User confirmation is required before any write.",
+      "Parent directories are created automatically. User confirmation is required before any write. " +
+      "Workspace required: operates only inside the conversation's approved workspace folder.",
     parameters: {
       type: "object",
       properties: {

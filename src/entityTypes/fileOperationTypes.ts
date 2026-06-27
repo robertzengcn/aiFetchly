@@ -39,4 +39,10 @@ export interface FileOperationRecord {
   readonly error?: string;
   /** Optional: unified diff for edit operations (D-03) */
   readonly diff?: string;
+  /** Optional: ID of the workspace the file operation was confined to */
+  readonly workspaceId?: string;
+  /** Optional: absolute root path of the active workspace */
+  readonly workspaceRoot?: string;
+  /** Optional: path of the file relative to the workspace root */
+  readonly relativePath?: string;
 }

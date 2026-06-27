@@ -1958,4 +1958,22 @@ export default {
     partial_result:
       "Affichage des résultats partiels ({collected} sur {expected}). L'outil a expiré mais a renvoyé les données collectées.",
   },
+  workspace: {
+    title: "Espace de travail",
+    badgeLabel: "Espace de travail",
+    notSet: "Aucun espace défini",
+    selectFolder: "Choisir un dossier",
+    changeFolder: "Changer de dossier",
+    approve: "Approuver l'espace",
+    revoke: "Révoquer l'espace",
+    rootPath: "Chemin racine",
+    description:
+      "Les outils fichiers IA ne fonctionnent que dans l'espace approuvé.",
+    required: {
+      title: "Choisissez un dossier de travail",
+      body: "Choisissez un dossier où les outils IA peuvent lire et écrire. Rien en dehors de ce dossier ne sera touché.",
+      pick: "Choisir un dossier",
+      cancel: "Annuler",
+    },
+  },
 };

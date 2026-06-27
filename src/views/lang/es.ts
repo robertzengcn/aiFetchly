@@ -1977,4 +1977,22 @@ export default {
     partial_result:
       "Mostrando resultados parciales ({collected} de {expected}). La herramienta agotó el tiempo de espera pero devolvió lo que tenía.",
   },
+  workspace: {
+    title: "Espacio de trabajo",
+    badgeLabel: "Espacio de trabajo",
+    notSet: "Sin espacio de trabajo",
+    selectFolder: "Seleccionar carpeta",
+    changeFolder: "Cambiar carpeta",
+    approve: "Aprobar espacio de trabajo",
+    revoke: "Revocar espacio de trabajo",
+    rootPath: "Ruta raíz",
+    description:
+      "Las herramientas de archivos de IA solo operan dentro del espacio aprobado.",
+    required: {
+      title: "Elige una carpeta de trabajo",
+      body: "Elige una carpeta donde las herramientas de IA puedan leer y escribir. Nada fuera de esta carpeta será afectado.",
+      pick: "Elegir carpeta",
+      cancel: "Cancelar",
+    },
+  },
 };
