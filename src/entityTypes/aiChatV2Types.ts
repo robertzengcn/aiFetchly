@@ -43,6 +43,15 @@ export interface ChatV2MessageMetadata {
   planStateView?: AIChatPlanStateView;
   planBlockedToolName?: string;
   planBlockedReason?: string;
+  // tool_progress: live progress metadata for long-running tools
+  toolProgress?: {
+    phase?: "queued" | "running" | "fetching" | "extracting" | "finalizing";
+    message?: string;
+    progress?: number | null;
+    partialCount?: number | null;
+    expectedCount?: number | null;
+    updatedAt: number;
+  };
 }
 
 /** Renderer request to start a streaming chat turn. */
