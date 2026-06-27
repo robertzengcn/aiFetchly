@@ -321,6 +321,8 @@ import {
   AI_WORKSPACE_APPROVE,
   AI_WORKSPACE_REVOKE,
   AI_WORKSPACE_LIST,
+  // Dialog Channels
+  DIALOG_PICK_FOLDER,
 } from "@/config/channellist";
 
 // window.ipcRenderer = ipcRenderer
@@ -818,6 +820,8 @@ contextBridge.exposeInMainWorld("api", {
       AI_WORKSPACE_APPROVE,
       AI_WORKSPACE_REVOKE,
       AI_WORKSPACE_LIST,
+      // Dialog Channels
+      DIALOG_PICK_FOLDER,
     ];
     if (validChannels.includes(channel)) {
       return ipcRenderer.invoke(channel, data);

@@ -5,6 +5,7 @@ import {
   AI_WORKSPACE_APPROVE,
   AI_WORKSPACE_REVOKE,
   AI_WORKSPACE_LIST,
+  DIALOG_PICK_FOLDER,
 } from "@/config/channellist";
 import type {
   WorkspaceRecord,
@@ -41,4 +42,17 @@ export async function listWorkspaces(
   conversationId: string
 ): Promise<WorkspaceSummary[]> {
   return windowInvoke(AI_WORKSPACE_LIST, { conversationId });
+}
+
+/**
+ * Open the native OS folder picker dialog.
+ * Returns the selected folder path, or null if the user cancelled.
+ */
+export async function pickFolder(): Promise<string | null> {
+  const api = (
+    window as unknown as {
+      api: { invoke: (channel: string, data?: unknown) => Promise<unknown> };
+    }
+  ).api;
+  return (await api.invoke(DIALOG_PICK_FOLDER)) as string | null;
 }
