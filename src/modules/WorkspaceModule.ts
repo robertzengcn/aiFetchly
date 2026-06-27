@@ -39,7 +39,7 @@ export class WorkspaceModule extends BaseModule {
     await this.ensureConnection();
     const record = await this.model().findByConversation(conversationId);
     if (!record) return null;
-    if (record.approvalState === "revoked") return null;
+    if (record.approvalState !== "approved") return null;
     return record;
   }
 
