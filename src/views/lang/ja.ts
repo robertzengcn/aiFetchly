@@ -1815,6 +1815,7 @@ export default {
       "AIが空のレスポンスを返しました。これは通常、一時的なサーバーの問題（レート制限、タイムアウト、または502エラー）です。メッセージを再送信してください。",
     file_change_one: "件のファイル変更",
     file_changes_other: "件のファイル変更",
+    tool_running: "実行中...",
   },
   aiChatV2Plan: {
     mode_chat: "チャット",

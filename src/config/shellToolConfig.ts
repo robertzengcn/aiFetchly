@@ -19,6 +19,15 @@ export const SHELL_MAX_TIMEOUT_MS = 600_000;
 /** Minimum allowed command timeout in milliseconds. */
 export const SHELL_MIN_TIMEOUT_MS = 1_000;
 
+/**
+ * When true, AI-invoked shell commands that exceed the timeout are moved
+ * into the BackgroundShellRegistry instead of being killed. The AI can
+ * then poll for completion via the check_shell_status tool.
+ *
+ * Default: true — preserves work that would otherwise be lost on timeout.
+ */
+export const SHELL_AUTO_BACKGROUND_DEFAULT = true;
+
 // ---------------------------------------------------------------------------
 // Output size caps
 // ---------------------------------------------------------------------------

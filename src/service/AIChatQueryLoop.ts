@@ -39,6 +39,7 @@ import {
   resolveTimeoutMs,
   type ToolTimeoutClass,
 } from "@/service/ToolTimeoutPolicy";
+import { CancellationToken } from "@/service/CancellationToken";
 import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
 import { USER_AI_ENABLED } from "@/config/usersetting";
 import { Token } from "@/modules/token";
@@ -52,6 +53,21 @@ import { Token } from "@/modules/token";
  * ~7 questions.
  */
 const CHAT_V2_MAX_TOOL_ROUNDS = 30;
+
+/**
+ * Polling interval for async tool jobs. The loop sleeps this long between
+ * ToolJobRegistry.getStatus() calls. Must be >= the registry's
+ * pollMinIntervalMs (5s) to avoid rate_limited snapshots.
+ */
+const ASYNC_POLL_INTERVAL_MS = 15_000;
+
+/**
+ * Hard cap on async tool job polling. Jobs that exceed this are almost
+ * certainly stuck; we inject a timeout error so the model can decide
+ * whether to ask the user or retry. 30min matches the outer bound of
+ * plausible subagent cascades.
+ */
+const ASYNC_POLL_MAX_MS = 30 * 60_000;
 
 /**
  * Maximum consecutive rounds where malformed tool-call arguments are fed
@@ -395,6 +411,22 @@ export class AIChatQueryLoop {
         }
 
         if (!willContinue) {
+          // If the turn was aborted, the accumulator likely ingested nothing
+          // (the onChunk callback early-returns on abort). Return "cancelled"
+          // here rather than falling through to the empty-response guard
+          // below, which would incorrectly surface a "failed" result for a
+          // user-initiated cancel.
+          if (input.abortController.signal.aborted) {
+            return {
+              type: "cancelled",
+              conversationId: input.conversationId,
+              assistantMessageId: input.assistantMessageId,
+              partialContent: accumulator.state.fullContent ?? "",
+              model: accumulator.state.model,
+              responseId: accumulator.state.responseId,
+            };
+          }
+
           // Detect truncated/empty responses: the server closed the stream
           // without delivering content, a complete tool call, or a
           // finish_reason. This typically indicates a transient server-side
@@ -884,11 +916,15 @@ export class AIChatQueryLoop {
    *
    * Used when resolveTimeoutMs(cls) === null (i.e. the resolved timeout class
    * is "async"). Instead of blocking the query loop with a Promise.race, we
-   * register a job in the ToolJobRegistry and return immediately with an
-   * envelope telling the model to poll for completion.
+   * register a job in the ToolJobRegistry and return the jobId. The caller
+   * (executeToolWithTimeout) then hands the jobId to pollAsyncJobToCompletion,
+   * which blocks the loop until the registry job reaches a terminal status,
+   * emitting tool_progress events along the way.
    *
    * Defense-in-depth: re-checks the AI-enable gate before starting the job,
-   * matching the project's mandatory rule for AI-feature handlers.
+   * matching the project's mandatory rule for AI-feature handlers. On failure
+   * we throw — the outer run() try/catch (line ~797) converts this into a
+   * { type: "failed" } turn result.
    */
   private async executeAsyncTool(
     input: AIChatQueryLoopInput,
@@ -897,20 +933,14 @@ export class AIChatQueryLoop {
       name: string;
       arguments?: Record<string, unknown>;
     }
-  ): Promise<ToolExecutionResult> {
-    const startedAt = Date.now();
-
+  ): Promise<{ jobId: string }> {
     // Re-check AI enable gate before starting async work. The IPC layer
     // already checks this; this is defense-in-depth per the project rule.
+    // Throw on failure: the run() outer try/catch at line ~797 catches this
+    // and surfaces it as a { type: "failed" } turn result to the UI.
     const aiEnabled = new Token().getValue(USER_AI_ENABLED) === "true";
     if (!aiEnabled) {
-      return {
-        tool_call_id: call.id,
-        tool_name: call.name,
-        success: false,
-        result: { error: "AI features are not enabled on this plan." },
-        execution_time_ms: Date.now() - startedAt,
-      };
+      throw new Error("AI features are not enabled on this plan.");
     }
 
     const registry = getDefaultToolJobRegistry();
@@ -951,19 +981,188 @@ export class AIChatQueryLoop {
       }
     );
 
-    return {
-      tool_call_id: call.id,
-      tool_name: call.name,
-      success: true,
-      result: {
-        async: true,
-        job_id: jobId,
-        status: registry.getStatus(jobId).status,
-        message:
-          "Tool is running asynchronously. Poll with check_tool_job_status(job_id) every 15-30s.",
-      },
-      execution_time_ms: Date.now() - startedAt,
+    return { jobId };
+  }
+
+  /**
+   * Poll an async tool job until terminal status or the 30-min cap.
+   *
+   * Emits tool_progress events on the same toolCallId so the UI can render
+   * a live "running" badge on the tool card. Returns a ToolExecutionResult
+   * on every exit path so the caller can push a well-formed `tool` message
+   * (required by the OpenAI chat-completions contract: every tool_call_id
+   * must have a matching tool response).
+   *
+   * Abort-aware: if input.abortController fires, we cancel the job in the
+   * registry and return a cancelled-state result; the outer loop breaks via
+   * its existing cancel detection.
+   */
+  private async pollAsyncJobToCompletion(
+    input: AIChatQueryLoopInput,
+    call: { id: string; name: string },
+    jobId: string
+  ): Promise<ToolExecutionResult> {
+    const registry = getDefaultToolJobRegistry();
+    const startedAt = Date.now();
+    const shortId = jobId.slice(0, 8);
+
+    const emitProgress = (
+      phase: "queued" | "running" | "fetching" | "extracting" | "finalizing",
+      message: string,
+      progress: number | null,
+      partialCount: number | null,
+      expectedCount: number | null
+    ): void => {
+      input.eventSink.emit({
+        type: "tool_progress",
+        conversationId: input.conversationId,
+        messageId: input.assistantMessageId,
+        toolCallId: call.id,
+        toolName: call.name,
+        phase,
+        message,
+        progress,
+        partialCount,
+        expectedCount,
+        timestamp: Date.now(),
+      });
     };
+
+    emitProgress(
+      "running",
+      `Background job started (job_id: ${shortId})`,
+      null,
+      null,
+      null
+    );
+
+    let lastProgressSig = "";
+    let lastPhase = "";
+
+    /**
+     * Resolve after `ms` OR when the abort signal fires, whichever is first.
+     *
+     * CRITICAL: the `abort` listener is removed via done() in all cases
+     * (timeout, abort, or pre-aborted) to prevent leaking listeners across
+     * poll ticks. Without this, a long async job would accumulate one
+     * listener per tick on input.abortController.signal.
+     */
+    const sleepUntilAbortOrTimeout = (ms: number): Promise<void> =>
+      new Promise<void>((resolve) => {
+        if (input.abortController.signal.aborted) {
+          resolve();
+          return;
+        }
+        const done = (): void => {
+          clearTimeout(timer);
+          input.abortController.signal.removeEventListener("abort", onAbort);
+          resolve();
+        };
+        const onAbort = (): void => done();
+        const timer = setTimeout(done, ms);
+        input.abortController.signal.addEventListener("abort", onAbort, {
+          once: true,
+        });
+      });
+
+    // eslint-disable-next-line no-constant-condition -- poll loop; all exits are explicit returns inside
+    while (true) {
+      await sleepUntilAbortOrTimeout(ASYNC_POLL_INTERVAL_MS);
+
+      if (input.abortController.signal.aborted) {
+        try {
+          registry.cancel(jobId);
+        } catch {
+          // Best-effort; the turn is dead anyway.
+        }
+        return {
+          tool_call_id: call.id,
+          tool_name: call.name,
+          success: false,
+          result: { error: "Turn cancelled" },
+          execution_time_ms: Date.now() - startedAt,
+        };
+      }
+
+      if (Date.now() - startedAt >= ASYNC_POLL_MAX_MS) {
+        return {
+          tool_call_id: call.id,
+          tool_name: call.name,
+          success: false,
+          result: {
+            error:
+              "Background job did not complete within 30 minutes. " +
+              "The job may still be running; ask the user whether to keep " +
+              "waiting or cancel via cancel_tool_job(job_id).",
+            job_id: jobId,
+          },
+          execution_time_ms: Date.now() - startedAt,
+        };
+      }
+
+      const snap = registry.getStatus(jobId);
+      const progressSig = `${snap.progress?.phase ?? ""}|${
+        snap.progress?.progress ?? ""
+      }|${snap.progress?.partialCount ?? ""}|${
+        snap.progress?.expectedCount ?? ""
+      }`;
+
+      if (
+        snap.progress &&
+        (snap.progress.phase !== lastPhase || progressSig !== lastProgressSig)
+      ) {
+        lastPhase = snap.progress.phase;
+        lastProgressSig = progressSig;
+        emitProgress(
+          snap.progress.phase,
+          snap.progress.message,
+          snap.progress.progress,
+          snap.progress.partialCount,
+          snap.progress.expectedCount
+        );
+      }
+
+      if (snap.status === "completed") {
+        return {
+          tool_call_id: call.id,
+          tool_name: call.name,
+          success: true,
+          result: (snap.result as Record<string, unknown>) ?? {},
+          execution_time_ms: Date.now() - startedAt,
+        };
+      }
+      if (snap.status === "failed") {
+        return {
+          tool_call_id: call.id,
+          tool_name: call.name,
+          success: false,
+          result: { error: snap.error ?? "Job failed", job_id: jobId },
+          execution_time_ms: Date.now() - startedAt,
+        };
+      }
+      if (snap.status === "cancelled") {
+        return {
+          tool_call_id: call.id,
+          tool_name: call.name,
+          success: false,
+          result: { error: "Job cancelled", job_id: jobId },
+          execution_time_ms: Date.now() - startedAt,
+        };
+      }
+      if (snap.status === "not_found") {
+        return {
+          tool_call_id: call.id,
+          tool_name: call.name,
+          success: false,
+          result: {
+            error: "Job evicted from registry; retry the tool call",
+            job_id: jobId,
+          },
+          execution_time_ms: Date.now() - startedAt,
+        };
+      }
+      // status === "running" | "queued" | "rate_limited" -> keep polling.
+    }
   }
 
   private async executeToolWithTimeout(
@@ -986,13 +1185,16 @@ export class AIChatQueryLoop {
     const timeoutMs = resolveTimeoutMs(cls);
 
     // When the resolved class is "async", dispatch to the async job path
-    // instead of running a blocking race. The loop returns immediately
-    // with a { async: true, job_id } envelope; the model polls for
-    // completion via the companion check_tool_job_status tool.
+    // and block on pollAsyncJobToCompletion until the registry job reaches
+    // a terminal status. This keeps the model→tool→model loop intact: the
+    // model sees the real tool result instead of an { async: true } envelope.
     if (timeoutMs === null) {
-      return await this.executeAsyncTool(input, call);
+      const { jobId } = await this.executeAsyncTool(input, call);
+      return await this.pollAsyncJobToCompletion(input, call, jobId);
     }
-    const effectiveTimeoutMs = timeoutMs;
+
+    const token = new CancellationToken(timeoutMs);
+    token.startTimer();
 
     const executePromise = this.deps.executeTool(
       call.name,
@@ -1001,7 +1203,9 @@ export class AIChatQueryLoop {
         conversationId: input.conversationId,
         toolCallId: call.id,
         args: call.arguments,
+        signal: token.signal,
         emitProgress: (event) => {
+          if (token.signal.aborted) return; // drop progress after abort
           input.eventSink.emit({
             type: "tool_progress",
             conversationId: input.conversationId,
@@ -1019,15 +1223,40 @@ export class AIChatQueryLoop {
       }
     );
 
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
-    const timeoutPromise = new Promise<ToolExecutionResult>((resolve) => {
-      timeoutId = setTimeout(async () => {
-        // When the skill supports partial results, try to return whatever
-        // data was collected before the deadline.
+    // Swallow late rejection from the abandoned executePromise when abort wins
+    // the race. The loop has already moved on by the time a non-cooperative
+    // tool gets around to rejecting.
+    executePromise.catch(() => {
+      /* intentionally swallowed: see comment above */
+    });
+
+    // Race the execute promise against the abort signal. For tools that
+    // observe the signal, they will reject promptly when aborted; for
+    // non-cooperative tools, this promise still resolves first so the
+    // loop doesn't hang.
+    const abortPromise = new Promise<never>((_, reject) => {
+      if (token.signal.aborted) {
+        reject(new Error(`__ABORTED__:${token.reason}`));
+        return;
+      }
+      token.signal.addEventListener(
+        "abort",
+        () => {
+          reject(new Error(`__ABORTED__:${token.reason}`));
+        },
+        { once: true }
+      );
+    });
+
+    try {
+      return await Promise.race([executePromise, abortPromise]);
+    } catch (err) {
+      // If the abort fired, return a timeout result (with optional partial snapshot).
+      if (token.signal.aborted) {
         if (skill?.supportsPartialResult) {
           const snapshot = await ToolExecutor.requestPartialSnapshot(call.id);
           if (snapshot && snapshot.collectedCount > 0) {
-            resolve({
+            return {
               tool_call_id: call.id,
               tool_name: call.name,
               success: true,
@@ -1035,29 +1264,32 @@ export class AIChatQueryLoop {
               partial: true,
               collectedCount: snapshot.collectedCount,
               expectedCount: snapshot.expectedCount,
-              timedOutAfterMs: effectiveTimeoutMs,
+              timedOutAfterMs: timeoutMs,
               execution_time_ms: Date.now() - startedAt,
-            });
-            return;
+            };
           }
         }
-        resolve({
+        return {
           tool_call_id: call.id,
           tool_name: call.name,
           success: false,
           result: {
-            error: `Tool "${call.name}" timed out after ${effectiveTimeoutMs}ms.`,
+            error: `Tool "${call.name}" timed out after ${timeoutMs}ms.`,
             timedOut: true,
+            abortReason: token.reason,
           },
           execution_time_ms: Date.now() - startedAt,
-        });
-      }, effectiveTimeoutMs);
-    });
-
-    try {
-      return await Promise.race([executePromise, timeoutPromise]);
+        };
+      }
+      // Non-abort error: rethrow to be handled by the outer try/catch in the caller.
+      throw err;
     } finally {
-      if (timeoutId) clearTimeout(timeoutId);
+      token.clearTimer();
+      // Abort to clean up the abortPromise listener ({ once: true }) and to
+      // signal any still-running cooperative tool that its result is unneeded.
+      if (!token.signal.aborted) {
+        token.abort("cancel");
+      }
       ToolExecutor.unregisterPartialSnapshot(call.id);
     }
   }

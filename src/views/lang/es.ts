@@ -1858,6 +1858,7 @@ export default {
       "La IA devolvió una respuesta vacía. Esto suele ser un problema temporal del servidor (límite de tasa, tiempo de espera o error 502). Intente enviar su mensaje nuevamente.",
     file_change_one: "cambio de archivo",
     file_changes_other: "cambios de archivo",
+    tool_running: "Ejecutando...",
   },
   aiChatV2Plan: {
     mode_chat: "Chat",

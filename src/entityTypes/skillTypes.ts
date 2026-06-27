@@ -193,6 +193,13 @@ export interface SkillExecutionContext {
     partialCount?: number | null;
     expectedCount?: number | null;
   }) => void;
+
+  /**
+   * Optional abort signal. Set by AIChatQueryLoop when the tool call is
+   * raced against a timeout. Skills MAY ignore it but SHOULD check
+   * signal.aborted between long steps to fail fast.
+   */
+  readonly signal?: AbortSignal;
 }
 
 // ---------------------------------------------------------------------------
@@ -226,6 +233,11 @@ export interface ModuleExecutionContext {
    * module should silently skip (no crash, no behavior change).
    */
   readonly emitProgress?: (event: ToolProgressEvent) => void;
+  /**
+   * Optional abort signal. Long-running modules SHOULD register a listener
+   * and stop work promptly when aborted. Short modules MAY ignore it.
+   */
+  readonly signal?: AbortSignal;
 }
 
 // ---------------------------------------------------------------------------

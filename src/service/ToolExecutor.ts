@@ -29,6 +29,10 @@ import { YandexMapsModule } from "@/modules/YandexMapsModule";
 import { FileOperationTracker } from "@/service/FileOperationTracker";
 import type { FileOperationRecord } from "@/entityTypes/fileOperationTypes";
 import type { ModuleExecutionContext } from "@/entityTypes/skillTypes";
+import {
+  shortErrorStack,
+  splitTelemetryMessage,
+} from "@/service/ShortErrorStack";
 
 /**
  * Rate limiting configuration for tool execution
@@ -170,6 +174,37 @@ export class ToolExecutor {
     ToolExecutor.partialSnapshots.delete(toolCallId);
   }
 
+  // -------------------------------------------------------------------------
+  // Error-result helper — trims stacks and splits telemetry-safe messages
+  // so that caught errors don't bloat the tool_result context window or
+  // leak internal file paths to the model.
+  // -------------------------------------------------------------------------
+
+  /**
+   * Build a failure `Record<string, unknown>` from a caught error.
+   *
+   * - `error` is the user-facing message (original, unmodified).
+   * - `telemetryMessage` has absolute file paths stripped, safe for logging.
+   * - `stack` is the trimmed stack (message + up to 5 frames), or undefined.
+   *
+   * Callers that need extra fields (e.g. `timedOut`, `cancelled`) can spread
+   * the returned object and add their own keys.
+   */
+  private static toErrorResult(
+    err: unknown,
+    fallbackMessage: string
+  ): Record<string, unknown> {
+    const e = err instanceof Error ? err : new Error(String(err));
+    const { message, telemetryMessage } = splitTelemetryMessage(e);
+    const stack = shortErrorStack(e) ?? undefined;
+    return {
+      success: false,
+      error: message || fallbackMessage,
+      telemetryMessage,
+      ...(stack !== undefined && { stack }),
+    };
+  }
+
   /**
    * Execute a tool by name with rate limiting
    *
@@ -186,6 +221,17 @@ export class ToolExecutor {
     conversationId: string,
     context?: ModuleExecutionContext
   ): Promise<Record<string, unknown>> {
+    // Early-abort fast path: if the cancellation signal was already fired
+    // before we even started, return immediately without acquiring the rate
+    // limiter or doing any work.
+    if (context?.signal?.aborted) {
+      return {
+        success: false,
+        error: "Tool call was cancelled before execution",
+        cancelled: true,
+      };
+    }
+
     const rateLimiter = RateLimiterManager.getLimiter(toolName);
 
     try {
@@ -326,13 +372,10 @@ export class ToolExecutor {
       };
     } catch (error) {
       console.error("MCP tool execution error:", error);
-      return {
-        success: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : "Unknown error executing MCP tool",
-      };
+      return ToolExecutor.toErrorResult(
+        error,
+        "Unknown error executing MCP tool"
+      );
     }
   }
 
@@ -1218,12 +1261,7 @@ export class ToolExecutor {
         ...(truncated && { truncated: true }),
       };
     } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
-      return {
-        success: false,
-        error: errorMessage,
-      };
+      return ToolExecutor.toErrorResult(error, "Failed to read URL content");
     }
   }
 
@@ -1295,12 +1333,7 @@ export class ToolExecutor {
         } seed(s): ${seedKeywords.join(", ")}`,
       };
     } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
-      return {
-        success: false,
-        error: errorMessage,
-      };
+      return ToolExecutor.toErrorResult(error, "Failed to generate keywords");
     }
   }
 
@@ -1462,13 +1495,10 @@ export class ToolExecutor {
 
       return result as unknown as Record<string, unknown>;
     } catch (error) {
-      return {
-        success: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : "Unknown error executing Google Maps search",
-      };
+      return ToolExecutor.toErrorResult(
+        error,
+        "Unknown error executing Google Maps search"
+      );
     }
   }
 
@@ -1527,13 +1557,10 @@ export class ToolExecutor {
 
       return result as unknown as Record<string, unknown>;
     } catch (error) {
-      return {
-        success: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : "Unknown error executing Yandex Maps search",
-      };
+      return ToolExecutor.toErrorResult(
+        error,
+        "Unknown error executing Yandex Maps search"
+      );
     }
   }
 
@@ -1580,13 +1607,10 @@ export class ToolExecutor {
         truncated: isTruncated,
       };
     } catch (error) {
-      return {
-        success: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : "Failed to read attachment content",
-      };
+      return ToolExecutor.toErrorResult(
+        error,
+        "Failed to read attachment content"
+      );
     }
   }
 
