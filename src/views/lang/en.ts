@@ -1977,4 +1977,21 @@ export default {
     partial_result:
       "Showing partial results ({collected} of {expected}). The tool timed out but returned what it had.",
   },
+  workspace: {
+    title: "Workspace",
+    badgeLabel: "Workspace",
+    notSet: "No workspace set",
+    selectFolder: "Select folder",
+    changeFolder: "Change folder",
+    approve: "Approve workspace",
+    revoke: "Revoke workspace",
+    rootPath: "Root path",
+    description: "AI file tools only operate inside the approved workspace.",
+    required: {
+      title: "Choose a workspace folder",
+      body: "Pick a folder where AI file tools can read and write. Nothing outside this folder will be touched.",
+      pick: "Pick folder",
+      cancel: "Cancel",
+    },
+  },
 };
