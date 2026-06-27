@@ -2,100 +2,67 @@ import { ipcMain } from 'electron';
 import { LANGUAGE_PREFERENCE_GET, LANGUAGE_PREFERENCE_UPDATE } from '@/config/channellist';
 import { SystemSettingController } from '@/controller/SystemSettingController';
 import { CommonMessage } from '@/entityTypes/commonType';
+import { registerValidatedHandler } from '@/main-process/communication/_shared/registerValidatedHandler';
+import { updateLanguageInputSchema } from '@/schemas/ipc/language';
 
 /**
- * Register IPC handlers for language preference operations
+ * Register IPC handlers for language preference operations.
+ *
+ * UPDATE handler uses registerValidatedHandler: input is validated by
+ * updateLanguageInputSchema (z.enum of supported languages), so any
+ * non-supported language code is rejected at the boundary with a clear
+ * message rather than reaching the controller.
  */
 export function registerLanguagePreferenceIpcHandlers() {
-    
-    /**
-     * Get current language preference
-     */
-    ipcMain.handle(LANGUAGE_PREFERENCE_GET, async (event) => {
-        try {
-            const systemSettingCtrl = new SystemSettingController();
-            // Ensure database connection is initialized
-            await systemSettingCtrl.ensureConnection();
 
-            const language = await systemSettingCtrl.getLanguagePreference();
-            
+    /**
+     * Get current language preference (no input -> raw ipcMain.handle).
+     */
+    ipcMain.handle(LANGUAGE_PREFERENCE_GET, async () => {
+        try {
+            const ctrl = new SystemSettingController();
+            await ctrl.ensureConnection();
+
+            const language = await ctrl.getLanguagePreference();
+
             const result: CommonMessage<string> = {
                 status: true,
                 msg: 'Language preference retrieved successfully',
                 data: language
             };
-            
+
             return result;
         } catch (error) {
             console.error('Error getting language preference:', error);
-            
+
             const result: CommonMessage<string> = {
                 status: false,
                 msg: error instanceof Error ? error.message : 'Unknown error occurred',
                 data: 'en' // Default fallback
             };
-            
+
             return result;
         }
     });
 
     /**
-     * Update language preference
+     * Update language preference (validated handler).
+     * Frontend (src/views/api/language.ts) passes `{ language }` object directly.
      */
-    ipcMain.handle(LANGUAGE_PREFERENCE_UPDATE, async (event, jsonData: unknown) => {
-        try {
-            // Parse JSON data from frontend
-            let parsedData: { language: string };
-            try {
-                parsedData = JSON.parse(jsonData as string);
-            } catch (parseError) {
-                const result: CommonMessage<boolean> = {
-                    status: false,
-                    msg: 'Invalid JSON data received',
-                    data: false
-                };
-                return result;
+    registerValidatedHandler(
+        LANGUAGE_PREFERENCE_UPDATE,
+        updateLanguageInputSchema,
+        async (input) => {
+            const ctrl = new SystemSettingController();
+            await ctrl.ensureConnection();
+
+            const success = await ctrl.updateLanguagePreference(input.language);
+            if (!success) {
+                throw new Error('Failed to update language preference');
             }
-
-            // Extract language from parsed object
-            const { language } = parsedData;
-
-            // Validate extracted language
-            if (!language || typeof language !== 'string') {
-                const result: CommonMessage<boolean> = {
-                    status: false,
-                    msg: 'Invalid language parameter',
-                    data: false
-                };
-                return result;
-            }
-
-            const systemSettingCtrl = new SystemSettingController();
-            // Ensure database connection is initialized
-            await systemSettingCtrl.ensureConnection();
-
-            const success = await systemSettingCtrl.updateLanguagePreference(language);
-            
-            const result: CommonMessage<boolean> = {
-                status: success,
-                msg: success ? 'Language preference updated successfully' : 'Failed to update language preference',
-                data: success
-            };
-            
-            return result;
-        } catch (error) {
-            console.error('Error updating language preference:', error);
-            
-            const result: CommonMessage<boolean> = {
-                status: false,
-                msg: error instanceof Error ? error.message : 'Unknown error occurred',
-                data: false
-            };
-            
-            return result;
-        }
-    });
+            return success;
+        },
+    );
 
     console.log('Language preference IPC handlers registered successfully');
 }
-
