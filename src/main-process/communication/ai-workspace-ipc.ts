@@ -24,6 +24,15 @@ function isAIEnabled(): boolean {
   return new Token().getValue(USER_AI_ENABLED) === "true";
 }
 
+function safeParse<T = unknown>(data: unknown): T | null {
+  if (typeof data !== "string" || data.length === 0) return null;
+  try {
+    return JSON.parse(data) as T;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Test-only: reset module cache so the next handler call builds a fresh
  * WorkspaceModule against newly installed mocks. Never call from production.
@@ -40,10 +49,10 @@ export function registerAIWorkspaceIpcHandlers(_win: BrowserWindow): void {
         return denied("AI functionality is only available to subscribers.");
       }
       try {
-        if (!data || typeof data !== "object") {
+        const payload = safeParse<Record<string, unknown>>(data);
+        if (!payload) {
           return denied("Invalid workspace payload.");
         }
-        const payload = data as Record<string, unknown>;
         if (
           typeof payload.conversationId !== "string" ||
           typeof payload.rootPath !== "string"
@@ -72,11 +81,8 @@ export function registerAIWorkspaceIpcHandlers(_win: BrowserWindow): void {
         return denied("AI functionality is only available to subscribers.");
       }
       try {
-        if (!data || typeof data !== "object") {
-          return denied("Invalid payload.");
-        }
-        const payload = data as Record<string, unknown>;
-        if (typeof payload.conversationId !== "string") {
+        const payload = safeParse<{ conversationId?: unknown }>(data);
+        if (!payload || typeof payload.conversationId !== "string") {
           return denied("conversationId must be a string.");
         }
         const module = new WorkspaceModule();
@@ -97,11 +103,12 @@ export function registerAIWorkspaceIpcHandlers(_win: BrowserWindow): void {
         return denied("AI functionality is only available to subscribers.");
       }
       try {
-        if (!data || typeof data !== "object") {
-          return denied("Invalid payload.");
-        }
-        const payload = data as Record<string, unknown>;
-        if (typeof payload.id !== "number" || !Number.isFinite(payload.id)) {
+        const payload = safeParse<{ id?: unknown }>(data);
+        if (
+          !payload ||
+          typeof payload.id !== "number" ||
+          !Number.isFinite(payload.id)
+        ) {
           return denied("workspace id must be a number.");
         }
         const module = new WorkspaceModule();
@@ -122,11 +129,12 @@ export function registerAIWorkspaceIpcHandlers(_win: BrowserWindow): void {
         return denied("AI functionality is only available to subscribers.");
       }
       try {
-        if (!data || typeof data !== "object") {
-          return denied("Invalid payload.");
-        }
-        const payload = data as Record<string, unknown>;
-        if (typeof payload.id !== "number" || !Number.isFinite(payload.id)) {
+        const payload = safeParse<{ id?: unknown }>(data);
+        if (
+          !payload ||
+          typeof payload.id !== "number" ||
+          !Number.isFinite(payload.id)
+        ) {
           return denied("workspace id must be a number.");
         }
         const module = new WorkspaceModule();
@@ -147,11 +155,8 @@ export function registerAIWorkspaceIpcHandlers(_win: BrowserWindow): void {
         return denied("AI functionality is only available to subscribers.");
       }
       try {
-        if (!data || typeof data !== "object") {
-          return denied("Invalid payload.");
-        }
-        const payload = data as Record<string, unknown>;
-        if (typeof payload.conversationId !== "string") {
+        const payload = safeParse<{ conversationId?: unknown }>(data);
+        if (!payload || typeof payload.conversationId !== "string") {
           return denied("conversationId must be a string.");
         }
         const module = new WorkspaceModule();
@@ -166,7 +171,11 @@ export function registerAIWorkspaceIpcHandlers(_win: BrowserWindow): void {
   );
 
   // Folder picker dialog - returns selected folder path or null if cancelled.
+  // Gated on AI enablement per CLAUDE.md mandate for AI-serving IPC handlers.
   ipcMain.handle(DIALOG_PICK_FOLDER, async (): Promise<string | null> => {
+    if (!isAIEnabled()) {
+      return null;
+    }
     const result = await dialog.showOpenDialog({
       properties: ["openDirectory"],
     });
