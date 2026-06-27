@@ -167,6 +167,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         {
           toolCallId: context.toolCallId,
           emitProgress: context.emitProgress,
+          signal: context.signal,
         }
       );
       return { success: true, result };
@@ -341,6 +342,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         {
           toolCallId: context.toolCallId,
           emitProgress: context.emitProgress,
+          signal: context.signal,
         }
       );
       return { success: true, result };
@@ -670,6 +672,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         {
           toolCallId: context.toolCallId,
           emitProgress: context.emitProgress,
+          signal: context.signal,
         }
       );
       return { success: true, result };
@@ -1453,6 +1456,35 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         success: shellResult.success,
         result: { ...shellResult } as Record<string, unknown>,
       };
+    },
+  },
+  {
+    name: "check_shell_status",
+    description:
+      "Poll the status of a shell command that was auto-backgrounded due to timeout. " +
+      "Returns { status: 'running' | 'completed' | 'failed' | 'killed', stdout, stderr, exit_code }. " +
+      "Use the shell_id returned from the original shell_execute call that was backgrounded.",
+    parameters: {
+      type: "object",
+      properties: {
+        shell_id: {
+          type: "string",
+          description:
+            "The shell_id returned from a shell_execute call that was auto-backgrounded.",
+        },
+      },
+      required: ["shell_id"],
+    },
+    tier: "main",
+    requiresConfirmation: true,
+    permissionCategory: "shell",
+    source: "built-in",
+    execute: async (args) => {
+      const { handleCheckShellStatus } = await import(
+        "@/service/agentTools/checkShellStatusTool"
+      );
+      const res = await handleCheckShellStatus(args);
+      return { success: res.success, result: res.result };
     },
   },
   {
