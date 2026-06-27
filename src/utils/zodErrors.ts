@@ -1,10 +1,14 @@
-import type { ZodError } from "zod";
+/**
+ * Zod 错误格式化器。
+ *
+ * 接受任意「带 issues 数组」的对象，不直接依赖 ZodError 的完整类型，
+ * 以兼容 zod v3/v4 的 issue 结构差异，并便于测试构造 fake。
+ */
 
 /**
- * 一个最小化的 zod issue 描述，兼容 v3。
- * 用结构化字段而非完整 ZodIssue 类型，便于构造测试 fake。
+ * 最小化的 zod issue 描述。字段对齐 zod v3 ZodIssue 的结构子集。
  */
-type AnyIssue = {
+export type AnyIssue = {
   code: string;
   path: (string | number)[];
   message: string;
@@ -13,8 +17,13 @@ type AnyIssue = {
   received?: string;
 };
 
-type AnyZodError = {
-  issues: AnyIssue[];
+/**
+ * 接受任意「带 issues 数组」的错误对象。issues 字段为 unknown[] 以兼容
+ * ZodError（其 ZodIssue 类型与本库 AnyIssue 不完全结构兼容），
+ * 函数内部统一收敛为 AnyIssue[]。
+ */
+export type AnyZodError = {
+  issues: readonly unknown[];
   message?: string;
 };
 
@@ -33,9 +42,10 @@ function pathStr(p: (string | number)[]): string {
  */
 export function formatZodValidationError(
   scope: string,
-  error: ZodError | AnyZodError
+  error: AnyZodError
 ): string {
-  const issues = error.issues ?? [];
+  // 把 issues 统一收敛为 AnyIssue[]，避免与库内 ZodIssue 类型 union 后字段访问受限
+  const issues: AnyIssue[] = (error.issues ?? []).map((i) => i as AnyIssue);
 
   // "missing" = required field absent. In zod v3 the issue message is "Required"
   // and received is "undefined"; in v4 the message includes "received undefined".
@@ -94,7 +104,7 @@ export function formatZodValidationError(
  */
 export function formatZodError(
   scope: string,
-  error: ZodError | AnyZodError,
+  error: AnyZodError,
   _locale = "en"
 ): string {
   return formatZodValidationError(scope, error);

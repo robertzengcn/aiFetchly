@@ -1,10 +1,11 @@
-import { ipcMain } from 'electron'
-import type { ZodType } from 'zod'
-import { log } from '@/modules/Logger'
-import { Token } from '@/modules/token'
-import { USER_AI_ENABLED } from '@/config/usersetting'
-import { formatZodValidationError } from '@/utils/zodErrors'
-import type { CommonMessage } from '@/entityTypes/commonType'
+import { ipcMain } from "electron";
+import type { IpcMainInvokeEvent } from "electron";
+import type { ZodType } from "zod";
+import { log } from "@/modules/Logger";
+import { Token } from "@/modules/token";
+import { USER_AI_ENABLED } from "@/config/usersetting";
+import { formatZodValidationError } from "@/utils/zodErrors";
+import type { CommonMessage } from "@/entityTypes/commonType";
 
 /**
  * 注册带 schema 校验的 IPC handler。
@@ -18,25 +19,25 @@ import type { CommonMessage } from '@/entityTypes/commonType'
 export function registerValidatedHandler<TInput, TOutput>(
   channel: string,
   schema: () => ZodType<TInput>,
-  handler: (input: TInput, event: Electron.IpcMainInvokeEvent) => Promise<TOutput>,
+  handler: (input: TInput, event: IpcMainInvokeEvent) => Promise<TOutput>,
 ): void {
   ipcMain.handle(channel, async (event, raw) => {
-    const parsed = schema().safeParse(raw)
+    const parsed = schema().safeParse(raw);
     if (!parsed.success) {
-      const msg = formatZodValidationError(channel, parsed.error)
-      log(`[${channel}] validation failed: ${msg}`, 'warn')
-      return { status: false, msg, data: null } satisfies CommonMessage<null>
+      const msg = formatZodValidationError(channel, parsed.error);
+      log.warn(`[${channel}] validation failed: ${msg}`);
+      return { status: false, msg, data: null } satisfies CommonMessage<null>;
     }
 
     try {
-      const data = await handler(parsed.data, event)
-      return { status: true, msg: 'ok', data } satisfies CommonMessage<TOutput>
+      const data = await handler(parsed.data, event);
+      return { status: true, msg: "ok", data } satisfies CommonMessage<TOutput>;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Unknown error'
-      log(`[${channel}] handler error: ${msg}`, 'error')
-      return { status: false, msg, data: null } satisfies CommonMessage<null>
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      log.error(`[${channel}] handler error: ${msg}`);
+      return { status: false, msg, data: null } satisfies CommonMessage<null>;
     }
-  })
+  });
 }
 
 /**
@@ -52,41 +53,41 @@ export function registerValidatedHandler<TInput, TOutput>(
 export function registerAiValidatedHandler<TInput, TOutput>(
   channel: string,
   schema: () => ZodType<TInput>,
-  handler: (input: TInput, event: Electron.IpcMainInvokeEvent) => Promise<TOutput>,
+  handler: (input: TInput, event: IpcMainInvokeEvent) => Promise<TOutput>,
 ): void {
   ipcMain.handle(channel, async (event, raw) => {
     // 1. AI 开关检查
     try {
-      const aiEnabled = new Token().getValue(USER_AI_ENABLED)
-      if (aiEnabled !== 'true') {
+      const aiEnabled = new Token().getValue(USER_AI_ENABLED);
+      if (aiEnabled !== "true") {
         return {
           status: false,
-          msg: 'AI feature is not enabled',
+          msg: "AI feature is not enabled",
           data: null,
-        } satisfies CommonMessage<null>
+        } satisfies CommonMessage<null>;
       }
     } catch (err) {
       // Token 服务异常不应阻塞 handler，但需告警
-      const msg = err instanceof Error ? err.message : 'Token service error'
-      log(`[${channel}] AI-enabled check failed: ${msg}`, 'warn')
+      const msg = err instanceof Error ? err.message : "Token service error";
+      log.warn(`[${channel}] AI-enabled check failed: ${msg}`);
     }
 
     // 2. schema 校验
-    const parsed = schema().safeParse(raw)
+    const parsed = schema().safeParse(raw);
     if (!parsed.success) {
-      const msg = formatZodValidationError(channel, parsed.error)
-      log(`[${channel}] validation failed: ${msg}`, 'warn')
-      return { status: false, msg, data: null } satisfies CommonMessage<null>
+      const msg = formatZodValidationError(channel, parsed.error);
+      log.warn(`[${channel}] validation failed: ${msg}`);
+      return { status: false, msg, data: null } satisfies CommonMessage<null>;
     }
 
     // 3. 业务执行
     try {
-      const data = await handler(parsed.data, event)
-      return { status: true, msg: 'ok', data } satisfies CommonMessage<TOutput>
+      const data = await handler(parsed.data, event);
+      return { status: true, msg: "ok", data } satisfies CommonMessage<TOutput>;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Unknown error'
-      log(`[${channel}] AI handler error: ${msg}`, 'error')
-      return { status: false, msg, data: null } satisfies CommonMessage<null>
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      log.error(`[${channel}] AI handler error: ${msg}`);
+      return { status: false, msg, data: null } satisfies CommonMessage<null>;
     }
-  })
+  });
 }
