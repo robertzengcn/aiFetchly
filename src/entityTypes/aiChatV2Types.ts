@@ -103,6 +103,7 @@ export type ChatV2StreamEventType =
   | "token"
   | "tool_call_delta"
   | "tool_call"
+  | "tool_progress"
   | "tool_result"
   | "plan_state"
   | "ask_user_question"
@@ -131,6 +132,18 @@ export interface ChatV2StreamChunk {
   toolArguments?: Record<string, unknown>;
   toolResult?: Record<string, unknown>;
   replacesPermissionPromptForToolId?: string;
+  /** tool_progress: lifecycle phase of a long-running tool. */
+  phase?: "queued" | "running" | "fetching" | "extracting" | "finalizing";
+  /** tool_progress: human-readable status message (i18n key or English fallback). */
+  progressMessage?: string;
+  /** tool_progress: 0..1 progress fraction, or undefined when indeterminate. */
+  progressFraction?: number;
+  /** tool_progress: count of items processed so far, when known. */
+  partialCount?: number;
+  /** tool_progress: total items expected, when known. */
+  expectedCount?: number;
+  /** tool_progress: epoch ms when this progress update was emitted. */
+  progressTimestamp?: number;
   planState?: AIChatPlanStateView;
   /** Present on plan_state chunks when transition was auto-initiated by EnterPlanMode. */
   autoEntered?: boolean;

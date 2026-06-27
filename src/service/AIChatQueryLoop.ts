@@ -55,6 +55,21 @@ import { Token } from "@/modules/token";
 const CHAT_V2_MAX_TOOL_ROUNDS = 30;
 
 /**
+ * Polling interval for async tool jobs. The loop sleeps this long between
+ * ToolJobRegistry.getStatus() calls. Must be >= the registry's
+ * pollMinIntervalMs (5s) to avoid rate_limited snapshots.
+ */
+const ASYNC_POLL_INTERVAL_MS = 15_000;
+
+/**
+ * Hard cap on async tool job polling. Jobs that exceed this are almost
+ * certainly stuck; we inject a timeout error so the model can decide
+ * whether to ask the user or retry. 30min matches the outer bound of
+ * plausible subagent cascades.
+ */
+const ASYNC_POLL_MAX_MS = 30 * 60_000;
+
+/**
  * Maximum consecutive rounds where malformed tool-call arguments are fed
  * back to the model for self-correction before giving up with a user-facing
  * error. Prevents infinite burn when a model is fundamentally broken for a
