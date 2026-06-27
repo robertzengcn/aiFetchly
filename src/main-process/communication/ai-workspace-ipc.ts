@@ -1,4 +1,4 @@
-import { ipcMain, BrowserWindow } from "electron";
+import { ipcMain, BrowserWindow, dialog } from "electron";
 import { Token } from "@/modules/token";
 import { USER_AI_ENABLED } from "@/config/usersetting";
 import {
@@ -7,6 +7,7 @@ import {
   AI_WORKSPACE_APPROVE,
   AI_WORKSPACE_REVOKE,
   AI_WORKSPACE_LIST,
+  DIALOG_PICK_FOLDER,
 } from "@/config/channellist";
 import { WorkspaceModule } from "@/modules/WorkspaceModule";
 import type { CommonMessage } from "@/entityTypes/commonType";
@@ -163,4 +164,15 @@ export function registerAIWorkspaceIpcHandlers(_win: BrowserWindow): void {
       }
     }
   );
+
+  // Folder picker dialog - returns selected folder path or null if cancelled.
+  ipcMain.handle(DIALOG_PICK_FOLDER, async (): Promise<string | null> => {
+    const result = await dialog.showOpenDialog({
+      properties: ["openDirectory"],
+    });
+    if (result.canceled || result.filePaths.length === 0) {
+      return null;
+    }
+    return result.filePaths[0];
+  });
 }

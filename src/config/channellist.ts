@@ -416,3 +416,6 @@ export const AI_WORKSPACE_GET = "ai-workspace:get";
 export const AI_WORKSPACE_APPROVE = "ai-workspace:approve";
 export const AI_WORKSPACE_REVOKE = "ai-workspace:revoke";
 export const AI_WORKSPACE_LIST = "ai-workspace:list";
+
+// Dialog Channels
+export const DIALOG_PICK_FOLDER = "dialog:pick-folder";
