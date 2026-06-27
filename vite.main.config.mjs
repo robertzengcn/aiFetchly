@@ -367,6 +367,10 @@ export default ({ mode }) => {
         },
         test: {
             include: ['test/vitest/main/**/*.test.ts'],
+            // Run `tsc --noEmit` once before tests start. Vitest's esbuild
+            // transpile-only mode silently passes files with type errors
+            // (this exact issue bit us during the zod schema rollout).
+            globalSetup: ['./test/vitest/_typecheck/globalSetup.ts'],
         }
     })
 }
