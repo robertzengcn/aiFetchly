@@ -411,6 +411,22 @@ export class AIChatQueryLoop {
         }
 
         if (!willContinue) {
+          // If the turn was aborted, the accumulator likely ingested nothing
+          // (the onChunk callback early-returns on abort). Return "cancelled"
+          // here rather than falling through to the empty-response guard
+          // below, which would incorrectly surface a "failed" result for a
+          // user-initiated cancel.
+          if (input.abortController.signal.aborted) {
+            return {
+              type: "cancelled",
+              conversationId: input.conversationId,
+              assistantMessageId: input.assistantMessageId,
+              partialContent: accumulator.state.fullContent ?? "",
+              model: accumulator.state.model,
+              responseId: accumulator.state.responseId,
+            };
+          }
+
           // Detect truncated/empty responses: the server closed the stream
           // without delivering content, a complete tool call, or a
           // finish_reason. This typically indicates a transient server-side
@@ -1111,7 +1127,7 @@ export class AIChatQueryLoop {
           tool_call_id: call.id,
           tool_name: call.name,
           success: true,
-          result: snap.result,
+          result: (snap.result as Record<string, unknown>) ?? {},
           execution_time_ms: Date.now() - startedAt,
         };
       }
