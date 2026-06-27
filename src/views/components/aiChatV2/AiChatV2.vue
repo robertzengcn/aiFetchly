@@ -85,6 +85,7 @@
         :show-typing-indicator="showTypingIndicator"
         :is-streaming="chatIsRunning"
         :retry-info="retryInfo"
+        :workspace-root="activeWorkspace?.rootPath ?? ''"
         @grant-permission="handleSkillPermissionGrant"
         @deny-permission="handleSkillPermissionDeny"
         @approve-plan="handleApprovePlan"

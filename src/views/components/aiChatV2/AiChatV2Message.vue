@@ -32,6 +32,7 @@
           :tool-name="String(message.metadata?.toolName || '')"
           :permission-category="String(toolResult.permissionCategory || '')"
           :shell-preview="shellPreview"
+          :workspace-root="workspaceRoot"
           @grant="(payload) => emit('grant-permission', message, payload)"
           @deny="emit('deny-permission', message)"
         />
@@ -94,6 +95,7 @@ const props = defineProps<{
   status?: Status;
   errorMessage?: string;
   disabled?: boolean;
+  workspaceRoot?: string;
 }>();
 const emit = defineEmits<{
   (
