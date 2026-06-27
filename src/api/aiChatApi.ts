@@ -2408,8 +2408,10 @@ export class AiChatApi {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    let rawBody = "";
     let currentEventType: string | undefined;
     let loggedPayloadCount = 0;
+    let emittedPayloadCount = 0;
 
     const emitPayload = (payload: unknown, eventType?: string): void => {
       if (loggedPayloadCount < 8) {
@@ -2437,6 +2439,7 @@ export class AiChatApi {
         );
         return;
       }
+      emittedPayloadCount += 1;
       onChunk(chunk);
     };
 
@@ -2465,7 +2468,9 @@ export class AiChatApi {
           continue;
         }
 
-        buffer += decoder.decode(value, { stream: true });
+        const decoded = decoder.decode(value, { stream: true });
+        buffer += decoded;
+        rawBody += decoded;
         const lines = buffer.split("\n");
         buffer = lines.pop() || "";
 
@@ -2517,6 +2522,36 @@ export class AiChatApi {
             `[ai-chat-v2] openai-stream failed to parse final payload length=${jsonStr.length}:`,
             err
           );
+        }
+      }
+
+      // Recovery: if the server bypassed SSE framing and returned a plain
+      // JSON body (no "data:" lines), the loop above emits zero chunks and
+      // the accumulator reports finishReason=undefined — masking real
+      // server-side errors like finish_reason="error". When nothing was
+      // emitted and the body is non-empty, try to parse the entire body as
+      // a single JSON payload and feed it through the normal normalization
+      // path (which already handles the non-streaming "message" shape).
+      if (emittedPayloadCount === 0) {
+        const trimmedBody = rawBody.trim();
+        if (
+          trimmedBody &&
+          trimmedBody !== "data: [DONE]" &&
+          trimmedBody !== "data:[DONE]" &&
+          !trimmedBody.startsWith("data:")
+        ) {
+          try {
+            const payload: unknown = JSON.parse(trimmedBody);
+            console.warn(
+              `[ai-chat-v2] openai-stream recovered non-SSE JSON body (length=${trimmedBody.length}); treating as single payload.`
+            );
+            emitPayload(payload, currentEventType);
+          } catch (err) {
+            console.warn(
+              `[ai-chat-v2] openai-stream body was not valid JSON and emitted no SSE chunks (length=${trimmedBody.length}):`,
+              err
+            );
+          }
         }
       }
     } finally {

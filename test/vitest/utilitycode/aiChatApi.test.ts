@@ -1047,4 +1047,111 @@ describe("AiChatApi - OpenAI compatibility fallback", () => {
 
     expect(chunks).toEqual([{ content: "AI response", finishReason: "stop" }]);
   });
+
+  it("recovers a non-SSE JSON body with finish_reason=error when server bypasses SSE framing", async () => {
+    // Real-world failure: under load the AI server sometimes returns a plain
+    // JSON body (no "data:" prefix) using the non-streaming "message" shape.
+    // Without recovery the SSE parser emits zero chunks and the accumulator
+    // reports finishReason=undefined, masking the real server-side error.
+    const encoder = new TextEncoder();
+    const body = JSON.stringify({
+      id: "chatcmpl-error-1",
+      object: "chat.completion",
+      created: 1,
+      model: "deepseek-v4-flash",
+      choices: [
+        {
+          index: 0,
+          message: { role: "assistant", content: "", tool_calls: null },
+          finish_reason: "error",
+        },
+      ],
+    });
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(body));
+          controller.close();
+        },
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }
+    );
+
+    mockPostStreamShared.mockResolvedValueOnce(response);
+
+    const chunks: Array<{
+      content?: string | null;
+      finishReason?: string | null;
+    }> = [];
+    await api.openAIChatCompletionStream(
+      {
+        model: "deepseek-v4-flash",
+        messages: [{ role: "user", content: "Hi" }],
+      },
+      (chunk) => {
+        chunks.push({
+          content: chunk.choices[0]?.delta?.content,
+          finishReason: chunk.choices[0]?.finish_reason,
+        });
+      }
+    );
+
+    expect(chunks).toEqual([{ content: "", finishReason: "error" }]);
+  });
+
+  it("does not double-emit when the SSE stream already delivered chunks", async () => {
+    // Regression guard: the non-SSE fallback must only fire when NOTHING was
+    // emitted. Normal SSE streams should be unaffected.
+    const encoder = new TextEncoder();
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(
+            encoder.encode(
+              [
+                'data: {"id":"resp-1","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}]}',
+                "",
+                'data: {"id":"resp-1","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}',
+                "",
+                "data: [DONE]",
+                "",
+              ].join("\n")
+            )
+          );
+          controller.close();
+        },
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      }
+    );
+
+    mockPostStreamShared.mockResolvedValueOnce(response);
+
+    const chunks: Array<{
+      content?: string | null;
+      finishReason?: string | null;
+    }> = [];
+    await api.openAIChatCompletionStream(
+      {
+        model: "gpt-test",
+        messages: [{ role: "user", content: "Hi" }],
+      },
+      (chunk) => {
+        chunks.push({
+          content: chunk.choices[0]?.delta?.content,
+          finishReason: chunk.choices[0]?.finish_reason,
+        });
+      }
+    );
+
+    expect(chunks).toEqual([
+      { content: "hi", finishReason: null },
+      { content: undefined, finishReason: "stop" },
+    ]);
+  });
 });
