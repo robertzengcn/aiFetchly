@@ -1970,4 +1970,22 @@ export default {
     partial_result:
       "Teilergebnisse werden angezeigt ({collected} von {expected}). Das Tool hat das Zeitlimit überschritten, aber die bisherigen Daten zurückgegeben.",
   },
+  workspace: {
+    title: "Arbeitsbereich",
+    badgeLabel: "Arbeitsbereich",
+    notSet: "Kein Arbeitsbereich festgelegt",
+    selectFolder: "Ordner wählen",
+    changeFolder: "Ordner wechseln",
+    approve: "Arbeitsbereich genehmigen",
+    revoke: "Arbeitsbereich widerrufen",
+    rootPath: "Stammpfad",
+    description:
+      "AI-Dateiwerkzeuge arbeiten nur innerhalb des genehmigten Arbeitsbereichs.",
+    required: {
+      title: "Wählen Sie einen Arbeitsordner",
+      body: "Wählen Sie einen Ordner, in dem AI-Dateiwerkzeuge lesen und schreiben können. Außerhalb dieses Ordners wird nichts berührt.",
+      pick: "Ordner wählen",
+      cancel: "Abbrechen",
+    },
+  },
 };
