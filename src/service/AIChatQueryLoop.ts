@@ -395,6 +395,24 @@ export class AIChatQueryLoop {
           );
         }
 
+        // Detect explicit server-side errors: OpenAI-compatible servers can
+        // signal a failure by returning finish_reason="error" (often with
+        // empty content). This is typically a transient issue (overload,
+        // rate limit, upstream timeout). Surface it as a recognizable,
+        // retryable-tagged error so the user-facing mapper can translate it
+        // into an actionable message instead of a generic "unexpected error".
+        // We do not auto-retry inside the stream consumer because content
+        // may have already been delivered to onChunk before the error
+        // finish_reason arrives; the user can re-send the turn manually.
+        if (
+          accumulator.state.finishReason === "error" &&
+          accumulator.state.fullContent.trim().length === 0
+        ) {
+          throw new Error(
+            "AI server returned finish_reason=error (transient server-side failure, e.g. overload, rate limit, or timeout). Please try sending your message again."
+          );
+        }
+
         if (!willContinue) {
           // Detect truncated/empty responses: the server closed the stream
           // without delivering content, a complete tool call, or a

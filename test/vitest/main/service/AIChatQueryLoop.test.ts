@@ -544,4 +544,47 @@ describe("AIChatQueryLoop", () => {
       }
     });
   });
+
+  describe("server-side error finish_reason", () => {
+    it("surfaces a retryable-tagged error when the stream ends with finish_reason=error and empty content", async () => {
+      // Reproduces the real-world failure mode where the AI server returns
+      // finish_reason="error" with empty content (typically under load).
+      // The SSE recovery path in aiChatApi emits a chunk carrying the
+      // error finish_reason; the loop must surface it as a recognizable
+      // error so userSafeError can translate it to an actionable message.
+      const fakeStream = vi.fn(
+        async (
+          _req: unknown,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          onChunk(makeChunk("", "error"));
+        }
+      );
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: vi.fn(),
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const input: AIChatQueryLoopInput = {
+        conversationId: "v2-err",
+        assistantMessageId: "assistant-err",
+        messages: [],
+        request: { message: "hi" },
+        openAITools: [],
+        abortController: new AbortController(),
+        eventSink: { emit: vi.fn() },
+        startRound: 0,
+        isActiveTurn: () => true,
+      };
+
+      const result = await loop.run(input);
+      expect(result.type).toBe("failed");
+      if (result.type === "failed") {
+        expect(result.error).toBeInstanceOf(Error);
+        const msg = (result.error as Error).message;
+        expect(msg).toMatch(/finish_reason=error/i);
+        expect(msg).toMatch(/transient server/i);
+      }
+    });
+  });
 });

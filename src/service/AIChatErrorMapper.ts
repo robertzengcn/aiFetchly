@@ -38,6 +38,17 @@ export function userSafeError(err: unknown): string {
     if (/Failed to fetch|NetworkError|ECONNREFUSED|fetch failed/i.test(msg)) {
       return "Could not connect to the AI server.";
     }
+    // Transient server-side issues: empty responses, finish_reason=error,
+    // rate limits, timeouts, and 502s. These are recoverable by retrying
+    // after a short wait, so surface a clear, actionable message instead of
+    // the generic "unexpected error" fallback.
+    if (
+      /finish_reason=error|empty response|no finish reason|transient server|rate limit|timeout|\b502\b/i.test(
+        msg
+      )
+    ) {
+      return "The AI service is busy or had a transient issue. Please try again in a moment.";
+    }
     console.error("[ai-chat-v2] unmapped error:", msg);
     return "An unexpected error occurred. Please try again.";
   }
