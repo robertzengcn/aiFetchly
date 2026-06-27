@@ -311,6 +311,7 @@ import type {
   ChatV2MessageView,
   ChatV2ConversationSummary,
   ChatV2StreamChunk,
+  ChatV2MessageMetadata,
 } from "@/entityTypes/aiChatV2Types";
 import type {
   AIChatPlanStateView,
@@ -855,6 +856,50 @@ const resolveToolIdForPermissionMessage = (
   return undefined;
 };
 
+const upsertToolProgress = (
+  chunk: ChatV2StreamChunk,
+  conversationId: string
+): void => {
+  if (!chunk.toolCallId) return;
+  const idx = messages.value.findIndex(
+    (m) =>
+      m.messageType === MessageType.TOOL_CALL &&
+      m.metadata?.toolCallId === chunk.toolCallId
+  );
+  if (idx === -1) {
+    return;
+  }
+  const existing = messages.value[idx];
+  const nextProgress: {
+    phase?: "queued" | "running" | "fetching" | "extracting" | "finalizing";
+    message?: string;
+    progress: number | null;
+    partialCount: number | null;
+    expectedCount: number | null;
+    updatedAt: number;
+  } = {
+    phase: chunk.phase,
+    message: chunk.progressMessage,
+    progress:
+      typeof chunk.progressFraction === "number" ? chunk.progressFraction : null,
+    partialCount: chunk.partialCount ?? null,
+    expectedCount: chunk.expectedCount ?? null,
+    updatedAt: chunk.progressTimestamp ?? Date.now(),
+  };
+  const updatedMessage: ChatV2MessageView = {
+    ...existing,
+    metadata: {
+      ...existing.metadata,
+      toolProgress: nextProgress,
+    } as ChatV2MessageMetadata,
+  };
+  messages.value = [
+    ...messages.value.slice(0, idx),
+    updatedMessage,
+    ...messages.value.slice(idx + 1),
+  ];
+};
+
 const upsertToolResultMessage = (
   chunk: ChatV2StreamChunk,
   conversationId: string,
@@ -1387,6 +1432,11 @@ const onSend = async (text: string): Promise<void> => {
               planChunk,
               planChunk.conversationId || activeConversationId.value || "",
               assistantAdded ? assistant.id : undefined
+            );
+          } else if (chunk.eventType === "tool_progress") {
+            upsertToolProgress(
+              chunk,
+              chunk.conversationId || activeConversationId.value || ""
             );
           } else if (chunk.eventType === "tool_call") {
             const toolCallId = chunk.toolCallId;
