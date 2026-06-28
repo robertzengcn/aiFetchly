@@ -1,15 +1,11 @@
 /**
  * Yandex Maps Scraper IPC Handlers
  *
- * Handles IPC communication between renderer process and main process
- * for Yandex Maps business search functionality.
- *
- * Start: validates input, creates YandexMapsModule, runs async search,
- *        pushes progress and results via webContents.send
- * Cancel: cancels an active search by requestId
+ * All 5 handlers go through registerValidatedHandler, sharing schemas with
+ * googleMaps-ipc via src/schemas/ipc/_shared/maps.ts.
  */
 
-import { ipcMain, type IpcMainInvokeEvent } from "electron";
+import { type IpcMainInvokeEvent } from "electron";
 import { v4 as uuidv4 } from "uuid";
 import {
   YandexMapsModule,
@@ -27,11 +23,15 @@ import {
   YANDEX_MAPS_HISTORY_DETAIL,
   YANDEX_MAPS_HISTORY_DELETE,
 } from "@/config/channellist";
-import type {
-  YandexMapsSearchInput,
-  YandexMapsSearchResult,
-} from "@/entityTypes/yandexMapsTypes";
+import type { YandexMapsSearchResult } from "@/entityTypes/yandexMapsTypes";
 import { YANDEX_MAPS_HARD_CAP } from "@/entityTypes/yandexMapsTypes";
+import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
+import {
+  mapsSearchStartInputSchema,
+  mapsSearchCancelInputSchema,
+  mapsHistoryListInputSchema,
+  mapsHistoryByIdInputSchema,
+} from "@/schemas/ipc/_shared/maps";
 
 /** Tracks active search sessions so they can be cancelled. */
 const activeModules = new Map<string, YandexMapsModule>();
@@ -39,76 +39,34 @@ const activeModules = new Map<string, YandexMapsModule>();
 /** Maximum concurrent Yandex Maps searches. */
 const MAX_CONCURRENT_SEARCHES = 3;
 
-/**
- * Register all Yandex Maps scraper IPC handlers.
- * Must be called once during app initialization.
- */
 export function registerYandexMapsHandlers(): void {
   // ── Start a search ──────────────────────────────────────────────────
-  ipcMain.handle(
+  registerValidatedHandler(
     YANDEX_MAPS_SEARCH_START,
-    async (event: IpcMainInvokeEvent, ...args: unknown[]) => {
-      const raw = args[0];
-      const data = (
-        typeof raw === "string" ? JSON.parse(raw) : raw ?? {}
-      ) as Record<string, unknown>;
-      const query = typeof data.query === "string" ? data.query : "";
-      const location = typeof data.location === "string" ? data.location : "";
-
-      if (!query.trim() || !location.trim()) {
-        return {
-          status: false,
-          msg: "query and location are required",
-          data: null,
-        };
-      }
-
-      // Enforce concurrent search limit
+    mapsSearchStartInputSchema,
+    async (input, event) => {
       if (activeModules.size >= MAX_CONCURRENT_SEARCHES) {
-        return {
-          status: false,
-          msg: "Too many concurrent searches. Please wait for one to finish.",
-          data: null,
-        };
+        throw new Error(
+          "Too many concurrent searches. Please wait for one to finish.",
+        );
       }
 
       const requestId = uuidv4();
       const module = new YandexMapsModule();
       activeModules.set(requestId, module);
 
-      const maxResultsRaw =
-        typeof data.max_results === "number" ? data.max_results : 20;
+      // Cap max_results to YANDEX_MAPS_HARD_CAP
       const maxResults = Math.min(
-        Math.max(1, maxResultsRaw),
-        YANDEX_MAPS_HARD_CAP
+        Math.max(1, input.max_results ?? 20),
+        YANDEX_MAPS_HARD_CAP,
       );
-
-      const input: YandexMapsSearchInput = {
-        query: query.trim().slice(0, 255),
-        location: location.trim().slice(0, 255),
-        max_results: maxResults,
-        include_website:
-          typeof data.include_website === "boolean"
-            ? data.include_website
-            : true,
-        include_reviews:
-          typeof data.include_reviews === "boolean"
-            ? data.include_reviews
-            : false,
-        show_browser:
-          typeof data.show_browser === "boolean" ? data.show_browser : false,
-        language: typeof data.language === "string" ? data.language : undefined,
-        region: typeof data.region === "string" ? data.region : undefined,
-      };
 
       // Resolve cookies if account_id is provided
       let cookies: unknown[] | undefined;
-      const accountId =
-        typeof data.account_id === "number" ? data.account_id : undefined;
-      if (accountId) {
+      if (input.account_id) {
         try {
           const cookiesModule = new AccountCookiesModule();
-          const cookieRecord = await cookiesModule.getAccountCookies(accountId);
+          const cookieRecord = await cookiesModule.getAccountCookies(input.account_id);
           if (cookieRecord?.cookies) {
             const parsed = JSON.parse(cookieRecord.cookies);
             cookies = Array.isArray(parsed) ? parsed : undefined;
@@ -116,22 +74,19 @@ export function registerYandexMapsHandlers(): void {
         } catch (err) {
           console.warn(
             "[YandexMaps] Failed to load cookies for account",
-            accountId,
-            err
+            input.account_id,
+            err,
           );
         }
       }
 
       // Resolve proxy configs if proxy_ids are provided
       let proxies: YellowPagesTaskProxyConfig[] | undefined;
-      const proxyIds = Array.isArray(data.proxy_ids)
-        ? (data.proxy_ids as number[])
-        : undefined;
-      if (proxyIds && proxyIds.length > 0) {
+      if (input.proxy_ids && input.proxy_ids.length > 0) {
         try {
           const proxyModel = new ProxyModel(module["dbpath"]);
           const resolved: YellowPagesTaskProxyConfig[] = [];
-          for (const pid of proxyIds) {
+          for (const pid of input.proxy_ids) {
             const entity = await proxyModel.getProxyById(pid);
             if (entity) {
               resolved.push({
@@ -151,7 +106,9 @@ export function registerYandexMapsHandlers(): void {
         }
       }
 
-      const senderWebContents = event.sender;
+      const senderWebContents = (event as IpcMainInvokeEvent).sender;
+      const trimmedQuery = input.query.trim().slice(0, 255);
+      const trimmedLocation = input.location.trim().slice(0, 255);
 
       const executeOptions: YandexMapsExecuteOptions = {
         externalRequestId: requestId,
@@ -167,15 +124,23 @@ export function registerYandexMapsHandlers(): void {
         },
       };
 
-      // Execute search asynchronously; push result via webContents.send
       module
-        .executeSearch(input, executeOptions)
+        .executeSearch(
+          {
+            query: trimmedQuery,
+            location: trimmedLocation,
+            max_results: maxResults,
+            include_website: input.include_website ?? true,
+            include_reviews: input.include_reviews ?? false,
+            show_browser: input.show_browser ?? false,
+            language: input.language,
+            region: input.region,
+          },
+          executeOptions,
+        )
         .then((result: YandexMapsSearchResult) => {
           if (!senderWebContents.isDestroyed()) {
-            senderWebContents.send(YANDEX_MAPS_SEARCH_RESULT, {
-              requestId,
-              result,
-            });
+            senderWebContents.send(YANDEX_MAPS_SEARCH_RESULT, { requestId, result });
           }
           activeModules.delete(requestId);
         })
@@ -187,8 +152,8 @@ export function registerYandexMapsHandlers(): void {
               requestId,
               result: {
                 success: false,
-                query: input.query,
-                location: input.location,
+                query: trimmedQuery,
+                location: trimmedLocation,
                 totalResults: 0,
                 summary: `Search failed: ${errorMessage}`,
                 results: [],
@@ -198,133 +163,63 @@ export function registerYandexMapsHandlers(): void {
           activeModules.delete(requestId);
         });
 
-      return { status: true, msg: "Search started", data: { requestId } };
-    }
+      return { requestId };
+    },
   );
 
   // ── Cancel a search ─────────────────────────────────────────────────
-  ipcMain.handle(
+  registerValidatedHandler(
     YANDEX_MAPS_SEARCH_CANCEL,
-    async (_event, ...args: unknown[]) => {
-      const raw = args[0];
-      const data = (
-        typeof raw === "string" ? JSON.parse(raw) : raw ?? {}
-      ) as Record<string, unknown>;
-      const requestId =
-        typeof data.requestId === "string" ? data.requestId : "";
-      if (!requestId) {
-        return {
-          status: false,
-          msg: "requestId is required",
-          data: null,
-        };
+    mapsSearchCancelInputSchema,
+    async (input) => {
+      const activeModule = activeModules.get(input.requestId);
+      if (!activeModule) {
+        throw new Error("No active search found for this requestId");
       }
-
-      const activeModule = activeModules.get(requestId);
-      if (activeModule) {
-        await activeModule.cancelSearch(requestId);
-        activeModules.delete(requestId);
-        return { status: true, msg: "Search cancelled", data: null };
-      }
-
-      return {
-        status: false,
-        msg: "No active search found for this requestId",
-        data: null,
-      };
-    }
+      await activeModule.cancelSearch(input.requestId);
+      activeModules.delete(input.requestId);
+      return null;
+    },
   );
 
   // ── History list ────────────────────────────────────────────────────
-  ipcMain.handle(
+  registerValidatedHandler(
     YANDEX_MAPS_HISTORY_LIST,
-    async (_event, ...args: unknown[]) => {
-      try {
-        const raw = args[0];
-        const data = (
-          typeof raw === "string" ? JSON.parse(raw) : raw ?? {}
-        ) as Record<string, unknown>;
-        const rawLimit = typeof data.limit === "number" ? data.limit : 50;
-        const rawOffset = typeof data.offset === "number" ? data.offset : 0;
-        const limit = Math.min(Math.max(1, rawLimit), 100);
-        const offset = Math.max(0, rawOffset);
-        const module = new YandexMapsModule();
-        const [records, total] = await module.getSearchHistory(limit, offset);
-        return { status: true, msg: "OK", data: { records, total } };
-      } catch (err) {
-        console.error("[YandexMaps] History list error:", err);
-        return {
-          status: false,
-          msg: `Failed to load history: ${
-            err instanceof Error ? err.message : String(err)
-          }`,
-          data: null,
-        };
-      }
-    }
+    mapsHistoryListInputSchema,
+    async (input) => {
+      const limit = Math.min(Math.max(1, input.limit ?? 50), 100);
+      const offset = Math.max(0, input.offset ?? 0);
+      const module = new YandexMapsModule();
+      const [records, total] = await module.getSearchHistory(limit, offset);
+      return { records, total };
+    },
   );
 
   // ── History detail ──────────────────────────────────────────────────
-  ipcMain.handle(
+  registerValidatedHandler(
     YANDEX_MAPS_HISTORY_DETAIL,
-    async (_event, ...args: unknown[]) => {
-      try {
-        const raw = args[0];
-        const data = (
-          typeof raw === "string" ? JSON.parse(raw) : raw ?? {}
-        ) as Record<string, unknown>;
-        const id = typeof data.id === "number" ? data.id : 0;
-        if (!id) {
-          return { status: false, msg: "id is required", data: null };
-        }
-        const module = new YandexMapsModule();
-        const record = await module.getSearchRecord(id);
-        if (!record) {
-          return { status: false, msg: "Record not found", data: null };
-        }
-        return { status: true, msg: "OK", data: record };
-      } catch (err) {
-        console.error("[YandexMaps] History detail error:", err);
-        return {
-          status: false,
-          msg: `Failed to load record: ${
-            err instanceof Error ? err.message : String(err)
-          }`,
-          data: null,
-        };
+    mapsHistoryByIdInputSchema,
+    async (input) => {
+      const module = new YandexMapsModule();
+      const record = await module.getSearchRecord(input.id);
+      if (!record) {
+        throw new Error("Record not found");
       }
-    }
+      return record;
+    },
   );
 
   // ── History delete ──────────────────────────────────────────────────
-  ipcMain.handle(
+  registerValidatedHandler(
     YANDEX_MAPS_HISTORY_DELETE,
-    async (_event, ...args: unknown[]) => {
-      try {
-        const raw = args[0];
-        const data = (
-          typeof raw === "string" ? JSON.parse(raw) : raw ?? {}
-        ) as Record<string, unknown>;
-        const id = typeof data.id === "number" ? data.id : 0;
-        if (!id) {
-          return { status: false, msg: "id is required", data: null };
-        }
-        const module = new YandexMapsModule();
-        const deleted = await module.deleteSearchRecord(id);
-        if (!deleted) {
-          return { status: false, msg: "Record not found", data: null };
-        }
-        return { status: true, msg: "Deleted", data: null };
-      } catch (err) {
-        console.error("[YandexMaps] History delete error:", err);
-        return {
-          status: false,
-          msg: `Failed to delete record: ${
-            err instanceof Error ? err.message : String(err)
-          }`,
-          data: null,
-        };
+    mapsHistoryByIdInputSchema,
+    async (input) => {
+      const module = new YandexMapsModule();
+      const deleted = await module.deleteSearchRecord(input.id);
+      if (!deleted) {
+        throw new Error("Record not found");
       }
-    }
+      return null;
+    },
   );
 }
