@@ -6,254 +6,91 @@ import {
   DASHBOARD_SEARCH_ENGINES,
   DASHBOARD_EMAIL_STATUS
 } from '@/config/channellist';
+import { registerValidatedHandler } from '@/main-process/communication/_shared/registerValidatedHandler';
 import {
-  DashboardSummaryRequest,
-  DashboardSummaryResponse,
-  DashboardTrendsRequest,
-  DashboardTrendsResponse,
-  DashboardSearchEnginesRequest,
-  DashboardSearchEnginesResponse,
-  DashboardEmailStatusRequest,
-  DashboardEmailStatusResponse
-} from '@/entityTypes/dashboardType';
-import { CommonMessage } from '@/entityTypes/commonType';
+  dashboardDateRangeInputSchema,
+  dashboardTrendsInputSchema,
+} from '@/schemas/ipc/dashboard';
 
 /**
- * Register Dashboard IPC handlers
+ * Register Dashboard IPC handlers.
+ *
+ * All 4 handlers go through registerValidatedHandler now:
+ *  - schema validates startDate/endDate strings parse as real dates
+ *    (replaces manual isNaN(new Date(str).getTime()) checks)
+ *  - schema requires both dates present (replaces "startDate and endDate
+ *    are required" runtime check)
+ *  - start <= end ordering enforced inside handler via thrown Error
+ *    (caught and wrapped by wrapper as status:false envelope)
+ *
+ * Envelope caveat: original returned specific success messages like
+ * "Dashboard summary retrieved successfully"; wrapper standardizes to
+ * msg:'ok'. Frontend should rely on status + data, not msg wording.
  */
 export function registerDashboardIpcHandlers(): void {
   console.log("Dashboard IPC handlers registered");
 
-  // Dashboard Summary Statistics
-  ipcMain.handle(DASHBOARD_SUMMARY, async (event, data: unknown): Promise<DashboardSummaryResponse> => {
-    try {
-      const controller = new DashboardController();
-      // Ensure database connection is initialized
-      await controller.ensureConnection();
-
-      const request: DashboardSummaryRequest = typeof data === 'string' ? JSON.parse(data) : (data as DashboardSummaryRequest);
-
-      // Validate request
-      if (!request.startDate || !request.endDate) {
-        const errorResponse: DashboardSummaryResponse = {
-          status: false,
-          msg: "Invalid request: startDate and endDate are required"
-        };
-        return errorResponse;
-      }
-
-      // Parse dates
-      const startDate = new Date(request.startDate);
-      const endDate = new Date(request.endDate);
-
-      // Validate dates
-      if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
-        const errorResponse: DashboardSummaryResponse = {
-          status: false,
-          msg: "Invalid date format. Use ISO 8601 format (YYYY-MM-DD)"
-        };
-        return errorResponse;
-      }
-
+  // Summary Statistics
+  registerValidatedHandler(
+    DASHBOARD_SUMMARY,
+    dashboardDateRangeInputSchema,
+    async (input) => {
+      const startDate = new Date(input.startDate);
+      const endDate = new Date(input.endDate);
       if (startDate > endDate) {
-        const errorResponse: DashboardSummaryResponse = {
-          status: false,
-          msg: "Start date must be before end date"
-        };
-        return errorResponse;
+        throw new Error('Start date must be before end date');
       }
-
-      // Fetch dashboard summary
-      const summary = await controller.getSummaryStats(startDate, endDate);
-
-      const response: DashboardSummaryResponse = {
-        status: true,
-        msg: "Dashboard summary retrieved successfully",
-        data: summary
-      };
-      return response;
-    } catch (error) {
-      console.error('Dashboard summary error:', error);
-      const errorResponse: DashboardSummaryResponse = {
-        status: false,
-        msg: error instanceof Error ? error.message : "Unknown error occurred"
-      };
-      return errorResponse;
-    }
-  });
-
-  // Dashboard Trends Data
-  ipcMain.handle(DASHBOARD_TRENDS, async (event, data): Promise<DashboardTrendsResponse> => {
-    try {
       const controller = new DashboardController();
-      // Ensure database connection is initialized
       await controller.ensureConnection();
+      return controller.getSummaryStats(startDate, endDate);
+    },
+  );
 
-      const request: DashboardTrendsRequest = typeof data === 'string' ? JSON.parse(data) : (data as DashboardTrendsRequest);
-
-      // Validate request
-      if (!request.startDate || !request.endDate) {
-        const errorResponse: DashboardTrendsResponse = {
-          status: false,
-          msg: "Invalid request: startDate and endDate are required"
-        };
-        return errorResponse;
-      }
-
-      // Parse dates
-      const startDate = new Date(request.startDate);
-      const endDate = new Date(request.endDate);
-
-      // Validate dates
-      if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
-        const errorResponse: DashboardTrendsResponse = {
-          status: false,
-          msg: "Invalid date format. Use ISO 8601 format (YYYY-MM-DD)"
-        };
-        return errorResponse;
-      }
-
+  // Trends Data
+  registerValidatedHandler(
+    DASHBOARD_TRENDS,
+    dashboardTrendsInputSchema,
+    async (input) => {
+      const startDate = new Date(input.startDate);
+      const endDate = new Date(input.endDate);
       if (startDate > endDate) {
-        const errorResponse: DashboardTrendsResponse = {
-          status: false,
-          msg: "Start date must be before end date"
-        };
-        return errorResponse;
+        throw new Error('Start date must be before end date');
       }
-
-      // Fetch trend data
-      const trends = await controller.getTrendData(startDate, endDate, request.groupBy);
-
-      const response: DashboardTrendsResponse = {
-        status: true,
-        msg: "Dashboard trends retrieved successfully",
-        data: trends
-      };
-      return response;
-    } catch (error) {
-      console.error('Dashboard trends error:', error);
-      const errorResponse: DashboardTrendsResponse = {
-        status: false,
-        msg: error instanceof Error ? error.message : "Unknown error occurred"
-      };
-      return errorResponse;
-    }
-  });
+      const controller = new DashboardController();
+      await controller.ensureConnection();
+      return controller.getTrendData(startDate, endDate, input.groupBy);
+    },
+  );
 
   // Search Engine Breakdown
-  ipcMain.handle(DASHBOARD_SEARCH_ENGINES, async (event, data): Promise<DashboardSearchEnginesResponse> => {
-    try {
-      const controller = new DashboardController();
-      // Ensure database connection is initialized
-      await controller.ensureConnection();
-
-      const request: DashboardSearchEnginesRequest = typeof data === 'string' ? JSON.parse(data) : (data as DashboardSearchEnginesRequest);
-
-      // Validate request
-      if (!request.startDate || !request.endDate) {
-        const errorResponse: DashboardSearchEnginesResponse = {
-          status: false,
-          msg: "Invalid request: startDate and endDate are required"
-        };
-        return errorResponse;
-      }
-
-      // Parse dates
-      const startDate = new Date(request.startDate);
-      const endDate = new Date(request.endDate);
-
-      // Validate dates
-      if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
-        const errorResponse: DashboardSearchEnginesResponse = {
-          status: false,
-          msg: "Invalid date format. Use ISO 8601 format (YYYY-MM-DD)"
-        };
-        return errorResponse;
-      }
-
+  registerValidatedHandler(
+    DASHBOARD_SEARCH_ENGINES,
+    dashboardDateRangeInputSchema,
+    async (input) => {
+      const startDate = new Date(input.startDate);
+      const endDate = new Date(input.endDate);
       if (startDate > endDate) {
-        const errorResponse: DashboardSearchEnginesResponse = {
-          status: false,
-          msg: "Start date must be before end date"
-        };
-        return errorResponse;
+        throw new Error('Start date must be before end date');
       }
-
-      // Fetch search engine breakdown
-      const breakdown = await controller.getSearchEngineBreakdown(startDate, endDate);
-
-      const response: DashboardSearchEnginesResponse = {
-        status: true,
-        msg: "Search engine breakdown retrieved successfully",
-        data: breakdown
-      };
-      return response;
-    } catch (error) {
-      console.error('Search engine breakdown error:', error);
-      const errorResponse: DashboardSearchEnginesResponse = {
-        status: false,
-        msg: error instanceof Error ? error.message : "Unknown error occurred"
-      };
-      return errorResponse;
-    }
-  });
+      const controller = new DashboardController();
+      await controller.ensureConnection();
+      return controller.getSearchEngineBreakdown(startDate, endDate);
+    },
+  );
 
   // Email Status Breakdown
-  ipcMain.handle(DASHBOARD_EMAIL_STATUS, async (event, data): Promise<DashboardEmailStatusResponse> => {
-    try {
-      const controller = new DashboardController();
-      // Ensure database connection is initialized
-      await controller.ensureConnection();
-
-      const request: DashboardEmailStatusRequest = typeof data === 'string' ? JSON.parse(data) : (data as DashboardEmailStatusRequest);
-
-      // Validate request
-      if (!request.startDate || !request.endDate) {
-        const errorResponse: DashboardEmailStatusResponse = {
-          status: false,
-          msg: "Invalid request: startDate and endDate are required"
-        };
-        return errorResponse;
-      }
-
-      // Parse dates
-      const startDate = new Date(request.startDate);
-      const endDate = new Date(request.endDate);
-
-      // Validate dates
-      if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
-        const errorResponse: DashboardEmailStatusResponse = {
-          status: false,
-          msg: "Invalid date format. Use ISO 8601 format (YYYY-MM-DD)"
-        };
-        return errorResponse;
-      }
-
+  registerValidatedHandler(
+    DASHBOARD_EMAIL_STATUS,
+    dashboardDateRangeInputSchema,
+    async (input) => {
+      const startDate = new Date(input.startDate);
+      const endDate = new Date(input.endDate);
       if (startDate > endDate) {
-        const errorResponse: DashboardEmailStatusResponse = {
-          status: false,
-          msg: "Start date must be before end date"
-        };
-        return errorResponse;
+        throw new Error('Start date must be before end date');
       }
-
-      // Fetch email status breakdown
-      const breakdown = await controller.getEmailStatusBreakdown(startDate, endDate);
-
-      const response: DashboardEmailStatusResponse = {
-        status: true,
-        msg: "Email status breakdown retrieved successfully",
-        data: breakdown
-      };
-      return response;
-    } catch (error) {
-      console.error('Email status breakdown error:', error);
-      const errorResponse: DashboardEmailStatusResponse = {
-        status: false,
-        msg: error instanceof Error ? error.message : "Unknown error occurred"
-      };
-      return errorResponse;
-    }
-  });
+      const controller = new DashboardController();
+      await controller.ensureConnection();
+      return controller.getEmailStatusBreakdown(startDate, endDate);
+    },
+  );
 }
-
