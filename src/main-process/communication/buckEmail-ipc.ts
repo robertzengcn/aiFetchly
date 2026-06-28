@@ -26,6 +26,11 @@ import {
   EmailMarketingSendLogListDisplay,
 } from "@/entityTypes/buckemailType";
 import { EmailMarketingSendLogEntity } from "@/model/emailMarketingSendLogdb";
+import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
+import {
+  buckEmailTaskListInputSchema,
+  buckEmailTaskSendLogInputSchema,
+} from "@/schemas/ipc/buckEmail";
 /**
  * buck send email ipc
  */
@@ -108,62 +113,45 @@ export function registerBuckEmailIpcHandlers() {
     }
   });
   //get buck email task lis´
-  ipcMain.handle(BUCKEMAILTASKLIST, async (event, data) => {
-    const qdata = JSON.parse(data as string) as ItemSearchparam;
-    if (!Object.prototype.hasOwnProperty.call(qdata, "page")) {
-      qdata.page = 0;
-    }
-    if (!Object.prototype.hasOwnProperty.call(qdata, "size")) {
-      qdata.size = 100;
-    }
-    const buckemailCon = new BuckemailController();
-    const res = await buckemailCon.getBuckEmailTaskList(
-      qdata.page,
-      qdata.size,
-      qdata.sortby
-    );
-    const resp: CommonResponse<BuckEmailListType> = {
-      status: true,
-      msg: "",
-      data: {
+  registerValidatedHandler(
+    BUCKEMAILTASKLIST,
+    buckEmailTaskListInputSchema,
+    async (input) => {
+      const buckemailCon = new BuckemailController();
+      const res = await buckemailCon.getBuckEmailTaskList(
+        input.page ?? 0,
+        input.size ?? 100,
+        input.sortby
+      );
+      // Wrapper wraps this in {status: true, msg: 'ok', data: {...}},
+      // matching the original CommonResponse<BuckEmailListType> wire shape
+      // (just msg: '' replaced with msg: 'ok', safe for frontend).
+      return {
         records: res.records,
         num: res.total,
-      },
-    };
-    return resp;
-  });
-  //get buck email task log
-  ipcMain.handle(BUCKEMAILTASKSENDLOG, async (event, data) => {
-    const qdata = JSON.parse(data as string) as BuckEmailTasklogQueryType;
-    if (!Object.prototype.hasOwnProperty.call(qdata, "TaskId")) {
-      const resp: CommonResponse<null> = {
-        status: false,
-        msg: "taskid is empty",
       };
-      return resp;
     }
-    if (!Object.prototype.hasOwnProperty.call(qdata, "page")) {
-      qdata.page = 0;
-    }
-    if (!Object.prototype.hasOwnProperty.call(qdata, "size")) {
-      qdata.size = 100;
-    }
-    const buckemailCon = new BuckemailController();
-    const res = await buckemailCon.getBuckEmailSendLog(
-      qdata.TaskId,
-      qdata.page,
-      qdata.size,
-      qdata.where,
-      qdata.sortby
-    );
-    const resp: CommonResponse<EmailMarketingSendLogListDisplay> = {
-      status: true,
-      msg: "",
-      data: {
+  );
+  //get buck email task log
+  registerValidatedHandler(
+    BUCKEMAILTASKSENDLOG,
+    buckEmailTaskSendLogInputSchema,
+    async (input) => {
+      // Original: if TaskId missing -> {status:false, msg:'taskid is empty'}.
+      // Schema now requires TaskId as positive int; missing/invalid is
+      // rejected at boundary by the wrapper with a clear zod message.
+      const buckemailCon = new BuckemailController();
+      const res = await buckemailCon.getBuckEmailSendLog(
+        input.TaskId,
+        input.page ?? 0,
+        input.size ?? 100,
+        input.where,
+        input.sortby
+      );
+      return {
         records: res.records,
         num: res.total,
-      },
-    };
-    return resp;
-  });
+      };
+    }
+  );
 }
