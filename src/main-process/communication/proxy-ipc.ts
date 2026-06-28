@@ -1,14 +1,23 @@
 import { ipcMain } from 'electron';
 import { CHECKALLPROXY, CHECKALLPROXYMESSAGE, REMOVEFAILUREPROXY,REMOVEFAILUREPROXY_MESSAGE} from "@/config/channellist";
-//import { ProxyApi } from '@/api/proxyApi'
 import { ProxyParseItem } from '@/entityTypes/proxyType'
 import { ProxyController } from '@/controller/proxy-controller'
 import { CommonMessage, NumProcessdata } from "@/entityTypes/commonType"
 import {IProxyApi} from "@/modules/interface/IProxyApi"
 import {ProxyModule} from "@/modules/ProxyModule"
-import {PROXYLIST,PROXYDETAIL,PROXYSAVE,PROXYCHECK,PROXYIMPORT,PROXYDELETE} from "@/config/channellist"
+import {PROXYLIST,PROXYDETAIL,PROXYSAVE,PROXYCHECK,PROXYIMPORT,PROXYDELETE} from "@/config/channellist";
+import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
+import {
+  proxyListInputSchema,
+  proxyByIdInputSchema,
+  proxySaveInputSchema,
+  proxyCheckInputSchema,
+  proxyImportInputSchema,
+} from "@/schemas/ipc/proxy";
+
 export function registeProxyIpcHandlers() {
 
+  // ── ipcMain.on handlers (push model, out of scope for validated wrapper) ──
   ipcMain.on(CHECKALLPROXY, async (event, data: unknown) => {
     const qdata = JSON.parse(data as string) as { timeout?: number; proxyIds?: number[] };
     const proxyCon = new ProxyController()
@@ -18,8 +27,6 @@ export function registeProxyIpcHandlers() {
         status: true,
         msg: "success",
         data: {
-          // num: num,
-          // total: total,
           process: process
         }
       };
@@ -29,8 +36,6 @@ export function registeProxyIpcHandlers() {
         status: true,
         msg: "success",
         data: {
-          // num: num,
-          // total: total,
           process: 100
         }
       };
@@ -38,147 +43,73 @@ export function registeProxyIpcHandlers() {
     }, qdata.timeout, qdata.proxyIds)
   })
 
-  ipcMain.handle(PROXYDETAIL, async (event, data: unknown) => {
-    const qdata = JSON.parse(data as string);
-    if (!("id" in qdata)) {
-      return {
-        status: false,
-        msg: "id not found",
-      };
-    }
-
-    const proxyModule:IProxyApi = new ProxyModule()
-    const resp = await proxyModule.getProxyDetail(qdata.id).then(function (res) {
-      return res;
-    }).catch(function (err) {
-      console.log(err);
-      if (err instanceof Error) {
-        return {
-          status: false,
-          msg: err.message,
-        };
-      } else {
-        return {
-          status: false,
-          msg: "unknow error",
-        };
-      }
-    })
-    return resp
-  })
-  ipcMain.handle(PROXYSAVE, async (event, data) => {
-    const qdata = JSON.parse(data as string);
-    const proxyModule:IProxyApi = new ProxyModule()
-    const pres = await proxyModule.saveProxy(qdata).then(function (res) {
-      return res;
-    }).catch(function (err) {
-      console.log(err);
-      if (err instanceof Error) {
-        return {
-          status: false,
-          msg: err.message,
-        };
-      } else {
-        return {
-          status: false,
-          msg: "unknow error",
-        };
-      }
-    })
-    return pres
-  })
-  //check proxy
-  ipcMain.handle(PROXYCHECK, async (event, data) => {
-    const qdata = JSON.parse(data as string) as ProxyParseItem;
-
+  ipcMain.on(REMOVEFAILUREPROXY, async (event) => {
     const proxyCon = new ProxyController()
-    const res = await proxyCon.checkProxy(qdata, qdata.timeout).catch(function (err) {
-      return { status: false, msg: err.message, data: false };
-    })
-    return res
-  })
-  //import proxy
-  ipcMain.handle(PROXYIMPORT, async (event, data) => {
-    const qdata = JSON.parse(data as string) as Array<ProxyParseItem>;
-    const proxyModel:IProxyApi = new ProxyModule()
-    const res = await proxyModel.importProxy(qdata).catch(function (err) {
-      return { status: false, msg: err.message, data: false };
-    })
-    return res
-  })
-  //get proxy list
-  ipcMain.handle(PROXYLIST, async (event, data) => {
-    const qdata = JSON.parse(data as string);
-    if (!("page" in qdata)) {
-      qdata.page = 0;
-    }
-    if (!("size" in qdata)) {
-      qdata.size = 10;
-    }
-    if (!("search" in qdata)) {
-      qdata.search = "";
-    }
-    const proxyCon = new ProxyController()
-    const res = await proxyCon.getProxylist(qdata.page, qdata.size, qdata.search).then(function (res) {
-      return res
-    }).catch(function (err) {
-      console.log(err);
-      if (err instanceof Error) {
-        return {
-          status: false,
-          msg: err.message,
-        };
-      } else {
-        return {
-          status: false,
-          msg: "unknow error",
-        };
-      }
-    })
-    return res
-  })
-  ipcMain.handle(PROXYDELETE, async (event, data) => {
-    const qdata = JSON.parse(data as string);
-    if (!("id" in qdata)) {
-      return {
-        status: false,
-        msg: "id not found",
-      };
-    }
-
-    const proxyModule:IProxyApi = new ProxyModule()
-    const resp = await proxyModule.deleteProxy(qdata.id).then(function (res) {
-      return res;
-    }).catch(function (err) {
-      console.log(err);
-      if (err instanceof Error) {
-        return {
-          status: false,
-          msg: err.message,
-        };
-      } else {
-        return {
-          status: false,
-          msg: "unknow error",
-        };
-      }
-    })
-
-
-    return resp
-  })
-//remove failure proxy
-  ipcMain.on(REMOVEFAILUREPROXY, async (event, data) => {
-    const proxyCon = new ProxyController()
-    //console.log("removeFailureProxy")
     await proxyCon.removeFailureProxy(function(){
-      //remove failure proxy
       const messageData: CommonMessage<null> = {
         status: true,
         msg: "success",
-        
       };
       (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(REMOVEFAILUREPROXY_MESSAGE, JSON.stringify(messageData))
     })
   })
+
+  // ── Validated handle handlers ───────────────────────────────────────────
+  registerValidatedHandler(
+    PROXYDETAIL,
+    proxyByIdInputSchema,
+    async (input) => {
+      const proxyModule: IProxyApi = new ProxyModule();
+      return proxyModule.getProxyDetail(input.id);
+    },
+  );
+
+  registerValidatedHandler(
+    PROXYSAVE,
+    proxySaveInputSchema,
+    async (input) => {
+      const proxyModule: IProxyApi = new ProxyModule();
+      return proxyModule.saveProxy(input as unknown as ProxyParseItem);
+    },
+  );
+
+  registerValidatedHandler(
+    PROXYCHECK,
+    proxyCheckInputSchema,
+    async (input) => {
+      const proxyCon = new ProxyController();
+      return proxyCon.checkProxy(input as unknown as ProxyParseItem, input.timeout);
+    },
+  );
+
+  registerValidatedHandler(
+    PROXYIMPORT,
+    proxyImportInputSchema,
+    async (input) => {
+      const proxyModel: IProxyApi = new ProxyModule();
+      return proxyModel.importProxy(input as unknown as ProxyParseItem[]);
+    },
+  );
+
+  registerValidatedHandler(
+    PROXYLIST,
+    proxyListInputSchema,
+    async (input) => {
+      const proxyCon = new ProxyController();
+      return proxyCon.getProxylist(
+        input.page ?? 0,
+        input.size ?? 10,
+        input.search ?? "",
+      );
+    },
+  );
+
+  registerValidatedHandler(
+    PROXYDELETE,
+    proxyByIdInputSchema,
+    async (input) => {
+      const proxyModule: IProxyApi = new ProxyModule();
+      return proxyModule.deleteProxy(input.id);
+    },
+  );
 }
