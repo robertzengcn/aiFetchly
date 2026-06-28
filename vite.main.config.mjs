@@ -367,6 +367,13 @@ export default ({ mode }) => {
         },
         test: {
             include: ['test/vitest/main/**/*.test.ts'],
+            // NOTE: Do NOT set `environment: 'happy-dom'` globally here.
+            // Doing so breaks non-component tests (e.g. AIChatQueryLoopAsyncPoll)
+            // because happy-dom interferes with resolution of Node builtins
+            // like 'fs'. Component tests under test/vitest/main/components/
+            // use a dedicated workspace config
+            // (test/vitest/main/components/vitest.config.mjs) that opts only
+            // that subtree into happy-dom.
         }
     })
 }
