@@ -135,3 +135,5 @@ node_modules
 
 # Local worktrees (superpowers)
 .worktrees/
+*.mp4
+*.wav
