@@ -700,6 +700,26 @@ export class AIChatQueryLoop {
             input,
             executableCall
           );
+
+          // If the abort fired during the tool (e.g. user clicked Stop during
+          // async polling), skip the tool_result emit — the outer abort handler
+          // will return { type: "cancelled" } for the whole turn. Emitting a
+          // tool_result here would cause an orphan "Turn cancelled" card in the
+          // renderer.
+          if (input.abortController.signal.aborted) {
+            return {
+              type: "cancelled",
+              conversationId: input.conversationId,
+              assistantMessageId: input.assistantMessageId,
+              partialContent: finalAccumulator?.state.fullContent ?? "",
+              model: finalAccumulator?.state.model,
+              responseId: finalAccumulator?.state.responseId,
+              totalTokens: lastReportedUsage?.totalTokens,
+              promptTokens: lastReportedUsage?.promptTokens,
+              completionTokens: lastReportedUsage?.completionTokens,
+            };
+          }
+
           const toolPayload = normalizeToolResult(toolResult);
           if (toolResult.success) {
             lastFailedTool = null;

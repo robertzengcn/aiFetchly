@@ -255,6 +255,12 @@ describe("AIChatQueryLoop async poll", () => {
       getSkillDefinition: () => undefined,
     };
 
+    // `as never` is load-bearing for test ergonomics: the test supplies a
+    // partial mock of AIChatQueryLoopDeps (only streamChatCompletion /
+    // executeTool / getSkillDefinition), not the full type. `as never`
+    // satisfies the constructor without stubbing every dep. The same pattern
+    // is reused in the two tests below, and for the `request` /
+    // `skillRegistry` shapes inside buildInput().
     const loop = new AIChatQueryLoop(deps as never);
     const input = buildInput(events, abort);
 
@@ -354,5 +360,9 @@ describe("AIChatQueryLoop async poll", () => {
 
     expect(result.type).toBe("cancelled");
     expect(fake.cancelSpied).toHaveBeenCalledWith(lastStartedJobId());
+    // Regression: the abort must NOT emit a tool_result event, otherwise the
+    // renderer inserts an orphan "Turn cancelled" card on the cancel path.
+    const resultEvents = events.filter((e) => e.type === "tool_result");
+    expect(resultEvents.length).toBe(0);
   });
 });

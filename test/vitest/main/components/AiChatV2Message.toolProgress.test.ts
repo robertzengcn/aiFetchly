@@ -3,6 +3,7 @@ import { mount, flushPromises } from "@vue/test-utils";
 import { createI18n } from "vue-i18n";
 import AiChatV2Message from "@/views/components/aiChatV2/AiChatV2Message.vue";
 import { MessageType } from "@/entityTypes/commonType";
+import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
 
 /**
  * Component test for the "running" badge on TOOL_CALL messages.
@@ -47,24 +48,26 @@ const i18n = createI18n({
  * Build a minimal TOOL_CALL message that exercises the TOOL_CALL branch of
  * the template. `toolProgress` is added per-test as needed.
  *
- * Typed as `any` because ChatV2MessageView is a large union; the fields set
- * here are exactly what the TOOL_CALL template branch reads.
+ * ChatV2MessageView is a large union; the fields set here are exactly what
+ * the TOOL_CALL template branch reads. The `as unknown as ChatV2MessageView`
+ * cast is acceptable because constructing the full union is not worth the
+ * noise for a unit test.
  */
-function makeBaseMessage(): any {
+function makeBaseMessage(): ChatV2MessageView {
   return {
     id: "m1",
     conversationId: "c1",
-    role: "assistant" as const,
+    role: "assistant",
     content: "",
     timestamp: new Date().toISOString(),
     messageType: MessageType.TOOL_CALL,
     metadata: {
-      source: "chat-v2" as const,
+      source: "chat-v2",
       toolCallId: "tc1",
       toolName: "run_subagent",
       toolArguments: {},
     },
-  };
+  } as unknown as ChatV2MessageView;
 }
 
 /**
@@ -73,7 +76,7 @@ function makeBaseMessage(): any {
  * the TOOL_RESULT / plan-card / streaming-status branches, none of which
  * are exercised by these tests — stubbing keeps the mount hermetic.
  */
-function mountWith(message: any) {
+function mountWith(message: ChatV2MessageView) {
   return mount(AiChatV2Message, {
     props: { message },
     global: {
@@ -89,8 +92,8 @@ function mountWith(message: any) {
 
 describe("AiChatV2Message tool progress badge", () => {
   it("renders spinner and message when toolProgress metadata is present", async () => {
-    const base: any = makeBaseMessage();
-    base.metadata.toolProgress = {
+    const base = makeBaseMessage();
+    base.metadata!.toolProgress = {
       phase: "running",
       message: "Subagent running...",
       progress: null,
@@ -113,8 +116,8 @@ describe("AiChatV2Message tool progress badge", () => {
   });
 
   it("renders progress bar and count when progress and counts are set", async () => {
-    const base: any = makeBaseMessage();
-    base.metadata.toolProgress = {
+    const base = makeBaseMessage();
+    base.metadata!.toolProgress = {
       phase: "extracting",
       message: "Extracting",
       progress: 0.42,
