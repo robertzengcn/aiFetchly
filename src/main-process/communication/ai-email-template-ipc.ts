@@ -48,6 +48,8 @@ import {
   parseEmailTemplateFromStream,
   extractVariables,
 } from "@/views/utils/variableValidation";
+import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
+import { aiEmailTemplateValidateInputSchema } from "@/schemas/ipc/aiEmailTemplate";
 
 /** Strip trailing OpenAI-style sentinel JSON (e.g. {"choices":[{"delta":{},"finish_reason":"STOP"}]}) from stream content. */
 function stripTrailingSentinelJson(content: string): string {
@@ -292,28 +294,36 @@ export function registerAIEmailTemplateHandlers(): void {
     }
   });
 
-  // Validation handler
-  ipcMain.handle(AI_EMAIL_TEMPLATE_VALIDATE, async (...args: unknown[]) => {
-    const requestData = args[1] as { title: string; content: string };
+  // Validation handler — local validation, no LLM call. Original code did
+  // NOT check USER_AI_ENABLED here, so we use registerValidatedHandler
+  // (not the AI variant) to preserve behavior.
+  registerValidatedHandler(
+    AI_EMAIL_TEMPLATE_VALIDATE,
+    aiEmailTemplateValidateInputSchema,
+    async (input) => {
+      const contentValidation = validateAIOutputVariables(input.content);
+      const titleValidation = validateAIOutputVariables(input.title);
 
-    const contentValidation = validateAIOutputVariables(requestData.content);
-    const titleValidation = validateAIOutputVariables(requestData.title);
+      const hasInvalid = !contentValidation.isValid || !titleValidation.isValid;
+      const allInvalidVars = [
+        ...(contentValidation.invalidVariables || []),
+        ...(titleValidation.invalidVariables || []),
+      ];
 
-    const hasInvalid = !contentValidation.isValid || !titleValidation.isValid;
-    const allInvalidVars = [
-      ...(contentValidation.invalidVariables || []),
-      ...(titleValidation.invalidVariables || []),
-    ];
-
-    return {
-      status: !hasInvalid,
-      data: {
+      // Return the data payload; wrapper wraps in {status: true, msg: 'ok', data}.
+      // Note: original returned `status: !hasInvalid` at the envelope level.
+      // The wrapper always sets status:true on successful handler execution.
+      // To preserve the original semantics where callers could distinguish
+      // valid vs invalid via envelope.status, we surface that in `data.isValid`
+      // (already present) — frontend should rely on data.isValid, not status.
+      return {
         isValid: !hasInvalid,
         invalidVariables: allInvalidVars,
         sanitizedContent: contentValidation.sanitizedContent,
         sanitizedTitle: titleValidation.sanitizedContent,
-      },
-      msg: hasInvalid ? "Invalid variables found" : "Validation passed",
-    };
-  });
+        // Surface the human-readable message at the data level.
+        msg: hasInvalid ? "Invalid variables found" : "Validation passed",
+      };
+    }
+  );
 }
