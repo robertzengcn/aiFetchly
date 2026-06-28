@@ -1,17 +1,20 @@
 import { z } from 'zod'
 import { lazySchema } from '@/utils/lazySchema'
-import { semanticNumber } from '@/utils/semanticNumber'
 
 /**
  * 共享分页查询 schema。
  *
- * 项目里多处 handler 接收 ItemSearchparam 形式的入参（page/size/sortby/where/search），
- * 并在原代码里用 `Object.prototype.hasOwnProperty.call(qdata, 'page')` 兜底默认值。
- * 这里用 zod 的 .default() 替代那种样板。
+ * 项目里多处 handler 接收 ItemSearchparam 形式的入参（page/size/sortby/where/search）。
  *
- * 兼容点：
- *  - page/size 使用 semanticNumber：兼容前端传字符串数字
- *  - sortby 是自由形式（key/order 都是 string），不做枚举限制以避免破坏现有调用
+ * 设计选择：page/size 用 .optional()，由 handler 内 fallback 提供默认值。
+ *  - 不用 .default()：zod v3 在 strictObject 内把 .default() 的 OUTPUT 推成
+ *    `number | undefined`，破坏 registerValidatedHandler 的 TInput 推导
+ *  - 不用 semanticNumber：JSON.parse 后类型已经是 number；wrapper 类型推导也更干净
+ *  - 保留原 "缺失字段 → handler 补默认" 的行为，前端零改动
+ *
+ * handler 模板：
+ *   const page = input.page ?? 0;
+ *   const size = input.size ?? 100;
  */
 export const sortBySchema = lazySchema(() =>
   z.strictObject({
@@ -22,8 +25,8 @@ export const sortBySchema = lazySchema(() =>
 
 export const itemSearchParamSchema = lazySchema(() =>
   z.strictObject({
-    page: semanticNumber(z.number().int().nonnegative()).default(0),
-    size: semanticNumber(z.number().int().positive()).default(100),
+    page: z.number().int().nonnegative().optional(),
+    size: z.number().int().positive().optional(),
     where: z.string().optional(),
     search: z.string().optional(),
     sortby: sortBySchema().optional(),
