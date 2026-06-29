@@ -1,9 +1,12 @@
 <template>
     <v-layout
+class="layout-shell"
 :class="{
         isMini: navState.isMini,
         isMobile: mainStore.isMobile,
-    }">
+        chatDockOpen: v2ChatPanelOpen,
+    }"
+:style="{ '--ai-chat-dock-width': chatPanelWidth + 'px' }">
         <v-navigation-drawer
 class="my-4 layout_navigation" :rail="navState.rail" expand-on-hover rail-width="77"
             @update:rail="navigationRail" :permanent="permanent" v-model="navState.menuVisible" style="position: fixed">
@@ -162,25 +165,17 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
 
         <!-- AI Chat V2 Panel -->
         <div
-          class="ai-chat-panel"
-          :class="{ 'panel-open': v2ChatPanelOpen }"
-          :style="v2ChatPanelOpen ? { width: chatPanelWidth + 'px' } : {}"
+          class="ai-chat-dock"
+          :class="{ 'dock-open': v2ChatPanelOpen }"
         >
           <!-- Resize handle -->
           <div
-            v-if="v2ChatPanelOpen"
+            v-if="v2ChatPanelOpen && !mainStore.isMobile"
             class="chat-resize-handle"
             @mousedown="startResize"
           ></div>
           <AiChatV2 v-if="v2ChatPanelOpen" />
         </div>
-
-        <!-- V2 Backdrop overlay -->
-        <div
-          v-if="v2ChatPanelOpen"
-          class="chat-backdrop"
-          @click="toggleV2ChatPanel"
-        ></div>
     </v-layout>
 </template>
 <script setup lang="ts">
@@ -369,7 +364,7 @@ const startResize = (e: MouseEvent) => {
 const handleKeyboardShortcut = (e: KeyboardEvent) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
         e.preventDefault();
-        toggleChatPanel();
+        toggleChat();
     }
 }
 
@@ -483,6 +478,26 @@ const showDialog=(status:boolean, content:string)=>{
 }
 </script>
 <style scoped lang="scss">
+.layout-shell {
+    display: flex;
+    align-items: stretch;
+    width: 100%;
+    min-height: 100vh;
+    overflow-x: hidden;
+}
+
+:deep(.app_main) {
+    min-width: 0;
+}
+
+:deep(.chatDockOpen:not(.isMobile) .app_main .header) {
+    width: calc(100vw - 312px - var(--ai-chat-dock-width));
+}
+
+:deep(.isMini.chatDockOpen:not(.isMobile) .app_main .header) {
+    width: calc(100vw - 132px - var(--ai-chat-dock-width));
+}
+
 .messages-container {
     position: fixed;
     bottom: 20px;
@@ -564,6 +579,24 @@ const showDialog=(status:boolean, content:string)=>{
     right: 0;
 }
 
+.ai-chat-dock {
+    position: relative;
+    flex: 0 0 0;
+    width: 0;
+    height: 100vh;
+    overflow: hidden;
+    background-color: #ffffff;
+    border-left: 1px solid rgba(0, 0, 0, 0.08);
+    box-shadow: -2px 0 16px rgba(0, 0, 0, 0.08);
+    transition: flex-basis 0.3s ease-in-out, width 0.3s ease-in-out;
+    z-index: 1;
+}
+
+.ai-chat-dock.dock-open {
+    flex-basis: var(--ai-chat-dock-width);
+    width: var(--ai-chat-dock-width);
+}
+
 .chat-backdrop {
     position: fixed;
     top: 0;
@@ -589,6 +622,12 @@ const showDialog=(status:boolean, content:string)=>{
         background-color: #1e1e1e;
         box-shadow: -2px 0 16px rgba(0, 0, 0, 0.5);
     }
+
+    .ai-chat-dock {
+        background-color: #1e1e1e;
+        border-left-color: rgba(255, 255, 255, 0.12);
+        box-shadow: -2px 0 16px rgba(0, 0, 0, 0.5);
+    }
 }
 
 @media (max-width: 768px) {
@@ -599,6 +638,22 @@ const showDialog=(status:boolean, content:string)=>{
 
     .ai-chat-panel.panel-open {
         right: 0;
+    }
+
+    .ai-chat-dock {
+        position: fixed;
+        top: 0;
+        right: -100%;
+        width: 100%;
+        height: 100vh;
+        flex-basis: auto;
+        transition: right 0.3s ease-in-out;
+        z-index: 9998;
+    }
+
+    .ai-chat-dock.dock-open {
+        right: 0;
+        width: 100%;
     }
 }
 
