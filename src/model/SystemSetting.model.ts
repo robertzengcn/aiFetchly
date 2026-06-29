@@ -17,27 +17,10 @@ export class SystemSettingModel extends BaseDb {
         
     }
 
-    public async InsertDeepseekSetting(deepseekgroup:SystemSettingGroupEntity) {
-        await this.InsertDeepseekUrl(deepseekgroup)
+    public async removeById(id: number): Promise<void> {
+        await this.repository.delete(id);
     }
-    public async InsertDeepseekUrl(deepseekgroup:SystemSettingGroupEntity) {
-        const deepseek_local_url_key='deepseek-local-url'
-        const deepseek_local_url_value='http://localhost:11434'
 
-        let deepseeksettingurl = await this.repository.findOne({
-            where: { group: deepseekgroup,key:deepseek_local_url_key }
-        })
-        if (!deepseeksettingurl) {
-            const systemSettingEntity = new SystemSettingEntity();
-            systemSettingEntity.group = deepseekgroup;
-            systemSettingEntity.key = deepseek_local_url_key;
-            systemSettingEntity.value = deepseek_local_url_value;
-            systemSettingEntity.description = 'deepseek-local-url-description';
-            systemSettingEntity.type = 'input';
-            deepseeksettingurl = await this.repository.save(systemSettingEntity)
-        }
-        return deepseeksettingurl
-    }
     public async getSettingItem(key:string):Promise<SystemSettingEntity|null>{
         return this.repository.findOne({
             where: { key: key }

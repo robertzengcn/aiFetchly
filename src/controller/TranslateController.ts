@@ -1,7 +1,7 @@
 import { TranslateToolEnum } from "@/config/generate";
 import { LlmCongfig, TraditionalTranslateCongfig } from '@/entityTypes/commonType'
 import { SystemSettingGroupModule } from '@/modules/SystemSettingGroupModule'
-import { deepseeklocalgroup, deepseeklocalurl, deepseeklocalmodel,volcenginegrouppro,volcengineproapiurl,
+import { volcenginegrouppro, volcengineproapiurl,
     volcengineapipromodel
  } from "@/config/settinggroupInit";
 // import { group } from "console";
@@ -70,11 +70,6 @@ export class TranslateController {
         let urlKey=""
         let apikey=""
         switch (toolName) {
-            case TranslateToolEnum.DEEPSEEK_LOCAL:
-                groupName=deepseeklocalgroup
-                modelKey=deepseeklocalmodel
-                urlKey=deepseeklocalurl
-                break;
             case TranslateToolEnum.OPENAI:
 
                 break;

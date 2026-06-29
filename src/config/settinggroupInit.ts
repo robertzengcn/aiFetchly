@@ -1,8 +1,5 @@
 import { SystemSettingGroupdf } from "@/entityTypes/systemsettingType";
 import { LlmDatatype } from "@/entityTypes/commonType";
-export const deepseeklocalgroup = "Deepseek-local";
-export const deepseeklocalurl = "deepseek-local-url";
-export const deepseeklocalmodel = "deepseek-local-model";
 export const deepseekapigroup = "deepseek-api-group";
 export const grokaigroup = "grokai-group";
 export const grokaiapiurl = "grokai-url";
@@ -44,24 +41,6 @@ export const ai_auto_dream_enabled = "user_ai_auto_dream";
 export const ai_memory_injection_enabled = "user_ai_memory_injection";
 export const ai_custom_context_directive = "user_ai_custom_context_directive";
 export const settinggroupInit: Array<SystemSettingGroupdf> = [
-  {
-    name: deepseeklocalgroup,
-    description: "deepseek-local-group-description",
-    items: [
-      {
-        key: deepseeklocalurl,
-        value: "http://localhost:11434",
-        description: "deepseek-local-url-description",
-        type: "input",
-      },
-      {
-        key: deepseeklocalmodel,
-        value: "deepseek-r1:latest",
-        description: "deepseek-local-model-description",
-        type: "input",
-      },
-    ],
-  },
   {
     name: twocaptchagroup,
     description: twocaptchadescription,
