@@ -1707,9 +1707,12 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-height: 0;
+  overflow: hidden;
   background: #fff;
 }
 .v2-shell__header {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1733,16 +1736,20 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  overflow: hidden;
 }
 .v2-shell__plan-panel {
+  flex: 0 0 auto;
   padding: 0 12px;
   max-height: 300px;
   overflow-y: auto;
 }
 .v2-shell__workspace-panel {
+  flex: 0 0 auto;
   padding: 4px 12px;
 }
 .v2-shell__file-ops-panel {
+  flex: 0 0 auto;
   border-top: 1px solid rgba(0, 0, 0, 0.08);
   background: #fafafa;
 }
