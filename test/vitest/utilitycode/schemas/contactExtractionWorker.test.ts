@@ -91,6 +91,11 @@ describe("contactExtractionWorkerInboundSchema", () => {
       type: "extract-contact",
       batchId: "b1",
       resultIds: [1, 2, 3],
+      results: [
+        { id: 1, url: "https://a.com", title: "A" },
+        { id: 2, url: "https://b.com", title: "B" },
+        { id: 3, url: "https://c.com", title: "C" },
+      ],
     });
     expect(r.success).toBe(true);
   });

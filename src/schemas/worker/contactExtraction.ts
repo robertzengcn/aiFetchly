@@ -1,5 +1,5 @@
-import { z } from 'zod'
-import { lazySchema } from '@/utils/lazySchema'
+import { z } from "zod";
+import { lazySchema } from "@/utils/lazySchema";
 
 /**
  * Contact Extraction Worker 消息契约。
@@ -27,57 +27,68 @@ const contactExtractionUrlResultSchema = z.object({
     })
     .optional(),
   error: z.string().optional(),
-})
+});
 
 export const contactExtractionWorkerOutboundSchema = lazySchema(() =>
-  z.discriminatedUnion('type', [
+  z.discriminatedUnion("type", [
     z.object({
-      type: z.literal('worker-ready'),
+      type: z.literal("worker-ready"),
     }),
     z.object({
-      type: z.literal('worker-log'),
-      level: z.enum(['info', 'warn', 'error', 'debug']).default('info'),
+      type: z.literal("worker-log"),
+      level: z.enum(["info", "warn", "error", "debug"]).default("info"),
       args: z.array(z.unknown()).default([]),
     }),
     z.object({
-      type: z.literal('extraction-progress'),
+      type: z.literal("extraction-progress"),
       resultId: z.number().int().positive(),
-      status: z.enum(['running', 'completed', 'failed']),
+      status: z.enum(["running", "completed", "failed"]),
       progress: z.number().min(0).max(100).optional(),
       data: z.unknown().optional(),
     }),
     z.object({
-      type: z.literal('extract-contact-url-result'),
+      type: z.literal("extract-contact-url-result"),
       requestId: z.string(),
       results: z.array(contactExtractionUrlResultSchema),
     }),
-  ]),
-)
+  ])
+);
 
 export type ContactExtractionWorkerOutbound = z.infer<
   ReturnType<typeof contactExtractionWorkerOutboundSchema>
->
+>;
 
 // ─── Main → Worker (inbound) ────────────────────────────────────────────────
 
 export const contactExtractionWorkerInboundSchema = lazySchema(() =>
-  z.discriminatedUnion('type', [
+  z.discriminatedUnion("type", [
     z.object({
-      type: z.literal('extract-contact'),
-      batchId: z.string(),
+      type: z.literal("extract-contact"),
+      batchId: z.string().min(1, "batchId is required"),
       resultIds: z.array(z.number().int().positive()),
+      // Worker consumes a richer payload than just IDs — includes the
+      // pre-resolved result records (id/url/title) so the worker does
+      // not need to query the DB (which it can't, per architecture rule).
+      results: z.array(
+        z.object({
+          id: z.number().int().positive(),
+          url: z.string(),
+          title: z.string(),
+        })
+      ),
+      priority: z.number().int().min(0).optional(),
     }),
     z.object({
-      type: z.literal('extract-contact-from-urls'),
-      requestId: z.string(),
+      type: z.literal("extract-contact-from-urls"),
+      requestId: z.string().min(1, "requestId is required"),
       urls: z.array(z.string()),
     }),
     z.object({
-      type: z.literal('shutdown'),
+      type: z.literal("shutdown"),
     }),
-  ]),
-)
+  ])
+);
 
 export type ContactExtractionWorkerInbound = z.infer<
   ReturnType<typeof contactExtractionWorkerInboundSchema>
->
+>;
