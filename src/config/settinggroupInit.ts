@@ -1,12 +1,8 @@
 import { SystemSettingGroupdf } from "@/entityTypes/systemsettingType";
 import { LlmDatatype } from "@/entityTypes/commonType";
-export const openaigroup = "openai-group";
-export const openaiapiurl = "openai-url";
-export const openaiapikey = "openai-api-key";
 export const volcenginegrouppro = "volcengine-group";
 export const volcengineproapiurl = "volcengine-url";
 export const volcengineproapikey = "volcengine-key";
-export const openaiapimodel = "openai-model";
 export const volcengineapipromodel = "volcengine-model";
 export const twocaptcha_enabled = "2captcha-enabled";
 export const Doubao_PRO_A: LlmDatatype = {
@@ -51,30 +47,6 @@ export const settinggroupInit: Array<SystemSettingGroupdf> = [
         value: "0",
         description: "2captcha-enabled-description",
         type: "toggle",
-      },
-    ],
-  },
-  {
-    name: openaigroup,
-    description: "openai-group-description",
-    items: [
-      {
-        key: openaiapiurl,
-        value: "",
-        description: "openai-api-url-description",
-        type: "input",
-      },
-      {
-        key: openaiapimodel,
-        value: "",
-        description: "openai-api-key-description",
-        type: "input",
-      },
-      {
-        key: openaiapikey,
-        value: "",
-        description: "openai-api-key-description",
-        type: "input",
       },
     ],
   },
