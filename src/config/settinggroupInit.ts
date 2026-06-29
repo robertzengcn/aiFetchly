@@ -1,9 +1,5 @@
 import { SystemSettingGroupdf } from "@/entityTypes/systemsettingType";
 import { LlmDatatype } from "@/entityTypes/commonType";
-export const grokaigroup = "grokai-group";
-export const grokaiapiurl = "grokai-url";
-export const grokaiapimodel = "grokai-model";
-export const grokaiapilkey = "grokai-api-key";
 export const openaigroup = "openai-group";
 export const openaiapiurl = "openai-url";
 export const openaiapikey = "openai-api-key";
@@ -55,30 +51,6 @@ export const settinggroupInit: Array<SystemSettingGroupdf> = [
         value: "0",
         description: "2captcha-enabled-description",
         type: "toggle",
-      },
-    ],
-  },
-  {
-    name: grokaigroup,
-    description: "grokai-group-description",
-    items: [
-      {
-        key: grokaiapiurl,
-        value: "",
-        description: "grokai-url-description",
-        type: "input",
-      },
-      {
-        key: grokaiapimodel,
-        value: "",
-        description: "grokai-url-description",
-        type: "input",
-      },
-      {
-        key: grokaiapilkey,
-        value: "",
-        description: "grokai-api-key-description",
-        type: "input",
       },
     ],
   },
