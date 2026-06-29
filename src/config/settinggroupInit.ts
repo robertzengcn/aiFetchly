@@ -232,14 +232,14 @@ export const settinggroupInit: Array<SystemSettingGroupdf> = [
         // Auto-dream background consolidation. Default-on per product spec;
         // user can disable via the system settings UI toggle.
         key: ai_auto_dream_enabled,
-        value: "true",
+        value: "1",
         description: "ai-auto-dream-description",
         type: "toggle",
       },
       {
         // Durable user memory prompt injection. Default-on.
         key: ai_memory_injection_enabled,
-        value: "true",
+        value: "1",
         description: "ai-memory-injection-description",
         type: "toggle",
       },
