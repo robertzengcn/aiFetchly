@@ -1,4 +1,3 @@
-import { ipcMain } from "electron";
 import {
   YELLOW_PAGES_CREATE,
   YELLOW_PAGES_UPDATE,
@@ -20,647 +19,207 @@ import {
   YELLOW_PAGES_CHECK_ORPHANED_PROCESSES,
 } from "@/config/channellist";
 import { YellowPagesController } from "@/controller/YellowPagesController";
-import { CommonMessage } from "@/entityTypes/commonType";
 import {
   YellowPagesTaskData,
   YellowPagesTask,
   TaskFilters,
-  TaskSummary,
-  TaskProgress,
-  YellowPagesResult,
-  PaginatedResponse,
 } from "@/modules/interface/ITaskManager";
-import { PlatformSummary } from "@/modules/interface/IPlatformConfig";
+import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
+import {
+  yellowPagesTaskByIdInputSchema,
+  yellowPagesTaskCreateInputSchema,
+  yellowPagesTaskUpdateInputSchema,
+  yellowPagesByPidInputSchema,
+  yellowPagesListInputSchema,
+  yellowPagesResultsInputSchema,
+  yellowPagesExportInputSchema,
+  yellowPagesBulkInputSchema,
+  yellowPagesNoInputSchema,
+} from "@/schemas/ipc/yellowPages";
 
+/**
+ * Yellow Pages IPC handlers — all 20 migrated to registerValidatedHandler.
+ *
+ * 8 task by-id ops share taskByIdInputSchema (massive dedup).
+ *
+ * Envelope: handlers return data only; wrapper wraps. Original returned
+ * i18n message keys - standardized to 'ok'. Frontend should rely on
+ * status + data.
+ */
 export function registerYellowPagesIpcHandlers(): void {
   console.log("Yellow Pages IPC handlers registered");
+  const ctrl = (): YellowPagesController => YellowPagesController.getInstance();
 
-  // Task Management
-  ipcMain.handle(
+  // ── Task CRUD ────────────────────────────────────────────────────────
+
+  registerValidatedHandler(
     YELLOW_PAGES_CREATE,
-    async (event, data: unknown): Promise<CommonMessage<number | null>> => {
-      try {
-        const yellowPagesCtrl = YellowPagesController.getInstance();
-        const taskData = JSON.parse(data as string) as YellowPagesTaskData;
-        const taskId = await yellowPagesCtrl.createTask(taskData);
-
-        const response: CommonMessage<number> = {
-          status: true,
-          msg: "yellow_pages.task_created_successfully",
-          data: taskId,
-        };
-        return response;
-      } catch (error) {
-        console.error("Yellow Pages task creation error:", error);
-        const errorResponse: CommonMessage<null> = {
-          status: false,
-          msg:
-            error instanceof Error ? error.message : "Unknown error occurred",
-          data: null,
-        };
-        return errorResponse;
-      }
-    }
+    yellowPagesTaskCreateInputSchema,
+    async (input) => {
+      return ctrl().createTask(input as unknown as YellowPagesTaskData);
+    },
   );
-  // update yellow pages task
-  ipcMain.handle(
+
+  registerValidatedHandler(
     YELLOW_PAGES_UPDATE,
-    async (event, data: unknown): Promise<CommonMessage<number | void>> => {
-      try {
-        const yellowPagesCtrl = YellowPagesController.getInstance();
-        const { id, ...taskData } = JSON.parse(data as string) as {
-          id: number;
-        } & Partial<YellowPagesTask>;
-        await yellowPagesCtrl.updateTask(id, taskData);
-
-        const response: CommonMessage<number> = {
-          status: true,
-          msg: "yellow_pages.task_updated_successfully",
-          data: id,
-        };
-        return response;
-      } catch (error) {
-        console.error("Yellow Pages task update error:", error);
-        const errorResponse: CommonMessage<void> = {
-          status: false,
-          msg:
-            error instanceof Error ? error.message : "Unknown error occurred",
-        };
-        return errorResponse;
-      }
-    }
+    yellowPagesTaskUpdateInputSchema,
+    async (input) => {
+      const { id, ...taskData } = input as { id: number } & Partial<YellowPagesTask>;
+      await ctrl().updateTask(id, taskData);
+      return id;
+    },
   );
 
-  ipcMain.handle(
+  registerValidatedHandler(
     YELLOW_PAGES_DELETE,
-    async (event, data: unknown): Promise<CommonMessage<void>> => {
-      try {
-        const yellowPagesCtrl = YellowPagesController.getInstance();
-        const { id } = JSON.parse(data as string) as { id: number };
-        await yellowPagesCtrl.deleteTask(id);
-
-        const response: CommonMessage<void> = {
-          status: true,
-          msg: "yellow_pages.task_deleted_successfully",
-        };
-        return response;
-      } catch (error) {
-        console.error("Yellow Pages task deletion error:", error);
-        const errorResponse: CommonMessage<void> = {
-          status: false,
-          msg:
-            error instanceof Error ? error.message : "Unknown error occurred",
-        };
-        return errorResponse;
-      }
-    }
+    yellowPagesTaskByIdInputSchema,
+    async (input) => {
+      await ctrl().deleteTask(input.id);
+      return null;
+    },
   );
 
-  // Task Control Operations
-  // START loads the task from the DB (including proxy_config) and spawns the scraper;
-  // the main process passes proxy settings to the child via YellowPagesProcessManager / START message.
-  ipcMain.handle(
+  // ── Task state ops (5 share byId schema) ─────────────────────────────
+
+  registerValidatedHandler(
     YELLOW_PAGES_START,
-    async (event, data: unknown): Promise<CommonMessage<number>> => {
-      try {
-        const yellowPagesCtrl = YellowPagesController.getInstance();
-        const { id } = JSON.parse(data as string) as { id: number };
-        await yellowPagesCtrl.startTask(id);
-
-        const response: CommonMessage<number> = {
-          status: true,
-          msg: "yellow_pages.task_started_successfully",
-          data: id,
-        };
-        return response;
-      } catch (error) {
-        console.error("Yellow Pages task start error:", error);
-        const errorResponse: CommonMessage<number> = {
-          status: false,
-          msg:
-            error instanceof Error ? error.message : "Unknown error occurred",
-          data: 0,
-        };
-        return errorResponse;
-      }
-    }
+    yellowPagesTaskByIdInputSchema,
+    async (input) => { await ctrl().startTask(input.id); return input.id; },
   );
 
-  ipcMain.handle(
+  registerValidatedHandler(
     YELLOW_PAGES_STOP,
-    async (event, data: unknown): Promise<CommonMessage<void>> => {
-      try {
-        const yellowPagesCtrl = YellowPagesController.getInstance();
-        const { id } = JSON.parse(data as string) as { id: number };
-        await yellowPagesCtrl.stopTask(id);
-
-        const response: CommonMessage<void> = {
-          status: true,
-          msg: "yellow_pages.task_stopped_successfully",
-        };
-        return response;
-      } catch (error) {
-        console.error("Yellow Pages task stop error:", error);
-        const errorResponse: CommonMessage<void> = {
-          status: false,
-          msg:
-            error instanceof Error ? error.message : "Unknown error occurred",
-        };
-        return errorResponse;
-      }
-    }
+    yellowPagesTaskByIdInputSchema,
+    async (input) => { await ctrl().stopTask(input.id); return null; },
   );
 
-  ipcMain.handle(
+  registerValidatedHandler(
     YELLOW_PAGES_PAUSE,
-    async (event, data: unknown): Promise<CommonMessage<void>> => {
-      try {
-        const yellowPagesCtrl = YellowPagesController.getInstance();
-        const { id } = JSON.parse(data as string) as { id: number };
-        await yellowPagesCtrl.pauseTask(id);
-
-        const response: CommonMessage<void> = {
-          status: true,
-          msg: "yellow_pages.task_paused_successfully",
-        };
-        return response;
-      } catch (error) {
-        console.error("Yellow Pages task pause error:", error);
-        const errorResponse: CommonMessage<void> = {
-          status: false,
-          msg:
-            error instanceof Error ? error.message : "Unknown error occurred",
-        };
-        return errorResponse;
-      }
-    }
+    yellowPagesTaskByIdInputSchema,
+    async (input) => { await ctrl().pauseTask(input.id); return null; },
   );
 
-  ipcMain.handle(
+  registerValidatedHandler(
     YELLOW_PAGES_RESUME,
-    async (event, data: unknown): Promise<CommonMessage<number>> => {
-      try {
-        const yellowPagesCtrl = YellowPagesController.getInstance();
-        const { id } = JSON.parse(data as string) as { id: number };
-        await yellowPagesCtrl.resumeTask(id);
-
-        const response: CommonMessage<number> = {
-          status: true,
-          msg: "yellow_pages.task_resumed_successfully",
-          data: id,
-        };
-        return response;
-      } catch (error) {
-        console.error("Yellow Pages task resume error:", error);
-        const errorResponse: CommonMessage<number> = {
-          status: false,
-          msg:
-            error instanceof Error ? error.message : "Unknown error occurred",
-          data: 0,
-        };
-        return errorResponse;
-      }
-    }
+    yellowPagesTaskByIdInputSchema,
+    async (input) => { await ctrl().resumeTask(input.id); return input.id; },
   );
 
-  ipcMain.handle(
+  // ── Process management ───────────────────────────────────────────────
+
+  registerValidatedHandler(
     YELLOW_PAGES_KILL_PROCESS,
-    async (
-      event,
-      data: unknown
-    ): Promise<
-      CommonMessage<{
-        success: boolean;
-        taskId?: number;
-        message: string;
-      }>
-    > => {
-      try {
-        const yellowPagesCtrl = YellowPagesController.getInstance();
-        const { pid } = JSON.parse(data as string) as { pid: number };
-        const result = await yellowPagesCtrl.killProcessByPID(pid);
-
-        const response: CommonMessage<{
-          success: boolean;
-          taskId?: number;
-          message: string;
-        }> = {
-          status: true,
-          msg: "yellow_pages.process_killed_successfully",
-          data: result,
-        };
-        return response;
-      } catch (error) {
-        console.error("Yellow Pages process kill error:", error);
-        const errorResponse: CommonMessage<{
-          success: boolean;
-          taskId?: number;
-          message: string;
-        }> = {
-          status: false,
-          msg:
-            error instanceof Error ? error.message : "Unknown error occurred",
-          data: {
-            success: false,
-            message:
-              error instanceof Error ? error.message : "Unknown error occurred",
-          },
-        };
-        return errorResponse;
-      }
-    }
+    yellowPagesByPidInputSchema,
+    async (input) => {
+      return ctrl().killProcessByPID(input.pid);
+    },
   );
 
-  ipcMain.handle(
+  registerValidatedHandler(
     "yellow_pages:get_process_status",
-    async (
-      event,
-      data: unknown
-    ): Promise<
-      CommonMessage<{
-        isRunning: boolean;
-        taskId?: number;
-        status?: string;
-        error?: string;
-      }>
-    > => {
-      try {
-        const yellowPagesCtrl = YellowPagesController.getInstance();
-        const { pid } = JSON.parse(data as string) as { pid: number };
-        const result = await yellowPagesCtrl.getProcessStatusByPID(pid);
-
-        const response: CommonMessage<{
-          isRunning: boolean;
-          taskId?: number;
-          status?: string;
-          error?: string;
-        }> = {
-          status: true,
-          msg: "yellow_pages.process_status_retrieved_successfully",
-          data: result,
-        };
-        return response;
-      } catch (error) {
-        console.error("Yellow Pages process status error:", error);
-        const errorResponse: CommonMessage<{
-          isRunning: boolean;
-          taskId?: number;
-          status?: string;
-          error?: string;
-        }> = {
-          status: false,
-          msg:
-            error instanceof Error ? error.message : "Unknown error occurred",
-          data: {
-            isRunning: false,
-            error:
-              error instanceof Error ? error.message : "Unknown error occurred",
-          },
-        };
-        return errorResponse;
-      }
-    }
+    yellowPagesByPidInputSchema,
+    async (input) => {
+      return ctrl().getProcessStatusByPID(input.pid);
+    },
   );
 
-  // list yellow pages tasks
-  ipcMain.handle(
+  // ── Task queries ─────────────────────────────────────────────────────
+
+  registerValidatedHandler(
     YELLOW_PAGES_LIST,
-    async (
-      event,
-      data: unknown
-    ): Promise<CommonMessage<TaskSummary[] | null>> => {
-      try {
-        const yellowPagesCtrl = YellowPagesController.getInstance();
-        const filters = data
-          ? (JSON.parse(data as string) as TaskFilters)
-          : undefined;
-        const tasks = await yellowPagesCtrl.listTasks(filters);
-
-        const response: CommonMessage<TaskSummary[]> = {
-          status: true,
-          msg: "yellow_pages.tasks_retrieved_successfully",
-          data: tasks,
-        };
-        return response;
-      } catch (error) {
-        console.error("Yellow Pages tasks list error:", error);
-        const errorResponse: CommonMessage<null> = {
-          status: false,
-          msg:
-            error instanceof Error ? error.message : "Unknown error occurred",
-          data: null,
-        };
-        return errorResponse;
-      }
-    }
+    yellowPagesListInputSchema,
+    async (input) => {
+      // LIST filters are optional; passthrough schema allows empty object.
+      // Original behavior: `data ? JSON.parse : undefined`. With wrapper
+      // we always receive an object; pass it through as filters.
+      return ctrl().listTasks(input as unknown as TaskFilters | undefined);
+    },
   );
 
-  ipcMain.handle(
+  registerValidatedHandler(
     YELLOW_PAGES_DETAIL,
-    async (event, data: unknown): Promise<CommonMessage<any | null>> => {
-      try {
-        const yellowPagesCtrl = YellowPagesController.getInstance();
-        const { id } = JSON.parse(data as string) as { id: number };
-        const taskDetails = await yellowPagesCtrl.getTask(id);
-
-        const response: CommonMessage<any> = {
-          status: true,
-          msg: "yellow_pages.task_detail_retrieved_successfully",
-          data: taskDetails,
-        };
-        return response;
-      } catch (error) {
-        console.error("Yellow Pages task detail error:", error);
-        const errorResponse: CommonMessage<null> = {
-          status: false,
-          msg:
-            error instanceof Error ? error.message : "Unknown error occurred",
-          data: null,
-        };
-        return errorResponse;
-      }
-    }
+    yellowPagesTaskByIdInputSchema,
+    async (input) => {
+      return ctrl().getTask(input.id);
+    },
   );
 
-  ipcMain.handle(
+  registerValidatedHandler(
     YELLOW_PAGES_PROGRESS,
-    async (
-      event,
-      data: unknown
-    ): Promise<CommonMessage<TaskProgress | null>> => {
-      try {
-        const yellowPagesCtrl = YellowPagesController.getInstance();
-        const { id } = JSON.parse(data as string) as { id: number };
-        const progress = await yellowPagesCtrl.getTaskProgress(id);
-
-        const response: CommonMessage<TaskProgress> = {
-          status: true,
-          msg: "yellow_pages.task_progress_retrieved_successfully",
-          data: progress,
-        };
-        return response;
-      } catch (error) {
-        console.error("Yellow Pages task progress error:", error);
-        const errorResponse: CommonMessage<null> = {
-          status: false,
-          msg:
-            error instanceof Error ? error.message : "Unknown error occurred",
-          data: null,
-        };
-        return errorResponse;
-      }
-    }
+    yellowPagesTaskByIdInputSchema,
+    async (input) => {
+      return ctrl().getTaskProgress(input.id);
+    },
   );
 
-  ipcMain.handle(
+  registerValidatedHandler(
     YELLOW_PAGES_RESULTS,
-    async (
-      event,
-      data: unknown
-    ): Promise<CommonMessage<PaginatedResponse<YellowPagesResult> | null>> => {
-      try {
-        const yellowPagesCtrl = YellowPagesController.getInstance();
-        const {
-          id,
-          page = 0,
-          size = 20,
-        } = JSON.parse(data as string) as {
-          id: number;
-          page?: number;
-          size?: number;
-        };
-
-        const results = await yellowPagesCtrl.getTaskResults(id, {
-          page,
-          size,
-        });
-
-        const response: CommonMessage<PaginatedResponse<YellowPagesResult>> = {
-          status: true,
-          msg: "yellow_pages.task_results_retrieved_successfully",
-          data: results,
-        };
-        return response;
-      } catch (error) {
-        console.error("Yellow Pages task results error:", error);
-        const errorResponse: CommonMessage<null> = {
-          status: false,
-          msg:
-            error instanceof Error ? error.message : "Unknown error occurred",
-          data: null,
-        };
-        return errorResponse;
-      }
-    }
+    yellowPagesResultsInputSchema,
+    async (input) => {
+      return ctrl().getTaskResults(input.id, {
+        page: input.page ?? 0,
+        size: input.size ?? 20,
+      });
+    },
   );
 
-  ipcMain.handle(
+  registerValidatedHandler(
     YELLOW_PAGES_EXPORT,
-    async (event, data: unknown): Promise<CommonMessage<any | null>> => {
-      try {
-        const yellowPagesCtrl = YellowPagesController.getInstance();
-        const { id, format = "json" } = JSON.parse(data as string) as {
-          id: number;
-          format?: "json" | "csv";
-        };
-        const exportData = await yellowPagesCtrl.exportTaskResults(id, format);
-
-        const response: CommonMessage<any> = {
-          status: true,
-          msg: "yellow_pages.task_results_exported_successfully",
-          data: exportData,
-        };
-        return response;
-      } catch (error) {
-        console.error("Yellow Pages task export error:", error);
-        const errorResponse: CommonMessage<null> = {
-          status: false,
-          msg:
-            error instanceof Error ? error.message : "Unknown error occurred",
-          data: null,
-        };
-        return errorResponse;
-      }
-    }
+    yellowPagesExportInputSchema,
+    async (input) => {
+      return ctrl().exportTaskResults(input.id, input.format ?? "json");
+    },
   );
 
-  // Bulk Operations
-  ipcMain.handle(
+  // ── Bulk operations ──────────────────────────────────────────────────
+
+  registerValidatedHandler(
     YELLOW_PAGES_BULK,
-    async (event, data: unknown): Promise<CommonMessage<any | null>> => {
-      try {
-        const yellowPagesCtrl = YellowPagesController.getInstance();
-        const { operation, taskIds } = JSON.parse(data as string) as {
-          operation: "start" | "stop" | "pause" | "delete";
-          taskIds: number[];
-        };
-        const bulkResult = await yellowPagesCtrl.bulkOperations(
-          operation,
-          taskIds
-        );
-
-        const response: CommonMessage<any> = {
-          status: true,
-          msg: "yellow_pages.bulk_operation_completed_successfully",
-          data: bulkResult,
-        };
-        return response;
-      } catch (error) {
-        console.error("Yellow Pages bulk operation error:", error);
-        const errorResponse: CommonMessage<null> = {
-          status: false,
-          msg:
-            error instanceof Error ? error.message : "Unknown error occurred",
-          data: null,
-        };
-        return errorResponse;
-      }
-    }
+    yellowPagesBulkInputSchema,
+    async (input) => {
+      return ctrl().bulkOperations(input.operation, input.taskIds);
+    },
   );
 
-  // System Operations
-  ipcMain.handle(
+  // ── System operations ────────────────────────────────────────────────
+
+  registerValidatedHandler(
     YELLOW_PAGES_HEALTH,
-    async (event): Promise<CommonMessage<any | null>> => {
-      try {
-        const yellowPagesCtrl = YellowPagesController.getInstance();
-        const healthStatus = await yellowPagesCtrl.getHealthStatus();
-
-        const response: CommonMessage<any> = {
-          status: true,
-          msg: "yellow_pages.health_status_retrieved_successfully",
-          data: healthStatus,
-        };
-        return response;
-      } catch (error) {
-        console.error("Yellow Pages health status error:", error);
-        const errorResponse: CommonMessage<null> = {
-          status: false,
-          msg:
-            error instanceof Error ? error.message : "Unknown error occurred",
-          data: null,
-        };
-        return errorResponse;
-      }
-    }
+    yellowPagesNoInputSchema,
+    async () => {
+      return ctrl().getHealthStatus();
+    },
   );
 
-  ipcMain.handle(
+  registerValidatedHandler(
     YELLOW_PAGES_PLATFORMS,
-    async (event): Promise<CommonMessage<PlatformSummary[] | null>> => {
-      try {
-        const yellowPagesCtrl = YellowPagesController.getInstance();
-        const platforms = await yellowPagesCtrl.getAvailablePlatforms();
-
-        const response: CommonMessage<PlatformSummary[]> = {
-          status: true,
-          msg: "yellow_pages.platforms_retrieved_successfully",
-          data: platforms,
-        };
-        return response;
-      } catch (error) {
-        console.error("Yellow Pages platforms error:", error);
-        const errorResponse: CommonMessage<null> = {
-          status: false,
-          msg:
-            error instanceof Error ? error.message : "Unknown error occurred",
-          data: null,
-        };
-        return errorResponse;
-      }
-    }
+    yellowPagesNoInputSchema,
+    async () => {
+      return ctrl().getAvailablePlatforms();
+    },
   );
 
-  ipcMain.handle(
+  registerValidatedHandler(
     YELLOW_PAGES_STATISTICS,
-    async (event): Promise<CommonMessage<any | null>> => {
-      try {
-        const yellowPagesCtrl = YellowPagesController.getInstance();
-        const statistics = await yellowPagesCtrl.getTaskStatistics();
-
-        const response: CommonMessage<any> = {
-          status: true,
-          msg: "yellow_pages.statistics_retrieved_successfully",
-          data: statistics,
-        };
-        return response;
-      } catch (error) {
-        console.error("Yellow Pages statistics error:", error);
-        const errorResponse: CommonMessage<null> = {
-          status: false,
-          msg:
-            error instanceof Error ? error.message : "Unknown error occurred",
-          data: null,
-        };
-        return errorResponse;
-      }
-    }
+    yellowPagesNoInputSchema,
+    async () => {
+      return ctrl().getTaskStatistics();
+    },
   );
 
-  // Check for orphaned processes on startup
-  ipcMain.handle(
+  registerValidatedHandler(
     YELLOW_PAGES_CHECK_ORPHANED_PROCESSES,
-    async (
-      event
-    ): Promise<
-      CommonMessage<{
-        totalChecked: number;
-        orphanedFound: number;
-        failedUpdates: number;
-      } | null>
-    > => {
-      try {
-        const yellowPagesCtrl = YellowPagesController.getInstance();
-        const result = await yellowPagesCtrl.checkForOrphanedProcesses();
-
-        const response: CommonMessage<{
-          totalChecked: number;
-          orphanedFound: number;
-          failedUpdates: number;
-        }> = {
-          status: true,
-          msg: "yellow_pages.orphaned_processes_checked_successfully",
-          data: result,
-        };
-        return response;
-      } catch (error) {
-        console.error("Yellow Pages orphaned process check error:", error);
-        const errorResponse: CommonMessage<null> = {
-          status: false,
-          msg:
-            error instanceof Error ? error.message : "Unknown error occurred",
-          data: null,
-        };
-        return errorResponse;
-      }
-    }
+    yellowPagesNoInputSchema,
+    async () => {
+      return ctrl().checkForOrphanedProcesses();
+    },
   );
 
-  // Handle tasks from previous session on startup
-  ipcMain.handle(
+  registerValidatedHandler(
     "yellow_pages:handle_previous_session",
-    async (event): Promise<CommonMessage<number | null>> => {
-      try {
-        const yellowPagesCtrl = YellowPagesController.getInstance();
-        const failedCount =
-          await yellowPagesCtrl.handleTasksFromPreviousSession();
-
-        const response: CommonMessage<number> = {
-          status: true,
-          msg: "yellow_pages.previous_session_handled_successfully",
-          data: failedCount,
-        };
-        return response;
-      } catch (error) {
-        console.error("Yellow Pages previous session handling error:", error);
-        const errorResponse: CommonMessage<null> = {
-          status: false,
-          msg:
-            error instanceof Error ? error.message : "Unknown error occurred",
-          data: null,
-        };
-        return errorResponse;
-      }
-    }
+    yellowPagesNoInputSchema,
+    async () => {
+      return ctrl().handleTasksFromPreviousSession();
+    },
   );
 }
