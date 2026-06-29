@@ -59,7 +59,7 @@ export class SystemSettingGroupModel extends BaseDb {
         const repository = await this.getRepository();
 
         // Remove deprecated groups and their settings.
-        for (const name of ['Deepseek-local', 'deepseek-api-group', 'grokai-group', 'openai-group']) {
+        for (const name of ['Deepseek-local', 'deepseek-api-group', 'grokai-group', 'openai-group', 'volcengine-group']) {
             const deprecatedGroup = await repository.findOne({
                 where: { name },
                 relations: { settings: true },

@@ -1,16 +1,5 @@
 import { SystemSettingGroupdf } from "@/entityTypes/systemsettingType";
-import { LlmDatatype } from "@/entityTypes/commonType";
-export const volcenginegrouppro = "volcengine-group";
-export const volcengineproapiurl = "volcengine-url";
-export const volcengineproapikey = "volcengine-key";
-export const volcengineapipromodel = "volcengine-model";
 export const twocaptcha_enabled = "2captcha-enabled";
-export const Doubao_PRO_A: LlmDatatype = {
-  groupName: volcenginegrouppro,
-  modelName: volcengineapipromodel,
-  url: volcengineproapiurl,
-  apikey: volcengineproapikey,
-};
 export const twocaptchagroup = "2captcha-group";
 export const twocaptchatoken = "2captcha-token";
 export const twocaptchadescription = "2captcha-description";
@@ -47,30 +36,6 @@ export const settinggroupInit: Array<SystemSettingGroupdf> = [
         value: "0",
         description: "2captcha-enabled-description",
         type: "toggle",
-      },
-    ],
-  },
-  {
-    name: volcenginegrouppro,
-    description: "volcengine-group-description",
-    items: [
-      {
-        key: volcengineproapiurl,
-        value: "https://ark.cn-beijing.volces.com/api/v3/",
-        description: "volcengine-api-url-description",
-        type: "input",
-      },
-      {
-        key: volcengineapipromodel,
-        value: "doubao-1.5-pro-32k-250115",
-        description: "volcengine-api-model-description",
-        type: "input",
-      },
-      {
-        key: volcengineproapikey,
-        value: "",
-        description: "volcengine-api-key-description",
-        type: "input",
       },
     ],
   },
