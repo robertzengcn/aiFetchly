@@ -583,7 +583,8 @@ const showDialog=(status:boolean, content:string)=>{
     flex: 0 0 0;
     width: 0;
     height: 100%;
-    padding-top: 16px;
+    padding-top: 32px;
+    box-sizing: border-box;
     overflow: hidden;
     background-color: #ffffff;
     border-left: 1px solid rgba(0, 0, 0, 0.08);
@@ -645,6 +646,7 @@ const showDialog=(status:boolean, content:string)=>{
         right: -100%;
         width: 100%;
         height: 100vh;
+        padding-top: 0;
         flex-basis: auto;
         transition: right 0.3s ease-in-out;
         z-index: 9998;
