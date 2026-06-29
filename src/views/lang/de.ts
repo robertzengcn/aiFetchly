@@ -1134,6 +1134,14 @@ export default {
     mcp_tools: "MCP-Tools",
     manage_mcp_tools: "MCP-Tools verwalten",
     manage_skills: "Fähigkeiten verwalten",
+    ai_preferences: "KI-Einstellungen",
+    "ai-preferences-group-description": "Einstellungen zur Steuerung des KI-Chat-Verhaltens, des Speichers und des Kontexts.",
+    user_ai_auto_dream: "Auto-Traum-Konsolidierung",
+    "ai-auto-dream-description":
+      "Automatisches Zusammenfassen vergangener Konversationen im Hintergrund, um KI-Kontext-Token zu sparen.",
+    user_ai_memory_injection: "Benutzerspeicher-Injektion",
+    "ai-memory-injection-description":
+      "Relevante Benutzererinnerungen aus vergangenen Konversationen in den KI-Chat-Kontext einfügen.",
     user_ai_custom_context_directive: "Benutzerdefinierte Kontext-Direktive",
     "ai-custom-context-directive-description":
       "Statischer Text, der in jede KI-Chat-Anfrage eingefügt wird, nach dem System-Prompt. Feld leeren, um zu deaktivieren.",

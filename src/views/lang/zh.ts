@@ -1099,6 +1099,14 @@ export default {
     mcp_tools: "MCP工具",
     manage_mcp_tools: "管理MCP工具",
     manage_skills: "管理技能",
+    ai_preferences: "AI 偏好设置",
+    "ai-preferences-group-description": "控制 AI 聊天行为、记忆和上下文的设置。",
+    user_ai_auto_dream: "自动摘要整合",
+    "ai-auto-dream-description":
+      "在后台自动汇总过去的对话，以节省 AI 上下文令牌。",
+    user_ai_memory_injection: "用户记忆注入",
+    "ai-memory-injection-description":
+      "将过去对话中的相关用户记忆注入 AI 聊天上下文中。",
     user_ai_custom_context_directive: "自定义上下文指令",
     "ai-custom-context-directive-description":
       "在每次 AI 聊天请求中注入的静态文本（位于系统提示词之后）。清空输入框即可停用。",

@@ -1143,6 +1143,14 @@ export default {
     mcp_tools: "MCP Tools",
     manage_mcp_tools: "Manage MCP Tools",
     manage_skills: "Manage Skills",
+    ai_preferences: "AI Preferences",
+    "ai-preferences-group-description": "Settings that control AI chat behavior, memory, and context.",
+    user_ai_auto_dream: "Auto-Dream Consolidation",
+    "ai-auto-dream-description":
+      "Automatically summarize past conversations in the background to save AI context tokens.",
+    user_ai_memory_injection: "User Memory Injection",
+    "ai-memory-injection-description":
+      "Inject relevant user memories from past conversations into AI chat context.",
     user_ai_custom_context_directive: "Custom Context Directive",
     "ai-custom-context-directive-description":
       "Static text injected into every AI chat request, after the system prompt. Clear the box to disable.",

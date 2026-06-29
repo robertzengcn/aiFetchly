@@ -1112,6 +1112,14 @@ export default {
     mcp_tools: "MCPツール",
     manage_mcp_tools: "MCPツールを管理",
     manage_skills: "スキルを管理",
+    ai_preferences: "AI 設定",
+    "ai-preferences-group-description": "AIチャットの動作、メモリー、コンテキストを制御する設定。",
+    user_ai_auto_dream: "自動要約統合",
+    "ai-auto-dream-description":
+      "バックグラウンドで過去の会話を自動的に要約し、AIコンテキストトークンを節約します。",
+    user_ai_memory_injection: "ユーザーメモリー注入",
+    "ai-memory-injection-description":
+      "過去の会話から関連するユーザーの記憶をAIチャットコンテキストに注入します。",
     user_ai_custom_context_directive: "カスタムコンテキスト指示",
     "ai-custom-context-directive-description":
       "AI チャットリクエストに毎回注入される静的テキスト（システムプロンプトの後）。無効にするには入力欄を空にしてください。",

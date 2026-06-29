@@ -1127,6 +1127,14 @@ export default {
     mcp_tools: "MCP Tools",
     manage_mcp_tools: "Manage MCP Tools",
     manage_skills: "Gérer les compétences",
+    ai_preferences: "Préférences IA",
+    "ai-preferences-group-description": "Paramètres contrôlant le comportement du chat IA, la mémoire et le contexte.",
+    user_ai_auto_dream: "Consolidation Auto-Rêve",
+    "ai-auto-dream-description":
+      "Résumer automatiquement les conversations passées en arrière-plan pour économiser les tokens de contexte IA.",
+    user_ai_memory_injection: "Injection de Mémoire Utilisateur",
+    "ai-memory-injection-description":
+      "Injecter les souvenirs utilisateur pertinents des conversations passées dans le contexte du chat IA.",
     user_ai_custom_context_directive: "Directive de Contexte Personnalisée",
     "ai-custom-context-directive-description":
       "Texte statique injecté dans chaque requête de chat IA, après le prompt système. Videz le champ pour désactiver.",
