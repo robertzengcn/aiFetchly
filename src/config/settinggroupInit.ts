@@ -1,6 +1,5 @@
 import { SystemSettingGroupdf } from "@/entityTypes/systemsettingType";
 import { LlmDatatype } from "@/entityTypes/commonType";
-export const deepseekapigroup = "deepseek-api-group";
 export const grokaigroup = "grokai-group";
 export const grokaiapiurl = "grokai-url";
 export const grokaiapimodel = "grokai-model";
@@ -56,30 +55,6 @@ export const settinggroupInit: Array<SystemSettingGroupdf> = [
         value: "0",
         description: "2captcha-enabled-description",
         type: "toggle",
-      },
-    ],
-  },
-  {
-    name: deepseekapigroup,
-    description: "deepseek-api-description",
-    items: [
-      {
-        key: "deepseek-api-url",
-        value: "https://api.deepseek.com",
-        description: "deepseek-api-description",
-        type: "input",
-      },
-      {
-        key: "deepseek-api-model",
-        value: "deepseek-chat",
-        description: "deepseek-api-model-description",
-        type: "input",
-      },
-      {
-        key: "deepseek-api-key",
-        value: "",
-        description: "deepseek-api-key-description",
-        type: "input",
       },
     ],
   },

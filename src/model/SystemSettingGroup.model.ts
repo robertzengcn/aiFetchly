@@ -58,17 +58,19 @@ export class SystemSettingGroupModel extends BaseDb {
     public async initSystemSetting(){
         const repository = await this.getRepository();
 
-        // Remove deprecated Deepseek-local group and its settings.
-        const deprecatedGroup = await repository.findOne({
-            where: { name: 'Deepseek-local' },
-            relations: { settings: true },
-        });
-        if (deprecatedGroup) {
-            for (const s of deprecatedGroup.settings ?? []) {
-                await this.systemSettingModel.removeById(s.id);
+        // Remove deprecated groups and their settings.
+        for (const name of ['Deepseek-local', 'deepseek-api-group']) {
+            const deprecatedGroup = await repository.findOne({
+                where: { name },
+                relations: { settings: true },
+            });
+            if (deprecatedGroup) {
+                for (const s of deprecatedGroup.settings ?? []) {
+                    await this.systemSettingModel.removeById(s.id);
+                }
+                await repository.remove(deprecatedGroup);
+                console.log(`[system-setting] removed deprecated group: ${name}`);
             }
-            await repository.remove(deprecatedGroup);
-            console.log('[system-setting] removed deprecated Deepseek-local group');
         }
 
         for(const sgelement of settinggroupInit){
