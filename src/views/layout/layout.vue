@@ -579,7 +579,9 @@ const showDialog=(status:boolean, content:string)=>{
 }
 
 .ai-chat-dock {
-    position: relative;
+    position: sticky;
+    top: 92px;
+    align-self: flex-start;
     flex: 0 0 0;
     width: 0;
     height: calc(100vh - 92px);
@@ -643,6 +645,7 @@ const showDialog=(status:boolean, content:string)=>{
     .ai-chat-dock {
         position: fixed;
         top: 0;
+        align-self: auto;
         right: -100%;
         width: 100%;
         height: 100vh;

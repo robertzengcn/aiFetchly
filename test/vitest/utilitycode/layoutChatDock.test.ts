@@ -19,7 +19,8 @@ describe("layout AI chat V2 dock", () => {
     expect(source).not.toContain("<!-- V2 Backdrop overlay -->");
 
     const dockRule = extractRule(source, ".ai-chat-dock");
-    expect(dockRule).toContain("position: relative");
+    expect(dockRule).toContain("position: sticky");
+    expect(dockRule).toContain("top: 92px");
     expect(dockRule).toContain("height: calc(100vh - 92px)");
     expect(dockRule).toContain("padding-top: 32px");
     expect(dockRule).not.toContain("position: fixed");
