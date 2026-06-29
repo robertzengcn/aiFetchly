@@ -55,20 +55,38 @@ describe("contactExtractionWorkerOutboundSchema", () => {
     expect(r.success).toBe(false);
   });
 
-  it("accepts extract-contact-url-result", () => {
+  it("accepts extract-contact-url-result (single URL per message)", () => {
+    // Wire format matches ContactExtractionWorker.ts: one message per URL,
+    // all sharing the requestId. Multiple URLs => multiple messages.
+    const ok = contactExtractionWorkerOutboundSchema().safeParse({
+      type: "extract-contact-url-result",
+      requestId: "req-1",
+      url: "https://example.com",
+      success: true,
+      data: { emails: ["a@b.com"], phones: [] },
+    });
+    expect(ok.success).toBe(true);
+
+    const failed = contactExtractionWorkerOutboundSchema().safeParse({
+      type: "extract-contact-url-result",
+      requestId: "req-1",
+      url: "https://fail.com",
+      success: false,
+      error: "timeout",
+    });
+    expect(failed.success).toBe(true);
+  });
+
+  it("rejects extract-contact-url-result with array 'results' (wrong wire shape)", () => {
+    // Documents the deliberate wire-format choice: arrays are NOT accepted,
+    // because the worker emits one message per URL. If a future batch-mode
+    // variant is added, it should use a distinct discriminator value.
     const r = contactExtractionWorkerOutboundSchema().safeParse({
       type: "extract-contact-url-result",
       requestId: "req-1",
-      results: [
-        {
-          url: "https://example.com",
-          success: true,
-          data: { emails: ["a@b.com"], phones: [] },
-        },
-        { url: "https://fail.com", success: false, error: "timeout" },
-      ],
+      results: [{ url: "https://example.com", success: true }],
     });
-    expect(r.success).toBe(true);
+    expect(r.success).toBe(false);
   });
 
   it("rejects unknown message type", () => {

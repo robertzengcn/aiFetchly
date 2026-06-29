@@ -47,9 +47,15 @@ export const contactExtractionWorkerOutboundSchema = lazySchema(() =>
       data: z.unknown().optional(),
     }),
     z.object({
+      // Worker emits ONE message per URL (not a batch). Wire shape matches
+      // the worker's actual payload in ContactExtractionWorker.ts (single
+      // url/success/data/error per message, all sharing the requestId).
       type: z.literal("extract-contact-url-result"),
       requestId: z.string(),
-      results: z.array(contactExtractionUrlResultSchema),
+      url: z.string(),
+      success: z.boolean(),
+      data: contactExtractionUrlResultSchema.shape.data.optional(),
+      error: z.string().optional(),
     }),
   ])
 );
