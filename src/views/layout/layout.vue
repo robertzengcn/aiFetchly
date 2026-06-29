@@ -492,8 +492,7 @@ const showDialog=(status:boolean, content:string)=>{
 .app_main__body {
     display: flex;
     flex: 1;
-    min-height: 0;
-    height: 100%;
+    min-height: calc(100vh - 92px);
     align-items: stretch;
 }
 
@@ -579,12 +578,12 @@ const showDialog=(status:boolean, content:string)=>{
 }
 
 .ai-chat-dock {
-    position: sticky;
-    top: 92px;
-    align-self: flex-start;
+    position: relative;
+    align-self: stretch;
     flex: 0 0 0;
     width: 0;
-    height: calc(100vh - 92px);
+    height: auto;
+    min-height: calc(100vh - 92px);
     padding-top: 32px;
     box-sizing: border-box;
     overflow: hidden;
@@ -649,6 +648,7 @@ const showDialog=(status:boolean, content:string)=>{
         right: -100%;
         width: 100%;
         height: 100vh;
+        min-height: 0;
         padding-top: 0;
         flex-basis: auto;
         transition: right 0.3s ease-in-out;
