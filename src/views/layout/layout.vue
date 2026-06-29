@@ -104,8 +104,21 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
                     <v-btn icon="mdi-cog" />
                 </div>
             </header>
-            <div class="router">
-                <RouterView />
+            <div class="app_main__body">
+                <div class="router">
+                    <RouterView />
+                </div>
+                <div
+                    class="ai-chat-dock"
+                    :class="{ 'dock-open': v2ChatPanelOpen }"
+                >
+                    <div
+                        v-if="v2ChatPanelOpen && !mainStore.isMobile"
+                        class="chat-resize-handle"
+                        @mousedown="startResize"
+                    ></div>
+                    <AiChatV2 v-if="v2ChatPanelOpen" />
+                </div>
             </div>
         </main>
 
@@ -162,20 +175,6 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
           class="chat-backdrop"
           @click="toggleChatPanel"
         ></div>
-
-        <!-- AI Chat V2 Panel -->
-        <div
-          class="ai-chat-dock"
-          :class="{ 'dock-open': v2ChatPanelOpen }"
-        >
-          <!-- Resize handle -->
-          <div
-            v-if="v2ChatPanelOpen && !mainStore.isMobile"
-            class="chat-resize-handle"
-            @mousedown="startResize"
-          ></div>
-          <AiChatV2 v-if="v2ChatPanelOpen" />
-        </div>
     </v-layout>
 </template>
 <script setup lang="ts">
@@ -490,12 +489,12 @@ const showDialog=(status:boolean, content:string)=>{
     min-width: 0;
 }
 
-:deep(.chatDockOpen:not(.isMobile) .app_main .header) {
-    width: calc(100vw - 312px - var(--ai-chat-dock-width));
-}
-
-:deep(.isMini.chatDockOpen:not(.isMobile) .app_main .header) {
-    width: calc(100vw - 132px - var(--ai-chat-dock-width));
+.app_main__body {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    height: 100%;
+    align-items: stretch;
 }
 
 .messages-container {
@@ -583,13 +582,13 @@ const showDialog=(status:boolean, content:string)=>{
     position: relative;
     flex: 0 0 0;
     width: 0;
-    height: 100vh;
+    height: 100%;
+    padding-top: 16px;
     overflow: hidden;
     background-color: #ffffff;
     border-left: 1px solid rgba(0, 0, 0, 0.08);
     box-shadow: -2px 0 16px rgba(0, 0, 0, 0.08);
     transition: flex-basis 0.3s ease-in-out, width 0.3s ease-in-out;
-    z-index: 1;
 }
 
 .ai-chat-dock.dock-open {
