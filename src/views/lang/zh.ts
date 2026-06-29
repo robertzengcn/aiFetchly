@@ -1102,6 +1102,7 @@ export default {
     user_preferences: "用户偏好",
     "user-preferences-group-description": "应用程序行为的用户级偏好设置。",
     default_embedding_model: "默认嵌入模型",
+    "default-embedding-model-description": "选择用于向量搜索和相似度匹配的嵌入模型。",
     language_preference: "语言",
     "language-preference-description": "界面语言偏好。",
     ai_website_analysis_business_info: "业务信息",

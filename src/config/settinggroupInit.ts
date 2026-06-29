@@ -46,7 +46,7 @@ export const settinggroupInit: Array<SystemSettingGroupdf> = [
       {
         key: default_embedding_model,
         value: "",
-        description: "",
+        description: "default-embedding-model-description",
         type: "select",
       },
     ],

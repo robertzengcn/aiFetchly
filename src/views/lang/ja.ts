@@ -1115,6 +1115,7 @@ export default {
     user_preferences: "ユーザー設定",
     "user-preferences-group-description": "アプリケーション動作のユーザーレベル設定。",
     default_embedding_model: "デフォルト埋め込みモデル",
+    "default-embedding-model-description": "ベクトル検索と類似性マッチングに使用する埋め込みモデルを選択します。",
     language_preference: "言語",
     "language-preference-description": "UIの言語設定。",
     ai_website_analysis_business_info: "ビジネス情報",

@@ -1146,6 +1146,7 @@ export default {
     user_preferences: "User Preferences",
     "user-preferences-group-description": "User-level preferences for application behavior.",
     default_embedding_model: "Default Embedding Model",
+    "default-embedding-model-description": "Select the embedding model used for vector search and similarity matching.",
     language_preference: "Language",
     "language-preference-description": "UI language preference.",
     ai_website_analysis_business_info: "Business Info",

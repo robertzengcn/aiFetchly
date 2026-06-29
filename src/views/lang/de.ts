@@ -1137,6 +1137,7 @@ export default {
     user_preferences: "Benutzereinstellungen",
     "user-preferences-group-description": "Benutzereinstellungen für das Anwendungsverhalten.",
     default_embedding_model: "Standard-Einbettungsmodell",
+    "default-embedding-model-description": "Wählen Sie das Einbettungsmodell für die Vektorsuche und Ähnlichkeitsermittlung.",
     language_preference: "Sprache",
     "language-preference-description": "UI-Spracheinstellung.",
     ai_website_analysis_business_info: "Geschäftsinformationen",
