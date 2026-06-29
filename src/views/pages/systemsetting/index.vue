@@ -192,16 +192,15 @@ const selectItemid=ref<number>(0)
 const loadingSettings = ref<Record<number, boolean>>({});
 //const openGroups = ref<number[]>([]);
 
-// Convert each group into a tree item.
-// If you need deeper nesting, gather children by parentId, etc.
+// Convert each group into a tree item with translated labels.
 const groupItems = computed(() => {
   return settingGroups.value.map(group => ({
     id: group.id,
-    name: group.name,
+    name: t('system_settings.' + group.name) || group.name,
     description: group.description,
     children: group.items.map(item => ({
       id: item.id,
-      name: item.key,
+      name: t('system_settings.' + item.key) || item.key,
       description: item.description,
     })),
   }));
