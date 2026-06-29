@@ -582,7 +582,7 @@ const showDialog=(status:boolean, content:string)=>{
     position: relative;
     flex: 0 0 0;
     width: 0;
-    height: 100%;
+    height: calc(100vh - 92px);
     padding-top: 32px;
     box-sizing: border-box;
     overflow: hidden;
