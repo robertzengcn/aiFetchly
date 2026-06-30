@@ -26,6 +26,7 @@ import {
 } from "@/entityTypes/yandexMapsTypes";
 import { GoogleMapsModule } from "@/modules/GoogleMapsModule";
 import { YandexMapsModule } from "@/modules/YandexMapsModule";
+import path from "path";
 import { FileOperationTracker } from "@/service/FileOperationTracker";
 import type { FileOperationRecord } from "@/entityTypes/fileOperationTypes";
 import type { ModuleExecutionContext } from "@/entityTypes/skillTypes";
@@ -1690,9 +1691,14 @@ export class ToolExecutor {
 
       // EXEC-05: Only emit records for mutation tools
       if (toolName === "file_write" || toolName === "file_edit") {
-        const filePath =
+        const rawPath =
           (result.path as string) ?? (toolParams.path as string) ?? "";
         const ws = service.getActiveWorkspace();
+        const filePath = path.isAbsolute(rawPath)
+          ? rawPath
+          : ws?.rootPath
+            ? path.resolve(ws.rootPath, rawPath)
+            : path.resolve(rawPath);
         const record: Omit<FileOperationRecord, "id" | "timestamp"> = {
           type:
             toolName === "file_write"
@@ -1731,8 +1737,13 @@ export class ToolExecutor {
       if (toolName === "file_write" || toolName === "file_edit") {
         const errorMessage =
           error instanceof Error ? error.message : String(error);
-        const filePath = (toolParams.path as string) ?? "";
+        const rawPath = (toolParams.path as string) ?? "";
         const ws = service.getActiveWorkspace();
+        const filePath = path.isAbsolute(rawPath)
+          ? rawPath
+          : ws?.rootPath
+            ? path.resolve(ws.rootPath, rawPath)
+            : path.resolve(rawPath);
         FileOperationTracker.emit({
           // Note: On failure we can't know if file_write intended "create" vs "overwrite".
           // Defaulting to "overwrite" is reasonable since the file likely exists already.
