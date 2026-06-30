@@ -9,6 +9,8 @@ import {
   ai_memory_injection_enabled,
   ai_custom_context_directive,
 } from "@/config/settinggroupInit";
+import { WorkspaceResolver } from "@/service/WorkspaceResolver";
+import path from "node:path";
 import type { OpenAIChatMessage, OpenAIMessageRole } from "@/api/aiChatApi";
 import { MessageType } from "@/entityTypes/commonType";
 import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
@@ -121,6 +123,28 @@ export class AIChatContextAssembler {
     } catch (err) {
       console.error(
         "[ai-chat-context] failed to read custom context directive:",
+        err
+      );
+    }
+
+    // Active workspace context. Tell the model which folder it has file
+    // access to so it can answer questions about the workspace without
+    // probing the filesystem. Gracefully degrade on lookup failure.
+    try {
+      const workspaceResolver = new WorkspaceResolver();
+      const resolved = await workspaceResolver.resolve(
+        input.conversationId
+      );
+      if (resolved) {
+        const displayName = path.basename(resolved.rootPath);
+        messages.push({
+          role: "system",
+          content: `Active workspace: ${resolved.rootPath} (${displayName})`,
+        });
+      }
+    } catch (err) {
+      console.error(
+        "[ai-chat-context] failed to resolve active workspace:",
         err
       );
     }
