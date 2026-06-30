@@ -21,8 +21,10 @@ describe("layout AI chat V2 dock", () => {
     const dockRule = extractRule(source, ".ai-chat-dock");
     expect(dockRule).toContain("position: relative");
     expect(dockRule).toContain("align-self: stretch");
-    expect(dockRule).toContain("height: auto");
-    expect(dockRule).toContain("min-height: calc(100vh - 92px)");
+    expect(dockRule).toContain("height: calc(100vh - 92px)");
+    expect(dockRule).toContain("max-height: calc(100vh - 92px)");
+    expect(dockRule).toContain("min-height: 0");
+    expect(dockRule).not.toContain("height: auto");
     expect(dockRule).toContain("padding-top: 32px");
     expect(dockRule).not.toContain("position: fixed");
   });
