@@ -47,9 +47,15 @@ export function isValidDeepLinkOrigin(
 
   const host = parsedUrl.hostname.toLowerCase();
   const pathname = parsedUrl.pathname.toLowerCase();
+  // Reject empty-host URLs (e.g. "scheme:///auth/callback") — authority must
+  // be present. This also blocks the generic "/auth/callback" branch from
+  // accepting URLs with no authority at all.
+  if (!host) {
+    return false;
+  }
   const isCallbackPath =
     (host === "auth" && (pathname === "/callback" || pathname === "/")) ||
-    pathname === "/auth/callback";
+    (host !== "auth" && pathname === "/auth/callback");
   if (!isCallbackPath) {
     return false;
   }

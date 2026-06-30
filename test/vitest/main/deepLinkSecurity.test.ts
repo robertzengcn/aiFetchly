@@ -76,6 +76,8 @@ describe("isValidDeepLinkOrigin", () => {
     ["http://auth/callback?code=c", "wrong protocol"],
     ["aifetchly://evil/callback?code=c", "wrong host"],
     ["javascript:aifetchly://auth/callback?code=c", "javascript: protocol"],
+    ["aifetchly:///auth/callback?code=c&state=s", "empty host"],
+    ["aifetchly:///auth/?code=c&state=s", "empty host with /auth path"],
   ])("rejects invalid shape: %s (%s)", (url) => {
     expect(isValidDeepLinkOrigin(new URL(url), SCHEME)).toBe(false);
   });
