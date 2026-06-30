@@ -1,4 +1,6 @@
-import { ipcMain, shell } from "electron";
+import { ipcMain } from "electron";
+import { spawn } from "child_process";
+import { platform } from "os";
 import {
   AiChatApi,
   ChatRequest,
@@ -1481,7 +1483,21 @@ export function registerAiChatIpcHandlers(): void {
     }
   );
 
-  // Open file in system default application
+  // Open file in system default application.
+  // Uses spawn instead of shell.openPath because shell.openPath on Linux
+  // uses a blocking C++ call (system("xdg-open ...")) that freezes the main
+  // process event loop, making the UI unresponsive until xdg-open returns.
+  function openFileOnPlatform(filePath: string): void {
+    const [cmd, args] =
+      platform() === "darwin"
+        ? (["open", [filePath]] as const)
+        : platform() === "win32"
+          ? (["cmd.exe", ["/c", "start", "", filePath]] as const)
+          : (["xdg-open", [filePath]] as const);
+    const proc = spawn(cmd, args, { detached: true, stdio: "ignore" });
+    proc.unref();
+  }
+
   ipcMain.handle(AI_FILE_OPEN, async (_event, data: unknown) => {
     try {
       const parsed = JSON.parse(data as string) as { filePath: unknown };
@@ -1495,9 +1511,7 @@ export function registerAiChatIpcHandlers(): void {
       if (filePath.includes("..")) {
         return { status: false, msg: "Path traversal not allowed", data: null };
       }
-      shell.openPath(filePath).catch((openErr) => {
-        console.error("[ai-chat] Failed to open file:", openErr);
-      });
+      openFileOnPlatform(filePath);
       return { status: true, msg: "OK", data: null };
     } catch (error: unknown) {
       const msg =
