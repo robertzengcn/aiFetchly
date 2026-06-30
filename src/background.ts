@@ -24,25 +24,27 @@ import {
   REFRESHTOKENEXPIRY,
 } from "@/config/usersetting";
 import { DeviceFingerprintService } from "@/modules/deviceFingerprint";
-import { DeviceApi } from "@/api/deviceApi";
 import { SqliteDb } from "@/config/SqliteDb";
 import { logger, log } from "@/modules/Logger";
 import fs from "fs";
 import ProtocolRegistry from "protocol-registry";
 //import { RemoteSource } from '@/modules/remotesource'
-import { UserController } from "@/controller/UserController";
-import { NATIVATECOMMAND, LOGIN_STATUS } from "@/config/channellist";
-import { NativateDatatype } from "@/entityTypes/commonType";
+import { LOGIN_STATUS } from "@/config/channellist";
 import { ScheduleManager } from "@/modules/ScheduleManager";
 import { runafterbootup } from "@/modules/bootuprun";
 import { YellowPagesController } from "./controller/YellowPagesController";
-import { SearchController } from "./controller/SearchController";
 import {
   initializeWebSocketConnection,
   cleanupWebSocketConnection,
 } from "@/main-process/communication/websocket-ipc";
 import { TokenRefreshService } from "@/modules/tokenRefresh";
 import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
+import {
+  getPendingDesktopAuth,
+  clearPendingDesktopAuth,
+} from "@/modules/pendingDesktopAuth";
+import { DesktopAuthApi } from "@/api/desktopAuthApi";
+import { completeDesktopLogin } from "@/modules/desktopLoginCompletion";
 // import { RAGIpcHandlers } from '@/main-process/ragIpcHandlers';
 // import { createProtocol } from 'electron';
 const isDevelopment = process.env.NODE_ENV !== "production";
@@ -819,23 +821,54 @@ function makeSingleInstance() {
 }
 
 /**
- * Validate deep link URL origin to prevent malicious token injection
+ * Validate deep link URL origin to prevent malicious token injection.
+ *
+ * Under the secure auth handoff the ONLY acceptable deep-link shape is:
+ *
+ *     <protocolScheme>://auth/callback?code=<code>&state=<state>
+ *
+ * The legacy shape that carried bearer tokens in the query
+ * (`?token=...&refresh_token=...`) is rejected unconditionally — that
+ * path is what this refactor eliminates.
  */
 function isValidDeepLinkOrigin(parsedUrl: URL): boolean {
-  // Check if the URL protocol matches our app's protocol scheme (case-insensitive)
-  const urlProtocol = parsedUrl.protocol.toLowerCase();
-  if (!urlProtocol.includes(protocolScheme)) {
+  // Protocol must match our app's scheme (case-insensitive).
+  const urlProtocol = parsedUrl.protocol.toLowerCase().replace(/:$/, "");
+  if (urlProtocol !== protocolScheme) {
     log.error("Invalid deep link protocol:", parsedUrl.protocol);
     return false;
   }
 
-  // Additional validation: ensure URL has the expected structure
-  if (!parsedUrl.hostname) {
-    log.error("Invalid deep link hostname:", parsedUrl.hostname);
+  // Host MUST be 'auth' and pathname MUST be '/callback' (or '/auth/callback'
+  // on platforms that include the host in the path). This is the shape the
+  // web app emits via safeRedirectToCallback.
+  const host = parsedUrl.hostname.toLowerCase();
+  const pathname = parsedUrl.pathname.toLowerCase();
+  const isCallbackPath =
+    (host === "auth" && (pathname === "/callback" || pathname === "/")) ||
+    pathname === "/auth/callback";
+  if (!isCallbackPath) {
+    log.error("Invalid deep link host/path:", host, pathname);
     return false;
   }
 
   return true;
+}
+
+/**
+ * Returns true iff `url` contains any of the bearer-token query keys that
+ * the legacy insecure handoff used. The new flow only ever carries `code`
+ * and `state`; presence of any token key is a hard reject.
+ *
+ * This is the runtime enforcement of the security invariant from
+ * docs/custom-protocol-auth-handoff-security-fix.md acceptance criterion #2.
+ */
+function urlContainsTokenParams(url: string): boolean {
+  // Match either as a query key at any boundary. We deliberately match
+  // both snake_case and camelCase variants.
+  const tokenPattern =
+    /[?&](token|access_token|refresh_token|refreshToken|expiresIn|expires_in|refreshExpiresIn|refresh_expires_in)=/i;
+  return tokenPattern.test(url);
 }
 
 /**
@@ -866,294 +899,142 @@ async function handleDeepLink(url: string) {
       });
     }
 
+    // SECURITY: reject any deep link that carries bearer-token query keys.
+    // The secure handoff transports ONLY an authorization code + state.
+    if (urlContainsTokenParams(url)) {
+      log.error(
+        "Rejected deep link carrying bearer-token params (legacy/insecure shape)"
+      );
+      sendLoginError(
+        "This login link is no longer supported. Please sign in again."
+      );
+      dialog.showErrorBox(
+        "Login Link Expired",
+        "This login link uses an outdated format and cannot be used. Please sign in again from the app."
+      );
+      clearPendingDesktopAuth();
+      return;
+    }
+
     const parsedUrl = new URL(url);
 
-    // Validate deep link origin to prevent malicious token injection
+    // Validate deep link origin to prevent malicious token injection.
     if (!isValidDeepLinkOrigin(parsedUrl)) {
-      log.error("Invalid deep link origin:", url);
+      log.error(
+        "Invalid deep link origin:",
+        parsedUrl.protocol,
+        parsedUrl.host
+      );
       sendLoginError("Invalid deep link origin. This link may be malicious.");
       dialog.showErrorBox(
         "Security Error",
         "Invalid deep link origin. This link may be malicious."
       );
+      clearPendingDesktopAuth();
       return;
     }
 
-    // Extract token parameters
-    // Use searchParams if available, otherwise parse manually (for custom protocols)
-    let token: string | null = null;
-    let refreshToken: string | null = null;
-    let expiresIn: string | null = null;
-    let refreshExpiresIn: string | null = null;
+    // Only `code` and `state` are ever read from the URL. Any other parameter
+    // is treated as suspicious and the link is rejected.
+    const code = parsedUrl.searchParams.get("code");
+    const state = parsedUrl.searchParams.get("state");
+    const allKeys = Array.from(parsedUrl.searchParams.keys());
+    const forbiddenExtras = allKeys.filter(
+      (k) => k !== "code" && k !== "state"
+    );
 
-    if (parsedUrl.searchParams) {
-      // Standard URL parsing
-      token = parsedUrl.searchParams.get("token");
-      refreshToken =
-        parsedUrl.searchParams.get("refreshToken") ||
-        parsedUrl.searchParams.get("refresh_token");
-      expiresIn =
-        parsedUrl.searchParams.get("expiresIn") ||
-        parsedUrl.searchParams.get("expires_in");
-      refreshExpiresIn =
-        parsedUrl.searchParams.get("refreshExpiresIn") ||
-        parsedUrl.searchParams.get("refresh_expires_in");
+    if (!code || !state) {
+      log.error("Deep link missing code or state");
+      sendLoginError("Login link is missing required parameters.");
+      clearPendingDesktopAuth();
+      return;
+    }
+    if (forbiddenExtras.length > 0) {
+      log.error("Deep link contains unexpected query parameters");
+      sendLoginError("Login link contains unexpected parameters.");
+      clearPendingDesktopAuth();
+      return;
     }
 
-    // Fallback: Manual parsing if searchParams didn't work (common with custom protocols)
-    // Also trigger fallback if token exists but refreshToken is missing AND url ends with token (suggesting truncation)
-    const urlEndsWithTokenValue = token && url.endsWith(token);
-    if (
-      !token ||
-      (!refreshToken &&
-        (url.includes("refresh_token") || urlEndsWithTokenValue))
-    ) {
-      const queryString = url.includes("?") ? url.split("?")[1] : "";
-      const params = new URLSearchParams(queryString);
-      token = token || params.get("token");
-      refreshToken =
-        refreshToken ||
-        params.get("refreshToken") ||
-        params.get("refresh_token");
-      expiresIn =
-        expiresIn || params.get("expiresIn") || params.get("expires_in");
-      refreshExpiresIn =
-        refreshExpiresIn ||
-        params.get("refreshExpiresIn") ||
-        params.get("refresh_expires_in");
+    // Validate state against the pending handoff (CSRF defense).
+    const pending = getPendingDesktopAuth();
+    if (!pending) {
+      log.error("No pending desktop auth handoff for incoming deep link");
+      sendLoginError(
+        "Login session not found. Please sign in again from the app."
+      );
+      return;
+    }
+    if (state.length !== pending.state.length || state !== pending.state) {
+      log.error("Deep link state mismatch — possible CSRF attempt");
+      sendLoginError("Login verification failed. Please sign in again.");
+      dialog.showErrorBox(
+        "Security Error",
+        "Login verification failed. Please sign in again from the app."
+      );
+      clearPendingDesktopAuth();
+      return;
     }
 
-    // Debug logging
-    log.info("Extracted tokens from deep link:", {
-      hasToken: !!token,
-      hasRefreshToken: !!refreshToken,
-      tokenLength: token?.length || 0,
-      refreshTokenLength: refreshToken?.length || 0,
+    // Resolve device info for the exchange request.
+    const deviceFingerprintService = new DeviceFingerprintService();
+    const deviceIdHash = deviceFingerprintService.getDeviceIdHash();
+    const deviceName = deviceFingerprintService.getDeviceName();
+
+    // Exchange the one-time code for tokens over HTTPS. This is the ONLY
+    // place tokens are introduced into the desktop app; they never appear
+    // in any URL.
+    const desktopAuthApi = new DesktopAuthApi();
+    const exchangeResult =
+      await desktopAuthApi.exchangeDesktopAuthorizationCode({
+        clientId: "aifetchly-desktop",
+        code,
+        codeVerifier: pending.codeVerifier,
+        redirectUri: pending.redirectUri,
+        deviceName,
+        deviceIdHash,
+      });
+
+    if (!exchangeResult.ok) {
+      log.error("Desktop auth code exchange failed:", {
+        reason: exchangeResult.reason,
+        message: exchangeResult.message,
+      });
+      const userMessage =
+        exchangeResult.reason === "invalid_grant"
+          ? "Login code is invalid, expired, or already used. Please sign in again."
+          : exchangeResult.reason === "network"
+          ? "Unable to reach the login server. Check your network and try again."
+          : "Login could not be completed. Please try again.";
+      sendLoginError(userMessage);
+      dialog.showErrorBox("Login Failed", userMessage);
+      clearTokens();
+      clearPendingDesktopAuth();
+      return;
+    }
+
+    // Success — complete the login cascade (tokens, device, DB, WS, nav).
+    const completion = await completeDesktopLogin(win, {
+      accessToken: exchangeResult.data.accessToken,
+      refreshToken: exchangeResult.data.refreshToken,
+      expiresIn: exchangeResult.data.expiresIn,
+      refreshExpiresIn: exchangeResult.data.refreshExpiresIn,
     });
 
-    if (!token) {
-      log.error("No token found in deep link");
-      sendLoginError("No authentication token found.");
-      return;
-    }
-
-    // Store tokens with error handling
-    const tokenService = new Token();
-    try {
-      tokenService.setValue(TOKENNAME, token);
-      log.info("Access token saved successfully");
-
-      // Calculate and store token expiry time
-      if (expiresIn) {
-        const expiryTime = Date.now() + parseInt(expiresIn) * 1000;
-        tokenService.setValue(TOKENEXPIRY, expiryTime.toString());
-        log.info(
-          "Token expiry time saved:",
-          new Date(expiryTime).toISOString()
-        );
-      }
-
-      // Save refresh token if provided
-      if (refreshToken) {
-        tokenService.setValue(REFRESHTOKEN, refreshToken);
-        log.info("Refresh token saved successfully");
-
-        // Calculate and store refresh token expiry time
-        // Default to 30 days if not provided by server
-        const effectiveRefreshExpiresIn = refreshExpiresIn
-          ? parseInt(refreshExpiresIn)
-          : 2592000; // 30 days in seconds
-        const refreshExpiryTime = Date.now() + effectiveRefreshExpiresIn * 1000;
-        tokenService.setValue(REFRESHTOKENEXPIRY, refreshExpiryTime.toString());
-        log.info(
-          "Refresh token expiry time saved:",
-          new Date(refreshExpiryTime).toISOString()
-        );
-      } else {
-        log.warn("No refresh token found in deep link URL");
-      }
-    } catch (storageError) {
-      log.error("Failed to store tokens:", storageError);
-      const errorMessage =
-        storageError instanceof Error
-          ? storageError.message
-          : String(storageError);
-      sendLoginError(`Failed to store authentication tokens: ${errorMessage}`);
-      dialog.showErrorBox(
-        "Authentication Error",
-        `Failed to store authentication tokens: ${errorMessage}`
-      );
-      return;
-    }
-
-    // Fetch user information
-    const userController = new UserController();
-    try {
-      const userInfo = await userController.updateUserInfo();
-      if (userInfo) {
-        // Login successful - Register device with backend (non-blocking)
-        try {
-          const deviceFingerprintService = new DeviceFingerprintService();
-          const deviceApi = new DeviceApi();
-
-          const deviceIdHash = deviceFingerprintService.getDeviceIdHash();
-          const deviceName = deviceFingerprintService.getDeviceName();
-
-          // Store deviceIdHash for future use
-          deviceFingerprintService.storeDeviceIdHash(deviceIdHash);
-
-          // Register device with backend
-          if (refreshToken) {
-            await deviceApi.registerDevice(
-              deviceName,
-              deviceIdHash,
-              refreshToken
-            );
-            log.info("Device registered successfully:", deviceIdHash);
-          } else {
-            // Register without refresh token (backend will generate one)
-            await deviceApi.registerDevice(deviceName, deviceIdHash);
-            log.info(
-              "Device registered successfully (without refresh token):",
-              deviceIdHash
-            );
-          }
-        } catch (deviceError) {
-          // Log error but don't block login flow
-          log.error("Device registration failed (non-blocking):", deviceError);
-          const errorMessage =
-            deviceError instanceof Error
-              ? deviceError.message
-              : String(deviceError);
-          console.error("Device registration error:", errorMessage);
-        }
-
-        // After successful login, USERSDBPATH may have changed
-        // Reset database singletons to use the new path
-        try {
-          const tokenService = new Token();
-          const newDbPath = tokenService.getValue(USERSDBPATH);
-          if (newDbPath && newDbPath.length > 0) {
-            // Reset ScheduleManager first (before destroying DB connection)
-            // This allows it to stop cleanly without trying to use a destroyed connection
-            await ScheduleManager.resetInstance();
-            log.info("ScheduleManager reset to new path after login");
-
-            // Reset SqliteDb instance to use new path
-            const newDbInstance = await SqliteDb.resetInstance(newDbPath);
-            log.info("SqliteDb reset to new path after login:", newDbPath);
-
-            // Reset controller singletons so they re-create modules/models
-            // with the new SqliteDb instance on next use
-            SearchController.resetInstance();
-            YellowPagesController.resetInstance();
-            log.info("Controller singletons reset after SqliteDb path change");
-
-            // Ensure the new connection is initialized with retry logic for database locks
-            if (!newDbInstance.connection.isInitialized) {
-              let retries = 3;
-              let lastError: unknown = null;
-              while (retries > 0) {
-                try {
-                  await SqliteDb.ensureInitialized();
-                  log.info("New SqliteDb connection initialized");
-                  break;
-                } catch (initError) {
-                  lastError = initError;
-                  retries--;
-                  if (retries > 0) {
-                    const errorMessage =
-                      initError instanceof Error
-                        ? initError.message
-                        : String(initError);
-                    if (
-                      errorMessage.includes("locked") ||
-                      errorMessage.includes("database is locked")
-                    ) {
-                      log.warn(
-                        `Database locked during initialization, retrying... (${retries} retries left)`
-                      );
-                      // Wait a bit longer before retrying
-                      await new Promise((resolve) => setTimeout(resolve, 200));
-                    } else {
-                      // Not a lock error, don't retry
-                      throw initError;
-                    }
-                  }
-                }
-              }
-              if (retries === 0 && lastError) {
-                log.error(
-                  "Failed to initialize new SqliteDb connection after retries:",
-                  lastError
-                );
-                // Don't throw - allow login to continue, connection will be initialized on first use
-              }
-            }
-          }
-        } catch (dbResetError) {
-          // Log but don't block login flow
-          log.error(
-            "Failed to reset database singletons after login (non-blocking):",
-            dbResetError
-          );
-        }
-
-        // Initialize WebSocket connection after successful login
-        if (win && !(win as any).isDestroyed()) {
-          try {
-            await initializeWebSocketConnection(win);
-            log.info("WebSocket connection initialized after login");
-          } catch (wsError) {
-            log.error(
-              "Failed to initialize WebSocket after login (non-blocking):",
-              wsError
-            );
-          }
-        }
-
-        // Start background token auto-refresh (only if not already running)
-        if (!TokenRefreshService.isAutoRefreshRunning()) {
-          TokenRefreshService.startAutoRefresh();
-        }
-
-        // Navigate to dashboard
-        if (win && !(win as any).isDestroyed()) {
-          (win as any).webContents.send(NATIVATECOMMAND, {
-            path: "Dashboard",
-          } as NativateDatatype);
-        } else {
-          console.error(
-            "Window has been destroyed, cannot send navigation command"
-          );
-          log.error(
-            "Window has been destroyed, cannot send navigation command"
-          );
-        }
-      } else {
-        log.error("Failed to get user info from remote source");
-        sendLoginError("Failed to get user info from remote source.");
-        dialog.showErrorBox(
-          "User Info Error",
-          "Failed to get user info from remote source."
-        );
-
-        // Clear tokens on authentication failure
-        clearTokens();
-      }
-    } catch (userError) {
-      log.error("Error updating user info:", userError);
-      const errorMessage =
-        userError instanceof Error ? userError.message : String(userError);
-      sendLoginError(`Failed to update user information: ${errorMessage}`);
-      dialog.showErrorBox(
-        "User Info Update Error",
-        `Failed to update user information: ${errorMessage}`
-      );
-
-      // Clear tokens on authentication failure
+    if (!completion.ok) {
+      log.error("completeDesktopLogin reported failure:", {
+        reason: completion.reason,
+        message: completion.message,
+      });
+      sendLoginError(`Failed to complete sign-in: ${completion.message}`);
       clearTokens();
+      clearPendingDesktopAuth();
+      return;
     }
+
+    // The handoff is fully consumed — clear the pending state so the same
+    // code/state cannot be replayed.
+    clearPendingDesktopAuth();
   } catch (error) {
     log.error("Failed to handle deep link:", error);
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -1167,6 +1048,8 @@ async function handleDeepLink(url: string) {
         `Failed to process authentication link: ${errorMessage}`
       );
     }
+    clearTokens();
+    clearPendingDesktopAuth();
   }
 }
 
