@@ -49,10 +49,5 @@ export async function listWorkspaces(
  * Returns the selected folder path, or null if the user cancelled.
  */
 export async function pickFolder(): Promise<string | null> {
-  const api = (
-    window as unknown as {
-      api: { invoke: (channel: string, data?: unknown) => Promise<unknown> };
-    }
-  ).api;
-  return (await api.invoke(DIALOG_PICK_FOLDER)) as string | null;
+  return (await windowInvoke(DIALOG_PICK_FOLDER)) as string | null;
 }
