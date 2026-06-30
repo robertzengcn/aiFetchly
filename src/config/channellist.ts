@@ -107,6 +107,7 @@ export const SYSTEM_SETTING_UPDATE = "system_setting:update";
 export const QUERY_USER_INFO = "user:info";
 export const OPENLOGINPAGE = "open:page";
 export const GET_LOGIN_URL = "user:get_login_url";
+export const CANCEL_DESKTOP_LOGIN = "user:cancel_desktop_login";
 export const USER_LOGIN = "user:Login";
 export const NATIVATECOMMAND = "navigate:command";
 export const LOGIN_STATUS = "login:status";
