@@ -35,31 +35,40 @@ describe("run_subagent tool definition", () => {
     expect(taskPacketProps).toHaveProperty("requiredOutputSchema");
   });
 
-  it("taskPacket.lead description discourages inlining full contact lists", () => {
+  it("taskPacket.lead describes the lead data the model can pass", () => {
     const taskPacket = props.taskPacket as Record<string, unknown>;
     const taskPacketProps = taskPacket.properties as Record<string, unknown>;
     const lead = taskPacketProps.lead as Record<string, unknown>;
 
-    expect(lead.description).toContain("companyName + website only");
-    expect(lead.description).toContain("look up full details");
+    expect(lead.description).toMatch(/companyName/i);
+    expect(lead.description).toMatch(/website/i);
+    expect(lead.description).toMatch(/contacts/i);
 
-    // Ensure lead has defined sub-properties so the model knows what's expected
+    // Lead has defined sub-properties so the model knows what's expected
     const leadProps = lead.properties as Record<string, unknown>;
     expect(leadProps).toHaveProperty("companyName");
     expect(leadProps).toHaveProperty("website");
+    expect(leadProps).toHaveProperty("description");
+    expect(leadProps).toHaveProperty("existingContacts");
   });
 
-  it("taskPacket description tells the model to keep it compact", () => {
+  it("taskPacket lists the expected fields without restricting content", () => {
     const taskPacket = props.taskPacket as Record<string, unknown>;
-    expect(taskPacket.description).toMatch(/KEEP THIS COMPACT/i);
-    expect(taskPacket.description).toMatch(/do NOT inline/i);
-    expect(taskPacket.description).toMatch(/research and enrich/i);
+    expect(taskPacket.description).toMatch(/lead/);
+    expect(taskPacket.description).toMatch(/userGoal/);
+    expect(taskPacket.description).toMatch(/constraints/);
+    expect(taskPacket.description).toMatch(/priorFindings/);
+    expect(taskPacket.description).toMatch(/requiredOutputSchema/);
+    // Should NOT contain restrictive language
+    expect(taskPacket.description).not.toMatch(/only/i);
   });
 
-  it("prompt description encourages brevity", () => {
+  it("prompt description tells the model what to do without length restrictions", () => {
     const prompt = props.prompt as Record<string, unknown>;
-    expect(prompt.description).toMatch(/concise/i);
-    expect(prompt.description).toMatch(/1-2 sentences/i);
+    expect(prompt.description).toMatch(/instruction/i);
+    expect(prompt.description).toMatch(/specialist agent/i);
+    // Should NOT contain restrictive language about length
+    expect(prompt.description).not.toMatch(/concise/i);
   });
 
   it("exposes the async contract so models know to poll", () => {

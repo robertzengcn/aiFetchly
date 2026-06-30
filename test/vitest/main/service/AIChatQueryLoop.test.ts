@@ -598,7 +598,7 @@ describe("AIChatQueryLoop", () => {
       expect(toolResultEvents.length).toBeGreaterThan(0);
       const hasTruncationGuidance = toolResultEvents.some(
         (msg: string) =>
-          msg.includes("truncated") && msg.includes("MORE COMPACT")
+          msg.includes("cut off") && msg.includes("incomplete")
       );
       expect(hasTruncationGuidance).toBe(true);
     });
