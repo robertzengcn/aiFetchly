@@ -61,7 +61,7 @@ export function registerCommunicationIpcHandlers(win: BrowserWindow) {
     registerEmailTemplateIpcHandlers();
     registerSocialAccountIpcHandlers(win);
     registerSystemSettingIpcHandlers();
-    registerUserIpcHandlers();
+    registerUserIpcHandlers(() => win);
     registerPlatformIpcHandlers();
     registerSessionRecordingIpcHandlers();
     registerLanguagePreferenceIpcHandlers();

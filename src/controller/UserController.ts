@@ -25,7 +25,7 @@ import { SqliteDb } from "@/config/SqliteDb";
 // import { runafterbootup } from "@/modules/bootuprun"
 import { UserInfoType } from "@/entityTypes/userType";
 //import { CommonMessage } from "@/entityTypes/commonType";
-import { shell } from "electron";
+import { shell, BrowserWindow } from "electron";
 // const packageJson = require('../../../package.json');
 // import {Token} from "@/modules/token"
 import { resolveViteLoginBase } from "@/config/viteLoginUrl";
@@ -42,6 +42,7 @@ import {
   startLoopbackCallbackServer,
   type LoopbackServerHandle,
 } from "@/modules/loopbackCallbackServer";
+import { consumeDesktopAuthCode } from "@/modules/desktopAuthExchange";
 
 // const debug = require('debug')('user-controller');
 export type userlogin = {
@@ -59,6 +60,27 @@ export type userResponse = {
 export class UserController {
   // private user: string;
   // private pass: string;
+
+  /**
+   * Returns the main BrowserWindow for the desktop-login completion cascade
+   * (navigation to Dashboard, etc). The IPC layer sets this at app startup
+   * via setMainWindowProvider so the controller does not import background.ts
+   * (which would create a circular dependency).
+   *
+   * Defaults to () => null so the controller is usable in contexts without
+   * a window (tests, worker processes).
+   */
+  private static _mainWindowProvider: () => BrowserWindow | null = () => null;
+
+  public static setMainWindowProvider(
+    provider: () => BrowserWindow | null
+  ): void {
+    UserController._mainWindowProvider = provider;
+  }
+
+  private _windowProvider(): BrowserWindow | null {
+    return UserController._mainWindowProvider();
+  }
 
   /**
    * Check if a plan enables AI features.
@@ -266,16 +288,28 @@ export class UserController {
    *        <origin>/login?desktop_auth=1&client_id=aifetchly-desktop
    *          &redirect_uri=<loopback>&state=<state>
    *          &code_challenge=<challenge>&code_challenge_method=S256
+   *   5. Attach a consumer to the loopback callback that validates state,
+   *      exchanges the code for tokens, and completes the login cascade.
    *
-   * Returns the login URL to open in the browser plus a `cancel` callback
-   * that aborts the loopback server and clears pending state.
+   * Returns:
+   *   - loginUrl: the URL to open in the browser.
+   *   - cancel(): aborts the loopback server and clears pending state.
+   *   - done: a promise that resolves with the outcome of the loopback
+   *     callback processing. The caller (IPC layer) attaches UI-facing
+   *     side-effects (dialogs, error messages, token cleanup) via
+   *     done.then(...). Resolves on both success and failure — always
+   *     check result.ok.
    *
-   * The caller is responsible for calling shell.openExternal(loginUrl)
-   * and, on user cancel or error, calling cancel().
+   * If the browser never redirects back to the loopback URL, `done`
+   * rejects with the loopback server's timeout/abort error. The caller
+   * should attach a rejection handler.
    */
   public async prepareDesktopLogin(): Promise<{
     loginUrl: string;
     cancel: () => void;
+    done: Promise<
+      { ok: true } | { ok: false; reason: string; message: string }
+    >;
   }> {
     const origin = this.getLoginPageUrl();
 
@@ -320,72 +354,52 @@ export class UserController {
       // state and challenge are intentionally NOT logged.
     });
 
+    // 5. Attach the callback consumer. The promise resolves/rejects with
+    //    the outcome of the loopback callback processing; the caller
+    //    surfaces it to the UI. The BrowserWindow is resolved lazily via
+    //    windowProvider so tests can inject a mock.
+    const done = server
+      .waitForCallback()
+      .then(async ({ code, state: returnedState }) =>
+        consumeDesktopAuthCode({
+          code,
+          state: returnedState,
+          win: this._windowProvider(),
+        })
+      )
+      .then((result) => {
+        if (result.ok) return { ok: true as const };
+        return {
+          ok: false as const,
+          reason: result.reason,
+          message: result.message,
+        };
+      });
+
     const cancel = (): void => {
       server.abort();
       clearPendingDesktopAuth();
     };
 
-    return { loginUrl: loginUrl.toString(), cancel };
+    return { loginUrl: loginUrl.toString(), cancel, done };
   }
 
-  public async openLoginPage() {
-    // Open login page with shell
-    // const loginUrl = import.meta.env.VITE_LOGIN_URL as string;
-    // // Get app name from package.json
-    // const appName = app.getName() || "";
-    // const finalapp=appName.replace(/-/g, '');
-    // // try {
-    // //     appName = packageJson.name || "";
-    // //     console.log(`Using app name from package.json: ${appName}`);
-    // // } catch (error) {
-    // //     console.error("Could not read package.json:", error);
-    // // }
-
-    // // Build the login URL with app name
-    // const finalloginUrl=loginUrl.replace(/\/$/, '') + '/login?app='+finalapp
-    // if (!finalloginUrl) {
-    //     throw new Error("Login URL is not defined in environment variables");
-    // }
-
-    // // Check URL is valid
-    // const urlPattern = new RegExp(
-    //     '^(https?:\\/\\/)?' + // protocol
-    //     '((([a-z\\d]([a-z\\d-]*[a-z\\d])*)\\.)+[a-z]{2,}|' + // domain name
-    //     '((\\d{1,3}\\.){3}\\d{1,3})|' + // OR ip (v4) address
-    //     'localhost|' + // OR localhost
-    //     '127\\.0\\.0\\.1)' + // OR 127.0.0.1
-    //     '(\\:\\d+)?(\\/[-a-z\\d%_.~+]*)*' + // port and path
-    //     '(\\?[;&a-z\\d%_.~+=-]*)?' + // query string
-    //     '(\\#[-a-z\\d_]*)?$', // fragment locator
-    //     'i'
-    // );
-
-    // if (!urlPattern.test(finalloginUrl)) {
-    //     throw new Error(`Invalid login URL format: ${finalloginUrl}`);
-    // }
-    // Secure handoff: start loopback server, generate PKCE, build URL.
-    let prepared: { loginUrl: string; cancel: () => void };
+  /**
+   * @deprecated Use prepareDesktopLogin() + shell.openExternal from the IPC
+   *   layer. This thin wrapper is retained for direct callers but simply
+   *   delegates to the same pipeline. Does NOT wait for the loopback
+   *   callback — callers that need completion should await the `done`
+   *   promise returned by prepareDesktopLogin().
+   */
+  public async openLoginPage(): Promise<void> {
+    const prepared = await this.prepareDesktopLogin();
     try {
-      prepared = await this.prepareDesktopLogin();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      log.error("Failed to prepare desktop login:", error);
-      throw new Error(`Failed to prepare desktop login: ${message}`);
-    }
-
-    try {
-      // Open the URL in default browser. The loopback server keeps running
-      // and will receive the callback.
       await shell.openExternal(prepared.loginUrl);
     } catch (error) {
-      // Abort the pending handoff if the browser could not be opened.
       prepared.cancel();
-      log.error("Failed to open browser:", error);
-      throw new Error(
-        `Failed to open browser: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
+      const message = error instanceof Error ? error.message : String(error);
+      log.error("[openLoginPage] failed to open browser:", error);
+      throw new Error(`Failed to open browser: ${message}`);
     }
   }
 
