@@ -290,7 +290,9 @@ export function registerUserIpcHandlers(
         };
       })
       .catch(function (err) {
-        console.log(err);
+        log.error("[USER_SIGNOUT] signout failed", {
+          error: err instanceof Error ? err.message : String(err),
+        });
         if (err instanceof Error) {
           return {
             status: false,
