@@ -1495,7 +1495,9 @@ export function registerAiChatIpcHandlers(): void {
       if (filePath.includes("..")) {
         return { status: false, msg: "Path traversal not allowed", data: null };
       }
-      await shell.openPath(filePath);
+      shell.openPath(filePath).catch((openErr) => {
+        console.error("[ai-chat] Failed to open file:", openErr);
+      });
       return { status: true, msg: "OK", data: null };
     } catch (error: unknown) {
       const msg =
