@@ -522,12 +522,23 @@ export class AIChatQueryLoop {
           if (!call.id || !call.name) continue;
           const isEmpty =
             !call.rawArgumentsJson || call.rawArgumentsJson.trim().length === 0;
-          const errorDetail = isEmpty
-            ? "No arguments were provided. If this tool requires no arguments, send {}. Otherwise, provide valid JSON arguments."
-            : `Arguments were not valid JSON: "${call.rawArgumentsJson.slice(
-                0,
-                500
-              )}". Please retry with properly formatted JSON arguments.`;
+          const raw = call.rawArgumentsJson?.trim() ?? "";
+          const looksTruncated =
+            raw.length > 0 &&
+            ((raw.startsWith("{") && !raw.endsWith("}")) ||
+              (raw.startsWith("[") && !raw.endsWith("]")));
+          let errorDetail: string;
+          if (isEmpty) {
+            errorDetail =
+              "No arguments were provided. If this tool requires no arguments, send {}. Otherwise, provide valid JSON arguments.";
+          } else if (looksTruncated) {
+            errorDetail = `This tool requires a lot of arguments and the JSON was truncated before it could be completed. The generated JSON is incomplete — it does not close all open braces/arrays. Please retry with a MORE COMPACT argument payload. For run_subagent, keep taskPacket.lead minimal: only include companyName and website, NOT full contact lists or detailed research. The specialist agent will enrich the lead from scratch.`;
+          } else {
+            errorDetail = `Arguments were not valid JSON: "${raw.slice(
+              0,
+              500
+            )}". Please retry with properly formatted JSON arguments.`;
+          }
           const errorContent = serializeToolResultContent({
             success: false,
             error: errorDetail,

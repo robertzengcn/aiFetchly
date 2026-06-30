@@ -56,12 +56,42 @@ const PARAMETERS = {
     },
     prompt: {
       type: "string",
-      description: "Short instruction for the specialist agent.",
+      description:
+        "Short instruction for the specialist agent. Be concise — 1-2 sentences max.",
     },
     taskPacket: {
       type: "object",
       description:
-        "Self-contained task packet: lead, userGoal, constraints, priorFindings, requiredOutputSchema.",
+        "Self-contained task packet: lead (companyName + website + minimal context ONLY — do NOT inline full contact lists or detailed research), userGoal, constraints, priorFindings, requiredOutputSchema. KEEP THIS COMPACT: pass only identifiers and essential context. The specialist agent will research and enrich the lead from scratch.",
+      properties: {
+        lead: {
+          type: "object",
+          description:
+            "Minimal lead info — companyName + website only. The agent will look up full details.",
+          properties: {
+            companyName: { type: "string" },
+            website: { type: "string" },
+            description: { type: "string" },
+            location: { type: "string" },
+            metadata: { type: "object" },
+          },
+        },
+        userGoal: { type: "string" },
+        constraints: {
+          type: "object",
+          description:
+            "Optional constraints: maxLeads, language, tone, requireSourceUrls.",
+        },
+        priorFindings: {
+          type: "array",
+          description: "Previous findings from other agents to build upon.",
+        },
+        requiredOutputSchema: {
+          type: "object",
+          description:
+            "Optional narrower output schema; defaults to the agent's built-in schema.",
+        },
+      },
     },
     outputSchema: {
       type: "object",
