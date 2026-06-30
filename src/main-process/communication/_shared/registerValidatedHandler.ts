@@ -19,7 +19,7 @@ import type { CommonMessage } from "@/entityTypes/commonType";
 export function registerValidatedHandler<TInput, TOutput>(
   channel: string,
   schema: () => ZodType<TInput>,
-  handler: (input: TInput, event: IpcMainInvokeEvent) => Promise<TOutput>,
+  handler: (input: TInput, event: IpcMainInvokeEvent) => Promise<TOutput>
 ): void {
   ipcMain.handle(channel, async (event, raw) => {
     const parsed = schema().safeParse(raw);
@@ -53,10 +53,13 @@ export function registerValidatedHandler<TInput, TOutput>(
 export function registerAiValidatedHandler<TInput, TOutput>(
   channel: string,
   schema: () => ZodType<TInput>,
-  handler: (input: TInput, event: IpcMainInvokeEvent) => Promise<TOutput>,
+  handler: (input: TInput, event: IpcMainInvokeEvent) => Promise<TOutput>
 ): void {
   ipcMain.handle(channel, async (event, raw) => {
-    // 1. AI 开关检查
+    // 1. AI 开关检查 — FAIL-CLOSED: if Token service is unreachable
+    //    (DB not initialized, encrypted store corrupted), block the request
+    //    rather than letting it through. A broken feature gate should never
+    //    silently enable paid features.
     try {
       const aiEnabled = new Token().getValue(USER_AI_ENABLED);
       if (aiEnabled !== "true") {
@@ -67,9 +70,13 @@ export function registerAiValidatedHandler<TInput, TOutput>(
         } satisfies CommonMessage<null>;
       }
     } catch (err) {
-      // Token 服务异常不应阻塞 handler，但需告警
       const msg = err instanceof Error ? err.message : "Token service error";
-      log.warn(`[${channel}] AI-enabled check failed: ${msg}`);
+      log.error(`[${channel}] AI-enabled check failed (fail-closed): ${msg}`);
+      return {
+        status: false,
+        msg: "Unable to verify AI feature status. Please try again.",
+        data: null,
+      } satisfies CommonMessage<null>;
     }
 
     // 2. schema 校验

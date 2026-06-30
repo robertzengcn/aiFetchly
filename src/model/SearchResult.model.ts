@@ -40,17 +40,21 @@ export class SearchResultModel extends BaseDb {
       searchResultWriteSchema()
     );
 
-    // Check if a result with this link already exists
-    const existingResult = await this.repository.findOne({
-      where: { link: stripped.link as string },
-    });
-
-    // If link exists, return existing item ID
-    if (existingResult) {
-      return existingResult.id;
+    // Check if a result with this link already exists.
+    // link can be null in theory (schema allows nullable) — if so, skip
+    // the dedup check and always insert (null links can't be meaningfully
+    // deduplicated in SQLite).
+    const linkValue = stripped.link;
+    if (linkValue != null) {
+      const existingResult = await this.repository.findOne({
+        where: { link: linkValue },
+      });
+      if (existingResult) {
+        return existingResult.id;
+      }
     }
 
-    // If link doesn't exist, create new record
+    // If link doesn't exist (or was null), create new record
     const resultEntity = new SearchResultEntity();
     resultEntity.task_id = stripped.task_id as number;
     resultEntity.keyword_id = stripped.keyword_id as number;
