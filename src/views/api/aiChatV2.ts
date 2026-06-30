@@ -9,6 +9,7 @@ import type {
   ChatV2StreamChunk,
   ChatV2HistoryResponse,
   ChatV2ConversationSummary,
+  ChatToolApprovalMode,
 } from "@/entityTypes/aiChatV2Types";
 import type { AIChatCompactSummaryView } from "@/entityTypes/aiChatCompactTypes";
 import type {
@@ -34,6 +35,8 @@ import {
   AI_CHAT_V2_REJECT_PLAN,
   AI_CHAT_V2_REQUEST_PLAN_CHANGES,
   AI_CHAT_V2_PLAN_VERSIONS,
+  AI_CHAT_V2_GET_TOOL_APPROVAL_MODE,
+  AI_CHAT_V2_SET_TOOL_APPROVAL_MODE,
 } from "@/config/channellist";
 
 let activeChunkHandler: ((raw: unknown) => void) | null = null;
@@ -348,4 +351,35 @@ export async function getChatV2PlanVersions(
 ): Promise<AIChatPlanVersionView[]> {
   const resp = await windowInvoke(AI_CHAT_V2_PLAN_VERSIONS, { planId });
   return (resp as AIChatPlanVersionView[] | null) ?? [];
+}
+
+// ---------------------------------------------------------------------------
+// Tool Approval Mode
+// ---------------------------------------------------------------------------
+
+/**
+ * Get the tool approval mode for a conversation.
+ */
+export async function getChatV2ToolApprovalMode(
+  conversationId: string
+): Promise<ChatToolApprovalMode> {
+  const resp = await windowInvoke(AI_CHAT_V2_GET_TOOL_APPROVAL_MODE, {
+    conversationId,
+  });
+  return (resp as ChatToolApprovalMode) ?? "ask_for_approval";
+}
+
+/**
+ * Set the tool approval mode for a conversation.
+ * Returns the stored mode (may differ from requested if downgraded).
+ */
+export async function setChatV2ToolApprovalMode(
+  conversationId: string,
+  mode: ChatToolApprovalMode
+): Promise<ChatToolApprovalMode> {
+  const resp = await windowInvoke(AI_CHAT_V2_SET_TOOL_APPROVAL_MODE, {
+    conversationId,
+    mode,
+  });
+  return (resp as ChatToolApprovalMode) ?? "ask_for_approval";
 }
