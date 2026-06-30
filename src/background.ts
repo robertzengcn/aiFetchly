@@ -23,7 +23,6 @@ import {
   TOKENEXPIRY,
   REFRESHTOKENEXPIRY,
 } from "@/config/usersetting";
-import { DeviceFingerprintService } from "@/modules/deviceFingerprint";
 import { SqliteDb } from "@/config/SqliteDb";
 import { logger, log } from "@/modules/Logger";
 import fs from "fs";
@@ -43,8 +42,7 @@ import {
   getPendingDesktopAuth,
   clearPendingDesktopAuth,
 } from "@/modules/pendingDesktopAuth";
-import { DesktopAuthApi } from "@/api/desktopAuthApi";
-import { completeDesktopLogin } from "@/modules/desktopLoginCompletion";
+import { consumeDesktopAuthCode } from "@/modules/desktopAuthExchange";
 import {
   urlContainsTokenParams as deepLinkUrlContainsTokenParams,
   isValidDeepLinkOrigin as deepLinkIsValidDeepLinkOrigin,
@@ -522,6 +520,16 @@ function initialize() {
       console.error("[shutdown] ToolJobRegistry shutdown failed", err);
     }
 
+    // Clear any in-flight desktop auth handoff so the PKCE verifier does
+    // not outlive the session.
+    try {
+      clearPendingDesktopAuth();
+    } catch (err) {
+      log.warn("[shutdown] clearPendingDesktopAuth failed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
     try {
       const tokenService = new Token();
       const userdataPath = tokenService.getValue(USERSDBPATH);
@@ -553,9 +561,10 @@ function initialize() {
   });
 
   (app as any).on("open-url", (event, url) => {
-    console.log("open url call");
     event.preventDefault();
-    console.log(`App opened with URL on mac: ${url}`);
+    // Log only that a deep link arrived — never the URL itself, which now
+    // carries the authorization code.
+    log.info("[open-url] received deep link");
     handleDeepLink(url);
   });
   // app.on('second-instance', (event, argv) => {
@@ -814,11 +823,12 @@ function makeSingleInstance() {
           }
         }
 
-        console.log("app opened with url on window");
-        //console.log(`App opened with URL on window: ${url}`);
+        // Log only that a deep link arrived — the URL contains the
+        // authorization code and must not be logged.
+        log.info("[second-instance] received deep link on windows");
         handleDeepLink(url);
       } else {
-        console.error("no url found");
+        log.warn("[second-instance] no deep link URL found in argv");
       }
     });
   }
@@ -939,85 +949,31 @@ async function handleDeepLink(url: string) {
       return;
     }
 
-    // Validate state against the pending handoff (CSRF defense).
-    const pending = getPendingDesktopAuth();
-    if (!pending) {
-      log.error("No pending desktop auth handoff for incoming deep link");
-      sendLoginError(
-        "Login session not found. Please sign in again from the app."
-      );
-      return;
-    }
-    if (state.length !== pending.state.length || state !== pending.state) {
-      log.error("Deep link state mismatch — possible CSRF attempt");
-      sendLoginError("Login verification failed. Please sign in again.");
-      dialog.showErrorBox(
-        "Security Error",
-        "Login verification failed. Please sign in again from the app."
-      );
-      clearPendingDesktopAuth();
-      return;
-    }
+    // Delegate the rest (state validation, device fingerprint, exchange,
+    // completion, pending cleanup) to the shared pipeline used by both
+    // the loopback and custom-scheme paths. The pipeline clears pending
+    // state before the async network exchange to close the TOCTOU window.
+    const result = await consumeDesktopAuthCode({ code, state, win });
 
-    // Resolve device info for the exchange request.
-    const deviceFingerprintService = new DeviceFingerprintService();
-    const deviceIdHash = deviceFingerprintService.getDeviceIdHash();
-    const deviceName = deviceFingerprintService.getDeviceName();
-
-    // Exchange the one-time code for tokens over HTTPS. This is the ONLY
-    // place tokens are introduced into the desktop app; they never appear
-    // in any URL.
-    const desktopAuthApi = new DesktopAuthApi();
-    const exchangeResult =
-      await desktopAuthApi.exchangeDesktopAuthorizationCode({
-        clientId: "aifetchly-desktop",
-        code,
-        codeVerifier: pending.codeVerifier,
-        redirectUri: pending.redirectUri,
-        deviceName,
-        deviceIdHash,
+    if (!result.ok) {
+      log.error("Desktop auth code consumption failed:", {
+        reason: result.reason,
+        message: result.message,
       });
-
-    if (!exchangeResult.ok) {
-      log.error("Desktop auth code exchange failed:", {
-        reason: exchangeResult.reason,
-        message: exchangeResult.message,
-      });
-      const userMessage =
-        exchangeResult.reason === "invalid_grant"
-          ? "Login code is invalid, expired, or already used. Please sign in again."
-          : exchangeResult.reason === "network"
-          ? "Unable to reach the login server. Check your network and try again."
-          : "Login could not be completed. Please try again.";
-      sendLoginError(userMessage);
-      dialog.showErrorBox("Login Failed", userMessage);
-      clearTokens();
-      clearPendingDesktopAuth();
+      sendLoginError(result.message);
+      if (result.reason === "state_mismatch") {
+        dialog.showErrorBox("Security Error", result.message);
+      } else if (
+        result.reason === "invalid_grant" ||
+        result.reason === "completion_failed"
+      ) {
+        dialog.showErrorBox("Login Failed", result.message);
+        clearTokens();
+      }
       return;
     }
 
-    // Success — complete the login cascade (tokens, device, DB, WS, nav).
-    const completion = await completeDesktopLogin(win, {
-      accessToken: exchangeResult.data.accessToken,
-      refreshToken: exchangeResult.data.refreshToken,
-      expiresIn: exchangeResult.data.expiresIn,
-      refreshExpiresIn: exchangeResult.data.refreshExpiresIn,
-    });
-
-    if (!completion.ok) {
-      log.error("completeDesktopLogin reported failure:", {
-        reason: completion.reason,
-        message: completion.message,
-      });
-      sendLoginError(`Failed to complete sign-in: ${completion.message}`);
-      clearTokens();
-      clearPendingDesktopAuth();
-      return;
-    }
-
-    // The handoff is fully consumed — clear the pending state so the same
-    // code/state cannot be replayed.
-    clearPendingDesktopAuth();
+    // Success — the pipeline navigates to Dashboard via completeDesktopLogin.
   } catch (error) {
     log.error("Failed to handle deep link:", error);
     const errorMessage = error instanceof Error ? error.message : String(error);

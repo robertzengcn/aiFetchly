@@ -1,5 +1,5 @@
 "use strict";
-import { HttpClient } from "@/modules/lib/httpclient";
+import { resolveViteLoginBase } from "@/config/viteLoginUrl";
 
 /**
  * Request body for POST /api/desktop-auth/exchange.
@@ -73,13 +73,27 @@ export type ExchangeResult =
   | { ok: true; data: ExchangeSuccessResponse }
   | {
       ok: false;
-      reason:
-        | "invalid_grant"
-        | "network"
-        | "server"
-        | "bad_response";
+      reason: "invalid_grant" | "network" | "server" | "bad_response";
       message?: string;
     };
+
+/**
+ * Resolve the absolute exchange endpoint URL.
+ *
+ * HttpClient prefixes its baseUrl with `${VITE_LOGIN_URL}/apis`, so the
+ * exchange endpoint is at `${origin}/apis/api/desktop-auth/exchange`. We
+ * construct the same URL here without HttpClient so we can read the
+ * response body on non-2xx (HttpClient throws on !res.ok).
+ */
+function resolveExchangeUrl(): string {
+  const resolved = resolveViteLoginBase();
+  let origin = resolved?.value;
+  if (!origin || origin.trim() === "") {
+    origin = "http://localhost:3000";
+  }
+  // Normalize: ensure no trailing slash before appending.
+  return origin.replace(/\/+$/, "") + "/apis/api/desktop-auth/exchange";
+}
 
 /**
  * API client for redeeming a desktop authorization code for tokens.
@@ -89,14 +103,12 @@ export type ExchangeResult =
  * desktop redeems it here.
  *
  * Never logs tokens. Never constructs URLs containing tokens.
+ *
+ * Uses raw `fetch` rather than HttpClient because the exchange endpoint
+ * is public (no Bearer token) and HttpClient throws on non-2xx, which
+ * would discard the `invalid_grant` body the server emits on failure.
  */
 export class DesktopAuthApi {
-  private _httpClient: HttpClient;
-
-  constructor() {
-    this._httpClient = new HttpClient();
-  }
-
   /**
    * POST /api/desktop-auth/exchange
    *
@@ -114,7 +126,11 @@ export class DesktopAuthApi {
     request: ExchangeRequest
   ): Promise<ExchangeResult> {
     if (!request.clientId) {
-      return { ok: false, reason: "invalid_grant", message: "missing clientId" };
+      return {
+        ok: false,
+        reason: "invalid_grant",
+        message: "missing clientId",
+      };
     }
     if (!request.code) {
       return { ok: false, reason: "invalid_grant", message: "missing code" };
@@ -134,25 +150,47 @@ export class DesktopAuthApi {
       };
     }
 
-    let response: unknown;
+    let res: Response;
     try {
-      response = await this._httpClient.postJson<
-        ExchangeSuccessResponse | ExchangeErrorResponse
-      >("/api/desktop-auth/exchange", request);
+      res = await fetch(resolveExchangeUrl(), {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(request),
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       // fetch network failure / DNS / CORS / offline
       return { ok: false, reason: "network", message };
     }
 
-    // The exchange endpoint is public (no Bearer token), so HttpClient's
-    // 403-refresh path does not trigger. Any non-success is a server error
-    // or an `invalid_grant`. We treat both as failure but categorize.
-    const shape = response as Partial<ExchangeSuccessResponse> &
+    // Parse the JSON body regardless of status. The server emits an
+    // `invalid_grant` error body on 4xx, which we need to read.
+    let body: unknown = null;
+    try {
+      body = await res.json();
+    } catch {
+      // Non-JSON body (e.g. reverse-proxy HTML error page).
+      if (!res.ok) {
+        return {
+          ok: false,
+          reason: res.status >= 500 ? "server" : "bad_response",
+          message: `exchange returned HTTP ${res.status} ${res.statusText}`,
+        };
+      }
+      return {
+        ok: false,
+        reason: "bad_response",
+        message: "exchange response was not valid JSON",
+      };
+    }
+
+    const shape = body as Partial<ExchangeSuccessResponse> &
       Partial<ExchangeErrorResponse> & { status?: boolean; msg?: string };
 
-    // HttpClient wraps most responses; tolerate both wrapped and unwrapped.
-    // The controller writes JSON directly, so we expect unwrapped fields.
+    // Success: access token present + correct shape.
     if (
       shape &&
       typeof shape.accessToken === "string" &&
@@ -162,6 +200,7 @@ export class DesktopAuthApi {
       return { ok: true, data: shape as ExchangeSuccessResponse };
     }
 
+    // Error body from the backend: { error: "invalid_grant", ... }
     if (shape && typeof shape.error === "string") {
       return {
         ok: false,
