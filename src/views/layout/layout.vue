@@ -117,7 +117,7 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
                         class="chat-resize-handle"
                         @mousedown="startResize"
                     ></div>
-                    <AiChatV2 v-if="v2ChatPanelOpen" />
+                    <AiChatV2 v-show="v2ChatPanelOpen" />
                 </div>
             </div>
         </main>

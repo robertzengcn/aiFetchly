@@ -26,4 +26,11 @@ describe("layout AI chat V2 dock", () => {
     expect(dockRule).toContain("padding-top: 32px");
     expect(dockRule).not.toContain("position: fixed");
   });
+
+  it("keeps chat V2 mounted while toggling dock visibility", async () => {
+    const source = await readLayout();
+
+    expect(source).toContain("<AiChatV2 v-show=\"v2ChatPanelOpen\" />");
+    expect(source).not.toContain("<AiChatV2 v-if=\"v2ChatPanelOpen\" />");
+  });
 });
