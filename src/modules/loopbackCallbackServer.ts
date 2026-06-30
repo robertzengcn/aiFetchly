@@ -87,6 +87,13 @@ export function startLoopbackCallbackServer(
       callbackResolve = resolve;
       callbackReject = reject;
     });
+    // Attach a no-op handler so that an abort/timeout without any observer
+    // (i.e. waitForCallback() never called) does not surface as an unhandled
+    // rejection. Callers that DO call waitForCallback() get their own copy
+    // of the same promise and observe the rejection normally.
+    callbackPromise.catch(function noopRejectionSwallow() {
+      /* intentional no-op — see comment above */
+    });
 
     const server = http.createServer(
       (req: http.IncomingMessage, res: http.ServerResponse) => {

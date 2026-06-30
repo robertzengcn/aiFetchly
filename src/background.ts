@@ -45,6 +45,10 @@ import {
 } from "@/modules/pendingDesktopAuth";
 import { DesktopAuthApi } from "@/api/desktopAuthApi";
 import { completeDesktopLogin } from "@/modules/desktopLoginCompletion";
+import {
+  urlContainsTokenParams as deepLinkUrlContainsTokenParams,
+  isValidDeepLinkOrigin as deepLinkIsValidDeepLinkOrigin,
+} from "@/modules/deepLinkSecurity";
 // import { RAGIpcHandlers } from '@/main-process/ragIpcHandlers';
 // import { createProtocol } from 'electron';
 const isDevelopment = process.env.NODE_ENV !== "production";
@@ -823,36 +827,20 @@ function makeSingleInstance() {
 /**
  * Validate deep link URL origin to prevent malicious token injection.
  *
- * Under the secure auth handoff the ONLY acceptable deep-link shape is:
- *
- *     <protocolScheme>://auth/callback?code=<code>&state=<state>
- *
- * The legacy shape that carried bearer tokens in the query
- * (`?token=...&refresh_token=...`) is rejected unconditionally — that
- * path is what this refactor eliminates.
+ * Thin wrapper around the shared validator in deepLinkSecurity.ts so the
+ * protocolScheme (computed at module load from app.getName()) is bound in.
  */
 function isValidDeepLinkOrigin(parsedUrl: URL): boolean {
-  // Protocol must match our app's scheme (case-insensitive).
-  const urlProtocol = parsedUrl.protocol.toLowerCase().replace(/:$/, "");
-  if (urlProtocol !== protocolScheme) {
-    log.error("Invalid deep link protocol:", parsedUrl.protocol);
-    return false;
+  const ok = deepLinkIsValidDeepLinkOrigin(parsedUrl, protocolScheme);
+  if (!ok) {
+    log.error(
+      "Invalid deep link origin:",
+      parsedUrl.protocol,
+      parsedUrl.host,
+      parsedUrl.pathname
+    );
   }
-
-  // Host MUST be 'auth' and pathname MUST be '/callback' (or '/auth/callback'
-  // on platforms that include the host in the path). This is the shape the
-  // web app emits via safeRedirectToCallback.
-  const host = parsedUrl.hostname.toLowerCase();
-  const pathname = parsedUrl.pathname.toLowerCase();
-  const isCallbackPath =
-    (host === "auth" && (pathname === "/callback" || pathname === "/")) ||
-    pathname === "/auth/callback";
-  if (!isCallbackPath) {
-    log.error("Invalid deep link host/path:", host, pathname);
-    return false;
-  }
-
-  return true;
+  return ok;
 }
 
 /**
@@ -860,15 +848,10 @@ function isValidDeepLinkOrigin(parsedUrl: URL): boolean {
  * the legacy insecure handoff used. The new flow only ever carries `code`
  * and `state`; presence of any token key is a hard reject.
  *
- * This is the runtime enforcement of the security invariant from
- * docs/custom-protocol-auth-handoff-security-fix.md acceptance criterion #2.
+ * Delegated to deepLinkSecurity.ts so the rule is unit-tested in isolation.
  */
 function urlContainsTokenParams(url: string): boolean {
-  // Match either as a query key at any boundary. We deliberately match
-  // both snake_case and camelCase variants.
-  const tokenPattern =
-    /[?&](token|access_token|refresh_token|refreshToken|expiresIn|expires_in|refreshExpiresIn|refresh_expires_in)=/i;
-  return tokenPattern.test(url);
+  return deepLinkUrlContainsTokenParams(url);
 }
 
 /**
