@@ -27,9 +27,21 @@ import { UserInfoType } from "@/entityTypes/userType";
 //import { CommonMessage } from "@/entityTypes/commonType";
 import { shell } from "electron";
 // const packageJson = require('../../../package.json');
-import { app } from "electron";
 // import {Token} from "@/modules/token"
 import { resolveViteLoginBase } from "@/config/viteLoginUrl";
+import {
+  generateCodeVerifier,
+  deriveCodeChallenge,
+  generateState,
+} from "@/modules/pkce";
+import {
+  setPendingDesktopAuth,
+  clearPendingDesktopAuth,
+} from "@/modules/pendingDesktopAuth";
+import {
+  startLoopbackCallbackServer,
+  type LoopbackServerHandle,
+} from "@/modules/loopbackCallbackServer";
 
 // const debug = require('debug')('user-controller');
 export type userlogin = {
@@ -169,6 +181,14 @@ export class UserController {
   //     });
   //     return jwtuser;
   // }
+  /**
+   * Returns the bare login origin (e.g. "https://marketing.example.com")
+   * with no query string and no `?app=` parameter. Used as the base for
+   * prepareDesktopLogin()'s composed URL.
+   *
+   * Throws if VITE_LOGIN_URL is missing, literally "undefined"/"null",
+   * or fails whatwg URL parsing.
+   */
   public getLoginPageUrl(): string {
     const resolved = resolveViteLoginBase();
     const loginUrlRaw = resolved?.value;
@@ -229,43 +249,86 @@ export class UserController {
       );
     }
 
-    const appName = app.getName() || "";
-    const finalapp = appName.replace(/-/g, "");
-
-    let finalloginUrl: string;
-    try {
-      const u = new URL("/", baseUrl);
-      u.pathname = "/login";
-      u.searchParams.set("app", finalapp);
-      finalloginUrl = u.href;
-    } catch (error: unknown) {
-      log.error(
-        "[getLoginPageUrl] failed to compose /login URL from base (pathname/searchParams)",
-        {
-          baseHrefLen: baseUrl.href.length,
-          error:
-            error instanceof Error
-              ? { name: error.name, message: error.message }
-              : String(error),
-        }
-      );
-      throw new Error(
-        "Could not build login URL from VITE_LOGIN_URL; check it is a full origin (e.g. https://host.com)."
-      );
-    }
-
-    log.debug("[getLoginPageUrl] Build login URL", {
-      loginUrlRaw,
-      loginUrl,
-      appName,
-      finalapp,
-      finalloginUrl,
-    });
-
-    return finalloginUrl;
+    // Return the bare origin. prepareDesktopLogin() composes the full URL
+    // with desktop_auth, client_id, redirect_uri, state, code_challenge,
+    // and code_challenge_method.
+    return baseUrl.origin;
   }
 
-  public openLoginPage() {
+  /**
+   * Prepares a secure desktop login handoff.
+   *
+   * Steps:
+   *   1. Generate PKCE verifier + challenge + state.
+   *   2. Start loopback callback server on 127.0.0.1 (random port).
+   *   3. Store pending auth (verifier, challenge, state, redirectUri, expiry).
+   *   4. Build login URL:
+   *        <origin>/login?desktop_auth=1&client_id=aifetchly-desktop
+   *          &redirect_uri=<loopback>&state=<state>
+   *          &code_challenge=<challenge>&code_challenge_method=S256
+   *
+   * Returns the login URL to open in the browser plus a `cancel` callback
+   * that aborts the loopback server and clears pending state.
+   *
+   * The caller is responsible for calling shell.openExternal(loginUrl)
+   * and, on user cancel or error, calling cancel().
+   */
+  public async prepareDesktopLogin(): Promise<{
+    loginUrl: string;
+    cancel: () => void;
+  }> {
+    const origin = this.getLoginPageUrl();
+
+    // 1. PKCE + state.
+    const codeVerifier = generateCodeVerifier();
+    const codeChallenge = deriveCodeChallenge(codeVerifier);
+    const state = generateState();
+
+    // 2. Loopback callback server.
+    let server: LoopbackServerHandle;
+    try {
+      server = await startLoopbackCallbackServer();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.error("[prepareDesktopLogin] failed to start loopback server", {
+        error: message,
+      });
+      throw new Error(`Could not start login callback server: ${message}`);
+    }
+
+    // 3. Store pending auth.
+    setPendingDesktopAuth({
+      codeVerifier,
+      codeChallenge,
+      state,
+      redirectUri: server.redirectUri,
+    });
+
+    // 4. Compose URL.
+    const loginUrl = new URL("/login", origin);
+    loginUrl.searchParams.set("desktop_auth", "1");
+    loginUrl.searchParams.set("client_id", "aifetchly-desktop");
+    loginUrl.searchParams.set("redirect_uri", server.redirectUri);
+    loginUrl.searchParams.set("state", state);
+    loginUrl.searchParams.set("code_challenge", codeChallenge);
+    loginUrl.searchParams.set("code_challenge_method", "S256");
+
+    log.debug("[prepareDesktopLogin] Composed secure desktop login URL", {
+      origin,
+      port: server.port,
+      redirectUri: server.redirectUri,
+      // state and challenge are intentionally NOT logged.
+    });
+
+    const cancel = (): void => {
+      server.abort();
+      clearPendingDesktopAuth();
+    };
+
+    return { loginUrl: loginUrl.toString(), cancel };
+  }
+
+  public async openLoginPage() {
     // Open login page with shell
     // const loginUrl = import.meta.env.VITE_LOGIN_URL as string;
     // // Get app name from package.json
@@ -300,12 +363,23 @@ export class UserController {
     // if (!urlPattern.test(finalloginUrl)) {
     //     throw new Error(`Invalid login URL format: ${finalloginUrl}`);
     // }
-    const finalloginUrl = this.getLoginPageUrl();
+    // Secure handoff: start loopback server, generate PKCE, build URL.
+    let prepared: { loginUrl: string; cancel: () => void };
+    try {
+      prepared = await this.prepareDesktopLogin();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log.error("Failed to prepare desktop login:", error);
+      throw new Error(`Failed to prepare desktop login: ${message}`);
+    }
 
     try {
-      // Open the URL in default browser
-      shell.openExternal(finalloginUrl);
+      // Open the URL in default browser. The loopback server keeps running
+      // and will receive the callback.
+      await shell.openExternal(prepared.loginUrl);
     } catch (error) {
+      // Abort the pending handoff if the browser could not be opened.
+      prepared.cancel();
       log.error("Failed to open browser:", error);
       throw new Error(
         `Failed to open browser: ${
