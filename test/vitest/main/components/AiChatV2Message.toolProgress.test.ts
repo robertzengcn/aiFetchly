@@ -17,9 +17,8 @@ import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
  * NOT a `$t` mock), and references Vuetify components (`v-icon`,
  * `v-progress-linear`). Without the Vuetify plugin registered, these render
  * as unresolved custom elements with their kebab-case tag names — Vuetify's
- * runtime is what applies the `.v-progress-linear` etc. classes, so the tag
- * name is used for assertions instead (keeps deps minimal: no Vuetify bridge
- * needed).
+ * runtime is what applies the `.v-progress-linear` etc. classes, so the
+ * Vuetify components used by this branch are stubbed explicitly.
  *
  * NOTE: This file MUST be run with the dedicated workspace config
  * `test/vitest/main/components/vitest.config.mjs` (which sets
@@ -85,6 +84,10 @@ function mountWith(message: ChatV2MessageView) {
         SkillApprovalCard: true,
         AiChatV2StreamStatus: true,
         AiChatV2PlanApprovalCard: true,
+        VIcon: true,
+        VProgressLinear: {
+          template: "<div class=\"v-progress-linear\" />",
+        },
       },
     },
   });
@@ -127,13 +130,7 @@ describe("AiChatV2Message tool progress badge", () => {
     };
     const wrapper = mountWith(base);
     await flushPromises();
-    // Without the Vuetify plugin registered, <v-progress-linear> renders as
-    // an unresolved custom element with its kebab-case tag name (the brief's
-    // assumption that the `.v-progress-linear` class is preserved does NOT
-    // hold — the class is only applied by Vuetify's runtime). Asserting on
-    // the tag name keeps deps minimal (no Vuetify bridge needed) while still
-    // proving the element is conditionally rendered when `progress` is a number.
-    const bar = wrapper.find("v-progress-linear");
+    const bar = wrapper.find(".v-progress-linear");
     expect(bar.exists()).toBe(true);
     // The count text "(4/10)" is rendered inside the badge.
     expect(wrapper.text()).toContain("4/10");

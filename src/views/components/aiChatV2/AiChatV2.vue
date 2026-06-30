@@ -178,7 +178,11 @@
            and the required card prompts the user to pick a folder when no
            workspace exists yet. -->
       <div class="v2-shell__workspace-panel">
-        <WorkspaceBadge :workspace="activeWorkspace" class="mb-1" />
+        <WorkspaceBadge
+          :workspace="activeWorkspace"
+          class="mb-1"
+          @request-set-workspace="handleWorkspaceSetupRequest"
+        />
         <WorkspaceRequiredCard
           v-if="showWorkspaceRequired && activeConversationId"
           :conversation-id="activeConversationId"
@@ -431,6 +435,34 @@ const stoppedPendingToolConversationIds = ref<Set<string>>(new Set());
 const activeWorkspace = ref<WorkspaceSummary | null>(null);
 // True when the active conversation has no workspace — shows the pick card.
 const showWorkspaceRequired = ref(false);
+
+function createLocalConversationId(): string {
+  const randomId =
+    typeof globalThis.crypto?.randomUUID === "function"
+      ? globalThis.crypto.randomUUID()
+      : `id-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  return `v2-${randomId}`;
+}
+
+function ensureWorkspaceConversationId(): string {
+  if (activeConversationId.value) {
+    return activeConversationId.value;
+  }
+  const conversationId = createLocalConversationId();
+  activeConversationId.value = conversationId;
+  messages.value = [];
+  streamError.value = null;
+  applyPlanState(null);
+  pendingQuestion.value = null;
+  pendingPlanApproval.value = null;
+  return conversationId;
+}
+
+function handleWorkspaceSetupRequest(): void {
+  if (activeWorkspace.value) return;
+  ensureWorkspaceConversationId();
+  showWorkspaceRequired.value = true;
+}
 
 /**
  * Fetch the workspace (if any) for the given conversation and update the
