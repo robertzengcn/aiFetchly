@@ -9,6 +9,7 @@ import { Token } from "@/modules/token";
 import { USER_AI_ENABLED } from "@/config/usersetting";
 import type { AIEmailTemplateRequest } from "@/entityTypes/emailmarketingType";
 import type { AIRecoveryRequest } from "@/entityTypes/processMessage-type";
+import { batchKeywordGenerationResponseSchema } from "@/schemas/api/aiChat";
 
 /**
  * Chat request interface
@@ -1064,10 +1065,34 @@ export class AiChatApi {
     requests: BatchKeywordGenerationRequestItem[]
   ): Promise<CommonApiresp<BatchKeywordGenerationResponse>> {
     this.ensureAIEnabled();
-    return this._httpClient.postJson(
-      "/api/ai/keywords/generate/batch",
-      requests
-    );
+    const raw = await this._httpClient.postJson<
+      CommonApiresp<BatchKeywordGenerationResponse>
+    >("/api/ai/keywords/generate/batch", requests);
+
+    // Phase 5: validate + strip unknown fields at the API boundary.
+    // Backend field drift would otherwise leak into the frontend keyword UI.
+    if (raw.status && raw.data) {
+      const parsed = batchKeywordGenerationResponseSchema().safeParse(raw.data);
+      if (parsed.success) {
+        return {
+          status: true,
+          msg: raw.msg,
+          data: parsed.data as BatchKeywordGenerationResponse,
+          code: raw.code,
+        };
+      }
+      // On validation failure, surface as status:false so callers handle it
+      // uniformly. Detailed error goes into msg for debugging.
+      return {
+        status: false,
+        msg: `Backend response schema invalid: ${parsed.error.issues
+          .map((i) => `${i.path.join(".")}: ${i.message}`)
+          .join("; ")}`,
+        data: undefined,
+        code: raw.code,
+      };
+    }
+    return raw;
   }
 
   /**
