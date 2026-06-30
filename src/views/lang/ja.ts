@@ -1836,6 +1836,23 @@ export default {
     file_change_one: "件のファイル変更",
     file_changes_other: "件のファイル変更",
     tool_running: "実行中...",
+    tool_approval_mode_label: "ツール承認",
+    tool_approval_mode_ask: "確認してから実行",
+    tool_approval_mode_auto: "自動承認",
+    tool_approval_mode_full: "フルアクセス",
+    tool_approval_mode_ask_desc: "権限が必要なツールの実行前に確認します。",
+    tool_approval_mode_auto_desc:
+      "このチャット内の信頼できる非シェルツールを自動承認します。",
+    tool_approval_mode_full_desc:
+      "このチャット内の登録ツールを自動承認します。セーフティブロックは引き続き適用されます。",
+    tool_approval_mode_full_confirm_title: "フルアクセスを有効にしますか？",
+    tool_approval_mode_full_confirm_text:
+      "登録ツールはこのチャットで承認プロンプトなしで実行されます。依存関係のインストールとハードセーフティブロックには引き続き承認が必要です。",
+    tool_approval_mode_full_enable: "フルアクセスを有効にする",
+    tool_approval_mode_full_cancel: "キャンセル",
+    tool_approval_auto_approved: "チャットモードにより自動承認されました",
+    tool_approval_waiting: "承認待ち",
+    tool_approval_blocked: "セキュリティポリシーによりブロックされました",
   },
   aiChatV2Plan: {
     mode_chat: "チャット",

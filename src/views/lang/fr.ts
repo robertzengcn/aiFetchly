@@ -1861,6 +1861,24 @@ export default {
     file_change_one: "modification de fichier",
     file_changes_other: "modifications de fichier",
     tool_running: "En cours...",
+    tool_approval_mode_label: "Approbation des outils",
+    tool_approval_mode_ask: "Demander avant",
+    tool_approval_mode_auto: "Approuver pour moi",
+    tool_approval_mode_full: "Accès complet",
+    tool_approval_mode_ask_desc:
+      "Demander avant d'exécuter les outils nécessitant une autorisation.",
+    tool_approval_mode_auto_desc:
+      "Approuver automatiquement les outils non shell de confiance dans ce chat.",
+    tool_approval_mode_full_desc:
+      "Approuver automatiquement les outils enregistrés dans ce chat. Les blocages de sécurité s'appliquent toujours.",
+    tool_approval_mode_full_confirm_title: "Activer l'accès complet ?",
+    tool_approval_mode_full_confirm_text:
+      "Les outils enregistrés s'exécuteront sans demande d'approbation dans ce chat. Les installations de dépendances et les blocages de sécurité nécessitent toujours votre approbation.",
+    tool_approval_mode_full_enable: "Activer l'accès complet",
+    tool_approval_mode_full_cancel: "Annuler",
+    tool_approval_auto_approved: "Auto-approuvé par le mode de chat",
+    tool_approval_waiting: "En attente d'approbation",
+    tool_approval_blocked: "Bloqué par la politique de sécurité",
   },
   aiChatV2Plan: {
     mode_chat: "Chat",

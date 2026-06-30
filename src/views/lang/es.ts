@@ -1879,6 +1879,24 @@ export default {
     file_change_one: "cambio de archivo",
     file_changes_other: "cambios de archivo",
     tool_running: "Ejecutando...",
+    tool_approval_mode_label: "Aprobación de herramientas",
+    tool_approval_mode_ask: "Preguntar",
+    tool_approval_mode_auto: "Aprobar por mí",
+    tool_approval_mode_full: "Acceso completo",
+    tool_approval_mode_ask_desc:
+      "Preguntar antes de ejecutar herramientas que requieran permiso.",
+    tool_approval_mode_auto_desc:
+      "Autoaprobar herramientas de confianza no shell en este chat.",
+    tool_approval_mode_full_desc:
+      "Autoaprobar herramientas registradas en este chat. Los bloqueos de seguridad aún aplican.",
+    tool_approval_mode_full_confirm_title: "¿Activar acceso completo?",
+    tool_approval_mode_full_confirm_text:
+      "Las herramientas registradas se ejecutarán sin solicitudes de aprobación en este chat. Las instalaciones de dependencias y los bloqueos de seguridad aún requieren su aprobación.",
+    tool_approval_mode_full_enable: "Activar acceso completo",
+    tool_approval_mode_full_cancel: "Cancelar",
+    tool_approval_auto_approved: "Autoaprobado por modo de chat",
+    tool_approval_waiting: "Esperando aprobación",
+    tool_approval_blocked: "Bloqueado por política de seguridad",
   },
   aiChatV2Plan: {
     mode_chat: "Chat",

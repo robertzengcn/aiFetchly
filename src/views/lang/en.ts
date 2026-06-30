@@ -1881,6 +1881,24 @@ export default {
     file_change_one: "file change",
     file_changes_other: "file changes",
     tool_running: "Running...",
+    tool_approval_mode_label: "Tool Approval",
+    tool_approval_mode_ask: "Ask for approval",
+    tool_approval_mode_auto: "Approve for me",
+    tool_approval_mode_full: "Full access",
+    tool_approval_mode_ask_desc:
+      "Ask before tools that need permission.",
+    tool_approval_mode_auto_desc:
+      "Auto-approve trusted non-shell tools in this chat.",
+    tool_approval_mode_full_desc:
+      "Auto-approve registered tools in this chat. Safety blocks still apply.",
+    tool_approval_mode_full_confirm_title: "Enable Full Access?",
+    tool_approval_mode_full_confirm_text:
+      "Registered tools will run without approval prompts in this chat. Dependency installs and hard safety blocks still require your approval.",
+    tool_approval_mode_full_enable: "Enable Full Access",
+    tool_approval_mode_full_cancel: "Cancel",
+    tool_approval_auto_approved: "Auto-approved by chat mode",
+    tool_approval_waiting: "Waiting for approval",
+    tool_approval_blocked: "Blocked by safety policy",
   },
   aiChatV2Plan: {
     mode_chat: "Chat",

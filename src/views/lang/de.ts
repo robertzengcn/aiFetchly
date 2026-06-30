@@ -1873,6 +1873,24 @@ export default {
     file_change_one: "Dateiänderung",
     file_changes_other: "Dateiänderungen",
     tool_running: "Läuft...",
+    tool_approval_mode_label: "Tool-Genehmigung",
+    tool_approval_mode_ask: "Vorher fragen",
+    tool_approval_mode_auto: "Für mich genehmigen",
+    tool_approval_mode_full: "Vollzugriff",
+    tool_approval_mode_ask_desc:
+      "Vor der Ausführung von Tools, die eine Berechtigung benötigen, fragen.",
+    tool_approval_mode_auto_desc:
+      "Vertrauenswürdige Nicht-Shell-Tools in diesem Chat automatisch genehmigen.",
+    tool_approval_mode_full_desc:
+      "Registrierte Tools in diesem Chat automatisch genehmigen. Sicherheitssperren gelten weiterhin.",
+    tool_approval_mode_full_confirm_title: "Vollzugriff aktivieren?",
+    tool_approval_mode_full_confirm_text:
+      "Registrierte Tools werden in diesem Chat ohne Genehmigungsaufforderung ausgeführt. Abhängigkeitsinstallationen und harte Sicherheitssperren erfordern weiterhin Ihre Zustimmung.",
+    tool_approval_mode_full_enable: "Vollzugriff aktivieren",
+    tool_approval_mode_full_cancel: "Abbrechen",
+    tool_approval_auto_approved: "Automatisch durch Chat-Modus genehmigt",
+    tool_approval_waiting: "Warte auf Genehmigung",
+    tool_approval_blocked: "Durch Sicherheitsrichtlinie blockiert",
   },
   aiChatV2Plan: {
     mode_chat: "Chat",
