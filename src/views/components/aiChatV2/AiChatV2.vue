@@ -486,11 +486,11 @@ async function refreshWorkspace(conversationId: string | null): Promise<void> {
           approvalState: ws.approvalState,
         }
       : null;
-    showWorkspaceRequired.value = !activeWorkspace.value;
+    showWorkspaceRequired.value = false;
   } catch {
     // non-fatal; treat as no workspace
     activeWorkspace.value = null;
-    showWorkspaceRequired.value = true;
+    showWorkspaceRequired.value = false;
   }
 }
 
