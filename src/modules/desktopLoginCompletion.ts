@@ -47,10 +47,27 @@ export type LoginTokens = {
   refreshExpiresIn?: number;
 };
 
+/**
+ * Narrow guard for BrowserWindow liveness. Electron's type declarations
+ * omit `isDestroyed()` from the BrowserWindow/BaseWindow interface (a
+ * known typings quirk), but the method exists at runtime. We confine the
+ * cast here so the rest of the module uses the clean type.
+ */
+function isWindowAlive(win: BrowserWindow | null): win is BrowserWindow {
+  if (!win) return false;
+  return (
+    (win as unknown as { isDestroyed?: () => boolean }).isDestroyed?.() !== true
+  );
+}
+
 /** Typed result so callers can branch without touching error internals. */
 export type CompleteDesktopLoginResult =
   | { ok: true }
-  | { ok: false; reason: "storage" | "user_info" | "internal"; message: string };
+  | {
+      ok: false;
+      reason: "storage" | "user_info" | "internal";
+      message: string;
+    };
 
 /**
  * Persists tokens, fetches user info, registers device, resets DB singletons,
@@ -91,12 +108,8 @@ export async function completeDesktopLogin(
         typeof refreshExpiresIn === "number" && !Number.isNaN(refreshExpiresIn)
           ? refreshExpiresIn
           : 2592000;
-      const refreshExpiryTime =
-        Date.now() + effectiveRefreshExpiresIn * 1000;
-      tokenService.setValue(
-        REFRESHTOKENEXPIRY,
-        refreshExpiryTime.toString()
-      );
+      const refreshExpiryTime = Date.now() + effectiveRefreshExpiresIn * 1000;
+      tokenService.setValue(REFRESHTOKENEXPIRY, refreshExpiryTime.toString());
       log.info(
         "Refresh token expiry time saved:",
         new Date(refreshExpiryTime).toISOString()
@@ -236,7 +249,7 @@ export async function completeDesktopLogin(
   }
 
   // --- 5. Initialize WebSocket (non-blocking) -------------------------
-  if (win && !(win as unknown as { isDestroyed: () => boolean }).isDestroyed()) {
+  if (isWindowAlive(win)) {
     try {
       await initializeWebSocketConnection(win);
       log.info("WebSocket connection initialized after login");
@@ -254,10 +267,8 @@ export async function completeDesktopLogin(
   }
 
   // --- 7. Navigate to Dashboard --------------------------------------
-  if (win && !(win as unknown as { isDestroyed: () => boolean }).isDestroyed()) {
-    (win as unknown as {
-      webContents: { send: (channel: string, data: unknown) => void };
-    }).webContents.send(NATIVATECOMMAND, {
+  if (isWindowAlive(win)) {
+    win.webContents.send(NATIVATECOMMAND, {
       path: "Dashboard",
     } as NativateDatatype);
   } else {

@@ -110,7 +110,9 @@ export function startLoopbackCallbackServer(
         const error = parsed.searchParams.get("error");
 
         // Handle provider-style `?error=...` (e.g. user denied consent upstream).
-        // Not currently produced by our flow, but be defensive.
+        // Not currently produced by our flow, but be defensive. Do NOT reflect
+        // the raw `error` query value back into logs or messages — it is
+        // attacker-controlled.
         if (error) {
           res.statusCode = 400;
           res.end("error");
@@ -119,7 +121,7 @@ export function startLoopbackCallbackServer(
             cleanup();
             callbackReject?.({
               kind: "missing_params",
-              message: `callback reported error: ${error}`,
+              message: "callback reported an upstream error",
             } as CallbackError);
           }
           return;
