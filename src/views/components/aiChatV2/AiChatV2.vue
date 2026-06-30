@@ -206,6 +206,12 @@
             :loading="availableModels.length === 0"
             class="ml-2"
           />
+          <AiChatV2ToolApprovalModeSelector
+            v-model="toolApprovalMode"
+            :disabled="chatIsRunning"
+            class="ml-2"
+            @update:model-value="onToolApprovalModeChange"
+          />
         </template>
       </AiChatV2Composer>
     </div>
@@ -332,6 +338,7 @@ import type {
   ChatV2ConversationSummary,
   ChatV2StreamChunk,
   ChatV2MessageMetadata,
+  ChatToolApprovalMode,
 } from "@/entityTypes/aiChatV2Types";
 import type {
   AIChatPlanStateView,
@@ -358,11 +365,14 @@ import {
   rejectChatV2Plan,
   requestChatV2PlanChanges,
   getOpenAIChatModels,
+  getChatV2ToolApprovalMode,
+  setChatV2ToolApprovalMode,
 } from "@/views/api/aiChatV2";
 import AiChatV2Messages from "./AiChatV2Messages.vue";
 import AiChatV2Composer from "./AiChatV2Composer.vue";
 import AiChatV2ModeSelector from "./AiChatV2ModeSelector.vue";
 import AiChatV2ModelSelector from "./AiChatV2ModelSelector.vue";
+import AiChatV2ToolApprovalModeSelector from "./AiChatV2ToolApprovalModeSelector.vue";
 import AiChatV2QuestionCard from "./AiChatV2QuestionCard.vue";
 import AiChatV2PlanApprovalCard from "./AiChatV2PlanApprovalCard.vue";
 import AiChatV2PlanStatusBadge from "./AiChatV2PlanStatusBadge.vue";
@@ -426,6 +436,36 @@ const showMCPToolManager = ref(false);
 const isCompacting = ref(false);
 const compactNotice = ref(false);
 const stoppedPendingToolConversationIds = ref<Set<string>>(new Set());
+
+// ---------------------------------------------------------------------------
+// Tool approval mode
+// ---------------------------------------------------------------------------
+const toolApprovalMode = ref<ChatToolApprovalMode>("ask_for_approval");
+
+async function loadToolApprovalMode(conversationId: string | null): Promise<void> {
+  if (!conversationId) {
+    toolApprovalMode.value = "ask_for_approval";
+    return;
+  }
+  try {
+    const mode = await getChatV2ToolApprovalMode(conversationId);
+    toolApprovalMode.value = mode;
+  } catch {
+    toolApprovalMode.value = "ask_for_approval";
+  }
+}
+
+async function onToolApprovalModeChange(mode: ChatToolApprovalMode): Promise<void> {
+  if (!activeConversationId.value) return;
+  toolApprovalMode.value = mode;
+  try {
+    const saved = await setChatV2ToolApprovalMode(activeConversationId.value, mode);
+    toolApprovalMode.value = saved;
+  } catch (err) {
+    console.error("[AiChatV2] failed to save tool approval mode:", err);
+    toolApprovalMode.value = "ask_for_approval";
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Workspace tracking
@@ -892,6 +932,8 @@ const loadHistory = async (conversationId: string): Promise<void> => {
       pendingQuestion.value = null;
       pendingPlanApproval.value = null;
     }
+    // Load tool approval mode for this conversation
+    void loadToolApprovalMode(conversationId);
   } catch (err) {
     streamError.value = err instanceof Error ? err.message : String(err);
   }
@@ -909,6 +951,7 @@ const onNewConversation = (): void => {
   lastUsage.value = null;
   streamingEstimatedTokens.value = 0;
   activeModel.value = undefined;
+  toolApprovalMode.value = "ask_for_approval";
 };
 
 const onClearMessages = (): void => {
