@@ -9,7 +9,10 @@ import { Token } from "@/modules/token";
 import { USER_AI_ENABLED } from "@/config/usersetting";
 import type { AIEmailTemplateRequest } from "@/entityTypes/emailmarketingType";
 import type { AIRecoveryRequest } from "@/entityTypes/processMessage-type";
-import { batchKeywordGenerationResponseSchema } from "@/schemas/api/aiChat";
+import {
+  batchKeywordGenerationResponseSchema,
+  chatApiResponseSchema,
+} from "@/schemas/api/aiChat";
 
 /**
  * Chat request interface
@@ -758,7 +761,34 @@ export class AiChatApi {
       data.model = request.model;
     }
 
-    return this._httpClient.postJson("/api/ai/chat/message", data);
+    const raw = await this._httpClient.postJson<CommonApiresp<ChatApiResponse>>(
+      "/api/ai/chat/message",
+      data
+    );
+
+    // Phase 5: validate + strip unknown fields at the API boundary.
+    // Backend field drift would otherwise leak undefined messageId/model
+    // into the chat UI save path.
+    if (raw.status && raw.data) {
+      const parsed = chatApiResponseSchema().safeParse(raw.data);
+      if (parsed.success) {
+        return {
+          status: true,
+          msg: raw.msg,
+          data: parsed.data as ChatApiResponse,
+          code: raw.code,
+        };
+      }
+      return {
+        status: false,
+        msg: `Backend chat response schema invalid: ${parsed.error.issues
+          .map((i) => `${i.path.join(".")}: ${i.message}`)
+          .join("; ")}`,
+        data: undefined,
+        code: raw.code,
+      };
+    }
+    return raw;
   }
 
   /**
