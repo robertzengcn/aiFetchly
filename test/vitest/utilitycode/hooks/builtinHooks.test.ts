@@ -4,11 +4,17 @@ import {
   resetBuiltinHooksRegistrationForTests,
 } from "@/service/hooks/builtinHooks";
 import { HookRegistry } from "@/service/hooks/HookRegistry";
+import { Token } from "@/modules/token";
+import { USER_HOOKS_ENABLED } from "@/config/usersetting";
 
 describe("registerBuiltinHooks", () => {
   beforeEach(() => {
     HookRegistry.resetForTests();
     resetBuiltinHooksRegistrationForTests();
+    // The dispatcher's global-enable gate reads this token; the
+    // dangerous-delete test below calls executeHooks, so we must opt
+    // in explicitly to keep this test independent of run order.
+    new Token().setValue(USER_HOOKS_ENABLED, "true");
   });
 
   it("registers built-in demo hooks (disabled, so they are filtered out of getMatchingHooks)", () => {
