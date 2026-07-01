@@ -3,6 +3,8 @@ import { HookModel, NewHookRow, HookPatch } from "@/model/Hook.model";
 import { HookConfigEntity } from "@/entity/HookConfig.entity";
 import { HookRegistry } from "@/service/hooks/HookRegistry";
 import { HookCommandTrustService } from "@/service/hooks/HookCommandTrustService";
+import { Token } from "@/modules/token";
+import { USER_HOOKS_BUILTIN_OVERRIDES } from "@/config/usersetting";
 import { HOOK_LIMITS } from "@/entityTypes/hookTypes";
 import type {
   CommandHookDefinition,
@@ -116,8 +118,12 @@ export class HookModule extends BaseModule {
    * Startup hydration. Reads all user hooks, pushes enabled ones into
    * HookRegistry, and populates HookCommandTrustService cache from
    * the trusted column.
+   *
+   * Order: apply builtin overrides first (mutates already-registered
+   * builtins in place), then replace user hooks.
    */
   async loadUserHooksIntoRegistry(): Promise<void> {
+    await this.applyBuiltinOverrides();
     const rows = await this.model.listBySource("user");
     for (const r of rows) {
       if (r.trusted) {
@@ -126,6 +132,36 @@ export class HookModule extends BaseModule {
     }
     const defs = rows.filter((r) => r.enabled).map((r) => this.toDefinition(r));
     HookRegistry.replaceUserHooks(defs);
+  }
+
+  /**
+   * Read the builtin override map from Token and apply it to the
+   * already-registered builtins. Builtins register themselves with
+   * their code-defined default `enabled` state at app init; this
+   * runs afterwards and flips the flag based on user preference.
+   *
+   * The override map shape: `{ [hookId: string]: { enabled: boolean } }`
+   * stored as JSON in Token under USER_HOOKS_BUILTIN_OVERRIDES.
+   */
+  async applyBuiltinOverrides(): Promise<void> {
+    const t = new Token();
+    const raw = t.getValue(USER_HOOKS_BUILTIN_OVERRIDES);
+    if (!raw) return;
+
+    let map: Record<string, { enabled: boolean }>;
+    try {
+      map = JSON.parse(raw);
+    } catch {
+      console.warn("[HookModule] malformed builtin overrides JSON, ignoring");
+      return;
+    }
+
+    const all = HookRegistry.listAll({ source: "builtin" });
+    for (const hook of all) {
+      const override = map[hook.id];
+      if (!override) continue;
+      HookRegistry.setBuiltinEnabled(hook.id, override.enabled);
+    }
   }
 
   async reloadUserHooksInRegistry(): Promise<void> {
