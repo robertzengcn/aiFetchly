@@ -1,21 +1,28 @@
 import { expect } from "chai";
+import sinon from "sinon";
 import { HookModule } from "@/modules/HookModule";
 import { HookRegistry } from "@/service/hooks/HookRegistry";
 import { HookCommandTrustService } from "@/service/hooks/HookCommandTrustService";
+import { Token } from "@/modules/token";
+import { USER_HOOKS_BUILTIN_OVERRIDES } from "@/config/usersetting";
 import type { HookEventName } from "@/entityTypes/hookTypes";
 
 describe("HookModule", () => {
   let module: HookModule;
+  let tokenStub: sinon.SinonStub;
 
   beforeEach(() => {
     HookRegistry.resetForTests();
     HookCommandTrustService.resetForTests();
     module = new HookModule();
+    // Default stub returns empty string (no override)
+    tokenStub = sinon.stub(Token.prototype, "getValue").returns("");
   });
 
   afterEach(async () => {
     HookRegistry.resetForTests();
     HookCommandTrustService.resetForTests();
+    tokenStub.restore();
     try {
       await module.deleteAllUserHooksForTests();
     } catch {
@@ -132,5 +139,71 @@ describe("HookModule", () => {
     });
     await module.setTrusted("u6", true);
     expect(HookCommandTrustService.isTrusted("u6")).to.equal(true);
+  });
+
+  it("applyBuiltinOverrides reads Token map and flips builtin enabled state", async () => {
+    // Register a builtin (simulating builtinHooks.ts registration at app init)
+    HookRegistry.resetForTests();
+    HookRegistry.registerBuiltinHook({
+      id: "test-builtin",
+      eventName: "PreToolUse",
+      source: "builtin",
+      enabled: true, // starts enabled
+      trusted: true,
+      type: "callback",
+      callback: () => ({}),
+    });
+
+    // Stub Token to return an override that disables the builtin
+    tokenStub.restore();
+    const overrideStub = sinon.stub(Token.prototype, "getValue");
+    overrideStub
+      .withArgs(USER_HOOKS_BUILTIN_OVERRIDES)
+      .returns(JSON.stringify({ "test-builtin": { enabled: false } }));
+    tokenStub = overrideStub;
+
+    await module.applyBuiltinOverrides();
+
+    const all = HookRegistry.listAll({ source: "builtin" });
+    const builtin = all.find((h) => h.id === "test-builtin");
+    expect(builtin?.enabled).to.equal(false);
+
+    HookRegistry.resetForTests();
+  });
+
+  it("applyBuiltinOverrides ignores malformed JSON in Token", async () => {
+    HookRegistry.resetForTests();
+    HookRegistry.registerBuiltinHook({
+      id: "test-builtin-2",
+      eventName: "Stop",
+      source: "builtin",
+      enabled: true,
+      trusted: true,
+      type: "callback",
+      callback: () => ({}),
+    });
+
+    // Stub Token to return malformed JSON
+    tokenStub.restore();
+    const malformedStub = sinon.stub(Token.prototype, "getValue");
+    malformedStub
+      .withArgs(USER_HOOKS_BUILTIN_OVERRIDES)
+      .returns("{not valid json");
+    tokenStub = malformedStub;
+
+    // Should not throw, and builtin should remain enabled (no override applied)
+    let threw = false;
+    try {
+      await module.applyBuiltinOverrides();
+    } catch {
+      threw = true;
+    }
+    expect(threw).to.equal(false);
+
+    const all = HookRegistry.listAll({ source: "builtin" });
+    const builtin = all.find((h) => h.id === "test-builtin-2");
+    expect(builtin?.enabled).to.equal(true); // unchanged
+
+    HookRegistry.resetForTests();
   });
 });
