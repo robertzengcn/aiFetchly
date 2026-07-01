@@ -218,6 +218,13 @@ export function registerUserIpcHandlers(
    */
   ipcMain.handle(GET_LOGIN_URL, async (event, data) => {
     try {
+      // Abort any previous handoff BEFORE creating the new one. The old
+      // cancel() closes the old loopback server and clears old pending
+      // state. If we did this AFTER prepareDesktopLogin(), the old cancel
+      // would wipe the fresh pending auth (global singleton) and the new
+      // callback would arrive to find "no pending auth".
+      setActiveDesktopLoginCancel(null);
+
       const userControll = new UserController();
       const prepared = await userControll.prepareDesktopLogin();
       setActiveDesktopLoginCancel(prepared.cancel);
