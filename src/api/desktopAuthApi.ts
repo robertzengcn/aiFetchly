@@ -42,6 +42,16 @@ export interface ExchangeUser {
  * Success response from POST /api/desktop-auth/exchange.
  *
  * Tokens travel ONLY in this HTTPS response body — never in a URL.
+ *
+ * NOTE: the success path is wrapped by BaseController.SuccessJson in the
+ * standard ReturnMsg envelope:
+ *
+ *   { status: true, code: 20000, msg: "success",
+ *     data: { accessToken, refreshToken, expiresIn, ... } }
+ *
+ * The error path (desktopAuthError) writes raw JSON without the envelope:
+ *
+ *   { error: "invalid_grant" }
  */
 export interface ExchangeSuccessResponse {
   accessToken: string;
@@ -49,6 +59,17 @@ export interface ExchangeSuccessResponse {
   expiresIn: number;
   refreshExpiresIn?: number;
   user: ExchangeUser;
+}
+
+/**
+ * Shape of the ReturnMsg envelope BaseController.SuccessJson emits.
+ * On success the tokens live under `data`.
+ */
+interface WrappedResponse<T> {
+  status?: boolean;
+  code?: number;
+  msg?: string;
+  data?: T;
 }
 
 /**
@@ -187,20 +208,15 @@ export class DesktopAuthApi {
       };
     }
 
+    // The body can be either:
+    //   - Raw error JSON: { error: "invalid_grant" }  (desktopAuthError)
+    //   - Wrapped success: { status: true, code, msg, data: { tokens } }
+    //     (BaseController.SuccessJson)
     const shape = body as Partial<ExchangeSuccessResponse> &
-      Partial<ExchangeErrorResponse> & { status?: boolean; msg?: string };
+      Partial<ExchangeErrorResponse> &
+      WrappedResponse<ExchangeSuccessResponse>;
 
-    // Success: access token present + correct shape.
-    if (
-      shape &&
-      typeof shape.accessToken === "string" &&
-      typeof shape.refreshToken === "string" &&
-      typeof shape.expiresIn === "number"
-    ) {
-      return { ok: true, data: shape as ExchangeSuccessResponse };
-    }
-
-    // Error body from the backend: { error: "invalid_grant", ... }
+    // Error body from the backend (raw, not enveloped): { error: "invalid_grant" }
     if (shape && typeof shape.error === "string") {
       return {
         ok: false,
@@ -209,13 +225,41 @@ export class DesktopAuthApi {
       };
     }
 
-    // Wrapped CommonApiresp-style {status, msg, data}
+    // Wrapped success: { status: true, data: { accessToken, ... } }
+    if (shape && shape.status === true && shape.data) {
+      const tokens = shape.data;
+      if (
+        typeof tokens.accessToken === "string" &&
+        typeof tokens.refreshToken === "string" &&
+        typeof tokens.expiresIn === "number"
+      ) {
+        return { ok: true, data: tokens };
+      }
+      // status:true but data shape is wrong
+      return {
+        ok: false,
+        reason: "bad_response",
+        message: "exchange succeeded but token payload was malformed",
+      };
+    }
+
+    // Wrapped failure: { status: false, msg: "..." }
     if (shape && typeof shape.status === "boolean" && !shape.status) {
       return {
         ok: false,
         reason: "server",
         message: shape.msg || "exchange rejected",
       };
+    }
+
+    // Unwrapped success (defensive — in case the controller ever changes)
+    if (
+      shape &&
+      typeof shape.accessToken === "string" &&
+      typeof shape.refreshToken === "string" &&
+      typeof shape.expiresIn === "number"
+    ) {
+      return { ok: true, data: shape as ExchangeSuccessResponse };
     }
 
     return {
