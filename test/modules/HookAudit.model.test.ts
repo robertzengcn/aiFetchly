@@ -68,7 +68,11 @@ describe("HookAuditModel", () => {
       status: "success",
       eventName: "PostToolUse",
     });
-    const blocked = await model.query({ status: "blocked", limit: 10, offset: 0 });
+    const blocked = await model.query({
+      status: "blocked",
+      limit: 10,
+      offset: 0,
+    });
     expect(blocked.rows.length).to.equal(1);
     const post = await model.query({
       eventName: "PostToolUse",
@@ -94,5 +98,16 @@ describe("HookAuditModel", () => {
     await insert({ hookRunId: "r2", hookId: "h2", timestamp: late });
     const result = await model.query({ limit: 10, offset: 0 });
     expect(result.rows[0].hookId).to.equal("h2");
+  });
+
+  it("throws when constructed in a worker process", () => {
+    const previous = process.env.WORKER_TYPE;
+    process.env.WORKER_TYPE = "test-worker";
+    try {
+      expect(() => new HookAuditModel("")).to.throw(/worker process/);
+    } finally {
+      if (previous === undefined) delete process.env.WORKER_TYPE;
+      else process.env.WORKER_TYPE = previous;
+    }
   });
 });
