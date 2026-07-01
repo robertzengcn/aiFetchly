@@ -34,6 +34,12 @@ export interface HookLookupInput {
   readonly sessionId?: string;
 }
 
+export interface ListAllFilter {
+  readonly eventName?: HookEventName;
+  readonly source?: HookSource;
+  readonly includeSession?: boolean;
+}
+
 export interface HookRegistryApi {
   registerBuiltinHook(hook: CallbackHookDefinition): void;
   registerSessionHook(sessionId: string, hook: HookDefinition): void;
@@ -41,6 +47,7 @@ export interface HookRegistryApi {
   replaceUserHooks(hooks: HookDefinition[]): void;
   clearSessionHooks(sessionId: string): void;
   getMatchingHooks(input: HookLookupInput): readonly HookDefinition[];
+  listAll(filter?: ListAllFilter): readonly HookDefinition[];
   /** Test-only: wipe all hooks including built-ins. */
   resetForTests(): void;
 }
@@ -128,6 +135,33 @@ class HookRegistryImpl implements HookRegistryApi {
     });
 
     return matched.map((e) => e.hook);
+  }
+
+  listAll(filter?: ListAllFilter): readonly HookDefinition[] {
+    const seen = new Set<string>();
+    const collected: RegistryEntry[] = [];
+
+    for (const list of this.byEvent.values()) {
+      for (const entry of list) {
+        if (entry.hook.source === "session" && !filter?.includeSession)
+          continue;
+        if (filter?.eventName && entry.hook.eventName !== filter.eventName)
+          continue;
+        if (filter?.source && entry.hook.source !== filter.source) continue;
+        if (seen.has(entry.hook.id)) continue;
+        seen.add(entry.hook.id);
+        collected.push(entry);
+      }
+    }
+
+    collected.sort((a, b) => {
+      const pa = SOURCE_PRIORITY[a.hook.source];
+      const pb = SOURCE_PRIORITY[b.hook.source];
+      if (pa !== pb) return pa - pb;
+      return a.seq - b.seq;
+    });
+
+    return collected.map((e) => e.hook);
   }
 
   resetForTests(): void {
