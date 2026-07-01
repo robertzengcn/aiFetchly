@@ -1,16 +1,14 @@
 /**
- * In-memory trust store for command hooks.
+ * Trust store for command hooks. Persisted to the HookConfig table
+ * (via HookModule.setTrusted) and hydrated at app startup from
+ * loadUserHooksIntoRegistry.
  *
- * Command hooks are local code execution and must NOT run until they
- * are explicitly trusted. The MVP keeps trust in memory — Phase 4
- * will replace this with a persisted Token-backed store when the UI
- * CRUD lands. Until then, `setTrusted(hookId, true)` is the gate.
+ * `HookDefinition.trusted` is the static flag set at registration
+ * time. This service is the dynamic, user-approved layer on top —
+ * a command hook only runs when both are true.
  *
- * Note: `HookDefinition.trusted` is the static flag set by whoever
- * registered the hook. This service is the dynamic, user-approved
- * layer on top: a hook only runs when both are true.
+ * Main-process only.
  */
-
 class HookCommandTrustServiceImpl {
   private trusted = new Set<string>();
 
@@ -25,6 +23,20 @@ class HookCommandTrustServiceImpl {
     } else {
       this.trusted.delete(hookId);
     }
+  }
+
+  /**
+   * Replace the in-memory trusted set. Called by
+   * HookModule.loadUserHooksIntoRegistry at startup with the set of
+   * hook IDs whose HookConfig.trusted column is true.
+   */
+  hydrateFromTrustedMap(ids: Set<string>): void {
+    this.trusted = new Set(ids);
+  }
+
+  /** Current trusted hook IDs. Used by tests and debug views. */
+  snapshotTrusted(): Set<string> {
+    return new Set(this.trusted);
   }
 
   /** Test-only: wipe all trust grants. */
