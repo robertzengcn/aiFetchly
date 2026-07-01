@@ -202,7 +202,7 @@
                 <v-select
                   v-model="auditFilter.eventName"
                   :items="eventOptions"
-                  label="Event"
+                  :label="t('system_settings.hooks.filter_event') || 'Event'"
                   clearable
                   density="compact"
                 />
@@ -211,7 +211,7 @@
                 <v-select
                   v-model="auditFilter.status"
                   :items="['started','success','blocked','failed','timeout']"
-                  label="Status"
+                  :label="t('system_settings.hooks.filter_status') || 'Status'"
                   clearable
                   density="compact"
                 />
@@ -220,7 +220,7 @@
                 <v-select
                   v-model="auditFilter.hookId"
                   :items="hookIdOptions"
-                  label="Hook"
+                  :label="t('system_settings.hooks.filter_hook') || 'Hook'"
                   clearable
                   density="compact"
                 />
@@ -229,7 +229,7 @@
                 <v-select
                   v-model="auditLimit"
                   :items="[100, 500, 1000]"
-                  label="Last N rows"
+                  :label="t('system_settings.hooks.last_rows') || 'Rows'"
                   density="compact"
                 />
               </v-col>
@@ -300,7 +300,7 @@ import { ref, computed, onMounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import {
   listHooks, createHook, updateHook, deleteHook,
-  setHookEnabled, setHookTrusted,
+  setHookTrusted,
   getHooksGlobalEnable, setHooksGlobalEnable,
   listHookAudit,
   type NewHookInput,
@@ -347,12 +347,12 @@ const auditFilter = ref<{ eventName?: HookEventName; status?: HookAuditStatus; h
 const auditLimit = ref(100);
 
 const auditHeaders = [
-  { title: "Time", key: "timestamp", sortable: true },
-  { title: "Hook", key: "hookId" },
-  { title: "Event", key: "eventName" },
-  { title: "Status", key: "status" },
-  { title: "Duration", key: "durationMs" },
-  { title: "Reason", key: "reason" },
+  { title: t("system_settings.hooks.audit_time") || "Time", key: "timestamp", sortable: true },
+  { title: t("system_settings.hooks.filter_hook") || "Hook", key: "hookId" },
+  { title: t("system_settings.hooks.filter_event") || "Event", key: "eventName" },
+  { title: t("system_settings.hooks.filter_status") || "Status", key: "status" },
+  { title: t("system_settings.hooks.audit_duration") || "Duration", key: "durationMs" },
+  { title: t("system_settings.hooks.audit_reason") || "Reason", key: "reason" },
 ];
 
 const visibleHooks = computed(() => allHooks.value);
