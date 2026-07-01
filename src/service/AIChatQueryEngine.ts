@@ -1,6 +1,8 @@
 // src/service/AIChatQueryEngine.ts
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { AIChatPlanModule } from "@/modules/AIChatPlanModule";
+import { AIChatAttachmentModule } from "@/modules/AIChatAttachmentModule";
+import { DocumentService } from "@/service/DocumentService";
 import type {
   OpenAIChatMessage,
   OpenAITool,
@@ -33,7 +35,17 @@ import type {
   ResumeToolAfterPermissionRequest,
   ResumeTurnResult,
 } from "@/service/AIChatQueryEvents";
-import type { ChatV2StreamRequest } from "@/entityTypes/aiChatV2Types";
+import type {
+  ChatV2StreamRequest,
+  ChatV2UploadedAttachment,
+  ChatV2AttachmentKind,
+  ChatV2AttachmentMetadata,
+} from "@/entityTypes/aiChatV2Types";
+import type {
+  OpenAITextContentPart,
+  OpenAIImageUrlContentPart,
+  OpenAIMessageContent,
+} from "@/api/aiChatApi";
 import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
 
 function isActivePlanState(plan?: AIChatPlanStateView | null): boolean {
@@ -103,6 +115,14 @@ function toOpenAITools(toolFunctions: ToolFunction[]): OpenAITool[] {
     }));
 }
 
+interface AttachmentPrepResult {
+  enrichedMessage: string;
+  contentParts: Array<OpenAITextContentPart | OpenAIImageUrlContentPart>;
+  displayMetadata: ChatV2AttachmentMetadata[];
+  attachmentRefs: string[];
+  docFileNames: string[];
+}
+
 export interface AIChatQuerySubmitInput {
   eventSink: AIChatQueryEventSink;
   request: ChatV2StreamRequest;
@@ -146,6 +166,130 @@ export class AIChatQueryEngine {
       deps?.contextAssembler ?? new AIChatContextAssembler();
     this.compactAgent = deps?.compactAgent;
     this.autoDreamService = deps?.autoDreamService;
+  }
+
+  /**
+   * Prepare attachment content enrichment (no DB writes).
+   * Returns enriched message text, content parts (for images), and metadata.
+   */
+  private prepareAttachmentContent(
+    files: ChatV2UploadedAttachment[],
+    originalMessage: string
+  ): AttachmentPrepResult {
+    const displayMetadata: ChatV2AttachmentMetadata[] = [];
+    const contentParts: Array<OpenAITextContentPart | OpenAIImageUrlContentPart> = [];
+    const attachmentRefs: string[] = [];
+    const docFileNames: string[] = [];
+
+    for (const file of files) {
+      if (file.kind === "image") {
+        const dataUrl = `data:${file.mimeType};base64,${file.contentBase64}`;
+        contentParts.push({
+          type: "image_url",
+          image_url: { url: dataUrl, detail: "auto" },
+        });
+        displayMetadata.push({
+          fileName: file.fileName,
+          mimeType: file.mimeType,
+          sizeBytes: file.sizeBytes,
+          kind: "image",
+          processingMode: "image_url",
+        });
+      } else {
+        docFileNames.push(file.fileName);
+        displayMetadata.push({
+          fileName: file.fileName,
+          mimeType: file.mimeType,
+          sizeBytes: file.sizeBytes,
+          kind: "document",
+          processingMode: "staged_markdown",
+        });
+      }
+    }
+
+    // Build enriched user message with attachment reference block for documents
+    let enrichedMessage = originalMessage || "";
+    if (docFileNames.length > 0) {
+      const blockLines = [
+        "",
+        `Attached ${docFileNames.length} file(s) are staged locally and available below.`,
+        "A `read_attachment_content` tool is available to load their contents.",
+        ...docFileNames.map(
+          (name, i) =>
+            `${i + 1}. staged file "${name}" → call \`read_attachment_content\` with fileName="${name}"`
+        ),
+      ];
+      enrichedMessage = enrichedMessage
+        ? `${enrichedMessage}\n\n${blockLines.join("\n")}`
+        : blockLines.join("\n");
+    }
+
+    return {
+      enrichedMessage,
+      contentParts,
+      displayMetadata,
+      attachmentRefs,
+      docFileNames,
+    };
+  }
+
+  /**
+   * Convert small documents to markdown and stage them.
+   * Runs asynchronously after the message is sent — failures are logged only.
+   */
+  private async stageDocumentMarkdowns(
+    files: ChatV2UploadedAttachment[],
+    conversationId: string,
+    messageId: string
+  ): Promise<void> {
+    const docService = new DocumentService();
+    const SMALL_DOC_THRESHOLD = 1 * 1024 * 1024; // 1 MB
+    for (const file of files) {
+      if (file.sizeBytes > SMALL_DOC_THRESHOLD) {
+        console.log(
+          `[ai-chat-v2] large document ${file.fileName} (${file.sizeBytes}b) — RAG path not yet implemented`
+        );
+        continue;
+      }
+      try {
+        const markdown = await docService.convertUploadedAttachmentToMarkdown(
+          file.fileName,
+          file.mimeType,
+          file.contentBase64
+        );
+        await docService.stageAttachmentMarkdown(
+          conversationId,
+          file.fileName,
+          markdown
+        );
+      } catch (err) {
+        console.error(
+          `[ai-chat-v2] failed to stage document ${file.fileName}:`,
+          err
+        );
+      }
+    }
+  }
+
+  /**
+   * Persist attachment bytes to DB.
+   */
+  private async persistAttachmentBytes(
+    files: ChatV2UploadedAttachment[],
+    conversationId: string,
+    messageId: string
+  ): Promise<void> {
+    const attachmentModule = new AIChatAttachmentModule();
+    await attachmentModule.saveUploadedFiles(
+      conversationId,
+      messageId,
+      files.map((f) => ({
+        fileName: f.fileName,
+        mimeType: f.mimeType,
+        sizeBytes: f.sizeBytes,
+        contentBase64: f.contentBase64,
+      }))
+    );
   }
 
   /**
@@ -209,24 +353,74 @@ export class AIChatQueryEngine {
         }
       }
 
-      // Save user message before remote call.
+      // Handle uploaded attachments: compute enrichment + metadata before saving.
+      const hasFiles =
+        Array.isArray(request.uploadedFiles) && request.uploadedFiles.length > 0;
+      let messageToSave = request.message || "";
+      let attachmentMetadata: ChatV2AttachmentMetadata[] | undefined;
+      let currentUserContentParts:
+        | Array<OpenAITextContentPart | OpenAIImageUrlContentPart>
+        | undefined;
+
+      if (hasFiles) {
+        const prep = this.prepareAttachmentContent(
+          request.uploadedFiles!,
+          request.message || ""
+        );
+        messageToSave = prep.enrichedMessage;
+        attachmentMetadata = prep.displayMetadata;
+        if (prep.contentParts.length > 0) {
+          currentUserContentParts = [
+            { type: "text", text: prep.enrichedMessage },
+            ...prep.contentParts,
+          ];
+        }
+      }
+
+      // Save user message with enriched text + attachment metadata.
       const savedUser = await module.saveUserMessage({
         conversationId,
-        content: request.message,
+        content: messageToSave,
+        metadata: attachmentMetadata
+          ? { source: "chat-v2", attachments: attachmentMetadata }
+          : undefined,
       });
+
+      // Persist attachment bytes + stage documents (after message is saved so we have the real messageId).
+      if (hasFiles) {
+        await this.persistAttachmentBytes(
+          request.uploadedFiles!,
+          conversationId,
+          savedUser.messageId
+        );
+        // Stage small documents as markdown
+        const docFiles = request.uploadedFiles!.filter(
+          (f) => f.kind === "document"
+        );
+        if (docFiles.length > 0) {
+          this.stageDocumentMarkdowns(
+            docFiles,
+            conversationId,
+            savedUser.messageId
+          ).catch((err) =>
+            console.error("[ai-chat-v2] document staging error:", err)
+          );
+        }
+      }
 
       // Load history and build transcript.
       const basePrompt =
         request.systemPrompt ?? module.getDefaultSystemPrompt();
       const assembled = await this.contextAssembler.assemble({
         conversationId,
-        currentUserMessage: request.message,
+        currentUserMessage: messageToSave,
         currentUserMessageId: savedUser.messageId,
         baseSystemPrompt: basePrompt,
         mode: isPlanMode ? "plan" : "chat",
         model: request.model,
         maxTokens: request.maxTokens,
         planState,
+        currentUserContentParts,
       });
 
       assistantMessageId = `assistant-${Date.now()}-${Math.random()

@@ -1898,6 +1898,17 @@ export default {
     tool_approval_waiting: "Esperando aprobación",
     tool_approval_blocked: "Bloqueado por política de seguridad",
     agent_task_list: "Agentes en segundo plano",
+    attachments: {
+      add: "Adjuntar archivo",
+      remove: "Eliminar adjunto",
+      too_many: "Máximo {max} archivos permitidos.",
+      too_large: "{name} excede el límite de {maxSize}.",
+      unsupported: "{name} no es un tipo de archivo compatible.",
+      preparing: "Preparando adjunto…",
+      document_indexing: "Indexando documento…",
+      document_ready: "Documento listo",
+      document_failed: "Error al procesar el documento",
+    },
   },
   agentTaskList: {
     title: "Agentes en segundo plano",

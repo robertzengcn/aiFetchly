@@ -1900,6 +1900,17 @@ export default {
     tool_approval_waiting: "Waiting for approval",
     tool_approval_blocked: "Blocked by safety policy",
     agent_task_list: "Background Agents",
+    attachments: {
+      add: "Attach file",
+      remove: "Remove attachment",
+      too_many: "Maximum {max} files allowed.",
+      too_large: "{name} exceeds the {maxSize} limit.",
+      unsupported: "{name} is not a supported file type.",
+      preparing: "Preparing attachment…",
+      document_indexing: "Indexing document…",
+      document_ready: "Document ready",
+      document_failed: "Document processing failed",
+    },
   },
   agentTaskList: {
     title: "Background Agents",

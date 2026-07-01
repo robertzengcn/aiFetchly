@@ -12,6 +12,7 @@ import {
 } from "@/service/AIChatCompactPromptBuilder";
 import type { Token } from "@/modules/token";
 import type { USER_AI_ENABLED } from "@/config/usersetting";
+import { openAIContentToString } from "@/api/aiChatApi";
 import type {
   OpenAIChatCompletionRequest,
   OpenAIChatCompletionResponse,
@@ -239,7 +240,7 @@ export class AIChatCompactAgentService {
       };
       const startedAt = Date.now();
       const resp = await this.deps.completeChat(req);
-      const raw = resp.choices?.[0]?.message?.content ?? "";
+      const raw = openAIContentToString(resp.choices?.[0]?.message?.content);
       const { summary, ok } = normalizeSessionMemorySummary(raw);
       if (!ok) {
         await this.memory.recordFailure(
@@ -324,7 +325,7 @@ export class AIChatCompactAgentService {
       ],
       ...(input.model ? { model: input.model } : {}),
     });
-    const raw = resp.choices?.[0]?.message?.content ?? "";
+    const raw = openAIContentToString(resp.choices?.[0]?.message?.content);
     const { summary, ok } = normalizeFullCompactSummary(raw);
     if (!ok) {
       throw new Error("Compact model returned empty summary");

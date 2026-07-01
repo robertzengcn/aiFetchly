@@ -26,6 +26,29 @@ export type ChatToolApprovalMode =
   | "approve_for_me"
   | "full_access";
 
+// ---------------------------------------------------------------------------
+// Attachment types
+// ---------------------------------------------------------------------------
+
+export type ChatV2AttachmentKind = "document" | "image";
+
+export interface ChatV2UploadedAttachment {
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  contentBase64: string;
+  kind: ChatV2AttachmentKind;
+}
+
+export interface ChatV2AttachmentMetadata {
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  kind: ChatV2AttachmentKind;
+  processingMode?: "staged_markdown" | "rag_ingestion" | "image_url";
+  documentId?: number;
+}
+
 /** Metadata stored on v2 chat rows in the existing ai_chat_messages table. */
 export interface ChatV2MessageMetadata {
   source: "chat-v2";
@@ -42,6 +65,7 @@ export interface ChatV2MessageMetadata {
   success?: boolean;
   executionTimeMs?: number;
   summary?: string;
+  attachments?: ChatV2AttachmentMetadata[];
   // Plan-mode fields (present only on plan-related display rows)
   planEventType?:
     | "ask_user_question"
@@ -77,6 +101,7 @@ export interface ChatV2StreamRequest {
   maxTokens?: number;
   systemPrompt?: string;
   mode?: ChatV2Mode;
+  uploadedFiles?: ChatV2UploadedAttachment[];
 }
 
 export interface ChatV2HistoryRequest {

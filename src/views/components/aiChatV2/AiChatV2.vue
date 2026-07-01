@@ -194,6 +194,7 @@
 
       <AiChatV2Composer
         :is-streaming="chatIsRunning"
+        :is-processing="isPreparingAttachments"
         @send="onSend"
         @stop="onStop"
       >
@@ -340,7 +341,11 @@ import type {
   ChatV2MessageView,
   ChatV2ConversationSummary,
   ChatV2StreamChunk,
+  ChatV2StreamRequest,
   ChatV2MessageMetadata,
+  ChatV2UploadedAttachment,
+  ChatV2AttachmentKind,
+  ChatV2AttachmentMetadata,
   ChatToolApprovalMode,
 } from "@/entityTypes/aiChatV2Types";
 import type {
@@ -440,6 +445,83 @@ const showMCPToolManager = ref(false);
 const isCompacting = ref(false);
 const compactNotice = ref(false);
 const stoppedPendingToolConversationIds = ref<Set<string>>(new Set());
+
+// ---------------------------------------------------------------------------
+// Attachment upload state
+// ---------------------------------------------------------------------------
+const isPreparingAttachments = ref(false);
+const attachmentError = ref<string | null>(null);
+
+const MAX_UPLOAD_FILE_BYTES = 5 * 1024 * 1024;
+
+function classifyAttachment(fileName: string, mimeType: string): ChatV2AttachmentKind | null {
+  const name = fileName.toLowerCase();
+  const mime = mimeType.toLowerCase();
+
+  if (mime.startsWith("image/")) return "image";
+  if (name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg")) return "image";
+  if (name.endsWith(".webp") || name.endsWith(".gif")) return "image";
+
+  if (mime === "application/pdf" || name.endsWith(".pdf")) return "document";
+  if (mime === "text/csv" || mime === "application/csv" || name.endsWith(".csv")) return "document";
+  if (name.endsWith(".docx") || mime.includes("wordprocessingml.document")) return "document";
+  if (name.endsWith(".xlsx") || name.endsWith(".xls") || mime.includes("spreadsheetml.sheet")) return "document";
+
+  return null;
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+function defaultPromptForAttachments(files: File[]): string {
+  const images = files.filter((f) => classifyAttachment(f.name, f.type) === "image");
+  if (images.length > 0 && files.every((f) => classifyAttachment(f.name, f.type) === "image")) {
+    return "What is in this image?";
+  }
+  return "";
+}
+
+function resolveMimeType(file: File): string {
+  if (file.type && file.type !== "application/octet-stream") {
+    return file.type;
+  }
+  const name = file.name.toLowerCase();
+  if (name.endsWith(".pdf")) return "application/pdf";
+  if (name.endsWith(".csv")) return "text/csv";
+  if (name.endsWith(".docx")) return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  if (name.endsWith(".xlsx")) return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  if (name.endsWith(".xls")) return "application/vnd.ms-excel";
+  if (name.endsWith(".png")) return "image/png";
+  if (name.endsWith(".jpg") || name.endsWith(".jpeg")) return "image/jpeg";
+  if (name.endsWith(".webp")) return "image/webp";
+  if (name.endsWith(".gif")) return "image/gif";
+  return file.type || "application/octet-stream";
+}
+
+async function buildUploadedAttachments(files: File[]): Promise<ChatV2UploadedAttachment[]> {
+  const out: ChatV2UploadedAttachment[] = [];
+  for (const file of files) {
+    const kind = classifyAttachment(file.name, file.type);
+    if (!kind) throw new Error(`Unsupported file type: ${file.name}`);
+    if (file.size > MAX_UPLOAD_FILE_BYTES) throw new Error(`File too large: ${file.name}`);
+
+    const buffer = await file.arrayBuffer();
+    out.push({
+      fileName: file.name,
+      mimeType: resolveMimeType(file),
+      sizeBytes: file.size,
+      contentBase64: arrayBufferToBase64(buffer),
+      kind,
+    });
+  }
+  return out;
+}
 
 // ---------------------------------------------------------------------------
 // Tool approval mode
@@ -1404,23 +1486,53 @@ const handleCompactConversation = async (): Promise<void> => {
   }
 };
 
-const onSend = async (text: string): Promise<void> => {
+const onSend = async (text: string, files?: File[]): Promise<void> => {
   if (chatIsRunning.value) return;
   streamError.value = null;
+  attachmentError.value = null;
   if (activeConversationId.value) {
     const nextStopped = new Set(stoppedPendingToolConversationIds.value);
     nextStopped.delete(activeConversationId.value);
     stoppedPendingToolConversationIds.value = nextStopped;
   }
 
+  // Process attachments if present
+  let uploadedFiles: ChatV2UploadedAttachment[] | undefined;
+  let attachmentMetadata: ChatV2AttachmentMetadata[] | undefined;
+  if (files && files.length > 0) {
+    isPreparingAttachments.value = true;
+    try {
+      uploadedFiles = await buildUploadedAttachments(files);
+      attachmentMetadata = uploadedFiles.map((f) => ({
+        fileName: f.fileName,
+        mimeType: f.mimeType,
+        sizeBytes: f.sizeBytes,
+        kind: f.kind,
+        processingMode: f.kind === "image" ? "image_url" : "staged_markdown",
+      }));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      attachmentError.value = msg;
+      isPreparingAttachments.value = false;
+      return;
+    }
+    isPreparingAttachments.value = false;
+  }
+
+  // Resolve text: if only images with no text, use default prompt
+  const displayText = text || defaultPromptForAttachments(files ?? []);
+
   const nowIso = new Date().toISOString();
   const tempUser: ChatV2MessageView = {
     id: `temp-user-${Date.now()}`,
     conversationId: activeConversationId.value ?? "",
     role: "user",
-    content: text,
+    content: displayText,
     timestamp: nowIso,
     messageType: "message" as MessageType,
+    metadata: attachmentMetadata
+      ? { source: "chat-v2", attachments: attachmentMetadata }
+      : undefined,
   };
   messages.value = [...messages.value, tempUser];
 
@@ -1482,13 +1594,17 @@ const onSend = async (text: string): Promise<void> => {
   await nextTick();
 
   try {
+    const streamRequest: ChatV2StreamRequest = {
+      conversationId: activeConversationId.value ?? undefined,
+      message: displayText,
+      mode: mode.value,
+      model: resolveModelForRequest(),
+    };
+    if (uploadedFiles && uploadedFiles.length > 0) {
+      streamRequest.uploadedFiles = uploadedFiles;
+    }
     await streamChatV2Message(
-      {
-        conversationId: activeConversationId.value ?? undefined,
-        message: text,
-        mode: mode.value,
-        model: resolveModelForRequest(),
-      },
+      streamRequest,
       (chunk: ChatV2StreamChunk) => {
         if (chunk.eventType === "start") {
           if (chunk.conversationId) {

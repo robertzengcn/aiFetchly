@@ -1892,6 +1892,17 @@ export default {
     tool_approval_waiting: "Warte auf Genehmigung",
     tool_approval_blocked: "Durch Sicherheitsrichtlinie blockiert",
     agent_task_list: "Hintergrund-Agenten",
+    attachments: {
+      add: "Datei anhängen",
+      remove: "Anhang entfernen",
+      too_many: "Maximal {max} Dateien erlaubt.",
+      too_large: "{name} überschreitet das Limit von {maxSize}.",
+      unsupported: "{name} ist kein unterstützter Dateityp.",
+      preparing: "Anhang wird vorbereitet…",
+      document_indexing: "Dokument wird indiziert…",
+      document_ready: "Dokument bereit",
+      document_failed: "Dokumentverarbeitung fehlgeschlagen",
+    },
   },
   agentTaskList: {
     title: "Hintergrund-Agenten",

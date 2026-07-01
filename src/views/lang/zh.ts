@@ -1832,6 +1832,17 @@ export default {
     tool_approval_waiting: "等待批准",
     tool_approval_blocked: "已被安全策略阻止",
     agent_task_list: "后台代理",
+    attachments: {
+      add: "附加文件",
+      remove: "移除附件",
+      too_many: "最多允许 {max} 个文件。",
+      too_large: "{name} 超过 {maxSize} 限制。",
+      unsupported: "{name} 是不支持的文件类型。",
+      preparing: "正在准备附件…",
+      document_indexing: "正在索引文档…",
+      document_ready: "文档就绪",
+      document_failed: "文档处理失败",
+    },
   },
   agentTaskList: {
     title: "后台代理",

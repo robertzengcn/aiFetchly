@@ -1854,6 +1854,17 @@ export default {
     tool_approval_waiting: "承認待ち",
     tool_approval_blocked: "セキュリティポリシーによりブロックされました",
     agent_task_list: "バックグラウンドエージェント",
+    attachments: {
+      add: "ファイルを添付",
+      remove: "添付ファイルを削除",
+      too_many: "最大 {max} ファイルまで許可されています。",
+      too_large: "{name} は {maxSize} 制限を超えています。",
+      unsupported: "{name} はサポートされていないファイルタイプです。",
+      preparing: "添付ファイルを準備中…",
+      document_indexing: "ドキュメントをインデックス中…",
+      document_ready: "ドキュメント準備完了",
+      document_failed: "ドキュメント処理に失敗しました",
+    },
   },
   agentTaskList: {
     title: "バックグラウンドエージェント",

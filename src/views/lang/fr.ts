@@ -1880,6 +1880,17 @@ export default {
     tool_approval_waiting: "En attente d'approbation",
     tool_approval_blocked: "Bloqué par la politique de sécurité",
     agent_task_list: "Agents en arrière-plan",
+    attachments: {
+      add: "Joindre un fichier",
+      remove: "Supprimer la pièce jointe",
+      too_many: "Maximum {max} fichiers autorisés.",
+      too_large: "{name} dépasse la limite de {maxSize}.",
+      unsupported: "{name} n'est pas un type de fichier pris en charge.",
+      preparing: "Préparation de la pièce jointe…",
+      document_indexing: "Indexation du document…",
+      document_ready: "Document prêt",
+      document_failed: "Échec du traitement du document",
+    },
   },
   agentTaskList: {
     title: "Agents en arrière-plan",
