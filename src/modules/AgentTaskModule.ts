@@ -86,6 +86,14 @@ export class AgentTaskModule extends BaseModule {
    * auto-dream source collection. `since` is optional; when omitted, the most
    * recent tasks overall are returned.
    */
+  async listRecent(
+    limit: number,
+    statusFilter?: AgentTaskStatus
+  ): Promise<AgentTaskSnapshot[]> {
+    await this.ensureConnection();
+    return this.taskModel.listRecent(limit, statusFilter);
+  }
+
   async listFinishedAfter(
     since: Date | null,
     limit: number

@@ -8,6 +8,7 @@ import {
   AGENT_DEFINITION_LIST,
   AGENT_TASK_DETAIL,
   AGENT_TASK_TRANSCRIPT,
+  AGENT_TASK_LIST,
   AGENT_RESUME_TOOL_AFTER_PERMISSION,
 } from "@/config/channellist";
 import type { CommonMessage } from "@/entityTypes/commonType";
@@ -72,6 +73,25 @@ async function handleTaskTranscript(
   }
 }
 
+async function handleTaskList(
+  data: string
+): Promise<CommonMessage<unknown[] | null>> {
+  if (!isAIEnabled()) return denied("AI is not enabled");
+  try {
+    const req = JSON.parse(data ?? "{}");
+    const limit = typeof req.limit === "number" ? req.limit : 50;
+    const statusFilter: string | undefined =
+      typeof req.status === "string" && req.status.length > 0
+        ? req.status
+        : undefined;
+    const module = new AgentTaskModule();
+    const tasks = await module.listRecent(limit, statusFilter as any);
+    return ok(tasks);
+  } catch (err) {
+    return denied(err instanceof Error ? err.message : String(err));
+  }
+}
+
 async function handleResumeToolAfterPermission(
   _data: string
 ): Promise<CommonMessage<{ ok: boolean; error?: string } | null>> {
@@ -92,6 +112,9 @@ export function registerAgentRuntimeIpcHandlers(): void {
   );
   ipcMain.handle(AGENT_TASK_TRANSCRIPT, async (_e, data: unknown) =>
     handleTaskTranscript((data as string) ?? "")
+  );
+  ipcMain.handle(AGENT_TASK_LIST, async (_e, data: unknown) =>
+    handleTaskList((data as string) ?? "")
   );
   ipcMain.handle(
     AGENT_RESUME_TOOL_AFTER_PERMISSION,

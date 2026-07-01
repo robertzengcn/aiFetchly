@@ -70,8 +70,8 @@ function requestSetWorkspace(): void {
   color: rgb(var(--v-theme-on-surface));
 }
 .workspace-badge--unset {
-  background: rgba(var(--v-theme-error), 0.08);
-  color: rgb(var(--v-theme-error));
+  background: rgba(var(--v-theme-warning), 0.12);
+  color: rgb(var(--v-theme-warning));
   cursor: pointer;
 }
 .workspace-badge--unset:focus-visible {

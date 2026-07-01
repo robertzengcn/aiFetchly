@@ -134,6 +134,31 @@ export class AgentTaskModel extends BaseDb {
     } as Partial<AgentTaskMessageEntity>);
   }
 
+  async listRecent(
+    limit: number,
+    statusFilter?: AgentTaskStatus
+  ): Promise<AgentTaskSnapshot[]> {
+    const qb = this.repository.createQueryBuilder("t");
+    if (statusFilter) {
+      qb.where("t.status = :status", { status: statusFilter });
+    }
+    qb.orderBy("t.createdAt", "DESC").take(Math.max(1, Math.min(limit, 100)));
+    const rows = await qb.getMany();
+    return rows.map((e) => ({
+      agentTaskId: e.agentTaskId,
+      agentId: e.agentId,
+      agentVersion: e.agentVersion,
+      workflowRunId: e.workflowRunId ?? undefined,
+      parentConversationId: e.parentConversationId ?? undefined,
+      status: e.status as AgentTaskStatus,
+      startedAt: e.startedAt?.toISOString(),
+      finishedAt: e.finishedAt?.toISOString(),
+      toolCallsCount: e.toolCallsCount,
+      errorMessage: e.errorMessage ?? undefined,
+      result: (e.result as unknown as AgentResult) ?? undefined,
+    }));
+  }
+
   async listMessages(agentTaskId: string): Promise<AgentTaskMessageRecord[]> {
     const rows = await this.msgRepo.find({
       where: { agentTaskId },

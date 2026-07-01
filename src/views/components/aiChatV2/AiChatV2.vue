@@ -72,6 +72,7 @@
         >
           <v-icon size="small">mdi-delete-outline</v-icon>
         </v-btn>
+        <AgentTaskListDialog @cancel-task="handleAgentTaskCancel" />
       </div>
     </div>
 
@@ -218,6 +219,8 @@
 
     <!-- MCP Tool Manager Dialog -->
     <MCPToolManager v-model="showMCPToolManager" />
+
+
 
     <v-snackbar v-model="compactNotice" timeout="3000" location="bottom">
       {{
@@ -379,6 +382,7 @@ import AiChatV2PlanStatusBadge from "./AiChatV2PlanStatusBadge.vue";
 import AiChatV2ContextBadge from "./AiChatV2ContextBadge.vue";
 import FileOperationBadge from "../aiChat/FileOperationBadge.vue";
 import MCPToolManager from "../aiChat/MCPToolManager.vue";
+import AgentTaskListDialog from "./AgentTaskListDialog.vue";
 import WorkspaceBadge from "./WorkspaceBadge.vue";
 import WorkspaceRequiredCard from "./WorkspaceRequiredCard.vue";
 import { getWorkspace } from "@/views/api/workspace";
@@ -453,6 +457,11 @@ async function loadToolApprovalMode(conversationId: string | null): Promise<void
   } catch {
     toolApprovalMode.value = "ask_for_approval";
   }
+}
+
+function handleAgentTaskCancel(agentTaskId: string): void {
+  // Agent task cancellation is wired in a later milestone.
+  console.log("[AiChatV2] cancel-task requested:", agentTaskId);
 }
 
 async function onToolApprovalModeChange(mode: ChatToolApprovalMode): Promise<void> {
