@@ -158,7 +158,27 @@ export class HookModule extends BaseModule {
       timeoutMs: row.timeoutMs,
       failureMode: row.failureMode as "warn" | "block",
       statusMessage: row.statusMessage ?? undefined,
-      envAllowlist: row.envAllowlist ? JSON.parse(row.envAllowlist) : undefined,
+      envAllowlist: this.parseEnvAllowlist(row.envAllowlist),
     };
+  }
+
+  private parseEnvAllowlist(raw: string | null): readonly string[] | undefined {
+    if (!raw) return undefined;
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (!Array.isArray(parsed)) {
+        console.warn(
+          `[HookModule] envAllowlist is not an array, ignoring: ${raw}`
+        );
+        return undefined;
+      }
+      return parsed.filter((v): v is string => typeof v === "string");
+    } catch (err) {
+      console.warn(
+        `[HookModule] failed to parse envAllowlist JSON, ignoring: ${raw}`,
+        err
+      );
+      return undefined;
+    }
   }
 }
