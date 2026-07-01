@@ -108,6 +108,10 @@ export class HookModule extends BaseModule {
     return this.model.listBySource("user");
   }
 
+  async findById(id: string): Promise<HookConfigEntity | null> {
+    return this.model.findById(id);
+  }
+
   /**
    * Startup hydration. Reads all user hooks, pushes enabled ones into
    * HookRegistry, and populates HookCommandTrustService cache from
