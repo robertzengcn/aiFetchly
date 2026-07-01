@@ -14,32 +14,38 @@ import {
 } from "@/config/channellist";
 import * as path from "path";
 import * as fs from "fs";
-import { EmailscFormdata } from "@/entityTypes/emailextraction-type";
+import { EmailscFormdata, EmailsControldata } from "@/entityTypes/emailextraction-type";
 import { CommonDialogMsg } from "@/entityTypes/commonType";
 import { isValidUrl } from "@/views/utils/function";
-//import { SearchModule } from "@/modules/searchModule"
 import { EmailextractionController } from "@/controller/emailextractionController";
-import {
-  EmailsControldata,
-  EmailResultDisplay,
-  EmailsearchTaskEntityDisplay,
-  EmailsearchtaskResultquery,
-} from "@/entityTypes/emailextraction-type";
 import { EmailExtractionTypes } from "@/config/emailextraction";
-import { ItemSearchparam } from "@/entityTypes/commonType";
 import { CommonResponse } from "@/entityTypes/commonType";
-import { CommonIdrequestType } from "@/entityTypes/commonType";
-import { CommonMessage } from "@/entityTypes/commonType";
 import { SearchResultModule } from "@/modules/SearchResultModule";
 import { ISearchResultApi } from "@/modules/interface/ISearchResultApi";
 import { EmailSearchTaskModule } from "@/modules/EmailSearchTaskModule";
 import { resolveSearchResultUrls } from "@/main-process/communication/emailExtractionSearchResultUrls";
+import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
+import {
+  emailExtractionListInputSchema,
+  emailExtractionTaskResultInputSchema,
+  emailExtractionByIdInputSchema,
+  emailExtractionUpdateInputSchema,
+  emailExtractionExportInputSchema,
+} from "@/schemas/ipc/emailExtraction";
+
+/**
+ * Email extraction IPC handlers.
+ *
+ * EMAILEXTRACTIONAPI (ipcMain.on) is the streaming submit handler —
+ * it pushes results via EMAILEXTRACTIONMESSAGE. Out of scope for the
+ * validated wrapper. Kept as-is.
+ *
+ * 9 ipcMain.handle handlers migrated to registerValidatedHandler.
+ */
 export function registerEmailextractionIpcHandlers() {
-  // const searchModel = new searhModel();
-  // const emailCon = new EmailextractionController();
+  // ── Out-of-scope: streaming on handler ──────────────────────────────
   ipcMain.on(EMAILEXTRACTIONAPI, async (event, arg) => {
     let extraType: EmailExtractionTypes = EmailExtractionTypes.ManualInputUrl;
-    //receive user submit form
     const qdata = JSON.parse(arg as string) as EmailscFormdata;
     if (!Object.prototype.hasOwnProperty.call(qdata, "extratype")) {
       qdata.extratype = "ManualInputUrl";
@@ -47,129 +53,69 @@ export function registerEmailextractionIpcHandlers() {
     const validUrls: string[] = [];
     if (qdata.extratype === "ManualInputUrl") {
       if (!qdata.urls || qdata.urls.length === 0) {
-        const comMsgs: CommonDialogMsg = {
-          status: false,
-          code: 20240705103811,
-          data: {
-            action: "error",
-            title: "emailscrape.failed",
-            content: "emailscrape.url_empty",
-          },
-        };
-        (
-          event as {
-            sender: { send: (channel: string, message: string) => void };
-          }
-        ).sender.send(EMAILEXTRACTIONMESSAGE, JSON.stringify(comMsgs));
+        (event as { sender: { send: (c: string, m: string) => void } }).sender.send(
+          EMAILEXTRACTIONMESSAGE,
+          JSON.stringify({
+            status: false,
+            code: 20240705103811,
+            data: { action: "error", title: "emailscrape.failed", content: "emailscrape.url_empty" },
+          } satisfies CommonDialogMsg),
+        );
         return;
       }
-      //valid item in urls
       qdata.urls.forEach((item) => {
-        //check url is valid
         isValidUrl(item) ? validUrls.push(item) : null;
       });
       if (validUrls.length === 0) {
-        const comMsgs: CommonDialogMsg = {
-          status: false,
-          code: 20240705103811,
-          data: {
-            action: "error",
-            title: "emailscrape.failed",
-            content: "emailscrape.url_invalid",
-          },
-        };
-        (
-          event as {
-            sender: { send: (channel: string, message: string) => void };
-          }
-        ).sender.send(EMAILEXTRACTIONMESSAGE, JSON.stringify(comMsgs));
+        (event as { sender: { send: (c: string, m: string) => void } }).sender.send(
+          EMAILEXTRACTIONMESSAGE,
+          JSON.stringify({
+            status: false,
+            code: 20240705103811,
+            data: { action: "error", title: "emailscrape.failed", content: "emailscrape.url_invalid" },
+          } satisfies CommonDialogMsg),
+        );
         return;
       }
     } else if (qdata.extratype === "SearchResult") {
       extraType = EmailExtractionTypes.SearchResult;
       if (!qdata.searchTaskId) {
-        const comMsgs: CommonDialogMsg = {
-          status: false,
-          code: 20240705103811,
-          data: {
-            action: "error",
-            title: "emailscrape.failed",
-            content: "emailscrape.searchTaskId_empty",
-          },
-        };
-        (
-          event as {
-            sender: { send: (channel: string, message: string) => void };
-          }
-        ).sender.send(EMAILEXTRACTIONMESSAGE, JSON.stringify(comMsgs));
+        (event as { sender: { send: (c: string, m: string) => void } }).sender.send(
+          EMAILEXTRACTIONMESSAGE,
+          JSON.stringify({
+            status: false,
+            code: 20240705103811,
+            data: { action: "error", title: "emailscrape.failed", content: "emailscrape.searchTaskId_empty" },
+          } satisfies CommonDialogMsg),
+        );
         return;
       }
-      //const searchModel = new SearchModule();
-      //get search task
       const searchResultModule: ISearchResultApi = new SearchResultModule();
-      const searchResult = await searchResultModule.getAllSearchResultsByTaskId(
-        qdata.searchTaskId
-      );
+      const searchResult = await searchResultModule.getAllSearchResultsByTaskId(qdata.searchTaskId);
       validUrls.push(...resolveSearchResultUrls(searchResult));
       if (validUrls.length === 0) {
-        const comMsgs: CommonDialogMsg = {
-          status: false,
-          code: 20240705103811,
-          data: {
-            action: "error",
-            title: "emailscrape.failed",
-            content: "emailscrape.searchResult_empty",
-          },
-        };
-        (
-          event as {
-            sender: { send: (channel: string, message: string) => void };
-          }
-        ).sender.send(EMAILEXTRACTIONMESSAGE, JSON.stringify(comMsgs));
+        (event as { sender: { send: (c: string, m: string) => void } }).sender.send(
+          EMAILEXTRACTIONMESSAGE,
+          JSON.stringify({
+            status: false,
+            code: 20240705103811,
+            data: { action: "error", title: "emailscrape.failed", content: "emailscrape.searchResult_empty" },
+          } satisfies CommonDialogMsg),
+        );
         return;
       }
-      //get result url from search task
-      //const taskresultNum = await searchModel.countSearchResult(qdata.searchTaskId)
-      //const step = 100
-      // for (let i = 0; i < taskresultNum; i = i + step) {
-      //     const taskresult = await searchModel.listSearchResult(qdata.searchTaskId, i, step)
-      //     if (taskresult.length > 0) {
-      //         taskresult.map((item) => {
-      //             validUrls.push(item.link)
-      //         })
-      //     }
-      // }
     } else {
-      //error action
-      const comMsgs: CommonDialogMsg = {
-        status: false,
-        code: 20240705103811,
-        data: {
-          action: "error",
-          title: "emailscrape.failed",
-          content: "emailscrape.action_error",
-        },
-      };
-      (
-        event as {
-          sender: { send: (channel: string, message: string) => void };
-        }
-      ).sender.send(EMAILEXTRACTIONMESSAGE, JSON.stringify(comMsgs));
+      (event as { sender: { send: (c: string, m: string) => void } }).sender.send(
+        EMAILEXTRACTIONMESSAGE,
+        JSON.stringify({
+          status: false,
+          code: 20240705103811,
+          data: { action: "error", title: "emailscrape.failed", content: "emailscrape.action_error" },
+        } satisfies CommonDialogMsg),
+      );
       return;
     }
-    // if (validUrls.length === 0) {
-    //     const comMsgs: CommonDialogMsg = {
-    //         status: false,
-    //         code: 20240705103811,
-    //         data: {
-    //             action: "",
-    //             title: "emailscrape.failed",
-    //             content: "emailscrape.url_empty"
-    //         }
-    //     }
-    //     event.sender.send(EMAILEXTRACTIONMESSAGE, JSON.stringify(comMsgs))
-    //     return
-    // }
+
     const datas: EmailsControldata = {
       searchResultId: qdata.searchTaskId ? qdata.searchTaskId : 0,
       validUrls: validUrls,
@@ -185,387 +131,181 @@ export function registerEmailextractionIpcHandlers() {
 
     const emailCon = new EmailextractionController();
     emailCon.searchEmail(datas);
-    // const emailSearchTaskModule=new EmailSearchTaskModule()
-    // emailSearchTaskModule.searchEmail(datas.searchResultId)
-    const comMsgs: CommonDialogMsg = {
-      status: true,
-      code: 0,
-      data: {
-        action: "emailscrape.emailsearch_task_start",
-        title: "",
-        content: "",
-      },
-    };
-    (
-      event as { sender: { send: (channel: string, message: string) => void } }
-    ).sender.send(EMAILEXTRACTIONMESSAGE, JSON.stringify(comMsgs));
-  });
-
-  ipcMain.handle(LISTEMAILSEARCHTASK, async (event, data: unknown) => {
-    const qdata = JSON.parse(data as string) as ItemSearchparam;
-    if (!Object.prototype.hasOwnProperty.call(qdata, "page")) {
-      qdata.page = 0;
-    }
-    if (!Object.prototype.hasOwnProperty.call(qdata, "size")) {
-      qdata.size = 100;
-    }
-
-    const emailCon = new EmailextractionController();
-    const res = await emailCon.listEmailSearchtasks(
-      qdata.page,
-      qdata.size,
-      qdata.sortby
+    (event as { sender: { send: (c: string, m: string) => void } }).sender.send(
+      EMAILEXTRACTIONMESSAGE,
+      JSON.stringify({
+        status: true,
+        code: 0,
+        data: { action: "emailscrape.emailsearch_task_start", title: "", content: "" },
+      } satisfies CommonDialogMsg),
     );
-
-    const resp: CommonResponse<EmailsearchTaskEntityDisplay> = {
-      status: true,
-      msg: "",
-      data: {
-        records: res.records,
-        num: res.total,
-      },
-    };
-    return resp;
-  });
-  ipcMain.handle(EMAILSEARCHTASKRESULT, async (event, arg: unknown) => {
-    const qdata = JSON.parse(arg as string) as EmailsearchtaskResultquery;
-    if (!Object.prototype.hasOwnProperty.call(qdata, "taskId")) {
-      const comMsgs: CommonResponse<EmailResultDisplay> = {
-        status: false,
-        msg: "emailextraction.task_id_empty",
-      };
-
-      return;
-    }
-    if (!Object.prototype.hasOwnProperty.call(qdata, "page")) {
-      qdata.page = 0;
-    }
-    if (!Object.prototype.hasOwnProperty.call(qdata, "size")) {
-      qdata.size = 100;
-    }
-    if (!qdata.taskId) {
-      const comMsgs: CommonResponse<EmailResultDisplay> = {
-        status: false,
-        msg: "emailextraction.task_id_empty",
-      };
-      return comMsgs;
-    }
-    console.log("task id is" + qdata.taskId);
-    //EmailsearchTaskquery
-
-    const emailCon = new EmailextractionController();
-    const res = await emailCon.Emailtaskresult(
-      qdata.taskId,
-      qdata.page,
-      qdata.size
-    );
-    //count number
-    const count = await emailCon.EmailtaskresultCount(qdata.taskId);
-    const resp: CommonResponse<EmailResultDisplay> = {
-      status: true,
-      msg: "",
-      data: {
-        records: res,
-        num: count,
-      },
-    };
-    return resp;
   });
 
-  ipcMain.handle(
-    EMAILSEARCHTASK_ERROR_LOG_DOWNLOAD,
-    async (event, data: unknown) => {
-      try {
-        const qdata = JSON.parse(data as string) as CommonIdrequestType<number>;
-        if (!("id" in qdata)) {
-          throw new Error("id not found");
-        }
-        const emailCon = new EmailextractionController();
-        const content = await emailCon.readTaskErrorlog(qdata.id);
-        const resp: CommonMessage<string> = {
-          status: true,
-          msg: "",
-          data: content,
-        };
-        return resp;
-      } catch (error) {
-        if (error instanceof Error) {
-          const resp: CommonMessage<string> = {
-            status: false,
-            msg: error.message,
-          };
-          return resp;
-        }
-      }
-    }
+  // ── Validated handle handlers ─────────────────────────────────────────
+
+  registerValidatedHandler(
+    LISTEMAILSEARCHTASK,
+    emailExtractionListInputSchema,
+    async (input) => {
+      const emailCon = new EmailextractionController();
+      const res = await emailCon.listEmailSearchtasks(
+        input.page ?? 0,
+        input.size ?? 100,
+        input.sortby,
+      );
+      return { records: res.records, num: res.total };
+    },
   );
 
-  // Get single email search task for editing
-  ipcMain.handle(GETEMAILSEARCHTASK, async (event, data: unknown) => {
-    try {
-      const qdata = JSON.parse(data as string) as CommonIdrequestType<number>;
-      if (!("id" in qdata)) {
-        throw new Error("Task ID not found");
-      }
+  registerValidatedHandler(
+    EMAILSEARCHTASKRESULT,
+    emailExtractionTaskResultInputSchema,
+    async (input) => {
       const emailCon = new EmailextractionController();
-      const task = await emailCon.getEmailSearchTask(qdata.id);
-      const resp: CommonMessage<any> = {
-        status: true,
-        msg: "",
-        data: task,
-      };
-      return resp;
-    } catch (error) {
-      if (error instanceof Error) {
-        const resp: CommonMessage<any> = {
-          status: false,
-          msg: error.message,
-        };
-        return resp;
-      }
-    }
-  });
+      const res = await emailCon.Emailtaskresult(
+        input.taskId,
+        input.page ?? 0,
+        input.size ?? 100,
+      );
+      const count = await emailCon.EmailtaskresultCount(input.taskId);
+      return { records: res, num: count };
+    },
+  );
 
-  // Update email search task
-  ipcMain.handle(UPDATEEMAILSEARCHTASK, async (event, data: unknown) => {
-    try {
-      const qdata = JSON.parse(data as string) as {
-        id: number;
-        data: EmailscFormdata;
-      };
-      if (!qdata.id) {
-        throw new Error("Task ID not found");
-      }
-      if (!qdata.data) {
-        throw new Error("Task data not found");
-      }
+  registerValidatedHandler(
+    EMAILSEARCHTASK_ERROR_LOG_DOWNLOAD,
+    emailExtractionByIdInputSchema,
+    async (input) => {
+      const emailCon = new EmailextractionController();
+      return emailCon.readTaskErrorlog(input.id);
+    },
+  );
+
+  registerValidatedHandler(
+    GETEMAILSEARCHTASK,
+    emailExtractionByIdInputSchema,
+    async (input) => {
+      const emailCon = new EmailextractionController();
+      return emailCon.getEmailSearchTask(input.id);
+    },
+  );
+
+  registerValidatedHandler(
+    UPDATEEMAILSEARCHTASK,
+    emailExtractionUpdateInputSchema,
+    async (input) => {
+      const formData = input.data as unknown as EmailscFormdata;
+      const emailCon = new EmailextractionController();
 
       // Validate task status before allowing edit
-      const emailCon = new EmailextractionController();
-      const task = await emailCon.getEmailSearchTask(qdata.id);
-      if (!task) {
-        throw new Error("Task not found");
-      }
-
-      // Only allow editing pending or error tasks
+      const task = await emailCon.getEmailSearchTask(input.id);
+      if (!task) throw new Error("Task not found");
       if (task.status !== "pending" && task.status !== "error") {
         throw new Error("Cannot edit task with current status");
       }
 
-      // Validate URLs if provided
+      // Validate URLs if ManualInputUrl mode
       const validUrls: string[] = [];
-      if (qdata.data.extratype === "ManualInputUrl") {
-        if (!qdata.data.urls || qdata.data.urls.length === 0) {
+      if (formData.extratype === "ManualInputUrl") {
+        if (!formData.urls || formData.urls.length === 0) {
           throw new Error("URLs cannot be empty");
         }
-        qdata.data.urls.forEach((item) => {
+        formData.urls.forEach((item) => {
           isValidUrl(item) ? validUrls.push(item) : null;
         });
-        if (validUrls.length === 0) {
-          throw new Error("No valid URLs provided");
-        }
+        if (validUrls.length === 0) throw new Error("No valid URLs provided");
       }
 
       const updateData: EmailsControldata = {
-        searchResultId: qdata.data.searchTaskId ? qdata.data.searchTaskId : 0,
+        searchResultId: formData.searchTaskId ? formData.searchTaskId : 0,
         validUrls: validUrls,
-        concurrency: qdata.data.concurrency,
-        pagelength: qdata.data.pagelength,
-        notShowBrowser: qdata.data.notShowBrowser,
-        proxys: qdata.data.proxys,
+        concurrency: formData.concurrency,
+        pagelength: formData.pagelength,
+        notShowBrowser: formData.notShowBrowser,
+        proxys: formData.proxys,
         type:
-          qdata.data.extratype === "SearchResult"
+          formData.extratype === "SearchResult"
             ? EmailExtractionTypes.SearchResult
             : EmailExtractionTypes.ManualInputUrl,
-        processTimeout: Number(qdata.data.processTimeout),
-        maxPageNumber: qdata.data.maxPageNumber,
-        aiSupportEnabled: qdata.data.aiSupportEnabled || false,
+        processTimeout: Number(formData.processTimeout),
+        maxPageNumber: formData.maxPageNumber,
+        aiSupportEnabled: formData.aiSupportEnabled || false,
       };
 
-      await emailCon.updateEmailSearchTask(qdata.id, updateData);
+      await emailCon.updateEmailSearchTask(input.id, updateData);
+      return "Task updated successfully";
+    },
+  );
 
-      const resp: CommonMessage<string> = {
-        status: true,
-        msg: "Task updated successfully",
-        data: "Task updated successfully",
-      };
-      return resp;
-    } catch (error) {
-      if (error instanceof Error) {
-        const resp: CommonMessage<string> = {
-          status: false,
-          msg: error.message,
-        };
-        return resp;
-      }
-    }
-  });
-
-  // Delete email search task
-  ipcMain.handle(DELETEEMAILSEARCHTASK, async (event, data: unknown) => {
-    try {
-      const qdata = JSON.parse(data as string) as CommonIdrequestType<number>;
-      if (!("id" in qdata)) {
-        throw new Error("Task ID not found");
-      }
-
-      // Validate task status before allowing deletion
+  registerValidatedHandler(
+    DELETEEMAILSEARCHTASK,
+    emailExtractionByIdInputSchema,
+    async (input) => {
       const emailCon = new EmailextractionController();
-      const task = await emailCon.getEmailSearchTask(qdata.id);
-      if (!task) {
-        throw new Error("Task not found");
-      }
-
-      // Only allow deleting pending or error tasks
+      // Validate task status before allowing deletion
+      const task = await emailCon.getEmailSearchTask(input.id);
+      if (!task) throw new Error("Task not found");
       if (task.status !== "pending" && task.status !== "error") {
         throw new Error("Cannot delete task with current status");
       }
-
-      await emailCon.deleteEmailSearchTask(qdata.id);
-
-      const resp: CommonMessage<string> = {
-        status: true,
-        msg: "Task deleted successfully",
-        data: "Task deleted successfully",
-      };
-      return resp;
-    } catch (error) {
-      if (error instanceof Error) {
-        const resp: CommonMessage<string> = {
-          status: false,
-          msg: error.message,
-        };
-        return resp;
-      }
-    }
-  });
-
-  // Export email extraction results
-  ipcMain.handle(
-    EMAILEXTRACTION_RESULT_EXPORT,
-    async (event, data): Promise<CommonMessage<string | null>> => {
-      const qdata = JSON.parse(data as string) as {
-        taskId: number;
-        format?: "json" | "csv";
-      };
-
-      if (!qdata.taskId || qdata.taskId <= 0) {
-        const resp: CommonMessage<null> = {
-          status: false,
-          msg: "Task ID is required",
-        };
-        return resp;
-      }
-
-      try {
-        const emailController = new EmailextractionController();
-        const format = qdata.format || "csv";
-        const exportData = await emailController.exportEmailResults(
-          qdata.taskId,
-          format
-        );
-
-        // Show save dialog
-        const fileExtension = format === "csv" ? "csv" : "json";
-        const defaultFilename = `email_results_task_${qdata.taskId}_${
-          new Date().toISOString().split("T")[0]
-        }.${fileExtension}`;
-
-        const { filePath } = await dialog.showSaveDialog({
-          title: `Export Email Results as ${format.toUpperCase()}`,
-          defaultPath: path.join(app.getPath("documents"), defaultFilename),
-          filters: [
-            {
-              name: format === "csv" ? "CSV Files" : "JSON Files",
-              extensions: [fileExtension],
-            },
-            { name: "All Files", extensions: ["*"] },
-          ],
-        });
-
-        if (filePath) {
-          if (format === "csv") {
-            fs.writeFileSync(filePath, exportData, "utf-8");
-          } else {
-            fs.writeFileSync(
-              filePath,
-              JSON.stringify(exportData, null, 2),
-              "utf-8"
-            );
-          }
-
-          const resp: CommonMessage<string> = {
-            status: true,
-            msg: "Email results exported successfully",
-            data: filePath,
-          };
-          return resp;
-        } else {
-          const resp: CommonMessage<null> = {
-            status: false,
-            msg: "Export cancelled by user",
-          };
-          return resp;
-        }
-      } catch (error) {
-        console.error("Export email results error:", error);
-        const resp: CommonMessage<null> = {
-          status: false,
-          msg:
-            error instanceof Error ? error.message : "Unknown error occurred",
-        };
-        return resp;
-      }
-    }
+      await emailCon.deleteEmailSearchTask(input.id);
+      return "Task deleted successfully";
+    },
   );
 
-  // Kill running email search task
-  ipcMain.handle(EMAIL_SEARCH_TASK_KILL, async (event, data: unknown) => {
-    try {
-      const qdata = JSON.parse(data as string) as CommonIdrequestType<number>;
-      if (!("id" in qdata)) {
-        throw new Error("Task ID not found");
-      }
-      const emailCon = new EmailextractionController();
-      await emailCon.killEmailSearchTask(qdata.id);
-      const resp: CommonMessage<string> = {
-        status: true,
-        msg: "Task stopped successfully",
-        data: "Task stopped successfully",
-      };
-      return resp;
-    } catch (error) {
-      const resp: CommonMessage<string> = {
-        status: false,
-        msg: error instanceof Error ? error.message : "Unknown error occurred",
-      };
-      return resp;
-    }
-  });
+  registerValidatedHandler(
+    EMAILEXTRACTION_RESULT_EXPORT,
+    emailExtractionExportInputSchema,
+    async (input) => {
+      const emailController = new EmailextractionController();
+      const format = input.format ?? "csv";
+      const exportData = await emailController.exportEmailResults(input.taskId, format);
 
-  // Start (or restart) an existing email search task
-  ipcMain.handle(EMAIL_SEARCH_TASK_START, async (event, data: unknown) => {
-    try {
-      const qdata = JSON.parse(data as string) as CommonIdrequestType<number>;
-      if (!("id" in qdata)) {
-        throw new Error("Task ID not found");
+      const fileExtension = format === "csv" ? "csv" : "json";
+      const defaultFilename = `email_results_task_${input.taskId}_${
+        new Date().toISOString().split("T")[0]
+      }.${fileExtension}`;
+
+      const { filePath } = await dialog.showSaveDialog({
+        title: `Export Email Results as ${format.toUpperCase()}`,
+        defaultPath: path.join(app.getPath("documents"), defaultFilename),
+        filters: [
+          { name: format === "csv" ? "CSV Files" : "JSON Files", extensions: [fileExtension] },
+          { name: "All Files", extensions: ["*"] },
+        ],
+      });
+
+      if (!filePath) {
+        throw new Error("Export cancelled by user");
       }
+      if (format === "csv") {
+        fs.writeFileSync(filePath, exportData, "utf-8");
+      } else {
+        fs.writeFileSync(filePath, JSON.stringify(exportData, null, 2), "utf-8");
+      }
+      return filePath;
+    },
+  );
+
+  registerValidatedHandler(
+    EMAIL_SEARCH_TASK_KILL,
+    emailExtractionByIdInputSchema,
+    async (input) => {
       const emailCon = new EmailextractionController();
-      await emailCon.startEmailSearchTask(qdata.id);
-      const resp: CommonMessage<string> = {
-        status: true,
-        msg: "Task started successfully",
-        data: "Task started successfully",
-      };
-      return resp;
-    } catch (error) {
-      const resp: CommonMessage<string> = {
-        status: false,
-        msg: error instanceof Error ? error.message : "Unknown error occurred",
-      };
-      return resp;
-    }
-  });
+      await emailCon.killEmailSearchTask(input.id);
+      return "Task stopped successfully";
+    },
+  );
+
+  registerValidatedHandler(
+    EMAIL_SEARCH_TASK_START,
+    emailExtractionByIdInputSchema,
+    async (input) => {
+      const emailCon = new EmailextractionController();
+      await emailCon.startEmailSearchTask(input.id);
+      return "Task started successfully";
+    },
+  );
 
   // Reset any tasks stuck in "Processing" from a previous app session
   const emailTaskModule = new EmailSearchTaskModule();

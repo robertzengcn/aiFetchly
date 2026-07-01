@@ -12,6 +12,20 @@ export type {
   AIChatPlanStatus,
 } from "@/entityTypes/aiChatPlanTypes";
 
+/**
+ * Tool approval mode for AI Chat V2 conversations.
+ * Controls how permission-required tools are handled during a chat turn.
+ *
+ * - `ask_for_approval`: Show permission prompts for non-pure tools (default).
+ * - `approve_for_me`  : Auto-approve non-shell tools; shell still prompts.
+ * - `full_access`     : Auto-approve all registered tools after hard safety checks;
+ *                        dependency installs still prompt.
+ */
+export type ChatToolApprovalMode =
+  | "ask_for_approval"
+  | "approve_for_me"
+  | "full_access";
+
 /** Metadata stored on v2 chat rows in the existing ai_chat_messages table. */
 export interface ChatV2MessageMetadata {
   source: "chat-v2";

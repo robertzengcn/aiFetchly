@@ -185,6 +185,91 @@ describe("OpenAIStreamAccumulator", () => {
     expect(parsed[0].rawArgumentsJson).toBe("");
   });
 
+  it("reports truncated JSON (object that never closes) as malformed", () => {
+    // Simulates a run_subagent tool call where the model ran out of tokens
+    // mid-JSON — the object starts with '{' but never closes with '}'.
+    const acc = new OpenAIStreamAccumulator();
+    acc.ingest(
+      chunk({
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "c-trunc",
+                  function: {
+                    name: "run_subagent",
+                    arguments:
+                      '{"agentId":"agent-lead-researcher","prompt":"Research","taskPacket":{"lead":{"companyName":"Stripe"',
+                  },
+                },
+              ],
+            },
+            finish_reason: "tool_calls",
+          },
+        ],
+      })
+    );
+    const parsed = acc.tryParseToolCallArguments();
+    expect(parsed.length).toBe(1);
+    expect(parsed[0].ok).toBe(false);
+    expect(parsed[0].rawArgumentsJson).toContain("Stripe");
+    // Verify the JSON is indeed truncated (not valid parseable JSON)
+    expect(() => JSON.parse(parsed[0].rawArgumentsJson)).toThrow();
+  });
+
+  it("successfully parses large valid nested JSON arguments", () => {
+    // Ensures that a legitimate deeply-nested taskPacket (without
+    // truncation) is correctly parsed — regression guard against
+    // overzealous truncation detection.
+    const acc = new OpenAIStreamAccumulator();
+    const validArgs = JSON.stringify({
+      agentId: "agent-lead-researcher",
+      prompt: "Research Stripe",
+      taskPacket: {
+        lead: { companyName: "Stripe", website: "https://stripe.com" },
+        userGoal: "Find contacts",
+        constraints: { maxLeads: 3, requireSourceUrls: true },
+        priorFindings: [],
+        requiredOutputSchema: {
+          type: "object",
+          properties: { contacts: { type: "array" } },
+        },
+      },
+    });
+    acc.ingest(
+      chunk({
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "c-valid",
+                  function: {
+                    name: "run_subagent",
+                    arguments: validArgs,
+                  },
+                },
+              ],
+            },
+            finish_reason: "tool_calls",
+          },
+        ],
+      })
+    );
+    const parsed = acc.tryParseToolCallArguments();
+    expect(parsed.length).toBe(1);
+    expect(parsed[0].ok).toBe(true);
+    expect(parsed[0].arguments).toBeDefined();
+    expect(
+      (parsed[0].arguments as Record<string, unknown>).agentId
+    ).toBe("agent-lead-researcher");
+  });
+
   it("captures usage from the final usage-only chunk", () => {
     const acc = new OpenAIStreamAccumulator();
     // Normal token chunk first

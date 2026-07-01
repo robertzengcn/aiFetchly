@@ -282,6 +282,10 @@ export const AI_CHAT_V2_REQUEST_PLAN_CHANGES =
 export const AI_CHAT_V2_PLAN_VERSIONS = "ai-chat-v2:plan-versions";
 export const AI_CHAT_V2_COMPACT_CONVERSATION =
   "ai-chat-v2:compact-conversation";
+export const AI_CHAT_V2_GET_TOOL_APPROVAL_MODE =
+  "ai-chat-v2:get-tool-approval-mode";
+export const AI_CHAT_V2_SET_TOOL_APPROVAL_MODE =
+  "ai-chat-v2:set-tool-approval-mode";
 
 // MCP Tool Management Channels
 export const MCP_TOOL_LIST = "mcp:tool:list";
@@ -382,6 +386,7 @@ export const AI_MESSAGE_TASK_LIST_AVAILABLE_TOOLS =
 export const AGENT_DEFINITION_LIST = "agent-runtime:definition-list";
 export const AGENT_TASK_DETAIL = "agent-runtime:task-detail";
 export const AGENT_TASK_TRANSCRIPT = "agent-runtime:task-transcript";
+export const AGENT_TASK_LIST = "agent-runtime:task-list";
 export const AGENT_RESUME_TOOL_AFTER_PERMISSION =
   "agent-runtime:resume-tool-after-permission";
 

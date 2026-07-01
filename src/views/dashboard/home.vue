@@ -77,8 +77,8 @@
           />
         </v-col>
 
-        <!-- Search Engine Bar Chart -->
-        <v-col cols="12" md="6">
+        <!-- Search Engine Bar Chart (hidden) -->
+        <v-col cols="12" md="6" v-if="false">
           <DashboardSearchEngineChart
             :data="searchEngineData"
             :loading="isChartsLoading"
@@ -88,8 +88,8 @@
           />
         </v-col>
 
-        <!-- Email Status Pie Chart -->
-        <v-col cols="12" md="6">
+        <!-- Email Status Pie Chart (hidden) -->
+        <v-col cols="12" md="6" v-if="false">
           <DashboardEmailStatusChart
             :data="emailStatusData"
             :loading="isChartsLoading"

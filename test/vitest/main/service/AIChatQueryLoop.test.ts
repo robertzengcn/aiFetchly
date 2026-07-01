@@ -545,6 +545,65 @@ describe("AIChatQueryLoop", () => {
     });
   });
 
+  describe("truncated JSON tool arguments", () => {
+    it("emits compact-payload guidance when tool call JSON looks truncated", async () => {
+      // Simulates run_subagent with a taskPacket so large the JSON gets
+      // truncated mid-object (missing closing brace). The loop should emit
+      // a tool_result event with specific guidance about keeping args compact.
+      // Built as a raw string because the truncation is in the mock data itself.
+      const truncated =
+        '{"agentId":"agent-lead-researcher","prompt":"Research Stripe","taskPacket":' +
+        '{"lead":{"companyName":"Stripe","contacts":[{"name":"John"';
+      const truncChunk = makeToolCallChunk("call-trunc", "run_subagent", truncated);
+
+      const eventSink = { emit: vi.fn() };
+
+      // Return the same truncated chunk on every round
+      const fakeStream = vi.fn(
+        async (
+          _req: unknown,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          onChunk(truncChunk);
+        }
+      );
+
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: vi.fn(),
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+
+      const result = await loop.run({
+        conversationId: "v2-trunc",
+        assistantMessageId: "a-trunc",
+        messages: [],
+        request: { message: "enrich these leads" },
+        openAITools: [],
+        abortController: new AbortController(),
+        eventSink,
+        startRound: 0,
+        isActiveTurn: () => true,
+      });
+
+      // After 4 consecutive malformed rounds, the loop returns "failed"
+      expect(result.type).toBe("failed");
+
+      // Check that at least one tool_result event carried the compact-payload
+      // guidance message (emitted before the retry limit was exhausted)
+      const toolResultEvents = (eventSink.emit as ReturnType<typeof vi.fn>).mock.calls
+        .filter((call: unknown[]) => (call[0] as { type?: string }).type === "tool_result")
+        .map((call: unknown[]) => (call[0] as { toolResult?: { error?: string } }).toolResult?.error ?? "");
+
+      expect(toolResultEvents.length).toBeGreaterThan(0);
+      const hasTruncationGuidance = toolResultEvents.some(
+        (msg: string) =>
+          msg.includes("cut off") && msg.includes("incomplete")
+      );
+      expect(hasTruncationGuidance).toBe(true);
+    });
+  });
+
   describe("server-side error finish_reason", () => {
     it("surfaces a retryable-tagged error when the stream ends with finish_reason=error and empty content", async () => {
       // Reproduces the real-world failure mode where the AI server returns

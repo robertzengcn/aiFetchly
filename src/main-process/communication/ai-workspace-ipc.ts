@@ -172,16 +172,27 @@ export function registerAIWorkspaceIpcHandlers(_win: BrowserWindow): void {
 
   // Folder picker dialog - returns selected folder path or null if cancelled.
   // Gated on AI enablement per CLAUDE.md mandate for AI-serving IPC handlers.
-  ipcMain.handle(DIALOG_PICK_FOLDER, async (): Promise<string | null> => {
-    if (!isAIEnabled()) {
-      return null;
+  ipcMain.handle(
+    DIALOG_PICK_FOLDER,
+    async (): Promise<CommonMessage<string | null>> => {
+      if (!isAIEnabled()) {
+        return denied("AI functionality is only available to subscribers.");
+      }
+      try {
+        const result = await dialog.showOpenDialog(_win, {
+          properties: ["openDirectory"],
+        });
+        if (result.canceled || result.filePaths.length === 0) {
+          return ok(null);
+        }
+        return ok(result.filePaths[0]);
+      } catch (err) {
+        return denied(
+          err instanceof Error
+            ? err.message
+            : "Failed to pick workspace folder."
+        );
+      }
     }
-    const result = await dialog.showOpenDialog({
-      properties: ["openDirectory"],
-    });
-    if (result.canceled || result.filePaths.length === 0) {
-      return null;
-    }
-    return result.filePaths[0];
-  });
+  );
 }

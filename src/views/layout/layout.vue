@@ -117,7 +117,7 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
                         class="chat-resize-handle"
                         @mousedown="startResize"
                     ></div>
-                    <AiChatV2 v-if="v2ChatPanelOpen" />
+                    <AiChatV2 v-show="v2ChatPanelOpen" />
                 </div>
             </div>
         </main>
@@ -583,7 +583,8 @@ const showDialog=(status:boolean, content:string)=>{
     flex: 0 0 0;
     width: 0;
     height: auto;
-    min-height: calc(100vh - 92px);
+    max-height: calc(100vh - 92px);
+    min-height: 0;
     padding-top: 32px;
     box-sizing: border-box;
     overflow: hidden;

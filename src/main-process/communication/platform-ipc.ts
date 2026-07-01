@@ -1,313 +1,118 @@
-import { ipcMain } from 'electron'
-import { 
-  PLATFORM_LIST, 
-  PLATFORM_DETAIL, 
-  PLATFORM_CREATE, 
-  PLATFORM_UPDATE, 
-  PLATFORM_DELETE, 
-  PLATFORM_VALIDATE, 
-  PLATFORM_STATISTICS, 
-  PLATFORM_TOGGLE 
+import {
+  PLATFORM_LIST,
+  PLATFORM_DETAIL,
+  PLATFORM_CREATE,
+  PLATFORM_UPDATE,
+  PLATFORM_DELETE,
+  PLATFORM_VALIDATE,
+  PLATFORM_STATISTICS,
+  PLATFORM_TOGGLE,
 } from '@/config/channellist'
 import { PlatformRegistry } from '@/modules/PlatformRegistry'
 import { PlatformConfig } from '@/modules/interface/IPlatformConfig'
-import { CommonResponse } from '@/entityTypes/commonType'
+import { registerValidatedHandler } from '@/main-process/communication/_shared/registerValidatedHandler'
+import {
+  platformNoInputSchema,
+  platformByIdInputSchema,
+  platformConfigInputSchema,
+  platformUpdateInputSchema,
+} from '@/schemas/ipc/platform'
 
+/**
+ * Platform IPC handlers — all 8 migrated to registerValidatedHandler.
+ *
+ * Envelope: handlers return data only; wrapper wraps. Returned shapes
+ * preserve {records, num} for frontend list-style consumption.
+ */
 export function registerPlatformIpcHandlers() {
   const platformRegistry = new PlatformRegistry()
 
-  // Get all platforms
-  ipcMain.handle(PLATFORM_LIST, async (event, data) => {
-    try {
+  registerValidatedHandler(
+    PLATFORM_LIST,
+    platformNoInputSchema,
+    async () => {
       const platforms = platformRegistry.getAllPlatforms()
-      const response: CommonResponse<PlatformConfig[]> = {
-        status: true,
-        msg: 'Platforms retrieved successfully',
-        data: {
-          records: [platforms],
-          num: 1
-        }
-      }
-      return response
-    } catch (error) {
-      console.error('Failed to get platforms:', error)
-      const response: CommonResponse<PlatformConfig[]> = {
-        status: false,
-        msg: error instanceof Error ? error.message : 'Failed to get platforms',
-        data: {
-          records: [],
-          num: 0
-        }
-      }
-      return response
-    }
-  })
+      return { records: [platforms], num: 1 }
+    },
+  )
 
-  // Get platform detail
-  ipcMain.handle(PLATFORM_DETAIL, async (event, data) => {
-    try {
-      const qdata = JSON.parse(data as string)
-      if (!('id' in qdata)) {
-        return {
-          status: false,
-          msg: 'Platform ID is required',
-          data: {
-            records: [],
-            num: 0
-          }
-        }
-      }
-
-      const platform = platformRegistry.getPlatformConfig(qdata.id)
+  registerValidatedHandler(
+    PLATFORM_DETAIL,
+    platformByIdInputSchema,
+    async (input) => {
+      const platform = platformRegistry.getPlatformConfig(input.id)
       if (!platform) {
-        return {
-          status: false,
-          msg: 'Platform not found',
-          data: {
-            records: [],
-            num: 0
-          }
-        }
+        throw new Error('Platform not found')
       }
+      return { records: [platform], num: 1 }
+    },
+  )
 
-      const response: CommonResponse<PlatformConfig> = {
-        status: true,
-        msg: 'Platform retrieved successfully',
-        data: {
-          records: [platform],
-          num: 1
-        }
-      }
-      return response
-    } catch (error) {
-      console.error('Failed to get platform detail:', error)
-      const response: CommonResponse<PlatformConfig> = {
-        status: false,
-        msg: error instanceof Error ? error.message : 'Failed to get platform detail',
-        data: {
-          records: [],
-          num: 0
-        }
-      }
-      return response
-    }
-  })
-
-  // Create new platform
-  ipcMain.handle(PLATFORM_CREATE, async (event, data) => {
-    try {
-      const platformData: PlatformConfig = JSON.parse(data as string)
+  registerValidatedHandler(
+    PLATFORM_CREATE,
+    platformConfigInputSchema,
+    async (input) => {
+      const platformData = input as unknown as PlatformConfig
       await platformRegistry.registerPlatform(platformData)
-      
-      const response: CommonResponse<PlatformConfig> = {
-        status: true,
-        msg: 'Platform created successfully',
-        data: {
-          records: [platformData],
-          num: 1
-        }
-      }
-      return response
-    } catch (error) {
-      console.error('Failed to create platform:', error)
-      const response: CommonResponse<PlatformConfig> = {
-        status: false,
-        msg: error instanceof Error ? error.message : 'Failed to create platform',
-        data: {
-          records: [],
-          num: 0
-        }
-      }
-      return response
-    }
-  })
+      return { records: [platformData], num: 1 }
+    },
+  )
 
-  // Update platform
-  ipcMain.handle(PLATFORM_UPDATE, async (event, data) => {
-    try {
-      const qdata = JSON.parse(data as string)
-      if (!('id' in qdata) || !('updates' in qdata)) {
-        return {
-          status: false,
-          msg: 'Platform ID and updates are required',
-          data: {
-            records: [],
-            num: 0
-          }
-        }
-      }
+  registerValidatedHandler(
+    PLATFORM_UPDATE,
+    platformUpdateInputSchema,
+    async (input) => {
+      await platformRegistry.updatePlatformConfig(input.id, input.updates)
+      return { records: [], num: 0 }
+    },
+  )
 
-      await platformRegistry.updatePlatformConfig(qdata.id, qdata.updates)
-      
-      const response: CommonResponse<PlatformConfig> = {
-        status: true,
-        msg: 'Platform updated successfully',
-        data: {
-          records: [],
-          num: 0
-        }
-      }
-      return response
-    } catch (error) {
-      console.error('Failed to update platform:', error)
-      const response: CommonResponse<PlatformConfig> = {
-        status: false,
-        msg: error instanceof Error ? error.message : 'Failed to update platform',
-        data: {
-          records: [],
-          num: 0
-        }
-      }
-      return response
-    }
-  })
+  registerValidatedHandler(
+    PLATFORM_DELETE,
+    platformByIdInputSchema,
+    async (input) => {
+      await platformRegistry.removePlatform(input.id)
+      return { records: [], num: 0 }
+    },
+  )
 
-  // Delete platform
-  ipcMain.handle(PLATFORM_DELETE, async (event, data) => {
-    try {
-      const qdata = JSON.parse(data as string)
-      if (!('id' in qdata)) {
-        return {
-          status: false,
-          msg: 'Platform ID is required',
-          data: null
-        }
-      }
+  registerValidatedHandler(
+    PLATFORM_VALIDATE,
+    platformConfigInputSchema,
+    async (input) => {
+      const validation = platformRegistry.validatePlatformConfig(
+        input as unknown as PlatformConfig,
+      )
+      return { records: [validation], num: 1 }
+    },
+  )
 
-      await platformRegistry.removePlatform(qdata.id)
-      
-      const response: CommonResponse<null> = {
-        status: true,
-        msg: 'Platform deleted successfully',
-        data: {
-          records: [],
-          num: 0
-        }
-      }
-      return response
-    } catch (error) {
-      console.error('Failed to delete platform:', error)
-      const response: CommonResponse<null> = {
-        status: false,
-        msg: error instanceof Error ? error.message : 'Failed to delete platform',
-        data: {
-          records: [],
-          num: 0
-        }
-      }
-      return response
-    }
-  })
-
-  // Validate platform configuration
-  ipcMain.handle(PLATFORM_VALIDATE, async (event, data) => {
-    try {
-      const platformData: PlatformConfig = JSON.parse(data as string)
-      const validation = platformRegistry.validatePlatformConfig(platformData)
-      
-      const response: CommonResponse<any> = {
-        status: true,
-        msg: 'Platform validation completed',
-        data: {
-          records: [validation],
-          num: 1
-        }
-      }
-      return response
-    } catch (error) {
-      console.error('Failed to validate platform:', error)
-      const response: CommonResponse<any> = {
-        status: false,
-        msg: error instanceof Error ? error.message : 'Failed to validate platform',
-        data: {
-          records: [],
-          num: 0
-        }
-      }
-      return response
-    }
-  })
-
-  // Get platform statistics
-  ipcMain.handle(PLATFORM_STATISTICS, async (event, data) => {
-    try {
+  registerValidatedHandler(
+    PLATFORM_STATISTICS,
+    platformNoInputSchema,
+    async () => {
       const statistics = platformRegistry.getPlatformStatistics()
-      
-      const response: CommonResponse<any> = {
-        status: true,
-        msg: 'Platform statistics retrieved successfully',
-        data: {
-          records: [statistics],
-          num: 1
-        }
-      }
-      return response
-    } catch (error) {
-      console.error('Failed to get platform statistics:', error)
-      const response: CommonResponse<any> = {
-        status: false,
-        msg: error instanceof Error ? error.message : 'Failed to get platform statistics',
-        data: {
-          records: [],
-          num: 0
-        }
-      }
-      return response
-    }
-  })
+      return { records: [statistics], num: 1 }
+    },
+  )
 
-  // Toggle platform active status
-  ipcMain.handle(PLATFORM_TOGGLE, async (event, data) => {
-    try {
-      const qdata = JSON.parse(data as string)
-      if (!('id' in qdata)) {
-        return {
-          status: false,
-          msg: 'Platform ID is required',
-          data: {
-            records: [],
-            num: 0
-          }
-        }
-      }
-
-      const platform = platformRegistry.getPlatformConfig(qdata.id)
+  registerValidatedHandler(
+    PLATFORM_TOGGLE,
+    platformByIdInputSchema,
+    async (input) => {
+      const platform = platformRegistry.getPlatformConfig(input.id)
       if (!platform) {
-        return {
-          status: false,
-          msg: 'Platform not found',
-          data: {
-            records: [],
-            num: 0
-          }
-        }
+        throw new Error('Platform not found')
       }
-
-      await platformRegistry.updatePlatformConfig(qdata.id, {
-        is_active: !platform.is_active
+      await platformRegistry.updatePlatformConfig(input.id, {
+        is_active: !platform.is_active,
       })
-      
-      const response: CommonResponse<PlatformConfig> = {
-        status: true,
-        msg: `Platform ${platform.is_active ? 'deactivated' : 'activated'} successfully`,
-        data: {
-          records: [],
-          num: 0
-        }
+      return {
+        records: [],
+        num: 0,
+        // Carry through the toggle action verb for frontend toast messages.
+        action: platform.is_active ? 'deactivated' : 'activated',
       }
-      return response
-    } catch (error) {
-      console.error('Failed to toggle platform:', error)
-      const response: CommonResponse<PlatformConfig> = {
-        status: false,
-        msg: error instanceof Error ? error.message : 'Failed to toggle platform',
-        data: {
-          records: [],
-          num: 0
-        }
-      }
-      return response
-    }
-  })
+    },
+  )
 }
-

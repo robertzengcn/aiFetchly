@@ -72,8 +72,10 @@ function getAppendIcon(record: FileOperationRecord): string {
   return record.success ? "mdi-check-circle" : "mdi-alert-circle";
 }
 
-async function openFile(filePath: string): Promise<void> {
-  await windowInvoke(AI_FILE_OPEN, { filePath });
+function openFile(filePath: string): void {
+  windowInvoke(AI_FILE_OPEN, { filePath }).catch((openErr: unknown) => {
+    console.error("[file-ops] Failed to open file:", openErr);
+  });
 }
 
 function getDiffLines(diff: string): string[] {

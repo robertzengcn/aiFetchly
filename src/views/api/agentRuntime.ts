@@ -4,6 +4,7 @@ import {
   AGENT_DEFINITION_LIST,
   AGENT_TASK_DETAIL,
   AGENT_TASK_TRANSCRIPT,
+  AGENT_TASK_LIST,
 } from "@/config/channellist";
 import type {
   AgentDefinitionView,
@@ -24,6 +25,14 @@ export async function getAgentTaskDetail(
 ): Promise<AgentTaskSnapshot | null> {
   const resp = await windowInvoke(AGENT_TASK_DETAIL, { agentTaskId });
   return (resp as AgentTaskSnapshot | null) ?? null;
+}
+
+export async function listAgentTasks(
+  limit?: number,
+  status?: string
+): Promise<AgentTaskSnapshot[]> {
+  const resp = await windowInvoke(AGENT_TASK_LIST, { limit, status });
+  return (resp as AgentTaskSnapshot[]) ?? [];
 }
 
 export async function getAgentTaskTranscript(

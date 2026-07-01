@@ -305,6 +305,10 @@ export class AIChatQueryLoop {
     // Reset to 0 whenever a round has no malformed calls. When this exceeds
     // MAX_MALFORMED_ARGUMENT_RETRIES, the turn fails with a user-facing error.
     let consecutiveMalformedRounds = 0;
+    // Ensure a generous token budget so large tool-call arguments (e.g.
+    // run_subagent with a full taskPacket) are not truncated mid-JSON.
+    // The frontend may or may not send maxTokens; default to 16384.
+    let currentMaxTokens = input.request.maxTokens ?? 16384;
 
     try {
       for (
@@ -328,7 +332,7 @@ export class AIChatQueryLoop {
             messages,
             model: input.request.model,
             temperature: input.request.temperature,
-            max_tokens: input.request.maxTokens,
+            max_tokens: currentMaxTokens,
             stream: true,
             tools: currentTools.length > 0 ? currentTools : undefined,
             tool_choice: resolveToolChoiceForRound({
@@ -522,12 +526,25 @@ export class AIChatQueryLoop {
           if (!call.id || !call.name) continue;
           const isEmpty =
             !call.rawArgumentsJson || call.rawArgumentsJson.trim().length === 0;
-          const errorDetail = isEmpty
-            ? "No arguments were provided. If this tool requires no arguments, send {}. Otherwise, provide valid JSON arguments."
-            : `Arguments were not valid JSON: "${call.rawArgumentsJson.slice(
-                0,
-                500
-              )}". Please retry with properly formatted JSON arguments.`;
+          const raw = call.rawArgumentsJson?.trim() ?? "";
+          const looksTruncated =
+            raw.length > 0 &&
+            ((raw.startsWith("{") && !raw.endsWith("}")) ||
+              (raw.startsWith("[") && !raw.endsWith("]")));
+          let errorDetail: string;
+          if (isEmpty) {
+            errorDetail =
+              "No arguments were provided. If this tool requires no arguments, send {}. Otherwise, provide valid JSON arguments.";
+          } else if (looksTruncated) {
+            errorDetail = `The tool call arguments appear to have been cut off — the JSON is incomplete and does not close all open braces/arrays. This is often a transient issue. Please retry by regenerating the complete tool call arguments.`;
+            // Give the model more token budget on the retry round
+            currentMaxTokens = Math.min(currentMaxTokens * 2, 65536);
+          } else {
+            errorDetail = `Arguments were not valid JSON: "${raw.slice(
+              0,
+              500
+            )}". Please retry with properly formatted JSON arguments.`;
+          }
           const errorContent = serializeToolResultContent({
             success: false,
             error: errorDetail,

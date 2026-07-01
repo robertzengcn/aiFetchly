@@ -72,6 +72,7 @@
         >
           <v-icon size="small">mdi-delete-outline</v-icon>
         </v-btn>
+        <AgentTaskListDialog @cancel-task="handleAgentTaskCancel" />
       </div>
     </div>
 
@@ -178,7 +179,11 @@
            and the required card prompts the user to pick a folder when no
            workspace exists yet. -->
       <div class="v2-shell__workspace-panel">
-        <WorkspaceBadge :workspace="activeWorkspace" class="mb-1" />
+        <WorkspaceBadge
+          :workspace="activeWorkspace"
+          class="mb-1"
+          @request-set-workspace="handleWorkspaceSetupRequest"
+        />
         <WorkspaceRequiredCard
           v-if="showWorkspaceRequired && activeConversationId"
           :conversation-id="activeConversationId"
@@ -202,12 +207,20 @@
             :loading="availableModels.length === 0"
             class="ml-2"
           />
+          <AiChatV2ToolApprovalModeSelector
+            v-model="toolApprovalMode"
+            :disabled="chatIsRunning"
+            class="ml-2"
+            @update:model-value="onToolApprovalModeChange"
+          />
         </template>
       </AiChatV2Composer>
     </div>
 
     <!-- MCP Tool Manager Dialog -->
     <MCPToolManager v-model="showMCPToolManager" />
+
+
 
     <v-snackbar v-model="compactNotice" timeout="3000" location="bottom">
       {{
@@ -328,6 +341,7 @@ import type {
   ChatV2ConversationSummary,
   ChatV2StreamChunk,
   ChatV2MessageMetadata,
+  ChatToolApprovalMode,
 } from "@/entityTypes/aiChatV2Types";
 import type {
   AIChatPlanStateView,
@@ -354,17 +368,21 @@ import {
   rejectChatV2Plan,
   requestChatV2PlanChanges,
   getOpenAIChatModels,
+  getChatV2ToolApprovalMode,
+  setChatV2ToolApprovalMode,
 } from "@/views/api/aiChatV2";
 import AiChatV2Messages from "./AiChatV2Messages.vue";
 import AiChatV2Composer from "./AiChatV2Composer.vue";
 import AiChatV2ModeSelector from "./AiChatV2ModeSelector.vue";
 import AiChatV2ModelSelector from "./AiChatV2ModelSelector.vue";
+import AiChatV2ToolApprovalModeSelector from "./AiChatV2ToolApprovalModeSelector.vue";
 import AiChatV2QuestionCard from "./AiChatV2QuestionCard.vue";
 import AiChatV2PlanApprovalCard from "./AiChatV2PlanApprovalCard.vue";
 import AiChatV2PlanStatusBadge from "./AiChatV2PlanStatusBadge.vue";
 import AiChatV2ContextBadge from "./AiChatV2ContextBadge.vue";
 import FileOperationBadge from "../aiChat/FileOperationBadge.vue";
 import MCPToolManager from "../aiChat/MCPToolManager.vue";
+import AgentTaskListDialog from "./AgentTaskListDialog.vue";
 import WorkspaceBadge from "./WorkspaceBadge.vue";
 import WorkspaceRequiredCard from "./WorkspaceRequiredCard.vue";
 import { getWorkspace } from "@/views/api/workspace";
@@ -424,6 +442,41 @@ const compactNotice = ref(false);
 const stoppedPendingToolConversationIds = ref<Set<string>>(new Set());
 
 // ---------------------------------------------------------------------------
+// Tool approval mode
+// ---------------------------------------------------------------------------
+const toolApprovalMode = ref<ChatToolApprovalMode>("ask_for_approval");
+
+async function loadToolApprovalMode(conversationId: string | null): Promise<void> {
+  if (!conversationId) {
+    toolApprovalMode.value = "ask_for_approval";
+    return;
+  }
+  try {
+    const mode = await getChatV2ToolApprovalMode(conversationId);
+    toolApprovalMode.value = mode;
+  } catch {
+    toolApprovalMode.value = "ask_for_approval";
+  }
+}
+
+function handleAgentTaskCancel(agentTaskId: string): void {
+  // Agent task cancellation is wired in a later milestone.
+  console.log("[AiChatV2] cancel-task requested:", agentTaskId);
+}
+
+async function onToolApprovalModeChange(mode: ChatToolApprovalMode): Promise<void> {
+  if (!activeConversationId.value) return;
+  toolApprovalMode.value = mode;
+  try {
+    const saved = await setChatV2ToolApprovalMode(activeConversationId.value, mode);
+    toolApprovalMode.value = saved;
+  } catch (err) {
+    console.error("[AiChatV2] failed to save tool approval mode:", err);
+    toolApprovalMode.value = "ask_for_approval";
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Workspace tracking
 // ---------------------------------------------------------------------------
 // Active workspace for the current conversation. Null when no conversation is
@@ -431,6 +484,34 @@ const stoppedPendingToolConversationIds = ref<Set<string>>(new Set());
 const activeWorkspace = ref<WorkspaceSummary | null>(null);
 // True when the active conversation has no workspace — shows the pick card.
 const showWorkspaceRequired = ref(false);
+
+function createLocalConversationId(): string {
+  const randomId =
+    typeof globalThis.crypto?.randomUUID === "function"
+      ? globalThis.crypto.randomUUID()
+      : `id-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  return `v2-${randomId}`;
+}
+
+function ensureWorkspaceConversationId(): string {
+  if (activeConversationId.value) {
+    return activeConversationId.value;
+  }
+  const conversationId = createLocalConversationId();
+  activeConversationId.value = conversationId;
+  messages.value = [];
+  streamError.value = null;
+  applyPlanState(null);
+  pendingQuestion.value = null;
+  pendingPlanApproval.value = null;
+  return conversationId;
+}
+
+function handleWorkspaceSetupRequest(): void {
+  if (activeWorkspace.value) return;
+  ensureWorkspaceConversationId();
+  showWorkspaceRequired.value = true;
+}
 
 /**
  * Fetch the workspace (if any) for the given conversation and update the
@@ -454,11 +535,11 @@ async function refreshWorkspace(conversationId: string | null): Promise<void> {
           approvalState: ws.approvalState,
         }
       : null;
-    showWorkspaceRequired.value = !activeWorkspace.value;
+    showWorkspaceRequired.value = false;
   } catch {
     // non-fatal; treat as no workspace
     activeWorkspace.value = null;
-    showWorkspaceRequired.value = true;
+    showWorkspaceRequired.value = false;
   }
 }
 
@@ -860,6 +941,8 @@ const loadHistory = async (conversationId: string): Promise<void> => {
       pendingQuestion.value = null;
       pendingPlanApproval.value = null;
     }
+    // Load tool approval mode for this conversation
+    void loadToolApprovalMode(conversationId);
   } catch (err) {
     streamError.value = err instanceof Error ? err.message : String(err);
   }
@@ -877,6 +960,7 @@ const onNewConversation = (): void => {
   lastUsage.value = null;
   streamingEstimatedTokens.value = 0;
   activeModel.value = undefined;
+  toolApprovalMode.value = "ask_for_approval";
 };
 
 const onClearMessages = (): void => {

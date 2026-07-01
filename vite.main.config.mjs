@@ -378,6 +378,10 @@ export default ({ mode }) => {
             // use a dedicated workspace config
             // (test/vitest/main/components/vitest.config.mjs) that opts only
             // that subtree into happy-dom.
+            // Run `tsc --noEmit` once before tests start. Vitest's esbuild
+            // transpile-only mode silently passes files with type errors
+            // (this exact issue bit us during the zod schema rollout).
+            globalSetup: ['./test/vitest/_typecheck/globalSetup.ts'],
         }
     })
 }

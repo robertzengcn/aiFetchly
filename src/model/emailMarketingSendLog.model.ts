@@ -4,169 +4,213 @@ import { EmailMarketingSendLogEntity } from "@/entity/EmailMarketingSendLog.enti
 //import { EmailMarketingSendLogEntity as EmailMarketingSendLogInterface } from "./emailMarketingSendLogdb";
 import { SortBy } from "@/entityTypes/commonType";
 import { getRecorddatetime } from "@/modules/lib/function";
+import { parseAndStrip } from "@/utils/parseAndStrip";
+import { emailMarketingSendLogWriteSchema } from "@/schemas/entity/emailMarketingSendLog";
 export enum SendStatus {
-    Success = 1,
-    Failure = 0,
-  }
+  Success = 1,
+  Failure = 0,
+}
 
 export class EmailMarketingSendLogModel extends BaseDb {
-    private repository: Repository<EmailMarketingSendLogEntity>;
+  private repository: Repository<EmailMarketingSendLogEntity>;
 
-    constructor(filepath: string) {
-        super(filepath);
-        this.repository = this.sqliteDb.connection.getRepository(EmailMarketingSendLogEntity);
+  constructor(filepath: string) {
+    super(filepath);
+    this.repository = this.sqliteDb.connection.getRepository(
+      EmailMarketingSendLogEntity
+    );
+  }
+
+  async create(task: EmailMarketingSendLogEntity): Promise<number> {
+    if (!task.record_time) {
+      task.record_time = getRecorddatetime();
     }
 
-    async create(task: EmailMarketingSendLogEntity): Promise<number> {
-        // const entity = new EmailMarketingSendLogEntity();
-        // entity.status = task.status;
-        // entity.task_id = task.task_id;
-        // entity.receiver = task.receiver;
-        // entity.title = task.title;
-        // entity.content = task.content;
-        // entity.record_time = task.record_time || getRecorddatetime();
-        // entity.log = task.log || "";
-        if(!task.record_time){
-            task.record_time=getRecorddatetime();
-        }
+    // Phase 5: parseAndStrip filters unknown fields before persistence.
+    // Email send flow can attach debug/temp fields (e.g. smtpSessionId,
+    // retryCount) that don't have matching TypeORM columns.
+    const stripped = parseAndStrip(task, emailMarketingSendLogWriteSchema());
+    const savedEntity = await this.repository.save(
+      stripped as unknown as EmailMarketingSendLogEntity
+    );
+    return savedEntity.id;
+  }
 
-        const savedEntity = await this.repository.save(task);
-        return savedEntity.id;
+  async read(id: number): Promise<EmailMarketingSendLogEntity | null> {
+    return await this.repository.findOne({ where: { id } });
+  }
+
+  async update(id: number, task: EmailMarketingSendLogEntity): Promise<void> {
+    const entity = await this.repository.findOne({ where: { id } });
+    if (!entity) return;
+
+    entity.status = task.status;
+    entity.task_id = task.task_id;
+    entity.receiver = task.receiver;
+    entity.title = task.title;
+    entity.content = task.content;
+    entity.record_time = task.record_time || getRecorddatetime();
+    entity.log = task.log || "";
+
+    await this.repository.save(entity);
+  }
+
+  async delete(id: number): Promise<void> {
+    await this.repository.delete(id);
+  }
+
+  getSendStatusName(status: SendStatus): string {
+    switch (status) {
+      case SendStatus.Success:
+        return "Success";
+      case SendStatus.Failure:
+        return "Failure";
+      default:
+        return "Unknown";
+    }
+  }
+
+  async listEmailMarketingSendLog(
+    taskid: number,
+    page: number,
+    limit: number,
+    where?: string,
+    sort?: SortBy
+  ): Promise<EmailMarketingSendLogEntity[]> {
+    let queryBuilder = this.repository
+      .createQueryBuilder("log")
+      .where("log.task_id = :taskid", { taskid });
+
+    if (where) {
+      queryBuilder = queryBuilder.andWhere(
+        "(log.receiver LIKE :search OR log.title LIKE :search OR log.content LIKE :search)",
+        { search: `%${where}%` }
+      );
     }
 
-    async read(id: number): Promise<EmailMarketingSendLogEntity | null> {
-        return await this.repository.findOne({ where: { id } });
+    if (sort?.key && sort?.order) {
+      const lowsersortkey = sort.key.toLowerCase();
+      const lowsersortorder = sort.order.toLowerCase();
+      const allowsortkey = ["id", "record_time", "status"];
+      const allowsortorder = ["asc", "desc"];
+
+      if (!allowsortkey.includes(lowsersortkey)) {
+        throw new Error("not allow sort key");
+      }
+      if (!allowsortorder.includes(lowsersortorder)) {
+        throw new Error("not allow sort order");
+      }
+
+      queryBuilder = queryBuilder.orderBy(
+        `log.${lowsersortkey}`,
+        lowsersortorder.toUpperCase() as "ASC" | "DESC"
+      );
+    } else {
+      queryBuilder = queryBuilder.orderBy("log.id", "DESC");
     }
 
-    async update(id: number, task: EmailMarketingSendLogEntity): Promise<void> {
-        const entity = await this.repository.findOne({ where: { id } });
-        if (!entity) return;
+    queryBuilder = queryBuilder.skip(page).take(limit);
+    return await queryBuilder.getMany();
+  }
 
-        entity.status = task.status;
-        entity.task_id = task.task_id;
-        entity.receiver = task.receiver;
-        entity.title = task.title;
-        entity.content = task.content;
-        entity.record_time = task.record_time || getRecorddatetime();
-        entity.log = task.log || "";
+  async countEmailMarketingSendLog(
+    taskid: number,
+    where?: string
+  ): Promise<number> {
+    let queryBuilder = this.repository
+      .createQueryBuilder("log")
+      .where("log.task_id = :taskid", { taskid });
 
-        await this.repository.save(entity);
+    if (where) {
+      queryBuilder = queryBuilder.andWhere(
+        "(log.receiver LIKE :search OR log.title LIKE :search OR log.content LIKE :search)",
+        { search: `%${where}%` }
+      );
     }
 
-    async delete(id: number): Promise<void> {
-        await this.repository.delete(id);
+    return await queryBuilder.getCount();
+  }
+
+  async countAll(): Promise<number> {
+    return this.repository.count();
+  }
+
+  async countByDateRange(startDate: Date, endDate: Date): Promise<number> {
+    return this.repository
+      .createQueryBuilder("log")
+      .where("log.record_time >= :startDate", {
+        startDate: startDate.toISOString(),
+      })
+      .andWhere("log.record_time <= :endDate", {
+        endDate: endDate.toISOString(),
+      })
+      .getCount();
+  }
+
+  async aggregateByDateRange(
+    startDate: Date,
+    endDate: Date,
+    granularity: "day" | "week" | "month"
+  ): Promise<Array<{ date: string; count: number }>> {
+    const dateExpression = this.getDateExpression(
+      granularity,
+      "log.record_time"
+    );
+    const rows = await this.repository
+      .createQueryBuilder("log")
+      .select(dateExpression, "date")
+      .addSelect("COUNT(*)", "count")
+      .where("log.record_time >= :startDate", {
+        startDate: startDate.toISOString(),
+      })
+      .andWhere("log.record_time <= :endDate", {
+        endDate: endDate.toISOString(),
+      })
+      .groupBy(dateExpression)
+      .orderBy(dateExpression, "ASC")
+      .getRawMany();
+
+    return rows.map((row: { date: string; count: string }) => ({
+      date: row.date,
+      count: parseInt(row.count, 10),
+    }));
+  }
+
+  async countByStatusWithinDateRange(
+    startDate: Date,
+    endDate: Date
+  ): Promise<Array<{ status: number; count: number }>> {
+    const rows = await this.repository
+      .createQueryBuilder("log")
+      .select("log.status", "status")
+      .addSelect("COUNT(*)", "count")
+      .where("log.record_time >= :startDate", {
+        startDate: startDate.toISOString(),
+      })
+      .andWhere("log.record_time <= :endDate", {
+        endDate: endDate.toISOString(),
+      })
+      .groupBy("log.status")
+      .getRawMany();
+
+    return rows.map((row: { status: number; count: string }) => ({
+      status: Number(row.status),
+      count: parseInt(row.count, 10),
+    }));
+  }
+
+  private getDateExpression(
+    granularity: "day" | "week" | "month",
+    column: string
+  ): string {
+    switch (granularity) {
+      case "week":
+        return `STRFTIME('%Y-%W', ${column})`;
+      case "month":
+        return `STRFTIME('%Y-%m', ${column})`;
+      case "day":
+      default:
+        return `DATE(${column})`;
     }
-
-    getSendStatusName(status: SendStatus): string {
-        switch (status) {
-            case SendStatus.Success:
-                return "Success";
-            case SendStatus.Failure:
-                return "Failure";
-            default:
-                return "Unknown";
-        }
-    }
-
-    async listEmailMarketingSendLog(taskid: number, page: number, limit: number, where?: string, sort?: SortBy): Promise<EmailMarketingSendLogEntity[]> {
-        let queryBuilder = this.repository.createQueryBuilder('log')
-            .where('log.task_id = :taskid', { taskid });
-
-        if (where) {
-            queryBuilder = queryBuilder.andWhere(
-                '(log.receiver LIKE :search OR log.title LIKE :search OR log.content LIKE :search)',
-                { search: `%${where}%` }
-            );
-        }
-
-        if (sort?.key && sort?.order) {
-            const lowsersortkey = sort.key.toLowerCase();
-            const lowsersortorder = sort.order.toLowerCase();
-            const allowsortkey = ['id', 'record_time', 'status'];
-            const allowsortorder = ['asc', 'desc'];
-
-            if (!allowsortkey.includes(lowsersortkey)) {
-                throw new Error("not allow sort key");
-            }
-            if (!allowsortorder.includes(lowsersortorder)) {
-                throw new Error("not allow sort order");
-            }
-
-            queryBuilder = queryBuilder.orderBy(`log.${lowsersortkey}`, lowsersortorder.toUpperCase() as 'ASC' | 'DESC');
-        } else {
-            queryBuilder = queryBuilder.orderBy('log.id', 'DESC');
-        }
-
-        queryBuilder = queryBuilder.skip(page).take(limit);
-        return await queryBuilder.getMany();
-    }
-
-    async countEmailMarketingSendLog(taskid: number, where?: string): Promise<number> {
-        let queryBuilder = this.repository.createQueryBuilder('log')
-            .where('log.task_id = :taskid', { taskid });
-
-        if (where) {
-            queryBuilder = queryBuilder.andWhere(
-                '(log.receiver LIKE :search OR log.title LIKE :search OR log.content LIKE :search)',
-                { search: `%${where}%` }
-            );
-        }
-
-        return await queryBuilder.getCount();
-    }
-
-    async countAll(): Promise<number> {
-        return this.repository.count();
-    }
-
-    async countByDateRange(startDate: Date, endDate: Date): Promise<number> {
-        return this.repository.createQueryBuilder('log')
-            .where('log.record_time >= :startDate', { startDate: startDate.toISOString() })
-            .andWhere('log.record_time <= :endDate', { endDate: endDate.toISOString() })
-            .getCount();
-    }
-
-    async aggregateByDateRange(startDate: Date, endDate: Date, granularity: 'day' | 'week' | 'month'): Promise<Array<{ date: string; count: number }>> {
-        const dateExpression = this.getDateExpression(granularity, 'log.record_time');
-        const rows = await this.repository.createQueryBuilder('log')
-            .select(dateExpression, 'date')
-            .addSelect('COUNT(*)', 'count')
-            .where('log.record_time >= :startDate', { startDate: startDate.toISOString() })
-            .andWhere('log.record_time <= :endDate', { endDate: endDate.toISOString() })
-            .groupBy(dateExpression)
-            .orderBy(dateExpression, 'ASC')
-            .getRawMany();
-
-        return rows.map((row: { date: string; count: string }) => ({
-            date: row.date,
-            count: parseInt(row.count, 10)
-        }));
-    }
-
-    async countByStatusWithinDateRange(startDate: Date, endDate: Date): Promise<Array<{ status: number; count: number }>> {
-        const rows = await this.repository.createQueryBuilder('log')
-            .select('log.status', 'status')
-            .addSelect('COUNT(*)', 'count')
-            .where('log.record_time >= :startDate', { startDate: startDate.toISOString() })
-            .andWhere('log.record_time <= :endDate', { endDate: endDate.toISOString() })
-            .groupBy('log.status')
-            .getRawMany();
-
-        return rows.map((row: { status: number; count: string }) => ({
-            status: Number(row.status),
-            count: parseInt(row.count, 10)
-        }));
-    }
-
-    private getDateExpression(granularity: 'day' | 'week' | 'month', column: string): string {
-        switch (granularity) {
-            case 'week':
-                return `STRFTIME('%Y-%W', ${column})`;
-            case 'month':
-                return `STRFTIME('%Y-%m', ${column})`;
-            case 'day':
-            default:
-                return `DATE(${column})`;
-        }
-    }
-} 
+  }
+}

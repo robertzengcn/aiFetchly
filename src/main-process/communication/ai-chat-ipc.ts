@@ -1,4 +1,6 @@
-import { ipcMain, shell } from "electron";
+import { ipcMain } from "electron";
+import { spawn } from "child_process";
+import { platform } from "os";
 import {
   AiChatApi,
   ChatRequest,
@@ -60,6 +62,20 @@ import {
   DocumentService,
   StagedAttachmentReference,
 } from "@/service/DocumentService";
+import {
+  registerValidatedHandler,
+  registerAiValidatedHandler,
+} from "@/main-process/communication/_shared/registerValidatedHandler";
+import {
+  aiChatResumeToolInputSchema,
+  aiChatMessageInputSchema,
+  aiChatHistoryInputSchema,
+  aiChatClearInputSchema,
+  aiChatConversationsInputSchema,
+  aiChatKeywordsGenerateInputSchema,
+  aiChatSystemDependencyPromptInputSchema,
+  aiChatFileOpenInputSchema,
+} from "@/schemas/ipc/aiChat";
 
 /**
  * Generate a unique conversation ID in format: user_id:uuid
@@ -577,80 +593,34 @@ let currentStreamEventProcessor: StreamEventProcessor | null = null;
 export function registerAiChatIpcHandlers(): void {
   console.log("AI Chat IPC handlers registered");
 
-  ipcMain.handle(
+  registerAiValidatedHandler(
     AI_CHAT_RESUME_TOOL_AFTER_PERMISSION,
-    async (
-      _event,
-      data: unknown
-    ): Promise<CommonMessage<{ ok: boolean; error?: string } | null>> => {
-      try {
-        const tokenService = new Token();
-        const aiEnabled = tokenService.getValue(USER_AI_ENABLED);
-        if (!aiEnabled || aiEnabled === "false" || aiEnabled === "0") {
-          return {
-            status: false,
-            msg: "AI is not enabled",
-            data: null,
-          };
-        }
-
-        const parsed = data
-          ? (JSON.parse(data as string) as {
-              toolId?: string;
-              conversationId?: string;
-            })
-          : {};
-        const toolId = parsed.toolId;
-        if (!toolId || typeof toolId !== "string") {
-          return {
-            status: false,
-            msg: "toolId is required",
-            data: null,
-          };
-        }
-
-        if (!currentStreamEventProcessor) {
-          return {
-            status: false,
-            msg: "No active chat stream",
-            data: {
-              ok: false,
-              error:
-                "No active chat stream to continue. Try sending your message again.",
-            },
-          };
-        }
-
-        const result =
-          await currentStreamEventProcessor.resumeToolAfterSkillPermissionGrant(
-            toolId,
-            typeof parsed.conversationId === "string"
-              ? parsed.conversationId
-              : undefined
-          );
-
-        if (!result.ok) {
-          return {
-            status: false,
-            msg: result.error,
-            data: { ok: false, error: result.error },
-          };
-        }
-
+    aiChatResumeToolInputSchema,
+    async (input): Promise<{ ok: boolean; error?: string }> => {
+      if (!currentStreamEventProcessor) {
         return {
-          status: true,
-          msg: "OK",
-          data: { ok: true },
-        };
-      } catch (error) {
-        const msg =
-          error instanceof Error ? error.message : "Unknown error occurred";
-        return {
-          status: false,
-          msg,
-          data: { ok: false, error: msg },
+          ok: false,
+          error:
+            "No active chat stream to continue. Try sending your message again.",
         };
       }
+
+      const result =
+        await currentStreamEventProcessor.resumeToolAfterSkillPermissionGrant(
+          input.toolId,
+          input.conversationId
+        );
+
+      if (!result.ok) {
+        // Throw so wrapper surfaces error in envelope; carry structured data via thrown message
+        const err = new Error(result.error || "resume failed");
+        (err as Error & { data?: unknown }).data = {
+          ok: false,
+          error: result.error,
+        };
+        throw err;
+      }
+      return { ok: true };
     }
   );
 
@@ -662,201 +632,143 @@ export function registerAiChatIpcHandlers(): void {
   });
 
   // Send chat message (non-streaming)
-  ipcMain.handle(
+  registerAiValidatedHandler(
     AI_CHAT_MESSAGE,
-    async (
-      event,
-      data: unknown
-    ): Promise<CommonMessage<ChatMessage | null>> => {
-      try {
-        const tokenService = new Token();
-        const aiEnabled = tokenService.getValue(USER_AI_ENABLED);
-        if (!aiEnabled || aiEnabled === "false" || aiEnabled === "0") {
-          return {
-            status: false,
-            msg: "AI is not enabled",
-            data: null,
-          };
-        }
+    aiChatMessageInputSchema,
+    async (requestData): Promise<ChatMessage> => {
+      const aiChatApi = new AiChatApi();
+      const chatModule = new AIChatModule();
+      const ragSearchModule = new RagSearchModule();
+      await ragSearchModule.initialize();
 
-        const requestData = JSON.parse(data as string) as {
-          message: string;
-          conversationId?: string;
-          model?: string;
-          useRAG?: boolean;
-          ragLimit?: number;
-          uploadedFiles?: unknown;
-          attachments?: unknown;
-        };
+      // Generate new conversationId if not provided or if it's 'pending' (which causes errors)
+      // 'pending' is used as a placeholder in the frontend but should not be sent to backend
+      const conversationId =
+        requestData.conversationId && requestData.conversationId !== "pending"
+          ? requestData.conversationId
+          : generateConversationId();
+      const parsedSlashCommand = parseSlashCommand(requestData.message);
 
-        const aiChatApi = new AiChatApi();
-        const chatModule = new AIChatModule();
-        const ragSearchModule = new RagSearchModule();
-        await ragSearchModule.initialize();
+      // Save user message to database
+      const userMessageId = `user-${Date.now()}`;
 
-        // Generate new conversationId if not provided or if it's 'pending' (which causes errors)
-        // 'pending' is used as a placeholder in the frontend but should not be sent to backend
-        const conversationId =
-          requestData.conversationId && requestData.conversationId !== "pending"
-            ? requestData.conversationId
-            : generateConversationId();
-        const parsedSlashCommand = parseSlashCommand(requestData.message);
+      await persistAttachmentsAndSaveMessage(
+        chatModule,
+        conversationId,
+        userMessageId,
+        requestData.message,
+        (requestData as { uploadedFiles?: unknown }).uploadedFiles
+      );
 
-        // Save user message to database
-        const userMessageId = `user-${Date.now()}`;
-
-        await persistAttachmentsAndSaveMessage(
-          chatModule,
-          conversationId,
-          userMessageId,
-          requestData.message,
-          requestData.uploadedFiles
+      if (parsedSlashCommand) {
+        const slashContent = await resolveSlashCommandContent(
+          parsedSlashCommand
         );
-
-        if (parsedSlashCommand) {
-          const slashContent = await resolveSlashCommandContent(
-            parsedSlashCommand
-          );
-          const assistantMessageId = `assistant-${Date.now()}`;
-          await chatModule.saveMessage({
-            messageId: assistantMessageId,
-            conversationId,
-            role: "assistant",
-            content: slashContent,
-            timestamp: new Date(),
-            messageType: MessageType.MESSAGE,
-          });
-          return {
-            status: true,
-            msg: "Slash command handled successfully",
-            data: {
-              id: assistantMessageId,
-              role: "assistant",
-              content: slashContent,
-              timestamp: new Date(),
-              conversationId,
-            },
-          };
-        }
-        const normalizedAttachments = resolveChatAttachments(
-          requestData.attachments,
-          requestData.uploadedFiles
-        );
-
-        // Build message with staged file references (documents are read by tool on demand).
-        let enhancedMessage = await buildMessageWithAttachmentReferences(
+        const assistantMessageId = `assistant-${Date.now()}`;
+        await chatModule.saveMessage({
+          messageId: assistantMessageId,
           conversationId,
-          requestData.message,
-          requestData.uploadedFiles
-        );
-
-        // If useRAG is true, perform local RAG search and append results to the message
-        if (requestData.useRAG) {
-          try {
-            const searchRequest: SearchRequest = {
-              query: requestData.message,
-              options: {
-                limit: requestData.ragLimit || 5,
-              },
-            };
-
-            const searchResponse: SearchResponse = await ragSearchModule.search(
-              searchRequest
-            );
-
-            if (searchResponse.results.length > 0) {
-              // Format RAG results as context
-              const ragContext = searchResponse.results
-                .map((result, index) => {
-                  return `[Document ${index + 1}: ${result.document.name}]\n${
-                    result.content
-                  }`;
-                })
-                .join("\n\n");
-
-              // Prepend RAG context to the message
-              enhancedMessage = `Based on the following context from knowledge base:\n\n${ragContext}\n\n---\n\nUser question: ${enhancedMessage}`;
-
-              console.log(
-                `RAG search found ${searchResponse.results.length} relevant documents`
-              );
-            } else {
-              console.log(
-                "RAG search returned no results, proceeding with original message"
-              );
-            }
-          } catch (ragError) {
-            console.error(
-              "RAG search failed, proceeding without RAG context:",
-              ragError
-            );
-            // Continue with original message if RAG fails
-          }
-        }
-
-        enhancedMessage = truncateForRemote(enhancedMessage);
-
-        // Get available tools (registry-built-in + MCP)
-        const availableTools = await SkillRegistry.getAllToolFunctions();
-
-        // Send to remote API
-        const chatRequest: ChatRequest = {
-          message: enhancedMessage,
+          role: "assistant",
+          content: slashContent,
+          timestamp: new Date(),
+          messageType: MessageType.MESSAGE,
+        });
+        return {
+          id: assistantMessageId,
+          role: "assistant",
+          content: slashContent,
+          timestamp: new Date(),
           conversationId,
-          model: requestData.model,
-          useRAG: requestData.useRAG,
-          ragLimit: requestData.ragLimit,
-          functions: availableTools,
-          attachments: normalizedAttachments,
         };
-
-        const apiResponse = await aiChatApi.sendMessage(chatRequest);
-
-        if (apiResponse.status && apiResponse.data) {
-          // Save assistant message to database
-          await chatModule.saveMessage({
-            messageId: apiResponse.data.messageId,
-            conversationId,
-            role: "assistant",
-            content: apiResponse.data.message,
-            timestamp: new Date(),
-            model: apiResponse.data.model,
-            tokensUsed: apiResponse.data.tokensUsed,
-            messageType: MessageType.MESSAGE,
-          });
-
-          const assistantMessage: ChatMessage = {
-            id: apiResponse.data.messageId,
-            role: "assistant",
-            content: apiResponse.data.message,
-            timestamp: new Date(),
-            conversationId,
-          };
-
-          const response: CommonMessage<ChatMessage> = {
-            status: true,
-            msg: "Message sent successfully",
-            data: assistantMessage,
-          };
-          return response;
-        } else {
-          const errorResponse: CommonMessage<null> = {
-            status: false,
-            msg: apiResponse.msg || "Failed to send message",
-            data: null,
-          };
-          return errorResponse;
-        }
-      } catch (error) {
-        console.error("AI Chat message error:", error);
-        const errorResponse: CommonMessage<null> = {
-          status: false,
-          msg:
-            error instanceof Error ? error.message : "Unknown error occurred",
-          data: null,
-        };
-        return errorResponse;
       }
+      const normalizedAttachments = resolveChatAttachments(
+        (requestData as { attachments?: unknown }).attachments,
+        (requestData as { uploadedFiles?: unknown }).uploadedFiles
+      );
+
+      // Build message with staged file references (documents are read by tool on demand).
+      let enhancedMessage = await buildMessageWithAttachmentReferences(
+        conversationId,
+        requestData.message,
+        (requestData as { uploadedFiles?: unknown }).uploadedFiles
+      );
+
+      // If useRAG is true, perform local RAG search and append results to the message
+      if (requestData.useRAG) {
+        try {
+          const searchRequest: SearchRequest = {
+            query: requestData.message,
+            options: { limit: requestData.ragLimit || 5 },
+          };
+
+          const searchResponse: SearchResponse = await ragSearchModule.search(
+            searchRequest
+          );
+
+          if (searchResponse.results.length > 0) {
+            const ragContext = searchResponse.results
+              .map((result, index) => {
+                return `[Document ${index + 1}: ${result.document.name}]\n${
+                  result.content
+                }`;
+              })
+              .join("\n\n");
+
+            enhancedMessage = `Based on the following context from knowledge base:\n\n${ragContext}\n\n---\n\nUser question: ${enhancedMessage}`;
+            console.log(
+              `RAG search found ${searchResponse.results.length} relevant documents`
+            );
+          } else {
+            console.log(
+              "RAG search returned no results, proceeding with original message"
+            );
+          }
+        } catch (ragError) {
+          console.error(
+            "RAG search failed, proceeding without RAG context:",
+            ragError
+          );
+        }
+      }
+
+      enhancedMessage = truncateForRemote(enhancedMessage);
+      const availableTools = await SkillRegistry.getAllToolFunctions();
+
+      const chatRequest: ChatRequest = {
+        message: enhancedMessage,
+        conversationId,
+        model: requestData.model,
+        useRAG: requestData.useRAG,
+        ragLimit: requestData.ragLimit,
+        functions: availableTools,
+        attachments: normalizedAttachments,
+      };
+
+      const apiResponse = await aiChatApi.sendMessage(chatRequest);
+
+      if (!apiResponse.status || !apiResponse.data) {
+        throw new Error(apiResponse.msg || "Failed to send message");
+      }
+
+      // Save assistant message to database
+      await chatModule.saveMessage({
+        messageId: apiResponse.data.messageId,
+        conversationId,
+        role: "assistant",
+        content: apiResponse.data.message,
+        timestamp: new Date(),
+        model: apiResponse.data.model,
+        tokensUsed: apiResponse.data.tokensUsed,
+        messageType: MessageType.MESSAGE,
+      });
+
+      return {
+        id: apiResponse.data.messageId,
+        role: "assistant",
+        content: apiResponse.data.message,
+        timestamp: new Date(),
+        conversationId,
+      };
     }
   );
 
@@ -1189,318 +1101,152 @@ export function registerAiChatIpcHandlers(): void {
   });
 
   // Get chat history
-  ipcMain.handle(
+  registerValidatedHandler(
     AI_CHAT_HISTORY,
-    async (
-      event,
-      data: unknown
-    ): Promise<CommonMessage<ChatHistoryResponse | null>> => {
-      try {
-        const requestData = data ? JSON.parse(data as string) : {};
-        const requestConversationId = requestData.conversationId;
+    aiChatHistoryInputSchema,
+    async (input): Promise<ChatHistoryResponse> => {
+      const chatModule = new AIChatModule();
+      const messageEntities = await chatModule.getConversationMessages(
+        input.conversationId
+      );
 
-        if (!requestConversationId) {
-          return {
-            status: false,
-            msg: "Conversation ID is required",
-            data: null,
-          };
-        }
+      // Convert entities to ChatMessage format
+      const messages: ChatMessage[] = messageEntities.map((entity) => {
+        const message: ChatMessage = {
+          id: entity.messageId,
+          role: entity.role as "user" | "assistant" | "system",
+          content: entity.content,
+          timestamp: entity.timestamp,
+          conversationId: entity.conversationId,
+          messageType: entity.messageType,
+        };
 
-        const chatModule = new AIChatModule();
-        const messageEntities = await chatModule.getConversationMessages(
-          requestConversationId
-        );
-
-        // Convert entities to ChatMessage format
-        const messages: ChatMessage[] = messageEntities.map((entity) => {
-          const message: ChatMessage = {
-            id: entity.messageId,
-            role: entity.role as "user" | "assistant" | "system",
-            content: entity.content,
-            timestamp: entity.timestamp,
-            conversationId: entity.conversationId,
-            messageType: entity.messageType,
-          };
-
-          // Parse metadata if available
-          if (entity.metadata) {
-            try {
-              message.metadata = JSON.parse(entity.metadata);
-            } catch (parseError) {
-              console.warn("Failed to parse message metadata:", parseError);
-            }
+        if (entity.metadata) {
+          try {
+            message.metadata = JSON.parse(entity.metadata);
+          } catch (parseError) {
+            console.warn("Failed to parse message metadata:", parseError);
           }
+        }
+        return message;
+      });
 
-          return message;
-        });
-
-        return {
-          status: true,
-          msg: "Chat history retrieved successfully",
-          data: {
-            conversationId: requestConversationId,
-            messages: messages,
-            totalMessages: messages.length,
-          },
-        };
-      } catch (error) {
-        console.error("Error getting chat history:", error);
-        return {
-          status: false,
-          msg:
-            error instanceof Error ? error.message : "Unknown error occurred",
-          data: null,
-        };
-      }
+      return {
+        conversationId: input.conversationId,
+        messages,
+        totalMessages: messages.length,
+      };
     }
   );
 
   // Clear chat history
-  ipcMain.handle(
+  registerValidatedHandler(
     AI_CHAT_CLEAR,
-    async (event, data: unknown): Promise<CommonMessage<void>> => {
-      try {
-        const requestData = data ? JSON.parse(data as string) : {};
-        const conversationId = requestData.conversationId;
-
-        const chatModule = new AIChatModule();
-        console.log("conversationId", conversationId);
-        if (conversationId === "all") {
-          // Clear all conversations from database
-          await chatModule.clearAllHistory();
-        } else {
-          // Clear specific conversation from database
-          await chatModule.clearConversation(conversationId);
-        }
-
-        const response: CommonMessage<void> = {
-          status: true,
-          msg: "Chat history cleared successfully",
-        };
-        return response;
-      } catch (error) {
-        console.error("AI Chat clear error:", error);
-        const errorResponse: CommonMessage<void> = {
-          status: false,
-          msg:
-            error instanceof Error ? error.message : "Unknown error occurred",
-        };
-        return errorResponse;
+    aiChatClearInputSchema,
+    async (input) => {
+      const chatModule = new AIChatModule();
+      if (input.conversationId === "all") {
+        await chatModule.clearAllHistory();
+      } else {
+        await chatModule.clearConversation(input.conversationId);
       }
+      return null;
     }
   );
 
   // Get all conversations with metadata
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  ipcMain.handle(
+  registerValidatedHandler(
     AI_CHAT_CONVERSATIONS,
-    async (
-      event,
-      data: unknown
-    ): Promise<
-      CommonMessage<Array<{
-        conversationId: string;
-        lastMessage: string;
-        lastMessageTimestamp: Date;
-        messageCount: number;
-        createdAt: Date;
-      }> | null>
-    > => {
-      try {
-        const chatModule = new AIChatModule();
-        const conversations = await chatModule.getConversationsWithMetadata();
-
-        const response: CommonMessage<
-          Array<{
-            conversationId: string;
-            lastMessage: string;
-            lastMessageTimestamp: Date;
-            messageCount: number;
-            createdAt: Date;
-          }>
-        > = {
-          status: true,
-          msg: "Conversations retrieved successfully",
-          data: conversations,
-        };
-        return response;
-      } catch (error) {
-        console.error("AI Chat conversations error:", error);
-        const errorResponse: CommonMessage<null> = {
-          status: false,
-          msg:
-            error instanceof Error ? error.message : "Unknown error occurred",
-          data: null,
-        };
-        return errorResponse;
-      }
+    aiChatConversationsInputSchema,
+    async () => {
+      const chatModule = new AIChatModule();
+      return chatModule.getConversationsWithMetadata();
     }
   );
 
   // Generate keywords using AI
-  ipcMain.handle(
+  registerAiValidatedHandler(
     AI_KEYWORDS_GENERATE,
-    async (event, data: unknown): Promise<CommonMessage<string[] | null>> => {
-      try {
-        // Check AI enable first
-        const tokenService = new Token();
-        const aiEnabled = tokenService.getValue(USER_AI_ENABLED);
-        if (aiEnabled !== "true") {
-          return {
-            status: false,
-            msg: "AI features are not enabled. Please upgrade your plan to access AI features.",
-            data: null,
-          };
-        }
+    aiChatKeywordsGenerateInputSchema,
+    async (input): Promise<string[]> => {
+      const numKeywords = input.num_keywords ?? 15;
+      const keywordType = input.keyword_type ?? "seo";
+      const aiChatApi = new AiChatApi();
 
-        const requestData = data ? JSON.parse(data as string) : {};
-        const seedKeywords: string[] = requestData.keywords || [];
-        const numKeywords: number = requestData.num_keywords || 15;
-        const keywordType: string = requestData.keyword_type || "seo";
+      // Prepare batch request - one request per seed keyword
+      const batchRequests: BatchKeywordGenerationRequestItem[] =
+        input.keywords.map((seedKeyword) => ({
+          seed_keywords: [seedKeyword],
+          config: {
+            num_keywords: numKeywords,
+            keyword_type: keywordType,
+          },
+        }));
 
-        if (!seedKeywords || seedKeywords.length === 0) {
-          return {
-            status: false,
-            msg: "Seed keywords are required",
-            data: null,
-          };
-        }
+      const apiResponse = await aiChatApi.batchGenerateKeywords(batchRequests);
 
-        const aiChatApi = new AiChatApi();
-
-        // Prepare batch request - one request per seed keyword
-        const batchRequests: BatchKeywordGenerationRequestItem[] =
-          seedKeywords.map((seedKeyword) => ({
-            seed_keywords: [seedKeyword],
-            config: {
-              num_keywords: numKeywords,
-              keyword_type: keywordType,
-            },
-          }));
-
-        // Call the batch generate API
-        const apiResponse = await aiChatApi.batchGenerateKeywords(
-          batchRequests
-        );
-
-        if (apiResponse.status && apiResponse.data) {
-          // Extract keywords from the response structure
-          // apiResponse.data.keywords is an array of KeywordItem objects with category and keyword
-          // Each KeywordItem has: { category: string, keyword: string }
-          const keywordItems = apiResponse.data.keywords || [];
-          const allKeywords: string[] = keywordItems.map(
-            (item) => item.keyword
-          );
-
-          // Remove duplicates and return
-          const uniqueKeywords = Array.from(new Set(allKeywords));
-
-          return {
-            status: true,
-            msg: apiResponse.msg || "Keywords generated successfully",
-            data: uniqueKeywords,
-          };
-        } else {
-          return {
-            status: false,
-            msg: apiResponse.msg || "Failed to generate keywords",
-            data: null,
-          };
-        }
-      } catch (error) {
-        console.error("AI Keywords generation error:", error);
-        const errorResponse: CommonMessage<null> = {
-          status: false,
-          msg:
-            error instanceof Error ? error.message : "Unknown error occurred",
-          data: null,
-        };
-        return errorResponse;
+      if (!apiResponse.status || !apiResponse.data) {
+        throw new Error(apiResponse.msg || "Failed to generate keywords");
       }
+
+      const keywordItems = apiResponse.data.keywords || [];
+      const allKeywords: string[] = keywordItems.map((item) => item.keyword);
+      return Array.from(new Set(allKeywords));
     }
   );
 
   // --- System Dependency User Approval Response (FR-006) ---
   // Renderer calls this after the user responds to DependencyInstallDialog.
-  ipcMain.handle(
+  registerValidatedHandler(
     SYSTEM_DEPENDENCY_PROMPT_RESPONSE,
-    async (
-      _event,
-      data: unknown
-    ): Promise<CommonMessage<{ ok: boolean; error?: string } | null>> => {
-      try {
-        const parsed = data
-          ? (JSON.parse(data as string) as {
-              toolId?: string;
-              approved?: boolean;
-            })
-          : {};
-        const toolId = parsed.toolId;
-        const approved = parsed.approved === true;
-
-        if (!toolId || typeof toolId !== "string") {
-          return {
-            status: false,
-            msg: "toolId is required",
-            data: null,
-          };
-        }
-
-        if (!currentStreamEventProcessor) {
-          return {
-            status: false,
-            msg: "No active chat stream",
-            data: {
-              ok: false,
-              error:
-                "No active chat stream to continue. Try sending your message again.",
-            },
-          };
-        }
-
-        await currentStreamEventProcessor.resumeAfterDependencyApproval(
-          toolId,
-          approved
-        );
-
+    aiChatSystemDependencyPromptInputSchema,
+    async (input): Promise<{ ok: boolean; error?: string }> => {
+      if (!currentStreamEventProcessor) {
         return {
-          status: true,
-          msg: "OK",
-          data: { ok: true },
-        };
-      } catch (error) {
-        const msg =
-          error instanceof Error ? error.message : "Unknown error occurred";
-        return {
-          status: false,
-          msg,
-          data: { ok: false, error: msg },
+          ok: false,
+          error:
+            "No active chat stream to continue. Try sending your message again.",
         };
       }
+      await currentStreamEventProcessor.resumeAfterDependencyApproval(
+        input.toolId,
+        input.approved
+      );
+      return { ok: true };
     }
   );
 
-  // Open file in system default application
-  ipcMain.handle(AI_FILE_OPEN, async (_event, data: unknown) => {
-    try {
-      const parsed = JSON.parse(data as string) as { filePath: unknown };
-      const filePath = parsed.filePath;
-      if (!filePath || typeof filePath !== "string") {
-        return { status: false, msg: "Invalid file path", data: null };
+  // Open file in system default application.
+  // Uses spawn instead of shell.openPath because shell.openPath on Linux
+  // uses a blocking C++ call (system("xdg-open ...")) that freezes the main
+  // process event loop, making the UI unresponsive until xdg-open returns.
+  function openFileOnPlatform(filePath: string): void {
+    const [cmd, args] =
+      platform() === "darwin"
+        ? (["open", [filePath]] as const)
+        : platform() === "win32"
+          ? (["cmd.exe", ["/c", "start", "", filePath]] as const)
+          : (["xdg-open", [filePath]] as const);
+    const proc = spawn(cmd, args, { detached: true, stdio: "ignore" });
+    proc.unref();
+  }
+
+  registerValidatedHandler(
+    AI_FILE_OPEN,
+    aiChatFileOpenInputSchema,
+    async (input) => {
+      // Security: path must be absolute and contain no traversal sequences.
+      if (
+        !input.filePath.startsWith("/") &&
+        !input.filePath.match(/^[A-Za-z]:\\/)
+      ) {
+        throw new Error("File path must be absolute");
       }
-      if (!filePath.startsWith("/") && !filePath.match(/^[A-Za-z]:\\/)) {
-        return { status: false, msg: "File path must be absolute", data: null };
+      if (input.filePath.includes("..")) {
+        throw new Error("Path traversal not allowed");
       }
-      if (filePath.includes("..")) {
-        return { status: false, msg: "Path traversal not allowed", data: null };
-      }
-      await shell.openPath(filePath);
-      return { status: true, msg: "OK", data: null };
-    } catch (error: unknown) {
-      const msg =
-        error instanceof Error ? error.message : "Failed to open file";
-      return { status: false, msg, data: null };
+      openFileOnPlatform(input.filePath);
+      return null;
     }
-  });
+  );
 }

@@ -520,6 +520,13 @@ test/
 - Run utility code tests: `yarn vitest-puppeteer`
 - Use DEBUG flags for detailed logging: `DEBUG='module:*' yarn test`
 
+##### TypeScript Type-Check Gate (Vitest)
+Vitest's default esbuild mode strips types without checking them, so type errors silently pass. To prevent this, both `vite.main.config.mjs` and `vite.utilityCode.config.mjs` reference `test/vitest/_typecheck/globalSetup.ts`, which runs `tsc --noEmit` once at startup.
+
+- **Behavior**: If `tsc` reports any error, the whole vitest run aborts before tests execute.
+- **To bypass** (only for tight inner loops when you know types are clean): `AIFETCHLY_SKIP_TSC=1 yarn testmain`. Do not commit code that needs this.
+- **To extend to other configs**: add `globalSetup: ['./test/vitest/_typecheck/globalSetup.ts']` to the config's `test` block.
+
 ## Database Schema
 
 ### Key Entities
