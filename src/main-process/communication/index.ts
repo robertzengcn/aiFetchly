@@ -34,6 +34,8 @@ import { registerYandexMapsHandlers } from "@/main-process/communication/yandexM
 import { registerAiMessageTaskIpcHandlers } from "@/main-process/communication/aiMessageTask-ipc";
 import { registerAgentRuntimeIpcHandlers } from "@/main-process/communication/agent-runtime-ipc";
 import { registerPluginIpcHandlers } from "@/main-process/communication/plugin-ipc";
+import { registerAIUserMemoryIpcHandlers } from "@/main-process/communication/ai-user-memory-ipc";
+import { registerAIWorkspaceIpcHandlers } from "@/main-process/communication/ai-workspace-ipc";
 
 type GlobalIpcState = typeof globalThis & {
   __aifetchlyIpcHandlersRegistered?: boolean;
@@ -79,6 +81,8 @@ export function registerCommunicationIpcHandlers(win: BrowserWindow) {
     registerAiMessageTaskIpcHandlers();
     registerAgentRuntimeIpcHandlers();
     registerPluginIpcHandlers();
+    registerAIUserMemoryIpcHandlers();
+    registerAIWorkspaceIpcHandlers(win);
     AsyncMsg();
   } catch (e) {
     console.log("registerCommunicationIpcHandlers error:");

@@ -10,6 +10,9 @@ import { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
 import type { AIChatQueryLoopDeps } from "@/service/AIChatQueryLoop";
 import { AIChatQueryEngine } from "@/service/AIChatQueryEngine";
 import { AIChatCompactAgentService } from "@/service/AIChatCompactAgentService";
+import { getSharedAutoDreamService } from "@/service/AIAutoDreamFactory";
+import { AIChatToolApprovalModule } from "@/modules/AIChatToolApprovalModule";
+import { evaluateToolApproval } from "@/service/AIChatToolApprovalPolicyService";
 import { userSafeError } from "@/service/AIChatErrorMapper";
 import type {
   AIChatQueryEvent,
@@ -33,6 +36,8 @@ import {
   AI_CHAT_V2_REQUEST_PLAN_CHANGES,
   AI_CHAT_V2_PLAN_VERSIONS,
   AI_CHAT_V2_COMPACT_CONVERSATION,
+  AI_CHAT_V2_GET_TOOL_APPROVAL_MODE,
+  AI_CHAT_V2_SET_TOOL_APPROVAL_MODE,
 } from "@/config/channellist";
 import type {
   AIChatPlanStateView,
@@ -48,6 +53,7 @@ import type {
   ChatV2HistoryResponse,
   ChatV2ConversationSummary,
   ChatV2MessageMetadata,
+  ChatToolApprovalMode,
 } from "@/entityTypes/aiChatV2Types";
 
 /**
@@ -73,6 +79,34 @@ function createQueryLoop(): AIChatQueryLoop {
       return api.openAIChatCompletionStream(request, onChunk, options);
     },
     executeTool: (name, args, context) => {
+      // Tool approval mode check — auto-approve eligible tools without
+      // showing a permission prompt, based on the conversation's mode.
+      if (context.conversationId) {
+        try {
+          const module = new AIChatToolApprovalModule();
+          const mode = module.getMode(context.conversationId);
+          if (mode !== "ask_for_approval") {
+            const decision = evaluateToolApproval({
+              conversationId: context.conversationId,
+              mode,
+              toolName: name,
+              isDependencyInstall: name.startsWith("install_system_dependency"),
+            });
+            if (decision.autoApprove) {
+              context = { ...context, skipPermissionCheck: true };
+              console.log(
+                `[ai-chat-v2] auto-approved tool "${name}" for conversation ${context.conversationId}: ${decision.reason}`
+              );
+            }
+          }
+        } catch (err) {
+          // Non-fatal: fall back to normal permission flow
+          console.warn(
+            "[ai-chat-v2] failed to evaluate tool approval mode, falling back to default:",
+            err
+          );
+        }
+      }
       return SkillExecutor.execute(name, args, context);
     },
     getSkillDefinition: (name) => SkillRegistry.getSkill(name) ?? undefined,
@@ -96,6 +130,7 @@ function getQueryEngine(): AIChatQueryEngine {
     const loop = createQueryLoop();
     queryEngine = new AIChatQueryEngine(loop, {
       compactAgent: getCompactAgent(),
+      autoDreamService: getSharedAutoDreamService(),
     });
   }
   return queryEngine;
@@ -182,6 +217,22 @@ function createEventSink(event: IpcEventLike): AIChatQueryEventSink {
             retryDelayMs: e.retryDelayMs,
           });
           break;
+        case "tool_progress":
+          sendChunk(event, {
+            eventType: "tool_progress",
+            conversationId: e.conversationId,
+            messageId: e.messageId,
+            toolCallId: e.toolCallId,
+            toolName: e.toolName,
+            phase: e.phase,
+            progressMessage: e.message,
+            progressFraction:
+              typeof e.progress === "number" ? e.progress : undefined,
+            partialCount: e.partialCount ?? undefined,
+            expectedCount: e.expectedCount ?? undefined,
+            progressTimestamp: e.timestamp,
+          });
+          break;
         case "tool_call":
           sendChunk(event, {
             eventType: "tool_call",
@@ -238,6 +289,15 @@ function createEventSink(event: IpcEventLike): AIChatQueryEventSink {
             planState: e.planState,
           } as ChatV2StreamChunk);
           break;
+        case "plan_state":
+          sendChunk(event, {
+            eventType: "plan_state" as never,
+            conversationId: e.conversationId,
+            messageId: e.messageId,
+            planState: e.planState,
+            autoEntered: e.autoEntered,
+          } as ChatV2StreamChunk);
+          break;
         case "usage_update":
           sendChunk(event, {
             eventType: "usage_update",
@@ -257,6 +317,9 @@ function createEventSink(event: IpcEventLike): AIChatQueryEventSink {
             fullContent: e.fullContent,
             model: e.model,
             finishReason: e.finishReason,
+            promptTokens: e.promptTokens,
+            completionTokens: e.completionTokens,
+            totalTokens: e.totalTokens,
           });
           break;
         case "cancelled":
@@ -719,6 +782,80 @@ async function handleCompactConversation(
   }
 }
 
+function parseSetApprovalModePayload(
+  data: string
+): { conversationId: string; mode: string } | null {
+  try {
+    const parsed = JSON.parse(data) as {
+      conversationId?: string;
+      mode?: string;
+    };
+    if (
+      typeof parsed.conversationId !== "string" ||
+      parsed.conversationId.length === 0
+    ) {
+      return null;
+    }
+    const validModes: ChatToolApprovalMode[] = [
+      "ask_for_approval",
+      "approve_for_me",
+      "full_access",
+    ];
+    if (!validModes.includes(parsed.mode as ChatToolApprovalMode)) {
+      return null;
+    }
+    return {
+      conversationId: parsed.conversationId,
+      mode: parsed.mode as ChatToolApprovalMode,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function handleGetToolApprovalMode(
+  data: string
+): Promise<CommonMessage<string>> {
+  if (!isAIEnabled()) {
+    return denied("AI functionality is only available to subscribers.");
+  }
+  const parsed = data ? (JSON.parse(data) as { conversationId?: string }) : {};
+  if (!parsed.conversationId) {
+    return denied("conversationId is required");
+  }
+  try {
+    const module = new AIChatToolApprovalModule();
+    const mode = module.getMode(parsed.conversationId);
+    return ok(mode);
+  } catch (err) {
+    return denied(userSafeError(err));
+  }
+}
+
+async function handleSetToolApprovalMode(
+  data: string
+): Promise<CommonMessage<string>> {
+  if (!isAIEnabled()) {
+    return denied("AI functionality is only available to subscribers.");
+  }
+  const payload = parseSetApprovalModePayload(data);
+  if (!payload) {
+    return denied("conversationId and valid mode are required");
+  }
+  try {
+    const module = new AIChatToolApprovalModule();
+    module.setMode(
+      payload.conversationId,
+      payload.mode as ChatToolApprovalMode
+    );
+    // Return the stored mode (in case of downgrade from full_access)
+    const saved = module.getMode(payload.conversationId);
+    return ok(saved);
+  } catch (err) {
+    return denied(userSafeError(err));
+  }
+}
+
 function parseMetadata(raw?: string | null): ChatV2MessageMetadata | undefined {
   if (!raw) {
     return undefined;
@@ -771,6 +908,12 @@ export function registerAiChatV2IpcHandlers(): void {
   );
   ipcMain.handle(AI_CHAT_V2_COMPACT_CONVERSATION, async (_e, data: unknown) =>
     handleCompactConversation((data as string) ?? "")
+  );
+  ipcMain.handle(AI_CHAT_V2_GET_TOOL_APPROVAL_MODE, async (_e, data: unknown) =>
+    handleGetToolApprovalMode((data as string) ?? "")
+  );
+  ipcMain.handle(AI_CHAT_V2_SET_TOOL_APPROVAL_MODE, async (_e, data: unknown) =>
+    handleSetToolApprovalMode((data as string) ?? "")
   );
   // Stream handler send message to the AI engine and receive chunks back
   ipcMain.on(AI_CHAT_V2_STREAM, async (event, data: unknown) => {

@@ -1,6 +1,8 @@
 import { MCPToolEntity } from "@/entity/MCPTool.entity";
 import { MCPToolModule } from "@/modules/MCPToolModule";
 import { MCPClient } from "@/modules/MCPClient";
+import { MCP_CALL_TIMEOUT_MS } from "@/config/mcpConfig";
+import { MCPTimeoutError } from "@/service/MCPTimeoutError";
 import type { ToolFunction } from "@/api/aiChatApi";
 import {
   mcpServerConfigSchema,
@@ -467,7 +469,12 @@ export class MCPToolService {
   }
 
   /**
-   * Execute a tool call on MCP server
+   * Execute a tool call on MCP server.
+   *
+   * Race-protects the call with `MCP_CALL_TIMEOUT_MS` so a stalled server
+   * cannot hang the AI tool loop forever. The timeout throws
+   * `MCPTimeoutError` (telemetry-safe); any other error propagates as-is.
+   * `client.disconnect()` always runs in the finally block.
    */
   async executeMCPTool(
     serverId: number,
@@ -484,32 +491,58 @@ export class MCPToolService {
       throw new Error(`MCP server ${server.serverName} is disabled`);
     }
 
-    // Check if tool is enabled
-    if (server.toolConfig) {
-      try {
-        const toolConfig: Record<string, { enabled?: boolean }> = JSON.parse(
-          server.toolConfig
-        );
-        if (toolConfig[toolName]?.enabled === false) {
-          throw new Error(`Tool ${toolName} is disabled`);
-        }
-      } catch (e) {
-        console.warn("Failed to parse toolConfig for tool check");
-      }
-    }
+    this.assertToolEnabled(server, toolName);
 
     const client = this.createClientForServer(server);
+    const callTimeoutMs = MCP_CALL_TIMEOUT_MS;
 
     try {
       await client.connect();
-      const result = await client.callTool(toolName, params);
-      await client.disconnect();
-      return result;
-    } catch (error) {
+
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(
+            new MCPTimeoutError(toolName, server.serverName, callTimeoutMs)
+          );
+        }, callTimeoutMs);
+      });
+
+      try {
+        const result = await Promise.race([
+          client.callTool(toolName, params),
+          timeoutPromise,
+        ]);
+        return result;
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+      // All errors (including MCPTimeoutError) propagate unchanged.
+      // MCPTimeoutError must NOT be wrapped — callers use instanceof for
+      // telemetry-safe classification.
+    } finally {
       await client.disconnect().catch(() => {
         /* best-effort disconnect */
       });
-      throw error;
+    }
+  }
+
+  /**
+   * Assert that an individual tool is not disabled in the server's toolConfig.
+   * Throws if the tool is explicitly disabled. Silently skips the check when
+   * toolConfig is missing or unparseable (backward compatibility).
+   */
+  private assertToolEnabled(server: MCPToolEntity, toolName: string): void {
+    if (!server.toolConfig) return;
+    let toolConfig: Record<string, { enabled?: boolean }>;
+    try {
+      toolConfig = JSON.parse(server.toolConfig);
+    } catch {
+      console.warn("Failed to parse toolConfig for tool check");
+      return;
+    }
+    if (toolConfig[toolName]?.enabled === false) {
+      throw new Error(`Tool ${toolName} is disabled`);
     }
   }
 

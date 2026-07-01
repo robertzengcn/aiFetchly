@@ -1,7 +1,7 @@
 // src/entityTypes/agentTypes.ts
 // Shared type definitions for the Marketing Automation Subagent System.
-// See doc/marketing-subagent-system-prd.md and
-// doc/marketing-subagent-system-technical-design.md for the product context.
+// See docs/marketing-subagent-system-prd.md and
+// docs/marketing-subagent-system-technical-design.md for the product context.
 
 /** Agent execution modes. */
 export type AgentExecutionMode = "foreground" | "background" | "scheduled";

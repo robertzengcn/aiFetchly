@@ -366,7 +366,18 @@ export default ({ mode }) => {
             sourcemap: true,
         },
         test: {
-            include: ['test/vitest/main/**/*.test.ts'],
+            // Component tests under test/vitest/main/components/ import .vue files,
+            // which the root config cannot transform (no @vitejs/plugin-vue here).
+            // Skip that subtree in the root suite; it runs via a dedicated config:
+            //   test/vitest/main/components/vitest.config.mjs
+            include: ['test/vitest/main/**/*.test.ts', '!test/vitest/main/components/**'],
+            // NOTE: Do NOT set `environment: 'happy-dom'` globally here.
+            // Doing so breaks non-component tests (e.g. AIChatQueryLoopAsyncPoll)
+            // because happy-dom interferes with resolution of Node builtins
+            // like 'fs'. Component tests under test/vitest/main/components/
+            // use a dedicated workspace config
+            // (test/vitest/main/components/vitest.config.mjs) that opts only
+            // that subtree into happy-dom.
             // Run `tsc --noEmit` once before tests start. Vitest's esbuild
             // transpile-only mode silently passes files with type errors
             // (this exact issue bit us during the zod schema rollout).

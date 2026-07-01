@@ -1,7 +1,7 @@
 # Implementation Plan: CSV & Excel Upload Support for AI Chat and Knowledge Library
 
 **Branch**: `001-skill-system` | **Date**: 2026-04-12 | **Spec**: inline
-**Input**: User request + referenced strategy docs in `doc/RAG Excel Support Strategies.md` and `doc/Convert Excel to Markdown All Sheets.md`
+**Input**: User request + referenced strategy docs in `docs/RAG Excel Support Strategies.md` and `docs/Convert Excel to Markdown All Sheets.md`
 
 ## Summary
 
@@ -11,7 +11,7 @@ Enable CSV and Excel (.xlsx/.xls) file uploads in two UI surfaces:
 
 **Technical approach**: Use `xlsx` (SheetJS) for Excel parsing with `sheet_to_html()` piped through the existing `HtmlConversionService` (turndown) for clean markdown conversion. Use `papaparse` for robust CSV parsing. Both libraries are already installed except `xlsx`.
 
-**RAG strategy** (per `doc/RAG Excel Support Strategies.md`): Use **Markdown Chunking** pattern for initial implementation -- convert sheets to markdown, then let `ChunkingService` handle splitting. Row-as-a-Document pattern is a future optimization for record-heavy files.
+**RAG strategy** (per `docs/RAG Excel Support Strategies.md`): Use **Markdown Chunking** pattern for initial implementation -- convert sheets to markdown, then let `ChunkingService` handle splitting. Row-as-a-Document pattern is a future optimization for record-heavy files.
 
 ## Technical Context
 
@@ -58,7 +58,7 @@ No violations. All gates pass.
 
 ## Conversion Pipeline Design
 
-Per `doc/Convert Excel to Markdown All Sheets.md`:
+Per `docs/Convert Excel to Markdown All Sheets.md`:
 
 ```
 .xlsx file
@@ -132,7 +132,7 @@ File: `src/service/DocumentService.ts` (currently ~380 lines)
 - Parse buffer with `xlsx.read(buffer, { type: 'buffer' })`
 - For each sheet: `sheet_to_html()` -> `HtmlConversionService.convertHtmlToMarkdown()`
 - Include sheet name headers (`## Sheet: {name}`)
-- Cap at 100 rows/sheet for chat context safety (per `doc/Convert Excel to Markdown All Sheets.md`)
+- Cap at 100 rows/sheet for chat context safety (per `docs/Convert Excel to Markdown All Sheets.md`)
 
 **Improve `convertCsvBufferToMarkdown()`**:
 - Replace naive `line.split(',')` with `papaparse.parse()` for proper CSV handling

@@ -20,7 +20,34 @@
         <div v-if="message.metadata?.toolName" class="v2-message__tool-field">
           <strong>{{ t("aiChatV2.tool_name") || "Tool" }}:</strong>
           <span>{{ message.metadata.toolName }}</span>
+          <span
+            v-if="toolProgress"
+            class="tool-progress-badge"
+            style="margin-left: 8px; display: inline-flex; align-items: center; gap: 4px;"
+          >
+            <v-icon size="small" class="mdi-spin">mdi-loading</v-icon>
+            <span class="text-caption">{{
+              toolProgress.message ||
+              t("aiChatV2.tool_running") ||
+              "Running..."
+            }}</span>
+            <span
+              v-if="
+                typeof toolProgress.partialCount === 'number' &&
+                typeof toolProgress.expectedCount === 'number'
+              "
+              class="text-caption"
+            >
+              ({{ toolProgress.partialCount }}/{{ toolProgress.expectedCount }})
+            </span>
+          </span>
         </div>
+        <v-progress-linear
+          v-if="toolProgress && typeof toolProgress.progress === 'number'"
+          :model-value="Math.round(toolProgress.progress * 100)"
+          height="4"
+          style="margin-top: 4px;"
+        />
         <details v-if="message.metadata?.toolArguments" class="v2-message__details">
           <summary>{{ t("aiChatV2.tool_arguments") || "Arguments" }}</summary>
           <pre>{{ JSON.stringify(message.metadata.toolArguments, null, 2) }}</pre>
@@ -32,6 +59,7 @@
           :tool-name="String(message.metadata?.toolName || '')"
           :permission-category="String(toolResult.permissionCategory || '')"
           :shell-preview="shellPreview"
+          :workspace-root="workspaceRoot"
           @grant="(payload) => emit('grant-permission', message, payload)"
           @deny="emit('deny-permission', message)"
         />
@@ -94,6 +122,7 @@ const props = defineProps<{
   status?: Status;
   errorMessage?: string;
   disabled?: boolean;
+  workspaceRoot?: string;
 }>();
 const emit = defineEmits<{
   (
@@ -126,6 +155,22 @@ const disabled = computed(() => props.disabled ?? false);
 const toolResult = computed<Record<string, unknown>>(
   () => props.message.metadata?.toolResult ?? {}
 );
+
+interface ToolProgressView {
+  phase: string;
+  message?: string;
+  progress: number | null;
+  partialCount: number | null;
+  expectedCount: number | null;
+  updatedAt: number;
+}
+
+const toolProgress = computed<ToolProgressView | null>(() => {
+  const meta = props.message.metadata as
+    | { toolProgress?: ToolProgressView }
+    | undefined;
+  return meta?.toolProgress ?? null;
+});
 
 const needsPermissionPrompt = computed(
   () => toolResult.value.needsPermissionPrompt === true

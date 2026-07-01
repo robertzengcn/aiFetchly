@@ -13,10 +13,12 @@ import { AgentPromptBuilder } from "@/service/AgentPromptBuilder";
 import { AgentOutputParser } from "@/service/AgentOutputParser";
 import { AgentTranscriptService } from "@/service/AgentTranscriptService";
 import { AgentToolPolicyService } from "@/service/AgentToolPolicyService";
+import type { AIAutoDreamService } from "@/service/AIAutoDreamService";
 import type {
   AgentDefinitionView,
   AgentResult,
   AgentTaskSnapshot,
+  AgentWorkflowConstraints,
   RunAgentRequest,
 } from "@/entityTypes/agentTypes";
 
@@ -43,6 +45,9 @@ export interface AgentRuntimeDeps {
   getSkillDefinition?: AIChatQueryLoopDeps["getSkillDefinition"];
   /** Inject an event sink for streaming (foreground only). */
   eventSink?: AIChatQueryEventSink;
+  /** Optional. When provided, the runtime triggers auto-dream consolidation
+   * after a completed task. Failures are logged and swallowed. */
+  autoDreamService?: AIAutoDreamService;
 }
 
 /**
@@ -74,6 +79,10 @@ export class AgentRuntime {
     const agentTaskId = `agt-${randomUUID()}`;
     const agentConversationId = `agent-v2-${randomUUID()}`;
     const transcript = new AgentTranscriptService(this.taskModule);
+
+    // Normalize constraints — AI-generated taskPackets may omit this object.
+    const constraints: AgentWorkflowConstraints =
+      request.taskPacket.constraints ?? {};
 
     // 1. Persist task + initial transcript.
     await this.taskModule.createTask({
@@ -110,7 +119,7 @@ export class AgentRuntime {
       availableToolNames: allTools
         .filter((t) => t.type === "function" && typeof t.name === "string")
         .map((t) => t.name),
-      blockedTools: request.taskPacket.constraints.blockedTools,
+      blockedTools: constraints.blockedTools,
     });
     const exposedTools: OpenAITool[] = exposedNames.map((name) => {
       const def = allTools.find((t) => t.name === name);
@@ -154,9 +163,8 @@ export class AgentRuntime {
         toolName: name,
         executionMode: request.executionMode,
         allowInteractivePermissionPrompts:
-          request.taskPacket.constraints.allowInteractivePermissionPrompts ??
-          true,
-        blockedTools: request.taskPacket.constraints.blockedTools,
+          constraints.allowInteractivePermissionPrompts ?? true,
+        blockedTools: constraints.blockedTools,
       });
       if (!decision.allowed) {
         await transcript.recordToolCall({
@@ -361,6 +369,16 @@ export class AgentRuntime {
     });
     const snap = await this.taskModule.getSnapshot(agentTaskId);
     result.toolCallsCount = snap?.toolCallsCount ?? 0;
+    if (deps?.autoDreamService) {
+      deps.autoDreamService
+        .evaluateAfterAgentTask({
+          agentTaskId,
+          reason: "agent_task_completed",
+        })
+        .catch((err) =>
+          console.error("[ai-auto-dream] agent trigger failed:", err)
+        );
+    }
     return result;
   }
 

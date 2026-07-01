@@ -41,6 +41,7 @@ export interface AiMessageTaskToolPolicy {
 
 /** Default values for tool policy fields. */
 export const AI_MESSAGE_TASK_DEFAULTS = {
+  model: "auto",
   autoApproveTools: false,
   allowedTools: [] as readonly string[],
   maxToolCalls: 10,

@@ -692,6 +692,8 @@ export default {
     select_account_hint:
       "Konto auswählen durch Klick auf den Konto-wechseln-Button, bitte Konto mit vorhandenen Cookies auswählen",
     change_account: "Konto wechseln",
+    encryption_unavailable:
+      "Der Kontoverschlüsselungsdienst ist nicht verfügbar. Bitte überprüfen Sie Ihre Verbindung und versuchen Sie es erneut.",
   },
   search: {
     google: "Google",
@@ -868,6 +870,10 @@ export default {
     update_error: "Aufgabe konnte nicht aktualisiert werden",
     load_task_error: "Aufgabendaten konnten nicht geladen werden",
     no_valid_urls: "Keine gültigen URLs gefunden",
+    ai_support_enabled: "KI-Anreicherung aktivieren",
+    ai_support_hint: "Telefon, Adresse und Social-Links mit KI extrahieren",
+    ai_support_upgrade_hint:
+      "Upgrade Ihren Plan, um die KI-Anreicherung zu aktivieren.",
     confirm_kill: "Sind Sie sicher, dass Sie diese Aufgabe stoppen möchten?",
     kill_task: "Aufgabe stoppen",
     kill_success: "Aufgabe erfolgreich gestoppt",
@@ -1112,6 +1118,7 @@ export default {
     title: "Systemeinstellungen",
     no_setting_item_found_exit:
       "Kein Einstellungselement gefunden, bitte beenden",
+    no_description: "Keine Beschreibung",
     "2captcha-group": "2captcha",
     "2captcha-description": "2captcha Beschreibung",
     "2captcha-token": "2captcha Token",
@@ -1124,10 +1131,34 @@ export default {
     "firefox-path-description": "Firefox-Pfad eingeben",
     chrome_path: "Chrome-Pfad",
     firefox_path: "Firefox-Pfad",
+    embedding_group: "Einbettungsmodelle",
+    embedding_group_description: "Standard-Einbettungsmodell für die Vektorsuche.",
+    external_system: "Externes System",
+    user_preferences: "Benutzereinstellungen",
+    "user-preferences-group-description": "Benutzereinstellungen für das Anwendungsverhalten.",
+    default_embedding_model: "Standard-Einbettungsmodell",
+    "default-embedding-model-description": "Wählen Sie das Einbettungsmodell für die Vektorsuche und Ähnlichkeitsermittlung.",
+    language_preference: "Sprache",
+    "language-preference-description": "UI-Spracheinstellung.",
+    ai_website_analysis_business_info: "Geschäftsinformationen",
+    "ai-website-analysis-business-info-description": "Geschäftsinformationen, die bei der KI-Analyse von Websites verwendet werden.",
     "external-system-group-description": "Externe Systemgruppen-Einstellung",
     mcp_tools: "MCP-Tools",
     manage_mcp_tools: "MCP-Tools verwalten",
     manage_skills: "Fähigkeiten verwalten",
+    ai_preferences: "KI-Einstellungen",
+    "ai-preferences-group-description": "Einstellungen zur Steuerung des KI-Chat-Verhaltens, des Speichers und des Kontexts.",
+    user_ai_auto_dream: "Auto-Traum-Konsolidierung",
+    "ai-auto-dream-description":
+      "Automatisches Zusammenfassen vergangener Konversationen im Hintergrund, um KI-Kontext-Token zu sparen.",
+    user_ai_memory_injection: "Benutzerspeicher-Injektion",
+    "ai-memory-injection-description":
+      "Relevante Benutzererinnerungen aus vergangenen Konversationen in den KI-Chat-Kontext einfügen.",
+    user_ai_custom_context_directive: "Benutzerdefinierte Kontext-Direktive",
+    "ai-custom-context-directive-description":
+      "Statischer Text, der in jede KI-Chat-Anfrage eingefügt wird, nach dem System-Prompt. Feld leeren, um zu deaktivieren.",
+    "ai-custom-context-directive-placeholder":
+      "z.B. Antworte immer prägnant. Bevorzuge Aufzählungspunkte. Wir verkaufen Schuhe an US-Kunden.",
   },
   skills: {
     title: "Fähigkeiten verwalten",
@@ -1432,7 +1463,8 @@ export default {
     ai_message_task_system_prompt_hint:
       "Optionale Systemanweisungen für die KI",
     ai_message_task_model: "KI-Modell",
-    ai_message_task_model_hint: "Zu verwendendes Modell (z.B. gpt-4o)",
+    ai_message_task_model_hint:
+      "'Auto' verwendet das Standardmodell des Servers. Wähle ein spezifisches Modell zum Überschreiben.",
     ai_message_task_allowed_tools: "Erlaubte Werkzeuge",
     ai_message_task_allowed_tools_hint:
       "Wählen Sie integrierte Werkzeuge, die die KI bei unbeaufsichtigten Ausführungen verwenden darf",
@@ -1793,6 +1825,8 @@ export default {
     clear_conversation: "Unterhaltung löschen",
     clear_all: "Alles löschen",
     clear_chat: "Chat löschen",
+    compact_conversation: "Unterhaltung komprimieren",
+    compact_completed: "Unterhaltung wurde in den Speicher komprimiert.",
     context_usage: "Kontext",
     context_usage_tooltip: "{used} / {total} Tokens ({percent}%)",
     loading_models: "Modelle werden geladen…",
@@ -1804,10 +1838,16 @@ export default {
     cancelled: "Abgebrochen",
     ai_disabled: "KI-Funktionen stehen nur Abonnenten zur Verfügung.",
     model_unavailable: "Ausgewähltes Modell nicht verfügbar.",
+    model_selector_label: "Modell",
+    model_loading: "Modelle werden geladen…",
+    model_none_available: "Keine Modelle verfügbar",
+    model_auto: "Automatisch",
+    model_auto_default: "Standard",
     server_unavailable: "Verbindung zum KI-Server nicht möglich.",
     unsupported_tool_call:
       "Der Assistent hat ein noch nicht unterstütztes Werkzeug angefordert.",
     conversation_history: "Unterhaltungsverlauf",
+    conversation_running: "Unterhaltung läuft",
     manage_mcp_tools: "MCP-Tools verwalten",
     no_conversations: "Noch keine Unterhaltungen",
     search_conversations: "Unterhaltungen suchen...",
@@ -1826,6 +1866,31 @@ export default {
       "Das Werkzeug konnte nach der Freigabe nicht fortgesetzt werden.",
     permission_resume_no_tool_id:
       "Werkzeugaufrufinformationen fehlen; Fortsetzung nicht möglich.",
+    quota_exhausted:
+      "Die in Ihrem Abonnement enthaltenen KI-Token sind aufgebraucht. Bitte laden Sie Ihr Konto auf, um die KI-Funktionen weiterhin zu nutzen.",
+    empty_response_error:
+      "Die KI hat eine leere Antwort zurückgegeben. Dies ist in der Regel ein vorübergehendes Serverproblem (Ratenbegrenzung, Zeitüberschreitung oder 502-Fehler). Bitte senden Sie Ihre Nachricht erneut.",
+    file_change_one: "Dateiänderung",
+    file_changes_other: "Dateiänderungen",
+    tool_running: "Läuft...",
+    tool_approval_mode_label: "Tool-Genehmigung",
+    tool_approval_mode_ask: "Vorher fragen",
+    tool_approval_mode_auto: "Für mich genehmigen",
+    tool_approval_mode_full: "Vollzugriff",
+    tool_approval_mode_ask_desc:
+      "Vor der Ausführung von Tools, die eine Berechtigung benötigen, fragen.",
+    tool_approval_mode_auto_desc:
+      "Vertrauenswürdige Nicht-Shell-Tools in diesem Chat automatisch genehmigen.",
+    tool_approval_mode_full_desc:
+      "Registrierte Tools in diesem Chat automatisch genehmigen. Sicherheitssperren gelten weiterhin.",
+    tool_approval_mode_full_confirm_title: "Vollzugriff aktivieren?",
+    tool_approval_mode_full_confirm_text:
+      "Registrierte Tools werden in diesem Chat ohne Genehmigungsaufforderung ausgeführt. Abhängigkeitsinstallationen und harte Sicherheitssperren erfordern weiterhin Ihre Zustimmung.",
+    tool_approval_mode_full_enable: "Vollzugriff aktivieren",
+    tool_approval_mode_full_cancel: "Abbrechen",
+    tool_approval_auto_approved: "Automatisch durch Chat-Modus genehmigt",
+    tool_approval_waiting: "Warte auf Genehmigung",
+    tool_approval_blocked: "Durch Sicherheitsrichtlinie blockiert",
   },
   aiChatV2Plan: {
     mode_chat: "Chat",
@@ -1838,6 +1903,10 @@ export default {
     approved: "Genehmigt",
     approved_continue_message:
       "Plan genehmigt. Bitte beginnen Sie jetzt mit der Ausführung des Plans.",
+    rejected_continue_message:
+      "Plan abgelehnt. Bitte überarbeiten Sie den Plan basierend auf dem folgenden Feedback und reichen Sie ihn erneut zur Genehmigung ein.",
+    changes_requested_continue_message:
+      "Planänderungen angefordert. Bitte aktualisieren Sie den Plan basierend auf dem folgenden Feedback und reichen Sie ihn erneut zur Genehmigung ein.",
     reject_feedback: "Grund für Ablehnung",
     changes_feedback: "Was muss geändert werden?",
     no_plan_yet: "Noch kein Planinhalt.",
@@ -1852,6 +1921,7 @@ export default {
   plugins: {
     title: "Plugins",
     import_button: "Plugin importieren",
+    install_button: "Installieren",
     validate_button: "Paket validieren",
     reload_button: "Neu laden",
     column_plugin: "Plugin",
@@ -1877,12 +1947,14 @@ export default {
     tab_permissions: "Berechtigungen",
     tab_diagnostics: "Diagnose",
     tab_manifest: "Manifest",
-    uninstall_confirm: "Dieses Plugin deinstallieren? Skills und MCP-Server werden entfernt.",
+    uninstall_confirm:
+      "Dieses Plugin deinstallieren? Skills und MCP-Server werden entfernt.",
     uninstall_button: "Deinstallieren",
     import_validation_failed: "Paketvalidierung fehlgeschlagen",
     import_success: "Plugin importiert",
     import_failed: "Import fehlgeschlagen",
-    empty_state: "Keine Plugins installiert. Klicken Sie auf „Plugin importieren“.",
+    empty_state:
+      "Keine Plugins installiert. Klicken Sie auf „Plugin importieren“.",
     select_zip: "Plugin-.zip-Datei auswählen",
     validating: "Validiere…",
     discover_tools: "Werkzeuge erkennen",
@@ -1891,5 +1963,68 @@ export default {
     diagnostics_copied: "Diagnose in Zwischenablage kopiert",
     enabled_label: "Aktiviert",
     via_plugin: "über Plugin: {name}",
+    install_source: {
+      button: "Aus Quelle installieren",
+      title: "Plugin aus Quelle installieren",
+      kind_label: "Quelltyp",
+      kind_local_zip: "Lokales Zip",
+      kind_local_folder: "Lokaler Ordner",
+      kind_git: "Git",
+      kind_github: "GitHub",
+      kind_npm: "npm",
+      kind_url: "URL",
+      zip_label: ".zip wählen",
+      folder_label: "Ordner wählen",
+      folder_hint:
+        "Ihr Quellordner wird in den Plugin-Cache kopiert und nie verändert.",
+      git_url: "Git-URL (https oder ssh)",
+      git_ref: "Branch / Tag / Commit (optional)",
+      github_url: "GitHub-Repo- oder Release-Asset-URL",
+      github_ref: "Branch / Tag (optional)",
+      npm_package: "Paketname (z. B. @scope/pkg)",
+      npm_version: "Version (optional)",
+      npm_registry: "Registry-URL (optional, HTTPS)",
+      npm_token: "Authentifizierungs-Token (optional, wird nicht gespeichert)",
+      npm_token_hint:
+        "Wird nur für diese Installation verwendet; nicht dauerhaft gespeichert.",
+      url_label: "URL (.zip, git oder GitHub-URL)",
+      url_hint:
+        "Automatische Erkennung: .zip wird heruntergeladen, git-URLs geklont, GitHub-URLs nutzen den Release-Flow.",
+      install_failed: "Installation fehlgeschlagen.",
+      source_kind: "Installationsquelle",
+    },
+  },
+  toolProgress: {
+    maps_starting: "Kartensuche wird gestartet...",
+    maps_fetching: "Ergebnisse werden von {platform} Maps geladen...",
+    maps_found: "{collected} von {expected} Unternehmen gefunden",
+    maps_extracting:
+      "Details für Unternehmen {collected} von {expected} werden extrahiert",
+    maps_finalizing: "Ergebnisse werden finalisiert...",
+    contact_starting: "Kontaktextraktion wird gestartet...",
+    contact_found: "{collected} von {expected} Kontakte extrahiert",
+    contact_finalizing: "Kontakte werden finalisiert...",
+    website_analyzing: "Website-Inhalte werden analysiert...",
+    website_finalizing: "Analyse wird abgeschlossen...",
+    partial_result:
+      "Teilergebnisse werden angezeigt ({collected} von {expected}). Das Tool hat das Zeitlimit überschritten, aber die bisherigen Daten zurückgegeben.",
+  },
+  workspace: {
+    title: "Arbeitsbereich",
+    badgeLabel: "Arbeitsbereich",
+    notSet: "Kein Arbeitsbereich festgelegt",
+    selectFolder: "Ordner wählen",
+    changeFolder: "Ordner wechseln",
+    approve: "Arbeitsbereich genehmigen",
+    revoke: "Arbeitsbereich widerrufen",
+    rootPath: "Stammpfad",
+    description:
+      "AI-Dateiwerkzeuge arbeiten nur innerhalb des genehmigten Arbeitsbereichs.",
+    required: {
+      title: "Wählen Sie einen Arbeitsordner",
+      body: "Wählen Sie einen Ordner, in dem AI-Dateiwerkzeuge lesen und schreiben können. Außerhalb dieses Ordners wird nichts berührt.",
+      pick: "Ordner wählen",
+      cancel: "Abbrechen",
+    },
   },
 };

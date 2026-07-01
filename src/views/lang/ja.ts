@@ -675,6 +675,8 @@ export default {
     select_account_hint:
       "アカウント変更ボタンをクリックしてアカウントを選択してください。Cookieが存在するアカウントを選択してください",
     change_account: "アカウントを変更",
+    encryption_unavailable:
+      "アカウント暗号化サービスを利用できません。接続を確認して再試行してください。",
   },
   search: {
     google: "Google",
@@ -850,6 +852,10 @@ export default {
     update_error: "タスクの更新に失敗しました",
     load_task_error: "タスクデータの読み込みに失敗しました",
     no_valid_urls: "有効なURLが見つかりません",
+    ai_support_enabled: "AIエンリッチメントを有効化",
+    ai_support_hint: "AIを使用して電話番号、住所、ソーシャルリンクを抽出",
+    ai_support_upgrade_hint:
+      "AIエンリッチメントを有効にするにはプランをアップグレードしてください。",
     confirm_kill: "このタスクを停止してもよろしいですか？",
     kill_task: "タスクを停止",
     kill_success: "タスクが正常に停止されました",
@@ -1090,6 +1096,7 @@ export default {
   system_settings: {
     title: "システム設定",
     no_setting_item_found_exit: "設定項目が見つかりません。終了してください",
+    no_description: "説明なし",
     "2captcha-group": "2captcha",
     "2captcha-description": "2captchaの説明",
     "2captcha-token": "2captchaトークン",
@@ -1102,10 +1109,34 @@ export default {
     "firefox-path-description": "Firefoxパスを入力",
     chrome_path: "Chromeパス",
     firefox_path: "Firefoxパス",
+    embedding_group: "埋め込みモデル",
+    embedding_group_description: "ベクトル検索のデフォルト埋め込みモデル。",
+    external_system: "外部システム",
+    user_preferences: "ユーザー設定",
+    "user-preferences-group-description": "アプリケーション動作のユーザーレベル設定。",
+    default_embedding_model: "デフォルト埋め込みモデル",
+    "default-embedding-model-description": "ベクトル検索と類似性マッチングに使用する埋め込みモデルを選択します。",
+    language_preference: "言語",
+    "language-preference-description": "UIの言語設定。",
+    ai_website_analysis_business_info: "ビジネス情報",
+    "ai-website-analysis-business-info-description": "ウェブサイトのAI分析で使用されるビジネス情報。",
     "external-system-group-description": "外部システムグループ設定",
     mcp_tools: "MCPツール",
     manage_mcp_tools: "MCPツールを管理",
     manage_skills: "スキルを管理",
+    ai_preferences: "AI 設定",
+    "ai-preferences-group-description": "AIチャットの動作、メモリー、コンテキストを制御する設定。",
+    user_ai_auto_dream: "自動要約統合",
+    "ai-auto-dream-description":
+      "バックグラウンドで過去の会話を自動的に要約し、AIコンテキストトークンを節約します。",
+    user_ai_memory_injection: "ユーザーメモリー注入",
+    "ai-memory-injection-description":
+      "過去の会話から関連するユーザーの記憶をAIチャットコンテキストに注入します。",
+    user_ai_custom_context_directive: "カスタムコンテキスト指示",
+    "ai-custom-context-directive-description":
+      "AI チャットリクエストに毎回注入される静的テキスト（システムプロンプトの後）。無効にするには入力欄を空にしてください。",
+    "ai-custom-context-directive-placeholder":
+      "例：常に簡潔に答える。箇条書きを優先。米国顧客に靴を販売。",
   },
   skills: {
     title: "スキル管理",
@@ -1403,7 +1434,8 @@ export default {
     ai_message_task_system_prompt: "システムプロンプト",
     ai_message_task_system_prompt_hint: "AIのオプションのシステム指示",
     ai_message_task_model: "AIモデル",
-    ai_message_task_model_hint: "使用するモデル（例：gpt-4o）",
+    ai_message_task_model_hint:
+      "「自動」はサーバーのデフォルトモデルを使用します。特定のモデルを選択で上書きできます。",
     ai_message_task_allowed_tools: "許可されたツール",
     ai_message_task_allowed_tools_hint:
       "無人実行中にAIが使用できる組み込みツールを選択",
@@ -1760,6 +1792,8 @@ export default {
     clear_conversation: "会話を消去",
     clear_all: "すべて消去",
     clear_chat: "チャットを消去",
+    compact_conversation: "会話を圧縮",
+    compact_completed: "会話をメモリに圧縮しました。",
     context_usage: "コンテキスト",
     context_usage_tooltip: "{used} / {total} トークン ({percent}%)",
     loading_models: "モデルを読み込み中…",
@@ -1771,9 +1805,15 @@ export default {
     cancelled: "キャンセルされました",
     ai_disabled: "AI機能はサブスクライバー限定です。",
     model_unavailable: "選択したモデルは利用できません。",
+    model_selector_label: "モデル",
+    model_loading: "モデルを読み込み中…",
+    model_none_available: "利用できるモデルがありません",
+    model_auto: "自動",
+    model_auto_default: "デフォルト",
     server_unavailable: "AI サーバーに接続できませんでした。",
     unsupported_tool_call: "アシスタントが未対応のツールを要求しました。",
     conversation_history: "会話履歴",
+    conversation_running: "会話を実行中",
     manage_mcp_tools: "MCP ツールを管理",
     no_conversations: "まだ会話がありません",
     search_conversations: "会話を検索...",
@@ -1789,6 +1829,30 @@ export default {
     permission_resume_failed: "許可後にツールを再開できませんでした。",
     permission_resume_no_tool_id:
       "ツール呼び出し情報が不足しているため、続行できません。",
+    quota_exhausted:
+      "サブスクリプションプランに含まれるAIトークンが尽きました。AI機能を続けてご利用いただくには、アカウントをチャージしてください。",
+    empty_response_error:
+      "AIが空のレスポンスを返しました。これは通常、一時的なサーバーの問題（レート制限、タイムアウト、または502エラー）です。メッセージを再送信してください。",
+    file_change_one: "件のファイル変更",
+    file_changes_other: "件のファイル変更",
+    tool_running: "実行中...",
+    tool_approval_mode_label: "ツール承認",
+    tool_approval_mode_ask: "確認してから実行",
+    tool_approval_mode_auto: "自動承認",
+    tool_approval_mode_full: "フルアクセス",
+    tool_approval_mode_ask_desc: "権限が必要なツールの実行前に確認します。",
+    tool_approval_mode_auto_desc:
+      "このチャット内の信頼できる非シェルツールを自動承認します。",
+    tool_approval_mode_full_desc:
+      "このチャット内の登録ツールを自動承認します。セーフティブロックは引き続き適用されます。",
+    tool_approval_mode_full_confirm_title: "フルアクセスを有効にしますか？",
+    tool_approval_mode_full_confirm_text:
+      "登録ツールはこのチャットで承認プロンプトなしで実行されます。依存関係のインストールとハードセーフティブロックには引き続き承認が必要です。",
+    tool_approval_mode_full_enable: "フルアクセスを有効にする",
+    tool_approval_mode_full_cancel: "キャンセル",
+    tool_approval_auto_approved: "チャットモードにより自動承認されました",
+    tool_approval_waiting: "承認待ち",
+    tool_approval_blocked: "セキュリティポリシーによりブロックされました",
   },
   aiChatV2Plan: {
     mode_chat: "チャット",
@@ -1801,6 +1865,10 @@ export default {
     approved: "承認済み",
     approved_continue_message:
       "計画が承認されました。今すぐ計画の実行を開始してください。",
+    rejected_continue_message:
+      "計画が拒否されました。以下のフィードバックに基づいて計画を修正し、承認のために再提出してください。",
+    changes_requested_continue_message:
+      "計画の変更が要求されました。以下のフィードバックに基づいて計画を更新し、承認のために再提出してください。",
     reject_feedback: "拒否の理由",
     changes_feedback: "何を変更する必要がありますか？",
     no_plan_yet: "計画内容がまだありません。",
@@ -1815,6 +1883,7 @@ export default {
   plugins: {
     title: "プラグイン",
     import_button: "プラグインをインポート",
+    install_button: "インストール",
     validate_button: "パッケージを検証",
     reload_button: "再読み込み",
     column_plugin: "プラグイン",
@@ -1840,12 +1909,14 @@ export default {
     tab_permissions: "権限",
     tab_diagnostics: "診断",
     tab_manifest: "マニフェスト",
-    uninstall_confirm: "このプラグインをアンインストールしますか？スキルと MCP サーバーが削除されます。",
+    uninstall_confirm:
+      "このプラグインをアンインストールしますか？スキルと MCP サーバーが削除されます。",
     uninstall_button: "アンインストール",
     import_validation_failed: "パッケージの検証に失敗しました",
     import_success: "プラグインをインポートしました",
     import_failed: "プラグインのインポートに失敗しました",
-    empty_state: "インストール済みのプラグインがありません。「プラグインをインポート」をクリックしてください。",
+    empty_state:
+      "インストール済みのプラグインがありません。「プラグインをインポート」をクリックしてください。",
     select_zip: "プラグインの .zip ファイルを選択",
     validating: "検証中…",
     discover_tools: "ツールを検出",
@@ -1854,5 +1925,66 @@ export default {
     diagnostics_copied: "診断をクリップボードにコピーしました",
     enabled_label: "有効",
     via_plugin: "プラグイン経由: {name}",
+    install_source: {
+      button: "ソースからインストール",
+      title: "ソースからプラグインをインストール",
+      kind_label: "ソース種別",
+      kind_local_zip: "ローカル Zip",
+      kind_local_folder: "ローカル フォルダ",
+      kind_git: "Git",
+      kind_github: "GitHub",
+      kind_npm: "npm",
+      kind_url: "URL",
+      zip_label: ".zip を選択",
+      folder_label: "フォルダを選択",
+      folder_hint:
+        "ソース フォルダはプラグイン キャッシュにコピーされ、変更されることはありません。",
+      git_url: "Git URL（https または ssh）",
+      git_ref: "ブランチ / タグ / コミット（任意）",
+      github_url: "GitHub リポジトリまたはリリース アセット URL",
+      github_ref: "ブランチ / タグ（任意）",
+      npm_package: "パッケージ名（例: @scope/pkg）",
+      npm_version: "バージョン（任意）",
+      npm_registry: "レジストリ URL（任意、HTTPS）",
+      npm_token: "認証トークン（任意、保存されません）",
+      npm_token_hint: "このインストールでのみ使用され、永続化されません。",
+      url_label: "URL（.zip、git、または GitHub URL）",
+      url_hint:
+        "自動検出: .zip はダウンロード、git URL はクローン、GitHub URL はリリース フローを使用。",
+      install_failed: "インストールに失敗しました。",
+      source_kind: "インストール元",
+    },
+  },
+  toolProgress: {
+    maps_starting: "マップ検索を開始しています...",
+    maps_fetching: "{platform} マップから結果を読み込んでいます...",
+    maps_found: "{expected} 件中 {collected} 件の事業所が見つかりました",
+    maps_extracting: "事業所 {collected} / {expected} 件の詳細を抽出しています",
+    maps_finalizing: "結果を確定しています...",
+    contact_starting: "連絡先抽出を開始しています...",
+    contact_found: "{expected} 件中 {collected} 件の連絡先を抽出しました",
+    contact_finalizing: "連絡先を確定しています...",
+    website_analyzing: "ウェブサイトの内容を分析しています...",
+    website_finalizing: "分析を完了しています...",
+    partial_result:
+      "部分的な結果を表示中（{collected} / {expected}）。ツールはタイムアウトしましたが、取得済みのデータを返しました。",
+  },
+  workspace: {
+    title: "ワークスペース",
+    badgeLabel: "ワークスペース",
+    notSet: "ワークスペース未設定",
+    selectFolder: "フォルダを選択",
+    changeFolder: "フォルダを変更",
+    approve: "ワークスペースを承認",
+    revoke: "ワークスペースを取り消し",
+    rootPath: "ルートパス",
+    description:
+      "AI ファイルツールは承認されたワークスペース内でのみ動作します。",
+    required: {
+      title: "ワークスペースフォルダを選択",
+      body: "AI ファイルツールが読み書きできるフォルダを選択してください。このフォルダ外には触れません。",
+      pick: "フォルダを選択",
+      cancel: "キャンセル",
+    },
   },
 };

@@ -69,6 +69,7 @@ const onKeydown = (event: KeyboardEvent): void => {
 
 <style scoped>
 .v2-composer {
+  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   gap: 8px;

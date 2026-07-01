@@ -686,6 +686,8 @@ export default {
     select_account_hint:
       "Select account by click the change account button, please select account with cookies exist",
     change_account: "change account",
+    encryption_unavailable:
+      "Le service de chiffrement des comptes est indisponible. Vérifiez votre connexion et réessayez.",
   },
   search: {
     google: "Google",
@@ -862,6 +864,10 @@ export default {
     update_error: "Failed to update task",
     load_task_error: "Failed to load task data",
     no_valid_urls: "No valid URLs found",
+    ai_support_enabled: "Activer l'enrichissement IA",
+    ai_support_hint: "Extraire téléphone, adresse et liens sociaux avec l'IA",
+    ai_support_upgrade_hint:
+      "Mettez à niveau votre forfait pour activer l'enrichissement IA.",
     confirm_kill: "Êtes-vous sûr de vouloir arrêter cette tâche ?",
     kill_task: "Arrêter la tâche",
     kill_success: "Tâche arrêtée avec succès",
@@ -1105,6 +1111,7 @@ export default {
   system_settings: {
     title: "System Settings",
     no_setting_item_found_exit: "No setting item found, please exit",
+    no_description: "Aucune description",
     "2captcha-group": "2captcha",
     "2captcha-description": "2captcha description",
     "2captcha-token": "2captcha token",
@@ -1117,10 +1124,34 @@ export default {
     "firefox-path-description": "input firefox path",
     chrome_path: "chrome path",
     firefox_path: "firefox path",
+    embedding_group: "Modèles d'Embedding",
+    embedding_group_description: "Modèle d'embedding par défaut pour la recherche vectorielle.",
+    external_system: "Système Externe",
+    user_preferences: "Préférences Utilisateur",
+    "user-preferences-group-description": "Préférences utilisateur pour le comportement de l'application.",
+    default_embedding_model: "Modèle d'Embedding par Défaut",
+    "default-embedding-model-description": "Sélectionnez le modèle d'embedding utilisé pour la recherche vectorielle et la correspondance de similarité.",
+    language_preference: "Langue",
+    "language-preference-description": "Préférence de langue de l'interface.",
+    ai_website_analysis_business_info: "Informations Commerciales",
+    "ai-website-analysis-business-info-description": "Informations commerciales utilisées lors de l'analyse IA du site web.",
     "external-system-group-description": "external system group setting",
     mcp_tools: "MCP Tools",
     manage_mcp_tools: "Manage MCP Tools",
     manage_skills: "Gérer les compétences",
+    ai_preferences: "Préférences IA",
+    "ai-preferences-group-description": "Paramètres contrôlant le comportement du chat IA, la mémoire et le contexte.",
+    user_ai_auto_dream: "Consolidation Auto-Rêve",
+    "ai-auto-dream-description":
+      "Résumer automatiquement les conversations passées en arrière-plan pour économiser les tokens de contexte IA.",
+    user_ai_memory_injection: "Injection de Mémoire Utilisateur",
+    "ai-memory-injection-description":
+      "Injecter les souvenirs utilisateur pertinents des conversations passées dans le contexte du chat IA.",
+    user_ai_custom_context_directive: "Directive de Contexte Personnalisée",
+    "ai-custom-context-directive-description":
+      "Texte statique injecté dans chaque requête de chat IA, après le prompt système. Videz le champ pour désactiver.",
+    "ai-custom-context-directive-placeholder":
+      "ex. Réponds toujours concis. Préfère les puces. Nous vendons des chaussures aux clients américains.",
   },
   skills: {
     title: "Gestion des Compétences",
@@ -1239,7 +1270,8 @@ export default {
     ai_message_task_system_prompt_hint:
       "Instructions système optionnelles pour l'IA",
     ai_message_task_model: "Modèle IA",
-    ai_message_task_model_hint: "Modèle à utiliser (ex. gpt-4o)",
+    ai_message_task_model_hint:
+      "'Auto' utilise le modèle par défaut du serveur. Choisissez un modèle spécifique pour remplacer.",
     ai_message_task_allowed_tools: "Outils autorisés",
     ai_message_task_allowed_tools_hint:
       "Sélectionnez les outils intégrés que l'IA peut utiliser",
@@ -1782,6 +1814,8 @@ export default {
     clear_conversation: "Effacer la conversation",
     clear_all: "Tout effacer",
     clear_chat: "Effacer le chat",
+    compact_conversation: "Compacter la conversation",
+    compact_completed: "Conversation compactée en mémoire.",
     context_usage: "Contexte",
     context_usage_tooltip: "{used} / {total} tokens ({percent}%)",
     loading_models: "Chargement des modèles…",
@@ -1793,10 +1827,16 @@ export default {
     cancelled: "Annulé",
     ai_disabled: "Les fonctionnalités d'IA sont réservées aux abonnés.",
     model_unavailable: "Le modèle sélectionné n'est pas disponible.",
+    model_selector_label: "Modèle",
+    model_loading: "Chargement des modèles…",
+    model_none_available: "Aucun modèle disponible",
+    model_auto: "Auto",
+    model_auto_default: "Par défaut",
     server_unavailable: "Impossible de se connecter au serveur IA.",
     unsupported_tool_call:
       "L'assistant a demandé un outil non encore pris en charge.",
     conversation_history: "Historique des conversations",
+    conversation_running: "Conversation en cours",
     manage_mcp_tools: "Gérer les outils MCP",
     no_conversations: "Pas encore de conversations",
     search_conversations: "Rechercher des conversations...",
@@ -1814,6 +1854,31 @@ export default {
       "Impossible de reprendre l'outil après l'autorisation.",
     permission_resume_no_tool_id:
       "Informations d'appel d'outil manquantes ; impossible de continuer.",
+    quota_exhausted:
+      "Les jetons IA inclus dans votre abonnement sont épuisés. Veuillez recharger votre compte pour continuer à utiliser les fonctions IA.",
+    empty_response_error:
+      "L'IA a renvoyé une réponse vide. Il s'agit généralement d'un problème temporaire du serveur (limite de débit, délai d'attente ou erreur 502). Veuillez renvoyer votre message.",
+    file_change_one: "modification de fichier",
+    file_changes_other: "modifications de fichier",
+    tool_running: "En cours...",
+    tool_approval_mode_label: "Approbation des outils",
+    tool_approval_mode_ask: "Demander avant",
+    tool_approval_mode_auto: "Approuver pour moi",
+    tool_approval_mode_full: "Accès complet",
+    tool_approval_mode_ask_desc:
+      "Demander avant d'exécuter les outils nécessitant une autorisation.",
+    tool_approval_mode_auto_desc:
+      "Approuver automatiquement les outils non shell de confiance dans ce chat.",
+    tool_approval_mode_full_desc:
+      "Approuver automatiquement les outils enregistrés dans ce chat. Les blocages de sécurité s'appliquent toujours.",
+    tool_approval_mode_full_confirm_title: "Activer l'accès complet ?",
+    tool_approval_mode_full_confirm_text:
+      "Les outils enregistrés s'exécuteront sans demande d'approbation dans ce chat. Les installations de dépendances et les blocages de sécurité nécessitent toujours votre approbation.",
+    tool_approval_mode_full_enable: "Activer l'accès complet",
+    tool_approval_mode_full_cancel: "Annuler",
+    tool_approval_auto_approved: "Auto-approuvé par le mode de chat",
+    tool_approval_waiting: "En attente d'approbation",
+    tool_approval_blocked: "Bloqué par la politique de sécurité",
   },
   aiChatV2Plan: {
     mode_chat: "Chat",
@@ -1826,6 +1891,10 @@ export default {
     approved: "Approuvé",
     approved_continue_message:
       "Plan approuvé. Veuillez commencer à exécuter le plan maintenant.",
+    rejected_continue_message:
+      "Plan rejeté. Veuillez réviser le plan en fonction des commentaires suivants et le soumettre à nouveau pour approbation.",
+    changes_requested_continue_message:
+      "Modifications demandées. Veuillez mettre à jour le plan en fonction des commentaires suivants et le soumettre à nouveau pour approbation.",
     reject_feedback: "Raison du rejet",
     changes_feedback: "Qu'est-ce qui doit changer?",
     no_plan_yet: "Pas encore de contenu de plan.",
@@ -1840,6 +1909,7 @@ export default {
   plugins: {
     title: "Plugins",
     import_button: "Importer un plugin",
+    install_button: "Installer",
     validate_button: "Valider le paquet",
     reload_button: "Recharger",
     column_plugin: "Plugin",
@@ -1865,7 +1935,8 @@ export default {
     tab_permissions: "Permissions",
     tab_diagnostics: "Diagnostics",
     tab_manifest: "Manifeste",
-    uninstall_confirm: "Désinstaller ce plugin ? Ses compétences et serveurs MCP seront supprimés.",
+    uninstall_confirm:
+      "Désinstaller ce plugin ? Ses compétences et serveurs MCP seront supprimés.",
     uninstall_button: "Désinstaller",
     import_validation_failed: "Validation du paquet échouée",
     import_success: "Plugin importé",
@@ -1879,5 +1950,68 @@ export default {
     diagnostics_copied: "Diagnostics copiés dans le presse-papiers",
     enabled_label: "Activé",
     via_plugin: "via plugin : {name}",
+    install_source: {
+      button: "Installer depuis la source",
+      title: "Installer le plugin depuis la source",
+      kind_label: "Type de source",
+      kind_local_zip: "Zip local",
+      kind_local_folder: "Dossier local",
+      kind_git: "Git",
+      kind_github: "GitHub",
+      kind_npm: "npm",
+      kind_url: "URL",
+      zip_label: "Choisir un .zip",
+      folder_label: "Choisir un dossier",
+      folder_hint:
+        "Votre dossier source sera copié dans le cache des plugins et ne sera jamais modifié.",
+      git_url: "URL Git (https ou ssh)",
+      git_ref: "Branche / tag / commit (optionnel)",
+      github_url: "URL de dépôt ou d'asset de release GitHub",
+      github_ref: "Branche / tag (optionnel)",
+      npm_package: "Nom du paquet (ex. @scope/pkg)",
+      npm_version: "Version (optionnel)",
+      npm_registry: "URL du registre (optionnel, HTTPS)",
+      npm_token: "Jeton d'authentification (optionnel, non stocké)",
+      npm_token_hint:
+        "Utilisé une seule fois pour cette installation ; non persisté.",
+      url_label: "URL (.zip, git ou URL GitHub)",
+      url_hint:
+        "Détection auto : .zip téléchargé, URL git clonée, les URLs GitHub passent par le flux release.",
+      install_failed: "Échec de l'installation.",
+      source_kind: "Source d'installation",
+    },
+  },
+  toolProgress: {
+    maps_starting: "Démarrage de la recherche cartographique...",
+    maps_fetching: "Chargement des résultats depuis {platform} Maps...",
+    maps_found: "{collected} sur {expected} entreprises trouvées",
+    maps_extracting:
+      "Extraction des détails pour l'entreprise {collected} sur {expected}",
+    maps_finalizing: "Finalisation des résultats...",
+    contact_starting: "Démarrage de l'extraction des contacts...",
+    contact_found: "{collected} sur {expected} contacts extraits",
+    contact_finalizing: "Finalisation des contacts...",
+    website_analyzing: "Analyse du contenu du site web...",
+    website_finalizing: "Finalisation de l'analyse...",
+    partial_result:
+      "Affichage des résultats partiels ({collected} sur {expected}). L'outil a expiré mais a renvoyé les données collectées.",
+  },
+  workspace: {
+    title: "Espace de travail",
+    badgeLabel: "Espace de travail",
+    notSet: "Aucun espace défini",
+    selectFolder: "Choisir un dossier",
+    changeFolder: "Changer de dossier",
+    approve: "Approuver l'espace",
+    revoke: "Révoquer l'espace",
+    rootPath: "Chemin racine",
+    description:
+      "Les outils fichiers IA ne fonctionnent que dans l'espace approuvé.",
+    required: {
+      title: "Choisissez un dossier de travail",
+      body: "Choisissez un dossier où les outils IA peuvent lire et écrire. Rien en dehors de ce dossier ne sera touché.",
+      pick: "Choisir un dossier",
+      cancel: "Annuler",
+    },
   },
 };

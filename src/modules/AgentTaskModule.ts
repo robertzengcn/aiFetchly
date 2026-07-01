@@ -2,6 +2,7 @@
 import { BaseModule } from "@/modules/baseModule";
 import { AgentTaskModel } from "@/model/AgentTask.model";
 import { AgentToolCallModel } from "@/model/AgentToolCall.model";
+import type { AgentTaskEntity } from "@/entity/AgentTask.entity";
 import type {
   AgentResult,
   AgentTaskMessageRecord,
@@ -78,5 +79,18 @@ export class AgentTaskModule extends BaseModule {
   async listToolCalls(agentTaskId: string): Promise<AgentToolCallRecord[]> {
     await this.ensureConnection();
     return this.toolCallModel.listByTask(agentTaskId);
+  }
+
+  /**
+   * Returns completed agent tasks ordered by most-recent first. Used by
+   * auto-dream source collection. `since` is optional; when omitted, the most
+   * recent tasks overall are returned.
+   */
+  async listFinishedAfter(
+    since: Date | null,
+    limit: number
+  ): Promise<AgentTaskEntity[]> {
+    await this.ensureConnection();
+    return this.taskModel.listFinishedAfter(since, limit);
   }
 }

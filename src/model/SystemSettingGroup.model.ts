@@ -7,7 +7,6 @@ import { SystemSettingEntity } from "@/entity/SystemSetting.entity"
 import {SystemSettingOptionModel} from "@/model/SystemSettingOption.model"
 import { SqliteDb } from "@/config/SqliteDb";
 
-export const deepseeklocalgroup = 'Deepseek-local'
 export class SystemSettingGroupModel extends BaseDb {
     private _repository: Repository<SystemSettingGroupEntity> | null = null;
     private systemSettingModel:SystemSettingModel
@@ -55,12 +54,25 @@ export class SystemSettingGroupModel extends BaseDb {
     }
     public async tableInit() {
         await this.initSystemSetting()
-       //const deepseekgroup=await this.insertDeepseekgroup()
-       //await this.systemSettingModel.InsertDeepseekSetting(deepseekgroup) 
     }
     public async initSystemSetting(){
-        //console.log(settinggroupInit)
         const repository = await this.getRepository();
+
+        // Remove deprecated groups and their settings.
+        for (const name of ['Deepseek-local', 'deepseek-api-group', 'grokai-group', 'openai-group', 'volcengine-group']) {
+            const deprecatedGroup = await repository.findOne({
+                where: { name },
+                relations: { settings: true },
+            });
+            if (deprecatedGroup) {
+                for (const s of deprecatedGroup.settings ?? []) {
+                    await this.systemSettingModel.removeById(s.id);
+                }
+                await repository.remove(deprecatedGroup);
+                console.log(`[system-setting] removed deprecated group: ${name}`);
+            }
+        }
+
         for(const sgelement of settinggroupInit){
         //    console.log(sgelement)
             let settargroup = await repository.findOne({
@@ -99,23 +111,6 @@ export class SystemSettingGroupModel extends BaseDb {
                 }
         }
     }
-    public async insertDeepseekgroup():Promise<SystemSettingGroupEntity>{
-        const repository = await this.getRepository();
-        let deepseekgroup = await repository.findOne({
-            where:{name: deepseeklocalgroup},
-            relations: {settings:true}
-         })
-         if (!deepseekgroup) {
-             const systemSettingGroupEntity = new SystemSettingGroupEntity();
-             systemSettingGroupEntity.name = deepseeklocalgroup;
-             systemSettingGroupEntity.description = 'deepseek-local-group-description';
-             
-
-             deepseekgroup=await repository.save(systemSettingGroupEntity)
-         }
-         return deepseekgroup
-    }
-
     public async listall(): Promise<SystemSettingGroupEntity[]> {
         const repository = await this.getRepository();
         return repository.find({

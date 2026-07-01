@@ -2,7 +2,7 @@
 
 **Branch**: `001-ai-email-template` | **Date**: 2025-02-16 | **Spec**: [spec.md](./spec.md)
 **Input**: Feature specification from `/specs/001-ai-email-template/spec.md`
-**Tech Stack**: Based on [doc/ai-email-template-tech-stack-architecture.md](../../doc/ai-email-template-tech-stack-architecture.md)
+**Tech Stack**: Based on [docs/ai-email-template-tech-stack-architecture.md](../../docs/ai-email-template-tech-stack-architecture.md)
 
 ## Summary
 

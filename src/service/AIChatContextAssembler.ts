@@ -2,7 +2,15 @@ import { AIChatSessionMemoryModule } from "@/modules/AIChatSessionMemoryModule";
 import { AIChatCompactModule } from "@/modules/AIChatCompactModule";
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { AIChatTokenEstimator } from "@/service/AIChatTokenEstimator";
+import { AIUserMemoryRetrievalService } from "@/service/AIUserMemoryRetrievalService";
 import { buildPlanModeSystemPrompt } from "@/service/PlanModePromptBuilder";
+import { SystemSettingModule } from "@/modules/SystemSettingModule";
+import {
+  ai_memory_injection_enabled,
+  ai_custom_context_directive,
+} from "@/config/settinggroupInit";
+import { WorkspaceResolver } from "@/service/WorkspaceResolver";
+import path from "node:path";
 import type { OpenAIChatMessage, OpenAIMessageRole } from "@/api/aiChatApi";
 import { MessageType } from "@/entityTypes/commonType";
 import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
@@ -29,6 +37,8 @@ export interface AIChatContextAssembleResult {
   readonly tokenEstimate: number;
   readonly usedSessionMemory: boolean;
   readonly usedFullCompact: boolean;
+  readonly usedDurableMemory: boolean;
+  readonly durableMemoryCount: number;
   readonly compactTriggered: boolean;
   readonly warnings: readonly string[];
 }
@@ -49,6 +59,8 @@ export class AIChatContextAssembler {
   private readonly compact = new AIChatCompactModule();
   private readonly v2 = new AIChatV2Module();
   private readonly estimator = new AIChatTokenEstimator();
+  private readonly durableMemory = new AIUserMemoryRetrievalService();
+  private readonly systemSettings = new SystemSettingModule();
 
   async assemble(
     input: AIChatContextAssembleInput
@@ -97,6 +109,85 @@ export class AIChatContextAssembler {
     const messages: OpenAIChatMessage[] = [];
     messages.push({ role: "system", content: systemPrompt });
 
+    // User-defined custom context directive (CLAUDE.md-style).
+    // Placed right after the base system prompt so static user instructions
+    // win over conversation-specific retrieved memories. Read failures must
+    // never break the AI chat — degrade to no-injection.
+    try {
+      const customDirective = await this.systemSettings.getSettingValue(
+        ai_custom_context_directive
+      );
+      if (customDirective && customDirective.trim().length > 0) {
+        messages.push({ role: "system", content: customDirective });
+      }
+    } catch (err) {
+      console.error(
+        "[ai-chat-context] failed to read custom context directive:",
+        err
+      );
+    }
+
+    // Active workspace context. Tell the model which folder it has file
+    // access to so it can answer questions about the workspace without
+    // probing the filesystem. Gracefully degrade on lookup failure.
+    try {
+      const workspaceResolver = new WorkspaceResolver();
+      const resolved = await workspaceResolver.resolve(
+        input.conversationId
+      );
+      if (resolved) {
+        const displayName = path.basename(resolved.rootPath);
+        messages.push({
+          role: "system",
+          content: `Active workspace: ${resolved.rootPath} (${displayName})`,
+        });
+      }
+    } catch (err) {
+      console.error(
+        "[ai-chat-context] failed to resolve active workspace:",
+        err
+      );
+    }
+
+    // Durable user memory injection. Reads the user-controllable toggle from
+    // the system_setting table (default-on when absent). Placed before compact
+    // context so recent conversation history wins when they conflict.
+    let injectionEnabled = true;
+    try {
+      const v = await this.systemSettings.getSettingValue(
+        ai_memory_injection_enabled
+      );
+      injectionEnabled = v !== "false";
+    } catch (err) {
+      console.error(
+        "[ai-chat-context] failed to read memory injection toggle:",
+        err
+      );
+    }
+    let durableContextBlock = "";
+    let durableMemoryCount = 0;
+    if (injectionEnabled) {
+      try {
+        const durable = await this.durableMemory.retrieve({
+          currentUserMessage: input.currentUserMessage,
+          conversationId: input.conversationId,
+          mode: input.mode,
+          maxMemories: 10,
+          maxTokens: 2000,
+        });
+        durableContextBlock = durable.contextBlock;
+        durableMemoryCount = durable.memories.length;
+      } catch (err) {
+        console.error(
+          "[ai-chat-context] durable memory retrieval failed:",
+          err
+        );
+      }
+    }
+    if (durableContextBlock.length > 0) {
+      messages.push({ role: "system", content: durableContextBlock });
+    }
+
     if (fullCompact) {
       messages.push({
         role: "system",
@@ -122,6 +213,8 @@ export class AIChatContextAssembler {
       tokenEstimate,
       usedSessionMemory: !fullCompact && !!sessionMemory,
       usedFullCompact: !!fullCompact,
+      usedDurableMemory: durableMemoryCount > 0,
+      durableMemoryCount,
       compactTriggered: false,
       warnings,
     };

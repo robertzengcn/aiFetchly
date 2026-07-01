@@ -688,6 +688,8 @@ export default {
     select_account_hint:
       "Select account by click the change account button, please select account with cookies exist",
     change_account: "change account",
+    encryption_unavailable:
+      "Account encryption service is unavailable. Please check your connection and try again.",
   },
   search: {
     google: "Google",
@@ -871,6 +873,7 @@ export default {
     no_valid_urls: "No valid URLs found",
     ai_support_enabled: "Enable AI Enrichment",
     ai_support_hint: "Extract phone, address, social links using AI",
+    ai_support_upgrade_hint: "Upgrade your plan to enable AI Enrichment.",
     ai_enrichment_status: "AI Status",
     ai_status_none: "Not enriched",
     ai_status_pending: "Processing",
@@ -1124,6 +1127,7 @@ export default {
   system_settings: {
     title: "System Settings",
     no_setting_item_found_exit: "No setting item found, please exit",
+    no_description: "No description",
     "2captcha-group": "2captcha",
     "2captcha-description": "2captcha description",
     "2captcha-token": "2captcha token",
@@ -1136,10 +1140,34 @@ export default {
     "firefox-path-description": "input firefox path",
     chrome_path: "chrome path",
     firefox_path: "firefox path",
+    embedding_group: "Embedding Models",
+    embedding_group_description: "Default embedding model for vector search.",
+    external_system: "External System",
+    user_preferences: "User Preferences",
+    "user-preferences-group-description": "User-level preferences for application behavior.",
+    default_embedding_model: "Default Embedding Model",
+    "default-embedding-model-description": "Select the embedding model used for vector search and similarity matching.",
+    language_preference: "Language",
+    "language-preference-description": "UI language preference.",
+    ai_website_analysis_business_info: "Business Info",
+    "ai-website-analysis-business-info-description": "Business information used during website AI analysis.",
     "external-system-group-description": "external system group setting",
     mcp_tools: "MCP Tools",
     manage_mcp_tools: "Manage MCP Tools",
     manage_skills: "Manage Skills",
+    ai_preferences: "AI Preferences",
+    "ai-preferences-group-description": "Settings that control AI chat behavior, memory, and context.",
+    user_ai_auto_dream: "Auto-Dream Consolidation",
+    "ai-auto-dream-description":
+      "Automatically summarize past conversations in the background to save AI context tokens.",
+    user_ai_memory_injection: "User Memory Injection",
+    "ai-memory-injection-description":
+      "Inject relevant user memories from past conversations into AI chat context.",
+    user_ai_custom_context_directive: "Custom Context Directive",
+    "ai-custom-context-directive-description":
+      "Static text injected into every AI chat request, after the system prompt. Clear the box to disable.",
+    "ai-custom-context-directive-placeholder":
+      "e.g. Always answer concisely. Prefer bullet points. We sell shoes to US customers.",
   },
   skills: {
     title: "Skills Management",
@@ -1450,7 +1478,8 @@ export default {
     ai_message_task_system_prompt_hint:
       "Optional system instructions for the AI",
     ai_message_task_model: "AI Model",
-    ai_message_task_model_hint: "Model to use (e.g. gpt-4o)",
+    ai_message_task_model_hint:
+      "'Auto' uses the server's default model. Choose a specific model to override.",
     ai_message_task_allowed_tools: "Allowed Tools",
     ai_message_task_allowed_tools_hint:
       "Select built-in tools the AI can use during unattended runs",
@@ -1806,6 +1835,8 @@ export default {
     clear_conversation: "Clear conversation",
     clear_all: "Clear all",
     clear_chat: "Clear chat",
+    compact_conversation: "Compact conversation",
+    compact_completed: "Conversation compacted into memory.",
     context_usage: "Context",
     context_usage_tooltip: "{used} / {total} tokens ({percent}%)",
     loading_models: "Loading models…",
@@ -1817,10 +1848,16 @@ export default {
     cancelled: "Cancelled",
     ai_disabled: "AI functionality is only available to subscribers.",
     model_unavailable: "Selected model is not available.",
+    model_selector_label: "Model",
+    model_loading: "Loading models…",
+    model_none_available: "No models available",
+    model_auto: "Auto",
+    model_auto_default: "Default",
     server_unavailable: "Could not connect to the AI server.",
     unsupported_tool_call:
       "This assistant requested a tool that is not supported yet.",
     conversation_history: "Conversation History",
+    conversation_running: "Conversation is running",
     manage_mcp_tools: "Manage MCP Tools",
     no_conversations: "No conversations yet",
     search_conversations: "Search conversations...",
@@ -1837,6 +1874,31 @@ export default {
       "Could not continue the tool after permission was granted.",
     permission_resume_no_tool_id:
       "Missing tool call information; cannot continue execution.",
+    quota_exhausted:
+      "The AI tokens included in your subscription plan have been exhausted. Please recharge your account to continue using AI features.",
+    empty_response_error:
+      "The AI returned an empty response. This is typically a transient server issue (rate limit, timeout, or 502). Please try sending your message again.",
+    file_change_one: "file change",
+    file_changes_other: "file changes",
+    tool_running: "Running...",
+    tool_approval_mode_label: "Tool Approval",
+    tool_approval_mode_ask: "Ask for approval",
+    tool_approval_mode_auto: "Approve for me",
+    tool_approval_mode_full: "Full access",
+    tool_approval_mode_ask_desc:
+      "Ask before tools that need permission.",
+    tool_approval_mode_auto_desc:
+      "Auto-approve trusted non-shell tools in this chat.",
+    tool_approval_mode_full_desc:
+      "Auto-approve registered tools in this chat. Safety blocks still apply.",
+    tool_approval_mode_full_confirm_title: "Enable Full Access?",
+    tool_approval_mode_full_confirm_text:
+      "Registered tools will run without approval prompts in this chat. Dependency installs and hard safety blocks still require your approval.",
+    tool_approval_mode_full_enable: "Enable Full Access",
+    tool_approval_mode_full_cancel: "Cancel",
+    tool_approval_auto_approved: "Auto-approved by chat mode",
+    tool_approval_waiting: "Waiting for approval",
+    tool_approval_blocked: "Blocked by safety policy",
   },
   aiChatV2Plan: {
     mode_chat: "Chat",
@@ -1849,6 +1911,10 @@ export default {
     approved: "Approved",
     approved_continue_message:
       "Plan approved. Please begin executing the plan now.",
+    rejected_continue_message:
+      "Plan rejected. Please revise the plan based on the following feedback and resubmit for approval.",
+    changes_requested_continue_message:
+      "Plan changes requested. Please update the plan based on the following feedback and resubmit for approval.",
     reject_feedback: "Reason for rejection",
     changes_feedback: "What needs to change?",
     no_plan_yet: "No plan content yet.",
@@ -1863,6 +1929,7 @@ export default {
   plugins: {
     title: "Plugins",
     import_button: "Import Plugin",
+    install_button: "Install",
     validate_button: "Validate Package",
     reload_button: "Reload",
     column_plugin: "Plugin",
@@ -1904,5 +1971,66 @@ export default {
     diagnostics_copied: "Diagnostics copied to clipboard",
     enabled_label: "Enabled",
     via_plugin: "via plugin: {name}",
+    install_source: {
+      button: "Install from Source",
+      title: "Install Plugin from Source",
+      kind_label: "Source type",
+      kind_local_zip: "Local Zip",
+      kind_local_folder: "Local Folder",
+      kind_git: "Git",
+      kind_github: "GitHub",
+      kind_npm: "npm",
+      kind_url: "URL",
+      zip_label: "Choose .zip",
+      folder_label: "Choose folder",
+      folder_hint:
+        "Your source folder will be copied into the plugins cache and never modified.",
+      git_url: "Git URL (https or ssh)",
+      git_ref: "Branch / tag / commit (optional)",
+      github_url: "GitHub repo or release asset URL",
+      github_ref: "Branch / tag (optional)",
+      npm_package: "Package name (e.g. @scope/pkg)",
+      npm_version: "Version (optional)",
+      npm_registry: "Registry URL (optional, HTTPS)",
+      npm_token: "Auth token (optional, not stored)",
+      npm_token_hint: "Used once for this install; not persisted.",
+      url_label: "URL (.zip, git, or GitHub URL)",
+      url_hint:
+        "Auto-detected: .zip downloads, git URLs clone, GitHub URLs use the release flow.",
+      install_failed: "Install failed.",
+      source_kind: "Install source",
+    },
+  },
+  toolProgress: {
+    maps_starting: "Starting map search...",
+    maps_fetching: "Loading results from {platform} Maps...",
+    maps_found: "Found {collected} of {expected} businesses",
+    maps_extracting:
+      "Extracting details for business {collected} of {expected}",
+    maps_finalizing: "Finalizing results...",
+    contact_starting: "Starting contact extraction...",
+    contact_found: "Extracted {collected} of {expected} contacts",
+    contact_finalizing: "Finalizing contacts...",
+    website_analyzing: "Analyzing website content...",
+    website_finalizing: "Finalizing analysis...",
+    partial_result:
+      "Showing partial results ({collected} of {expected}). The tool timed out but returned what it had.",
+  },
+  workspace: {
+    title: "Workspace",
+    badgeLabel: "Workspace",
+    notSet: "No workspace set",
+    selectFolder: "Select folder",
+    changeFolder: "Change folder",
+    approve: "Approve workspace",
+    revoke: "Revoke workspace",
+    rootPath: "Root path",
+    description: "AI file tools only operate inside the approved workspace.",
+    required: {
+      title: "Choose a workspace folder",
+      body: "Pick a folder where AI file tools can read and write. Nothing outside this folder will be touched.",
+      pick: "Pick folder",
+      cancel: "Cancel",
+    },
   },
 };

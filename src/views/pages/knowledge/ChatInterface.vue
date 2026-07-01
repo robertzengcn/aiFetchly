@@ -415,9 +415,18 @@ export default defineComponent({
       return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     };
 
+    const escapeHtml = (value) => value.replace(/[&<>"']/g, (char) => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;',
+    })[char]);
     const formatMessage = (content) => {
-      // Simple markdown-like formatting
-      return content
+      // Escape first to prevent XSS via v-html; markdown replacements then
+      // re-introduce only a fixed set of safe tags with no user attributes.
+      const escaped = escapeHtml(content);
+      return escaped
         .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
         .replace(/\*(.*?)\*/g, '<em>$1</em>')
         .replace(/\n/g, '<br>');

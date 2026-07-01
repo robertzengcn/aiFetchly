@@ -50,12 +50,16 @@ async function executeWithMock(
   const getServiceSpy = vi
     .spyOn(
       ToolExecutor as unknown as {
-        getFileToolService: () => { execute: typeof mockFileToolExecute };
+        getFileToolService: () => {
+          execute: typeof mockFileToolExecute;
+          getActiveWorkspace: () => undefined;
+        };
       },
       "getFileToolService"
     )
     .mockReturnValue({
       execute: mockFileToolExecute,
+      getActiveWorkspace: () => undefined,
     });
 
   try {
@@ -84,12 +88,16 @@ async function executeWithMockError(
   const getServiceSpy = vi
     .spyOn(
       ToolExecutor as unknown as {
-        getFileToolService: () => { execute: typeof mockFileToolExecute };
+        getFileToolService: () => {
+          execute: typeof mockFileToolExecute;
+          getActiveWorkspace: () => undefined;
+        };
       },
       "getFileToolService"
     )
     .mockReturnValue({
       execute: mockFileToolExecute,
+      getActiveWorkspace: () => undefined,
     });
 
   try {

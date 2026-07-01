@@ -24,6 +24,14 @@ const V2_PREFIX = "v2-";
 const MIN_DELTA_MESSAGES = 2;
 const FAILURE_CIRCUIT_THRESHOLD = 3;
 const CIRCUIT_BREAKER_COOLDOWN_MS = 10 * 60 * 1000;
+/** Trigger session-memory compaction when prompt tokens reach this fraction
+ * of the configured context window. Mirrors Claude Code's autocompact layer. */
+const SESSION_MEMORY_TOKEN_THRESHOLD_FRACTION = 0.8;
+/** Fallback context-window size when the model limit is unknown. */
+const DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000;
+/** Trigger session-memory compaction when more than this long has passed
+ * since the last successful update. Mirrors Claude Code's time-based layer. */
+const SESSION_MEMORY_MAX_AGE_MS = 60 * 60 * 1000;
 
 function isMessageRow(row: { messageType?: MessageType }): boolean {
   return row.messageType === MessageType.MESSAGE;
@@ -40,6 +48,11 @@ export interface AIChatCompactAgentDeps {
 export interface SessionMemoryUpdateInput {
   conversationId: string;
   reason: string;
+  /** Real prompt-token count from the API usage event. When provided,
+   * enables token-based threshold gating. */
+  promptTokens?: number;
+  /** Model used by the triggering chat turn; forwarded to the compact request. */
+  model?: string;
 }
 
 export interface FullCompactInput {
@@ -53,6 +66,12 @@ export class AIChatCompactAgentService {
   private readonly compact = new AIChatCompactModule();
   private readonly v2 = new AIChatV2Module();
   private readonly estimator = new AIChatTokenEstimator();
+  /** Per-conversation latest known prompt-token count from the API. */
+  private readonly lastPromptTokens = new Map<string, number>();
+  /** Per-conversation epoch-ms of the last successful session-memory update.
+   * In-memory only; resets on process restart (acceptable: the first turn
+   * after restart falls through to MIN_DELTA_MESSAGES inside the runner). */
+  private readonly lastSessionMemoryAt = new Map<string, number>();
 
   constructor(
     private readonly tokenService: Token,
@@ -86,11 +105,72 @@ export class AIChatCompactAgentService {
       );
       return;
     }
+    // Threshold gate: skip all DB and LLM work unless either (A) the latest
+    // prompt-token count is near the context-window limit, or (B) more than
+    // SESSION_MEMORY_MAX_AGE_MS has passed since the last successful update.
+    const gate = this.shouldAttemptSessionMemoryUpdate(input);
+    if (!gate.attempt) {
+      console.log(
+        `[ai-chat-compact] session update skipped (threshold gate) conv=${
+          input.conversationId
+        } reason=${gate.reason} promptTokens=${
+          this.lastPromptTokens.get(input.conversationId) ?? "n/a"
+        }`
+      );
+      return;
+    }
     const p = this.runSessionMemoryUpdate(input).finally(() => {
       this.inFlight.delete(input.conversationId);
     });
     this.inFlight.set(input.conversationId, p);
     await p;
+  }
+
+  /**
+   * Decide whether to actually run a session-memory update this turn.
+   * Cheap, in-memory only — never touches the DB. Always tracks the latest
+   * promptTokens even when skipping, so the gate re-evaluates next turn.
+   */
+  private shouldAttemptSessionMemoryUpdate(
+    input: SessionMemoryUpdateInput
+  ): { attempt: true; reason: string } | { attempt: false; reason: string } {
+    if (typeof input.promptTokens === "number") {
+      this.lastPromptTokens.set(input.conversationId, input.promptTokens);
+    }
+    const lastTokens = this.lastPromptTokens.get(input.conversationId) ?? 0;
+    const tokenThreshold = Math.floor(
+      SESSION_MEMORY_TOKEN_THRESHOLD_FRACTION * DEFAULT_CONTEXT_WINDOW_TOKENS
+    );
+    const nearLimit = lastTokens >= tokenThreshold;
+    if (nearLimit) {
+      return {
+        attempt: true,
+        reason: `prompt_tokens=${lastTokens}>=${tokenThreshold}`,
+      };
+    }
+    // Lazy-initialize the per-conversation timestamp on first observation.
+    // Using 0 (Unix epoch) as the default would make Date.now() - 0 always
+    // exceed SESSION_MEMORY_MAX_AGE_MS, causing the time gate to fire on
+    // every fresh conversation. Seeding to now ensures the time gate starts
+    // closed and only opens after 60 min of actual inactivity.
+    let lastAt = this.lastSessionMemoryAt.get(input.conversationId);
+    if (lastAt === undefined) {
+      lastAt = Date.now();
+      this.lastSessionMemoryAt.set(input.conversationId, lastAt);
+    }
+    const staleByTime = Date.now() - lastAt > SESSION_MEMORY_MAX_AGE_MS;
+    if (staleByTime) {
+      return {
+        attempt: true,
+        reason: `stale_ms=${Date.now() - lastAt}>=${SESSION_MEMORY_MAX_AGE_MS}`,
+      };
+    }
+    return {
+      attempt: false,
+      reason: `prompt_tokens=${lastTokens}<${tokenThreshold} and age_ms=${
+        Date.now() - lastAt
+      }<${SESSION_MEMORY_MAX_AGE_MS}`,
+    };
   }
 
   private async runSessionMemoryUpdate(
@@ -145,6 +225,7 @@ export class AIChatCompactAgentService {
         content: r.content,
       }));
       const req: OpenAIChatCompletionRequest = {
+        model: input.model,
         messages: [
           { role: "system", content: buildSessionMemorySystemPrompt() },
           {
@@ -181,6 +262,7 @@ export class AIChatCompactAgentService {
         status: "active",
       });
       await this.memory.resetFailures(input.conversationId);
+      this.lastSessionMemoryAt.set(input.conversationId, Date.now());
       console.log(
         `[ai-chat-compact] session update completed conv=${
           input.conversationId

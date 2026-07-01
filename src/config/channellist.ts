@@ -281,6 +281,10 @@ export const AI_CHAT_V2_REQUEST_PLAN_CHANGES =
 export const AI_CHAT_V2_PLAN_VERSIONS = "ai-chat-v2:plan-versions";
 export const AI_CHAT_V2_COMPACT_CONVERSATION =
   "ai-chat-v2:compact-conversation";
+export const AI_CHAT_V2_GET_TOOL_APPROVAL_MODE =
+  "ai-chat-v2:get-tool-approval-mode";
+export const AI_CHAT_V2_SET_TOOL_APPROVAL_MODE =
+  "ai-chat-v2:set-tool-approval-mode";
 
 // MCP Tool Management Channels
 export const MCP_TOOL_LIST = "mcp:tool:list";
@@ -398,3 +402,24 @@ export const PLUGIN_TOGGLE_MCP_SERVER = "plugin:toggle-mcp-server";
 export const PLUGIN_TOGGLE_MCP_TOOL = "plugin:toggle-mcp-tool";
 export const PLUGIN_TEST_MCP_CONNECTION = "plugin:test-mcp-connection";
 export const PLUGIN_DISCOVER_MCP_TOOLS = "plugin:discover-mcp-tools";
+export const PLUGIN_INSTALL_FROM_SOURCE = "plugin:install-from-source";
+
+// AI user memory (durable cross-session memory)
+export const AI_USER_MEMORY_LIST = "ai:user-memory:list";
+export const AI_USER_MEMORY_CREATE = "ai:user-memory:create";
+export const AI_USER_MEMORY_UPDATE = "ai:user-memory:update";
+export const AI_USER_MEMORY_ARCHIVE = "ai:user-memory:archive";
+export const AI_USER_MEMORY_DELETE = "ai:user-memory:delete";
+export const AI_USER_MEMORY_RUN_AUTO_DREAM = "ai:user-memory:auto-dream:run";
+export const AI_USER_MEMORY_AUTO_DREAM_STATUS =
+  "ai:user-memory:auto-dream:status";
+
+// Workspace Management Channels
+export const AI_WORKSPACE_SET = "ai-workspace:set";
+export const AI_WORKSPACE_GET = "ai-workspace:get";
+export const AI_WORKSPACE_APPROVE = "ai-workspace:approve";
+export const AI_WORKSPACE_REVOKE = "ai-workspace:revoke";
+export const AI_WORKSPACE_LIST = "ai-workspace:list";
+
+// Dialog Channels
+export const DIALOG_PICK_FOLDER = "dialog:pick-folder";

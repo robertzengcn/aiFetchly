@@ -59,7 +59,7 @@ Display color-coded inline badges in the AI chat for every file mutation perform
 **Downstream agents MUST read these before planning or implementing.**
 
 ### Feature Specification
-- `doc/README.md` — Full PRD for AI Chat File Operation Recording: data model, IPC channel design, security requirements, error handling, testing strategy
+- `docs/README.md` — Full PRD for AI Chat File Operation Recording: data model, IPC channel design, security requirements, error handling, testing strategy
 
 ### Requirements
 - `.planning/REQUIREMENTS.md` — v1.1 requirements with REQ-IDs (SUB-01..03, BADGE-01..05, DIFF-01..03, OPEN-01..03 for this phase)

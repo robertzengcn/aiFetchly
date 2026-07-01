@@ -25,6 +25,8 @@ import {
 import type { YellowPagesTaskProxyConfig } from "@/entityTypes/yellowPagesTaskProxyType";
 import { YandexMapsSearchRecordModel } from "@/model/YandexMapsSearchRecord.model";
 import type { YandexMapsSearchRecordEntity } from "@/entity/YandexMapsSearchRecord.entity";
+import type { ModuleExecutionContext } from "@/entityTypes/skillTypes";
+import { ToolExecutor } from "@/service/ToolExecutor";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -121,6 +123,13 @@ export interface YandexMapsExecuteOptions {
   cookies?: unknown[];
   /** Optional proxy configs for IP rotation. */
   proxies?: YellowPagesTaskProxyConfig[];
+  /**
+   * Optional execution context for progress emission and partial-snapshot
+   * registration. When provided, worker `progress` messages are forwarded
+   * to `context.emitProgress` and the partial snapshot is kept up to date
+   * via `ToolExecutor.updatePartialSnapshot`.
+   */
+  context?: ModuleExecutionContext;
 }
 
 // ---------------------------------------------------------------------------
@@ -206,6 +215,10 @@ export class YandexMapsModule extends BaseModule {
           const progress = parseYandexMapsProgressEvent(data);
           if (search.progressCallback && progress) {
             search.progressCallback(progress);
+          }
+          // Forward to execution context (AI tool-progress pipeline)
+          if (options?.context && progress) {
+            this.emitContextProgress(options.context, progress);
           }
           return;
         }
@@ -369,6 +382,59 @@ export class YandexMapsModule extends BaseModule {
   async deleteSearchRecord(id: number): Promise<boolean> {
     await this.ensureConnection();
     return await this.recordModel.deleteById(id);
+  }
+
+  /**
+   * Translate a worker progress event into the context's progress pipeline
+   * and update the partial snapshot so the timeout branch can return
+   * whatever was collected so far.
+   */
+  private emitContextProgress(
+    context: ModuleExecutionContext,
+    progress: YandexMapsProgressEvent
+  ): void {
+    const phase = this.mapStatusToPhase(progress.status);
+    context.emitProgress?.({
+      phase,
+      message: progress.message,
+      partialCount: progress.current,
+      expectedCount: progress.total,
+    });
+    if (progress.current > 0) {
+      // NOTE: Worker files (src/childprocess/) do not yet stream incremental business
+      // data in their `progress` IPC messages. Until they do (deferred Step 9.5),
+      // `collectedCount` is accurate but `data.results` remains empty. The model
+      // still receives a partial-success signal with the count.
+      ToolExecutor.updatePartialSnapshot(context.toolCallId, {
+        collectedCount: progress.current,
+        expectedCount: progress.total,
+        data: { results: [] },
+      });
+    }
+  }
+
+  /** Map worker status string to the unified progress phase vocabulary. */
+  private mapStatusToPhase(
+    status: YandexMapsProgressStatus
+  ): "queued" | "running" | "fetching" | "extracting" | "finalizing" {
+    switch (status) {
+      case "idle":
+      case "validating":
+        return "queued";
+      case "launching":
+      case "loading":
+        return "fetching";
+      case "extracting":
+        return "extracting";
+      case "completed":
+      case "cancelled":
+      case "failed":
+      case "captcha":
+      case "timed_out":
+        return "finalizing";
+      default:
+        return "running";
+    }
   }
 
   /**

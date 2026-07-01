@@ -10,6 +10,7 @@ import { SkillRegistry } from "@/config/skillsRegistry";
 import { SkillExecutor } from "@/service/SkillExecutor";
 import { AIChatContextAssembler } from "@/service/AIChatContextAssembler";
 import type { AIChatCompactAgentService } from "@/service/AIChatCompactAgentService";
+import type { AIAutoDreamService } from "@/service/AIAutoDreamService";
 import { PlanModeToolRegistry } from "@/service/PlanModeToolRegistry";
 import type { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
 import {
@@ -18,6 +19,9 @@ import {
   isPermissionPromptResult,
 } from "@/service/AIChatQueryLoop";
 import { userSafeError } from "@/service/AIChatErrorMapper";
+import { Token } from "@/modules/token";
+import { USER_AI_AUTO_PLAN, USER_AI_ENABLED } from "@/config/usersetting";
+import { ENTER_PLAN_MODE_TOOL } from "@/service/EnterPlanModeTool";
 import type {
   AIChatQueryEventSink,
   AIChatQueryLoopInput,
@@ -38,6 +42,50 @@ function isActivePlanState(plan?: AIChatPlanStateView | null): boolean {
     plan.status !== "completed" &&
     plan.status !== "cancelled" &&
     plan.status !== "rejected"
+  );
+}
+
+function isTypedPlanApproval(message: string): boolean {
+  const normalized = message.toLowerCase().replace(/\s+/g, " ").trim();
+  if (!normalized) return false;
+
+  const negativeSignals = [
+    "do not approve",
+    "don't approve",
+    "not approved",
+    "reject",
+    "rejected",
+    "request changes",
+    "changes requested",
+  ];
+  if (negativeSignals.some((signal) => normalized.includes(signal))) {
+    return false;
+  }
+
+  const explicitApprovalSignals = [
+    "plan approved",
+    "approve the plan",
+    "approved the plan",
+    "i approve",
+  ];
+  if (explicitApprovalSignals.some((signal) => normalized.includes(signal))) {
+    return true;
+  }
+
+  const looksGoodSignals = [
+    "looks good",
+    "looks fine",
+    "looks correct",
+  ];
+  const executionSignals = [
+    "begin executing",
+    "start executing",
+    "please execute",
+    "execute the plan",
+  ];
+  return (
+    looksGoodSignals.some((signal) => normalized.includes(signal)) &&
+    executionSignals.some((signal) => normalized.includes(signal))
   );
 }
 
@@ -66,6 +114,9 @@ export interface AIChatQueryEngineDeps {
   /** Optional. When provided, the engine enqueues session memory updates
    * after each completed assistant turn. */
   compactAgent?: AIChatCompactAgentService;
+  /** Optional. When provided, the engine triggers auto-dream consolidation
+   * after each completed assistant turn. Failures are logged and swallowed. */
+  autoDreamService?: AIAutoDreamService;
 }
 
 /**
@@ -81,6 +132,7 @@ export class AIChatQueryEngine {
   private pendingPlanQuestion: PendingPlanQuestionTurn | null = null;
   private readonly contextAssembler: AIChatContextAssembler;
   private readonly compactAgent?: AIChatCompactAgentService;
+  private readonly autoDreamService?: AIAutoDreamService;
   private readonly pendingEventSaves = new WeakMap<
     AIChatQueryEventSink,
     Promise<unknown>[]
@@ -93,6 +145,7 @@ export class AIChatQueryEngine {
     this.contextAssembler =
       deps?.contextAssembler ?? new AIChatContextAssembler();
     this.compactAgent = deps?.compactAgent;
+    this.autoDreamService = deps?.autoDreamService;
   }
 
   /**
@@ -124,6 +177,7 @@ export class AIChatQueryEngine {
     let conversationId: string;
     let assistantMessageId: string;
     let messages: OpenAIChatMessage[];
+    let textApprovedPlanState: AIChatPlanStateView | null = null;
 
     try {
       conversationId = module.createConversationIfNeeded(
@@ -141,6 +195,17 @@ export class AIChatQueryEngine {
           });
         } else if (planState.conversationId !== conversationId) {
           planState = await planModule.getPlanState(conversationId);
+        }
+        if (
+          planState?.status === "awaiting_approval" &&
+          isTypedPlanApproval(request.message)
+        ) {
+          planState = await planModule.approvePlan({
+            conversationId,
+            planId: planState.planId,
+            version: planState.currentVersion,
+          });
+          textApprovedPlanState = planState;
         }
       }
 
@@ -185,8 +250,21 @@ export class AIChatQueryEngine {
     // ------------------------------------------------------------------
     const toolFunctions = await SkillRegistry.getAllToolFunctions();
     const openAITools = toOpenAITools(toolFunctions);
+
+    // Resolve auto-plan config. Only active in plain chat mode (not when the
+    // conversation is already in plan mode), only when AI is enabled, and only
+    // when USER_AI_AUTO_PLAN is not explicitly "false" (default-on).
+    const tokenService = new Token();
+    const autoPlanEnabled =
+      !isPlanMode &&
+      tokenService.getValue(USER_AI_ENABLED) === "true" &&
+      tokenService.getValue(USER_AI_AUTO_PLAN) !== "false";
+
+    const planTools = PlanModeToolRegistry.toOpenAITools();
     const allOpenAITools = isPlanMode
-      ? [...openAITools, ...PlanModeToolRegistry.toOpenAITools()]
+      ? [...openAITools, ...planTools]
+      : autoPlanEnabled
+      ? [...openAITools, ENTER_PLAN_MODE_TOOL]
       : openAITools;
 
     // ------------------------------------------------------------------
@@ -208,6 +286,14 @@ export class AIChatQueryEngine {
       conversationId,
       messageId: assistantMessageId,
     });
+    if (textApprovedPlanState) {
+      eventSink.emit({
+        type: "plan_state",
+        conversationId,
+        messageId: assistantMessageId,
+        planState: textApprovedPlanState,
+      });
+    }
 
     // ------------------------------------------------------------------
     // 6. Build plan context if in plan mode
@@ -239,7 +325,14 @@ export class AIChatQueryEngine {
       openAITools: allOpenAITools,
       abortController,
       eventSink: streamEventSink,
+      skillRegistry: SkillRegistry,
       planContext,
+      autoPlan: autoPlanEnabled
+        ? {
+            planModule: new AIChatPlanModule(),
+            planTools,
+          }
+        : undefined,
       startRound: 0,
       isActiveTurn: () =>
         this.currentAssistantMessageId === assistantMessageId &&
@@ -387,6 +480,7 @@ export class AIChatQueryEngine {
         openAITools: pending.openAITools,
         abortController: pending.abortController,
         eventSink,
+        skillRegistry: SkillRegistry,
         planContext: pending.planContext,
         startRound: pending.nextRound,
         isActiveTurn: () =>
@@ -511,6 +605,7 @@ export class AIChatQueryEngine {
       openAITools: allOpenAITools,
       abortController: pending.abortController,
       eventSink: pending.eventSink,
+      skillRegistry: SkillRegistry,
       planContext,
       startRound: pending.nextRound,
       isActiveTurn: () =>
@@ -565,6 +660,7 @@ export class AIChatQueryEngine {
             content: result.fullContent,
             messageId: assistantMessageId,
             model: result.model,
+            tokensUsed: result.totalTokens,
             metadata: {
               source: "chat-v2",
               openaiResponseId: result.responseId,
@@ -579,18 +675,33 @@ export class AIChatQueryEngine {
           fullContent: result.fullContent,
           model: result.model,
           finishReason: result.finishReason,
+          totalTokens: result.totalTokens,
+          promptTokens: result.promptTokens,
+          completionTokens: result.completionTokens,
         });
         if (this.compactAgent) {
           this.compactAgent
             .enqueueSessionMemoryUpdate({
               conversationId,
               reason: "assistant_turn_completed",
+              promptTokens: result.promptTokens,
+              model: result.model,
             })
             .catch((err) =>
               console.error(
                 "[ai-chat-compact] session memory update failed:",
                 err
               )
+            );
+        }
+        if (this.autoDreamService) {
+          this.autoDreamService
+            .evaluateAfterChatTurn({
+              conversationId,
+              reason: "assistant_turn_completed",
+            })
+            .catch((err) =>
+              console.error("[ai-auto-dream] chat trigger failed:", err)
             );
         }
         this.clearActiveTurnState();
@@ -685,9 +796,19 @@ export class AIChatQueryEngine {
       return eventSink;
     }
     const saves: Promise<unknown>[] = [];
+    // Track the latest server-reported usage so it can be attributed to
+    // intermediate tool_call messages. Without this, every tool_call row
+    // is persisted with null tokensUsed/model, losing per-round cost data.
+    let latestUsage: { totalTokens: number; model?: string } | undefined;
     const wrapped: AIChatQueryEventSink = {
       emit: (event) => {
         eventSink.emit(event);
+        if (event.type === "usage_update") {
+          latestUsage = {
+            totalTokens: event.totalTokens,
+            model: event.model,
+          };
+        }
         if (event.type === "tool_call") {
           saves.push(
             module
@@ -697,6 +818,8 @@ export class AIChatQueryEngine {
                 toolCallId: event.toolCallId,
                 toolName: event.toolName,
                 toolArguments: event.toolArguments,
+                model: latestUsage?.model,
+                tokensUsed: latestUsage?.totalTokens,
               })
               .catch((err: unknown) => {
                 console.error("[ai-chat-v2] save tool call failed:", err);
@@ -727,7 +850,9 @@ export class AIChatQueryEngine {
     return wrapped;
   }
 
-  private async flushEventSaves(eventSink: AIChatQueryEventSink): Promise<void> {
+  private async flushEventSaves(
+    eventSink: AIChatQueryEventSink
+  ): Promise<void> {
     const saves = this.pendingEventSaves.get(eventSink);
     if (!saves || saves.length === 0) {
       return;

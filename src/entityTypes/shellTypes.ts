@@ -36,6 +36,15 @@ export const ShellExecutionRequestSchema = z.object({
     .max(600000, "Timeout must not exceed 600000ms (10 minutes)")
     .optional()
     .default(60000),
+  /**
+   * When true, a command that exceeds its timeout is moved into the
+   * BackgroundShellRegistry instead of being killed. The caller can then
+   * poll for completion via the check_shell_status tool.
+   *
+   * No zod default — the service layer applies SHELL_AUTO_BACKGROUND_DEFAULT
+   * so callers who explicitly pass false are honored.
+   */
+  autoBackground: z.boolean().optional(),
 });
 
 /** Validated shell execution request type. */
@@ -63,6 +72,12 @@ export interface ShellExecutionResult {
   readonly stderr_truncated: boolean;
   /** Whether the command was killed due to timeout. */
   readonly timed_out: boolean;
+  /** Present when the command was auto-backgrounded instead of killed on timeout. */
+  readonly backgrounded?: boolean;
+  /** The registry id, present only when backgrounded === true. */
+  readonly shell_id?: string;
+  /** Human-facing explanation, present only when backgrounded === true. */
+  readonly background_message?: string;
   /** Error message for pre-execution failures (denylist, cwd guard). */
   readonly error?: string;
   /** Validated command text (only present when input passed zod validation). */

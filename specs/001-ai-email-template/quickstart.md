@@ -573,7 +573,7 @@ const unsubscribeLink = `https://example.com/unsubscribe?email=${encodeURICompon
 - [Research Document](./research.md) - Technical decisions
 - [Data Model](./data-model.md) - Entity definitions
 - [IPC Channels](./contracts/ipc-channels.md) - Channel specs
-- [Tech Stack Architecture](../../doc/ai-email-template-tech-stack-architecture.md) - Architecture choices
+- [Tech Stack Architecture](../../docs/ai-email-template-tech-stack-architecture.md) - Architecture choices
 
 ### Code References
 - Existing AI chat: `src/main-process/communication/ai-chat-ipc.ts`

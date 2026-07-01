@@ -90,6 +90,14 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
             "Whether to show the browser window during scraping (default: false, headless)",
           default: false,
         },
+        account: {
+          type: "number",
+          description:
+            "Social account ID to use for authenticated scraping. " +
+            "REQUIRED when search_engine is 'google' or 'yandex' (these engines require login cookies). " +
+            "Ignored for 'bing' and 'baidu'. The account must have valid cookies stored; " +
+            "otherwise the call fails and the user must add account cookies first.",
+        },
       },
       required: ["search_engine", "query"],
     },
@@ -97,11 +105,70 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     requiresConfirmation: false,
     permissionCategory: "network",
     source: "built-in",
+    timeoutClass: "network",
+    supportsPartialResult: true,
     execute: async (args, context) => {
+      const engineRaw =
+        typeof args.search_engine === "string"
+          ? args.search_engine.trim().toLowerCase()
+          : "";
+      const requiresAccount = engineRaw === "google" || engineRaw === "yandex";
+      const accountId =
+        typeof args.account === "number"
+          ? args.account
+          : typeof args.account === "string" && args.account.trim() !== ""
+          ? Number(args.account)
+          : NaN;
+
+      if (requiresAccount) {
+        if (!Number.isFinite(accountId) || accountId <= 0) {
+          return {
+            success: false,
+            result: {
+              error:
+                `An account (social account ID) is required when search_engine is "${engineRaw}". ` +
+                "Please provide the 'account' parameter and retry.",
+            },
+          };
+        }
+        // Verify the account has cookies stored; if not, ask the user to add them.
+        try {
+          const { AccountCookiesModule } = await import(
+            "@/modules/accountCookiesModule"
+          );
+          const cookiesModule = new AccountCookiesModule();
+          const cookies = await cookiesModule.getAccountCookies(accountId);
+          if (!cookies || !cookies.cookies) {
+            return {
+              success: false,
+              result: {
+                error:
+                  `No cookies found for account ID ${accountId}. ` +
+                  `Please add account cookies for this ${engineRaw} account in the account management page and retry.`,
+              },
+            };
+          }
+        } catch (error: unknown) {
+          return {
+            success: false,
+            result: {
+              error:
+                "Failed to verify account cookies: " +
+                (error instanceof Error ? error.message : String(error)),
+            },
+          };
+        }
+      }
+
       const result = await ToolExecutor.execute(
         "scrape_urls_from_search_engine",
         args,
-        context.conversationId
+        context.conversationId,
+        {
+          toolCallId: context.toolCallId,
+          emitProgress: context.emitProgress,
+          signal: context.signal,
+        }
       );
       return { success: true, result };
     },
@@ -183,6 +250,8 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     requiresConfirmation: false,
     permissionCategory: "network",
     source: "built-in",
+    timeoutClass: "network",
+    supportsPartialResult: true,
     execute: async (args, context) => {
       const result = await ToolExecutor.execute(
         "search_yellow_pages",
@@ -258,11 +327,23 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     requiresConfirmation: false,
     permissionCategory: "automation",
     source: "built-in",
+    resolveTimeoutClass: (args) =>
+      (args.max_results as number) > 20 || args.include_website === true
+        ? "async"
+        : "browser",
+    resolveAsync: (args) =>
+      (args.max_results as number) > 20 || args.include_website === true,
+    supportsPartialResult: true,
     execute: async (args, context) => {
       const result = await ToolExecutor.execute(
         "search_maps_businesses",
         args,
-        context.conversationId
+        context.conversationId,
+        {
+          toolCallId: context.toolCallId,
+          emitProgress: context.emitProgress,
+          signal: context.signal,
+        }
       );
       return { success: true, result };
     },
@@ -326,6 +407,8 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     requiresConfirmation: false,
     permissionCategory: "network",
     source: "built-in",
+    timeoutClass: "network",
+    supportsPartialResult: true,
     execute: async (args, context) => {
       const result = await ToolExecutor.execute(
         "analyze_website",
@@ -368,6 +451,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     requiresConfirmation: false,
     permissionCategory: "network",
     source: "built-in",
+    timeoutClass: "network",
     execute: async (args, context) => {
       const result = await ToolExecutor.execute(
         "analyze_website_batch",
@@ -410,6 +494,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     requiresConfirmation: false,
     permissionCategory: "network",
     source: "built-in",
+    timeoutClass: "network",
     execute: async (args, context) => {
       const result = await ToolExecutor.execute(
         "analyze_websites",
@@ -530,7 +615,9 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "extract_contact_info",
     description:
-      "Extract contact information (emails, phones, address, social links) from one or more website URLs. Uses AI-assisted discovery and regex fallback. Call this when the user wants to find contact details for given website URLs.",
+      "Extract contact information (emails, phones, address, social links) from one or more website URLs. Uses AI-assisted discovery and regex fallback. Call this when the user wants to find contact details for given website URLs. " +
+      "When the urls array contains 8 or more entries, this tool runs ASYNCHRONOUSLY: it returns { async: true, job_id } within ~2 seconds and continues working in the background. " +
+      "Poll the result with check_tool_job_status(job_id) every 15-30 seconds until status is 'completed' or 'failed'. Do not retry the call while a job is running.",
     parameters: {
       type: "object",
       properties: {
@@ -547,11 +634,46 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     requiresConfirmation: false,
     permissionCategory: "automation",
     source: "built-in",
+    // extract_contact_info processes a urls[] batch sequentially through a
+    // child-process worker (extractContactFromUrls). Per-URL cost is
+    // ~10-40s (Puppeteer nav + content scrape + regex/AI extraction), so
+    // the total runtime scales linearly with urls.length.
+    //
+    // - < ASYNC_URL_THRESHOLD  → run synchronously under the "browser"
+    //   ceiling (240s). Bounded batches finish well under 4 minutes and
+    //   the model gets the full result in one turn.
+    // - >= ASYNC_URL_THRESHOLD → route to the async ToolJobRegistry path
+    //   (resolveTimeoutMs("async") === null, no synchronous ceiling). The
+    //   loop returns { async: true, job_id } within ~2s and the model
+    //   polls with check_tool_job_status every 15-30s. This matches the
+    //   search_maps_businesses pattern (see lines ~329).
+    //
+    // Before this routing, large URL batches hit the 240s browser ceiling
+    // even though the inner worker (URL_EXTRACTION_TIMEOUT_MS = 300s)
+    // would have finished — the outer race always fired first and the
+    // orphaned worker kept consuming CPU.
+    //
+    // The threshold is calibrated to ~30s/URL average: 7 URLs ≈ 210s
+    // (safe synchronous), 8+ crosses 240s (must be async). Conservative.
+    resolveTimeoutClass: (args) => {
+      const urlCount = Array.isArray(args.urls) ? args.urls.length : 0;
+      return urlCount >= 8 ? "async" : "browser";
+    },
+    resolveAsync: (args) => {
+      const urlCount = Array.isArray(args.urls) ? args.urls.length : 0;
+      return urlCount >= 8;
+    },
+    supportsPartialResult: true,
     execute: async (args, context) => {
       const result = await ToolExecutor.execute(
         "extract_contact_info",
         args,
-        context.conversationId
+        context.conversationId,
+        {
+          toolCallId: context.toolCallId,
+          emitProgress: context.emitProgress,
+          signal: context.signal,
+        }
       );
       return { success: true, result };
     },
@@ -561,7 +683,8 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     description:
       "Read the contents of a file within the allowed workspace. Returns text content with line numbers, " +
       "or binary metadata if the file is not text. Supports offset/limit for reading specific line ranges. " +
-      "Files are truncated if they exceed the size limit.",
+      "Files are truncated if they exceed the size limit. " +
+      "Workspace required: operates only inside the conversation's approved workspace folder.",
     parameters: {
       type: "object",
       properties: {
@@ -606,7 +729,8 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     name: "glob_files",
     description:
       "Find files matching a glob pattern within the allowed workspace. " +
-      "Returns matched file paths with support for ignore patterns and result limiting.",
+      "Returns matched file paths with support for ignore patterns and result limiting. " +
+      "Workspace required: operates only inside the conversation's approved workspace folder.",
     parameters: {
       type: "object",
       properties: {
@@ -653,7 +777,8 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     description:
       "Search file contents by regex pattern within the allowed workspace. " +
       "Supports multiple output modes: content (matching lines), files_with_matches (file list), " +
-      "and count (match counts per file). Includes context line support.",
+      "and count (match counts per file). Includes context line support. " +
+      "Workspace required: operates only inside the conversation's approved workspace folder.",
     parameters: {
       type: "object",
       properties: {
@@ -727,7 +852,8 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       "Perform a precise string replacement in an existing file within the allowed workspace. " +
       "Requires the exact old_string to find and new_string to replace it with. " +
       "Fails if old_string appears multiple times unless replace_all is true. " +
-      "User confirmation is required before any edit is applied.",
+      "User confirmation is required before any edit is applied. " +
+      "Workspace required: operates only inside the conversation's approved workspace folder.",
     parameters: {
       type: "object",
       properties: {
@@ -772,7 +898,8 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     description:
       "Create a new file or overwrite an existing file within the allowed workspace. " +
       "In 'create' mode, fails if the file already exists. In 'overwrite' mode, replaces the file. " +
-      "Parent directories are created automatically. User confirmation is required before any write.",
+      "Parent directories are created automatically. User confirmation is required before any write. " +
+      "Workspace required: operates only inside the conversation's approved workspace folder.",
     parameters: {
       type: "object",
       properties: {
@@ -1332,6 +1459,35 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     },
   },
   {
+    name: "check_shell_status",
+    description:
+      "Poll the status of a shell command that was auto-backgrounded due to timeout. " +
+      "Returns { status: 'running' | 'completed' | 'failed' | 'killed', stdout, stderr, exit_code }. " +
+      "Use the shell_id returned from the original shell_execute call that was backgrounded.",
+    parameters: {
+      type: "object",
+      properties: {
+        shell_id: {
+          type: "string",
+          description:
+            "The shell_id returned from a shell_execute call that was auto-backgrounded.",
+        },
+      },
+      required: ["shell_id"],
+    },
+    tier: "main",
+    requiresConfirmation: true,
+    permissionCategory: "shell",
+    source: "built-in",
+    execute: async (args) => {
+      const { handleCheckShellStatus } = await import(
+        "@/service/agentTools/checkShellStatusTool"
+      );
+      const res = await handleCheckShellStatus(args);
+      return { success: res.success, result: res.result };
+    },
+  },
+  {
     name: "knowledge_library_search",
     description:
       "Search the local knowledge library for factual information from uploaded documents. " +
@@ -1782,6 +1938,92 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         success: result.success,
         result: result as unknown as Record<string, unknown>,
       };
+    },
+  },
+  {
+    name: "check_tool_job_status",
+    description:
+      "Check the status of an async tool job. Returns one of: running, queued, completed, failed, cancelled, not_found, rate_limited. When return_partial_if_running=true, includes partial results collected so far. Poll at most once every 5 seconds per job_id.",
+    parameters: {
+      type: "object",
+      properties: {
+        job_id: {
+          type: "string",
+          description: "The job_id returned from an async tool call.",
+        },
+        return_partial_if_running: {
+          type: "boolean",
+          description:
+            "If true and the job is still running, include partial results in the response.",
+          default: false,
+        },
+      },
+      required: ["job_id"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "network",
+    source: "built-in",
+    timeoutClass: "fast",
+    execute: async (args, context) => {
+      const { getDefaultToolJobRegistry } = await import(
+        "@/service/ToolJobRegistry"
+      );
+      const reg = getDefaultToolJobRegistry();
+      const jobId = String(args.job_id ?? "");
+      const wantPartial = args.return_partial_if_running === true;
+      const snap = reg.getStatusForConversation(jobId, context.conversationId);
+      const result: Record<string, unknown> = {
+        job_id: jobId,
+        status: snap.status,
+        progress: snap.progress,
+        started_at: snap.startedAt,
+        completed_at: snap.completedAt,
+      };
+      if (wantPartial && snap.partial) {
+        result.partial = snap.partial;
+      }
+      if (snap.status === "completed") result.result = snap.result;
+      if (snap.status === "failed") result.error = snap.error;
+      if (snap.retryAfterMs) result.retry_after_ms = snap.retryAfterMs;
+      return { success: true, result };
+    },
+  },
+  {
+    name: "cancel_tool_job",
+    description:
+      "Cancel a running async tool job. Returns { cancelled: true } on success or { cancelled: false, reason } when the job has already completed or does not exist.",
+    parameters: {
+      type: "object",
+      properties: {
+        job_id: {
+          type: "string",
+          description: "The job_id to cancel.",
+        },
+      },
+      required: ["job_id"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "network",
+    source: "built-in",
+    timeoutClass: "fast",
+    execute: async (args, context) => {
+      const { getDefaultToolJobRegistry } = await import(
+        "@/service/ToolJobRegistry"
+      );
+      const reg = getDefaultToolJobRegistry();
+      const jobId = String(args.job_id ?? "");
+      // Conversation-scoped: verify ownership before cancelling.
+      const snap = reg.getStatusForConversation(jobId, context.conversationId);
+      if (snap.status === "not_found") {
+        return {
+          success: true,
+          result: { cancelled: false, reason: "not_found" },
+        };
+      }
+      const result = reg.cancel(jobId);
+      return { success: true, result };
     },
   },
   RUN_SUBAGENT_TOOL,

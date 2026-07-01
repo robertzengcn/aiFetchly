@@ -4,6 +4,9 @@ import { AIChatSessionMemoryModule } from "@/modules/AIChatSessionMemoryModule";
 import { AIChatCompactModule } from "@/modules/AIChatCompactModule";
 import { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
 import { MessageType } from "@/entityTypes/commonType";
+import { Token } from "@/modules/token";
+import { USER_AI_AUTO_PLAN } from "@/config/usersetting";
+import { buildAutoPlanPromptSection } from "@/service/ChatModePromptSection";
 import type {
   ChatV2ConversationSummary,
   ChatV2MessageMetadata,
@@ -93,6 +96,8 @@ export class AIChatV2Module extends BaseModule {
     toolName: string;
     toolArguments: Record<string, unknown>;
     timestamp?: Date;
+    model?: string;
+    tokensUsed?: number;
   }): Promise<AIChatMessageEntity> {
     const metadata: ChatV2MessageMetadata = {
       source: "chat-v2",
@@ -106,6 +111,8 @@ export class AIChatV2Module extends BaseModule {
       role: "assistant",
       content: "",
       timestamp: params.timestamp,
+      model: params.model,
+      tokensUsed: params.tokensUsed,
       metadata,
       messageType: MessageType.TOOL_CALL,
     });
@@ -128,7 +135,9 @@ export class AIChatV2Module extends BaseModule {
       toolName: params.toolName,
       toolResult,
       toolResultStatus:
-        toolResult.success === false ? ("error" as const) : ("success" as const),
+        toolResult.success === false
+          ? ("error" as const)
+          : ("success" as const),
       toolResultSummary:
         typeof toolResult.summary === "string" ? toolResult.summary : undefined,
       success: toolResult.success !== false,
@@ -138,7 +147,8 @@ export class AIChatV2Module extends BaseModule {
           : undefined,
       summary:
         typeof toolResult.summary === "string" ? toolResult.summary : undefined,
-      error: typeof toolResult.error === "string" ? toolResult.error : undefined,
+      error:
+        typeof toolResult.error === "string" ? toolResult.error : undefined,
     };
     return this.chatModule.saveMessage({
       messageId: `tool-result-${
@@ -248,6 +258,12 @@ export class AIChatV2Module extends BaseModule {
 
   /** Derive the default system prompt for new conversations. */
   getDefaultSystemPrompt(): string {
-    return V2_DEFAULT_SYSTEM_PROMPT;
+    const token = new Token();
+    const autoPlanEnabled = token.getValue(USER_AI_AUTO_PLAN) !== "false";
+    if (!autoPlanEnabled) {
+      return V2_DEFAULT_SYSTEM_PROMPT;
+    }
+    const section = buildAutoPlanPromptSection();
+    return `${V2_DEFAULT_SYSTEM_PROMPT}\n\n${section}`;
   }
 }

@@ -24,6 +24,12 @@
             : t('skills.approval_description')
         }}
       </p>
+      <!-- Filesystem workspace preview -->
+      <div v-if="workspaceRoot" class="skill-approval__fs mt-2">
+        <v-icon size="small" start>mdi-folder</v-icon>
+        <span class="text-caption">{{ workspaceRoot }}</span>
+        <span v-if="relativePath" class="text-caption text--secondary font-italic"> / {{ relativePath }}</span>
+      </div>
       <!-- Shell command preview -->
       <div v-if="isShellCategory && shellPreview" class="shell-preview mt-3">
         <div class="shell-preview-row">
@@ -93,6 +99,8 @@ interface Props {
   toolName: string;
   permissionCategory?: string;
   shellPreview?: ShellPreview;
+  workspaceRoot?: string;
+  relativePath?: string;
 }
 
 const props = defineProps<Props>();
@@ -204,6 +212,18 @@ async function handleDeny(): Promise<void> {
   font-size: 0.85rem;
   color: rgba(var(--v-theme-on-surface), 0.7);
   margin-bottom: 0;
+}
+
+.skill-approval__fs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 0;
+  word-break: break-all;
+}
+
+.font-italic {
+  font-style: italic;
 }
 
 .shell-preview {

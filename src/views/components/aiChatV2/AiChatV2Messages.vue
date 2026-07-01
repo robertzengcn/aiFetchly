@@ -16,6 +16,7 @@
       :status="m.id === activeAssistantMessageId ? streamStatus : 'idle'"
       :error-message="errorMessage"
       :disabled="isStreaming"
+      :workspace-root="workspaceRoot"
       @grant-permission="onGrantPermission"
       @deny-permission="onDenyPermission"
       @approve-plan="emit('approve-plan')"
@@ -71,6 +72,7 @@ const props = defineProps<{
   showTypingIndicator?: boolean;
   isStreaming?: boolean;
   retryInfo?: { attempt: number; maxAttempts: number; delayMs: number } | null;
+  workspaceRoot?: string;
 }>();
 const emit = defineEmits<{
   (e: "grant-permission", message: ChatV2MessageView, persistent: boolean): void;
@@ -126,7 +128,8 @@ watch(
 
 <style scoped>
 .v2-messages {
-  flex: 1;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
   padding: 12px 16px;
 }

@@ -6,10 +6,14 @@ import { PluginImportService } from "@/service/PluginImportService";
 import { PluginComponentRegistryService } from "@/service/PluginComponentRegistryService";
 import { PluginDiagnosticsService } from "@/service/PluginDiagnosticsService";
 import { getPluginInstallRoot } from "@/service/pluginPaths";
-import type { PluginSummary } from "@/entityTypes/pluginTypes";
+import type {
+  PluginSummary,
+  PluginSourceKind,
+} from "@/entityTypes/pluginTypes";
 import type { InstalledPluginEntity } from "@/entity/InstalledPlugin.entity";
 import {
   PLUGIN_IMPORT,
+  PLUGIN_INSTALL_FROM_SOURCE,
   PLUGIN_VALIDATE_PACKAGE,
   PLUGIN_LIST,
   PLUGIN_GET,
@@ -28,6 +32,7 @@ import {
   pluginNoInputSchema,
   pluginByNameInputSchema,
   pluginImportInputSchema,
+  pluginInstallFromSourceInputSchema,
   pluginValidatePackageInputSchema,
   pluginToggleInputSchema,
   pluginToggleSkillInputSchema,
@@ -153,6 +158,79 @@ export function registerPluginIpcHandlers(): void {
         throw new Error(result.errors.map((e) => e.message).join("; "));
       }
       return result.plugin;
+    }
+  );
+
+  // Install from various sources (zip, folder, git, github, npm, url)
+  // Merged from dev branch. Uses registerAiValidatedHandler + passthrough schema.
+  registerAiValidatedHandler(
+    PLUGIN_INSTALL_FROM_SOURCE,
+    pluginInstallFromSourceInputSchema,
+    async (input) => {
+      const data = input as {
+        kind: string;
+        overwrite?: boolean;
+        zipPath?: string;
+        folderPath?: string;
+        uri?: string;
+        ref?: string;
+        npmPackage?: string;
+        npmVersion?: string;
+        npmRegistry?: string;
+        npmAuthScope?: string;
+        npmAuthToken?: string;
+      };
+
+      const ALLOWED_KINDS = [
+        "local-zip",
+        "local-folder",
+        "git",
+        "github",
+        "npm",
+        "url",
+      ];
+      if (!ALLOWED_KINDS.includes(data.kind)) {
+        throw new Error("Invalid or missing source kind.");
+      }
+
+      // Reject CRLF / control chars in any string field that may reach spawn.
+      const stringFields = [
+        data.uri,
+        data.zipPath,
+        data.folderPath,
+        data.npmPackage,
+        data.npmVersion,
+        data.npmRegistry,
+        data.npmAuthScope,
+        data.ref,
+      ];
+      for (const v of stringFields) {
+        if (typeof v === "string" && /[\r\n]/.test(v)) {
+          throw new Error("Invalid characters in source field.");
+        }
+      }
+
+      const { PluginInstallService } = await import(
+        "@/service/PluginInstallService"
+      );
+      const svc = new PluginInstallService();
+      const r = await svc.installFromSource({
+        kind: data.kind as PluginSourceKind,
+        overwrite: data.overwrite === true,
+        zipPath: data.zipPath,
+        folderPath: data.folderPath,
+        uri: data.uri,
+        ref: data.ref,
+        npmPackage: data.npmPackage,
+        npmVersion: data.npmVersion,
+        npmRegistry: data.npmRegistry,
+        npmAuthScope: data.npmAuthScope,
+        npmAuthToken: data.npmAuthToken,
+      });
+      if (!r.success) {
+        throw new Error(r.errors.map((e) => e.message).join("; "));
+      }
+      return r.plugin;
     }
   );
 

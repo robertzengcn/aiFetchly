@@ -2,14 +2,16 @@ import {
   windowInvoke,
   windowSend,
   windowReceive,
-  windowRemoveAllListeners,
+  windowRemoveListener,
 } from "@/views/utils/apirequest";
 import type {
   ChatV2StreamRequest,
   ChatV2StreamChunk,
   ChatV2HistoryResponse,
   ChatV2ConversationSummary,
+  ChatToolApprovalMode,
 } from "@/entityTypes/aiChatV2Types";
+import type { AIChatCompactSummaryView } from "@/entityTypes/aiChatCompactTypes";
 import type {
   AIChatPlanStateView,
   AIChatPlanVersionView,
@@ -26,24 +28,39 @@ import {
   AI_CHAT_V2_STREAM_COMPLETE,
   AI_CHAT_V2_CLEAR_CONVERSATION,
   AI_CHAT_V2_CLEAR_ALL,
+  AI_CHAT_V2_COMPACT_CONVERSATION,
   AI_CHAT_V2_PLAN_STATE,
   AI_CHAT_V2_ANSWER_QUESTION,
   AI_CHAT_V2_APPROVE_PLAN,
   AI_CHAT_V2_REJECT_PLAN,
   AI_CHAT_V2_REQUEST_PLAN_CHANGES,
   AI_CHAT_V2_PLAN_VERSIONS,
+  AI_CHAT_V2_GET_TOOL_APPROVAL_MODE,
+  AI_CHAT_V2_SET_TOOL_APPROVAL_MODE,
 } from "@/config/channellist";
 
-let activeChunkHandler: ((raw: string) => void) | null = null;
-let activeCompleteHandler: ((raw: string) => void) | null = null;
+let activeChunkHandler: ((raw: unknown) => void) | null = null;
+let activeCompleteHandler: ((raw: unknown) => void) | null = null;
+let activeDetachedResolve: (() => void) | null = null;
 
-export function clearChatV2StreamListeners(): void {
-  if (activeChunkHandler || activeCompleteHandler) {
-    windowRemoveAllListeners(AI_CHAT_V2_STREAM_CHUNK);
-    windowRemoveAllListeners(AI_CHAT_V2_STREAM_COMPLETE);
+const detachChatV2StreamListeners = (resolvePending: boolean): void => {
+  if (activeChunkHandler) {
+    windowRemoveListener(AI_CHAT_V2_STREAM_CHUNK, activeChunkHandler);
   }
+  if (activeCompleteHandler) {
+    windowRemoveListener(AI_CHAT_V2_STREAM_COMPLETE, activeCompleteHandler);
+  }
+  const resolve = activeDetachedResolve;
   activeChunkHandler = null;
   activeCompleteHandler = null;
+  activeDetachedResolve = null;
+  if (resolvePending) {
+    resolve?.();
+  }
+};
+
+export function clearChatV2StreamListeners(): void {
+  detachChatV2StreamListeners(true);
 }
 
 /**
@@ -102,12 +119,12 @@ export async function streamChatV2Message(
   return new Promise((resolve, reject) => {
     let tokenLogCount = 0;
     const cleanup = (): void => {
-      clearChatV2StreamListeners();
+      detachChatV2StreamListeners(false);
     };
 
-    const chunkHandler = (raw: string): void => {
+    const chunkHandler = (raw: unknown): void => {
       try {
-        const chunk: ChatV2StreamChunk = JSON.parse(raw);
+        const chunk: ChatV2StreamChunk = JSON.parse(String(raw));
         if (chunk.eventType === "token") {
           if (tokenLogCount < 5 || tokenLogCount % 25 === 0) {
             console.debug(
@@ -134,9 +151,9 @@ export async function streamChatV2Message(
       }
     };
 
-    const completeHandler = (raw: string): void => {
+    const completeHandler = (raw: unknown): void => {
       try {
-        const chunk: ChatV2StreamChunk = JSON.parse(raw);
+        const chunk: ChatV2StreamChunk = JSON.parse(String(raw));
         console.debug(
           `[aiChatV2] stream complete event=${chunk.eventType} conv=${
             chunk.conversationId || "(none)"
@@ -168,10 +185,12 @@ export async function streamChatV2Message(
 
     try {
       clearChatV2StreamListeners();
-      activeChunkHandler = chunkHandler;
-      activeCompleteHandler = completeHandler;
-      windowReceive(AI_CHAT_V2_STREAM_CHUNK, chunkHandler);
-      windowReceive(AI_CHAT_V2_STREAM_COMPLETE, completeHandler);
+      activeDetachedResolve = resolve;
+      activeChunkHandler = windowReceive(AI_CHAT_V2_STREAM_CHUNK, chunkHandler);
+      activeCompleteHandler = windowReceive(
+        AI_CHAT_V2_STREAM_COMPLETE,
+        completeHandler
+      );
       void windowSend(AI_CHAT_V2_STREAM, request).catch((err: unknown) => {
         cleanup();
         const error =
@@ -221,6 +240,21 @@ export async function clearAllChatV2History(): Promise<{
 } | null> {
   const resp = await windowInvoke(AI_CHAT_V2_CLEAR_ALL);
   return (resp as { deleted: number } | null) ?? null;
+}
+
+/**
+ * Run a full compact for the selected v2 conversation and return the active
+ * compact summary saved by the main process.
+ */
+export async function compactChatV2Conversation(
+  conversationId: string,
+  model?: string
+): Promise<AIChatCompactSummaryView | null> {
+  const resp = await windowInvoke(AI_CHAT_V2_COMPACT_CONVERSATION, {
+    conversationId,
+    model,
+  });
+  return (resp as AIChatCompactSummaryView | null) ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -317,4 +351,35 @@ export async function getChatV2PlanVersions(
 ): Promise<AIChatPlanVersionView[]> {
   const resp = await windowInvoke(AI_CHAT_V2_PLAN_VERSIONS, { planId });
   return (resp as AIChatPlanVersionView[] | null) ?? [];
+}
+
+// ---------------------------------------------------------------------------
+// Tool Approval Mode
+// ---------------------------------------------------------------------------
+
+/**
+ * Get the tool approval mode for a conversation.
+ */
+export async function getChatV2ToolApprovalMode(
+  conversationId: string
+): Promise<ChatToolApprovalMode> {
+  const resp = await windowInvoke(AI_CHAT_V2_GET_TOOL_APPROVAL_MODE, {
+    conversationId,
+  });
+  return (resp as ChatToolApprovalMode) ?? "ask_for_approval";
+}
+
+/**
+ * Set the tool approval mode for a conversation.
+ * Returns the stored mode (may differ from requested if downgraded).
+ */
+export async function setChatV2ToolApprovalMode(
+  conversationId: string,
+  mode: ChatToolApprovalMode
+): Promise<ChatToolApprovalMode> {
+  const resp = await windowInvoke(AI_CHAT_V2_SET_TOOL_APPROVAL_MODE, {
+    conversationId,
+    mode,
+  });
+  return (resp as ChatToolApprovalMode) ?? "ask_for_approval";
 }

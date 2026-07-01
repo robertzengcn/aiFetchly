@@ -292,6 +292,37 @@ import {
   EMAIL_SEARCH_TASK_START,
   UPDATEEMAILSEARCHTASK,
   DELETEEMAILSEARCHTASK,
+  // Plugin Management Channels
+  PLUGIN_IMPORT,
+  PLUGIN_INSTALL_FROM_SOURCE,
+  PLUGIN_VALIDATE_PACKAGE,
+  PLUGIN_LIST,
+  PLUGIN_GET,
+  PLUGIN_TOGGLE,
+  PLUGIN_UNINSTALL,
+  PLUGIN_RELOAD,
+  PLUGIN_EXPORT_DIAGNOSTICS,
+  PLUGIN_TOGGLE_SKILL,
+  PLUGIN_TOGGLE_MCP_SERVER,
+  PLUGIN_TOGGLE_MCP_TOOL,
+  PLUGIN_TEST_MCP_CONNECTION,
+  PLUGIN_DISCOVER_MCP_TOOLS,
+  // AI user memory (durable cross-session memory)
+  AI_USER_MEMORY_LIST,
+  AI_USER_MEMORY_CREATE,
+  AI_USER_MEMORY_UPDATE,
+  AI_USER_MEMORY_ARCHIVE,
+  AI_USER_MEMORY_DELETE,
+  AI_USER_MEMORY_RUN_AUTO_DREAM,
+  AI_USER_MEMORY_AUTO_DREAM_STATUS,
+  // Workspace Management Channels
+  AI_WORKSPACE_SET,
+  AI_WORKSPACE_GET,
+  AI_WORKSPACE_APPROVE,
+  AI_WORKSPACE_REVOKE,
+  AI_WORKSPACE_LIST,
+  // Dialog Channels
+  DIALOG_PICK_FOLDER,
 } from "@/config/channellist";
 
 // window.ipcRenderer = ipcRenderer
@@ -760,6 +791,37 @@ contextBridge.exposeInMainWorld("api", {
       // Email Search Task Edit/Delete Channels
       UPDATEEMAILSEARCHTASK,
       DELETEEMAILSEARCHTASK,
+      // Plugin Management Channels
+      PLUGIN_IMPORT,
+      PLUGIN_INSTALL_FROM_SOURCE,
+      PLUGIN_VALIDATE_PACKAGE,
+      PLUGIN_LIST,
+      PLUGIN_GET,
+      PLUGIN_TOGGLE,
+      PLUGIN_UNINSTALL,
+      PLUGIN_RELOAD,
+      PLUGIN_EXPORT_DIAGNOSTICS,
+      PLUGIN_TOGGLE_SKILL,
+      PLUGIN_TOGGLE_MCP_SERVER,
+      PLUGIN_TOGGLE_MCP_TOOL,
+      PLUGIN_TEST_MCP_CONNECTION,
+      PLUGIN_DISCOVER_MCP_TOOLS,
+      // AI user memory (durable cross-session memory)
+      AI_USER_MEMORY_LIST,
+      AI_USER_MEMORY_CREATE,
+      AI_USER_MEMORY_UPDATE,
+      AI_USER_MEMORY_ARCHIVE,
+      AI_USER_MEMORY_DELETE,
+      AI_USER_MEMORY_RUN_AUTO_DREAM,
+      AI_USER_MEMORY_AUTO_DREAM_STATUS,
+      // Workspace Management Channels
+      AI_WORKSPACE_SET,
+      AI_WORKSPACE_GET,
+      AI_WORKSPACE_APPROVE,
+      AI_WORKSPACE_REVOKE,
+      AI_WORKSPACE_LIST,
+      // Dialog Channels
+      DIALOG_PICK_FOLDER,
     ];
     if (validChannels.includes(channel)) {
       return ipcRenderer.invoke(channel, data);

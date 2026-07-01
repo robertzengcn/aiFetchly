@@ -14,6 +14,7 @@ import { AiChatApi, BatchKeywordGenerationRequestItem } from "@/api/aiChatApi";
 import { extractContactFromUrls } from "@/main-process/communication/contactExtraction-ipc";
 import { DocumentService } from "@/service/DocumentService";
 import { FileToolService } from "@/service/FileToolService";
+import { WorkspaceResolver } from "@/service/WorkspaceResolver";
 import { FILE_TOOL_RATE_LIMITS } from "@/config/fileToolConfig";
 import {
   GOOGLE_MAPS_DEFAULT_MAX_RESULTS,
@@ -25,8 +26,14 @@ import {
 } from "@/entityTypes/yandexMapsTypes";
 import { GoogleMapsModule } from "@/modules/GoogleMapsModule";
 import { YandexMapsModule } from "@/modules/YandexMapsModule";
+import path from "path";
 import { FileOperationTracker } from "@/service/FileOperationTracker";
 import type { FileOperationRecord } from "@/entityTypes/fileOperationTypes";
+import type { ModuleExecutionContext } from "@/entityTypes/skillTypes";
+import {
+  shortErrorStack,
+  splitTelemetryMessage,
+} from "@/service/ShortErrorStack";
 
 /**
  * Rate limiting configuration for tool execution
@@ -116,17 +123,116 @@ class RateLimiterManager {
 }
 
 /**
+ * Partial snapshot collected by a tool that supports partial results.
+ * Stored in the registry so the timeout branch can return whatever data
+ * the tool managed to collect before the deadline.
+ */
+export interface PartialSnapshot {
+  collectedCount: number;
+  expectedCount: number;
+  data: Record<string, unknown>;
+}
+
+/**
  * Execute tools called by the AI
  */
 export class ToolExecutor {
+  // -------------------------------------------------------------------------
+  // Partial-snapshot API — used by executeToolWithTimeout to return partial
+  // data when a supporting tool hits the timeout ceiling.
+  // -------------------------------------------------------------------------
+
+  private static partialSnapshots = new Map<string, PartialSnapshot>();
+
+  /**
+   * Register (or replace) the partial snapshot for a given tool call.
+   * Worker modules call this continuously as they scrape.
+   */
+  static updatePartialSnapshot(
+    toolCallId: string,
+    snapshot: PartialSnapshot
+  ): void {
+    ToolExecutor.partialSnapshots.set(toolCallId, snapshot);
+  }
+
+  /**
+   * Retrieve the current partial snapshot for a tool call.
+   * Returns null when no snapshot has been registered.
+   */
+  static async requestPartialSnapshot(
+    toolCallId: string
+  ): Promise<PartialSnapshot | null> {
+    return Promise.resolve(
+      ToolExecutor.partialSnapshots.get(toolCallId) ?? null
+    );
+  }
+
+  /**
+   * Remove the partial snapshot entry. Called in the finally block of
+   * executeToolWithTimeout so the map does not leak.
+   */
+  static unregisterPartialSnapshot(toolCallId: string): void {
+    ToolExecutor.partialSnapshots.delete(toolCallId);
+  }
+
+  // -------------------------------------------------------------------------
+  // Error-result helper — trims stacks and splits telemetry-safe messages
+  // so that caught errors don't bloat the tool_result context window or
+  // leak internal file paths to the model.
+  // -------------------------------------------------------------------------
+
+  /**
+   * Build a failure `Record<string, unknown>` from a caught error.
+   *
+   * - `error` is the user-facing message (original, unmodified).
+   * - `telemetryMessage` has absolute file paths stripped, safe for logging.
+   * - `stack` is the trimmed stack (message + up to 5 frames), or undefined.
+   *
+   * Callers that need extra fields (e.g. `timedOut`, `cancelled`) can spread
+   * the returned object and add their own keys.
+   */
+  private static toErrorResult(
+    err: unknown,
+    fallbackMessage: string
+  ): Record<string, unknown> {
+    const e = err instanceof Error ? err : new Error(String(err));
+    const { message, telemetryMessage } = splitTelemetryMessage(e);
+    const stack = shortErrorStack(e) ?? undefined;
+    return {
+      success: false,
+      error: message || fallbackMessage,
+      telemetryMessage,
+      ...(stack !== undefined && { stack }),
+    };
+  }
+
   /**
    * Execute a tool by name with rate limiting
+   *
+   * @param toolName Name of the tool to execute
+   * @param toolParams Tool input parameters
+   * @param conversationId Conversation ID for context
+   * @param context Optional module execution context for progress emission
+   *        and partial-snapshot registration. Forwarded only to long-running
+   *        browser-tool modules (maps, contact extraction, website analysis).
    */
   static async execute(
     toolName: string,
     toolParams: Record<string, unknown>,
-    conversationId: string
+    conversationId: string,
+    context?: ModuleExecutionContext
   ): Promise<Record<string, unknown>> {
+    // Early-abort fast path: if the cancellation signal was already fired
+    // before we even started, return immediately without acquiring the rate
+    // limiter or doing any work.
+    if (context?.signal?.aborted) {
+      return {
+        success: false,
+        error: "Tool call was cancelled before execution",
+        cancelled: true,
+      };
+    }
+
     const rateLimiter = RateLimiterManager.getLimiter(toolName);
 
     try {
@@ -137,7 +243,12 @@ export class ToolExecutor {
       const status = rateLimiter.getStatus();
       console.log(`Executing tool '${toolName}' - Rate limit status:`, status);
 
-      return await this.executeInternal(toolName, toolParams, conversationId);
+      return await this.executeInternal(
+        toolName,
+        toolParams,
+        conversationId,
+        context
+      );
     } finally {
       // Always release the rate limit slot
       rateLimiter.release();
@@ -150,7 +261,8 @@ export class ToolExecutor {
   private static async executeInternal(
     toolName: string,
     toolParams: Record<string, unknown>,
-    conversationId: string
+    conversationId: string,
+    context?: ModuleExecutionContext
   ): Promise<Record<string, unknown>> {
     // Check if this is an MCP tool (format: mcp_<serverId>_<toolName>)
     if (toolName.startsWith("mcp_")) {
@@ -163,7 +275,11 @@ export class ToolExecutor {
       case "scrape_urls_from_yandex":
       case "scrape_urls_from_baidu":
       case "scrape_urls_from_search_engine":
-        return await this.executeSearchEngineTool(toolName, toolParams);
+        return await this.executeSearchEngineTool(
+          toolName,
+          toolParams,
+          context
+        );
 
       case "search_yellow_pages":
         return await this.executeYellowPagesSearch(toolParams);
@@ -190,10 +306,10 @@ export class ToolExecutor {
         return await this.executeGenerateKeywords(toolParams);
 
       case "extract_contact_info":
-        return await this.executeContactExtraction(toolParams);
+        return await this.executeContactExtraction(toolParams, context);
 
       case "search_maps_businesses":
-        return await this.executeMapsSearch(toolParams);
+        return await this.executeMapsSearch(toolParams, context);
 
       case "read_attachment_content":
         return await this.executeReadAttachmentContent(
@@ -257,13 +373,10 @@ export class ToolExecutor {
       };
     } catch (error) {
       console.error("MCP tool execution error:", error);
-      return {
-        success: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : "Unknown error executing MCP tool",
-      };
+      return ToolExecutor.toErrorResult(
+        error,
+        "Unknown error executing MCP tool"
+      );
     }
   }
 
@@ -311,10 +424,18 @@ export class ToolExecutor {
 
   /**
    * Execute search engine tool (Google, Bing, Yandex, Baidu)
+   *
+   * Emits a partial snapshot into ToolExecutor.partialSnapshots every
+   * ~5s while polling so that, when the outer executeToolWithTimeout
+   * races this call against the network timeout ceiling (90s), the
+   * loop's partial-result recovery branch can still return whatever
+   * the worker has scraped so far instead of a hard `timedOut: true`
+   * error. Also forwards progress events for UI visibility.
    */
   private static async executeSearchEngineTool(
     toolName: string,
-    toolParams: Record<string, unknown>
+    toolParams: Record<string, unknown>,
+    context?: ModuleExecutionContext
   ): Promise<Record<string, unknown>> {
     const searchModule = new SearchModule();
     const query = typeof toolParams.query === "string" ? toolParams.query : "";
@@ -334,6 +455,21 @@ export class ToolExecutor {
     // Calculate num_pages based on num_results (assuming ~10 results per page)
     const numPages = Math.ceil(numResults / 10);
 
+    // Resolve optional account selector. When the caller (e.g. the
+    // scrape_urls_from_search_engine skill) has already validated an account,
+    // forward it so SearchModule uses that specific account instead of falling
+    // back to a random one. Coerce robustly — LLMs sometimes send numbers as
+    // strings. Invalid/non-positive values are dropped (treated as "no account").
+    const rawAccount = toolParams.account;
+    const accountNum =
+      typeof rawAccount === "number"
+        ? rawAccount
+        : typeof rawAccount === "string" && rawAccount.trim() !== ""
+        ? Number(rawAccount)
+        : NaN;
+    const accounts =
+      Number.isFinite(accountNum) && accountNum > 0 ? [accountNum] : undefined;
+
     // Execute search (notShowBrowser: true when show_browser is false, i.e. headless by default)
     const taskId = await searchModule.searchByKeywordAndEngine(
       [query],
@@ -342,14 +478,24 @@ export class ToolExecutor {
         num_pages: numPages,
         concurrency: 1,
         notShowBrowser: !showBrowser,
+        ...(accounts ? { accounts } : {}),
       }
     );
 
-    // Poll task status until complete or error (max 10 minutes)
+    // Poll task status until complete or error (max 10 minutes).
+    //
+    // Every `partialSnapshotInterval` iterations we also query whatever
+    // results the worker has produced so far and register them via
+    // ToolExecutor.updatePartialSnapshot. The outer timeout race reads
+    // this snapshot if the network ceiling fires before the worker
+    // finishes, letting the model reason over partial SERP data instead
+    // of getting an opaque timedOut error.
     let taskStatus: SearchTaskStatus | null = null;
     const maxWaitTime = 600000; // 10 minutes
     const pollInterval = 1000; // 1 second
+    const partialSnapshotInterval = 5; // every ~5s
     const startTime = Date.now();
+    let pollIter = 0;
 
     while (Date.now() - startTime < maxWaitTime) {
       taskStatus = await searchModule.getTaskStatus(taskId);
@@ -362,6 +508,20 @@ export class ToolExecutor {
       ) {
         break;
       }
+      if (
+        context?.toolCallId &&
+        pollIter > 0 &&
+        pollIter % partialSnapshotInterval === 0
+      ) {
+        await this.registerSearchPartialSnapshot(
+          taskId,
+          query,
+          engineName,
+          numResults,
+          context
+        );
+      }
+      pollIter += 1;
       await new Promise((resolve) => setTimeout(resolve, pollInterval));
     }
 
@@ -394,6 +554,70 @@ export class ToolExecutor {
       // Clean structured data (no HTML blobs or messy metadata)
       results: cleanResults,
     };
+  }
+
+  /**
+   * Query whatever the search worker has produced so far and register it
+   * as the partial snapshot for the given toolCallId. Called periodically
+   * from the executeSearchEngineTool poll loop so the outer timeout race
+   * can return partial SERP data on timeout.
+   *
+   * Failures are swallowed deliberately: partial-snapshot emission is a
+   * best-effort UX affordance, not a correctness path. If the worker
+   * hasn't populated any rows yet, or the DB query hiccups, we'd rather
+   * skip this snapshot than crash the real scrape.
+   */
+  private static async registerSearchPartialSnapshot(
+    taskId: number,
+    query: string,
+    engineName: string,
+    numResults: number,
+    context: ModuleExecutionContext
+  ): Promise<void> {
+    try {
+      const searchModule = new SearchModule();
+      const partial = await searchModule.listSearchResult(
+        taskId,
+        1,
+        numResults
+      );
+      if (!partial || partial.length === 0) {
+        return;
+      }
+      const cleanPartial = ToolExecutionService.extractCleanResults(partial);
+      if (cleanPartial.length === 0) {
+        return;
+      }
+      ToolExecutor.updatePartialSnapshot(context.toolCallId, {
+        collectedCount: cleanPartial.length,
+        expectedCount: numResults,
+        data: {
+          success: true,
+          partial: true,
+          taskId,
+          query,
+          engine: engineName,
+          collectedCount: cleanPartial.length,
+          expectedCount: numResults,
+          totalResults: cleanPartial.length,
+          summary: ToolExecutionService.formatSearchResultsForLLM(cleanPartial),
+          results: cleanPartial,
+          message: `Collected ${cleanPartial.length} of ${numResults} results before the timeout ceiling fired.`,
+        },
+      });
+      context.emitProgress?.({
+        phase: "extracting",
+        message: `Scraping ${engineName} — ${cleanPartial.length} of ${numResults} results collected`,
+        progress: Math.min(1, cleanPartial.length / Math.max(1, numResults)),
+        partialCount: cleanPartial.length,
+        expectedCount: numResults,
+      });
+    } catch (err) {
+      console.warn(
+        `[ToolExecutor] partial snapshot for search task ${taskId} failed:`,
+        err
+      );
+    }
   }
 
   /**
@@ -1038,12 +1262,7 @@ export class ToolExecutor {
         ...(truncated && { truncated: true }),
       };
     } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
-      return {
-        success: false,
-        error: errorMessage,
-      };
+      return ToolExecutor.toErrorResult(error, "Failed to read URL content");
     }
   }
 
@@ -1115,12 +1334,7 @@ export class ToolExecutor {
         } seed(s): ${seedKeywords.join(", ")}`,
       };
     } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
-      return {
-        success: false,
-        error: errorMessage,
-      };
+      return ToolExecutor.toErrorResult(error, "Failed to generate keywords");
     }
   }
 
@@ -1128,7 +1342,8 @@ export class ToolExecutor {
    * Execute extract_contact_info: extract contact info (emails, phones, address, social links) from URLs.
    */
   private static async executeContactExtraction(
-    toolParams: Record<string, unknown>
+    toolParams: Record<string, unknown>,
+    context?: ModuleExecutionContext
   ): Promise<Record<string, unknown>> {
     const urls = Array.isArray(toolParams.urls)
       ? toolParams.urls.filter(
@@ -1143,7 +1358,7 @@ export class ToolExecutor {
       );
     }
 
-    const results = await extractContactFromUrls(urls);
+    const results = await extractContactFromUrls(urls, context);
     const successful = results.filter((r) => r.success);
     const failed = results.filter((r) => !r.success);
 
@@ -1206,7 +1421,8 @@ export class ToolExecutor {
    * Execute Maps business search — dispatches to Google or Yandex based on platform param.
    */
   private static async executeMapsSearch(
-    toolParams: Record<string, unknown>
+    toolParams: Record<string, unknown>,
+    context?: ModuleExecutionContext
   ): Promise<Record<string, unknown>> {
     const platform =
       typeof toolParams.platform === "string" ? toolParams.platform : "google";
@@ -1230,13 +1446,14 @@ export class ToolExecutor {
     }
 
     if (platform === "yandex") {
-      return this.executeYandexMapsSearch(toolParams);
+      return this.executeYandexMapsSearch(toolParams, context);
     }
-    return this.executeGoogleMapsSearch(toolParams);
+    return this.executeGoogleMapsSearch(toolParams, context);
   }
 
   private static async executeGoogleMapsSearch(
-    toolParams: Record<string, unknown>
+    toolParams: Record<string, unknown>,
+    context?: ModuleExecutionContext
   ): Promise<Record<string, unknown>> {
     const query = typeof toolParams.query === "string" ? toolParams.query : "";
     const location =
@@ -1253,33 +1470,36 @@ export class ToolExecutor {
 
     try {
       const module = new GoogleMapsModule();
-      const result = await module.executeSearch({
-        query: query.trim(),
-        location: location.trim(),
-        max_results: clampedMaxResults,
-        include_website:
-          typeof toolParams.include_website === "boolean"
-            ? toolParams.include_website
-            : true,
-        include_reviews:
-          typeof toolParams.include_reviews === "boolean"
-            ? toolParams.include_reviews
-            : false,
-        show_browser:
-          typeof toolParams.show_browser === "boolean"
-            ? toolParams.show_browser
-            : false,
-      });
+      const result = await module.executeSearch(
+        {
+          query: query.trim(),
+          location: location.trim(),
+          max_results: clampedMaxResults,
+          include_website:
+            typeof toolParams.include_website === "boolean"
+              ? toolParams.include_website
+              : true,
+          include_reviews:
+            typeof toolParams.include_reviews === "boolean"
+              ? toolParams.include_reviews
+              : false,
+          show_browser:
+            typeof toolParams.show_browser === "boolean"
+              ? toolParams.show_browser
+              : false,
+        },
+        undefined, // cookies
+        undefined, // proxies
+        undefined, // externalRequestId
+        context
+      );
 
       return result as unknown as Record<string, unknown>;
     } catch (error) {
-      return {
-        success: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : "Unknown error executing Google Maps search",
-      };
+      return ToolExecutor.toErrorResult(
+        error,
+        "Unknown error executing Google Maps search"
+      );
     }
   }
 
@@ -1289,7 +1509,8 @@ export class ToolExecutor {
    * for Puppeteer-based Yandex Maps scraping.
    */
   private static async executeYandexMapsSearch(
-    toolParams: Record<string, unknown>
+    toolParams: Record<string, unknown>,
+    context?: ModuleExecutionContext
   ): Promise<Record<string, unknown>> {
     const query = typeof toolParams.query === "string" ? toolParams.query : "";
     const location =
@@ -1306,39 +1527,41 @@ export class ToolExecutor {
 
     try {
       const module = new YandexMapsModule();
-      const result = await module.executeSearch({
-        query: query.trim(),
-        location: location.trim(),
-        max_results: clampedMaxResults,
-        include_website:
-          typeof toolParams.include_website === "boolean"
-            ? toolParams.include_website
-            : true,
-        include_reviews:
-          typeof toolParams.include_reviews === "boolean"
-            ? toolParams.include_reviews
-            : false,
-        show_browser:
-          typeof toolParams.show_browser === "boolean"
-            ? toolParams.show_browser
-            : false,
-        language:
-          typeof toolParams.language === "string"
-            ? toolParams.language
-            : undefined,
-        region:
-          typeof toolParams.region === "string" ? toolParams.region : undefined,
-      });
+      const result = await module.executeSearch(
+        {
+          query: query.trim(),
+          location: location.trim(),
+          max_results: clampedMaxResults,
+          include_website:
+            typeof toolParams.include_website === "boolean"
+              ? toolParams.include_website
+              : true,
+          include_reviews:
+            typeof toolParams.include_reviews === "boolean"
+              ? toolParams.include_reviews
+              : false,
+          show_browser:
+            typeof toolParams.show_browser === "boolean"
+              ? toolParams.show_browser
+              : false,
+          language:
+            typeof toolParams.language === "string"
+              ? toolParams.language
+              : undefined,
+          region:
+            typeof toolParams.region === "string"
+              ? toolParams.region
+              : undefined,
+        },
+        { context }
+      );
 
       return result as unknown as Record<string, unknown>;
     } catch (error) {
-      return {
-        success: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : "Unknown error executing Yandex Maps search",
-      };
+      return ToolExecutor.toErrorResult(
+        error,
+        "Unknown error executing Yandex Maps search"
+      );
     }
   }
 
@@ -1385,27 +1608,52 @@ export class ToolExecutor {
         truncated: isTruncated,
       };
     } catch (error) {
-      return {
-        success: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : "Failed to read attachment content",
-      };
+      return ToolExecutor.toErrorResult(
+        error,
+        "Failed to read attachment content"
+      );
     }
   }
 
   /**
-   * Execute a file tool by delegating to FileToolService.
-   * M2 fix — reuse a cached instance instead of creating per call.
+   * Per-workspace FileToolService cache, keyed by workspace root path.
+   * Replaces the previous single global singleton so that each
+   * approved workspace gets its own strict-mode service instance.
    */
-  private static fileToolService: FileToolService | null = null;
+  private static fileToolServices: Map<string, FileToolService> = new Map();
 
-  private static getFileToolService(): FileToolService {
-    if (!ToolExecutor.fileToolService) {
-      ToolExecutor.fileToolService = new FileToolService();
+  /**
+   * Legacy fallback service used when no workspace has been resolved
+   * (e.g. conversations without an approved workspace). Runs in
+   * default-roots soft mode so existing skills keep working.
+   */
+  private static fallbackFileToolService: FileToolService | null = null;
+
+  /**
+   * Returns a FileToolService scoped to the given workspace root.
+   * When no root is provided, returns the legacy default-roots
+   * service so non-workspace callers keep working.
+   */
+  private static getFileToolService(workspaceRoot?: string): FileToolService {
+    if (!workspaceRoot) {
+      if (!ToolExecutor.fallbackFileToolService) {
+        ToolExecutor.fallbackFileToolService = new FileToolService();
+      }
+      return ToolExecutor.fallbackFileToolService;
     }
-    return ToolExecutor.fileToolService;
+    const key = workspaceRoot;
+    let service = ToolExecutor.fileToolServices.get(key);
+    if (!service) {
+      service = new FileToolService({
+        workspace: {
+          // id is metadata-only; synthesize a stable value from the root.
+          id: "resolved:" + key,
+          rootPath: key,
+        },
+      });
+      ToolExecutor.fileToolServices.set(key, service);
+    }
+    return service;
   }
 
   private static async executeFileTool(
@@ -1413,16 +1661,44 @@ export class ToolExecutor {
     toolParams: Record<string, unknown>,
     conversationId: string
   ): Promise<Record<string, unknown>> {
+    // Resolve the active workspace (if any) for this conversation so
+    // the FileToolService runs in strict mode when a workspace is set.
+    // Falls back to the legacy default-roots service otherwise.
+    let workspaceRoot: string | undefined;
     try {
-      const result = await ToolExecutor.getFileToolService().execute(
-        toolName,
-        toolParams
+      const resolver = new WorkspaceResolver();
+      const resolved = await resolver.resolve(conversationId);
+      if (resolved) {
+        workspaceRoot = resolved.rootPath;
+      }
+    } catch {
+      // Resolver failures must not block tool execution; fall back to
+      // the default-roots service. A later hardening task can decide
+      // whether to refuse outright.
+      workspaceRoot = undefined;
+    }
+    if (!workspaceRoot) {
+      console.warn(
+        `executeFileTool: no approved workspace for conversation ${conversationId}; ` +
+          "falling back to legacy default-roots service."
       );
+    }
+
+    const service = ToolExecutor.getFileToolService(workspaceRoot);
+
+    try {
+      const result = await service.execute(toolName, toolParams);
 
       // EXEC-05: Only emit records for mutation tools
       if (toolName === "file_write" || toolName === "file_edit") {
-        const filePath =
+        const rawPath =
           (result.path as string) ?? (toolParams.path as string) ?? "";
+        const ws = service.getActiveWorkspace();
+        const filePath = path.isAbsolute(rawPath)
+          ? rawPath
+          : ws?.rootPath
+            ? path.resolve(ws.rootPath, rawPath)
+            : path.resolve(rawPath);
         const record: Omit<FileOperationRecord, "id" | "timestamp"> = {
           type:
             toolName === "file_write"
@@ -1443,6 +1719,14 @@ export class ToolExecutor {
           ...(toolName === "file_write" && {
             sizeBytes: result.bytesWritten as number,
           }),
+          // Workspace metadata — only present in strict mode.
+          ...(ws && {
+            workspaceId: ws.id,
+            workspaceRoot: ws.rootPath,
+            relativePath: filePath.startsWith(ws.rootPath)
+              ? filePath.slice(ws.rootPath.length).replace(/^[/\\]+/, "")
+              : filePath,
+          }),
         };
         FileOperationTracker.emit(record);
       }
@@ -1453,7 +1737,13 @@ export class ToolExecutor {
       if (toolName === "file_write" || toolName === "file_edit") {
         const errorMessage =
           error instanceof Error ? error.message : String(error);
-        const filePath = (toolParams.path as string) ?? "";
+        const rawPath = (toolParams.path as string) ?? "";
+        const ws = service.getActiveWorkspace();
+        const filePath = path.isAbsolute(rawPath)
+          ? rawPath
+          : ws?.rootPath
+            ? path.resolve(ws.rootPath, rawPath)
+            : path.resolve(rawPath);
         FileOperationTracker.emit({
           // Note: On failure we can't know if file_write intended "create" vs "overwrite".
           // Defaulting to "overwrite" is reasonable since the file likely exists already.
@@ -1463,6 +1753,14 @@ export class ToolExecutor {
           conversationId,
           skillName: toolName,
           error: errorMessage,
+          // Workspace metadata — only present in strict mode.
+          ...(ws && {
+            workspaceId: ws.id,
+            workspaceRoot: ws.rootPath,
+            relativePath: filePath.startsWith(ws.rootPath)
+              ? filePath.slice(ws.rootPath.length).replace(/^[/\\]+/, "")
+              : filePath,
+          }),
         });
       }
       // EXEC-06: Re-throw -- tracking must not swallow errors

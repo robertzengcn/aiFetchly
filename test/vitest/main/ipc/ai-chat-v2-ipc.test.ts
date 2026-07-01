@@ -105,6 +105,7 @@ vi.mock("@/modules/AIChatPlanModule", () => ({
   AIChatPlanModule: vi.fn().mockImplementation(() => ({
     getPlanState: vi.fn().mockResolvedValue(null),
     ensurePlanForConversation: vi.fn().mockResolvedValue(null),
+    clearConversationPlanState: vi.fn().mockResolvedValue({ deleted: 0 }),
   })),
 }));
 
@@ -423,16 +424,16 @@ describe("AI Chat V2 — stream lifecycle", () => {
 
     mockOpenAIChatCompletionStream
       .mockImplementationOnce(async (req, onChunk: (c: unknown) => void) => {
-        expect(req).toMatchObject({
-          tools: [
+        expect(req.tools).toEqual(
+          expect.arrayContaining([
             {
               type: "function",
               function: expect.objectContaining({
                 name: "scrape_urls_from_search_engine",
               }),
             },
-          ],
-        });
+          ])
+        );
         onChunk({
           choices: [
             {

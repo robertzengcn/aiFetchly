@@ -18,8 +18,23 @@
           :percent="contextPercent"
           :used-tokens="contextUsedTokens"
           :total-tokens="contextTotalTokens"
-          class="mr-1"
+          class="mx-2"
         />
+        <v-btn
+          icon
+          size="small"
+          variant="text"
+          :loading="isCompacting"
+          :disabled="
+            !activeConversationId || messages.length === 0 || chatIsRunning
+          "
+          @click="handleCompactConversation"
+          :title="
+            t('aiChatV2.compact_conversation') || 'Compact conversation'
+          "
+        >
+          <v-icon size="small">mdi-arrow-collapse</v-icon>
+        </v-btn>
         <v-btn
           icon
           size="small"
@@ -68,8 +83,9 @@
         :stream-status="streamStatus"
         :error-message="streamError ?? undefined"
         :show-typing-indicator="showTypingIndicator"
-        :is-streaming="isStreaming"
+        :is-streaming="chatIsRunning"
         :retry-info="retryInfo"
+        :workspace-root="activeWorkspace?.rootPath ?? ''"
         @grant-permission="handleSkillPermissionGrant"
         @deny-permission="handleSkillPermissionDeny"
         @approve-plan="handleApprovePlan"
@@ -77,30 +93,138 @@
         @request-plan-changes="handleRequestPlanChanges"
       />
 
-      <!-- Plan Mode active cards (question card only; approval card renders inline) -->
+      <!-- Pinned action cards: question + plan approval while awaiting user input.
+           After the user approves/rejects/requests changes, the plan card moves
+           into the message flow (see handleApprovePlan et al.). -->
       <div
-        v-if="mode === 'plan' && pendingQuestion"
+        v-if="mode === 'plan' && (pendingQuestion || pendingPlanApproval)"
         class="v2-shell__plan-panel"
       >
         <AiChatV2QuestionCard
+          v-if="pendingQuestion"
           :question="pendingQuestion"
           @answered="handleQuestionAnswered"
+        />
+        <AiChatV2PlanApprovalCard
+          v-if="pendingPlanApproval"
+          :plan-state="pendingPlanApproval"
+          :disabled="chatIsRunning"
+          @approve="handleApprovePlan"
+          @reject="handleRejectPlan"
+          @request-changes="handleRequestPlanChanges"
+        />
+      </div>
+
+      <!-- File Operations Summary Panel: lists files created/modified by the
+           AI during tool execution in the active conversation. -->
+      <div v-if="currentFileOps.length > 0" class="v2-shell__file-ops-panel">
+        <div
+          class="v2-shell__file-ops-header"
+          @click="showFileOpsPanel = !showFileOpsPanel"
+        >
+          <v-icon size="small" class="mr-1" color="primary">
+            mdi-file-document-edit-outline
+          </v-icon>
+          <span class="v2-shell__file-ops-summary">
+            {{ currentFileOps.length }}
+            {{
+              currentFileOps.length === 1
+                ? t("aiChatV2.file_change_one") || "file change"
+                : t("aiChatV2.file_changes_other") || "file changes"
+            }}
+          </span>
+          <span class="v2-shell__file-ops-counts">
+            <v-chip
+              v-if="createCount > 0"
+              size="x-small"
+              variant="tonal"
+              color="success"
+              class="ml-1"
+            >
+              +{{ createCount }}
+            </v-chip>
+            <v-chip
+              v-if="editCount > 0"
+              size="x-small"
+              variant="tonal"
+              color="info"
+              class="ml-1"
+            >
+              ~{{ editCount }}
+            </v-chip>
+            <v-chip
+              v-if="overwriteCount > 0"
+              size="x-small"
+              variant="tonal"
+              color="warning"
+              class="ml-1"
+            >
+              ~{{ overwriteCount }}
+            </v-chip>
+          </span>
+          <v-spacer />
+          <v-icon size="small">
+            {{ showFileOpsPanel ? "mdi-chevron-up" : "mdi-chevron-down" }}
+          </v-icon>
+        </div>
+        <div v-if="showFileOpsPanel" class="v2-shell__file-ops-body">
+          <FileOperationBadge :records="currentFileOps" />
+        </div>
+      </div>
+
+      <!-- Workspace badge + required card: pinned above the composer so the
+           user can see/set the workspace for the active conversation. The
+           badge shows the current workspace path (or "No workspace set"),
+           and the required card prompts the user to pick a folder when no
+           workspace exists yet. -->
+      <div class="v2-shell__workspace-panel">
+        <WorkspaceBadge
+          :workspace="activeWorkspace"
+          class="mb-1"
+          @request-set-workspace="handleWorkspaceSetupRequest"
+        />
+        <WorkspaceRequiredCard
+          v-if="showWorkspaceRequired && activeConversationId"
+          :conversation-id="activeConversationId"
+          @approved="onWorkspaceApproved"
+          @cancel="showWorkspaceRequired = false"
         />
       </div>
 
       <AiChatV2Composer
-        :is-streaming="isStreaming"
+        :is-streaming="chatIsRunning"
         @send="onSend"
         @stop="onStop"
       >
         <template #prepend>
-          <AiChatV2ModeSelector v-model="mode" :disabled="isStreaming" />
+          <AiChatV2ModeSelector v-model="mode" :disabled="chatIsRunning" />
+          <AiChatV2ModelSelector
+            v-model="selectedModel"
+            :items="availableModels"
+            :default-model="defaultModelId"
+            :disabled="chatIsRunning"
+            :loading="availableModels.length === 0"
+            class="ml-2"
+          />
+          <AiChatV2ToolApprovalModeSelector
+            v-model="toolApprovalMode"
+            :disabled="chatIsRunning"
+            class="ml-2"
+            @update:model-value="onToolApprovalModeChange"
+          />
         </template>
       </AiChatV2Composer>
     </div>
 
     <!-- MCP Tool Manager Dialog -->
     <MCPToolManager v-model="showMCPToolManager" />
+
+    <v-snackbar v-model="compactNotice" timeout="3000" location="bottom">
+      {{
+        t("aiChatV2.compact_completed") ||
+        "Conversation compacted into memory."
+      }}
+    </v-snackbar>
 
     <!-- Conversation history dialog -->
     <v-dialog v-model="showConversationsDialog" max-width="500" scrollable>
@@ -176,6 +300,20 @@
                   <span>{{ formatTimestamp(conv.lastMessageTimestamp) }}</span>
                 </div>
               </v-list-item-subtitle>
+              <template v-slot:append>
+                <v-progress-circular
+                  v-if="isConversationRunning(conv.conversationId)"
+                  indeterminate
+                  size="16"
+                  width="2"
+                  color="primary"
+                  class="ml-2"
+                  :title="
+                    t('aiChatV2.conversation_running') ||
+                    'Conversation is running'
+                  "
+                />
+              </template>
             </v-list-item>
           </v-list>
         </v-card-text>
@@ -199,6 +337,8 @@ import type {
   ChatV2MessageView,
   ChatV2ConversationSummary,
   ChatV2StreamChunk,
+  ChatV2MessageMetadata,
+  ChatToolApprovalMode,
 } from "@/entityTypes/aiChatV2Types";
 import type {
   AIChatPlanStateView,
@@ -208,12 +348,9 @@ import type {
 } from "@/entityTypes/aiChatPlanTypes";
 import {
   windowInvoke,
-  windowRemoveAllListeners,
 } from "@/views/utils/apirequest";
 import {
   AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
-  AI_CHAT_V2_STREAM_CHUNK,
-  AI_CHAT_V2_STREAM_COMPLETE,
 } from "@/config/channellist";
 import {
   clearChatV2StreamListeners,
@@ -222,30 +359,57 @@ import {
   streamChatV2Message,
   stopChatV2Stream,
   getChatV2PlanState,
+  compactChatV2Conversation,
   answerChatV2Question,
   approveChatV2Plan,
   rejectChatV2Plan,
   requestChatV2PlanChanges,
   getOpenAIChatModels,
+  getChatV2ToolApprovalMode,
+  setChatV2ToolApprovalMode,
 } from "@/views/api/aiChatV2";
 import AiChatV2Messages from "./AiChatV2Messages.vue";
 import AiChatV2Composer from "./AiChatV2Composer.vue";
 import AiChatV2ModeSelector from "./AiChatV2ModeSelector.vue";
+import AiChatV2ModelSelector from "./AiChatV2ModelSelector.vue";
+import AiChatV2ToolApprovalModeSelector from "./AiChatV2ToolApprovalModeSelector.vue";
 import AiChatV2QuestionCard from "./AiChatV2QuestionCard.vue";
+import AiChatV2PlanApprovalCard from "./AiChatV2PlanApprovalCard.vue";
 import AiChatV2PlanStatusBadge from "./AiChatV2PlanStatusBadge.vue";
 import AiChatV2ContextBadge from "./AiChatV2ContextBadge.vue";
+import FileOperationBadge from "../aiChat/FileOperationBadge.vue";
 import MCPToolManager from "../aiChat/MCPToolManager.vue";
+import WorkspaceBadge from "./WorkspaceBadge.vue";
+import WorkspaceRequiredCard from "./WorkspaceRequiredCard.vue";
+import { getWorkspace } from "@/views/api/workspace";
+import type { WorkspaceSummary } from "@/entityTypes/workspaceTypes";
+import type { FileOperationRecord } from "@/entityTypes/fileOperationTypes";
+import {
+  subscribeToFileOperations,
+  unsubscribeFromFileOperations,
+} from "@/views/api/aiChat";
+import type { OpenAIModel } from "@/api/aiChatApi";
 import {
   computeContextPercent,
   resolveContextWindow,
   DEFAULT_CONTEXT_WINDOW,
 } from "./contextUsageUtil";
+import { hasPendingToolExecution } from "./toolExecutionStateUtil";
+import { QUOTA_EXHAUSTED_SENTINEL } from "@/service/AIChatErrorMapper";
 
 /**
  * Rough chars→tokens ratio used to drive a live-updating estimate while
  * tokens stream. Real usage from the server overrides this on turn end.
  */
 const CHARS_PER_TOKEN_ESTIMATE = 4;
+
+/**
+ * Sentinel value used in the model selector for the "Auto" option.
+ * When selected, the actual model sent to the server resolves to the
+ * API's `default_model`, and the context badge reads the default model's
+ * context_size from the model list.
+ */
+const AUTO_MODEL_VALUE = "auto";
 
 type Status = "idle" | "streaming" | "cancelled" | "error";
 
@@ -269,6 +433,129 @@ const retryInfo = ref<{
 } | null>(null);
 const showConversationsDialog = ref(false);
 const showMCPToolManager = ref(false);
+const isCompacting = ref(false);
+const compactNotice = ref(false);
+const stoppedPendingToolConversationIds = ref<Set<string>>(new Set());
+
+// ---------------------------------------------------------------------------
+// Tool approval mode
+// ---------------------------------------------------------------------------
+const toolApprovalMode = ref<ChatToolApprovalMode>("ask_for_approval");
+
+async function loadToolApprovalMode(conversationId: string | null): Promise<void> {
+  if (!conversationId) {
+    toolApprovalMode.value = "ask_for_approval";
+    return;
+  }
+  try {
+    const mode = await getChatV2ToolApprovalMode(conversationId);
+    toolApprovalMode.value = mode;
+  } catch {
+    toolApprovalMode.value = "ask_for_approval";
+  }
+}
+
+async function onToolApprovalModeChange(mode: ChatToolApprovalMode): Promise<void> {
+  if (!activeConversationId.value) return;
+  toolApprovalMode.value = mode;
+  try {
+    const saved = await setChatV2ToolApprovalMode(activeConversationId.value, mode);
+    toolApprovalMode.value = saved;
+  } catch (err) {
+    console.error("[AiChatV2] failed to save tool approval mode:", err);
+    toolApprovalMode.value = "ask_for_approval";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Workspace tracking
+// ---------------------------------------------------------------------------
+// Active workspace for the current conversation. Null when no conversation is
+// selected or the conversation has no workspace yet. Drives the badge.
+const activeWorkspace = ref<WorkspaceSummary | null>(null);
+// True when the active conversation has no workspace — shows the pick card.
+const showWorkspaceRequired = ref(false);
+
+function createLocalConversationId(): string {
+  const randomId =
+    typeof globalThis.crypto?.randomUUID === "function"
+      ? globalThis.crypto.randomUUID()
+      : `id-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  return `v2-${randomId}`;
+}
+
+function ensureWorkspaceConversationId(): string {
+  if (activeConversationId.value) {
+    return activeConversationId.value;
+  }
+  const conversationId = createLocalConversationId();
+  activeConversationId.value = conversationId;
+  messages.value = [];
+  streamError.value = null;
+  applyPlanState(null);
+  pendingQuestion.value = null;
+  pendingPlanApproval.value = null;
+  return conversationId;
+}
+
+function handleWorkspaceSetupRequest(): void {
+  if (activeWorkspace.value) return;
+  ensureWorkspaceConversationId();
+  showWorkspaceRequired.value = true;
+}
+
+/**
+ * Fetch the workspace (if any) for the given conversation and update the
+ * badge/required-card state. Called on mount and whenever the active
+ * conversation changes.
+ */
+async function refreshWorkspace(conversationId: string | null): Promise<void> {
+  if (!conversationId) {
+    activeWorkspace.value = null;
+    showWorkspaceRequired.value = false;
+    return;
+  }
+  try {
+    const ws = await getWorkspace(conversationId);
+    activeWorkspace.value = ws
+      ? {
+          id: ws.id,
+          conversationId: ws.conversationId,
+          rootPath: ws.rootPath,
+          label: ws.label,
+          approvalState: ws.approvalState,
+        }
+      : null;
+    showWorkspaceRequired.value = false;
+  } catch {
+    // non-fatal; treat as no workspace
+    activeWorkspace.value = null;
+    showWorkspaceRequired.value = false;
+  }
+}
+
+/**
+ * Handler for the WorkspaceRequiredCard's `approved` event. Updates the badge
+ * to reflect the newly-created + approved workspace and hides the card.
+ */
+function onWorkspaceApproved(
+  workspaceId: number,
+  rootPath: string
+): void {
+  activeWorkspace.value = {
+    id: workspaceId,
+    conversationId: activeConversationId.value ?? "",
+    rootPath,
+    label: null,
+    approvalState: "approved",
+  };
+  showWorkspaceRequired.value = false;
+}
+
+// Refresh the workspace badge whenever the active conversation changes.
+watch(activeConversationId, (id) => {
+  void refreshWorkspace(id);
+});
 
 // Conversation search state
 const conversationSearch = ref("");
@@ -295,16 +582,47 @@ const streamingEstimatedTokens = ref(0);
 // Model id currently in use (tracked from start/usage events), used to look
 // up the context window denominator.
 const activeModel = ref<string | undefined>(undefined);
+// Server-reported default model id from /api/ai/v1/models. Used to resolve
+// the "Auto" selector option to a concrete model for stream requests and
+// for context-window lookup.
+const defaultModelId = ref<string | undefined>(undefined);
+
+// ---------------------------------------------------------------------------
+// Model selector
+// ---------------------------------------------------------------------------
+// localStorage key for the user's last-chosen model. Survives app restarts.
+const LAST_MODEL_STORAGE_KEY = "ai-chat-v2-last-model";
+// Available models for the dropdown. Populated from the same /api/ai/v1/models
+// call that feeds modelContextWindows, so we only fetch once.
+const availableModels = ref<OpenAIModel[]>([]);
+// User's selected model id. Sent on every stream request. Resolved on mount
+// via: saved localStorage choice → server default_model → first model id.
+const selectedModel = ref<string | undefined>(undefined);
 
 const resolveContextWindowLocal = (model?: string): number =>
   resolveContextWindow(modelContextWindows.value, model);
+
+/**
+ * The concrete model id used for context-window lookup. Prefers the model
+ * the server actually used (reported via usage_update/start); falls back to
+ * the user's explicit selection; finally resolves "Auto" to the server's
+ * default_model so the badge shows a meaningful denominator before the
+ * first response arrives.
+ */
+const effectiveModel = computed(() => {
+  if (lastUsage.value?.model) return lastUsage.value.model;
+  if (activeModel.value) return activeModel.value;
+  const sel = selectedModel.value;
+  if (sel && sel !== AUTO_MODEL_VALUE) return sel;
+  return defaultModelId.value;
+});
 
 const contextPercent = computed(() =>
   computeContextPercent({
     modelContextWindows: modelContextWindows.value,
     lastTotalTokens: lastUsage.value?.totalTokens,
     streamingEstimatedTokens: streamingEstimatedTokens.value,
-    model: lastUsage.value?.model || activeModel.value,
+    model: effectiveModel.value,
   })
 );
 
@@ -316,7 +634,7 @@ const contextUsedTokens = computed(
 );
 
 const contextTotalTokens = computed(() =>
-  resolveContextWindowLocal(lastUsage.value?.model || activeModel.value)
+  resolveContextWindowLocal(effectiveModel.value)
 );
 
 const loadModelContextWindows = async (): Promise<void> => {
@@ -324,26 +642,108 @@ const loadModelContextWindows = async (): Promise<void> => {
     const resp = await getOpenAIChatModels();
     const data = resp?.data;
     if (!Array.isArray(data)) return;
+    const validModels = data.filter(
+      (m) => m && typeof m.id === "string" && m.id.length > 0
+    );
+    availableModels.value = validModels;
+    defaultModelId.value = resp?.default_model;
     const map = new Map<string, number>();
-    for (const model of data) {
+    for (const model of validModels) {
       if (!model || typeof model.id !== "string") continue;
+      // The AI server reports context size as `context_size`; older
+      // OpenAI-compatible servers use `context_window` or `context_length`.
       const window =
-        model.context_window ?? model.context_length ?? DEFAULT_CONTEXT_WINDOW;
+        model.context_size ??
+        model.context_window ??
+        model.context_length ??
+        DEFAULT_CONTEXT_WINDOW;
       if (typeof window === "number" && window > 0) {
         map.set(model.id, window);
       }
     }
     modelContextWindows.value = map;
+    // Resolve the initial model selection once the list is available. Don't
+    // override a selection that was already made (e.g. restored from storage
+    // before this async load completed, or changed by the user).
+    if (selectedModel.value === undefined) {
+      selectedModel.value = resolveInitialModel(validModels);
+    }
   } catch {
     // non-fatal; denominator falls back to DEFAULT_CONTEXT_WINDOW
   }
 };
+
+/**
+ * Pick the initial model for the selector. Priority:
+ *   1. Saved localStorage choice — "auto" is always valid; a concrete id
+ *      must still be present in the available list.
+ *   2. "Auto" — lets the server pick default_model for us.
+ */
+const resolveInitialModel = (models: OpenAIModel[]): string => {
+  const ids = new Set(models.map((m) => m.id));
+  try {
+    const saved = window.localStorage.getItem(LAST_MODEL_STORAGE_KEY);
+    if (saved === AUTO_MODEL_VALUE) return AUTO_MODEL_VALUE;
+    if (typeof saved === "string" && saved.length > 0 && ids.has(saved)) {
+      return saved;
+    }
+  } catch {
+    // localStorage may be unavailable (private mode, etc.) — ignore.
+  }
+  return AUTO_MODEL_VALUE;
+};
+
+/**
+ * Resolve the model id to send in stream requests. A concrete selection is
+ * passed through; "Auto" resolves to the server's default_model. If the
+ * default is unknown (e.g. models API failed), undefined is sent so the
+ * server falls back to its own default.
+ */
+const resolveModelForRequest = (): string | undefined => {
+  const sel = selectedModel.value;
+  if (typeof sel === "string" && sel.length > 0 && sel !== AUTO_MODEL_VALUE) {
+    return sel;
+  }
+  return defaultModelId.value;
+};
+
+// Persist the user's model choice so it survives app restarts.
+watch(selectedModel, (val) => {
+  if (typeof val !== "string" || val.length === 0) return;
+  try {
+    window.localStorage.setItem(LAST_MODEL_STORAGE_KEY, val);
+  } catch {
+    // non-fatal; selection still works for the session
+  }
+});
+
+const hasLoadedPendingToolExecution = computed(() => {
+  const conversationId = activeConversationId.value;
+  if (!conversationId) return false;
+  if (stoppedPendingToolConversationIds.value.has(conversationId)) {
+    return false;
+  }
+  return hasPendingToolExecution(messages.value);
+});
+
+const chatIsRunning = computed(
+  () => isStreaming.value || hasLoadedPendingToolExecution.value
+);
+
+/**
+ * A conversation shows a "running" indicator when it is the active conversation
+ * and the chat is currently streaming or waiting on a pending tool execution.
+ * Other conversations in the list are idle (no background work happens on them).
+ */
+const isConversationRunning = (conversationId: string): boolean =>
+  chatIsRunning.value && conversationId === activeConversationId.value;
 
 // True only between clicking send and the first visible AI chunk. Auto-clears
 // when streaming ends for any reason (complete/error/stop/permission deny).
 // Also shows during tool execution rounds (after tool_call/tool_result, before
 // the next text token) so the user sees the AI is still working.
 const showTypingIndicator = computed(() => {
+  if (hasLoadedPendingToolExecution.value) return true;
   if (!isStreaming.value) return false;
   if (!receivedFirstResponse.value) return true;
   // Between tool rounds: last message is a tool call/result with no
@@ -360,9 +760,48 @@ const showTypingIndicator = computed(() => {
 const mode = ref<ChatV2Mode>("chat");
 const planState = ref<AIChatPlanStateView | null>(null);
 const pendingQuestion = ref<AIChatPlanQuestionView | null>(null);
+// While a plan is awaiting the user's decision, its approval card is pinned
+// at the bottom of the chat (alongside the question card). Once the user
+// approves/rejects/requests changes, it is moved into the message flow and
+// this ref is cleared.
+const pendingPlanApproval = ref<AIChatPlanStateView | null>(null);
+
+// ---------------------------------------------------------------------------
+// File operation tracking
+// ---------------------------------------------------------------------------
+// Map of conversationId → file operation records emitted via IPC during
+// tool execution (create/overwrite/edit). Shown as a collapsible summary
+// panel above the composer so the user can see what the AI changed.
+const fileOps = ref<Map<string, readonly FileOperationRecord[]>>(new Map());
+const showFileOpsPanel = ref(true);
+const currentFileOps = computed<readonly FileOperationRecord[]>(() => {
+  if (!activeConversationId.value) return [];
+  return fileOps.value.get(activeConversationId.value) ?? [];
+});
+const createCount = computed(
+  () => currentFileOps.value.filter((r) => r.type === "create").length
+);
+const editCount = computed(
+  () => currentFileOps.value.filter((r) => r.type === "edit").length
+);
+const overwriteCount = computed(
+  () => currentFileOps.value.filter((r) => r.type === "overwrite").length
+);
+
+const applyPlanState = (state: AIChatPlanStateView | null): void => {
+  planState.value = state;
+  if (
+    state &&
+    state.status !== "completed" &&
+    state.status !== "cancelled" &&
+    state.status !== "rejected"
+  ) {
+    mode.value = "plan";
+  }
+};
 
 const streamStatus = computed<Status>(() => {
-  if (isStreaming.value) return "streaming";
+  if (chatIsRunning.value) return "streaming";
   if (streamError.value) return "error";
   const last = messages.value[messages.value.length - 1];
   if (last?.metadata?.cancelled) return "cancelled";
@@ -380,6 +819,22 @@ const formatTimestamp = (iso: string): string => {
   } catch {
     return "";
   }
+};
+
+/**
+ * Map a backend-mapped error string to a user-facing, translated message.
+ * The backend {@link userSafeError} returns sentinel codes for known error
+ * classes (e.g. QUOTA_EXHAUSTED for HTTP 402); unknown strings pass through
+ * verbatim so ad-hoc server messages still surface.
+ */
+const mapStreamErrorMessage = (raw: string): string => {
+  if (raw === QUOTA_EXHAUSTED_SENTINEL) {
+    return (
+      t("aiChatV2.quota_exhausted") ||
+      "The AI tokens included in your subscription plan have been exhausted. Please recharge your account to continue using AI features."
+    );
+  }
+  return raw;
 };
 
 const loadConversations = async (): Promise<void> => {
@@ -455,37 +910,48 @@ const loadHistory = async (conversationId: string): Promise<void> => {
     }
     // Load plan state for this conversation.
     try {
-      planState.value = await getChatV2PlanState(conversationId);
+      applyPlanState(await getChatV2PlanState(conversationId));
       if (planState.value?.pendingQuestion) {
         pendingQuestion.value = planState.value.pendingQuestion;
       } else {
         pendingQuestion.value = null;
       }
-      // If the plan has content (submitted/approved/rejected), render its
-      // card inline within the message flow at the end of the loaded history.
+      // If the plan has content, decide where to render it:
+      //  - awaiting_approval → pin at the bottom so the user can act on it
+      //  - any other status → render inline as part of the history
+      pendingPlanApproval.value = null;
       if (planState.value?.latestVersion) {
-        upsertPlanMessage(planState.value);
+        if (planState.value.status === "awaiting_approval") {
+          pendingPlanApproval.value = planState.value;
+        } else {
+          upsertPlanMessage(planState.value);
+        }
       }
     } catch {
-      planState.value = null;
+      applyPlanState(null);
       pendingQuestion.value = null;
+      pendingPlanApproval.value = null;
     }
+    // Load tool approval mode for this conversation
+    void loadToolApprovalMode(conversationId);
   } catch (err) {
     streamError.value = err instanceof Error ? err.message : String(err);
   }
 };
 
 const onNewConversation = (): void => {
-  stopIfStreaming();
+  detachActiveStreamView();
   activeConversationId.value = null;
   messages.value = [];
   streamError.value = null;
-  planState.value = null;
+  applyPlanState(null);
   pendingQuestion.value = null;
+  pendingPlanApproval.value = null;
   // Reset context-usage tracking for the new conversation.
   lastUsage.value = null;
   streamingEstimatedTokens.value = 0;
   activeModel.value = undefined;
+  toolApprovalMode.value = "ask_for_approval";
 };
 
 const onClearMessages = (): void => {
@@ -493,17 +959,19 @@ const onClearMessages = (): void => {
 };
 
 const onSelectConversation = (conversationId: string): void => {
-  stopIfStreaming();
+  detachActiveStreamView();
   activeConversationId.value = conversationId;
   streamError.value = null;
   showConversationsDialog.value = false;
   void loadHistory(conversationId);
 };
 
-const stopIfStreaming = (): void => {
+const detachActiveStreamView = (): void => {
   if (isStreaming.value) {
-    stopChatV2Stream();
+    clearChatV2StreamListeners();
     isStreaming.value = false;
+    activeAssistantMessageId.value = null;
+    retryInfo.value = null;
   }
 };
 
@@ -511,6 +979,13 @@ const onStop = (): void => {
   stopChatV2Stream();
   clearChatV2StreamListeners();
   isStreaming.value = false;
+  const conversationId = activeConversationId.value;
+  if (conversationId) {
+    stoppedPendingToolConversationIds.value = new Set([
+      ...stoppedPendingToolConversationIds.value,
+      conversationId,
+    ]);
+  }
 };
 
 const resolveToolIdForPermissionMessage = (
@@ -538,9 +1013,54 @@ const resolveToolIdForPermissionMessage = (
   return undefined;
 };
 
-const upsertToolResultMessage = (
+const upsertToolProgress = (
   chunk: ChatV2StreamChunk,
   conversationId: string
+): void => {
+  if (!chunk.toolCallId) return;
+  const idx = messages.value.findIndex(
+    (m) =>
+      m.messageType === MessageType.TOOL_CALL &&
+      m.metadata?.toolCallId === chunk.toolCallId
+  );
+  if (idx === -1) {
+    return;
+  }
+  const existing = messages.value[idx];
+  const nextProgress: {
+    phase?: "queued" | "running" | "fetching" | "extracting" | "finalizing";
+    message?: string;
+    progress: number | null;
+    partialCount: number | null;
+    expectedCount: number | null;
+    updatedAt: number;
+  } = {
+    phase: chunk.phase,
+    message: chunk.progressMessage,
+    progress:
+      typeof chunk.progressFraction === "number" ? chunk.progressFraction : null,
+    partialCount: chunk.partialCount ?? null,
+    expectedCount: chunk.expectedCount ?? null,
+    updatedAt: chunk.progressTimestamp ?? Date.now(),
+  };
+  const updatedMessage: ChatV2MessageView = {
+    ...existing,
+    metadata: {
+      ...existing.metadata,
+      toolProgress: nextProgress,
+    } as ChatV2MessageMetadata,
+  };
+  messages.value = [
+    ...messages.value.slice(0, idx),
+    updatedMessage,
+    ...messages.value.slice(idx + 1),
+  ];
+};
+
+const upsertToolResultMessage = (
+  chunk: ChatV2StreamChunk,
+  conversationId: string,
+  insertBeforeAssistantId?: string
 ): void => {
   const toolResult = chunk.toolResult ?? {};
   const content =
@@ -598,7 +1118,7 @@ const upsertToolResultMessage = (
     return;
   }
 
-  messages.value.push({
+  const toolResultMsg: ChatV2MessageView = {
     id: `tool-result-${chunk.toolCallId || Date.now()}`,
     conversationId,
     role: "assistant",
@@ -606,7 +1126,23 @@ const upsertToolResultMessage = (
     timestamp: new Date().toISOString(),
     messageType: MessageType.TOOL_RESULT,
     metadata,
-  });
+  };
+  // Insert before the assistant placeholder so tool results always
+  // appear before the assistant's text response.
+  if (insertBeforeAssistantId) {
+    const aIdx = messages.value.findIndex(
+      (m) => m.id === insertBeforeAssistantId
+    );
+    if (aIdx !== -1) {
+      messages.value = [
+        ...messages.value.slice(0, aIdx),
+        toolResultMsg,
+        ...messages.value.slice(aIdx),
+      ];
+      return;
+    }
+  }
+  messages.value = [...messages.value, toolResultMsg];
 };
 
 const handleSkillPermissionGrant = async (
@@ -729,7 +1265,7 @@ const handleQuestionAnswered = async (
     await answerChatV2Question(activeConversationId.value, questionId, answers);
     pendingQuestion.value = null;
     // Refresh plan state to reflect the updated status.
-    planState.value = await getChatV2PlanState(activeConversationId.value);
+    applyPlanState(await getChatV2PlanState(activeConversationId.value));
   } catch (err) {
     streamError.value = err instanceof Error ? err.message : String(err);
   }
@@ -737,7 +1273,7 @@ const handleQuestionAnswered = async (
 
 const handleApprovePlan = async (): Promise<void> => {
   if (!planState.value || !activeConversationId.value) return;
-  if (isStreaming.value) return;
+  if (chatIsRunning.value) return;
   try {
     const updated = await approveChatV2Plan(
       activeConversationId.value,
@@ -745,7 +1281,9 @@ const handleApprovePlan = async (): Promise<void> => {
       planState.value.currentVersion
     );
     if (updated) {
-      planState.value = updated;
+      applyPlanState(updated);
+      // Move the card out of the pinned panel into the message flow.
+      pendingPlanApproval.value = null;
       upsertPlanMessage(updated);
     }
 
@@ -764,6 +1302,7 @@ const handleApprovePlan = async (): Promise<void> => {
 
 const handleRejectPlan = async (feedback: string): Promise<void> => {
   if (!planState.value || !activeConversationId.value) return;
+  if (chatIsRunning.value) return;
   try {
     const updated = await rejectChatV2Plan(
       activeConversationId.value,
@@ -772,9 +1311,21 @@ const handleRejectPlan = async (feedback: string): Promise<void> => {
       feedback
     );
     if (updated) {
-      planState.value = updated;
+      applyPlanState(updated);
+      // Move the card out of the pinned panel into the message flow.
+      pendingPlanApproval.value = null;
       upsertPlanMessage(updated);
     }
+
+    // After rejection, send the feedback to the LLM so it can revise
+    // the plan or respond accordingly.
+    const prefix =
+      t("aiChatV2Plan.rejected_continue_message") ||
+      "Plan rejected. Please revise the plan based on the following feedback and resubmit for approval.";
+    const continueText = feedback
+      ? `${prefix}\n\nFeedback: ${feedback}`
+      : prefix;
+    await onSend(continueText);
   } catch (err) {
     streamError.value = err instanceof Error ? err.message : String(err);
   }
@@ -782,6 +1333,7 @@ const handleRejectPlan = async (feedback: string): Promise<void> => {
 
 const handleRequestPlanChanges = async (feedback: string): Promise<void> => {
   if (!planState.value || !activeConversationId.value) return;
+  if (chatIsRunning.value) return;
   try {
     const updated = await requestChatV2PlanChanges(
       activeConversationId.value,
@@ -790,17 +1342,67 @@ const handleRequestPlanChanges = async (feedback: string): Promise<void> => {
       feedback
     );
     if (updated) {
-      planState.value = updated;
+      applyPlanState(updated);
+      // Move the card out of the pinned panel into the message flow.
+      pendingPlanApproval.value = null;
       upsertPlanMessage(updated);
     }
+
+    // After requesting changes, send the feedback to the LLM so it can
+    // update the plan accordingly.
+    const prefix =
+      t("aiChatV2Plan.changes_requested_continue_message") ||
+      "Plan changes requested. Please update the plan based on the following feedback and resubmit for approval.";
+    const continueText = feedback
+      ? `${prefix}\n\nFeedback: ${feedback}`
+      : prefix;
+    await onSend(continueText);
   } catch (err) {
     streamError.value = err instanceof Error ? err.message : String(err);
   }
 };
 
-const onSend = async (text: string): Promise<void> => {
-  if (isStreaming.value) return;
+const handleCompactConversation = async (): Promise<void> => {
+  if (
+    !activeConversationId.value ||
+    chatIsRunning.value ||
+    isCompacting.value
+  ) {
+    return;
+  }
+  isCompacting.value = true;
   streamError.value = null;
+  try {
+    const summary = await compactChatV2Conversation(
+      activeConversationId.value,
+      resolveModelForRequest()
+    );
+    if (summary) {
+      const tokenEstimate =
+        summary.outputTokenEstimate ??
+        Math.ceil(summary.summary.length / CHARS_PER_TOKEN_ESTIMATE);
+      streamingEstimatedTokens.value = tokenEstimate;
+      lastUsage.value = null;
+      if (summary.model) {
+        activeModel.value = summary.model;
+      }
+      compactNotice.value = true;
+    }
+  } catch (err) {
+    streamError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    isCompacting.value = false;
+  }
+};
+
+const onSend = async (text: string): Promise<void> => {
+  if (chatIsRunning.value) return;
+  streamError.value = null;
+  if (activeConversationId.value) {
+    const nextStopped = new Set(stoppedPendingToolConversationIds.value);
+    nextStopped.delete(activeConversationId.value);
+    stoppedPendingToolConversationIds.value = nextStopped;
+  }
 
   const nowIso = new Date().toISOString();
   const tempUser: ChatV2MessageView = {
@@ -829,7 +1431,12 @@ const onSend = async (text: string): Promise<void> => {
   let assistantAdded = false;
   const ensureAssistantAdded = (): void => {
     if (assistantAdded) return;
-    messages.value = [...messages.value, assistant];
+    // Push a shallow copy so the array element is an independent object,
+    // not a reference to the raw closure-captured `assistant`. Vue's
+    // reactive proxy fully owns the copy, preventing reactivity gaps
+    // where mutations to `assistant.content` (the raw object) fail to
+    // trigger DOM updates — especially after many tool-call card pushes.
+    messages.value = [...messages.value, { ...assistant }];
     assistantAdded = true;
   };
   const showAssistantError = (message: string): void => {
@@ -852,10 +1459,16 @@ const onSend = async (text: string): Promise<void> => {
   isStreaming.value = true;
   receivedFirstResponse.value = false;
   retryInfo.value = null;
-  // Seed the live context estimate from the last known server usage; the
-  // incoming token stream will accumulate on top of this baseline and the
-  // next usage_update event will snap it back to ground truth.
-  streamingEstimatedTokens.value = lastUsage.value?.totalTokens ?? 0;
+  // Seed the live context estimate from the last known server usage. If no
+  // usage_update has arrived yet this session, fall back to the existing
+  // streaming estimate (e.g. seeded from persisted tokensUsed on history
+  // load) so the badge keeps a meaningful baseline instead of resetting
+  // to 0 on every turn.
+  const usageBaseline = lastUsage.value?.totalTokens;
+  streamingEstimatedTokens.value =
+    typeof usageBaseline === "number" && usageBaseline > 0
+      ? usageBaseline
+      : streamingEstimatedTokens.value;
 
   await nextTick();
 
@@ -865,7 +1478,7 @@ const onSend = async (text: string): Promise<void> => {
         conversationId: activeConversationId.value ?? undefined,
         message: text,
         mode: mode.value,
-        // model omitted → backend picks default
+        model: resolveModelForRequest(),
       },
       (chunk: ChatV2StreamChunk) => {
         if (chunk.eventType === "start") {
@@ -916,6 +1529,11 @@ const onSend = async (text: string): Promise<void> => {
           receivedFirstResponse.value = true;
           retryInfo.value = null;
           if (chunk.eventType === "token" && chunk.contentDelta) {
+            if (!assistantAdded) {
+              console.log(
+                `[ai-chat-v2] first token for assistant message ${assistant.id}, adding placeholder`
+              );
+            }
             ensureAssistantAdded();
             assistant.content += chunk.contentDelta;
             // Live estimate: each streamed delta adds ~chars/4 tokens to the
@@ -939,41 +1557,97 @@ const onSend = async (text: string): Promise<void> => {
               pendingQuestion.value = planChunk.question;
             }
             if (planChunk.planState) {
-              planState.value = planChunk.planState;
+              applyPlanState(planChunk.planState);
             }
           } else if (chunk.eventType === ("plan_submitted" as never)) {
             const planChunk = chunk as ChatV2StreamChunk;
             if (planChunk.planState) {
-              planState.value = planChunk.planState;
-              upsertPlanMessage(planChunk.planState);
+              applyPlanState(planChunk.planState);
+              // Pin the card at the bottom while awaiting the user's action.
+              // It moves into the message flow only after the user approves,
+              // rejects, or requests changes (see the plan handlers below).
+              pendingPlanApproval.value = planChunk.planState;
+            }
+          } else if (chunk.eventType === ("plan_state" as never)) {
+            // Model auto-entered Plan Mode via EnterPlanMode. Light up the
+            // Plan Mode indicator; do not render a plan message yet (the
+            // plan content does not exist until SubmitPlanForApproval).
+            const planChunk = chunk as ChatV2StreamChunk;
+            if (planChunk.planState) {
+              applyPlanState(planChunk.planState);
+              if (planChunk.planState.status !== "awaiting_approval") {
+                pendingPlanApproval.value = null;
+                if (planChunk.planState.latestVersion) {
+                  upsertPlanMessage(planChunk.planState);
+                }
+              }
             }
           } else if (chunk.eventType === ("plan_blocked_tool" as never)) {
             // Tool was blocked by plan policy — surface as a tool result message
             const planChunk = chunk as ChatV2StreamChunk;
             upsertToolResultMessage(
               planChunk,
-              planChunk.conversationId || activeConversationId.value || ""
+              planChunk.conversationId || activeConversationId.value || "",
+              assistantAdded ? assistant.id : undefined
+            );
+          } else if (chunk.eventType === "tool_progress") {
+            upsertToolProgress(
+              chunk,
+              chunk.conversationId || activeConversationId.value || ""
             );
           } else if (chunk.eventType === "tool_call") {
-            messages.value.push({
-              id: `tool-call-${chunk.toolCallId || Date.now()}`,
-              conversationId:
-                chunk.conversationId || activeConversationId.value || "",
-              role: "assistant",
-              content: "",
-              timestamp: new Date().toISOString(),
-              messageType: MessageType.TOOL_CALL,
-              metadata: {
-                source: "chat-v2",
-                toolCallId: chunk.toolCallId,
-                toolName: chunk.toolName,
-                toolArguments: chunk.toolArguments,
-              },
-            });
+            const toolCallId = chunk.toolCallId;
+            // Defensive dedup: if the same tool_call event is delivered twice
+            // (IPC re-delivery, listener cleanup race, or history already
+            // loaded), avoid rendering a duplicate card.
+            const alreadyRendered = toolCallId
+              ? messages.value.some(
+                  (m) =>
+                    m.messageType === MessageType.TOOL_CALL &&
+                    m.metadata?.toolCallId === toolCallId
+                )
+              : false;
+            if (!alreadyRendered) {
+              const toolCallMsg: ChatV2MessageView = {
+                id: `tool-call-${toolCallId || Date.now()}`,
+                conversationId:
+                  chunk.conversationId || activeConversationId.value || "",
+                role: "assistant",
+                content: "",
+                timestamp: new Date().toISOString(),
+                messageType: MessageType.TOOL_CALL,
+                metadata: {
+                  source: "chat-v2",
+                  toolCallId,
+                  toolName: chunk.toolName,
+                  toolArguments: chunk.toolArguments,
+                },
+              };
+              // Insert before the assistant placeholder if it was already
+              // added (text tokens arrived in an earlier round). This keeps
+              // tool calls visually before the assistant's text response.
+              if (assistantAdded) {
+                const aIdx = messages.value.findIndex(
+                  (m) => m.id === assistant.id
+                );
+                if (aIdx !== -1) {
+                  messages.value = [
+                    ...messages.value.slice(0, aIdx),
+                    toolCallMsg,
+                    ...messages.value.slice(aIdx),
+                  ];
+                } else {
+                  messages.value = [...messages.value, toolCallMsg];
+                }
+              } else {
+                messages.value = [...messages.value, toolCallMsg];
+              }
+            }
           } else if (chunk.eventType === "tool_result") {
             upsertToolResultMessage(
               chunk,
-              chunk.conversationId || activeConversationId.value || ""
+              chunk.conversationId || activeConversationId.value || "",
+              assistantAdded ? assistant.id : undefined
             );
           }
         }
@@ -982,6 +1656,27 @@ const onSend = async (text: string): Promise<void> => {
         isStreaming.value = false;
         activeAssistantMessageId.value = null;
         retryInfo.value = null;
+        // Snap to ground-truth usage carried by the complete event so the
+        // badge reflects the real context size even if usage_update chunks
+        // didn't fire during the stream (some servers only report usage on
+        // the final chunk, which the accumulator captures but emits after
+        // the last token round).
+        if (
+          typeof complete.totalTokens === "number" &&
+          typeof complete.promptTokens === "number" &&
+          typeof complete.completionTokens === "number"
+        ) {
+          lastUsage.value = {
+            promptTokens: complete.promptTokens,
+            completionTokens: complete.completionTokens,
+            totalTokens: complete.totalTokens,
+            model: complete.model ?? lastUsage.value?.model,
+          };
+          streamingEstimatedTokens.value = complete.totalTokens;
+          if (complete.model) {
+            activeModel.value = complete.model;
+          }
+        }
         if (
           complete.fullContent !== undefined &&
           complete.fullContent.length > 0
@@ -989,6 +1684,9 @@ const onSend = async (text: string): Promise<void> => {
           ensureAssistantAdded();
           assistant.content = complete.fullContent;
           const idx = messages.value.findIndex((m) => m.id === assistant.id);
+          console.log(
+            `[ai-chat-v2] stream complete: assistantId=${assistant.id} fullContentLen=${complete.fullContent.length} idxInMessages=${idx} assistantAdded=${assistantAdded} messagesLen=${messages.value.length}`
+          );
           if (idx !== -1) {
             messages.value[idx] = {
               ...messages.value[idx],
@@ -997,32 +1695,59 @@ const onSend = async (text: string): Promise<void> => {
           }
         } else if (!assistantAdded || assistant.content.length === 0) {
           const emptyMessage =
-            "AI returned an empty response. Check the ai-chat-v2 stream diagnostics in the app log.";
+            t("aiChatV2.empty_response_error") ||
+            "The AI returned an empty response. This is typically a transient server issue (rate limit, timeout, or 502). Please try sending your message again.";
           streamError.value = emptyMessage;
           showAssistantError(emptyMessage);
+        }
+        // Safety net: ensure the assistant message appears after all tool
+        // calls and tool results from this turn. During multi-round
+        // tool-calling, the placeholder may have been inserted before some
+        // tool calls if text tokens arrived in an earlier round. Moving it
+        // to the end guarantees correct final display order.
+        {
+          const aIdx = messages.value.findIndex(
+            (m) => m.id === assistant.id
+          );
+          if (aIdx !== -1 && aIdx < messages.value.length - 1) {
+            const reordered = [...messages.value];
+            const [assistantMsg] = reordered.splice(aIdx, 1);
+            reordered.push(assistantMsg);
+            messages.value = reordered;
+          }
         }
         if (complete.conversationId) {
           activeConversationId.value = complete.conversationId;
         }
         messages.value = [...messages.value];
+        // Force a second render pass after Vue's render cycle completes.
+        // After many tool-call card pushes followed by the lazy assistant
+        // add + token updates, Vue's render scheduler can miss the final
+        // state of the newly-added assistant element. This nextTick
+        // re-spread guarantees the DOM picks up the final content.
+        void nextTick(() => {
+          messages.value = [...messages.value];
+        });
         void loadConversations();
       },
       (error: Error) => {
         isStreaming.value = false;
         activeAssistantMessageId.value = null;
         retryInfo.value = null;
-        streamError.value = error.message;
-        showAssistantError(error.message);
+        const displayMessage = mapStreamErrorMessage(error.message);
+        streamError.value = displayMessage;
+        showAssistantError(displayMessage);
       }
     );
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const rawMessage = err instanceof Error ? err.message : String(err);
     if (!streamError.value) {
+      const displayMessage = mapStreamErrorMessage(rawMessage);
       isStreaming.value = false;
       activeAssistantMessageId.value = null;
       retryInfo.value = null;
-      streamError.value = message;
-      showAssistantError(message);
+      streamError.value = displayMessage;
+      showAssistantError(displayMessage);
     }
   }
 };
@@ -1030,13 +1755,21 @@ const onSend = async (text: string): Promise<void> => {
 onMounted(() => {
   void loadConversations();
   void loadModelContextWindows();
+  // Subscribe to file operation events emitted during tool execution.
+  // Records are appended per-conversation so the summary panel reflects
+  // all changes made within the active conversation.
+  subscribeToFileOperations((record: FileOperationRecord) => {
+    const convId = record.conversationId;
+    const current = fileOps.value.get(convId) ?? [];
+    const next = new Map(fileOps.value);
+    next.set(convId, [...current, record]);
+    fileOps.value = next;
+  });
 });
 
 onBeforeUnmount(() => {
-  stopIfStreaming();
-  clearChatV2StreamListeners();
-  windowRemoveAllListeners(AI_CHAT_V2_STREAM_CHUNK);
-  windowRemoveAllListeners(AI_CHAT_V2_STREAM_COMPLETE);
+  detachActiveStreamView();
+  unsubscribeFromFileOperations();
   if (searchDebounceTimer) {
     clearTimeout(searchDebounceTimer);
     searchDebounceTimer = null;
@@ -1049,9 +1782,12 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-height: 0;
+  overflow: hidden;
   background: #fff;
 }
 .v2-shell__header {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1075,10 +1811,44 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  overflow: hidden;
 }
 .v2-shell__plan-panel {
+  flex: 0 0 auto;
   padding: 0 12px;
   max-height: 300px;
   overflow-y: auto;
+}
+.v2-shell__workspace-panel {
+  flex: 0 0 auto;
+  padding: 4px 12px;
+}
+.v2-shell__file-ops-panel {
+  flex: 0 0 auto;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+  background: #fafafa;
+}
+.v2-shell__file-ops-header {
+  display: flex;
+  align-items: center;
+  padding: 6px 12px;
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 0.15s ease;
+}
+.v2-shell__file-ops-header:hover {
+  background-color: rgba(0, 0, 0, 0.04);
+}
+.v2-shell__file-ops-summary {
+  font-size: 13px;
+  font-weight: 500;
+}
+.v2-shell__file-ops-counts {
+  display: flex;
+  align-items: center;
+}
+.v2-shell__file-ops-body {
+  padding: 4px 12px 10px;
+  border-top: 1px solid rgba(0, 0, 0, 0.05);
 }
 </style>

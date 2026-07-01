@@ -19,6 +19,8 @@ import {
 import { log } from "@/modules/Logger";
 import { Token } from "@/modules/token";
 import { TOKENNAME, USER_AI_ENABLED } from "@/config/usersetting";
+import type { ModuleExecutionContext } from "@/entityTypes/skillTypes";
+import { ToolExecutor } from "@/service/ToolExecutor";
 import {
   contactExtractionWorkerOutboundSchema,
   type ContactExtractionWorkerOutbound,
@@ -56,6 +58,7 @@ const pendingUrlExtractions = new Map<
     results: UrlContactExtractionResult[];
     total: number;
     timeoutId: ReturnType<typeof setTimeout>;
+    context?: ModuleExecutionContext;
   }
 >();
 
@@ -198,6 +201,28 @@ function handleUrlExtractionResult(
     data: message.data,
     error: message.error,
   });
+
+  // Forward progress to the execution context (AI tool-progress pipeline).
+  // Each per-URL result counts as one unit of progress.
+  if (pending.context) {
+    const collected = pending.results.length;
+    const expected = pending.total;
+    const phase = collected >= expected ? "finalizing" : "extracting";
+    pending.context.emitProgress?.({
+      phase,
+      message: `Extracted ${collected} of ${expected} contacts`,
+      partialCount: collected,
+      expectedCount: expected,
+    });
+    if (pending.context.toolCallId) {
+      ToolExecutor.updatePartialSnapshot(pending.context.toolCallId, {
+        collectedCount: collected,
+        expectedCount: expected,
+        data: { results: pending.results },
+      });
+    }
+  }
+
   if (pending.results.length >= pending.total) {
     clearTimeout(pending.timeoutId);
     pendingUrlExtractions.delete(message.requestId);
@@ -210,7 +235,8 @@ function handleUrlExtractionResult(
  * Used by the AI tool extract_contact_info. Returns when all URLs are processed or timeout.
  */
 export async function extractContactFromUrls(
-  urls: string[]
+  urls: string[],
+  context?: ModuleExecutionContext
 ): Promise<UrlContactExtractionResult[]> {
   const validUrls = urls.filter(
     (u): u is string => typeof u === "string" && u.trim().length > 0
@@ -240,6 +266,7 @@ export async function extractContactFromUrls(
       results: [],
       total: validUrls.length,
       timeoutId,
+      context,
     });
 
     ensureWorkerStarted();
