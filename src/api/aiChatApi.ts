@@ -9,6 +9,10 @@ import { Token } from "@/modules/token";
 import { USER_AI_ENABLED } from "@/config/usersetting";
 import type { AIEmailTemplateRequest } from "@/entityTypes/emailmarketingType";
 import type { AIRecoveryRequest } from "@/entityTypes/processMessage-type";
+import {
+  batchKeywordGenerationResponseSchema,
+  chatApiResponseSchema,
+} from "@/schemas/api/aiChat";
 
 /**
  * Chat request interface
@@ -842,7 +846,32 @@ export class AiChatApi {
     }
 
     this._debugLogRequest("/api/ai/chat/message", data);
-    return this._httpClient.postJson("/api/ai/chat/message", data);
+    const raw = await this._httpClient.postJson<CommonApiresp<ChatApiResponse>>(
+      "/api/ai/chat/message",
+      data
+    );
+
+    // Phase 5: validate + strip unknown fields at the API boundary.
+    if (raw.status && raw.data) {
+      const parsed = chatApiResponseSchema().safeParse(raw.data);
+      if (parsed.success) {
+        return {
+          status: true,
+          msg: raw.msg,
+          data: parsed.data as ChatApiResponse,
+          code: raw.code,
+        };
+      }
+      return {
+        status: false,
+        msg: `Backend chat response schema invalid: ${parsed.error.issues
+          .map((i) => `${i.path.join(".")}: ${i.message}`)
+          .join("; ")}`,
+        data: undefined,
+        code: raw.code,
+      };
+    }
+    return raw;
   }
 
   /**
@@ -1152,10 +1181,31 @@ export class AiChatApi {
   ): Promise<CommonApiresp<BatchKeywordGenerationResponse>> {
     this.ensureAIEnabled();
     this._debugLogRequest("/api/ai/keywords/generate/batch", requests);
-    return this._httpClient.postJson(
-      "/api/ai/keywords/generate/batch",
-      requests
-    );
+    const raw = await this._httpClient.postJson<
+      CommonApiresp<BatchKeywordGenerationResponse>
+    >("/api/ai/keywords/generate/batch", requests);
+
+    // Phase 5: validate + strip unknown fields at the API boundary.
+    if (raw.status && raw.data) {
+      const parsed = batchKeywordGenerationResponseSchema().safeParse(raw.data);
+      if (parsed.success) {
+        return {
+          status: true,
+          msg: raw.msg,
+          data: parsed.data as BatchKeywordGenerationResponse,
+          code: raw.code,
+        };
+      }
+      return {
+        status: false,
+        msg: `Backend response schema invalid: ${parsed.error.issues
+          .map((i) => `${i.path.join(".")}: ${i.message}`)
+          .join("; ")}`,
+        data: undefined,
+        code: raw.code,
+      };
+    }
+    return raw;
   }
 
   /**

@@ -4,6 +4,10 @@ import { MCPClient } from "@/modules/MCPClient";
 import { MCP_CALL_TIMEOUT_MS } from "@/config/mcpConfig";
 import { MCPTimeoutError } from "@/service/MCPTimeoutError";
 import type { ToolFunction } from "@/api/aiChatApi";
+import {
+  mcpServerConfigSchema,
+  mcpServerConfigUpdateSchema,
+} from "@/schemas/config/mcpServer";
 
 export interface MCPServerConfig {
   serverName: string;
@@ -263,23 +267,33 @@ export class MCPToolService {
   }
 
   /**
-   * Add new MCP server configuration
+   * Add new MCP server configuration.
+   *
+   * Validates the config against mcpServerConfigSchema at the service
+   * boundary. Callers (e.g. plugin-ipc PLUGIN_IMPORT) already do their
+   * own higher-level checks; this is the last line of defense before
+   * persistence.
    */
   async addMCPServer(config: MCPServerConfig): Promise<number> {
+    const parsed = mcpServerConfigSchema().safeParse(config);
+    if (!parsed.success) {
+      throw new Error(
+        `Invalid MCP server config: ${parsed.error.issues
+          .map((i) => `${i.path.join(".")}: ${i.message}`)
+          .join("; ")}`
+      );
+    }
+    const c = parsed.data;
     const entity = new MCPToolEntity();
-    entity.serverName = config.serverName;
-    entity.host = config.host;
-    entity.port = config.port;
-    entity.transport = config.transport;
-    entity.enabled = config.enabled ?? true;
-    entity.authType = config.authType || "none";
-    entity.authConfig = config.authConfig
-      ? JSON.stringify(config.authConfig)
-      : undefined;
-    entity.timeout = config.timeout || 30000;
-    entity.metadata = config.metadata
-      ? JSON.stringify(config.metadata)
-      : undefined;
+    entity.serverName = c.serverName;
+    entity.host = c.host;
+    entity.port = c.port;
+    entity.transport = c.transport;
+    entity.enabled = c.enabled ?? true;
+    entity.authType = c.authType ?? "none";
+    entity.authConfig = c.authConfig ? JSON.stringify(c.authConfig) : undefined;
+    entity.timeout = c.timeout ?? 30000;
+    entity.metadata = c.metadata ? JSON.stringify(c.metadata) : undefined;
 
     return await this.mcpToolModule.saveMCPTool(entity);
   }
@@ -291,25 +305,33 @@ export class MCPToolService {
     id: number,
     config: Partial<MCPServerConfig>
   ): Promise<void> {
+    // Validate partial config — rejects bad enum values / wrong port ranges
+    // even when only a single field is being updated.
+    const parsed = mcpServerConfigUpdateSchema().safeParse(config);
+    if (!parsed.success) {
+      throw new Error(
+        `Invalid MCP server update config: ${parsed.error.issues
+          .map((i) => `${i.path.join(".")}: ${i.message}`)
+          .join("; ")}`
+      );
+    }
+    const c = parsed.data;
     const updateData: Partial<MCPToolEntity> = {};
 
-    if (config.serverName !== undefined)
-      updateData.serverName = config.serverName;
-    if (config.host !== undefined) updateData.host = config.host;
-    if (config.port !== undefined) updateData.port = config.port;
-    if (config.transport !== undefined) updateData.transport = config.transport;
-    if (config.enabled !== undefined) updateData.enabled = config.enabled;
-    if (config.authType !== undefined) updateData.authType = config.authType;
-    if (config.authConfig !== undefined) {
-      updateData.authConfig = config.authConfig
-        ? JSON.stringify(config.authConfig)
+    if (c.serverName !== undefined) updateData.serverName = c.serverName;
+    if (c.host !== undefined) updateData.host = c.host;
+    if (c.port !== undefined) updateData.port = c.port;
+    if (c.transport !== undefined) updateData.transport = c.transport;
+    if (c.enabled !== undefined) updateData.enabled = c.enabled;
+    if (c.authType !== undefined) updateData.authType = c.authType;
+    if (c.authConfig !== undefined) {
+      updateData.authConfig = c.authConfig
+        ? JSON.stringify(c.authConfig)
         : undefined;
     }
-    if (config.timeout !== undefined) updateData.timeout = config.timeout;
-    if (config.metadata !== undefined) {
-      updateData.metadata = config.metadata
-        ? JSON.stringify(config.metadata)
-        : undefined;
+    if (c.timeout !== undefined) updateData.timeout = c.timeout;
+    if (c.metadata !== undefined) {
+      updateData.metadata = c.metadata ? JSON.stringify(c.metadata) : undefined;
     }
 
     await this.mcpToolModule.updateMCPTool(id, updateData);

@@ -21,23 +21,20 @@ import { Token } from "@/modules/token";
 import { TOKENNAME, USER_AI_ENABLED } from "@/config/usersetting";
 import type { ModuleExecutionContext } from "@/entityTypes/skillTypes";
 import { ToolExecutor } from "@/service/ToolExecutor";
+import {
+  contactExtractionWorkerOutboundSchema,
+  type ContactExtractionWorkerOutbound,
+} from "@/schemas/worker/contactExtraction";
 
 // Type for IPC request with resultIds
 interface ContactExtractionRequest {
   resultIds: number[];
 }
 
-// Type for worker messages (from worker to main)
-interface WorkerMessage {
-  type:
-    | "worker-ready"
-    | "extraction-progress"
-    | "worker-log"
-    | "extract-contact-url-result";
-  level?: "info" | "error" | "warn" | "debug";
-  args?: unknown[];
-  [key: string]: unknown;
-}
+// Type for worker messages (from worker to main) — replaced by shared schema.
+// The discriminated union in contactExtractionWorkerOutboundSchema narrows
+// automatically inside switch(msg.type), eliminating the loose index-signature
+// that previously allowed silent field drift.
 
 /** Result item for URL-only contact extraction (AI tool) */
 export interface UrlContactExtractionResult {
@@ -125,23 +122,38 @@ function spawnWorker(): ChildProcess {
     }
   });
 
-  // Handle worker messages
-  worker.on("message", async (message: WorkerMessage) => {
-    if (message.type === "worker-ready") {
-      console.log("Contact extraction worker is ready");
-    } else if (message.type === "worker-log") {
-      // Forward worker logs to main process logger
-      const level = message.level ?? "info";
-      const args = message.args ?? [];
-      const logMethod = log[level];
-      if (typeof logMethod === "function") {
-        logMethod(...args);
+  // Handle worker messages — validated against the shared outbound schema.
+  // Malformed messages are dropped with a warn log. The discriminated union
+  // narrows message.type automatically inside each branch, eliminating the
+  // previous `as any` casts on resultId/status/data/etc.
+  worker.on("message", async (raw: unknown) => {
+    const parsed = contactExtractionWorkerOutboundSchema().safeParse(raw);
+    if (!parsed.success) {
+      log.warn(
+        `[contact-extraction-worker] dropped malformed outbound message: ${parsed.error.message}`
+      );
+      return;
+    }
+
+    const message = parsed.data;
+    switch (message.type) {
+      case "worker-ready":
+        console.log("Contact extraction worker is ready");
+        break;
+      case "worker-log": {
+        // level/args have .default() in schema so they're always present here
+        const logMethod = log[message.level];
+        if (typeof logMethod === "function") {
+          logMethod(...message.args);
+        }
+        break;
       }
-    } else if (message.type === "extraction-progress") {
-      // Handle progress update from worker
-      await handleWorkerProgress(message);
-    } else if (message.type === "extract-contact-url-result") {
-      handleUrlExtractionResult(message);
+      case "extraction-progress":
+        await handleWorkerProgress(message);
+        break;
+      case "extract-contact-url-result":
+        handleUrlExtractionResult(message);
+        break;
     }
   });
 
@@ -168,20 +180,27 @@ function ensureWorkerStarted(): void {
 }
 
 /**
- * Handle a single URL extraction result from worker (AI tool flow)
+ * Handle a single URL extraction result from worker (AI tool flow).
+ *
+ * Narrowed variant of ContactExtractionWorkerOutbound. Worker emits one
+ * message per URL (not a batch); all messages sharing a requestId resolve
+ * the same pending promise when the count reaches `total`.
  */
-function handleUrlExtractionResult(message: WorkerMessage): void {
-  if (message.type !== "extract-contact-url-result") return;
-  const requestId = message.requestId as string;
-  const url = message.url as string;
-  const success = message.success as boolean;
-  const data = message.data as UrlContactExtractionResult["data"] | undefined;
-  const error = message.error as string | undefined;
-
-  const pending = pendingUrlExtractions.get(requestId);
+function handleUrlExtractionResult(
+  message: Extract<
+    ContactExtractionWorkerOutbound,
+    { type: "extract-contact-url-result" }
+  >
+): void {
+  const pending = pendingUrlExtractions.get(message.requestId);
   if (!pending) return;
 
-  pending.results.push({ url, success, data, error });
+  pending.results.push({
+    url: message.url,
+    success: message.success,
+    data: message.data,
+    error: message.error,
+  });
 
   // Forward progress to the execution context (AI tool-progress pipeline).
   // Each per-URL result counts as one unit of progress.
@@ -206,7 +225,7 @@ function handleUrlExtractionResult(message: WorkerMessage): void {
 
   if (pending.results.length >= pending.total) {
     clearTimeout(pending.timeoutId);
-    pendingUrlExtractions.delete(requestId);
+    pendingUrlExtractions.delete(message.requestId);
     pending.resolve(pending.results);
   }
 }
@@ -214,11 +233,6 @@ function handleUrlExtractionResult(message: WorkerMessage): void {
 /**
  * Extract contact information from URLs via the worker (no DB write).
  * Used by the AI tool extract_contact_info. Returns when all URLs are processed or timeout.
- *
- * @param context Optional execution context for progress emission and
- *        partial-snapshot registration. When provided, progress and
- *        per-URL result events from the worker are forwarded to
- *        `context.emitProgress` and the partial snapshot is updated.
  */
 export async function extractContactFromUrls(
   urls: string[],
@@ -255,14 +269,6 @@ export async function extractContactFromUrls(
       context,
     });
 
-    // Emit an initial "running" progress event so the UI knows the tool started.
-    context?.emitProgress?.({
-      phase: "running",
-      message: "Starting contact extraction...",
-      partialCount: 0,
-      expectedCount: validUrls.length,
-    });
-
     ensureWorkerStarted();
     if (contactExtractionWorker?.send) {
       contactExtractionWorker.send({
@@ -279,17 +285,21 @@ export async function extractContactFromUrls(
 }
 
 /**
- * Handle worker progress updates and save to database
+ * Handle worker progress updates and save to database.
+ *
+ * Narrowed variant of ContactExtractionWorkerOutbound. The schema's status
+ * enum is 'running'|'completed'|'failed'; the DB layer accepts the wider
+ * 'pending'|'analyzing'|'completed'|'failed' union, so we cast through
+ * unknown at the call site.
  */
-async function handleWorkerProgress(progress: WorkerMessage): Promise<void> {
-  if (progress.type !== "extraction-progress") return;
-  const resultId = progress.resultId as number;
-  const status = progress.status as
-    | "pending"
-    | "analyzing"
-    | "completed"
-    | "failed";
-  const data = progress.data as
+async function handleWorkerProgress(
+  progress: Extract<
+    ContactExtractionWorkerOutbound,
+    { type: "extraction-progress" }
+  >
+): Promise<void> {
+  const { resultId, status, data } = progress;
+  const dataTyped = data as
     | {
         emails?: string[];
         phones?: string[];
@@ -297,22 +307,26 @@ async function handleWorkerProgress(progress: WorkerMessage): Promise<void> {
         socialLinks?: string[];
       }
     | undefined;
-  const error = progress.error as string | undefined;
+  const error = (progress as { error?: string }).error;
 
   try {
     // Use ContactInfoModule to save/update data in database
     const module = new ContactInfoModule();
 
     // Update status (and extraction_error when failed)
-    await module.updateExtractionStatus(resultId, status, error);
+    await module.updateExtractionStatus(
+      resultId,
+      status as "pending" | "analyzing" | "completed" | "failed",
+      error
+    );
 
     // If extraction completed and we have data, save it
-    if (status === "completed" && data) {
+    if (status === "completed" && dataTyped) {
       await module.saveContactExtractionResult(resultId, {
-        email: data.emails?.[0] || null,
-        phone: data.phones?.[0] || null,
-        address: data.address || null,
-        socialLinks: data.socialLinks || null,
+        email: dataTyped.emails?.[0] || null,
+        phone: dataTyped.phones?.[0] || null,
+        address: dataTyped.address || null,
+        socialLinks: dataTyped.socialLinks || null,
         extractionStatus: "completed",
       });
     }
@@ -320,11 +334,15 @@ async function handleWorkerProgress(progress: WorkerMessage): Promise<void> {
     // Forward progress to renderer
     const windows = BrowserWindow.getAllWindows();
     const mainWindow = windows[0];
-    if (mainWindow && !(mainWindow as any).isDestroyed()) {
-      (mainWindow as any).webContents.send(
-        CONTACT_EXTRACTION_PROGRESS,
-        progress
-      );
+    if (
+      mainWindow &&
+      !(mainWindow as { isDestroyed: () => boolean }).isDestroyed()
+    ) {
+      (
+        mainWindow as {
+          webContents: { send: (channel: string, payload: unknown) => void };
+        }
+      ).webContents.send(CONTACT_EXTRACTION_PROGRESS, progress);
     }
   } catch (err) {
     console.error("Failed to handle worker progress:", err);

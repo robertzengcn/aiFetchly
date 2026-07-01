@@ -1,116 +1,107 @@
-import { ipcMain, BrowserWindow } from 'electron'
-// IpcMainInvokeEvent type - use unknown for event parameter
-type IpcMainInvokeEvent = unknown;
+import { BrowserWindow } from 'electron'
 import { TaskController } from '@/controller/taskController'
-import { TaskCreateRequest, TaskUpdateRequest, TaskListResponse, TaskDetailResponse } from '@/entityTypes/task-type'
+import {
+  TaskCreateRequest,
+  TaskUpdateRequest,
+} from '@/entityTypes/task-type'
+import { registerValidatedHandler } from '@/main-process/communication/_shared/registerValidatedHandler'
+import {
+  taskWriteInputSchema,
+  taskByIdInputSchema,
+  taskListInputSchema,
+  taskResultsInputSchema,
+  taskPlatformListInputSchema,
+} from '@/schemas/ipc/task'
 
-export function registerTaskIpcHandlers(mainWindow: BrowserWindow) {
-  // Create task
-  ipcMain.handle('task:create', async (event: IpcMainInvokeEvent, taskData: unknown) => {
-    try {
+/**
+ * Task IPC handlers — all 9 migrated to registerValidatedHandler.
+ *
+ * Envelope caveat: original handlers threw on error and returned raw
+ * values (taskId / success boolean / objects). Wrapper now wraps all
+ * returns in {status: true, msg: 'ok', data: <value>} and converts
+ * thrown errors to {status: false, msg: <err.message>, data: null}.
+ *
+ * Frontend that did `const id = await invoke('task:create', ...)`
+ * should now do `const id = (await invoke(...)).data`.
+ */
+export function registerTaskIpcHandlers(_mainWindow: BrowserWindow) {
+  registerValidatedHandler(
+    'task:create',
+    taskWriteInputSchema,
+    async (input) => {
       const taskController = new TaskController()
-      const taskId = await taskController.createTask(taskData as TaskCreateRequest)
-      return taskId
-    } catch (error) {
-      console.error('Failed to create task:', error)
-      throw error
-    }
-  })
+      return taskController.createTask(input as unknown as TaskCreateRequest)
+    },
+  )
 
-  // Update task
-  ipcMain.handle('task:update', async (event: IpcMainInvokeEvent, taskData: unknown) => {
-    try {
+  registerValidatedHandler(
+    'task:update',
+    taskWriteInputSchema,
+    async (input) => {
       const taskController = new TaskController()
-      const success = await taskController.updateTask(taskData as TaskUpdateRequest)
-      return success
-    } catch (error) {
-      console.error('Failed to update task:', error)
-      throw error
-    }
-  })
+      return taskController.updateTask(input as unknown as TaskUpdateRequest)
+    },
+  )
 
-  // Delete task
-  ipcMain.handle('task:delete', async (event: IpcMainInvokeEvent, args: unknown) => {
-    try {
-      const { id } = args as { id: number }
+  registerValidatedHandler(
+    'task:delete',
+    taskByIdInputSchema,
+    async (input) => {
       const taskController = new TaskController()
-      const success = await taskController.deleteTask(id)
-      return success
-    } catch (error) {
-      console.error('Failed to delete task:', error)
-      throw error
-    }
-  })
+      return taskController.deleteTask(input.id)
+    },
+  )
 
-  // Get task list
-  ipcMain.handle('task:list', async (event: IpcMainInvokeEvent, args: unknown) => {
-    try {
-      const { page, size, search } = args as { page: number; size: number; search?: string }
+  registerValidatedHandler(
+    'task:list',
+    taskListInputSchema,
+    async (input) => {
       const taskController = new TaskController()
-      const result = await taskController.getTaskList(page, size, search)
-      return result
-    } catch (error) {
-      console.error('Failed to get task list:', error)
-      throw error
-    }
-  })
+      return taskController.getTaskList(input.page, input.size, input.search)
+    },
+  )
 
-  // Get task detail
-  ipcMain.handle('task:detail', async (event: IpcMainInvokeEvent, args: unknown) => {
-    try {
-      const { id } = args as { id: number }
+  registerValidatedHandler(
+    'task:detail',
+    taskByIdInputSchema,
+    async (input) => {
       const taskController = new TaskController()
-      const task = await taskController.getTaskDetail(id)
-      return task
-    } catch (error) {
-      console.error('Failed to get task detail:', error)
-      throw error
-    }
-  })
+      return taskController.getTaskDetail(input.id)
+    },
+  )
 
-  // Run task
-  ipcMain.handle('task:run', async (event: IpcMainInvokeEvent, args: unknown) => {
-    try {
-      const { id } = args as { id: number }
+  registerValidatedHandler(
+    'task:run',
+    taskByIdInputSchema,
+    async (input) => {
       const taskController = new TaskController()
-      const success = await taskController.runTask(id)
-      return success
-    } catch (error) {
-      console.error('Failed to run task:', error)
-      throw error
-    }
-  })
+      return taskController.runTask(input.id)
+    },
+  )
 
-  // Cancel task
-  ipcMain.handle('task:cancel', async (event: IpcMainInvokeEvent, args: unknown) => {
-    try {
-      const { id } = args as { id: number }
+  registerValidatedHandler(
+    'task:cancel',
+    taskByIdInputSchema,
+    async (input) => {
       const taskController = new TaskController()
-      const success = await taskController.cancelTask(id)
-      return success
-    } catch (error) {
-      console.error('Failed to cancel task:', error)
-      throw error
-    }
-  })
+      return taskController.cancelTask(input.id)
+    },
+  )
 
-  // Get task results
-  ipcMain.handle('task:results', async (event: IpcMainInvokeEvent, args: unknown) => {
-    try {
-      const { id, page, size } = args as { id: number; page: number; size: number }
+  registerValidatedHandler(
+    'task:results',
+    taskResultsInputSchema,
+    async (input) => {
       const taskController = new TaskController()
-      const results = await taskController.getTaskResults(id, page, size)
-      return results
-    } catch (error) {
-      console.error('Failed to get task results:', error)
-      throw error
-    }
-  })
+      return taskController.getTaskResults(input.id, input.page, input.size)
+    },
+  )
 
-  // Platform management
-  ipcMain.handle('platform:list', async (event) => {
-    try {
-      // TODO: Implement platform list retrieval
+  registerValidatedHandler(
+    'platform:list',
+    taskPlatformListInputSchema,
+    async () => {
+      // TODO: Implement platform list retrieval (placeholder data)
       const platforms = [
         {
           id: 'google',
@@ -121,12 +112,8 @@ export function registerTaskIpcHandlers(mainWindow: BrowserWindow) {
           config: {
             baseUrl: 'https://www.google.com',
             searchEndpoint: '/search',
-            selectors: {
-              results: '.g',
-              title: 'h3',
-              url: 'a[href]'
-            }
-          }
+            selectors: { results: '.g', title: 'h3', url: 'a[href]' },
+          },
         },
         {
           id: 'linkedin',
@@ -140,19 +127,12 @@ export function registerTaskIpcHandlers(mainWindow: BrowserWindow) {
             selectors: {
               results: '.search-result',
               title: '.result-title',
-              url: 'a[href]'
-            }
-          }
-        }
+              url: 'a[href]',
+            },
+          },
+        },
       ]
-      
-      return {
-        platforms,
-        total: platforms.length
-      }
-    } catch (error) {
-      console.error('Failed to get platform list:', error)
-      throw error
-    }
-  })
+      return { platforms, total: platforms.length }
+    },
+  )
 }
