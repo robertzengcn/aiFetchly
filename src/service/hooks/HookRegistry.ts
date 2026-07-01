@@ -37,6 +37,8 @@ export interface HookLookupInput {
 export interface HookRegistryApi {
   registerBuiltinHook(hook: CallbackHookDefinition): void;
   registerSessionHook(sessionId: string, hook: HookDefinition): void;
+  registerUserHook(hook: HookDefinition): void;
+  replaceUserHooks(hooks: HookDefinition[]): void;
   clearSessionHooks(sessionId: string): void;
   getMatchingHooks(input: HookLookupInput): readonly HookDefinition[];
   /** Test-only: wipe all hooks including built-ins. */
@@ -68,6 +70,24 @@ class HookRegistryImpl implements HookRegistryApi {
     this.push(hook, sessionId);
   }
 
+  registerUserHook(hook: HookDefinition): void {
+    this.assertNoLeak(hook);
+    this.push(hook);
+  }
+
+  replaceUserHooks(hooks: HookDefinition[]): void {
+    // Remove all existing user-source entries from every event list.
+    for (const list of this.byEvent.values()) {
+      const filtered = list.filter((e) => e.hook.source !== "user");
+      list.length = 0;
+      list.push(...filtered);
+    }
+    // Push the new user hooks.
+    for (const hook of hooks) {
+      this.push(hook);
+    }
+  }
+
   clearSessionHooks(sessionId: string): void {
     if (!sessionId) return;
     for (const list of this.byEvent.values()) {
@@ -91,7 +111,8 @@ class HookRegistryImpl implements HookRegistryApi {
       // Untrusted command hooks are excluded — trust gate is enforced
       // at registration time for command hooks, but defense-in-depth.
       if (entry.hook.type === "command" && !entry.hook.trusted) continue;
-      if (!matchesHookMatcher(entry.hook.matcher, input.matchQuery ?? "")) continue;
+      if (!matchesHookMatcher(entry.hook.matcher, input.matchQuery ?? ""))
+        continue;
       if (seen.has(entry.hook.id)) continue;
       seen.add(entry.hook.id);
       matched.push(entry);
