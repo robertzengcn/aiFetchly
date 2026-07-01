@@ -33,12 +33,15 @@ export interface HookDispatcherApi {
 }
 
 class HookDispatcherImpl implements HookDispatcherApi {
+  /** Cached once — Token construction reads the electron-store file. */
+  private readonly token = new Token();
+
   async executeHooks(args: ExecuteHooksInput): Promise<AggregatedHookResult> {
     // Global enable gate — Token-backed so the System Settings UI
     // can toggle the whole subsystem without touching dispatcher
     // internals. Defaults to OFF when the Token value is unset,
     // matching the PRD's "disabled by default" intent.
-    if (new Token().getValue(USER_HOOKS_ENABLED) !== "true") {
+    if (this.token.getValue(USER_HOOKS_ENABLED) !== "true") {
       return EMPTY_AGGREGATE;
     }
 
