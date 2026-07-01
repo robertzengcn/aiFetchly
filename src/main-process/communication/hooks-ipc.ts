@@ -103,7 +103,7 @@ export function registerHooksIpcHandlers(): void {
       await module.deleteById(data.id);
       return ok({ ok: true });
     } catch (err: unknown) {
-      return fail(String(err));
+      return fail(`hooks:delete failed: ${String(err)}`);
     }
   });
 
@@ -147,7 +147,7 @@ export function registerHooksIpcHandlers(): void {
         source: "builtin",
       });
     } catch (err: unknown) {
-      return fail(String(err));
+      return fail(`hooks:setEnabled failed: ${String(err)}`);
     }
   });
 
@@ -164,7 +164,7 @@ export function registerHooksIpcHandlers(): void {
       const updated = await module.setTrusted(data.id, data.trusted as boolean);
       return ok(updated);
     } catch (err: unknown) {
-      return fail(String(err));
+      return fail(`hooks:setTrusted failed: ${String(err)}`);
     }
   });
 
@@ -173,7 +173,7 @@ export function registerHooksIpcHandlers(): void {
       const t = new Token();
       return ok(t.getValue(USER_HOOKS_ENABLED) === "true");
     } catch (err: unknown) {
-      return fail(String(err));
+      return fail(`hooks:getGlobalEnable failed: ${String(err)}`);
     }
   });
 
@@ -188,7 +188,7 @@ export function registerHooksIpcHandlers(): void {
       );
       return ok(data.enabled as boolean);
     } catch (err: unknown) {
-      return fail(String(err));
+      return fail(`hooks:setGlobalEnable failed: ${String(err)}`);
     }
   });
 
@@ -215,7 +215,7 @@ export function registerHooksIpcHandlers(): void {
       });
       return ok(result);
     } catch (err: unknown) {
-      return fail(String(err));
+      return fail(`hooks:listAudit failed: ${String(err)}`);
     }
   });
 }

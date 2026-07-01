@@ -2,18 +2,24 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 
 // Test-only ipcMain shim. Captures handlers so tests can invoke them directly.
 vi.mock("electron", () => {
-  const handlers = new Map<string, (e: unknown, data: unknown) => Promise<unknown>>();
+  const handlers = new Map<
+    string,
+    (e: unknown, data: unknown) => Promise<unknown>
+  >();
   return {
     ipcMain: {
-      handle(channel: string, fn: (e: unknown, data: unknown) => Promise<unknown>) {
+      handle(
+        channel: string,
+        fn: (e: unknown, data: unknown) => Promise<unknown>
+      ) {
         handlers.set(channel, fn);
       },
       _handledChannels: () => Array.from(handlers.keys()),
       _invoke: (channel: string, data: unknown) =>
-        (handlers.get(channel) ?? (() => Promise.reject(new Error("no handler"))))(
-          undefined,
-          data
-        ),
+        (
+          handlers.get(channel) ??
+          (() => Promise.reject(new Error("no handler")))
+        )(undefined, data),
       _clear: () => handlers.clear(),
     },
   };
@@ -24,8 +30,12 @@ const fakeHook = {
   create: vi.fn().mockResolvedValue({ id: "u1", source: "user" }),
   update: vi.fn().mockResolvedValue({ id: "u1", source: "user" }),
   deleteById: vi.fn().mockResolvedValue(undefined),
-  setEnabled: vi.fn().mockResolvedValue({ id: "u1", enabled: true, source: "user" }),
-  setTrusted: vi.fn().mockResolvedValue({ id: "u1", trusted: true, source: "user" }),
+  setEnabled: vi
+    .fn()
+    .mockResolvedValue({ id: "u1", enabled: true, source: "user" }),
+  setTrusted: vi
+    .fn()
+    .mockResolvedValue({ id: "u1", trusted: true, source: "user" }),
   listUserHooks: vi.fn().mockResolvedValue([{ id: "u1", source: "user" }]),
   findById: vi.fn().mockResolvedValue(null),
   loadUserHooksIntoRegistry: vi.fn().mockResolvedValue(undefined),
@@ -46,7 +56,9 @@ vi.mock("@/modules/HookAuditModule", () => ({
 
 vi.mock("@/modules/token", () => ({
   Token: vi.fn().mockImplementation(() => ({
-    getValue: vi.fn((key: string) => (key === "user_hooks_enabled" ? "true" : "")),
+    getValue: vi.fn((key: string) =>
+      key === "user_hooks_enabled" ? "true" : ""
+    ),
     setValue: vi.fn(),
   })),
 }));
@@ -159,5 +171,40 @@ describe("hooks-ipc handlers", () => {
     })) as { status: boolean; data: boolean };
     expect(result.status).toBe(true);
     expect(result.data).toBe(true);
+  });
+
+  it("hooks:setEnabled updates DB when hook exists (user hook path)", async () => {
+    // findById returns a truthy value → user hook path
+    fakeHook.findById.mockResolvedValueOnce({ id: "u1", source: "user" });
+    const result = (await mockedIpc._invoke("hooks:setEnabled", {
+      id: "u1",
+      enabled: true,
+    })) as {
+      status: boolean;
+      data: { id: string; enabled: boolean; source: string };
+    };
+    expect(result.status).toBe(true);
+    expect(result.data).toEqual({ id: "u1", enabled: true, source: "user" });
+    expect(fakeHook.setEnabled).toHaveBeenCalledWith("u1", true);
+  });
+
+  it("hooks:setEnabled writes Token override when hook is not in DB (builtin path)", async () => {
+    // findById returns null → builtin path, persist override in Token
+    fakeHook.findById.mockResolvedValueOnce(null);
+    const result = (await mockedIpc._invoke("hooks:setEnabled", {
+      id: "builtin-x",
+      enabled: false,
+    })) as {
+      status: boolean;
+      data: { id: string; enabled: boolean; source: string };
+    };
+    expect(result.status).toBe(true);
+    expect(result.data).toEqual({
+      id: "builtin-x",
+      enabled: false,
+      source: "builtin",
+    });
+    // fakeHook.setEnabled should NOT have been called for builtins
+    expect(fakeHook.setEnabled).not.toHaveBeenCalled();
   });
 });
