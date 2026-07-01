@@ -6,7 +6,7 @@ import { USERSDBPATH } from "@/config/usersetting";
 
 /**
  * Data access for persisted user hooks. Main-process only — the
- * constructor throws when `process.env.DATABASE_PATH` is set, which
+ * constructor throws when `process.env.WORKER_TYPE` is set, which
  * is how worker processes are detected project-wide.
  */
 export type NewHookRow = Omit<
@@ -41,11 +41,17 @@ export type HookPatch = Partial<
   >
 >;
 
+/**
+ * Does NOT extend BaseDb because the worker-process guard must run
+ * before `super()`, which TypeScript requires to be the first call
+ * in a subclass constructor. Standalone class with explicit dbpath
+ * resolution instead.
+ */
 export class HookModel {
   private readonly dbpath: string;
 
   constructor(dbpath: string) {
-    if (process.env.DATABASE_PATH) {
+    if (process.env.WORKER_TYPE) {
       throw new Error(
         "Direct database access from worker process is not allowed. " +
           "Worker should send data to main process via IPC for database operations."
