@@ -143,6 +143,7 @@ export default {
     mcp_tools: "Outils MCP",
     skills: "Compétences",
     skills_management: "Gestion des Compétences",
+    hooks_management: "Gestion des Hooks",
     plugins: "Plugins",
     google_maps_scraper: "Recherche de Commerces Locaux",
     map_scraper: "Recherche de Commerces Locaux",
@@ -1125,22 +1126,28 @@ export default {
     chrome_path: "chrome path",
     firefox_path: "firefox path",
     embedding_group: "Modèles d'Embedding",
-    embedding_group_description: "Modèle d'embedding par défaut pour la recherche vectorielle.",
+    embedding_group_description:
+      "Modèle d'embedding par défaut pour la recherche vectorielle.",
     external_system: "Système Externe",
     user_preferences: "Préférences Utilisateur",
-    "user-preferences-group-description": "Préférences utilisateur pour le comportement de l'application.",
+    "user-preferences-group-description":
+      "Préférences utilisateur pour le comportement de l'application.",
     default_embedding_model: "Modèle d'Embedding par Défaut",
-    "default-embedding-model-description": "Sélectionnez le modèle d'embedding utilisé pour la recherche vectorielle et la correspondance de similarité.",
+    "default-embedding-model-description":
+      "Sélectionnez le modèle d'embedding utilisé pour la recherche vectorielle et la correspondance de similarité.",
     language_preference: "Langue",
     "language-preference-description": "Préférence de langue de l'interface.",
     ai_website_analysis_business_info: "Informations Commerciales",
-    "ai-website-analysis-business-info-description": "Informations commerciales utilisées lors de l'analyse IA du site web.",
+    "ai-website-analysis-business-info-description":
+      "Informations commerciales utilisées lors de l'analyse IA du site web.",
     "external-system-group-description": "external system group setting",
     mcp_tools: "MCP Tools",
     manage_mcp_tools: "Manage MCP Tools",
     manage_skills: "Gérer les compétences",
+    manage_hooks: "Gérer les Hooks",
     ai_preferences: "Préférences IA",
-    "ai-preferences-group-description": "Paramètres contrôlant le comportement du chat IA, la mémoire et le contexte.",
+    "ai-preferences-group-description":
+      "Paramètres contrôlant le comportement du chat IA, la mémoire et le contexte.",
     user_ai_auto_dream: "Consolidation Auto-Rêve",
     "ai-auto-dream-description":
       "Résumer automatiquement les conversations passées en arrière-plan pour économiser les tokens de contexte IA.",

@@ -76,6 +76,18 @@ export const constantRoutes: RouteRecordRaw[] = [
         children: [],
       },
       {
+        path: "hooks",
+        name: "system_setting_hooks",
+        meta: {
+          title: "route.hooks_management",
+          icon: "mdi-hook",
+          keepAlive: false,
+          visible: false,
+        },
+        component: () => import("@/views/pages/systemsetting/Hooks.vue"),
+        children: [],
+      },
+      {
         path: "plugins",
         name: "system_setting_plugins",
         meta: {

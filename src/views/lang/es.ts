@@ -143,6 +143,7 @@ export default {
     mcp_tools: "Herramientas MCP",
     skills: "Habilidades",
     skills_management: "Gestión de Habilidades",
+    hooks_management: "Gestión de Hooks",
     plugins: "Complementos",
     google_maps_scraper: "Buscador de Negocios Locales",
     map_scraper: "Buscador de Negocios Locales",
@@ -1139,23 +1140,29 @@ export default {
     chrome_path: "Ruta de Chrome",
     firefox_path: "Ruta de Firefox",
     embedding_group: "Modelos de Embedding",
-    embedding_group_description: "Modelo de embedding predeterminado para búsqueda vectorial.",
+    embedding_group_description:
+      "Modelo de embedding predeterminado para búsqueda vectorial.",
     external_system: "Sistema Externo",
     user_preferences: "Preferencias de Usuario",
-    "user-preferences-group-description": "Preferencias a nivel de usuario para el comportamiento de la aplicación.",
+    "user-preferences-group-description":
+      "Preferencias a nivel de usuario para el comportamiento de la aplicación.",
     default_embedding_model: "Modelo de Embedding Predeterminado",
-    "default-embedding-model-description": "Seleccione el modelo de embedding utilizado para la búsqueda vectorial y la coincidencia de similitud.",
+    "default-embedding-model-description":
+      "Seleccione el modelo de embedding utilizado para la búsqueda vectorial y la coincidencia de similitud.",
     language_preference: "Idioma",
     "language-preference-description": "Preferencia de idioma de la interfaz.",
     ai_website_analysis_business_info: "Información de Negocio",
-    "ai-website-analysis-business-info-description": "Información comercial utilizada durante el análisis de IA del sitio web.",
+    "ai-website-analysis-business-info-description":
+      "Información comercial utilizada durante el análisis de IA del sitio web.",
     "external-system-group-description":
       "Configuración del grupo de sistema externo",
     mcp_tools: "Herramientas MCP",
     manage_mcp_tools: "Gestionar herramientas MCP",
     manage_skills: "Gestionar habilidades",
+    manage_hooks: "Administrar Hooks",
     ai_preferences: "Preferencias de IA",
-    "ai-preferences-group-description": "Configuración que controla el comportamiento del chat de IA, la memoria y el contexto.",
+    "ai-preferences-group-description":
+      "Configuración que controla el comportamiento del chat de IA, la memoria y el contexto.",
     user_ai_auto_dream: "Consolidación Auto-Sueño",
     "ai-auto-dream-description":
       "Resumir automáticamente conversaciones pasadas en segundo plano para ahorrar tokens de contexto de IA.",
