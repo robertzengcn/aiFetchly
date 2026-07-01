@@ -95,6 +95,25 @@ function clearAllTokens(): void {
 }
 
 /**
+ * Safely stringify any thrown value for logging. Avoids "[object Object]".
+ */
+function safeErrorString(value: unknown): string {
+  if (value === null) return "null";
+  if (value === undefined) return "undefined";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean")
+    return String(value);
+  if (value instanceof Error) {
+    return `${value.name}: ${value.message}`;
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return Object.prototype.toString.call(value);
+  }
+}
+
+/**
  * Attaches UI-facing side-effects to the loopback callback outcome.
  *
  * On success: sends LOGIN_STATUS:processing (the completion module
@@ -131,7 +150,8 @@ function attachLoopbackCompletionHandlers(
       clearPendingDesktopAuth();
     })
     .catch((err: unknown) => {
-      // Promise rejected — abort() or timeout. Extract the kind if available.
+      // Promise rejected — abort(), timeout, or an unexpected throw.
+      // Extract the kind if available (loopback CallbackError shapes).
       const kind =
         err && typeof err === "object" && "kind" in err
           ? String((err as { kind: unknown }).kind)
@@ -147,9 +167,14 @@ function attachLoopbackCompletionHandlers(
         dialog.showErrorBox("Login Timed Out", message);
         return;
       }
-      const message = err instanceof Error ? err.message : String(err);
+      // Serialize the error safely — avoid "[object Object]" for non-Error
+      // thrown values. Log the full object for debugging.
+      const message = err instanceof Error ? err.message : safeErrorString(err);
       log.error("[desktop-login] unexpected error during callback processing", {
         error: message,
+        kind,
+        stack: err instanceof Error ? err.stack : undefined,
+        raw: safeErrorString(err),
       });
       const win = resolveMainWindow();
       sendLoginStatus(win, "error", `Login failed: ${message}`);

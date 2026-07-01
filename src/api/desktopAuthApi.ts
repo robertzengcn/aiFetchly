@@ -1,5 +1,6 @@
 "use strict";
 import { resolveViteLoginBase } from "@/config/viteLoginUrl";
+import { log } from "@/modules/Logger";
 
 /**
  * Request body for POST /api/desktop-auth/exchange.
@@ -216,6 +217,16 @@ export class DesktopAuthApi {
       Partial<ExchangeErrorResponse> &
       WrappedResponse<ExchangeSuccessResponse>;
 
+    log.debug("[DesktopAuthApi] exchange response parsed", {
+      httpStatus: res.status,
+      httpOk: res.ok,
+      hasStatus: typeof shape?.status,
+      hasData: !!shape?.data,
+      hasError: typeof shape?.error,
+      hasAccessToken: shape?.data && typeof shape.data.accessToken === "string",
+      keys: Object.keys((body as Record<string, unknown> | null) ?? {}),
+    });
+
     // Error body from the backend (raw, not enveloped): { error: "invalid_grant" }
     if (shape && typeof shape.error === "string") {
       return {
@@ -235,7 +246,13 @@ export class DesktopAuthApi {
       ) {
         return { ok: true, data: tokens };
       }
-      // status:true but data shape is wrong
+      // status:true but data shape is wrong — log what we actually got
+      log.error("[DesktopAuthApi] status:true but data malformed", {
+        dataKeys: Object.keys(tokens ?? {}),
+        accessTokenType: typeof tokens?.accessToken,
+        refreshTokenType: typeof tokens?.refreshToken,
+        expiresInType: typeof tokens?.expiresIn,
+      });
       return {
         ok: false,
         reason: "bad_response",
@@ -262,10 +279,35 @@ export class DesktopAuthApi {
       return { ok: true, data: shape as ExchangeSuccessResponse };
     }
 
+    // Log the raw body before returning bad_response so we can diagnose
+    // unexpected shapes without guessing.
+    log.error("[DesktopAuthApi] falling through to bad_response", {
+      httpStatus: res.status,
+      httpOk: res.ok,
+      bodyKeys: Object.keys((body as Record<string, unknown> | null) ?? {}),
+      bodyPreview: safeBodyPreview(body),
+    });
+
     return {
       ok: false,
       reason: "bad_response",
       message: "unexpected response shape from exchange endpoint",
     };
+  }
+}
+
+/**
+ * Safely preview a response body for debug logging. Redacts token values
+ * but shows the structure so unexpected shapes can be diagnosed.
+ */
+function safeBodyPreview(body: unknown): string {
+  try {
+    const json = JSON.stringify(body);
+    if (json.length > 500) {
+      return json.substring(0, 500) + "...(truncated)";
+    }
+    return json;
+  } catch {
+    return "(non-serializable body)";
   }
 }
