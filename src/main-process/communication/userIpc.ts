@@ -95,25 +95,6 @@ function clearAllTokens(): void {
 }
 
 /**
- * Safely stringify any thrown value for logging. Avoids "[object Object]".
- */
-function safeErrorString(value: unknown): string {
-  if (value === null) return "null";
-  if (value === undefined) return "undefined";
-  if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean")
-    return String(value);
-  if (value instanceof Error) {
-    return `${value.name}: ${value.message}`;
-  }
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return Object.prototype.toString.call(value);
-  }
-}
-
-/**
  * Attaches UI-facing side-effects to the loopback callback outcome.
  *
  * On success: sends LOGIN_STATUS:processing (the completion module
@@ -167,14 +148,12 @@ function attachLoopbackCompletionHandlers(
         dialog.showErrorBox("Login Timed Out", message);
         return;
       }
-      // Serialize the error safely — avoid "[object Object]" for non-Error
-      // thrown values. Log the full object for debugging.
-      const message = err instanceof Error ? err.message : safeErrorString(err);
+      // For any other rejection (state mismatch, listen error, unexpected
+      // throw), use the kind as the message for non-Error values to avoid
+      // "[object Object]".
+      const message = err instanceof Error ? err.message : kind;
       log.error("[desktop-login] unexpected error during callback processing", {
         error: message,
-        kind,
-        stack: err instanceof Error ? err.stack : undefined,
-        raw: safeErrorString(err),
       });
       const win = resolveMainWindow();
       sendLoginStatus(win, "error", `Login failed: ${message}`);
@@ -218,6 +197,13 @@ export function registerUserIpcHandlers(
    */
   ipcMain.handle(GET_LOGIN_URL, async (event, data) => {
     try {
+      // Abort any previous handoff BEFORE creating the new one. The old
+      // cancel() closes the old loopback server and clears old pending
+      // state. If we did this AFTER prepareDesktopLogin(), the old cancel
+      // would wipe the fresh pending auth (global singleton) and the new
+      // callback would arrive to find "no pending auth".
+      setActiveDesktopLoginCancel(null);
+
       const userControll = new UserController();
       const prepared = await userControll.prepareDesktopLogin();
       setActiveDesktopLoginCancel(prepared.cancel);

@@ -71,8 +71,6 @@ export async function consumeDesktopAuthCode(
 ): Promise<ConsumeCodeResult> {
   const { code, state, win } = input;
 
-  log.info("[consumeDesktopAuthCode] step 1: validate pending auth");
-
   // 1. Validate state against the pending handoff (CSRF defense).
   const pending = getPendingDesktopAuth();
   if (!pending) {
@@ -97,34 +95,10 @@ export async function consumeDesktopAuthCode(
   const { codeVerifier, redirectUri } = pending;
   clearPendingDesktopAuth();
 
-  log.info("[consumeDesktopAuthCode] step 2: resolve device fingerprint");
-
   // 2. Resolve device fingerprint.
-  let deviceIdHash: string;
-  let deviceName: string;
-  try {
-    const deviceFingerprintService = new DeviceFingerprintService();
-    deviceIdHash = deviceFingerprintService.getDeviceIdHash();
-    deviceName = deviceFingerprintService.getDeviceName();
-  } catch (fingerprintErr) {
-    const errMsg =
-      fingerprintErr instanceof Error
-        ? fingerprintErr.message
-        : safeStringify(fingerprintErr);
-    log.error("[consumeDesktopAuthCode] device fingerprint failed", {
-      error: errMsg,
-    });
-    return {
-      ok: false,
-      reason: "completion_failed",
-      message: `Failed to resolve device info: ${errMsg}`,
-    };
-  }
-
-  log.info("[consumeDesktopAuthCode] step 3: exchange code for tokens", {
-    redirectUri,
-    codePrefix: code.substring(0, 6) + "...",
-  });
+  const deviceFingerprintService = new DeviceFingerprintService();
+  const deviceIdHash = deviceFingerprintService.getDeviceIdHash();
+  const deviceName = deviceFingerprintService.getDeviceName();
 
   // 3. Exchange the one-time code for tokens over HTTPS.
   const desktopAuthApi = new DesktopAuthApi();
@@ -149,36 +123,13 @@ export async function consumeDesktopAuthCode(
     };
   }
 
-  log.info("[consumeDesktopAuthCode] step 4: complete desktop login", {
-    expiresIn: exchangeResult.data.expiresIn,
-    hasRefreshToken: !!exchangeResult.data.refreshToken,
-    hasUser: !!exchangeResult.data.user,
-  });
-
   // 4. Persist tokens + run the post-login cascade.
-  let completion;
-  try {
-    completion = await completeDesktopLogin(win, {
-      accessToken: exchangeResult.data.accessToken,
-      refreshToken: exchangeResult.data.refreshToken,
-      expiresIn: exchangeResult.data.expiresIn,
-      refreshExpiresIn: exchangeResult.data.refreshExpiresIn,
-    });
-  } catch (completionErr) {
-    const errMsg =
-      completionErr instanceof Error
-        ? completionErr.message
-        : safeStringify(completionErr);
-    log.error("[consumeDesktopAuthCode] completeDesktopLogin threw", {
-      error: errMsg,
-      stack: completionErr instanceof Error ? completionErr.stack : undefined,
-    });
-    return {
-      ok: false,
-      reason: "completion_failed",
-      message: `Failed to complete sign-in: ${errMsg}`,
-    };
-  }
+  const completion = await completeDesktopLogin(win, {
+    accessToken: exchangeResult.data.accessToken,
+    refreshToken: exchangeResult.data.refreshToken,
+    expiresIn: exchangeResult.data.expiresIn,
+    refreshExpiresIn: exchangeResult.data.refreshExpiresIn,
+  });
 
   if (!completion.ok) {
     log.error("[consumeDesktopAuthCode] completeDesktopLogin failed", {
@@ -192,29 +143,7 @@ export async function consumeDesktopAuthCode(
     };
   }
 
-  log.info("[consumeDesktopAuthCode] step 5: login completed successfully");
   return { ok: true };
-}
-
-/**
- * Safely stringify any value (including non-Error objects, plain objects,
- * circular structures) for logging. Avoids the "[object Object]" problem.
- */
-function safeStringify(value: unknown): string {
-  if (value === null) return "null";
-  if (value === undefined) return "undefined";
-  if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean")
-    return String(value);
-  if (value instanceof Error) {
-    return `${value.name}: ${value.message}\n${value.stack ?? ""}`;
-  }
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    // Circular or non-serializable
-    return Object.prototype.toString.call(value);
-  }
 }
 
 /** Map exchange failure reasons to user-facing copy. */
