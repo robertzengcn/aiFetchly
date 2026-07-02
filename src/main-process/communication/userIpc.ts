@@ -131,7 +131,8 @@ function attachLoopbackCompletionHandlers(
       clearPendingDesktopAuth();
     })
     .catch((err: unknown) => {
-      // Promise rejected — abort() or timeout. Extract the kind if available.
+      // Promise rejected — abort(), timeout, or an unexpected throw.
+      // Extract the kind if available (loopback CallbackError shapes).
       const kind =
         err && typeof err === "object" && "kind" in err
           ? String((err as { kind: unknown }).kind)
@@ -147,7 +148,10 @@ function attachLoopbackCompletionHandlers(
         dialog.showErrorBox("Login Timed Out", message);
         return;
       }
-      const message = err instanceof Error ? err.message : String(err);
+      // For any other rejection (state mismatch, listen error, unexpected
+      // throw), use the kind as the message for non-Error values to avoid
+      // "[object Object]".
+      const message = err instanceof Error ? err.message : kind;
       log.error("[desktop-login] unexpected error during callback processing", {
         error: message,
       });
@@ -193,6 +197,13 @@ export function registerUserIpcHandlers(
    */
   ipcMain.handle(GET_LOGIN_URL, async (event, data) => {
     try {
+      // Abort any previous handoff BEFORE creating the new one. The old
+      // cancel() closes the old loopback server and clears old pending
+      // state. If we did this AFTER prepareDesktopLogin(), the old cancel
+      // would wipe the fresh pending auth (global singleton) and the new
+      // callback would arrive to find "no pending auth".
+      setActiveDesktopLoginCancel(null);
+
       const userControll = new UserController();
       const prepared = await userControll.prepareDesktopLogin();
       setActiveDesktopLoginCancel(prepared.cancel);

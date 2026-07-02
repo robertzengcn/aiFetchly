@@ -323,6 +323,16 @@ import {
   AI_WORKSPACE_LIST,
   // Dialog Channels
   DIALOG_PICK_FOLDER,
+  // Hooks system channels — Phase 4
+  HOOKS_LIST,
+  HOOKS_CREATE,
+  HOOKS_UPDATE,
+  HOOKS_DELETE,
+  HOOKS_SET_ENABLED,
+  HOOKS_SET_TRUSTED,
+  HOOKS_GET_GLOBAL_ENABLE,
+  HOOKS_SET_GLOBAL_ENABLE,
+  HOOKS_LIST_AUDIT,
 } from "@/config/channellist";
 
 // window.ipcRenderer = ipcRenderer
@@ -822,6 +832,16 @@ contextBridge.exposeInMainWorld("api", {
       AI_WORKSPACE_LIST,
       // Dialog Channels
       DIALOG_PICK_FOLDER,
+      // Hooks system channels — Phase 4
+      HOOKS_LIST,
+      HOOKS_CREATE,
+      HOOKS_UPDATE,
+      HOOKS_DELETE,
+      HOOKS_SET_ENABLED,
+      HOOKS_SET_TRUSTED,
+      HOOKS_GET_GLOBAL_ENABLE,
+      HOOKS_SET_GLOBAL_ENABLE,
+      HOOKS_LIST_AUDIT,
     ];
     if (validChannels.includes(channel)) {
       return ipcRenderer.invoke(channel, data);
