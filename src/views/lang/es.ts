@@ -1918,6 +1918,17 @@ export default {
     thinking: "La IA está pensando…",
     reconnecting: "Reconectando…",
     reconnect_attempt: "(intento {n}/{max})",
+    recovery: {
+      attempt: "(intento {n}/{max})",
+      stop_hint: "Pulsa Detener para cancelar",
+      api_retry: "Reconectando al servidor de IA…",
+      overload_retry: "Servidor de IA saturado, reintentando…",
+      output_token_recovery: "Recuperando respuesta truncada…",
+      reactive_compact: "Resumiendo conversación para caber en el contexto…",
+      context_collapse_drain: "Recortando contexto anterior…",
+      model_fallback: "Cambiando a un modelo de respaldo…",
+      persistent_retry: "Reintentando en segundo plano…",
+    },
     cancelled: "Cancelado",
     ai_disabled:
       "La funcionalidad de IA solo está disponible para suscriptores.",

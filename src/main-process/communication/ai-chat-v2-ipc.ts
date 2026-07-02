@@ -10,6 +10,7 @@ import { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
 import type { AIChatQueryLoopDeps } from "@/service/AIChatQueryLoop";
 import { AIChatQueryEngine } from "@/service/AIChatQueryEngine";
 import { AIChatCompactAgentService } from "@/service/AIChatCompactAgentService";
+import { AIChatModelFallbackService } from "@/service/AIChatModelFallbackService";
 import { getSharedAutoDreamService } from "@/service/AIAutoDreamFactory";
 import { AIChatToolApprovalModule } from "@/modules/AIChatToolApprovalModule";
 import { evaluateToolApproval } from "@/service/AIChatToolApprovalPolicyService";
@@ -112,6 +113,12 @@ function createQueryLoop(): AIChatQueryLoop {
       return SkillExecutor.execute(name, args, context);
     },
     getSkillDefinition: (name) => SkillRegistry.getSkill(name) ?? undefined,
+    resolveFallbackModel: async ({ originalModel, currentModel, reason }) => {
+      // Lazily construct the fallback service so we don't pay the catalog
+      // fetch on every loop construction — only when recovery triggers.
+      const svc = new AIChatModelFallbackService();
+      return svc.resolve({ originalModel, currentModel, reason });
+    },
   };
   return new AIChatQueryLoop(deps);
 }
@@ -217,6 +224,23 @@ function createEventSink(event: IpcEventLike): AIChatQueryEventSink {
             retryAttempt: e.retryAttempt,
             retryMaxAttempts: e.retryMaxAttempts,
             retryDelayMs: e.retryDelayMs,
+          });
+          break;
+        case "recovery_status":
+          sendChunk(event, {
+            eventType: "recovery_status",
+            conversationId: e.conversationId,
+            messageId: e.messageId,
+            recoveryLayer: e.layer,
+            recoveryReason: e.reason,
+            recoveryAttempt: e.attempt,
+            recoveryMaxAttempts: e.maxAttempts,
+            recoveryDelayMs: e.delayMs,
+            recoveryElapsedMs: e.elapsedMs,
+            recoveryOriginalModel: e.originalModel,
+            recoveryCurrentModel: e.currentModel,
+            recoveryFallbackModel: e.fallbackModel,
+            recoveryMessage: e.message,
           });
           break;
         case "tool_progress":
