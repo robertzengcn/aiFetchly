@@ -7,6 +7,7 @@ import type {
   OpenAIToolCall,
   OpenAIToolChoice,
   ToolExecutionResult,
+  StreamRecoveryInfo,
   StreamRetryInfo,
 } from "@/api/aiChatApi";
 import type {
@@ -212,6 +213,7 @@ export interface AIChatQueryLoopDeps {
     options?: {
       signal?: AbortSignal;
       onRetry?: (info: StreamRetryInfo) => void;
+      onRecoveryStatus?: (info: StreamRecoveryInfo) => void;
     }
   ): Promise<void>;
 
@@ -367,6 +369,19 @@ export class AIChatQueryLoop {
                 retryAttempt: info.attempt,
                 retryMaxAttempts: info.maxAttempts,
                 retryDelayMs: info.delayMs,
+              });
+            },
+            onRecoveryStatus: (info) => {
+              eventSink.emit({
+                type: "recovery_status",
+                conversationId: input.conversationId,
+                messageId: input.assistantMessageId,
+                layer: info.layer,
+                reason: info.reason,
+                attempt: info.attempt,
+                maxAttempts: info.maxAttempts,
+                delayMs: info.delayMs,
+                message: info.message,
               });
             },
           }

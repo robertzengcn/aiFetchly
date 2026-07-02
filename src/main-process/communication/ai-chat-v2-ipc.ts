@@ -217,6 +217,23 @@ function createEventSink(event: IpcEventLike): AIChatQueryEventSink {
             retryDelayMs: e.retryDelayMs,
           });
           break;
+        case "recovery_status":
+          sendChunk(event, {
+            eventType: "recovery_status",
+            conversationId: e.conversationId,
+            messageId: e.messageId,
+            recoveryLayer: e.layer,
+            recoveryReason: e.reason,
+            recoveryAttempt: e.attempt,
+            recoveryMaxAttempts: e.maxAttempts,
+            recoveryDelayMs: e.delayMs,
+            recoveryElapsedMs: e.elapsedMs,
+            recoveryOriginalModel: e.originalModel,
+            recoveryCurrentModel: e.currentModel,
+            recoveryFallbackModel: e.fallbackModel,
+            recoveryMessage: e.message,
+          });
+          break;
         case "tool_progress":
           sendChunk(event, {
             eventType: "tool_progress",
