@@ -6,6 +6,11 @@ import type {
   ChatV2Mode,
   AIChatPlanStatus,
 } from "@/entityTypes/aiChatPlanTypes";
+import type {
+  AIChatRecoveryLayer,
+  AIChatRecoveryReason,
+  ChatV2RecoveryMetadata,
+} from "@/service/AIChatRecoveryTypes";
 
 export type {
   ChatV2Mode,
@@ -66,6 +71,9 @@ export interface ChatV2MessageMetadata {
     expectedCount?: number | null;
     updatedAt: number;
   };
+  /** Recovery metadata persisted on the assistant row when any recovery
+   * layer activated during the turn. Technical-design §15.1. */
+  recovery?: ChatV2RecoveryMetadata;
 }
 
 /** Renderer request to start a streaming chat turn. */
@@ -136,6 +144,7 @@ export type ChatV2StreamEventType =
   | "plan_blocked_tool"
   | "plan_changes_requested"
   | "retry_connect"
+  | "recovery_status"
   | "usage_update"
   | "error"
   | "cancelled"
@@ -177,6 +186,18 @@ export interface ChatV2StreamChunk {
   retryAttempt?: number;
   retryMaxAttempts?: number;
   retryDelayMs?: number;
+  // Recovery fields — present on recovery_status chunks emitted by the
+  // seven-layer recovery strategy. See AIChatQueryRecoveryStatusEvent.
+  recoveryLayer?: AIChatRecoveryLayer;
+  recoveryReason?: AIChatRecoveryReason;
+  recoveryAttempt?: number;
+  recoveryMaxAttempts?: number;
+  recoveryDelayMs?: number;
+  recoveryElapsedMs?: number;
+  recoveryOriginalModel?: string;
+  recoveryCurrentModel?: string;
+  recoveryFallbackModel?: string;
+  recoveryMessage?: string;
   // Usage fields — present on usage_update chunks emitted at the end of each
   // model round when the server returns token counts.
   promptTokens?: number;
