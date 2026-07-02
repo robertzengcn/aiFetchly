@@ -34,6 +34,12 @@ export interface HookLookupInput {
   readonly sessionId?: string;
 }
 
+export interface ListAllFilter {
+  readonly eventName?: HookEventName;
+  readonly source?: HookSource;
+  readonly includeSession?: boolean;
+}
+
 export interface HookRegistryApi {
   registerBuiltinHook(hook: CallbackHookDefinition): void;
   registerSessionHook(sessionId: string, hook: HookDefinition): void;
@@ -41,6 +47,14 @@ export interface HookRegistryApi {
   replaceUserHooks(hooks: HookDefinition[]): void;
   clearSessionHooks(sessionId: string): void;
   getMatchingHooks(input: HookLookupInput): readonly HookDefinition[];
+  listAll(filter?: ListAllFilter): readonly HookDefinition[];
+  /**
+   * Mutate the `enabled` flag on an already-registered builtin hook
+   * in place. Used at startup to apply user-specified overrides from
+   * the Token store. Returns true if a builtin with the given id was
+   * found and updated, false otherwise.
+   */
+  setBuiltinEnabled(id: string, enabled: boolean): boolean;
   /** Test-only: wipe all hooks including built-ins. */
   resetForTests(): void;
 }
@@ -128,6 +142,51 @@ class HookRegistryImpl implements HookRegistryApi {
     });
 
     return matched.map((e) => e.hook);
+  }
+
+  listAll(filter?: ListAllFilter): readonly HookDefinition[] {
+    const seen = new Set<string>();
+    const collected: RegistryEntry[] = [];
+
+    for (const list of this.byEvent.values()) {
+      for (const entry of list) {
+        if (entry.hook.source === "session" && !filter?.includeSession)
+          continue;
+        if (filter?.eventName && entry.hook.eventName !== filter.eventName)
+          continue;
+        if (filter?.source && entry.hook.source !== filter.source) continue;
+        if (seen.has(entry.hook.id)) continue;
+        seen.add(entry.hook.id);
+        collected.push(entry);
+      }
+    }
+
+    collected.sort((a, b) => {
+      const pa = SOURCE_PRIORITY[a.hook.source];
+      const pb = SOURCE_PRIORITY[b.hook.source];
+      if (pa !== pb) return pa - pb;
+      return a.seq - b.seq;
+    });
+
+    return collected.map((e) => e.hook);
+  }
+
+  setBuiltinEnabled(id: string, enabled: boolean): boolean {
+    for (const list of this.byEvent.values()) {
+      for (let i = 0; i < list.length; i++) {
+        const entry = list[i];
+        if (entry.hook.id === id && entry.hook.source === "builtin") {
+          // Replace the entry with an updated copy (immutability).
+          list[i] = {
+            hook: { ...entry.hook, enabled },
+            sessionId: entry.sessionId,
+            seq: entry.seq,
+          };
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   resetForTests(): void {
