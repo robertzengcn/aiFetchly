@@ -14,7 +14,7 @@ function buildApiMock(resp: OpenAIModelsResponse | Error): {
   }
   // Cast to satisfy the AiChatApi constructor type; we only use
   // listOpenAIModels on the instance.
-  const api = { listOpenAIModels } as unknown as Parameters<
+  const api = { listOpenAIModels } as unknown as ConstructorParameters<
     typeof AIChatModelCatalogService
   >[0];
   const service = new AIChatModelCatalogService(api, 128_000);
