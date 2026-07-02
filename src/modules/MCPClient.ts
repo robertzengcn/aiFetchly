@@ -36,6 +36,32 @@ const MCP_ENV_ALLOWLIST: readonly string[] = [
   "COMSPEC",
 ];
 
+/**
+ * F1 fix (bypass) — env var names that must NEVER be inherited from
+ * caller-declared config.env. These enable arbitrary code execution or
+ * process hijacking if layered on top of the spawned stdio child.
+ */
+const MCP_ENV_DENY_NAMES: ReadonlySet<string> = new Set([
+  "LD_PRELOAD",
+  "LD_LIBRARY_PATH",
+  "DYLD_INSERT_LIBRARIES",
+  "DYLD_LIBRARY_PATH",
+  "NODE_OPTIONS",
+  "NODE_PATH",
+  "ELECTRON_RUN_AS_NODE",
+  "ELECTRON_ENABLE_LOGGING",
+  "UV_THREADPOOL_SIZE",
+  "PYTHONPATH",
+  "PYTHONSTARTUP",
+  "PERL5OPT",
+  "PERLLIB",
+  "RUBYOPT",
+  "RUBYLIB",
+]);
+
+/** F1 fix (bypass) — env var prefixes to block (case-insensitive). */
+const MCP_ENV_DENY_PREFIXES: readonly string[] = ["ELECTRON_", "AIFETCHLY_"];
+
 export interface MCPClientConfig {
   host?: string;
   port?: number;
@@ -196,7 +222,23 @@ export class MCPClient {
       }
       if (this.config.env) {
         for (const [k, v] of Object.entries(this.config.env)) {
-          if (typeof v === "string") childEnv[k] = v;
+          if (typeof v !== "string") continue;
+          // F1 fix (bypass) — block variables that can hijack the spawned
+          // child process. config.env is renderer/plugin-controlled, so
+          // without this deny-list a malicious server config could inject
+          // LD_PRELOAD / DYLD_INSERT_LIBRARIES / NODE_OPTIONS / ELECTRON_*
+          // and get arbitrary code execution despite the env allowlist
+          // applied to process.env above.
+          const upper = k.toUpperCase();
+          if (MCP_ENV_DENY_NAMES.has(upper)) {
+            continue;
+          }
+          if (
+            MCP_ENV_DENY_PREFIXES.some((prefix) => upper.startsWith(prefix))
+          ) {
+            continue;
+          }
+          childEnv[k] = v;
         }
       }
 

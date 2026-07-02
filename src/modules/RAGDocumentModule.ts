@@ -182,6 +182,30 @@ export class RAGDocumentModule extends BaseModule {
   }
 
   /**
+   * F10 fix (bypass) — vectorIndexPath must live under either the app
+   * userData directory (where VectorStoreService creates indexes) or the
+   * upload staging root. Anything else is refused.
+   */
+  private isVectorIndex_pathSafe(target: string): boolean {
+    try {
+      const resolved = fs.realpathSync(target);
+      const allowedRoots = [
+        app.getPath("userData"),
+        this.getUploadStagingDir(),
+      ];
+      for (const root of allowedRoots) {
+        const rel = path.relative(root, resolved);
+        if (!rel.startsWith("..") && !path.isAbsolute(rel) && rel !== "") {
+          return true;
+        }
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Validate file before processing
    */
   async validateFile(filePath: string): Promise<DocumentValidationResult> {
@@ -402,16 +426,30 @@ export class RAGDocumentModule extends BaseModule {
       }
 
       // Delete vector index file if path exists (legacy cleanup)
-      if (document.vectorIndexPath && fs.existsSync(document.vectorIndexPath)) {
+      // F10 fix (bypass) — apply the same containment check used for
+      // document.filePath. A tampered/legacy DB row could otherwise let a
+      // renderer delete arbitrary local files via vectorIndexPath.
+      if (
+        document.vectorIndexPath &&
+        this.isVectorIndex_pathSafe(document.vectorIndexPath)
+      ) {
         try {
-          fs.unlinkSync(document.vectorIndexPath);
-          console.log(`Deleted vector index file: ${document.vectorIndexPath}`);
+          if (fs.existsSync(document.vectorIndexPath)) {
+            fs.unlinkSync(document.vectorIndexPath);
+            console.log(
+              `Deleted vector index file: ${document.vectorIndexPath}`
+            );
+          }
         } catch (error) {
           console.warn(
             `Failed to delete vector index file: ${document.vectorIndexPath}`,
             error
           );
         }
+      } else if (document.vectorIndexPath) {
+        console.warn(
+          `Refusing to delete vector index path outside allowed roots: ${document.vectorIndexPath}`
+        );
       }
     }
 

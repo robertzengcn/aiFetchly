@@ -39,7 +39,10 @@ export interface UrlValidationResult {
 }
 
 /** IPv4 ranges that must never be reachable from renderer/AI-controlled fetches. */
-const BLOCKED_IPV4_PATTERNS: ReadonlyArray<{ name: string; test: (ip: string) => boolean }> = [
+const BLOCKED_IPV4_PATTERNS: ReadonlyArray<{
+  name: string;
+  test: (ip: string) => boolean;
+}> = [
   // Loopback 127.0.0.0/8
   { name: "loopback", test: (ip) => ip.startsWith("127.") },
   // Link-local 169.254.0.0/16 — includes AWS/GCP/Azure metadata 169.254.169.254
@@ -65,7 +68,10 @@ const BLOCKED_IPV4_PATTERNS: ReadonlyArray<{ name: string; test: (ip: string) =>
     },
   },
   // Unspecified 0.0.0.0/8
-  { name: "unspecified", test: (ip) => ip === "0.0.0.0" || ip.startsWith("0.") },
+  {
+    name: "unspecified",
+    test: (ip) => ip === "0.0.0.0" || ip.startsWith("0."),
+  },
 ];
 
 /** Blocked hostname literals (lowercase). */
@@ -77,15 +83,6 @@ const BLOCKED_HOSTNAMES = new Set([
   "metadata", // Azure metadata alias
   "fhmb6fmkmfnfjsfksf.ns.aliyuncs.com", // Aliyun metadata alias
 ]);
-
-/** Blocked IPv6 literals (first hextet). */
-const BLOCKED_IPV6_PREFIXES = [
-  "::1", // loopback
-  "fc",
-  "fd", // unique local (fc00::/7)
-  "fe80", // link-local
-  "fec0", // site-local (deprecated)
-];
 
 function isBlockedIpv4(ip: string): string | null {
   for (const p of BLOCKED_IPV4_PATTERNS) {
@@ -99,12 +96,26 @@ function isBlockedIpv6(ip: string): string | null {
   if (lower === "::1") return "loopback";
   // Strip zone id
   const core = lower.split("%")[0];
-  const firstHextet = core.split(":")[0] ?? "";
-  if (BLOCKED_IPV6_PREFIXES.includes(firstHextet)) return "private/link-local";
-  // ::ffff:127.0.0.1 v4-mapped
-  const v4MappedMatch = core.match(/::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
-  if (v4MappedMatch) {
-    const v4 = v4MappedMatch[1];
+  const hextets = core.split(":");
+  const firstHextet = hextets[0] ?? "";
+  // ULA fc00::/7 → first hextet starts with "fc" or "fd"
+  if (/^fc[0-9a-f]{2}$/i.test(firstHextet)) return "ula-private";
+  // link-local fe80::/10
+  if (/^fe[89ab][0-9a-f]{2}$/i.test(firstHextet)) return "link-local";
+  // site-local fec0::/10 (deprecated but still block)
+  if (/^fec[0-9a-f]{1}$/i.test(firstHextet) || firstHextet === "fec0")
+    return "site-local";
+  // ::ffff:127.0.0.1 v4-mapped (short form)
+  const v4MappedShort = core.match(/::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
+  if (v4MappedShort) {
+    const v4 = v4MappedShort[1];
+    const blocked = isBlockedIpv4(v4);
+    if (blocked) return `v4-mapped-${blocked}`;
+  }
+  // 0:0:0:0:0:ffff:127.0.0.1 v4-mapped (long form)
+  const v4MappedLong = core.match(/^(?:0:){5}ffff:(\d+\.\d+\.\d+\.\d+)$/i);
+  if (v4MappedLong) {
+    const v4 = v4MappedLong[1];
     const blocked = isBlockedIpv4(v4);
     if (blocked) return `v4-mapped-${blocked}`;
   }

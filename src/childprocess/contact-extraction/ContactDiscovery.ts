@@ -382,32 +382,41 @@ export async function discoverAndExtractContactInfo(
       const contactPageUrl = await findContactPageHeuristic(page);
 
       if (contactPageUrl && !contactPageUrl.startsWith("mailto:")) {
-        console.log(
-          `ContactDiscovery: Stage 2 found contact page: ${contactPageUrl}`
-        );
-        await page.goto(contactPageUrl, {
-          waitUntil: "networkidle0",
-          timeout: 30000,
-        });
+        // F7 fix (bypass) — contactPageUrl comes from the scraped DOM and is
+        // attacker-controlled. Validate before navigation so a malicious page
+        // cannot steer the worker to internal/metadata destinations.
+        if (!(await validateUrlAsync(contactPageUrl))) {
+          console.warn(
+            `ContactDiscovery: Stage 2 contact page URL rejected by SSRF guard: ${contactPageUrl}`
+          );
+        } else {
+          console.log(
+            `ContactDiscovery: Stage 2 found contact page: ${contactPageUrl}`
+          );
+          await page.goto(contactPageUrl, {
+            waitUntil: "networkidle0",
+            timeout: 30000,
+          });
 
-        // Use AI on the contact page (not just regex)
-        const stage2Result = await extractWithAI(page, url, pageTitle, true);
-        if (stage2Result.success && stage2Result.data) {
-          const emails = stage2Result.data.emails ?? [];
-          const phones = stage2Result.data.phones ?? [];
-          const hasAddress = !!stage2Result.data.address;
-          const hasSocialLinks =
-            !!stage2Result.data.socialLinks &&
-            stage2Result.data.socialLinks.length > 0;
+          // Use AI on the contact page (not just regex)
+          const stage2Result = await extractWithAI(page, url, pageTitle, true);
+          if (stage2Result.success && stage2Result.data) {
+            const emails = stage2Result.data.emails ?? [];
+            const phones = stage2Result.data.phones ?? [];
+            const hasAddress = !!stage2Result.data.address;
+            const hasSocialLinks =
+              !!stage2Result.data.socialLinks &&
+              stage2Result.data.socialLinks.length > 0;
 
-          if (
-            emails.length > 0 ||
-            phones.length > 0 ||
-            hasAddress ||
-            hasSocialLinks
-          ) {
-            console.log("ContactDiscovery: Stage 2 SUCCESS");
-            return stage2Result;
+            if (
+              emails.length > 0 ||
+              phones.length > 0 ||
+              hasAddress ||
+              hasSocialLinks
+            ) {
+              console.log("ContactDiscovery: Stage 2 SUCCESS");
+              return stage2Result;
+            }
           }
         }
       }
@@ -420,36 +429,48 @@ export async function discoverAndExtractContactInfo(
 
       if (fallbackPath) {
         const fallbackUrl = new URL(fallbackPath, url).toString();
-        console.log(`ContactDiscovery: Stage 3 trying ${fallbackUrl}`);
+        // F7 fix (bypass) — validate derived URL before navigation.
+        if (!(await validateUrlAsync(fallbackUrl))) {
+          console.warn(
+            `ContactDiscovery: Stage 3 fallback URL rejected by SSRF guard: ${fallbackUrl}`
+          );
+        } else {
+          console.log(`ContactDiscovery: Stage 3 trying ${fallbackUrl}`);
 
-        try {
-          await page.goto(fallbackUrl, {
-            waitUntil: "networkidle0",
-            timeout: 30000,
-          });
+          try {
+            await page.goto(fallbackUrl, {
+              waitUntil: "networkidle0",
+              timeout: 30000,
+            });
 
-          // Use AI on fallback page
-          const stage3Result = await extractWithAI(page, url, pageTitle, true);
-          if (stage3Result.success && stage3Result.data) {
-            const emails = stage3Result.data.emails ?? [];
-            const phones = stage3Result.data.phones ?? [];
-            const hasAddress = !!stage3Result.data.address;
-            const hasSocialLinks =
-              !!stage3Result.data.socialLinks &&
-              stage3Result.data.socialLinks.length > 0;
+            // Use AI on fallback page
+            const stage3Result = await extractWithAI(
+              page,
+              url,
+              pageTitle,
+              true
+            );
+            if (stage3Result.success && stage3Result.data) {
+              const emails = stage3Result.data.emails ?? [];
+              const phones = stage3Result.data.phones ?? [];
+              const hasAddress = !!stage3Result.data.address;
+              const hasSocialLinks =
+                !!stage3Result.data.socialLinks &&
+                stage3Result.data.socialLinks.length > 0;
 
-            if (
-              emails.length > 0 ||
-              phones.length > 0 ||
-              hasAddress ||
-              hasSocialLinks
-            ) {
-              console.log("ContactDiscovery: Stage 3 SUCCESS");
-              return stage3Result;
+              if (
+                emails.length > 0 ||
+                phones.length > 0 ||
+                hasAddress ||
+                hasSocialLinks
+              ) {
+                console.log("ContactDiscovery: Stage 3 SUCCESS");
+                return stage3Result;
+              }
             }
+          } catch (e) {
+            console.log("ContactDiscovery: Stage 3 route not found");
           }
-        } catch (e) {
-          console.log("ContactDiscovery: Stage 3 route not found");
         }
       }
     } else {

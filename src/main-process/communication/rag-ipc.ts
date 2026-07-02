@@ -341,7 +341,34 @@ export function registerRagIpcHandlers(): void {
     GET_FILE_STATS,
     ragFileStatsInputSchema,
     async (input) => {
-      const stats = fs.statSync(input.filePath);
+      // F5 fix (bypass) — confine file-stat probing to app-owned directories
+      // (RAG upload staging + error logs). Without this, a compromised
+      // renderer could stat arbitrary local paths to learn existence, size,
+      // and mtime — an information leak.
+      const appDataDir = app.getPath("userData");
+      const allowedRoots = [
+        path.join(appDataDir, "rag_uploads"),
+        path.join(appDataDir, "error_logs"),
+      ];
+      let resolved: string;
+      try {
+        resolved = fs.realpathSync(input.filePath);
+      } catch {
+        throw new Error("File not found");
+      }
+      const isContained = allowedRoots.some((root) => {
+        try {
+          const realRoot = fs.realpathSync(root);
+          const rel = path.relative(realRoot, resolved);
+          return !rel.startsWith("..") && !path.isAbsolute(rel) && rel !== "";
+        } catch {
+          return false;
+        }
+      });
+      if (!isContained) {
+        throw new Error("File path is outside allowed directories");
+      }
+      const stats = fs.statSync(resolved);
       return {
         size: stats.size,
         mtime: stats.mtime,

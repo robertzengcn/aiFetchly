@@ -403,12 +403,23 @@ function initialize() {
       if (!isTrustedOrigin) {
         // Open externally WITHOUT preload. Never expose the IPC bridge to
         // arbitrary web content.
+        // F9 fix (bypass) — validate scheme before handing the URL to the
+        // OS handler. shell.openExternal will happily dispatch file://,
+        // smb://, custom protocol handlers, etc., which can launch
+        // arbitrary applications. Restrict to http/https.
         try {
-          shell.openExternal(url).catch(() => {
-            /* ignore — best-effort external open */
-          });
+          const parsed = new URL(url);
+          if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+            shell.openExternal(url).catch(() => {
+              /* ignore — best-effort external open */
+            });
+          } else {
+            console.warn(
+              `Refusing to open external URL with unsafe scheme: ${parsed.protocol}`
+            );
+          }
         } catch {
-          /* ignore */
+          /* ignore malformed URL */
         }
         return { action: "deny" };
       }
