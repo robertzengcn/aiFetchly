@@ -42,7 +42,10 @@ import {
   RAG_GET_DOCUMENT_ERROR_LOG,
   RAG_CHECK_DOCUMENT_DUPLICATE,
 } from "@/config/channellist";
-import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
+import {
+  registerValidatedHandler,
+  registerAiValidatedHandler,
+} from "@/main-process/communication/_shared/registerValidatedHandler";
 import {
   ragShowOpenDialogInputSchema,
   ragFileStatsInputSchema,
@@ -366,7 +369,8 @@ export function registerRagIpcHandlers(): void {
     return enhancedStats;
   });
 
-  registerValidatedHandler(RAG_QUERY, ragQueryInputSchema, async (input) => {
+  // F6 fix — RAG_QUERY triggers remote embedding/model work; gate on AI flag.
+  registerAiValidatedHandler(RAG_QUERY, ragQueryInputSchema, async (input) => {
     const ragSearchController = await createRagController();
     const searchRequest: SearchRequest = {
       query: input.query,
@@ -375,7 +379,8 @@ export function registerRagIpcHandlers(): void {
     return ragSearchController.search(searchRequest);
   });
 
-  registerValidatedHandler(
+  // F6 fix — upload triggers chunking + remote embedding; gate on AI flag.
+  registerAiValidatedHandler(
     RAG_UPLOAD_DOCUMENT,
     ragUploadDocumentInputSchema,
     async (input): Promise<DocumentUploadResponse> => {
@@ -519,15 +524,20 @@ export function registerRagIpcHandlers(): void {
     }
   );
 
-  registerValidatedHandler(RAG_SEARCH, ragSearchInputSchema, async (input) => {
-    const req = input as unknown as SearchRequest;
-    const ragSearchController = await createRagController();
-    return ragSearchController.search({
-      query: req.query,
-      options: req.options,
-      filters: req.filters,
-    }) as Promise<SearchResponse>;
-  });
+  // F6 fix — RAG_SEARCH runs remote embedding on the query; gate on AI flag.
+  registerAiValidatedHandler(
+    RAG_SEARCH,
+    ragSearchInputSchema,
+    async (input) => {
+      const req = input as unknown as SearchRequest;
+      const ragSearchController = await createRagController();
+      return ragSearchController.search({
+        query: req.query,
+        options: req.options,
+        filters: req.filters,
+      }) as Promise<SearchResponse>;
+    }
+  );
 
   registerValidatedHandler(
     RAG_GET_SUGGESTIONS,
@@ -589,7 +599,8 @@ export function registerRagIpcHandlers(): void {
     }
   );
 
-  registerValidatedHandler(
+  // F6 fix — embedding-service test issues a remote model call.
+  registerAiValidatedHandler(
     RAG_TEST_EMBEDDING_SERVICE,
     ragNoInputSchema,
     async () => {
@@ -604,7 +615,8 @@ export function registerRagIpcHandlers(): void {
     return null;
   });
 
-  registerValidatedHandler(
+  // F6 fix — chunk-and-embed issues remote embedding work.
+  registerAiValidatedHandler(
     RAG_CHUNK_AND_EMBED_DOCUMENT,
     ragChunkAndEmbedInputSchema,
     async (input) => {
