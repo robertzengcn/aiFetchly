@@ -529,14 +529,34 @@ export class RAGDocumentModule extends BaseModule {
         return null;
       }
 
+      // F5 fix — defence in depth: even if a stored `log` value was tampered
+      // with (or migrated from an older vulnerable build), refuse to read any
+      // path that does not resolve strictly under the app's error_logs dir.
+      const errorLogsDir = path.join(app.getPath("userData"), "error_logs");
+      let resolvedLog: string;
+      try {
+        resolvedLog = fs.realpathSync(document.log);
+      } catch {
+        console.warn(`Error log path cannot be resolved: ${document.log}`);
+        return null;
+      }
+      const resolvedDir = fs.realpathSync(errorLogsDir);
+      const rel = path.relative(resolvedDir, resolvedLog);
+      if (rel.startsWith("..") || path.isAbsolute(rel)) {
+        console.warn(
+          `Error log path outside allowed directory; refusing read: ${document.log}`
+        );
+        return null;
+      }
+
       // Check if log file exists
-      if (!fs.existsSync(document.log)) {
+      if (!fs.existsSync(resolvedLog)) {
         console.warn(`Error log file not found: ${document.log}`);
         return null;
       }
 
       // Read log file content
-      const logContent = fs.readFileSync(document.log, "utf-8");
+      const logContent = fs.readFileSync(resolvedLog, "utf-8");
       return logContent;
     } catch (error) {
       console.error(

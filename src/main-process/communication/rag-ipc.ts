@@ -476,16 +476,20 @@ export function registerRagIpcHandlers(): void {
     ragUpdateDocumentInputSchema,
     async (input) => {
       const ragSearchController = await createRagController();
-      await ragSearchController.updateDocument(
-        input.id,
-        input.metadata as {
-          title?: string;
-          description?: string;
-          tags?: string[];
-          author?: string;
-          log?: string;
-        }
-      );
+      // F5 fix — `log` is write-only from the renderer's perspective. The
+      // path is generated server-side by RAGDocumentModule.saveErrorLog under
+      // the app's error_logs dir. Allowing the renderer to set it would let a
+      // compromised renderer redirect getDocumentErrorLog reads to arbitrary
+      // local files.
+      const metadata = { ...input.metadata } as {
+        title?: string;
+        description?: string;
+        tags?: string[];
+        author?: string;
+        log?: string;
+      };
+      delete metadata.log;
+      await ragSearchController.updateDocument(input.id, metadata);
       return null;
     }
   );
