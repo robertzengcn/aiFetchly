@@ -132,10 +132,6 @@ describe("Native module version compatibility", () => {
   });
 
   it("should have the rebuild script target matching the installed Electron version", () => {
-    const pkgPath = path.join(projectRoot, "package.json");
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
-
-    const rebuildScript = pkg.scripts?.["rebuild-better-sqlite"] || "";
     const electronPkgPath = path.join(
       projectRoot,
       "node_modules/electron/package.json"
@@ -144,17 +140,29 @@ describe("Native module version compatibility", () => {
       fs.readFileSync(electronPkgPath, "utf-8")
     ).version;
 
-    const targetMatch = rebuildScript.match(/npm_config_target=([^\s]+)/);
-    expect(
-      targetMatch,
-      "rebuild-better-sqlite script should set npm_config_target"
-    ).not.toBeNull();
+    const rebuildTargetScript = path.join(
+      projectRoot,
+      "scripts/rebuild-better-sqlite.js"
+    );
+    const result = child_process.spawnSync(
+      process.execPath,
+      [rebuildTargetScript, "--print-target"],
+      {
+        encoding: "utf-8",
+        timeout: 10000,
+      }
+    );
 
-    const targetVersion = targetMatch![1];
+    expect(
+      result.status,
+      `rebuild-better-sqlite target helper failed: ${result.stderr}`
+    ).toBe(0);
+
+    const targetVersion = result.stdout.trim();
     expect(
       targetVersion,
       `rebuild-better-sqlite targets Electron ${targetVersion} but installed version is ${electronVersion}. ` +
-        `Update the npm_config_target in package.json scripts.`
+        `Update scripts/rebuild-better-sqlite.js.`
     ).toBe(electronVersion);
   });
 });
