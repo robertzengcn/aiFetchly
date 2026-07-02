@@ -1885,6 +1885,7 @@ export default {
     model_none_available: "利用できるモデルがありません",
     model_auto: "自動",
     model_auto_default: "デフォルト",
+    model_free: "無料",
     server_unavailable: "AI サーバーに接続できませんでした。",
     unsupported_tool_call: "アシスタントが未対応のツールを要求しました。",
     conversation_history: "会話履歴",

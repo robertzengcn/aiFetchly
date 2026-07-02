@@ -1919,6 +1919,7 @@ export default {
     model_none_available: "Keine Modelle verfügbar",
     model_auto: "Automatisch",
     model_auto_default: "Standard",
+    model_free: "Kostenlos",
     server_unavailable: "Verbindung zum KI-Server nicht möglich.",
     unsupported_tool_call:
       "Der Assistent hat ein noch nicht unterstütztes Werkzeug angefordert.",

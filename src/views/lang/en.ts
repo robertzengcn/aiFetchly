@@ -1927,6 +1927,7 @@ export default {
     model_none_available: "No models available",
     model_auto: "Auto",
     model_auto_default: "Default",
+    model_free: "Free",
     server_unavailable: "Could not connect to the AI server.",
     unsupported_tool_call:
       "This assistant requested a tool that is not supported yet.",

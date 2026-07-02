@@ -21,6 +21,17 @@
     >
       <template #item="{ item, props }">
         <v-list-item v-bind="props">
+          <template #append>
+            <v-chip
+              v-if="item.raw.isFree"
+              size="x-small"
+              color="success"
+              variant="flat"
+              class="ml-2"
+            >
+              {{ t('aiChatV2.model_free') || 'Free' }}
+            </v-chip>
+          </template>
           <v-list-item-subtitle
             v-if="item.raw.subtitle"
             class="text-caption text-grey"
@@ -62,6 +73,7 @@ interface ModelSelectItem {
   title: string;
   contextSize?: number;
   subtitle?: string;
+  isFree?: boolean;
 }
 
 /** Sentinel matching the parent's AUTO_MODEL_VALUE. */
@@ -74,6 +86,7 @@ const selectItems = computed<ModelSelectItem[]>(() => {
       value: m.id,
       title: m.id,
       contextSize: m.context_size,
+      isFree: m.is_free === true,
     }));
   // Resolve the context size for "Auto" from the default model's entry so
   // the dropdown shows the same context info as the concrete model.

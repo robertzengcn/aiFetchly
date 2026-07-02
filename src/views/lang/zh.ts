@@ -1864,6 +1864,7 @@ export default {
     model_none_available: "没有可用模型",
     model_auto: "自动",
     model_auto_default: "默认",
+    model_free: "免费",
     server_unavailable: "无法连接到 AI 服务器。",
     unsupported_tool_call: "助手请求了一个暂不支持的工具。",
     conversation_history: "对话历史",

@@ -1908,6 +1908,7 @@ export default {
     model_none_available: "Aucun modèle disponible",
     model_auto: "Auto",
     model_auto_default: "Par défaut",
+    model_free: "Gratuit",
     server_unavailable: "Impossible de se connecter au serveur IA.",
     unsupported_tool_call:
       "L'assistant a demandé un outil non encore pris en charge.",
