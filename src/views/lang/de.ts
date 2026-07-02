@@ -1132,22 +1132,27 @@ export default {
     chrome_path: "Chrome-Pfad",
     firefox_path: "Firefox-Pfad",
     embedding_group: "Einbettungsmodelle",
-    embedding_group_description: "Standard-Einbettungsmodell für die Vektorsuche.",
+    embedding_group_description:
+      "Standard-Einbettungsmodell für die Vektorsuche.",
     external_system: "Externes System",
     user_preferences: "Benutzereinstellungen",
-    "user-preferences-group-description": "Benutzereinstellungen für das Anwendungsverhalten.",
+    "user-preferences-group-description":
+      "Benutzereinstellungen für das Anwendungsverhalten.",
     default_embedding_model: "Standard-Einbettungsmodell",
-    "default-embedding-model-description": "Wählen Sie das Einbettungsmodell für die Vektorsuche und Ähnlichkeitsermittlung.",
+    "default-embedding-model-description":
+      "Wählen Sie das Einbettungsmodell für die Vektorsuche und Ähnlichkeitsermittlung.",
     language_preference: "Sprache",
     "language-preference-description": "UI-Spracheinstellung.",
     ai_website_analysis_business_info: "Geschäftsinformationen",
-    "ai-website-analysis-business-info-description": "Geschäftsinformationen, die bei der KI-Analyse von Websites verwendet werden.",
+    "ai-website-analysis-business-info-description":
+      "Geschäftsinformationen, die bei der KI-Analyse von Websites verwendet werden.",
     "external-system-group-description": "Externe Systemgruppen-Einstellung",
     mcp_tools: "MCP-Tools",
     manage_mcp_tools: "MCP-Tools verwalten",
     manage_skills: "Fähigkeiten verwalten",
     ai_preferences: "KI-Einstellungen",
-    "ai-preferences-group-description": "Einstellungen zur Steuerung des KI-Chat-Verhaltens, des Speichers und des Kontexts.",
+    "ai-preferences-group-description":
+      "Einstellungen zur Steuerung des KI-Chat-Verhaltens, des Speichers und des Kontexts.",
     user_ai_auto_dream: "Auto-Traum-Konsolidierung",
     "ai-auto-dream-description":
       "Automatisches Zusammenfassen vergangener Konversationen im Hintergrund, um KI-Kontext-Token zu sparen.",
@@ -1797,6 +1802,7 @@ export default {
     show_full_diff: "Vollständigen Diff anzeigen ({count} Zeilen)",
     collapse_diff: "Diff einklappen",
     open_file_tooltip: "Datei öffnen",
+    open_with_tooltip: "Öffnen mit…",
   },
   agentWorkflow: {
     status_queued: "In Warteschlange",
