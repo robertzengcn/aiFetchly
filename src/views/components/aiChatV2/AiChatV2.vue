@@ -86,6 +86,7 @@
         :show-typing-indicator="showTypingIndicator"
         :is-streaming="chatIsRunning"
         :retry-info="retryInfo"
+        :recovery-info="recoveryInfo"
         :workspace-root="activeWorkspace?.rootPath ?? ''"
         @grant-permission="handleSkillPermissionGrant"
         @deny-permission="handleSkillPermissionDeny"
@@ -435,6 +436,21 @@ const retryInfo = ref<{
   maxAttempts: number;
   delayMs: number;
 } | null>(null);
+// Active seven-layer recovery status. Null when no recovery layer is
+// running. Cleared on token/tool_call/complete/cancelled/error.
+type RecoveryInfo = {
+  layer: import("@/service/AIChatRecoveryTypes").AIChatRecoveryLayer;
+  reason: import("@/service/AIChatRecoveryTypes").AIChatRecoveryReason;
+  attempt?: number;
+  maxAttempts?: number;
+  delayMs?: number;
+  elapsedMs?: number;
+  originalModel?: string;
+  currentModel?: string;
+  fallbackModel?: string;
+  message?: string;
+};
+const recoveryInfo = ref<RecoveryInfo | null>(null);
 const showConversationsDialog = ref(false);
 const showMCPToolManager = ref(false);
 const isCompacting = ref(false);
@@ -981,6 +997,7 @@ const detachActiveStreamView = (): void => {
     isStreaming.value = false;
     activeAssistantMessageId.value = null;
     retryInfo.value = null;
+    recoveryInfo.value = null;
   }
 };
 
@@ -1468,6 +1485,7 @@ const onSend = async (text: string): Promise<void> => {
   isStreaming.value = true;
   receivedFirstResponse.value = false;
   retryInfo.value = null;
+  recoveryInfo.value = null;
   // Seed the live context estimate from the last known server usage. If no
   // usage_update has arrived yet this session, fall back to the existing
   // streaming estimate (e.g. seeded from persisted tokensUsed on history
@@ -1533,10 +1551,27 @@ const onSend = async (text: string): Promise<void> => {
               delayMs: chunk.retryDelayMs ?? 0,
             };
           }
+        } else if (chunk.eventType === "recovery_status") {
+          // Seven-layer recovery status. Show the badge but keep streaming.
+          if (chunk.recoveryLayer && chunk.recoveryReason) {
+            recoveryInfo.value = {
+              layer: chunk.recoveryLayer,
+              reason: chunk.recoveryReason,
+              attempt: chunk.recoveryAttempt,
+              maxAttempts: chunk.recoveryMaxAttempts,
+              delayMs: chunk.recoveryDelayMs,
+              elapsedMs: chunk.recoveryElapsedMs,
+              originalModel: chunk.recoveryOriginalModel,
+              currentModel: chunk.recoveryCurrentModel,
+              fallbackModel: chunk.recoveryFallbackModel,
+              message: chunk.recoveryMessage,
+            };
+          }
         } else {
           // Any non-start/non-retry chunk means the AI has started responding.
           receivedFirstResponse.value = true;
           retryInfo.value = null;
+          recoveryInfo.value = null;
           if (chunk.eventType === "token" && chunk.contentDelta) {
             if (!assistantAdded) {
               console.log(
@@ -1665,6 +1700,7 @@ const onSend = async (text: string): Promise<void> => {
         isStreaming.value = false;
         activeAssistantMessageId.value = null;
         retryInfo.value = null;
+        recoveryInfo.value = null;
         // Snap to ground-truth usage carried by the complete event so the
         // badge reflects the real context size even if usage_update chunks
         // didn't fire during the stream (some servers only report usage on
@@ -1743,6 +1779,7 @@ const onSend = async (text: string): Promise<void> => {
         isStreaming.value = false;
         activeAssistantMessageId.value = null;
         retryInfo.value = null;
+        recoveryInfo.value = null;
         const displayMessage = mapStreamErrorMessage(error.message);
         streamError.value = displayMessage;
         showAssistantError(displayMessage);
@@ -1755,6 +1792,7 @@ const onSend = async (text: string): Promise<void> => {
       isStreaming.value = false;
       activeAssistantMessageId.value = null;
       retryInfo.value = null;
+      recoveryInfo.value = null;
       streamError.value = displayMessage;
       showAssistantError(displayMessage);
     }
