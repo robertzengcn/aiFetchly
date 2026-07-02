@@ -138,3 +138,5 @@ node_modules
 *.mp4
 *.wav
 .superpowers/
+memory/*
+hyperframes-*
