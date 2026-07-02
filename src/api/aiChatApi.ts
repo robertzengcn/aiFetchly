@@ -1973,6 +1973,10 @@ export class AiChatApi {
     let lastError: unknown = null;
     let attempt = 1;
     let consecutiveOverload = 0;
+    // Turn start for the persistent-profile hard-cap check. Wall-clock
+    // epoch (Date.now()) would always exceed the 6h cap, so we anchor
+    // here and pass elapsed delta into the policy.
+    const turnStartedAt = Date.now();
 
     while (response === null) {
       let res: Response;
@@ -2013,7 +2017,7 @@ export class AiChatApi {
           rateLimitResetMs: classified.rateLimitResetMs,
           consecutiveOverloadCount: consecutiveOverload,
           hasFallback: false,
-          turnElapsedMs: Date.now() - 0,
+          turnElapsedMs: Date.now() - turnStartedAt,
         });
         if (decision.type !== "retry") {
           throw classified;

@@ -32,6 +32,7 @@ import {
   buildRecoveryMetadata,
   createRecoveryAttemptState,
   isAIChatRecoverableError,
+  type AIChatRecoveryReason,
 } from "@/service/AIChatRecoveryTypes";
 import { AIChatRecoveryClassifier } from "@/service/AIChatRecoveryClassifier";
 import { AIChatRecoveryCoordinator } from "@/service/AIChatRecoveryCoordinator";
@@ -236,6 +237,18 @@ export interface AIChatQueryLoopDeps {
   ): Promise<ToolExecutionResult>;
 
   getSkillDefinition(name: string): SkillDefinition | undefined;
+
+  /**
+   * Optional: resolves a fallback model id for Layer 6 recovery. When
+   * omitted, the loop records the failure reason but cannot auto-switch
+   * models (the badge stays dark). Production wires
+   * AIChatModelFallbackService here.
+   */
+  resolveFallbackModel?(input: {
+    originalModel?: string;
+    currentModel?: string;
+    reason: AIChatRecoveryReason;
+  }): Promise<{ model?: string; source: string }>;
 }
 
 /** Serialization helpers (moved from ai-chat-v2-ipc.ts). */
@@ -451,7 +464,15 @@ export class AIChatQueryLoop {
           });
           if (result.action.type === "escalate_output_tokens") {
             currentMaxTokens = result.action.maxTokens;
-            recoveryState = result.updatedState;
+            // Capture any partial content before re-trying with a larger
+            // budget. The model may have produced useful text before
+            // hitting the limit.
+            const partialEsc = accumulator.state.fullContent || "";
+            recoveryState = {
+              ...result.updatedState,
+              recoveredContentPrefix:
+                recoveryState.recoveredContentPrefix + partialEsc,
+            };
             eventSink.emit({
               type: "recovery_status",
               conversationId: input.conversationId,
@@ -466,15 +487,20 @@ export class AIChatQueryLoop {
             // Append a non-persisted continuation prompt so the model
             // picks up where it left off. We must NOT emit a terminal
             // event for the truncated partial content.
+            const partial = accumulator.state.fullContent || "";
+            recoveryState = {
+              ...result.updatedState,
+              recoveredContentPrefix:
+                recoveryState.recoveredContentPrefix + partial,
+            };
             messages.push({
               role: "assistant",
-              content: accumulator.state.fullContent || null,
+              content: partial || null,
             });
             messages.push({
               role: "user",
               content: result.action.continuationMessage,
             });
-            recoveryState = result.updatedState;
             eventSink.emit({
               type: "recovery_status",
               conversationId: input.conversationId,
@@ -501,7 +527,15 @@ export class AIChatQueryLoop {
           });
           if (result.action.type === "escalate_output_tokens") {
             currentMaxTokens = result.action.maxTokens;
-            recoveryState = result.updatedState;
+            // Capture any partial content before re-trying with a larger
+            // budget. The model may have produced useful text before
+            // hitting the limit.
+            const partialEsc = accumulator.state.fullContent || "";
+            recoveryState = {
+              ...result.updatedState,
+              recoveredContentPrefix:
+                recoveryState.recoveredContentPrefix + partialEsc,
+            };
             eventSink.emit({
               type: "recovery_status",
               conversationId: input.conversationId,
@@ -513,15 +547,20 @@ export class AIChatQueryLoop {
             continue;
           }
           if (result.action.type === "continue_output") {
+            const partial = accumulator.state.fullContent || "";
+            recoveryState = {
+              ...result.updatedState,
+              recoveredContentPrefix:
+                recoveryState.recoveredContentPrefix + partial,
+            };
             messages.push({
               role: "assistant",
-              content: accumulator.state.fullContent || null,
+              content: partial || null,
             });
             messages.push({
               role: "user",
               content: result.action.continuationMessage,
             });
-            recoveryState = result.updatedState;
             eventSink.emit({
               type: "recovery_status",
               conversationId: input.conversationId,
@@ -931,6 +970,12 @@ export class AIChatQueryLoop {
       }
 
       let fullContent = finalAccumulator?.state.fullContent ?? "";
+      // Layer 3 recovery: prepend any prefix accumulated from prior
+      // truncated rounds so the persisted assistant message includes
+      // the recovered content from earlier in the turn.
+      if (recoveryState.recoveredContentPrefix) {
+        fullContent = recoveryState.recoveredContentPrefix + fullContent;
+      }
       if (fullContent.trim().length === 0 && immediatePlanSubmissionContent) {
         fullContent = immediatePlanSubmissionContent;
       }
@@ -1010,13 +1055,37 @@ export class AIChatQueryLoop {
         const classifier = new AIChatRecoveryClassifier();
         const rec = classifier.classifyThrown(err);
         const coordinator = new AIChatRecoveryCoordinator();
+        // Resolve a fallback model (Layer 6) when the deps provide a
+        // resolver. Without it, the coordinator cannot return a
+        // fallback_model action and the badge stays dark.
+        let fallbackModel: string | undefined;
+        if (
+          this.deps.resolveFallbackModel &&
+          (rec.reason === "overload" || rec.reason === "model_unavailable")
+        ) {
+          try {
+            const resolved = await this.deps.resolveFallbackModel({
+              originalModel: recoveryState.originalModel,
+              currentModel: recoveryState.currentModel,
+              reason: rec.reason,
+            });
+            fallbackModel = resolved.model;
+          } catch {
+            // Non-fatal: proceed without a fallback.
+          }
+        }
         const result = coordinator.recover({
           reason: rec.reason,
           state: recoveryState,
           maxOutputTokensCap: AI_CHAT_RECOVERY_DEFAULTS.maxOutputTokensCap,
+          fallbackModel,
         });
-        recoveryState = result.updatedState;
+        // Only update state when the coordinator produced an action we
+        // actually act on (fallback_model). Recording persistent_retry
+        // or other actions without executing them would mislead the
+        // persisted recoveryMetadata.
         if (result.action.type === "fallback_model") {
+          recoveryState = result.updatedState;
           eventSink.emit({
             type: "recovery_status",
             conversationId: input.conversationId,

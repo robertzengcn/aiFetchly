@@ -10,6 +10,7 @@ import { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
 import type { AIChatQueryLoopDeps } from "@/service/AIChatQueryLoop";
 import { AIChatQueryEngine } from "@/service/AIChatQueryEngine";
 import { AIChatCompactAgentService } from "@/service/AIChatCompactAgentService";
+import { AIChatModelFallbackService } from "@/service/AIChatModelFallbackService";
 import { getSharedAutoDreamService } from "@/service/AIAutoDreamFactory";
 import { AIChatToolApprovalModule } from "@/modules/AIChatToolApprovalModule";
 import { evaluateToolApproval } from "@/service/AIChatToolApprovalPolicyService";
@@ -110,6 +111,12 @@ function createQueryLoop(): AIChatQueryLoop {
       return SkillExecutor.execute(name, args, context);
     },
     getSkillDefinition: (name) => SkillRegistry.getSkill(name) ?? undefined,
+    resolveFallbackModel: async ({ originalModel, currentModel, reason }) => {
+      // Lazily construct the fallback service so we don't pay the catalog
+      // fetch on every loop construction — only when recovery triggers.
+      const svc = new AIChatModelFallbackService();
+      return svc.resolve({ originalModel, currentModel, reason });
+    },
   };
   return new AIChatQueryLoop(deps);
 }

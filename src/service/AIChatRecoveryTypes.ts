@@ -52,9 +52,7 @@ export const NON_RETRYABLE_REASONS: ReadonlySet<AIChatRecoveryReason> =
   ]);
 
 /** Returns true when a reason is ever retryable. */
-export function isRetryableReason(
-  reason: AIChatRecoveryReason
-): boolean {
+export function isRetryableReason(reason: AIChatRecoveryReason): boolean {
   return !NON_RETRYABLE_REASONS.has(reason);
 }
 
@@ -137,6 +135,10 @@ export interface AIChatRecoveryAttemptState {
   maxTokensOverride?: number;
   outputEscalationAttempted: boolean;
   outputContinuationCount: number;
+  /** Accumulated assistant text from rounds that hit finish_reason=length
+   *  and were continued. Prepended to the final accumulator's fullContent
+   *  so the persisted assistant message includes the recovered prefix. */
+  recoveredContentPrefix: string;
   reactiveCompactAttempted: boolean;
   contextDrainAttempted: boolean;
   consecutiveOverloadCount: number;
@@ -155,6 +157,7 @@ export function createRecoveryAttemptState(
     currentModel: model,
     outputEscalationAttempted: false,
     outputContinuationCount: 0,
+    recoveredContentPrefix: "",
     reactiveCompactAttempted: false,
     contextDrainAttempted: false,
     consecutiveOverloadCount: 0,
@@ -236,11 +239,7 @@ export function logRecoveryEvent(input: {
   readonly delayMs?: number;
   readonly model?: string;
   readonly fallbackModel?: string;
-  readonly outcome?:
-    | "retrying"
-    | "fallback"
-    | "recovered"
-    | "failed";
+  readonly outcome?: "retrying" | "fallback" | "recovered" | "failed";
 }): void {
   // Intentionally minimal. No message text, no tool args, no API keys,
   // no raw server bodies.

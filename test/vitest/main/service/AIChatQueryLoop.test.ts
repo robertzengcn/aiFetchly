@@ -708,5 +708,52 @@ describe("AIChatQueryLoop", () => {
       expect(recoveryEvents.length).toBeGreaterThan(0);
       expect(recoveryEvents[0]?.layer).toBe("output_token_recovery");
     });
+
+    it("Layer 3: continuation preserves the truncated prefix in fullContent", async () => {
+      // Force escalation first (round 1), then continuation (round 2),
+      // then a clean stop (round 3). Verifies the prefix is concatenated
+      // rather than lost when the accumulator resets each round.
+      let callCount = 0;
+      const fakeStream = vi.fn(
+        async (
+          _req: unknown,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          callCount += 1;
+          if (callCount === 1) {
+            onChunk(makeChunk("alpha", "length")); // triggers escalation
+          } else if (callCount === 2) {
+            onChunk(makeChunk("beta", "length")); // triggers continuation
+          } else {
+            onChunk(makeChunk("gamma", "stop")); // clean completion
+          }
+        }
+      );
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: vi.fn(),
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const result = await loop.run({
+        conversationId: "v2-test",
+        assistantMessageId: "a-prefix",
+        messages: [],
+        request: { message: "hi" },
+        openAITools: [],
+        abortController: new AbortController(),
+        eventSink: { emit: () => undefined },
+        startRound: 0,
+        isActiveTurn: () => true,
+      });
+      expect(result.type).toBe("completed");
+      if (result.type === "completed") {
+        // alpha was followed by continuation; beta by continuation;
+        // gamma was the final clean tail. All three must be present.
+        expect(result.fullContent).toContain("alpha");
+        expect(result.fullContent).toContain("beta");
+        expect(result.fullContent).toContain("gamma");
+        expect(result.fullContent).toBe("alphabetagamma");
+      }
+    });
   });
 });
