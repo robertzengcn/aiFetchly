@@ -42,7 +42,10 @@ import {
   RAG_GET_DOCUMENT_ERROR_LOG,
   RAG_CHECK_DOCUMENT_DUPLICATE,
 } from "@/config/channellist";
-import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
+import {
+  registerValidatedHandler,
+  registerAiValidatedHandler,
+} from "@/main-process/communication/_shared/registerValidatedHandler";
 import {
   ragShowOpenDialogInputSchema,
   ragFileStatsInputSchema,
@@ -338,7 +341,34 @@ export function registerRagIpcHandlers(): void {
     GET_FILE_STATS,
     ragFileStatsInputSchema,
     async (input) => {
-      const stats = fs.statSync(input.filePath);
+      // F5 fix (bypass) — confine file-stat probing to app-owned directories
+      // (RAG upload staging + error logs). Without this, a compromised
+      // renderer could stat arbitrary local paths to learn existence, size,
+      // and mtime — an information leak.
+      const appDataDir = app.getPath("userData");
+      const allowedRoots = [
+        path.join(appDataDir, "rag_uploads"),
+        path.join(appDataDir, "error_logs"),
+      ];
+      let resolved: string;
+      try {
+        resolved = fs.realpathSync(input.filePath);
+      } catch {
+        throw new Error("File not found");
+      }
+      const isContained = allowedRoots.some((root) => {
+        try {
+          const realRoot = fs.realpathSync(root);
+          const rel = path.relative(realRoot, resolved);
+          return !rel.startsWith("..") && !path.isAbsolute(rel) && rel !== "";
+        } catch {
+          return false;
+        }
+      });
+      if (!isContained) {
+        throw new Error("File path is outside allowed directories");
+      }
+      const stats = fs.statSync(resolved);
       return {
         size: stats.size,
         mtime: stats.mtime,
@@ -366,7 +396,8 @@ export function registerRagIpcHandlers(): void {
     return enhancedStats;
   });
 
-  registerValidatedHandler(RAG_QUERY, ragQueryInputSchema, async (input) => {
+  // F6 fix — RAG_QUERY triggers remote embedding/model work; gate on AI flag.
+  registerAiValidatedHandler(RAG_QUERY, ragQueryInputSchema, async (input) => {
     const ragSearchController = await createRagController();
     const searchRequest: SearchRequest = {
       query: input.query,
@@ -375,7 +406,8 @@ export function registerRagIpcHandlers(): void {
     return ragSearchController.search(searchRequest);
   });
 
-  registerValidatedHandler(
+  // F6 fix — upload triggers chunking + remote embedding; gate on AI flag.
+  registerAiValidatedHandler(
     RAG_UPLOAD_DOCUMENT,
     ragUploadDocumentInputSchema,
     async (input): Promise<DocumentUploadResponse> => {
@@ -476,16 +508,20 @@ export function registerRagIpcHandlers(): void {
     ragUpdateDocumentInputSchema,
     async (input) => {
       const ragSearchController = await createRagController();
-      await ragSearchController.updateDocument(
-        input.id,
-        input.metadata as {
-          title?: string;
-          description?: string;
-          tags?: string[];
-          author?: string;
-          log?: string;
-        }
-      );
+      // F5 fix — `log` is write-only from the renderer's perspective. The
+      // path is generated server-side by RAGDocumentModule.saveErrorLog under
+      // the app's error_logs dir. Allowing the renderer to set it would let a
+      // compromised renderer redirect getDocumentErrorLog reads to arbitrary
+      // local files.
+      const metadata = Object.assign({}, input.metadata) as {
+        title?: string;
+        description?: string;
+        tags?: string[];
+        author?: string;
+        log?: string;
+      };
+      delete metadata.log;
+      await ragSearchController.updateDocument(input.id, metadata);
       return null;
     }
   );
@@ -515,15 +551,20 @@ export function registerRagIpcHandlers(): void {
     }
   );
 
-  registerValidatedHandler(RAG_SEARCH, ragSearchInputSchema, async (input) => {
-    const req = input as unknown as SearchRequest;
-    const ragSearchController = await createRagController();
-    return ragSearchController.search({
-      query: req.query,
-      options: req.options,
-      filters: req.filters,
-    }) as Promise<SearchResponse>;
-  });
+  // F6 fix — RAG_SEARCH runs remote embedding on the query; gate on AI flag.
+  registerAiValidatedHandler(
+    RAG_SEARCH,
+    ragSearchInputSchema,
+    async (input) => {
+      const req = input as unknown as SearchRequest;
+      const ragSearchController = await createRagController();
+      return ragSearchController.search({
+        query: req.query,
+        options: req.options,
+        filters: req.filters,
+      }) as Promise<SearchResponse>;
+    }
+  );
 
   registerValidatedHandler(
     RAG_GET_SUGGESTIONS,
@@ -585,7 +626,8 @@ export function registerRagIpcHandlers(): void {
     }
   );
 
-  registerValidatedHandler(
+  // F6 fix — embedding-service test issues a remote model call.
+  registerAiValidatedHandler(
     RAG_TEST_EMBEDDING_SERVICE,
     ragNoInputSchema,
     async () => {
@@ -600,7 +642,8 @@ export function registerRagIpcHandlers(): void {
     return null;
   });
 
-  registerValidatedHandler(
+  // F6 fix — chunk-and-embed issues remote embedding work.
+  registerAiValidatedHandler(
     RAG_CHUNK_AND_EMBED_DOCUMENT,
     ragChunkAndEmbedInputSchema,
     async (input) => {

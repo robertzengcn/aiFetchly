@@ -116,7 +116,7 @@ function getDiffLineClass(line: string): string {
         variant="tonal"
         density="compact"
         class="cursor-pointer"
-        :title="t('fileOperations.open_file_tooltip') || 'Open file'"
+        :title="t('fileOperations.open_with_tooltip') || 'Open with…'"
         @click="openFile(record.filePath)"
       >
         <v-icon start size="x-small">{{ getIcon(record) }}</v-icon>

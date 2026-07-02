@@ -119,13 +119,26 @@ function checkPermission(skillName: string): PermissionCheckResult {
     return { allowed: true, needsPrompt: false };
   }
 
-  // Check session-only grant first (set by "Always Allow" in current session).
-  // This must come before the shell always-prompt so that session-granted
-  // shell skills auto-approve within the same app session.
+  // Check session-only grant first (set by "Allow Once" in the current
+  // session). This must come before the shell always-prompt so that a
+  // pending session grant can auto-approve the next invocation.
+  //
+  // F8 fix — for shell-category skills the grant is ONE-SHOT: it must be
+  // consumed by the matching pending command. Without this, a single
+  // "Allow Once" click (or one renderer grant IPC) silently turned into a
+  // session-wide approval that bypassed the per-command shell prompt. We
+  // delete the grant here, before returning, so the very next shell
+  // command will again hit the always-prompt branch below unless a fresh
+  // grant is issued. Non-shell skills retain their session-wide behaviour
+  // since their threat model does not include arbitrary command execution.
   if (
     sessionGrants.has(skillName) ||
     (registryName !== skillName && sessionGrants.has(registryName))
   ) {
+    if (skill.permissionCategory === "shell") {
+      sessionGrants.delete(skillName);
+      if (registryName !== skillName) sessionGrants.delete(registryName);
+    }
     return { allowed: true, needsPrompt: false };
   }
 
@@ -161,6 +174,10 @@ function checkPermission(skillName: string): PermissionCheckResult {
  *
  * @param skillName - The skill to grant permission for.
  * @param persistent - If true, store permanently; if false, only for this session.
+ *
+ * F8 note — for shell-category skills, a non-persistent grant is ONE-SHOT:
+ * it is consumed by the next matching checkPermission call (see
+ * checkPermission). Non-shell skills keep session-wide semantics.
  */
 function grantPermission(skillName: string, persistent: boolean): void {
   if (persistent) {

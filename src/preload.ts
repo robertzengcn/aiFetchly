@@ -227,6 +227,7 @@ import {
   MCP_TOOL_TOGGLE_SERVER,
   MCP_TOOL_TOGGLE_TOOL,
   MCP_TOOL_TEST_CONNECTION,
+  MCP_TOOL_TRUST,
   // WebSocket Channels
   WEBSOCKET_EVENT,
   WEBSOCKET_CONNECT,
@@ -323,6 +324,16 @@ import {
   AI_WORKSPACE_LIST,
   // Dialog Channels
   DIALOG_PICK_FOLDER,
+  // Hooks system channels — Phase 4
+  HOOKS_LIST,
+  HOOKS_CREATE,
+  HOOKS_UPDATE,
+  HOOKS_DELETE,
+  HOOKS_SET_ENABLED,
+  HOOKS_SET_TRUSTED,
+  HOOKS_GET_GLOBAL_ENABLE,
+  HOOKS_SET_GLOBAL_ENABLE,
+  HOOKS_LIST_AUDIT,
 } from "@/config/channellist";
 
 // window.ipcRenderer = ipcRenderer
@@ -733,6 +744,7 @@ contextBridge.exposeInMainWorld("api", {
       MCP_TOOL_TOGGLE_SERVER,
       MCP_TOOL_TOGGLE_TOOL,
       MCP_TOOL_TEST_CONNECTION,
+      MCP_TOOL_TRUST,
       // WebSocket Channels
       WEBSOCKET_CONNECT,
       WEBSOCKET_DISCONNECT,
@@ -822,6 +834,16 @@ contextBridge.exposeInMainWorld("api", {
       AI_WORKSPACE_LIST,
       // Dialog Channels
       DIALOG_PICK_FOLDER,
+      // Hooks system channels — Phase 4
+      HOOKS_LIST,
+      HOOKS_CREATE,
+      HOOKS_UPDATE,
+      HOOKS_DELETE,
+      HOOKS_SET_ENABLED,
+      HOOKS_SET_TRUSTED,
+      HOOKS_GET_GLOBAL_ENABLE,
+      HOOKS_SET_GLOBAL_ENABLE,
+      HOOKS_LIST_AUDIT,
     ];
     if (validChannels.includes(channel)) {
       return ipcRenderer.invoke(channel, data);

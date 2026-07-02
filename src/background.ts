@@ -1,7 +1,7 @@
 "use strict";
 import "reflect-metadata";
 // import {ipcMain as ipc} from 'electron-better-ipc';
-import { app, BrowserWindow, Menu, dialog } from "electron";
+import { app, BrowserWindow, Menu, dialog, shell } from "electron";
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const autoUpdater = require("electron").autoUpdater;
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -370,36 +370,72 @@ function initialize() {
     // In this example, only windows with the `about:blank` url will be created.
     // All other urls will be blocked.
     (win as any).webContents.setWindowOpenHandler(({ url }) => {
-      // console.log(url)
-      //if (url === '_blank') {
+      // F9 fix — only attach the privileged preload bridge to trusted app
+      // origins. Untrusted child windows (any external URL, including
+      // attacker-controlled pages opened via window.open from a compromised
+      // renderer) must NOT receive window.api or any other privileged
+      // surface, otherwise they can read or delete AI chat history, drive
+      // shell/file tools, etc.
+      //
+      // Trusted set:
+      //   - the Vite dev server origin (development)
+      //   - the app://, file://, about:blank schemes (production / scaffolding)
+      // Anything else is forwarded to the OS browser via shell.openExternal
+      // and the in-app child BrowserWindow is denied.
+      const isTrustedOrigin = (() => {
+        try {
+          const parsed = new URL(url);
+          if (parsed.protocol === "about:") return true; // blank/sandboxed
+          if (parsed.protocol === "file:") return true;
+          if (parsed.protocol === "app:") return true;
+          if (
+            MAIN_WINDOW_VITE_DEV_SERVER_URL &&
+            parsed.origin === new URL(MAIN_WINDOW_VITE_DEV_SERVER_URL).origin
+          ) {
+            return true;
+          }
+          return false;
+        } catch {
+          return false;
+        }
+      })();
 
-      //   const url = new URL(req.url);
-      //   const filePath = url.pathname;
-
-      // if (url.startsWith(`${protocolScheme}://`)) {   // Handle token data if it's in the URL
-      //   if (url.searchParams.has('token')) {
-      //     const tokenService = new Token()
-      //     const token = url.searchParams.get('token');
-      //     if (token) {
-      //       log.info('Token received, setting USERSDBPATH');
-      //       tokenService.setValue(USERSDBPATH, token);
-      //     }
-      //   }
-      // }
+      if (!isTrustedOrigin) {
+        // Open externally WITHOUT preload. Never expose the IPC bridge to
+        // arbitrary web content.
+        // F9 fix (bypass) — validate scheme before handing the URL to the
+        // OS handler. shell.openExternal will happily dispatch file://,
+        // smb://, custom protocol handlers, etc., which can launch
+        // arbitrary applications. Restrict to http/https.
+        try {
+          const parsed = new URL(url);
+          if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+            shell.openExternal(url).catch(() => {
+              /* ignore — best-effort external open */
+            });
+          } else {
+            console.warn(
+              `Refusing to open external URL with unsafe scheme: ${parsed.protocol}`
+            );
+          }
+        } catch {
+          /* ignore malformed URL */
+        }
+        return { action: "deny" };
+      }
 
       return {
         action: "allow",
         overrideBrowserWindowOptions: {
-          // frame: false,
-          // fullscreenable: false,
           backgroundColor: "black",
           webPreferences: {
             preload: path.join(__dirname + "/preload.js"),
+            contextIsolation: true,
+            nodeIntegration: false,
+            sandbox: true,
           },
         },
       };
-      // }
-      // return { action: 'deny' }
     });
 
     // console.log(process.env.WEBPACK_DEV_SERVER_UR)
@@ -640,6 +676,30 @@ function initialize() {
         await defModule.ensureBuiltIns();
       } catch (err) {
         log.error("Failed to seed built-in agent definitions:", err);
+      }
+
+      // Phase 4: load persisted user hooks into the registry and
+      // hydrate HookCommandTrustService from the DB. Must run AFTER
+      // SqliteDb is initialized and AFTER builtin hooks are registered
+      // (which happens via builtinHooks.ts at module init).
+      try {
+        const { HookModule } = await import("@/modules/HookModule");
+        const hookModule = new HookModule();
+        await hookModule.loadUserHooksIntoRegistry();
+
+        // Activate the persistent audit logger now that the module is ready.
+        const { HookAuditModule } = await import("@/modules/HookAuditModule");
+        const { PersistentHookAuditLogger, setHookAuditLogger } = await import(
+          "@/service/hooks/HookAuditService"
+        );
+        PersistentHookAuditLogger.setModule(new HookAuditModule());
+        setHookAuditLogger(PersistentHookAuditLogger);
+
+        log.info(
+          "Hook subsystem loaded user hooks and persistent audit logger"
+        );
+      } catch (err) {
+        log.error("Failed to load hook subsystem:", err);
       }
 
       // Initialize RAG IPC handlers

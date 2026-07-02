@@ -504,6 +504,11 @@ export interface OpenAIModel {
   context_size?: number;
   /** Max output tokens, when reported by the server. */
   max_tokens?: number;
+  /**
+   * Whether the model is free to use (no input/output cost). Reported by the
+   * AI server's `/api/ai/v1/models` endpoint as `is_free`.
+   */
+  is_free?: boolean;
 }
 
 /** OpenAI-compatible models list response */
@@ -1855,6 +1860,10 @@ export class AiChatApi {
       }
       if (typeof maxTokens === "number" && maxTokens > 0) {
         model.max_tokens = maxTokens;
+      }
+      const isFreeRaw = (entry as { is_free?: unknown }).is_free;
+      if (typeof isFreeRaw === "boolean") {
+        model.is_free = isFreeRaw;
       }
       data.push(model);
     }
