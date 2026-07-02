@@ -66,7 +66,7 @@
     "tsc": "tsc --noEmit --watch",
     "tsc-result": "tsc --noEmit",
     "rebuild-sqlite3": "node -e \"console.log('sqlite3 uses N-API; Electron rebuild is not required')\"",
-    "rebuild-better-sqlite": "cross-env npm_config_runtime=electron npm_config_target=35.7.5 npm_config_disturl=https://electronjs.org/headers npm rebuild better-sqlite3 --build-from-source",
+    "rebuild-better-sqlite": "node scripts/rebuild-better-sqlite.js",
     "prepackage": "npm run rebuild-native",
     "rebuild-native": "yarn rebuild-sqlite3 && yarn rebuild-better-sqlite",
     "vue-check": "vue-tsc --noEmit --watch",

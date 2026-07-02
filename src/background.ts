@@ -678,6 +678,30 @@ function initialize() {
         log.error("Failed to seed built-in agent definitions:", err);
       }
 
+      // Phase 4: load persisted user hooks into the registry and
+      // hydrate HookCommandTrustService from the DB. Must run AFTER
+      // SqliteDb is initialized and AFTER builtin hooks are registered
+      // (which happens via builtinHooks.ts at module init).
+      try {
+        const { HookModule } = await import("@/modules/HookModule");
+        const hookModule = new HookModule();
+        await hookModule.loadUserHooksIntoRegistry();
+
+        // Activate the persistent audit logger now that the module is ready.
+        const { HookAuditModule } = await import("@/modules/HookAuditModule");
+        const { PersistentHookAuditLogger, setHookAuditLogger } = await import(
+          "@/service/hooks/HookAuditService"
+        );
+        PersistentHookAuditLogger.setModule(new HookAuditModule());
+        setHookAuditLogger(PersistentHookAuditLogger);
+
+        log.info(
+          "Hook subsystem loaded user hooks and persistent audit logger"
+        );
+      } catch (err) {
+        log.error("Failed to load hook subsystem:", err);
+      }
+
       // Initialize RAG IPC handlers
       // try {
       //   const ragHandlers = new RAGIpcHandlers(appDataSource);

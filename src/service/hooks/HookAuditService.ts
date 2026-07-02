@@ -67,11 +67,75 @@ export const ConsoleHookAuditLogger: HookAuditLogger = {
   },
 };
 
+/**
+ * Persistent logger variant: writes audit entries to SQLite via
+ * HookAuditModule while still mirroring to the console logger so
+ * dev behavior stays observable even if the DB write fails.
+ *
+ * The `import("@/modules/HookAuditModule").HookAuditModule` type
+ * reference is a lazy type-only import — it avoids a circular
+ * module-load dependency: HookAuditModule imports BaseModule which
+ * imports Token, and HookAuditService is imported by HookDispatcher
+ * which is imported widely. Deferring the import keeps the module
+ * graph acyclic at load time.
+ */
+export interface PersistentHookAuditLogger extends HookAuditLogger {
+  setModule(module: import("@/modules/HookAuditModule").HookAuditModule): void;
+}
+
+class PersistentHookAuditLoggerImpl implements PersistentHookAuditLogger {
+  private module?: import("@/modules/HookAuditModule").HookAuditModule;
+
+  setModule(module: import("@/modules/HookAuditModule").HookAuditModule): void {
+    this.module = module;
+  }
+
+  log(entry: HookAuditEntry): void {
+    // Always log to console first so behavior is observable in dev
+    // even if the DB write fails.
+    ConsoleHookAuditLogger.log(entry);
+
+    const mod = this.module;
+    if (!mod) return;
+
+    // Fire-and-forget — the dispatcher must never block on audit.
+    void mod
+      .recordEntry({
+        hookRunId: entry.hookRunId,
+        hookId: entry.hookId,
+        eventName: entry.eventName,
+        source: entry.source,
+        type: entry.type,
+        matchQuery: entry.matchQuery,
+        status: entry.status,
+        durationMs: entry.durationMs,
+        reason: entry.reason,
+      })
+      .catch((err: unknown) => {
+        // eslint-disable-next-line no-console
+        console.error("[HookAuditService] persistent log failed:", err);
+      });
+  }
+}
+
+export const PersistentHookAuditLogger: PersistentHookAuditLogger =
+  new PersistentHookAuditLoggerImpl();
+
 /** Current logger holder. Tests can swap via `setHookAuditLoggerForTests`. */
 let active: HookAuditLogger = ConsoleHookAuditLogger;
 
 export function getHookAuditLogger(): HookAuditLogger {
   return active;
+}
+
+/**
+ * Called once at app startup to switch from console-only to DB-backed
+ * audit. The startup wiring (in main-process init) constructs a
+ * HookAuditModule, calls PersistentHookAuditLogger.setModule(...),
+ * then passes PersistentHookAuditLogger here.
+ */
+export function setHookAuditLogger(logger: HookAuditLogger): void {
+  active = logger;
 }
 
 /** Test-only: redirect audit logs. */
