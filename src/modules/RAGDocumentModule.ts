@@ -10,6 +10,13 @@ import { VectorStoreService } from "@/service/VectorStoreService";
 import { VectorDatabaseType } from "@/modules/factories/VectorDatabaseFactory";
 import { RAGChunkModule } from "@/modules/RAGChunkModule";
 
+/** F2 helper — unique stamp used to build staged-upload filenames. */
+function validationStamp(): string {
+  return `${Date.now()}-${process.pid}-${crypto
+    .randomBytes(4)
+    .toString("hex")}`;
+}
+
 export interface DocumentUploadOptions {
   filePath: string;
   name: string;
@@ -66,8 +73,19 @@ export class RAGDocumentModule extends BaseModule {
       );
     }
 
-    // Check if file already exists
-    const existingDoc = await this.findDocumentByPath(options.filePath);
+    // F2 fix — copy the renderer-supplied source file into an app-owned
+    // upload directory before indexing. We persist the *staged* path as
+    // document.filePath, never the external path. This (a) prevents the
+    // RAG pipeline from being abused to read & embed arbitrary local
+    // files via known-path attacks and (b) makes deleteDocument safe:
+    // the unlink target is always under our own upload root.
+    const stagedPath = await this.stageUploadFile(
+      options.filePath,
+      validation.fileType!
+    );
+
+    // Check if file already exists (use the staged path)
+    const existingDoc = await this.findDocumentByPath(stagedPath);
     if (existingDoc) {
       throw new Error("Document with this path already exists");
     }
@@ -75,7 +93,7 @@ export class RAGDocumentModule extends BaseModule {
     // Create document entity
     const document = new RAGDocumentEntity();
     document.name = options.name;
-    document.filePath = options.filePath;
+    document.filePath = stagedPath;
     document.fileType = validation.fileType!;
     document.fileSize = validation.fileSize!;
     document.title = options.title;
@@ -97,6 +115,70 @@ export class RAGDocumentModule extends BaseModule {
     }
 
     return savedDocument;
+  }
+
+  /**
+   * F2 fix — copy an external renderer-supplied file into the app-owned
+   * RAG upload directory and return the staged path. If the source is
+   * already under the staging root (idempotent re-upload), it is returned
+   * unchanged. The staging root lives under app userData/rag_uploads.
+   */
+  private async stageUploadFile(
+    sourcePath: string,
+    fileExt: string
+  ): Promise<string> {
+    const stagingRoot = this.getUploadStagingDir();
+    if (!fs.existsSync(stagingRoot)) {
+      fs.mkdirSync(stagingRoot, { recursive: true });
+    }
+
+    // If the source is already contained under staging root, no-op.
+    const resolvedSource = fs.realpathSync(sourcePath);
+    const rel = path.relative(stagingRoot, resolvedSource);
+    const alreadyStaged =
+      !rel.startsWith("..") && !path.isAbsolute(rel) && rel !== "";
+    if (alreadyStaged) {
+      return resolvedSource;
+    }
+
+    // Build a unique destination under the staging root.
+    const hash = crypto
+      .createHash("sha256")
+      .update(`${resolvedSource}:${validationStamp()}`)
+      .digest("hex")
+      .slice(0, 16);
+    const safeName = `${hash}${fileExt}`;
+    const destPath = path.join(stagingRoot, safeName);
+
+    fs.copyFileSync(resolvedSource, destPath);
+    return destPath;
+  }
+
+  /**
+   * F2 fix — app-owned upload directory. All indexed documents live here
+   * and nowhere else, so deleteDocument can safely unlink any stored path.
+   */
+  private getUploadStagingDir(): string {
+    const stagingRoot = path.join(app.getPath("userData"), "rag_uploads");
+    if (!fs.existsSync(stagingRoot)) {
+      fs.mkdirSync(stagingRoot, { recursive: true });
+    }
+    return stagingRoot;
+  }
+
+  /**
+   * F2/F10 fix — return true iff `target` resolves strictly under the
+   * app-owned upload staging directory.
+   */
+  private isPathUnderUploadStaging(target: string): boolean {
+    try {
+      const resolved = fs.realpathSync(target);
+      const stagingRoot = this.getUploadStagingDir();
+      const rel = path.relative(stagingRoot, resolved);
+      return !rel.startsWith("..") && !path.isAbsolute(rel) && rel !== "";
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -334,12 +416,23 @@ export class RAGDocumentModule extends BaseModule {
     }
 
     // Delete file if requested
-    if (deleteFile && fs.existsSync(document.filePath)) {
-      try {
-        fs.unlinkSync(document.filePath);
-        console.log(`Deleted document file: ${document.filePath}`);
-      } catch (error) {
-        console.warn(`Failed to delete file: ${document.filePath}`, error);
+    // F10 fix — only unlink files that live under the app-owned upload
+    // staging directory. Because uploadDocument now stages every external
+    // path before persisting, document.filePath should always be contained,
+    // but older rows (or a tampered DB) might still hold an external path;
+    // refuse to unlink anything outside the staging root.
+    if (deleteFile && document.filePath) {
+      if (this.isPathUnderUploadStaging(document.filePath)) {
+        try {
+          fs.unlinkSync(document.filePath);
+          console.log(`Deleted document file: ${document.filePath}`);
+        } catch (error) {
+          console.warn(`Failed to delete file: ${document.filePath}`, error);
+        }
+      } else {
+        console.warn(
+          `Refusing to delete file outside upload staging directory: ${document.filePath}`
+        );
       }
     }
 
