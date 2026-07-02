@@ -447,12 +447,27 @@ export class FileToolService {
       params.head_limit ?? FILE_TOOL_SIZE_LIMITS.defaultHeadLimit;
     const ignore = [...DEFAULT_IGNORE_PATTERNS, ...(params.ignore ?? [])];
 
-    const allMatches = fg.sync(params.pattern, {
+    // F11 fix — disable symlink following so callers cannot enumerate paths
+    // outside the workspace root via symlinked directories.
+    const rawMatches = fg.sync(params.pattern, {
       cwd: searchCwd,
       ignore,
       dot: false,
       onlyFiles: true,
+      followSymbolicLinks: false,
     }) as string[];
+
+    // F11 fix — apply FilePathGuard (deny-list + realpath containment) to
+    // every match. fast-glob's ignore list does NOT enforce our deny-list
+    // (.env, secrets, ...) nor symlink containment.
+    const allMatches: string[] = [];
+    for (const rel of rawMatches) {
+      const candidate = path.isAbsolute(rel) ? rel : path.join(searchCwd, rel);
+      const verdict = this.guard.validate(candidate);
+      if (verdict.safe) {
+        allMatches.push(rel);
+      }
+    }
 
     const total = allMatches.length;
     const truncated = total > headLimit;
@@ -505,12 +520,27 @@ export class FileToolService {
     // Find files to search using glob (M6 fix — include params.ignore)
     const globPattern = params.glob ?? "**/*";
     const grepIgnore = [...DEFAULT_IGNORE_PATTERNS, ...(params.ignore ?? [])];
-    const files = fg.sync(globPattern, {
+    // F4 fix — do not follow symlinked directories during grep discovery.
+    const rawFiles = fg.sync(globPattern, {
       cwd: searchPath,
       ignore: grepIgnore,
       dot: false,
       onlyFiles: true,
+      followSymbolicLinks: false,
     }) as string[];
+
+    // F4 fix — apply FilePathGuard per matched file. The original code only
+    // validated the search root, then read each match directly. fast-glob can
+    // surface `.env` and symlink-escaped files that the deny-list and realpath
+    // containment rules are meant to block.
+    const files: string[] = [];
+    for (const rel of rawFiles) {
+      const candidate = path.isAbsolute(rel) ? rel : path.join(searchPath, rel);
+      const verdict = this.guard.validate(candidate);
+      if (verdict.safe) {
+        files.push(rel);
+      }
+    }
 
     const contextBefore = params.context_before ?? 0;
     const contextAfter = params.context_after ?? 0;
