@@ -486,7 +486,7 @@ export function registerRagIpcHandlers(): void {
       // the app's error_logs dir. Allowing the renderer to set it would let a
       // compromised renderer redirect getDocumentErrorLog reads to arbitrary
       // local files.
-      const metadata = { ...input.metadata } as {
+      const metadata = Object.assign({}, input.metadata) as {
         title?: string;
         description?: string;
         tags?: string[];
