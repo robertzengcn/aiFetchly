@@ -137,3 +137,5 @@ node_modules
 .worktrees/
 *.mp4
 *.wav
+.superpowers/
+hyperframes-*

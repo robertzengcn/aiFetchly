@@ -1216,18 +1216,65 @@ export function registerAiChatIpcHandlers(): void {
     }
   );
 
-  // Open file in system default application.
-  // Uses spawn instead of shell.openPath because shell.openPath on Linux
+  // Open the OS-native "Open With…" chooser so the user can pick which
+  // installed application should handle the file. We avoid opening with the
+  // system default directly so the user stays in control of which program
+  // renders AI-generated content.
+  //
+  // Platform notes:
+  //  - Windows: `rundll32 shell32.dll,OpenAs_RunnableDLL <path>` shows the
+  //    standard "How do you want to open this file?" dialog.
+  //  - macOS: AppleScript `choose application` is the only programmatic way
+  //    to surface the native app picker; we then launch the file via
+  //    `open -a <chosenApp> <path>` so any .app bundle the user picks works.
+  //  - Linux: there is no portable "Open With" dialog callable from the
+  //    shell across desktop environments, so we fall back to `xdg-open`
+  //    (which still respects the user's default-mime associations).
+  //
+  // spawn is used instead of shell.openPath because shell.openPath on Linux
   // uses a blocking C++ call (system("xdg-open ...")) that freezes the main
-  // process event loop, making the UI unresponsive until xdg-open returns.
-  function openFileOnPlatform(filePath: string): void {
-    const [cmd, args] =
-      platform() === "darwin"
-        ? (["open", [filePath]] as const)
-        : platform() === "win32"
-          ? (["cmd.exe", ["/c", "start", "", filePath]] as const)
-          : (["xdg-open", [filePath]] as const);
-    const proc = spawn(cmd, args, { detached: true, stdio: "ignore" });
+  // process event loop while xdg-open runs.
+  function openFileWithChooser(filePath: string): void {
+    if (platform() === "win32") {
+      const proc = spawn(
+        "rundll32.exe",
+        ["shell32.dll,OpenAs_RunnableDLL", filePath],
+        { detached: true, stdio: "ignore" }
+      );
+      proc.unref();
+      return;
+    }
+
+    if (platform() === "darwin") {
+      // AppleScript picks the app, then `open -a` launches the file with it.
+      // The file path is passed as argv[1] (not interpolated) so quotes or
+      // backslashes in the path cannot break out of the AppleScript string.
+      // Error number -128 is the user-cancelled case; we silently return.
+      const script = [
+        "on run argv",
+        "  set thePath to item 1 of argv",
+        "  try",
+        '    set chosenApp to choose application with prompt "Choose application to open with"',
+        "  on error number -128",
+        "    return",
+        "  end try",
+        "  set appPath to POSIX path of (chosenApp as alias)",
+        '  do shell script "open -a " & quoted form of appPath & " " & quoted form of thePath',
+        "end run",
+      ].join("\n");
+      const proc = spawn("osascript", ["-e", script, filePath], {
+        detached: true,
+        stdio: "ignore",
+      });
+      proc.unref();
+      return;
+    }
+
+    // Linux fallback: no portable "Open With" dialog exists.
+    const proc = spawn("xdg-open", [filePath], {
+      detached: true,
+      stdio: "ignore",
+    });
     proc.unref();
   }
 
@@ -1245,7 +1292,7 @@ export function registerAiChatIpcHandlers(): void {
       if (input.filePath.includes("..")) {
         throw new Error("Path traversal not allowed");
       }
-      openFileOnPlatform(input.filePath);
+      openFileWithChooser(input.filePath);
       return null;
     }
   );

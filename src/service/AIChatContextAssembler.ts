@@ -11,7 +11,12 @@ import {
 } from "@/config/settinggroupInit";
 import { WorkspaceResolver } from "@/service/WorkspaceResolver";
 import path from "node:path";
-import type { OpenAIChatMessage, OpenAIMessageRole } from "@/api/aiChatApi";
+import type {
+  OpenAIChatMessage,
+  OpenAIMessageRole,
+  OpenAITextContentPart,
+  OpenAIImageUrlContentPart,
+} from "@/api/aiChatApi";
 import { MessageType } from "@/entityTypes/commonType";
 import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
 
@@ -30,6 +35,7 @@ export interface AIChatContextAssembleInput {
   readonly maxTokens?: number;
   readonly planState?: AIChatPlanStateView | null;
   readonly recentMessageWindow?: number;
+  readonly currentUserContentParts?: Array<OpenAITextContentPart | OpenAIImageUrlContentPart>;
 }
 
 export interface AIChatContextAssembleResult {
@@ -204,7 +210,10 @@ export class AIChatContextAssembler {
       messages.push({ role: roleOf(r.role), content: r.content });
     }
 
-    messages.push({ role: "user", content: input.currentUserMessage });
+    messages.push({
+      role: "user",
+      content: input.currentUserContentParts ?? input.currentUserMessage,
+    });
 
     const tokenEstimate = this.estimator.estimateMessages(messages);
 

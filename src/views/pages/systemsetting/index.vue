@@ -30,6 +30,16 @@
               <v-icon left>mdi-view-dashboard</v-icon>
               {{ t('system_settings.manage_skills') }}
             </v-btn>
+            <v-btn
+              color="primary"
+              variant="outlined"
+              block
+              @click="navigateToHooks"
+              class="mb-2"
+            >
+              <v-icon left>mdi-hook</v-icon>
+              {{ t('system_settings.manage_hooks') || 'Manage Hooks' }}
+            </v-btn>
           </v-card-text>
         </v-card>
       </v-col>
@@ -383,6 +393,10 @@ function navigateToMCP() {
 
 function navigateToSkills() {
   router.push({ name: 'system_setting_skills' });
+}
+
+function navigateToHooks() {
+  router.push({ name: 'system_setting_hooks' });
 }
 
 onMounted(() => {

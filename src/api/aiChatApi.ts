@@ -434,12 +434,47 @@ export interface OpenAIStreamToolCallDelta {
   };
 }
 
+/** OpenAI-compatible text content part */
+export type OpenAITextContentPart = {
+  type: "text";
+  text: string;
+};
+
+/** OpenAI-compatible image URL content part */
+export type OpenAIImageUrlContentPart = {
+  type: "image_url";
+  image_url: {
+    url: string;
+    detail?: "auto" | "low" | "high";
+  };
+};
+
+/** OpenAI-compatible message content: string (text-only) or content parts array (multimodal). */
+export type OpenAIMessageContent =
+  | string
+  | Array<OpenAITextContentPart | OpenAIImageUrlContentPart>;
+
 /** OpenAI-compatible chat message */
 export interface OpenAIChatMessage {
   role: OpenAIMessageRole;
-  content: string | null;
+  content: OpenAIMessageContent | null;
   tool_calls?: OpenAIToolCall[];
   tool_call_id?: string;
+}
+
+/** Safely convert OpenAIMessageContent to a display string. */
+export function openAIContentToString(
+  content: OpenAIMessageContent | null | undefined
+): string {
+  if (content == null) return "";
+  if (typeof content === "string") return content;
+  return content
+    .map((part) =>
+      part.type === "text"
+        ? part.text
+        : `[Image: ${part.image_url.url.slice(0, 60)}...]`
+    )
+    .join("\n");
 }
 
 /** OpenAI-compatible tool choice */
@@ -480,6 +515,11 @@ export interface OpenAIModel {
   context_size?: number;
   /** Max output tokens, when reported by the server. */
   max_tokens?: number;
+  /**
+   * Whether the model is free to use (no input/output cost). Reported by the
+   * AI server's `/api/ai/v1/models` endpoint as `is_free`.
+   */
+  is_free?: boolean;
 }
 
 /** OpenAI-compatible models list response */
@@ -819,6 +859,9 @@ export class AiChatApi {
    */
   private _redactDebugPayload(data: unknown): unknown {
     if (data === null || typeof data !== "object") {
+      if (typeof data === "string" && data.startsWith("data:image/")) {
+        return `<image data url len=${data.length}>`;
+      }
       return data;
     }
     if (Array.isArray(data)) {
@@ -828,7 +871,9 @@ export class AiChatApi {
     for (const [key, value] of Object.entries(
       data as Record<string, unknown>
     )) {
-      if (
+      if (typeof value === "string" && value.startsWith("data:image/")) {
+        redacted[key] = `<image data url len=${value.length}>`;
+      } else if (
         (key === "screenshot" || key === "attachments") &&
         typeof value === "string" &&
         value.length > 200
@@ -1850,6 +1895,10 @@ export class AiChatApi {
       if (typeof maxTokens === "number" && maxTokens > 0) {
         model.max_tokens = maxTokens;
       }
+      const isFreeRaw = (entry as { is_free?: unknown }).is_free;
+      if (typeof isFreeRaw === "boolean") {
+        model.is_free = isFreeRaw;
+      }
       data.push(model);
     }
     const defaultModel = this.getStringField(response, "default_model");
@@ -2270,12 +2319,12 @@ export class AiChatApi {
     const conversationText = request.messages
       .filter((m) => m.role !== "system")
       .map((m) =>
-        `${this.getLegacyRoleLabel(m.role)}: ${m.content ?? ""}`.trim()
+        `${this.getLegacyRoleLabel(m.role)}: ${openAIContentToString(m.content)}`.trim()
       )
       .join("\n\n");
 
     return {
-      message: conversationText || request.messages.at(-1)?.content || "",
+      message: conversationText || openAIContentToString(request.messages.at(-1)?.content),
       model: request.model,
       system_prompt:
         typeof systemPrompt === "string" ? systemPrompt : undefined,

@@ -8,6 +8,7 @@ import {
   mcpServerConfigSchema,
   mcpServerConfigUpdateSchema,
 } from "@/schemas/config/mcpServer";
+import { Token } from "@/modules/token";
 
 export interface MCPServerConfig {
   serverName: string;
@@ -137,6 +138,56 @@ export class MCPToolService {
 
   private createClientForServer(server: MCPToolEntity): MCPClient {
     return new MCPClient(buildClientConfig(server));
+  }
+
+  /**
+   * F1 fix — stdio MCP servers execute arbitrary local commands via
+   * child_process.spawn. Treat them like shell-tool invocations: refuse to
+   * spawn until the user has explicitly trusted the server. Transport
+   * 'sse' / 'websocket' is unaffected (they open outbound sockets, not
+   * local processes).
+   *
+   * Trust is stored as a Token flag `MCP_TRUST_<id>` = "true". The
+   * frontend grants it through the MCP_TOOL_TRUST IPC handler. Plugin-
+   * imported servers start untrusted and must be explicitly approved
+   * before discovery / execution.
+   */
+  private assertStdioTrusted(server: MCPToolEntity): void {
+    if (server.transport !== "stdio") return;
+    if (server.id === undefined || server.id === null) {
+      throw new Error(
+        "MCP stdio server has no id; cannot verify trust status."
+      );
+    }
+    let trusted: string | undefined;
+    try {
+      trusted = new Token().getValue(`MCP_TRUST_${server.id}`);
+    } catch {
+      // Token service unreachable → fail-closed.
+      throw new Error(
+        `Unable to verify trust for MCP stdio server "${server.serverName}". Token service unavailable.`
+      );
+    }
+    if (trusted !== "true") {
+      throw new Error(
+        `MCP stdio server "${server.serverName}" requires explicit trust approval before it can spawn a local process.`
+      );
+    }
+  }
+
+  /** Grant or revoke trust for an MCP server (idempotent). */
+  setTrust(serverId: number, trusted: boolean): void {
+    const token = new Token();
+    token.setValue(`MCP_TRUST_${serverId}`, trusted ? "true" : "");
+  }
+
+  /** Returns true when the given stdio server has been explicitly trusted. */
+  isTrusted(serverId: number): boolean {
+    try {
+      return new Token().getValue(`MCP_TRUST_${serverId}`) === "true";
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -354,6 +405,8 @@ export class MCPToolService {
       throw new Error(`MCP server with id ${serverId} not found`);
     }
 
+    this.assertStdioTrusted(server);
+
     const client = this.createClientForServer(server);
 
     try {
@@ -492,6 +545,7 @@ export class MCPToolService {
     }
 
     this.assertToolEnabled(server, toolName);
+    this.assertStdioTrusted(server);
 
     const client = this.createClientForServer(server);
     const callTimeoutMs = MCP_CALL_TIMEOUT_MS;
@@ -555,6 +609,8 @@ export class MCPToolService {
     if (!server) {
       throw new Error(`MCP server with id ${serverId} not found`);
     }
+
+    this.assertStdioTrusted(server);
 
     const client = this.createClientForServer(server);
 
