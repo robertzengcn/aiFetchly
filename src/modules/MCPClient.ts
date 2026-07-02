@@ -12,6 +12,30 @@ try {
   // WebSocket not available, will throw error when trying to use it
 }
 
+/**
+ * F1 fix — minimal environment allowlist inherited by spawned MCP stdio
+ * children. Keeps PATH/HOME/USER/locale essentials so binaries resolve,
+ * while keeping tokens, cookies, DB paths, and Electron-internal secrets
+ * out of the child environment.
+ */
+const MCP_ENV_ALLOWLIST: readonly string[] = [
+  "PATH",
+  "HOME",
+  "USER",
+  "LANG",
+  "TERM",
+  "SHELL",
+  "PWD",
+  "HOSTNAME",
+  "LOGNAME",
+  "TZ",
+  "APPDATA",
+  "LOCALAPPDATA",
+  "PROGRAMFILES",
+  "SystemRoot",
+  "COMSPEC",
+];
+
 export interface MCPClientConfig {
   host?: string;
   port?: number;
@@ -158,9 +182,27 @@ export class MCPClient {
     }
 
     return new Promise((resolve, reject) => {
+      // F1 fix — do NOT inherit the full main-process environment when
+      // spawning MCP stdio servers. Renderer/plugin-controlled server
+      // configs can reach this sink; leaking process.env exposes tokens,
+      // DB paths, cookies, and other secrets the child has no business
+      // seeing. We keep a small PATH/HOME/USER/LANG-style allowlist and
+      // layer only the caller-declared config.env on top.
+      const childEnv: NodeJS.ProcessEnv = {};
+      for (const key of MCP_ENV_ALLOWLIST) {
+        if (process.env[key] !== undefined) {
+          childEnv[key] = process.env[key];
+        }
+      }
+      if (this.config.env) {
+        for (const [k, v] of Object.entries(this.config.env)) {
+          if (typeof v === "string") childEnv[k] = v;
+        }
+      }
+
       const child = spawn(command, args, {
         stdio: ["pipe", "pipe", "pipe"],
-        env: { ...process.env, ...this.config.env },
+        env: childEnv,
       });
 
       this.connection = child;

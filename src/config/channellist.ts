@@ -296,6 +296,7 @@ export const MCP_TOOL_DISCOVER = "mcp:tool:discover";
 export const MCP_TOOL_TOGGLE_SERVER = "mcp:tool:toggle:server";
 export const MCP_TOOL_TOGGLE_TOOL = "mcp:tool:toggle:tool";
 export const MCP_TOOL_TEST_CONNECTION = "mcp:tool:test:connection";
+export const MCP_TOOL_TRUST = "mcp:tool:trust";
 
 // Skill Management Channels
 export const SKILL_CHECK_PERMISSION = "skill:check-permission";
