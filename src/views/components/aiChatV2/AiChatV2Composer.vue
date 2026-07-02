@@ -31,20 +31,22 @@
       @keydown="onKeydown"
     />
     <div class="v2-composer__bar">
+      <!-- Attach file button. Rendered as its own flex item at the far
+           left of the bar so the mode/model/tool selectors in the prepend
+           slot can't push it off-screen on narrow chat panels. -->
+      <v-btn
+        v-if="!isStreaming && !isProcessing"
+        icon
+        size="small"
+        variant="text"
+        class="v2-composer__attach"
+        :title="t('aiChatV2.attachments.add') || 'Attach file'"
+        @click="triggerFilePicker"
+      >
+        <v-icon size="small">mdi-paperclip</v-icon>
+      </v-btn>
       <div v-if="$slots.prepend" class="v2-composer__prepend">
         <slot name="prepend" />
-        <!-- Attach file button -->
-        <v-btn
-          v-if="!isStreaming && !isProcessing"
-          icon
-          size="small"
-          variant="text"
-          class="ml-1"
-          :title="t('aiChatV2.attachments.add') || 'Attach file'"
-          @click="triggerFilePicker"
-        >
-          <v-icon size="small">mdi-paperclip</v-icon>
-        </v-btn>
       </div>
       <div class="v2-composer__actions">
         <v-btn
@@ -198,15 +200,26 @@ const onKeydown = (event: KeyboardEvent): void => {
 .v2-composer__bar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
 }
+/* Attach button never shrinks — always visible on the far left. */
+.v2-composer__attach {
+  flex: 0 0 auto;
+}
+/* Prepend slot wraps and can shrink; selectors move to the next line on
+   narrow panels instead of pushing the attach/send buttons off-screen. */
 .v2-composer__prepend {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  row-gap: 4px;
 }
 .v2-composer__actions {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
+  margin-left: auto;
 }
 </style>
