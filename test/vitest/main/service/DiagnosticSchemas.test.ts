@@ -90,4 +90,28 @@ describe('DiagnosticSchemas', () => {
     const r: CrashRecord = validCrash;
     expect(r.crashId).toBe(validCrash.crashId);
   });
+
+  test('rejects date-only timestamp (not RFC3339)', () => {
+    expect(() =>
+      crashRecordSchema.parse({ ...validCrash, timestamp: '2026-07-03' })
+    ).toThrow();
+  });
+
+  test('rejects slash-format timestamp', () => {
+    expect(() =>
+      crashRecordSchema.parse({ ...validCrash, timestamp: '2026/07/03T00:00:00Z' })
+    ).toThrow();
+  });
+
+  test('accepts RFC3339 with fractional seconds', () => {
+    expect(() =>
+      crashRecordSchema.parse({ ...validCrash, timestamp: '2026-07-03T00:00:00.123Z' })
+    ).not.toThrow();
+  });
+
+  test('accepts RFC3339 with timezone offset', () => {
+    expect(() =>
+      crashRecordSchema.parse({ ...validCrash, timestamp: '2026-07-03T00:00:00+08:00' })
+    ).not.toThrow();
+  });
 });

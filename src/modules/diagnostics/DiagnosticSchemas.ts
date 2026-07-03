@@ -11,8 +11,8 @@ const crashTypes = z.enum([
   'worker-exit',
   'unclean-shutdown',
 ]);
-const rfc3339 = z.string().refine(
-  (v) => !Number.isNaN(Date.parse(v)),
+const rfc3339 = z.string().regex(
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/,
   { message: 'timestamp must be RFC3339' }
 );
 
