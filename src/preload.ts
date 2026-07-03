@@ -323,6 +323,15 @@ import {
   AI_WORKSPACE_LIST,
   // Dialog Channels
   DIALOG_PICK_FOLDER,
+  // Diagnostics Channels
+  DIAGNOSTICS_RENDERER_ERROR,
+  DIAGNOSTICS_EXPORT_REPORT,
+  DIAGNOSTICS_UPLOAD_REPORT,
+  DIAGNOSTICS_OPEN_FOLDER,
+  DIAGNOSTICS_GET_STATUS,
+  DIAGNOSTICS_SET_DEBUG,
+  DIAGNOSTICS_CLEAR_LOCAL,
+  DIAGNOSTICS_LIST_CRASHES,
 } from "@/config/channellist";
 
 // window.ipcRenderer = ipcRenderer
@@ -822,9 +831,27 @@ contextBridge.exposeInMainWorld("api", {
       AI_WORKSPACE_LIST,
       // Dialog Channels
       DIALOG_PICK_FOLDER,
+      // Diagnostics Channels
+      DIAGNOSTICS_EXPORT_REPORT,
+      DIAGNOSTICS_UPLOAD_REPORT,
+      DIAGNOSTICS_OPEN_FOLDER,
+      DIAGNOSTICS_GET_STATUS,
+      DIAGNOSTICS_SET_DEBUG,
+      DIAGNOSTICS_CLEAR_LOCAL,
+      DIAGNOSTICS_LIST_CRASHES,
     ];
     if (validChannels.includes(channel)) {
       return ipcRenderer.invoke(channel, data);
     }
+  },
+});
+
+// Dedicated diagnostics bridge for renderer-originated error reports.
+// Kept separate from the generic `api` whitelist so the renderer entry point
+// (src/views/main.ts) can report uncaught errors without referencing channel
+// names directly. The handler side is registered in Task 13.
+contextBridge.exposeInMainWorld("diagnostics", {
+  reportRendererError: (payload: unknown): Promise<unknown> => {
+    return ipcRenderer.invoke(DIAGNOSTICS_RENDERER_ERROR, payload);
   },
 });

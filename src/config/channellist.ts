@@ -425,3 +425,13 @@ export const AI_WORKSPACE_LIST = "ai-workspace:list";
 
 // Dialog Channels
 export const DIALOG_PICK_FOLDER = "dialog:pick-folder";
+
+// Diagnostics Channels
+export const DIAGNOSTICS_RENDERER_ERROR = "diagnostics:renderer-error";
+export const DIAGNOSTICS_EXPORT_REPORT = "diagnostics:export-report";
+export const DIAGNOSTICS_UPLOAD_REPORT = "diagnostics:upload-report";
+export const DIAGNOSTICS_OPEN_FOLDER = "diagnostics:open-folder";
+export const DIAGNOSTICS_GET_STATUS = "diagnostics:get-status";
+export const DIAGNOSTICS_SET_DEBUG = "diagnostics:set-debug";
+export const DIAGNOSTICS_CLEAR_LOCAL = "diagnostics:clear-local";
+export const DIAGNOSTICS_LIST_CRASHES = "diagnostics:list-crashes";
