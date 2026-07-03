@@ -43,7 +43,6 @@ function isRefreshTokenInvalidError(error: unknown): boolean {
 export class HttpClient {
   private _headers: HeadersInit = {};
   private baseUrl: string;
-  private _tokenRefreshService: TokenRefreshService | null = null;
   private _isWorker = false;
   constructor() {
     const resolved = resolveViteLoginBase();
@@ -76,7 +75,6 @@ export class HttpClient {
         this.setHeader("Authorization", "Bearer " + workerToken);
       }
     } else {
-      this._tokenRefreshService = new TokenRefreshService();
       this.setheaderToken();
     }
     // const tokenModel=new Token()
