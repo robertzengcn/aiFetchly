@@ -1,6 +1,7 @@
 import { ipcMain } from "electron";
-import { spawn } from "child_process";
+import { spawn, spawnSync } from "child_process";
 import { platform } from "os";
+import { readFileSync } from "fs";
 import {
   AiChatApi,
   ChatRequest,
@@ -1234,6 +1235,44 @@ export function registerAiChatIpcHandlers(): void {
   // spawn is used instead of shell.openPath because shell.openPath on Linux
   // uses a blocking C++ call (system("xdg-open ...")) that freezes the main
   // process event loop while xdg-open runs.
+  // WSL detection is memoized — /proc/sys/kernel/osrelease only changes on
+  // kernel upgrade, so we read it once per process lifetime.
+  let _isWSLCached: boolean | undefined;
+  function isWSL(): boolean {
+    if (_isWSLCached !== undefined) return _isWSLCached;
+    if (platform() !== "linux") {
+      _isWSLCached = false;
+      return false;
+    }
+    try {
+      const release = readFileSync(
+        "/proc/sys/kernel/osrelease",
+        "utf8"
+      ).toLowerCase();
+      _isWSLCached = release.includes("microsoft") || release.includes("wsl");
+    } catch {
+      _isWSLCached = false;
+    }
+    return _isWSLCached;
+  }
+
+  // Translate a WSL/Linux absolute path to a Windows UNC path that rundll32
+  // can consume (e.g. \\wsl.localhost\<distro>\home\...). Returns null if
+  // the translation fails — callers fall back to xdg-open in that case.
+  function wslPathToWindows(linuxPath: string): string | null {
+    try {
+      const result = spawnSync("wslpath", ["-w", linuxPath], {
+        encoding: "utf8",
+      });
+      if (result.status === 0 && result.stdout) {
+        return result.stdout.trim();
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
   function openFileWithChooser(filePath: string): void {
     if (platform() === "win32") {
       const proc = spawn(
@@ -1270,7 +1309,23 @@ export function registerAiChatIpcHandlers(): void {
       return;
     }
 
-    // Linux fallback: no portable "Open With" dialog exists.
+    // Linux fallback: no portable "Open With" dialog exists natively.
+    // On WSL, route through the Windows host's "Open With" dialog so the
+    // user gets the same chooser experience as a native Windows install.
+    // Falls through to xdg-open on plain Linux or if path translation fails.
+    if (isWSL()) {
+      const winPath = wslPathToWindows(filePath);
+      if (winPath) {
+        const proc = spawn(
+          "rundll32.exe",
+          ["shell32.dll,OpenAs_RunnableDLL", winPath],
+          { detached: true, stdio: "ignore" }
+        );
+        proc.unref();
+        return;
+      }
+    }
+
     const proc = spawn("xdg-open", [filePath], {
       detached: true,
       stdio: "ignore",
