@@ -54,6 +54,13 @@ export interface AdaptedPluginHookMatcher {
    * diagnostics and future SkillWorker dispatch wrapping.
    */
   readonly sourceCommand: string;
+  /**
+   * Optional path (relative to plugin root) to a sandboxed JS script
+   * that implements the hook logic. When present, PluginHookRegistrar
+   * dispatches into SkillWorker to execute it. When absent, the hook
+   * registers but its callback is a no-op (log + allow).
+   */
+  readonly scriptPath?: string;
 }
 
 export interface ClaudeHooksAdaptSuccess {
@@ -75,6 +82,18 @@ export type ClaudeHooksAdaptResult =
 interface ClaudeHookEntry {
   readonly type?: string;
   readonly command?: string;
+  /**
+   * AiFetchly-specific extension: path to a JS file (relative to plugin
+   * root) whose default export is a function (input) => HookOutput.
+   * Claude's native hook model uses shell `command`s which AiFetchly
+   * deliberately does NOT auto-execute (security: arbitrary shell in
+   * main process is unsafe). Plugins that want their hook to actually
+   * run ship a sandboxed JS script instead.
+   *
+   * When `aifetchly.script` is absent, the hook registers but its
+   * callback is a no-op (log + allow).
+   */
+  readonly aifetchly?: { readonly script?: string };
 }
 
 interface ClaudeHookMatcherBlock {
@@ -83,10 +102,7 @@ interface ClaudeHookMatcherBlock {
 }
 
 export class ClaudeHooksAdapter {
-  static adapt(
-    raw: unknown,
-    pluginName: string
-  ): ClaudeHooksAdaptResult {
+  static adapt(raw: unknown, pluginName: string): ClaudeHooksAdaptResult {
     if (!raw || typeof raw !== "object") {
       return {
         ok: false,
@@ -124,11 +140,17 @@ export class ClaudeHooksAdapter {
           // Other types (if any appear) are silently skipped.
           if (hook.type !== "command") continue;
           if (typeof hook.command !== "string") continue;
+          const scriptPath =
+            hook.aifetchly && typeof hook.aifetchly.script === "string"
+              ? hook.aifetchly.script
+              : undefined;
           matchers.push({
             event,
-            matcher: typeof block.matcher === "string" ? block.matcher : undefined,
+            matcher:
+              typeof block.matcher === "string" ? block.matcher : undefined,
             pluginName,
             sourceCommand: hook.command,
+            scriptPath,
           });
         }
       }

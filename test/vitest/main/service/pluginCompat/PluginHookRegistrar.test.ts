@@ -1,7 +1,13 @@
 import { describe, it, expect, vi } from "vitest";
 import { PluginHookRegistrar } from "@/service/pluginCompat/PluginHookRegistrar";
 
-// Mock HookRegistry to capture registrations without touching the global.
+// Capture calls to SkillWorkerClient.executeHook so we can assert dispatch
+// happened (AC-17) and what the script returned (AC-7).
+const executeHookMock = vi.fn<
+  [script: string, input: unknown],
+  Promise<{ permissionDecision: "allow" | "deny"; reason?: string }>
+>();
+
 vi.mock("@/service/hooks/HookRegistry", () => {
   const registered: unknown[] = [];
   return {
@@ -14,7 +20,23 @@ vi.mock("@/service/hooks/HookRegistry", () => {
   };
 });
 
-// Mock logger to avoid import side effects.
+vi.mock("@/service/SkillWorkerClient", () => ({
+  SkillWorkerClient: {
+    getInstance: () => ({
+      executeHook: executeHookMock,
+    }),
+  },
+}));
+
+vi.mock("@/service/pluginPaths", () => ({
+  getPluginInstallRoot: (name: string) => `/tmp/plugins/${name}`,
+}));
+
+vi.mock("fs", () => ({
+  existsSync: (p: string) => p.endsWith("hook.js"),
+  readFileSync: () => "return { permissionDecision: 'deny' };",
+}));
+
 vi.mock("@/modules/Logger", () => ({
   log: { info: () => undefined, warn: () => undefined, error: () => undefined },
 }));
@@ -80,5 +102,67 @@ describe("PluginHookRegistrar", () => {
     ]);
 
     expect(reg._registered.length).toBe(1);
+  });
+
+  it("AC-7: callback dispatches to SkillWorker when scriptPath is set, returns deny", async () => {
+    const reg = HookRegistry as unknown as {
+      registerBuiltinHook: (h: unknown) => void;
+      _registered: Array<{
+        callback: (input: unknown) => Promise<unknown>;
+        matcher?: string;
+      }>;
+    };
+    reg._registered.length = 0;
+    executeHookMock.mockResolvedValue({
+      permissionDecision: "deny",
+      reason: "blocked by plugin policy",
+    });
+
+    PluginHookRegistrar.registerForPlugin("p", [
+      {
+        event: "PreToolUse",
+        matcher: "shell_execute",
+        pluginName: "p",
+        sourceCommand: "echo",
+        scriptPath: "hooks/hook.js",
+      },
+    ]);
+
+    const hook = reg._registered[0];
+    const result = (await hook.callback({
+      tool: { name: "shell_execute" },
+    })) as {
+      permissionDecision: string;
+      reason?: string;
+    };
+
+    expect(executeHookMock).toHaveBeenCalledTimes(1);
+    expect(result.permissionDecision).toBe("deny");
+    expect(result.reason).toBe("blocked by plugin policy");
+  });
+
+  it("AC-17: callback without scriptPath does NOT dispatch to SkillWorker", async () => {
+    const reg = HookRegistry as unknown as {
+      registerBuiltinHook: (h: unknown) => void;
+      _registered: Array<{
+        callback: (input: unknown) => Promise<unknown>;
+      }>;
+    };
+    reg._registered.length = 0;
+    executeHookMock.mockClear();
+
+    PluginHookRegistrar.registerForPlugin("p", [
+      {
+        event: "PreToolUse",
+        pluginName: "p",
+        sourceCommand: "echo", // Claude native shell — no auto-exec
+      },
+    ]);
+
+    const result = (await reg._registered[0].callback({})) as {
+      permissionDecision: string;
+    };
+    expect(executeHookMock).not.toHaveBeenCalled();
+    expect(result.permissionDecision).toBe("allow");
   });
 });

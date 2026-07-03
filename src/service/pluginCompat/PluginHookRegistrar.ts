@@ -1,20 +1,29 @@
+import * as fs from "fs";
+import * as path from "path";
 import { HookRegistry } from "@/service/hooks/HookRegistry";
+import { SkillWorkerClient } from "@/service/SkillWorkerClient";
 import type {
   CallbackHookDefinition,
   HookInput,
   HookOutput,
 } from "@/entityTypes/hookTypes";
 import type { AdaptedPluginHookMatcher } from "@/service/pluginCompat/ClaudeHooksAdapter";
+import { getPluginInstallRoot } from "@/service/pluginPaths";
 import { log } from "@/modules/Logger";
 
 /**
  * Registers Claude plugin hooks into AiFetchly's HookRegistry.
  *
- * Phase 3 plumbing: hooks register and match correctly, but the callback
- * action is currently a no-op (log + allow). Actual hook execution —
- * wrapping the sourceCommand in a synthetic skill that runs in the
- * SkillWorker sandbox — is a follow-up that requires a new worker IPC
- * message type. See tech design §9.4.
+ * Hook execution model (Phase 3, post-AC-7/17):
+ *   - If matcher.scriptPath is set, dispatch into SkillWorker via
+ *     SkillWorkerClient.executeHook(). Plugin authors ship a JS file
+ *     whose default export is (input) => HookOutput.
+ *   - If matcher.scriptPath is absent, the hook registers but its
+ *     callback is a no-op (log + allow). This is the case for stock
+ *     Claude plugins that only declare a shell `command` — we never
+ *     auto-execute arbitrary shell from plugins.
+ *
+ * All execution happens in the SkillWorker process, never in main.
  *
  * Re-register is idempotent: existing plugin hooks with the same id are
  * replaced rather than duplicated.
@@ -25,9 +34,32 @@ function buildHookId(pluginName: string, idx: number): string {
   return `plugin:${pluginName}:${idx}`;
 }
 
+function loadScriptContent(
+  pluginName: string,
+  scriptPath: string
+): string | null {
+  try {
+    const abs = path.join(getPluginInstallRoot(pluginName), scriptPath);
+    if (!fs.existsSync(abs)) {
+      log.warn(
+        `[plugin-hook] ${pluginName} script not found at ${scriptPath}; hook will no-op`
+      );
+      return null;
+    }
+    return fs.readFileSync(abs, "utf-8");
+  } catch (e: unknown) {
+    log.warn(
+      `[plugin-hook] ${pluginName} failed to read script ${scriptPath}: ${
+        e instanceof Error ? e.message : String(e)
+      }`
+    );
+    return null;
+  }
+}
+
 /**
- * Build a CallbackHookDefinition from an adapted Claude matcher. The
- * callback is the Phase 3 no-op placeholder.
+ * Build a CallbackHookDefinition from an adapted Claude matcher. When
+ * scriptPath is set, the callback dispatches into SkillWorker.
  */
 function buildCallbackHook(
   pluginName: string,
@@ -35,19 +67,57 @@ function buildCallbackHook(
   idx: number
 ): CallbackHookDefinition {
   const hookId = buildHookId(pluginName, idx);
-  const callback = async (_input: HookInput): Promise<HookOutput> => {
-    // Phase 3 placeholder: log and allow. Real dispatch (SkillWorker
-    // executing a synthetic skill wrapping sourceCommand) is a follow-up.
-    log.info(
-      `[plugin-hook] ${pluginName} ${matcher.event} matched tool ` +
-        `${matcher.matcher ?? "(any)"} — Phase 3 placeholder allow ` +
-        `(would have run: ${matcher.sourceCommand})`
-    );
-    return {
-      continue: true,
-      permissionDecision: "allow",
-      reason: "plugin hook Phase 3 placeholder (no action)",
-    };
+
+  const callback = async (input: HookInput): Promise<HookOutput> => {
+    if (!matcher.scriptPath) {
+      // No script — Phase 3 no-op. Plugin's shell `command` is logged
+      // for traceability but never executed (security policy).
+      log.info(
+        `[plugin-hook] ${pluginName} ${matcher.event} matched tool ` +
+          `${matcher.matcher ?? "(any)"} — no script; allow ` +
+          `(shell command was: ${matcher.sourceCommand})`
+      );
+      return {
+        continue: true,
+        permissionDecision: "allow",
+        reason: "plugin hook has no sandboxed script; no-op",
+      };
+    }
+
+    const script = loadScriptContent(pluginName, matcher.scriptPath);
+    if (!script) {
+      // Script declared but missing — fail-open with a warning. We do
+      // NOT deny here because a missing script shouldn't break the
+      // user's workflow; it should be visible in diagnostics.
+      return {
+        continue: true,
+        permissionDecision: "allow",
+        reason: `plugin hook script missing: ${matcher.scriptPath}`,
+      };
+    }
+
+    try {
+      // Dispatch into SkillWorker sandbox. This is what satisfies
+      // AC-17 — the script runs in the worker process, not main.
+      const worker = SkillWorkerClient.getInstance();
+      const result = await worker.executeHook(script, input);
+      return result;
+    } catch (e: unknown) {
+      log.error(
+        `[plugin-hook] ${pluginName} script execution failed: ${
+          e instanceof Error ? e.message : String(e)
+        }`
+      );
+      // Hook execution errors are non-fatal (failureMode: "warn").
+      // Fail-open to keep the user's tool call running.
+      return {
+        continue: true,
+        permissionDecision: "allow",
+        reason: `plugin hook execution error: ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      };
+    }
   };
 
   return {
@@ -66,8 +136,6 @@ function buildCallbackHook(
 export class PluginHookRegistrar {
   /**
    * Register all hooks declared by a single plugin. Idempotent per id.
-   * Callers should invoke this from the loader path after
-   * PluginLoaderService has produced LoadedPlugin.hooks.
    */
   static registerForPlugin(
     pluginName: string,
@@ -80,8 +148,7 @@ export class PluginHookRegistrar {
   }
 
   /**
-   * Register hooks for all enabled plugins in a PluginLoadResult. Should
-   * be called whenever plugins are (re)loaded.
+   * Register hooks for all enabled plugins in a PluginLoadResult.
    */
   static registerFromLoadedPlugins(
     enabledPlugins: ReadonlyArray<{
