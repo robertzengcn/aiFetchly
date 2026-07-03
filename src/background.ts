@@ -683,6 +683,10 @@ function initialize() {
 
     createWindow();
 
+    // Show crash prompt if there was an unclean shutdown (no-op otherwise).
+    // Fire-and-forget so it never blocks app startup.
+    void maybeShowCrashPrompt();
+
     // Schedule log cleanup (runs after 5 seconds delay, then every 24 hours)
     logger.scheduleLogCleanup();
 
@@ -1085,6 +1089,50 @@ function sendLoginError(message: string): void {
       status: "error",
       message,
     });
+  }
+}
+
+/**
+ * Show the "report crash" prompt if the previous session ended in an
+ * unclean shutdown. No-op when there is no `unclean-shutdown` record on
+ * disk (e.g. first launch or after a clean exit). The function is wrapped
+ * in a try/catch so a failure in the diagnostics layer can never block
+ * app startup — `maybeShowCrashPrompt` is invoked fire-and-forget via
+ * `void` from `app.whenReady`.
+ *
+ * v1 note: this is not throttled by `lastPromptedCrashId`. The prompt
+ * shows at most once per session that has an unread unclean-shutdown
+ * record. Throttling is a P2 follow-up.
+ */
+async function maybeShowCrashPrompt(): Promise<void> {
+  try {
+    const { CrashLogSink } = await import("@/modules/diagnostics/CrashLogSink");
+    const records = CrashLogSink.readAll();
+    const latest = records.find((r) => r.crashType === "unclean-shutdown");
+    if (!latest) return;
+    const choice = await dialog.showMessageBox({
+      type: "question",
+      title: "AiFetchly",
+      message: "The app closed unexpectedly last time.",
+      detail:
+        "Send a diagnostics report to help us fix this? You can review what gets sent before sending.",
+      buttons: ["Send report", "Export report", "Dismiss"],
+      defaultId: 0,
+      cancelId: 2,
+    });
+    if (choice.response === 0) {
+      const { uploadLatestUncleanShutdown } = await import(
+        "@/main-process/communication/diagnostics-ipc"
+      );
+      await uploadLatestUncleanShutdown(latest.crashId);
+    } else if (choice.response === 1) {
+      const { exportLatestReport } = await import(
+        "@/main-process/communication/diagnostics-ipc"
+      );
+      await exportLatestReport(latest.crashId);
+    }
+  } catch (e) {
+    log.warn("[crash-prompt] failed", e);
   }
 }
 

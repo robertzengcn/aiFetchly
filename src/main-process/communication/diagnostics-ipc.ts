@@ -22,6 +22,7 @@ import {
   CrashReporterService,
   DiagnosticUploadClient,
   type HttpClientLike,
+  type UploadResult,
 } from "@/modules/diagnostics";
 import { CrashLogSink } from "@/modules/diagnostics/CrashLogSink";
 import { DiagnosticReportBuilder } from "@/modules/diagnostics/DiagnosticReportBuilder";
@@ -34,6 +35,7 @@ import {
 import { resolveViteLoginBase } from "@/config/viteLoginUrl";
 import { Token } from "@/modules/token";
 import { TOKENNAME } from "@/config/usersetting";
+import { log } from "@/modules/Logger";
 
 // Per-webContents rate limit: max 10 renderer-error IPC/min.
 const rendererErrorTimestamps = new Map<number, number[]>();
@@ -224,6 +226,99 @@ const fetchHttp: HttpClientLike = {
   },
 };
 
+/** Result shape returned by {@link buildAndExportReport}. */
+interface ExportResult {
+  path: string | null;
+  error?: string;
+}
+
+/**
+ * Build an upload package for the given crash and post it to the backend.
+ * Returns the {@link UploadResult} from the upload client. Never throws —
+ * all errors are surfaced via `UploadResult.error`. Backend URL errors and
+ * missing crash records are also surfaced as `error` rather than thrown.
+ */
+async function buildAndUploadCrash(crashId: string): Promise<UploadResult> {
+  const base = getRemoteBase();
+  if (!base) {
+    return { reportId: null, error: "Backend URL is not configured." };
+  }
+  const pkg = makeBuilder().buildUploadPackage(crashId);
+  if (!pkg) {
+    return { reportId: null, error: "Crash record not found." };
+  }
+  const client = new DiagnosticUploadClient({
+    endpoint: `${base}/api/crash-reports`,
+    http: fetchHttp,
+    authToken: getAuthToken(),
+  });
+  return client.upload(pkg);
+}
+
+/**
+ * Build a report package for the given crash and write it to `filePath`.
+ * When no crash record exists, writes `"{}"` as a placeholder. Returns the
+ * resolved path on success, or `{ path: null, error }` on write failure.
+ */
+async function buildAndExportReport(
+  crashId: string,
+  filePath: string
+): Promise<ExportResult> {
+  const pkg = makeBuilder().buildUploadPackage(crashId);
+  const body = pkg ? JSON.stringify(pkg, null, 2) : "{}";
+  try {
+    fs.writeFileSync(filePath, body);
+  } catch (e) {
+    return {
+      path: null,
+      error: e instanceof Error ? e.message : String(e),
+    };
+  }
+  return { path: filePath };
+}
+
+/**
+ * Prompt-initiated upload: build a package for the latest unclean-shutdown
+ * crash and upload it. Fire-and-forget from the caller's perspective —
+ * errors are logged here, not thrown.
+ */
+export async function uploadLatestUncleanShutdown(
+  crashId: string
+): Promise<void> {
+  try {
+    const result = await buildAndUploadCrash(crashId);
+    if (result.error) {
+      log.warn("[crash-prompt] upload failed:", result.error);
+    }
+  } catch (e) {
+    // Defence-in-depth: buildAndUploadCrash should never throw, but if it
+    // does we must not let the rejection become an unhandled rejection.
+    log.warn("[crash-prompt] upload threw:", e);
+  }
+}
+
+/**
+ * Prompt-initiated export: show a save dialog, build a report package for
+ * the given crash, and write it to the chosen path. Errors are logged, not
+ * thrown.
+ */
+export async function exportLatestReport(crashId: string): Promise<void> {
+  try {
+    const res = await dialog.showSaveDialog({
+      title: "Export diagnostic report",
+      defaultPath: `aifetchly-diagnostics-${Date.now()}.json`,
+      filters: [{ name: "JSON", extensions: ["json"] }],
+    });
+    if (res.canceled || !res.filePath) return;
+    const result = await buildAndExportReport(crashId, res.filePath);
+    if (result.error) {
+      log.warn("[crash-prompt] export failed:", result.error);
+    }
+  } catch (e) {
+    log.warn("[crash-prompt] export threw:", e);
+  }
+}
+
 /**
  * Register all diagnostics IPC handlers on ipcMain. Idempotent — ipcMain
  * itself guards against duplicate handler registration.
@@ -263,17 +358,7 @@ export function registerDiagnosticsIpcHandlers(): void {
       }
       return { path: res.filePath };
     }
-    const pkg = makeBuilder().buildUploadPackage(targetId);
-    const body = pkg ? JSON.stringify(pkg, null, 2) : "{}";
-    try {
-      fs.writeFileSync(res.filePath, body);
-    } catch (e) {
-      return {
-        path: null,
-        error: e instanceof Error ? e.message : String(e),
-      };
-    }
-    return { path: res.filePath };
+    return buildAndExportReport(targetId, res.filePath);
   });
 
   ipcMain.handle(DIAGNOSTICS_UPLOAD_REPORT, async (_event, raw: unknown) => {
