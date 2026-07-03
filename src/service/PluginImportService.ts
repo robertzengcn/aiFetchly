@@ -363,10 +363,24 @@ function readPluginMcpServers(
   return { ok: true, servers: out };
 }
 
+/**
+ * Directories stripped from plugin copies at install time.
+ *
+ * `.git` is stripped because plugin archives fetched from git sources may
+ * contain a `.git/hooks/` directory with attacker-controlled hook scripts
+ * (post-checkout, etc.) that would execute on subsequent git operations.
+ * `.github` workflows similarly contain arbitrary shell. We never want
+ * this content on disk inside an installed plugin.
+ */
+const STRIPPED_DIR_NAMES: ReadonlySet<string> = new Set([".git", ".github"]);
+
 function copyDirSync(src: string, dest: string): void {
   fs.mkdirSync(dest, { recursive: true });
   const entries = fs.readdirSync(src, { withFileTypes: true });
   for (const entry of entries) {
+    if (entry.isDirectory() && STRIPPED_DIR_NAMES.has(entry.name)) {
+      continue;
+    }
     const s = path.join(src, entry.name);
     const d = path.join(dest, entry.name);
     if (entry.isDirectory()) {
