@@ -5,6 +5,9 @@ import {
   AGENT_TASK_DETAIL,
   AGENT_TASK_LIST,
   AGENT_TASK_TRANSCRIPT,
+  AI_CHAT_V2_COMPACT_CONVERSATION,
+  AI_CHAT_V2_GET_TOOL_APPROVAL_MODE,
+  AI_CHAT_V2_SET_TOOL_APPROVAL_MODE,
 } from "@/config/channellist";
 
 type ExposedApi = {
@@ -63,6 +66,31 @@ describe("preload agent runtime invoke allowlist", () => {
   ])("forwards %s through window.api.invoke", async (channel) => {
     const api = await loadApi();
     const payload = JSON.stringify({ agentTaskId: "agt-test" });
+
+    const result = await api.invoke(channel, payload);
+
+    expect(electronMock.ipcRenderer.invoke).toHaveBeenCalledWith(
+      channel,
+      payload
+    );
+    expect(result).toEqual({ channel, data: payload });
+  });
+});
+
+describe("preload AI Chat V2 invoke allowlist", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    electronMock.exposed.clear();
+    electronMock.ipcRenderer.invoke.mockClear();
+  });
+
+  it.each([
+    AI_CHAT_V2_COMPACT_CONVERSATION,
+    AI_CHAT_V2_GET_TOOL_APPROVAL_MODE,
+    AI_CHAT_V2_SET_TOOL_APPROVAL_MODE,
+  ])("forwards %s through window.api.invoke", async (channel) => {
+    const api = await loadApi();
+    const payload = JSON.stringify({ conversationId: "conv-test" });
 
     const result = await api.invoke(channel, payload);
 
