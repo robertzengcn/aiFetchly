@@ -12,6 +12,7 @@ import {
 import type {
   PluginError,
   PluginManifest,
+  PluginFormat,
   PluginSource,
 } from "@/entityTypes/pluginTypes";
 
@@ -49,6 +50,7 @@ export interface LoadedPlugin {
   readonly enabled: boolean;
   readonly installPath: string;
   readonly manifest: PluginManifest;
+  readonly format?: PluginFormat;
   readonly skills: readonly LoadedPluginSkill[];
   readonly mcpServers: readonly LoadedPluginMcpServer[];
   readonly errors: readonly PluginError[];
@@ -130,6 +132,8 @@ export class PluginLoaderService {
           enabled: plugin.enabled === 1,
           installPath,
           manifest: JSON.parse(plugin.manifestJson || "{}") as PluginManifest,
+          format: (JSON.parse(plugin.manifestJson || "{}") as PluginManifest)
+            .format,
           skills: [],
           mcpServers: [],
           errors,
@@ -199,6 +203,7 @@ export class PluginLoaderService {
         enabled: plugin.enabled === 1,
         installPath,
         manifest,
+        format: manifest.format,
         skills: loadedSkills,
         mcpServers: loadedMcp,
         errors,
