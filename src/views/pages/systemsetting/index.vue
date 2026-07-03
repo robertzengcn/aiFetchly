@@ -165,6 +165,9 @@ v-for="(opt, idx) in setting.options || []" :key="idx" :label="opt.optionLabel"
         </v-card>
       </v-col>
     </v-row>
+
+    <!-- Diagnostics section (always visible, independent of selected group) -->
+    <DiagnosticsSection />
   </v-container>
 </template>
 
@@ -180,6 +183,7 @@ import { language_preference } from '@/config/settinggroupInit';
 const { t, locale } = useI18n();
 const router = useRouter();
 import { chooseFileDialog } from "@/views/api/common"
+import DiagnosticsSection from "@/views/components/settings/DiagnosticsSection.vue"
 
 // Store references for settings, groups, and tree state
 //const systemSettings = ref<SystemSettingDisplay[]>([]);
