@@ -1,18 +1,27 @@
-'use strict';
-export { CrashReporterService } from './CrashReporterService';
-export type { CrashReporterServiceConfig, WorkerExitInfo } from './CrashReporterService';
+"use strict";
+export { CrashReporterService } from "./CrashReporterService";
+export type {
+  CrashReporterServiceConfig,
+  WorkerExitInfo,
+} from "./CrashReporterService";
+export { DiagnosticUploadClient } from "./DiagnosticUploadClient";
+export type {
+  HttpClientLike,
+  UploadClientConfig,
+  UploadResult,
+} from "./DiagnosticUploadClient";
 export {
   crashRecordSchema,
   errorRecordSchema,
   diagnosticBreadcrumbSchema,
   diagnosticReportPackageSchema,
-} from './DiagnosticSchemas';
+} from "./DiagnosticSchemas";
 export type {
   CrashRecord,
   ErrorRecord,
   DiagnosticBreadcrumb,
   DiagnosticReportPackage,
-} from './DiagnosticSchemas';
+} from "./DiagnosticSchemas";
 
 /**
  * Best-effort access to the singleton crash reporter installed in background.ts.
@@ -21,9 +30,11 @@ export type {
  * use optional chaining / null guards.
  */
 export function getCrashReporterFromGlobal():
-  | import('./CrashReporterService').CrashReporterService
+  | import("./CrashReporterService").CrashReporterService
   | undefined {
-  return (globalThis as unknown as {
-    __aifetchlyCrashReporter?: import('./CrashReporterService').CrashReporterService;
-  }).__aifetchlyCrashReporter;
+  return (
+    globalThis as unknown as {
+      __aifetchlyCrashReporter?: import("./CrashReporterService").CrashReporterService;
+    }
+  ).__aifetchlyCrashReporter;
 }
