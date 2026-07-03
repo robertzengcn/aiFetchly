@@ -1,6 +1,7 @@
 import { MCPToolEntity } from "@/entity/MCPTool.entity";
 import { MCPToolModule } from "@/modules/MCPToolModule";
 import { MCPClient } from "@/modules/MCPClient";
+import { PluginOptionsStore } from "@/service/pluginCompat/PluginOptionsStore";
 import { MCP_CALL_TIMEOUT_MS } from "@/config/mcpConfig";
 import { MCPTimeoutError } from "@/service/MCPTimeoutError";
 import type { ToolFunction } from "@/api/aiChatApi";
@@ -78,6 +79,28 @@ function buildClientConfig(server: MCPToolEntity): {
       ? safeJsonParseStringArray(server.argsJson)
       : [];
     base.env = server.envJson ? safeJsonParseRecord(server.envJson) : undefined;
+    // Plugin-owned MCP servers may declare ${VAR} placeholders in env.
+    // Resolve them against the per-plugin options store before spawn.
+    if (base.env && server.pluginName && server.origin === "plugin") {
+      const scopedName = server.serverName;
+      const resolved = PluginOptionsStore.resolveEnv(
+        server.pluginName,
+        scopedName,
+        base.env
+      );
+      if (resolved.ok) {
+        base.env = resolved.env;
+      } else {
+        // Unresolved placeholders — leave them in place; the spawn will
+        // surface a clear error. The Plugin Manager UI renders the
+        // missing vars so the user can supply values.
+        console.warn(
+          `[MCPToolService] plugin "${server.pluginName}" server ` +
+            `"${scopedName}" has unresolved env placeholders: ` +
+            `${resolved.missing.join(", ")}`
+        );
+      }
+    }
   } else {
     // Legacy manual server or network transport.
     if (server.host) base.host = server.host;
