@@ -37,7 +37,11 @@ export interface CommandSegment {
   readonly raw: string;
 }
 
-const REDIRECT_OPS = new Set(["op_redirect_out", "op_redirect_in", "op_redirect_fd"]);
+const REDIRECT_OPS = new Set([
+  "op_redirect_out",
+  "op_redirect_in",
+  "op_redirect_fd",
+]);
 
 /**
  * Split tokens into segments. Tokens that aren't words or redirects and
@@ -54,7 +58,10 @@ export function splitCompound(tokens: readonly ShellToken[]): CommandSegment[] {
 
   const flush = (rawEnd: number): void => {
     const raw = tokens.length
-      ? tokens.slice(rawStart, rawEnd).map((t) => t.text).join(" ")
+      ? tokens
+          .slice(rawStart, rawEnd)
+          .map((t) => t.text)
+          .join(" ")
       : "";
     segments.push({
       words,
@@ -122,6 +129,6 @@ export function splitCompound(tokens: readonly ShellToken[]): CommandSegment[] {
     rawStart = i + 1;
   }
 
-  flush(tokens.length - 1);
+  flush(tokens.length);
   return segments;
 }

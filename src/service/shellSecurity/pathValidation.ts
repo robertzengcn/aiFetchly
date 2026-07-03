@@ -129,14 +129,17 @@ function extractPathArgs(
     paths.push(w);
   }
 
-  if (profile.pathArgIndexes === "tail" && paths.length > 0) {
-    // For grep/rg/etc., the LAST positional is the path; earlier positionals
-    // are the pattern. We keep them all for validation — FilePathGuard will
-    // reject anything outside roots, which is the safer behavior.
-    return paths;
-  }
+  // For both 'all' and 'tail' profiles we validate every positional — for
+  // grep/rg the pattern is usually harmless to also validate (worst case is
+  // a false positive FilePathGuard deny, which is the safer failure mode).
   return paths;
 }
+
+// Pre-resolved SHELL_CRITICAL_PATHS at module load — avoids re-running
+// path.resolve() per call in isCriticalPath (hot path: once per path arg).
+const RESOLVED_CRITICAL_PATHS: readonly string[] = SHELL_CRITICAL_PATHS.map(
+  (p) => path.resolve(p)
+);
 
 // ---------------------------------------------------------------------------
 // Redirection validation
@@ -175,10 +178,10 @@ function validateRedirect(
 // ---------------------------------------------------------------------------
 
 function isCriticalPath(resolved: string): boolean {
-  const normalized = path.resolve(resolved);
-  for (const critical of SHELL_CRITICAL_PATHS) {
-    const c = path.resolve(critical);
-    if (normalized === c || normalized.startsWith(c + path.sep)) {
+  // Caller already passes a resolved path; just compare against the
+  // pre-resolved constant list.
+  for (const critical of RESOLVED_CRITICAL_PATHS) {
+    if (resolved === critical || resolved.startsWith(critical + path.sep)) {
       return true;
     }
   }

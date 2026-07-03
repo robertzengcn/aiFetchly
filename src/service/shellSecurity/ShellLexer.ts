@@ -100,7 +100,12 @@ export function lex(command: string): LexResult {
     if (OPERATOR_STARTS.has(ch)) {
       const two = src.slice(i, i + 2);
       const three = src.slice(i, i + 3);
-      if (three === ">>&" || three === "2>&" || three === "1>&" || three === "&>") {
+      if (
+        three === ">>&" ||
+        three === "2>&" ||
+        three === "1>&" ||
+        three === "&>"
+      ) {
         tokens.push({
           kind: "op_redirect_fd",
           text: three,
@@ -113,12 +118,26 @@ export function lex(command: string): LexResult {
         continue;
       }
       if (two === "&&") {
-        tokens.push({ kind: "op_and", text: two, quoted: false, expanded: false, literal: true, start: i });
+        tokens.push({
+          kind: "op_and",
+          text: two,
+          quoted: false,
+          expanded: false,
+          literal: true,
+          start: i,
+        });
         i += 2;
         continue;
       }
       if (two === "||") {
-        tokens.push({ kind: "op_or", text: two, quoted: false, expanded: false, literal: true, start: i });
+        tokens.push({
+          kind: "op_or",
+          text: two,
+          quoted: false,
+          expanded: false,
+          literal: true,
+          start: i,
+        });
         i += 2;
         continue;
       }
@@ -183,12 +202,26 @@ export function lex(command: string): LexResult {
         continue;
       }
       if (ch === "|") {
-        tokens.push({ kind: "op_pipe", text: ch, quoted: false, expanded: false, literal: true, start: i });
+        tokens.push({
+          kind: "op_pipe",
+          text: ch,
+          quoted: false,
+          expanded: false,
+          literal: true,
+          start: i,
+        });
         i++;
         continue;
       }
       if (ch === ";") {
-        tokens.push({ kind: "op_semi", text: ch, quoted: false, expanded: false, literal: true, start: i });
+        tokens.push({
+          kind: "op_semi",
+          text: ch,
+          quoted: false,
+          expanded: false,
+          literal: true,
+          start: i,
+        });
         i++;
         continue;
       }
@@ -233,7 +266,6 @@ export function lex(command: string): LexResult {
     // FD-prefixed redirect like `2>` or `2>>` at the start of a token
     if (/[0-9]/.test(ch) && (src[i + 1] === ">" || src[i + 1] === "<")) {
       const fdLen = countLeadingDigits(src, i);
-      const fdNum = src.slice(i, i + fdLen);
       const opStart = i + fdLen;
       const opChar = src[opStart];
       const nextChar = src[opStart + 1];
@@ -252,7 +284,7 @@ export function lex(command: string): LexResult {
       // will be validated downstream by the path layer.
       // If the FD points into an expansion like `2>$1`, the target word lex
       // will mark it non-literal and the path layer rejects.
-      void fdNum;
+      void opChar;
       continue;
     }
 
@@ -330,7 +362,9 @@ function lexWord(
           literal = false;
           // Detect $(...) command substitution inside double quotes
           if (src[i + 1] === "(") {
-            unanalyzable.push("command substitution $(...) inside double quotes");
+            unanalyzable.push(
+              "command substitution $(...) inside double quotes"
+            );
             i = skipBalancedParens(src, i + 1);
             text += "$(...)";
             continue;
@@ -342,7 +376,9 @@ function lexWord(
         if (dc === "`") {
           expanded = true;
           literal = false;
-          unanalyzable.push("backtick command substitution inside double quotes");
+          unanalyzable.push(
+            "backtick command substitution inside double quotes"
+          );
           // Skip until closing backtick
           i++;
           while (i < src.length && src[i] !== "`") i++;
