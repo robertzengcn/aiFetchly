@@ -1,10 +1,15 @@
 import * as fs from "fs";
+import * as path from "path";
 import { PluginManagementModule } from "@/modules/PluginManagementModule";
 import { SkillManagementModule } from "@/modules/SkillManagementModule";
 import { MCPToolModule } from "@/modules/MCPToolModule";
 import { InstalledSkillEntity } from "@/entity/InstalledSkill.entity";
 import { MCPToolEntity } from "@/entity/MCPTool.entity";
 import { PluginManifestService } from "@/service/PluginManifestService";
+import {
+  ClaudeHooksAdapter,
+  type AdaptedPluginHookMatcher,
+} from "@/service/pluginCompat/ClaudeHooksAdapter";
 import {
   getPluginInstallRoot,
   getPluginOwnedSkillRoot,
@@ -53,6 +58,14 @@ export interface LoadedPlugin {
   readonly format?: PluginFormat;
   readonly skills: readonly LoadedPluginSkill[];
   readonly mcpServers: readonly LoadedPluginMcpServer[];
+  /**
+   * Claude plugin hooks translated into AiFetchly matcher shape. Empty for
+   * AiFetchly-format plugins or Claude plugins without hooks/hooks.json.
+   * Phase 3 plumbing: the matchers register in HookRegistry but their
+   * actions run as a no-op (log + allow); SkillWorker dispatch is a
+   * follow-up.
+   */
+  readonly hooks: readonly AdaptedPluginHookMatcher[];
   readonly errors: readonly PluginError[];
 }
 
@@ -136,6 +149,7 @@ export class PluginLoaderService {
             .format,
           skills: [],
           mcpServers: [],
+          hooks: [],
           errors,
         };
         if (loaded.enabled) enabled.push(loaded);
@@ -195,6 +209,42 @@ export class PluginLoaderService {
         };
       });
 
+      // Parse hooks/hooks.json for Claude plugins (Phase 3 plumbing).
+      // Hook matchers are loaded but not yet dispatched into SkillWorker;
+      // registration in HookRegistry happens in PluginComponentRegistryService.
+      let loadedHooks: AdaptedPluginHookMatcher[] = [];
+      if (manifest.format === "claude") {
+        const hooksFile = path.join(installPath, "hooks", "hooks.json");
+        if (fs.existsSync(hooksFile)) {
+          try {
+            const raw = JSON.parse(fs.readFileSync(hooksFile, "utf-8"));
+            const adapted = ClaudeHooksAdapter.adapt(raw, plugin.name);
+            if (adapted.ok) {
+              loadedHooks = [...adapted.matchers];
+            } else {
+              for (const e of adapted.errors) {
+                errors.push({
+                  ...e,
+                  pluginName: plugin.name,
+                  recoverable: true,
+                });
+              }
+            }
+          } catch (e: unknown) {
+            errors.push({
+              code: "manifest-invalid-json",
+              pluginName: plugin.name,
+              path: hooksFile,
+              message:
+                e instanceof Error
+                  ? `Failed to parse hooks.json: ${e.message}`
+                  : "Failed to parse hooks.json",
+              recoverable: true,
+            });
+          }
+        }
+      }
+
       const loaded: LoadedPlugin = {
         name: plugin.name,
         displayName: plugin.displayName,
@@ -206,6 +256,7 @@ export class PluginLoaderService {
         format: manifest.format,
         skills: loadedSkills,
         mcpServers: loadedMcp,
+        hooks: loadedHooks,
         errors,
       };
       if (loaded.enabled) enabled.push(loaded);
