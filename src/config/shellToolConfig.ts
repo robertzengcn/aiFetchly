@@ -122,15 +122,10 @@ export const SHELL_DENYLIST_PATTERNS: readonly DenylistEntry[] = [
     description: "Privilege escalation via sudo",
   },
 
-  // Indirection and eval (bypass vectors)
-  {
-    pattern: /\beval\s+/i,
-    description: "eval command (can bypass denylist via string construction)",
-  },
-  {
-    pattern: /\bexec\s+/i,
-    description: "exec command (process replacement bypass)",
-  },
+  // Note: eval/exec/source/./bash -c are NOT in this regex list because
+  // regex matching on raw strings false-positives on quoted text like
+  // echo 'eval is just a word'. They are caught structurally by the
+  // semantic-hazard layer (semanticHazards.ts) which checks argv[0].
 ];
 
 /** A single denylist entry with pattern and description. */
@@ -196,7 +191,9 @@ export const SHELL_ASK_PATTERNS: readonly DenylistEntry[] = [
 const HOME = os.homedir();
 
 export const SHELL_CRITICAL_PATHS: readonly string[] = [
-  HOME,
+  // NOTE: HOME itself is intentionally NOT critical — workspaces commonly
+  // live under $HOME and we don't want to block all `rm`/`mv` inside a
+  // project. Specific sensitive subpaths under HOME are listed below.
   path.join(HOME, ".ssh"),
   path.join(HOME, ".gnupg"),
   path.join(HOME, ".config"),
