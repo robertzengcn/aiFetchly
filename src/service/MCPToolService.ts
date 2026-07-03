@@ -2,6 +2,11 @@ import { MCPToolEntity } from "@/entity/MCPTool.entity";
 import { MCPToolModule } from "@/modules/MCPToolModule";
 import { MCPClient } from "@/modules/MCPClient";
 import { PluginOptionsStore } from "@/service/pluginCompat/PluginOptionsStore";
+import {
+  buildPluginToolName,
+  buildLegacyToolName,
+  unscopeServerName,
+} from "@/service/pluginCompat/McpToolNaming";
 import { MCP_CALL_TIMEOUT_MS } from "@/config/mcpConfig";
 import { MCPTimeoutError } from "@/service/MCPTimeoutError";
 import type { ToolFunction } from "@/api/aiChatApi";
@@ -35,6 +40,10 @@ export interface MCPToolWithServer {
   serverName: string;
   toolName: string;
   toolInfo: MCPToolInfo;
+  /** Origin — "plugin" enables dual-format tool naming (PRD AC-6). */
+  origin?: "manual" | "plugin";
+  /** Plugin owner; required when origin === "plugin". */
+  pluginName?: string;
 }
 
 /**
@@ -252,6 +261,8 @@ export class MCPToolService {
                 enabled: true,
                 customConfig: config.customConfig,
               },
+              origin: server.origin,
+              pluginName: server.pluginName,
             });
           }
         }
@@ -272,9 +283,19 @@ export class MCPToolService {
     const toolFunctions: ToolFunction[] = [];
 
     for (const tool of enabledTools) {
+      // Plugin-owned tools use the mcp__<plugin>__<server>__<tool> format
+      // (PRD AC-6); legacy/manual tools keep the mcp_<serverId>_<tool> format.
+      const name =
+        tool.origin === "plugin" && tool.pluginName
+          ? buildPluginToolName(
+              tool.pluginName,
+              unscopeServerName(tool.pluginName, tool.serverName),
+              tool.toolName
+            )
+          : buildLegacyToolName(tool.serverId, tool.toolName);
       toolFunctions.push({
         type: "function",
-        name: `mcp_${tool.serverId}_${tool.toolName}`,
+        name,
         description:
           tool.toolInfo.description ||
           `MCP tool ${tool.toolName} from ${tool.serverName}`,
