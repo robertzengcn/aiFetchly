@@ -1,0 +1,6 @@
+{
+  "name": "claude-broken-skill-pack",
+  "version": "1.0.0",
+  "description": "Claude plugin with one good and one broken SKILL.md.",
+  "skills": true
+}

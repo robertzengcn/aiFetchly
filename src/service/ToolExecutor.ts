@@ -6,6 +6,8 @@ import { TaskStatus } from "@/entityTypes/commonType";
 import { ToolExecutionService } from "@/service/ToolExecutionService";
 import { formatYellowPagesResultsForLLM } from "@/main-process/communication/ai-chat-ipc";
 import { MCPToolService } from "@/service/MCPToolService";
+import { parseMcpToolName } from "@/service/pluginCompat/McpToolNaming";
+import { MCPToolModule } from "@/modules/MCPToolModule";
 import { EmailSearchTaskModule } from "@/modules/EmailSearchTaskModule";
 import { EmailExtractionTypes } from "@/config/emailextraction";
 import { WebsiteAnalysisService } from "@/service/WebsiteAnalysisService";
@@ -1697,8 +1699,8 @@ export class ToolExecutor {
         const filePath = path.isAbsolute(rawPath)
           ? rawPath
           : ws?.rootPath
-            ? path.resolve(ws.rootPath, rawPath)
-            : path.resolve(rawPath);
+          ? path.resolve(ws.rootPath, rawPath)
+          : path.resolve(rawPath);
         const record: Omit<FileOperationRecord, "id" | "timestamp"> = {
           type:
             toolName === "file_write"
@@ -1742,8 +1744,8 @@ export class ToolExecutor {
         const filePath = path.isAbsolute(rawPath)
           ? rawPath
           : ws?.rootPath
-            ? path.resolve(ws.rootPath, rawPath)
-            : path.resolve(rawPath);
+          ? path.resolve(ws.rootPath, rawPath)
+          : path.resolve(rawPath);
         FileOperationTracker.emit({
           // Note: On failure we can't know if file_write intended "create" vs "overwrite".
           // Defaulting to "overwrite" is reasonable since the file likely exists already.
