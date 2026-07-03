@@ -9,6 +9,7 @@ import { PluginManifestService } from "@/service/PluginManifestService";
 import {
   parseServersJson,
   normalizeMcpDeclaration,
+  normalizeInlineMcpMap,
   type NormalizedMcpServer,
 } from "@/service/PluginMcpDeclaration";
 import { getPluginInstallRoot } from "@/service/pluginPaths";
@@ -21,6 +22,7 @@ import {
 } from "@/entityTypes/pluginTypes";
 import { SkillImportService } from "@/service/SkillImportService";
 import { ClaudeSkillFormatAdapter } from "@/service/pluginCompat/ClaudeSkillFormatAdapter";
+import { ClaudePluginAdapter } from "@/service/pluginCompat/ClaudePluginAdapter";
 import type { SkillManifest } from "@/entityTypes/skillTypes";
 
 /**
@@ -510,16 +512,89 @@ export class PluginImportService {
     const mcpPaths = manifest.mcpServers ?? [];
     const mcpServers: NormalizedMcpServer[] = [];
     const mcpErrors: PluginError[] = [];
-    for (const mcpPath of mcpPaths) {
-      const r = readPluginMcpServers(localRoot, mcpPath);
-      if (!r.ok) {
-        mcpErrors.push(...r.errors);
+    const isClaudeMcp = manifest.format === "claude";
+
+    if (isClaudeMcp) {
+      // Claude plugins: prefer inline mcp map (alternative B); fall back to
+      // sibling .mcp.json (alternative A). Re-adapt here to recover the
+      // inlineMcp / mcpServersPaths context the adapter produced.
+      const claudeManifestPath = path.join(
+        localRoot,
+        ".claude-plugin",
+        "plugin.json"
+      );
+      let claudeRaw: unknown;
+      try {
+        claudeRaw = JSON.parse(fs.readFileSync(claudeManifestPath, "utf-8"));
+      } catch (e: unknown) {
+        return {
+          success: false,
+          errors: toErrors([
+            {
+              code: "manifest-invalid-json",
+              path: claudeManifestPath,
+              message:
+                e instanceof Error
+                  ? `Failed to re-read Claude manifest: ${e.message}`
+                  : "Failed to re-read Claude manifest",
+              recoverable: false,
+            },
+          ]),
+        };
+      }
+      const adapted = ClaudePluginAdapter.adapt(claudeRaw, {
+        pluginRoot: localRoot,
+      });
+      if (!adapted.ok) {
+        return { success: false, errors: toErrors([...adapted.errors]) };
+      }
+
+      if (adapted.adapted.inlineMcp) {
+        const r = normalizeInlineMcpMap(adapted.adapted.inlineMcp, localRoot);
+        if (!r.ok) mcpErrors.push(...r.errors);
+        else mcpServers.push(...r.servers);
       } else {
-        mcpServers.push(...r.servers);
+        // Try sibling .mcp.json at plugin root.
+        const siblingMcp = path.join(localRoot, ".mcp.json");
+        if (fs.existsSync(siblingMcp)) {
+          const r = readPluginMcpServers(localRoot, ".mcp.json");
+          if (!r.ok) mcpErrors.push(...r.errors);
+          else mcpServers.push(...r.servers);
+        }
+      }
+    } else {
+      // AiFetchly native path: each path is a servers.json file.
+      for (const mcpPath of mcpPaths) {
+        const r = readPluginMcpServers(localRoot, mcpPath);
+        if (!r.ok) {
+          mcpErrors.push(...r.errors);
+        } else {
+          mcpServers.push(...r.servers);
+        }
       }
     }
     if (mcpErrors.length > 0) {
       return { success: false, errors: toErrors(mcpErrors) };
+    }
+
+    // 6b. Apply name scoping for plugin-owned MCP servers. Two plugins with
+    // a server named "linkedin" become "plugin-a__linkedin" and
+    // "plugin-b__linkedin" to prevent collisions in the MCP client manager.
+    // The original (un-scoped) name is preserved in metadata.serverName.
+    if (isClaudeMcp || manifest.format === "aifetchly") {
+      for (let i = 0; i < mcpServers.length; i += 1) {
+        const s = mcpServers[i];
+        const scopedName = `${manifest.name}__${s.serverName}`;
+        mcpServers[i] = {
+          ...s,
+          serverName: scopedName,
+          metadata: {
+            ...s.metadata,
+            pluginServerName: s.serverName,
+            pluginOwner: manifest.name,
+          },
+        };
+      }
     }
 
     // 7. Resolve final install path + copy via sibling temp (atomic-ish rename)
