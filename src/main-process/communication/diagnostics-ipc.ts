@@ -140,12 +140,6 @@ function getSessionId(svc: CrashReporterService | undefined): string {
 }
 
 /**
- * Build a {@link DiagnosticReportBuilder} preconfigured with the current
- * app/version/platform/install/session identity and live breadcrumb/error
- * buffers from the crash reporter (or empty arrays when the reporter is not
- * yet initialised).
- */
-/**
  * Resolve the app version. Real Electron's `app.getVersion()` exists; the test
  * mock does not include it, so we guard with an optional-aware cast rather than
  * `any` (CLAUDE.md forbids `any`). Falls back to "unknown" when unavailable.
@@ -159,6 +153,12 @@ function getAppVersion(): string {
   }
 }
 
+/**
+ * Build a {@link DiagnosticReportBuilder} preconfigured with the current
+ * app/version/platform/install/session identity and live breadcrumb/error
+ * buffers from the crash reporter (or empty arrays when the reporter is not
+ * yet initialised).
+ */
 function makeBuilder(): DiagnosticReportBuilder {
   const svc = getSvc();
   return new DiagnosticReportBuilder({
@@ -304,11 +304,12 @@ export function registerDiagnosticsIpcHandlers(): void {
     const dir = getDiagnosticsDir();
     const storageBytes = measureDir(dir);
     const last = CrashLogSink.readAll()[0];
+    const debugExpiry = readDebugExpiry();
     return {
       storageBytes,
       budgetBytes: STORAGE_BUDGET_BYTES,
-      debugEnabled: readDebugExpiry() !== null,
-      debugExpiresAt: readDebugExpiry(),
+      debugEnabled: debugExpiry !== null,
+      debugExpiresAt: debugExpiry,
       lastCrashId: last?.crashId ?? null,
     };
   });
