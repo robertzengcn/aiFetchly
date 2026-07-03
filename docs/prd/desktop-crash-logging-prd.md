@@ -6,7 +6,7 @@
 | Created date | 2026-07-03 |
 | Status | Draft |
 | Product area | Electron desktop app |
-| Related backend PRD | `docs/prd/backend-crash-report-ingestion-prd.md` |
+| Related backend PRD | `/home/robertzeng/project/marketing/doc/crash-report-ingestion-prd.md` |
 | Reference | `/home/robertzeng/project/github/claude-code/docs/CRASH-LOGS.md` |
 
 ## 1. Summary
@@ -321,4 +321,3 @@ Maximum request size should be below the backend limit. Recommended desktop pack
 3. Should native crash dumps be uploaded, or only stored locally for explicit export?
 4. Should debug logging auto-disable after a fixed time window?
 5. Which app settings page should host diagnostics controls?
-
