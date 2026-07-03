@@ -8,6 +8,8 @@ const autoUpdater = require("electron").autoUpdater;
 const globalShortcut = require("electron").globalShortcut;
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const session = require("electron").session;
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const crashReporter = require("electron").crashReporter;
 // import { createProtocol } from 'vue-cli-plugin-electron-builder/lib'
 import installExtension, { VUEJS3_DEVTOOLS } from "electron-devtools-installer";
 import { registerCommunicationIpcHandlers } from "./main-process/communication/";
@@ -27,7 +29,11 @@ import {
 import { SqliteDb } from "@/config/SqliteDb";
 import { logger, log } from "@/modules/Logger";
 import { CrashReporterService } from "@/modules/diagnostics/CrashReporterService";
-import { ensureDiagnosticsDirs } from "@/modules/diagnostics/DiagnosticPaths";
+import {
+  ensureDiagnosticsDirs,
+  getStartupMarkerPath,
+  getNativeDumpsDir,
+} from "@/modules/diagnostics/DiagnosticPaths";
 import {
   newSessionId,
   getOrCreateInstallId,
@@ -99,6 +105,26 @@ const __crashReporter = new CrashReporterService({
 ).__aifetchlyCrashReporter = __crashReporter;
 __crashReporter.installProcessHandlers(process);
 __diagnosticsRetention.schedule();
+
+// Unclean shutdown detection: read previous session's startup marker (if any)
+// and record an unclean shutdown record, then write this session's marker.
+const __startupMarker = getStartupMarkerPath();
+let __previousSessionId: string | undefined;
+if (fs.existsSync(__startupMarker)) {
+  try {
+    const prev = JSON.parse(fs.readFileSync(__startupMarker, "utf8")) as {
+      sessionId?: string;
+    };
+    __previousSessionId = prev.sessionId;
+    __crashReporter.recordUncleanShutdown(__previousSessionId);
+  } catch {
+    __crashReporter.recordUncleanShutdown();
+  }
+}
+fs.writeFileSync(
+  __startupMarker,
+  JSON.stringify({ sessionId: __sessionId, ts: Date.now() })
+);
 
 log.info("Application starting...");
 
@@ -537,6 +563,15 @@ function initialize() {
 
   // Handle application shutdown
   (app as any).on("before-quit", async () => {
+    // Remove startup marker on clean shutdown so the next launch does not
+    // mistake a graceful exit for a crash.
+    try {
+      const __startupMarker = getStartupMarkerPath();
+      if (fs.existsSync(__startupMarker)) fs.rmSync(__startupMarker);
+    } catch {
+      /* ignore */
+    }
+
     // Stop periodic diagnostics retention cleanup timer immediately.
     __diagnosticsRetention.stop();
 
@@ -616,6 +651,19 @@ function initialize() {
 
     // Install Electron app-level crash handlers (render-process-gone, etc.).
     __crashReporter.installAppHandlers(app as any);
+
+    // Start Electron's native crashReporter to capture minidumps for the main
+    // and render processes. Dumps stay local (no upload) and are routed to
+    // the diagnostics folder for later inclusion in exported reports.
+    try {
+      crashReporter.start({
+        uploadToServer: false,
+        compress: true,
+      });
+      (app as any).setPath("crashDumps", getNativeDumpsDir());
+    } catch (e) {
+      log.warn("Failed to start Electron crashReporter", e);
+    }
 
     // Register built-in lifecycle hooks (disabled by default; flip
     // them on at runtime via HookRegistry for manual QA). See
