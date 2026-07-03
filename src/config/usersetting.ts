@@ -14,3 +14,8 @@ export const USERID = "user_id";
 export const USERPLANS = "user_plans";
 export const USER_AI_ENABLED = "user_ai_enabled";
 export const USER_AI_AUTO_PLAN = "user_ai_auto_plan";
+// Hooks system — Phase 4 global enable + builtin enabled-override map.
+// Values are strings ("true"/"false") to match the Token store shape.
+export const USER_HOOKS_ENABLED = "user_hooks_enabled";
+// Value is a JSON string: { [hookId: string]: { enabled: boolean } }
+export const USER_HOOKS_BUILTIN_OVERRIDES = "user_hooks_builtin_overrides";

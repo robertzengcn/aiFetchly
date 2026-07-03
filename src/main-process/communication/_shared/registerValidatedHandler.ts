@@ -22,7 +22,11 @@ export function registerValidatedHandler<TInput, TOutput>(
   handler: (input: TInput, event: IpcMainInvokeEvent) => Promise<TOutput>
 ): void {
   ipcMain.handle(channel, async (event, raw) => {
-    const parsed = schema().safeParse(raw);
+    // windowInvoke in apirequest.ts sends JSON.stringify(data) through IPC,
+    // resulting in a string on this side. Parse it if needed so the zod
+    // schema receives an object instead of a string.
+    const input = typeof raw === "string" ? JSON.parse(raw) : raw;
+    const parsed = schema().safeParse(input);
     if (!parsed.success) {
       const msg = formatZodValidationError(channel, parsed.error);
       log.warn(`[${channel}] validation failed: ${msg}`);
@@ -80,7 +84,9 @@ export function registerAiValidatedHandler<TInput, TOutput>(
     }
 
     // 2. schema 校验
-    const parsed = schema().safeParse(raw);
+    // (same JSON.parse handling as above — apirequest.ts sends stringified data)
+    const input = typeof raw === "string" ? JSON.parse(raw) : raw;
+    const parsed = schema().safeParse(input);
     if (!parsed.success) {
       const msg = formatZodValidationError(channel, parsed.error);
       log.warn(`[${channel}] validation failed: ${msg}`);
