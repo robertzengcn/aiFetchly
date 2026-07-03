@@ -26,6 +26,13 @@ import {
 } from "@/config/usersetting";
 import { SqliteDb } from "@/config/SqliteDb";
 import { logger, log } from "@/modules/Logger";
+import { CrashReporterService } from "@/modules/diagnostics/CrashReporterService";
+import { ensureDiagnosticsDirs } from "@/modules/diagnostics/DiagnosticPaths";
+import {
+  newSessionId,
+  getOrCreateInstallId,
+} from "@/modules/diagnostics/DiagnosticIdentity";
+import { DiagnosticRetentionService } from "@/modules/diagnostics/DiagnosticRetentionService";
 import fs from "fs";
 import ProtocolRegistry from "protocol-registry";
 //import { RemoteSource } from '@/modules/remotesource'
@@ -71,24 +78,40 @@ const logDir = logger.getLogDir();
 
 // Console override and log verification are now handled by the Logger module
 
+// Diagnostics: crash reporter, breadcrumb buffer, retention service.
+// Initialized before any other code so uncaught exceptions during startup
+// are captured. The diagnostics handlers are installed first; a separate
+// user-facing dialog handler is registered below.
+ensureDiagnosticsDirs();
+const __sessionId = newSessionId();
+const __diagnosticsRetention = new DiagnosticRetentionService();
+const __crashReporter = new CrashReporterService({
+  sessionId: __sessionId,
+  installId: getOrCreateInstallId(),
+  appVersion: (app as any).getVersion(),
+  platform: process.platform,
+  arch: process.arch,
+});
+(
+  globalThis as unknown as {
+    __aifetchlyCrashReporter: CrashReporterService;
+  }
+).__aifetchlyCrashReporter = __crashReporter;
+__crashReporter.installProcessHandlers(process);
+__diagnosticsRetention.schedule();
+
 log.info("Application starting...");
 
-// Handle uncaught exceptions
+// Handle uncaught exceptions — user-facing dialog only.
+// Crash record persistence is handled by __crashReporter (registered above,
+// which runs first as it was registered earlier).
 process.on("uncaughtException", (error) => {
-  log.error("Uncaught Exception:", error);
-
-  // Show error dialog if possible
   if ((app as any).isReady()) {
     dialog.showErrorBox(
       "Application Error",
       `An unexpected error occurred: ${error.message}\n\nDetails have been logged.`
     );
   }
-});
-
-// Handle unhandled promise rejections
-process.on("unhandledRejection", (reason) => {
-  log.error("Unhandled Promise Rejection:", reason);
 });
 
 let win: BrowserWindow | null;
@@ -514,6 +537,9 @@ function initialize() {
 
   // Handle application shutdown
   (app as any).on("before-quit", async () => {
+    // Stop periodic diagnostics retention cleanup timer immediately.
+    __diagnosticsRetention.stop();
+
     // Terminate running async tool jobs first so workers are signalled early
     try {
       getDefaultToolJobRegistry().shutdown();
@@ -587,6 +613,9 @@ function initialize() {
   (app as any).whenReady().then(async () => {
     // Configure Content Security Policy (must be called after app is ready)
     configureContentSecurityPolicy();
+
+    // Install Electron app-level crash handlers (render-process-gone, etc.).
+    __crashReporter.installAppHandlers(app as any);
 
     // Register built-in lifecycle hooks (disabled by default; flip
     // them on at runtime via HookRegistry for manual QA). See
