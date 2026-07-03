@@ -66,20 +66,23 @@ function coerceObject(v: unknown): Record<string, unknown> {
 
 function walk(value: unknown, depth: number): unknown {
   if (value === null) return null;
-  const t = typeof value;
-  if (t === "string") return clampString(redactString(value));
-  if (t === "number" || t === "boolean") return value;
-  if (t === "function" || t === "symbol" || t === "bigint") {
+  if (typeof value === "string") return clampString(redactString(value));
+  if (typeof value === "number" || typeof value === "boolean") return value;
+  if (
+    typeof value === "function" ||
+    typeof value === "symbol" ||
+    typeof value === "bigint"
+  ) {
     return clampString(redactString(String(value)));
   }
-  if (t === "undefined") return null;
+  if (typeof value === "undefined") return null;
   if (depth >= MAX_DEPTH) {
     return clampString(redactString(safeStringify(value)));
   }
   if (Array.isArray(value)) {
     return value.slice(0, MAX_PROPERTIES).map((v) => walk(v, depth + 1));
   }
-  if (t === "object") {
+  if (typeof value === "object") {
     const obj = value as Record<string, unknown>;
     const out: Record<string, unknown> = {};
     const keys = Object.keys(obj).slice(0, MAX_PROPERTIES);
