@@ -405,6 +405,8 @@ export const PLUGIN_TOGGLE_MCP_TOOL = "plugin:toggle-mcp-tool";
 export const PLUGIN_TEST_MCP_CONNECTION = "plugin:test-mcp-connection";
 export const PLUGIN_DISCOVER_MCP_TOOLS = "plugin:discover-mcp-tools";
 export const PLUGIN_INSTALL_FROM_SOURCE = "plugin:install-from-source";
+export const PLUGIN_GET_MCP_OPTIONS = "plugin:get-mcp-options";
+export const PLUGIN_SET_MCP_OPTION = "plugin:set-mcp-option";
 
 // AI user memory (durable cross-session memory)
 export const AI_USER_MEMORY_LIST = "ai:user-memory:list";
