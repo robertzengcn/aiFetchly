@@ -20,6 +20,7 @@ import {
   type PluginSourceProvenance,
 } from "@/entityTypes/pluginTypes";
 import { SkillImportService } from "@/service/SkillImportService";
+import { ClaudeSkillFormatAdapter } from "@/service/pluginCompat/ClaudeSkillFormatAdapter";
 import type { SkillManifest } from "@/entityTypes/skillTypes";
 
 /**
@@ -159,6 +160,145 @@ function readPluginSkillManifest(
     }
   }
   return { ok: true, manifest: validation.manifest, absPath };
+}
+
+/**
+ * Read Claude SKILL.md file(s) at a declared skill path.
+ *
+ * A Claude skills path may be:
+ *   - A directory (typically `skills/`): scan for `<name>/SKILL.md` (depth 1).
+ *     Each match is a separate skill.
+ *   - A direct path to a `SKILL.md` file.
+ *
+ * Returns one or more translated SkillManifest entries. Errors are
+ * collected per skill (one bad skill doesn't fail the rest).
+ *
+ * See tech design §6 / §7.3.
+ */
+function readPluginClaudeSkillsFromPath(
+  pluginRoot: string,
+  skillPath: string
+):
+  | {
+      ok: true;
+      skills: Array<{ manifest: SkillManifest; relManifestPath: string }>;
+    }
+  | { ok: false; errors: PluginError[] } {
+  let absPath: string;
+  try {
+    absPath = resolvePluginRelativePath(pluginRoot, skillPath);
+  } catch {
+    return {
+      ok: false,
+      errors: [
+        {
+          code: "path-outside-plugin",
+          componentType: "skill",
+          path: skillPath,
+          message: `Claude skill path "${skillPath}" escapes the plugin directory.`,
+          recoverable: false,
+        },
+      ],
+    };
+  }
+
+  // Build the list of SKILL.md files to translate.
+  const mdFiles: Array<{ abs: string; rel: string }> = [];
+  try {
+    const stat = fs.statSync(absPath);
+    if (stat.isDirectory()) {
+      // Depth-1 scan: <dir>/<skill-name>/SKILL.md
+      const entries = fs.readdirSync(absPath, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const candidateAbs = path.join(absPath, entry.name, "SKILL.md");
+        if (fs.existsSync(candidateAbs)) {
+          mdFiles.push({
+            abs: candidateAbs,
+            rel: `${skillPath.replace(/\/$/, "")}/${entry.name}/SKILL.md`,
+          });
+        }
+      }
+      // Also accept a SKILL.md directly inside the scanned directory
+      // (Claude plugins occasionally ship a single skill at skills/SKILL.md).
+      const direct = path.join(absPath, "SKILL.md");
+      if (fs.existsSync(direct)) {
+        mdFiles.push({
+          abs: direct,
+          rel: `${skillPath.replace(/\/$/, "")}/SKILL.md`,
+        });
+      }
+    } else {
+      mdFiles.push({ abs: absPath, rel: skillPath });
+    }
+  } catch (e: unknown) {
+    return {
+      ok: false,
+      errors: [
+        {
+          code: "component-not-found",
+          componentType: "skill",
+          componentName: skillPath,
+          path: absPath,
+          message:
+            e instanceof Error
+              ? `Claude skill path not accessible: ${e.message}`
+              : `Claude skill path not accessible: ${skillPath}`,
+          recoverable: false,
+        },
+      ],
+    };
+  }
+
+  if (mdFiles.length === 0) {
+    return {
+      ok: false,
+      errors: [
+        {
+          code: "component-not-found",
+          componentType: "skill",
+          componentName: skillPath,
+          path: absPath,
+          message: `No SKILL.md files found under Claude skill path: ${skillPath}`,
+          recoverable: false,
+        },
+      ],
+    };
+  }
+
+  const skills: Array<{ manifest: SkillManifest; relManifestPath: string }> =
+    [];
+  const errors: PluginError[] = [];
+
+  for (const mdFile of mdFiles) {
+    let content: string;
+    try {
+      content = fs.readFileSync(mdFile.abs, "utf-8");
+    } catch (e: unknown) {
+      errors.push({
+        code: "skill-manifest-invalid",
+        componentType: "skill",
+        componentName: mdFile.rel,
+        message:
+          e instanceof Error
+            ? `Failed to read SKILL.md: ${e.message}`
+            : "Failed to read SKILL.md",
+        recoverable: false,
+      });
+      continue;
+    }
+    const adapted = ClaudeSkillFormatAdapter.adapt(content, mdFile.rel);
+    if (!adapted.ok) {
+      errors.push(adapted.error);
+      continue;
+    }
+    skills.push({ manifest: adapted.manifest, relManifestPath: mdFile.rel });
+  }
+
+  if (skills.length === 0) {
+    return { ok: false, errors };
+  }
+  return { ok: true, skills };
 }
 
 /** Read and normalize an MCP servers.json declared by a plugin. */
@@ -341,15 +481,25 @@ export class PluginImportService {
       relManifestPath: string;
     }> = [];
     const skillErrors: PluginError[] = [];
+    const isClaudeFormat = manifest.format === "claude";
     for (const skillPath of skillPaths) {
-      const r = readPluginSkillManifest(localRoot, skillPath);
-      if (!r.ok) {
-        skillErrors.push(r.error);
+      if (isClaudeFormat) {
+        const r = readPluginClaudeSkillsFromPath(localRoot, skillPath);
+        if (!r.ok) {
+          skillErrors.push(...r.errors);
+        } else {
+          skills.push(...r.skills);
+        }
       } else {
-        skills.push({
-          manifest: r.manifest,
-          relManifestPath: skillPath,
-        });
+        const r = readPluginSkillManifest(localRoot, skillPath);
+        if (!r.ok) {
+          skillErrors.push(r.error);
+        } else {
+          skills.push({
+            manifest: r.manifest,
+            relManifestPath: skillPath,
+          });
+        }
       }
     }
     if (skillErrors.length > 0) {
