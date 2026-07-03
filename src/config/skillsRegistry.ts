@@ -63,7 +63,8 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       "MANDATORY WORKFLOW for google or yandex (these engines require login cookies):\n" +
       '  1. FIRST call `list_social_accounts` with platform="google" (or platform="yandex") to obtain a valid account ID. Only accounts with `cookies: true` and a successful `status` are usable.\n' +
       "  2. THEN call this tool with that account ID in the `account` field.\n" +
-      'Do NOT call this tool with search_engine "google" or "yandex" unless you already have a valid `account` ID obtained from `list_social_accounts`. Calls without a valid account ID will fail. For "bing" or "baidu", no account is needed.',
+      'Do NOT call this tool with search_engine "google" or "yandex" unless you already have a valid `account` ID obtained from `list_social_accounts`. Calls without a valid account ID will fail.\n' +
+      'For "bing" or "baidu": NO account is needed and NO login cookies are required. Do NOT call `list_social_accounts` and do NOT pass `account` when search_engine is "bing" or "baidu" — proceed directly with just the query.',
     parameters: {
       type: "object",
       properties: {
@@ -101,7 +102,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
             "MANDATORY (no default) when search_engine is 'google' or 'yandex' — these engines require login cookies. " +
             "You MUST obtain this ID by calling `list_social_accounts` first (filter by platform) and pick an account whose `cookies` field is true. " +
             "Never invent or guess an account ID. " +
-            "Ignored for 'bing' and 'baidu'.",
+            "DO NOT call `list_social_accounts` and DO NOT pass `account` when search_engine is 'bing' or 'baidu' — those engines need no account.",
         },
       },
       required: ["search_engine", "query"],
