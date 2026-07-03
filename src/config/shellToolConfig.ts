@@ -6,6 +6,9 @@
  * has a single source of truth for all security controls.
  */
 
+import * as os from "os";
+import * as path from "path";
+
 // ---------------------------------------------------------------------------
 // Timeout defaults
 // ---------------------------------------------------------------------------
@@ -135,6 +138,86 @@ export interface DenylistEntry {
   readonly pattern: RegExp;
   readonly description: string;
 }
+
+// ---------------------------------------------------------------------------
+// Ask-list patterns (tiered rules)
+// ---------------------------------------------------------------------------
+
+/**
+ * Regex patterns for commands that are *suspicious but not blocked*.
+ *
+ * These surface as a `ask` verdict — execution is blocked with a structured
+ * reason, distinct from `deny` so the UI can later offer an elevated-approval
+ * path. Patterns are matched against the full command string (case-insensitive).
+ */
+export const SHELL_ASK_PATTERNS: readonly DenylistEntry[] = [
+  // Network egress — exfiltration / download risk
+  {
+    pattern: /\b(curl|wget|httpie|ftp|scp|rsync|ssh|sftp|nc|netcat|ncat)\b/i,
+    description:
+      "Network egress command — can exfiltrate data or download payloads",
+  },
+  // Package managers (can run install scripts)
+  {
+    pattern:
+      /\b(npm|yarn|pnpm|npx|pip|pip3|gem|cargo|go|apt|apt-get|brew|yum|dnf)\b/i,
+    description: "Package manager — install scripts can run arbitrary code",
+  },
+  // Publishing / pushing
+  {
+    pattern: /\b(git\s+push|npm\s+publish|docker\s+push)\b/i,
+    description:
+      "Publish / push operation — visible to others, hard to reverse",
+  },
+  // Base64 / hex decoding then execution is a classic bypass
+  {
+    pattern: /\bbase64\s+.*\|\s*(bash|sh|zsh)\b/i,
+    description: "Decoded payload piped to shell — classic denylist bypass",
+  },
+  // In-place sed with execute/write command
+  {
+    pattern: /\bsed\s+.*[-/][a-zA-Z]*[ew]/i,
+    description:
+      "sed with execute (e) or write (w) command — can run/emit arbitrary data",
+  },
+];
+
+// ---------------------------------------------------------------------------
+// Critical paths — hard-deny for destructive commands
+// ---------------------------------------------------------------------------
+
+/**
+ * Filesystem paths that are ALWAYS blocked for destructive commands (rm,
+ * rmdir, mv-into, chmod, etc.) even if an allow rule would otherwise permit.
+ *
+ * Uses os.homedir() so user-specific paths resolve correctly per platform.
+ */
+
+const HOME = os.homedir();
+
+export const SHELL_CRITICAL_PATHS: readonly string[] = [
+  HOME,
+  path.join(HOME, ".ssh"),
+  path.join(HOME, ".gnupg"),
+  path.join(HOME, ".config"),
+  path.join(HOME, ".aws"),
+  path.join(HOME, ".docker"),
+  path.join(HOME, ".bashrc"),
+  path.join(HOME, ".bash_profile"),
+  path.join(HOME, ".zshrc"),
+  path.join(HOME, ".profile"),
+  "/etc",
+  "/usr",
+  "/var",
+  "/bin",
+  "/sbin",
+  "/boot",
+  "/sys",
+  "/proc",
+  "/dev",
+  "/root",
+  "/tmp", // writable by everyone — often used in exploits
+];
 
 // ---------------------------------------------------------------------------
 // Environment allowlist

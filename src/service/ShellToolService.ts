@@ -3,7 +3,8 @@
  *
  * Provides safe, controlled execution of local shell commands with:
  *   - Input validation via zod schemas
- *   - Destructive command denylist pre-check
+ *   - Layered permission analysis (parse → hazards → split → paths → rules)
+ *   - Destructive command denylist pre-check (defense-in-depth backstop)
  *   - Workspace-restricted working directory (FilePathGuard)
  *   - Cross-platform shell interpreter selection
  *   - Timeout enforcement with process-tree kill
@@ -33,6 +34,7 @@ import type {
   ShellExecutionResult,
   ShellInterpreter,
 } from "@/entityTypes/shellTypes";
+import { checkShellPermission } from "@/service/shellSecurity/bashPermissions";
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -58,22 +60,44 @@ export async function executeShellCommand(
   }
   const request = parsed.data;
 
-  // 2. Denylist pre-check
-  const denyResult = checkDenylist(request.command);
-  if (denyResult.blocked) {
-    return makeErrorResult(
-      `Command blocked by safety policy: ${denyResult.reason}`,
-      startTime
-    );
-  }
-
-  // 3. Resolve and validate cwd
+  // 2. Resolve and validate cwd FIRST — the permission layer needs the guard
   const cwdResult = resolveCwd(request.cwd);
   if (!cwdResult.valid) {
     return makeErrorResult(
       cwdResult.error ?? "Invalid working directory",
       startTime
     );
+  }
+
+  // 3. Layered permission check (parse → hazards → split → paths → rules)
+  //    This subsumes most of the legacy denylist; the denylist runs after as
+  //    a defense-in-depth backstop.
+  const guard = new FilePathGuard(getDefaultWorkspaceRoots(), []);
+  const verdict = checkShellPermission(request.command, guard);
+  if (verdict.tier !== "allow") {
+    return {
+      ...makeErrorResult(
+        verdict.tier === "deny"
+          ? `Command blocked by safety policy: ${verdict.reason}`
+          : `Command requires approval: ${verdict.reason}`,
+        startTime
+      ),
+      permission_verdict: verdict.tier,
+      permission_code: verdict.code,
+    };
+  }
+
+  // 3b. Legacy denylist — backstop, kept for defense in depth
+  const denyResult = checkDenylist(request.command);
+  if (denyResult.blocked) {
+    return {
+      ...makeErrorResult(
+        `Command blocked by safety policy: ${denyResult.reason}`,
+        startTime
+      ),
+      permission_verdict: "deny",
+      permission_code: "LEGACY_DENYLIST",
+    };
   }
 
   // 4. Resolve timeout (clamp to allowed range)
@@ -106,6 +130,8 @@ export async function executeShellCommand(
     validatedCommand: request.command,
     validatedCwd: cwdResult.path,
     validatedShell: request.shell,
+    permission_verdict: "allow" as const,
+    permission_code: "OK",
   };
 }
 
