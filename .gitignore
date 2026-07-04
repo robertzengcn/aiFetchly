@@ -139,3 +139,5 @@ node_modules
 *.wav
 # Test artifacts accidentally created in working tree root
 /true/
+.superpowers/
+hyperframes-*

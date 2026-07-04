@@ -296,6 +296,7 @@ export const MCP_TOOL_DISCOVER = "mcp:tool:discover";
 export const MCP_TOOL_TOGGLE_SERVER = "mcp:tool:toggle:server";
 export const MCP_TOOL_TOGGLE_TOOL = "mcp:tool:toggle:tool";
 export const MCP_TOOL_TEST_CONNECTION = "mcp:tool:test:connection";
+export const MCP_TOOL_TRUST = "mcp:tool:trust";
 
 // Skill Management Channels
 export const SKILL_CHECK_PERMISSION = "skill:check-permission";
@@ -405,6 +406,8 @@ export const PLUGIN_TOGGLE_MCP_TOOL = "plugin:toggle-mcp-tool";
 export const PLUGIN_TEST_MCP_CONNECTION = "plugin:test-mcp-connection";
 export const PLUGIN_DISCOVER_MCP_TOOLS = "plugin:discover-mcp-tools";
 export const PLUGIN_INSTALL_FROM_SOURCE = "plugin:install-from-source";
+export const PLUGIN_GET_MCP_OPTIONS = "plugin:get-mcp-options";
+export const PLUGIN_SET_MCP_OPTION = "plugin:set-mcp-option";
 
 // AI user memory (durable cross-session memory)
 export const AI_USER_MEMORY_LIST = "ai:user-memory:list";
@@ -425,6 +428,17 @@ export const AI_WORKSPACE_LIST = "ai-workspace:list";
 
 // Dialog Channels
 export const DIALOG_PICK_FOLDER = "dialog:pick-folder";
+
+// Hooks system — Phase 4 management UI channels.
+export const HOOKS_LIST = "hooks:list";
+export const HOOKS_CREATE = "hooks:create";
+export const HOOKS_UPDATE = "hooks:update";
+export const HOOKS_DELETE = "hooks:delete";
+export const HOOKS_SET_ENABLED = "hooks:setEnabled";
+export const HOOKS_SET_TRUSTED = "hooks:setTrusted";
+export const HOOKS_GET_GLOBAL_ENABLE = "hooks:getGlobalEnable";
+export const HOOKS_SET_GLOBAL_ENABLE = "hooks:setGlobalEnable";
+export const HOOKS_LIST_AUDIT = "hooks:listAudit";
 
 // Diagnostics Channels
 export const DIAGNOSTICS_RENDERER_ERROR = "diagnostics:renderer-error";

@@ -13,6 +13,12 @@ import * as path from "path";
 
 export type PluginSource = "local" | "builtin" | "marketplace";
 
+/**
+ * On-disk manifest format. Computed at load time from which manifest file
+ * was found; not persisted in the database.
+ */
+export type PluginFormat = "aifetchly" | "claude";
+
 export type PluginHealth =
   | "healthy"
   | "disabled"
@@ -32,6 +38,8 @@ export interface PluginManifest {
   readonly description: string;
   readonly author?: string;
   readonly source?: PluginSource;
+  /** Manifest format. Undefined for plugins installed before this field existed. */
+  readonly format?: PluginFormat;
   readonly skills?: readonly string[];
   readonly mcpServers?: readonly string[];
   readonly permissions?: readonly string[];
@@ -119,6 +127,11 @@ export type PluginErrorCode =
   | "cache-missing"
   | "uninstall-failed"
   | "missing_files"
+  | "claude-format-unsupported-feature"
+  | "claude-frontmatter-invalid"
+  | "claude-frontmatter-missing-field"
+  | "mcp-options-missing"
+  | "plugin-identifier-invalid"
   | "unknown";
 
 export interface PluginError {
@@ -143,6 +156,7 @@ export interface PluginSummary {
   readonly source: PluginSource;
   readonly enabled: boolean;
   readonly health: PluginHealth;
+  readonly format?: PluginFormat;
   readonly skillCount: number;
   readonly mcpServerCount: number;
   readonly permissions: readonly string[];

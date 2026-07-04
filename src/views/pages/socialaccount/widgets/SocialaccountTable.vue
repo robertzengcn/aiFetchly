@@ -160,7 +160,7 @@ const FakeAPI = {
     async fetch(fetchparam: Fetchparam): Promise<SearchResult<SocialAccountListData>> {
         // console.log(fetchparam.search)
         const fpage = (fetchparam.page - 1) * fetchparam.itemsPerPage
-        const res = await getSocialAccountlist({ page: fpage, size: fetchparam.itemsPerPage, sortby: fetchparam.sortBy, search: fetchparam.search })
+        const res = await getSocialAccountlist({ page: fpage, size: fetchparam.itemsPerPage, search: fetchparam.search })
         console.log(res)
         return res
     }
