@@ -64,11 +64,12 @@ Source: `docs/prd/aifetchly-local-extensibility-prd.md` + `docs/prd/aifetchly-lo
 3. `/reload-config` forces a rescan and reports current counts; `/status` shows global config + diagnostics state.
 4. Renderer never reads `~/.aifetchly` directly (verified by tests); AI-serving dispatch checks `USER_AI_ENABLED`.
 5. Invalid/oversized files produce diagnostics, not app crashes; all new UI text translated to 6 languages.
-**Plans:** 5 plans
+**Plans:** 6 plans
 Plans:
 - [ ] 13-01-config-loader-stack-PLAN.md — Pure types + constants + hand-rolled frontmatter parser + path safety + async bounded config loader + snapshot diff
 - [ ] 13-02-command-registry-parser-PLAN.md — Slash command types + CommandRegistry with source replacement + SlashCommandParser
-- [ ] 13-03-orchestrator-ipc-context-injection-PLAN.md — Config manager singleton + context store/loader + runtime sync + built-in commands + dispatcher + IPC handlers + AGENTS.md injection into AIChatContextAssembler
+- [ ] 13-03a-context-pipeline-assembler-injection-PLAN.md — Context store + context loader + runtime registry sync + config manager singleton + AGENTS.md injection into AIChatContextAssembler
+- [ ] 13-03b-commands-dispatcher-ipc-PLAN.md — Built-in slash commands + discriminated-union dispatcher + SlashCommandModule + IPC handlers + channel constants + startup hook
 - [ ] 13-04-renderer-suggestions-ui-PLAN.md — Preload whitelists + renderer API + AiChatV2SlashSuggestions dropdown + composer Enter/Tab intercept + config-changed subscription
 - [ ] 13-05-i18n-boundary-tests-PLAN.md — aifetchlyConfig + slashCommands groups in all 6 lang files + TRS-07 renderer boundary test + I18-01 keys-present test
 

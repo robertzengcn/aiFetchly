@@ -585,19 +585,22 @@ Phase 13 is **greenfield** (no rename/refactor/migration). This section is inclu
 
 **Note:** This table is NOT empty — A2 especially needs planner confirmation.
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Does `AI_CHAT_V2_STREAM` already enforce `USER_AI_ENABLED`? (assumption A2)**
+   - **RESOLVED: VERIFIED at src/main-process/communication/ai-chat-v2-ipc.ts:385-393 — handleStream() calls isAIEnabled() FIRST, then fail-closed returns before parsing the request. Strategy A confirmed; Plan 03b encodes the citation as a must_haves.truth + read_first.**
    - What we know: `ai-workspace-ipc.ts` and `ai-email-template-ipc.ts` gate AI work; the stream path is the canonical AI entry.
    - What's unclear: Whether the V2 stream handler gates at the top or relies on callers.
    - Recommendation: Planner adds a Wave-0 task to read `src/main-process/communication/ai-chat-v2-ipc.ts` and confirm. If not gated, use Strategy B for TRS-05 (dispatcher gates when `type==="prompt"`).
 
 2. **Preload API shape: namespaced vs flat `windowInvoke`?**
+   - **RESOLVED: Use flat windowInvoke (mirrors src/views/api/workspace.ts). Namespacing deferred milestone-wide.**
    - What we know: Design 17.2 proposes `api.slashCommands.{list,dispatch}`; existing `workspace.ts` uses flat `windowInvoke`.
    - What's unclear: Whether the project wants to start migrating toward namespaced preload APIs.
    - Recommendation: Use flat `windowInvoke` for phase 13 (consistency); revisit namespacing milestone-wide later. Minor.
 
 3. **Should `/clear` require confirmation?**
+   - **RESOLVED: /clear delegates to the existing AI_CHAT_V2_CLEAR_CONVERSATION path (ai-chat-v2-ipc.ts:887), which owns its own UX/confirmation; phase 13 adds no new confirmation dialog.**
    - What we know: Design 11.4 says "may require confirmation in renderer."
    - Recommendation: Yes — mirror the existing `clear_confirm_title`/`clear_confirm_body` pattern from `aiChatV2` i18n (line 1826+). Cheap, safe.
 

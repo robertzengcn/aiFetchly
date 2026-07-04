@@ -2,8 +2,8 @@
 phase: 13-global-context-and-built-in-slash-commands
 plan: 05
 type: execute
-wave: 4
-depends_on: [03, 04]
+wave: 5
+depends_on: [03b, 04]
 files_modified:
   - src/views/lang/en.ts
   - src/views/lang/zh.ts

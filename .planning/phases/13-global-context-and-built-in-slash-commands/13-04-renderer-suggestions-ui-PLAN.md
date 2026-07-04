@@ -2,8 +2,8 @@
 phase: 13-global-context-and-built-in-slash-commands
 plan: 04
 type: execute
-wave: 3
-depends_on: [03]
+wave: 4
+depends_on: [03b]
 files_modified:
   - src/preload.ts
   - src/views/api/slashCommands.ts
@@ -148,7 +148,7 @@ Output: One new Vue component, one new renderer API file, modifications to prelo
       - In script-setup, import onAifetchlyConfigChanged, listSlashCommands, dispatchSlashCommand from @/views/api/slashCommands.
       - On mounted: subscribe onAifetchlyConfigChanged(() => { /* refresh local command count / status if shown */ }) and store the unsubscribe function. On unmounted: call it (cleanup).
       - Add a handler onCommandSelect(command: SlashCommandView): async — calls dispatchSlashCommand({ conversationId, rawInput: '/' + command.name }). On response: if action === 'show_result' -> render the content into the conversation as a system/result message (mirror how tool results are displayed; if no clean path exists, render as an assistant message tagged 'system-result'). If action === 'submit_prompt' -> route through the existing send path (set the composer draft to the prompt and call the existing onSend). If status === false -> show a transient error toast / inline message with the msg. (Phase 13 exercises only show_result from built-ins + status:false from unknown commands.)
-      - Special-case /clear: when the dispatcher returns /clear's show_result guidance, the AiChatV2 ALSO invokes the existing AI_CHAT_V2_CLEAR_CONVERSATION path (the clear built-in returns guidance, the renderer performs the actual clear via the existing channel — do NOT reimplement clear here).
+      - Special-case /clear: when the dispatcher returns /clear's show_result guidance, the AiChatV2 ALSO invokes the existing AI_CHAT_V2_CLEAR_CONVERSATION path (the clear built-in returns guidance, the renderer performs the actual clear via the existing channel — do NOT reimplement clear here). Reuse the existing clear_confirm_title/clear_confirm_body i18n keys + confirmation flow before calling AI_CHAT_V2_CLEAR_CONVERSATION — do NOT add a new confirmation dialog (the existing clear path at ai-chat-v2-ipc.ts:887 owns confirmation).
       - Wire <AiChatV2Composer @command-select="onCommandSelect" ... /> in the template.
 
     NO component test is strictly required (design §21.5 permits manual QA). If the renderer component harness at test/vitest/main/components/vitest.config.mjs is healthy, add a minimal AiChatV2SlashSuggestions.test.ts covering: renders the list, highlights on prop change, emits 'select' on item click. Otherwise defer to manual QA (covered by the checkpoint below).
