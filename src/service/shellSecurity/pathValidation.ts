@@ -249,15 +249,9 @@ export function validateSegmentPaths(
       if (v) return v;
     }
 
-    // Always-ask heads (dd, shred, mkfs...) — too dangerous to auto-approve.
-    if (ALWAYS_ASK_HEADS.has(head)) {
-      return ask(
-        "DESTRUCTIVE_COMMAND",
-        `'${head}' is a high-risk operation; requires approval.`
-      );
-    }
-
     // `find` with destructive flags — deny regardless of which paths are used.
+    // Runs before path classification because `find` is profiled as 'read'
+    // and we don't want the destructive flags to be skipped as flags.
     if (head === "find") {
       const hit = seg.words.find((w) => FIND_DESTRUCTIVE_FLAGS.has(w));
       if (hit) {
@@ -268,8 +262,23 @@ export function validateSegmentPaths(
       }
     }
 
+    // If this head is an always-ask destructive command (dd, mkfs...), ask.
+    // NOTE: this runs AFTER path validation below for non-classified heads.
+    // For commands without a profile (dd, mkfs...), we ask immediately.
+    // For commands WITH a profile that are also in ALWAYS_ASK (shred), we
+    // let path validation run first so outside-workspace denies win.
+
     const profile = classify(head);
-    if (!profile) continue;
+    if (!profile) {
+      // Unclassified head — check ALWAYS_ASK before falling through.
+      if (ALWAYS_ASK_HEADS.has(head)) {
+        return ask(
+          "DESTRUCTIVE_COMMAND",
+          `'${head}' is a high-risk operation; requires approval.`
+        );
+      }
+      continue;
+    }
 
     const paths = extractPathArgs(seg.words, profile);
 
@@ -349,6 +358,16 @@ export function validateSegmentPaths(
           `'${head}' on a workspace root ('${p}') is blocked.`
         );
       }
+    }
+
+    // All paths validated clean. If this is an always-ask head with a profile
+    // (e.g. shred), ask before allowing. Runs AFTER path validation so that
+    // outside-workspace denies take precedence over the always-ask signal.
+    if (ALWAYS_ASK_HEADS.has(head)) {
+      return ask(
+        "DESTRUCTIVE_COMMAND",
+        `'${head}' is a high-risk operation; requires approval.`
+      );
     }
   }
   return null;

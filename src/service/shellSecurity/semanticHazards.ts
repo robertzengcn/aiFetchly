@@ -149,13 +149,11 @@ export function semanticHazards(
         `'${head}' spawns an interactive shell that bypasses static analysis.`
       );
     }
-
-    // Fork bomb — catches `NAME(){ NAME|NAME& };NAME` family. Best-effort;
-    // not all variants match, but timeout + auto-background is the real
-    // defense against resource exhaustion.
-    if (/\(\)\s*\{/.test(seg.raw) && /\|.*&/.test(seg.raw)) {
-      return deny("FORK_BOMB", "Fork-bomb pattern detected.");
-    }
+    // NOTE: Fork-bomb detection moved to SHELL_DENYLIST_PATTERNS in
+    // shellToolConfig — running it on per-segment raw text was broken
+    // because compoundSplitter already split on |, &, and ;, so the
+    // signature `NAME(){ NAME|NAME& }` never survived into a single
+    // segment's raw field.
   }
   return null;
 }

@@ -87,7 +87,13 @@ export const SHELL_DENYLIST_PATTERNS: readonly DenylistEntry[] = [
   // Fork bombs and resource exhaustion
   {
     pattern: /:\(\)\{\s*:\|:&\s*\}/,
-    description: "Bash fork bomb pattern",
+    description: "Bash fork bomb pattern (canonical :(){ :|:& };: form)",
+  },
+  {
+    // Generic fork-bomb: NAME(){ NAME|NAME& } — catches the f(){ f|f& };f
+    // family that the canonical :() pattern misses.
+    pattern: /\w+\(\)\s*\{[^}]*\|[^}]*&/,
+    description: "Generic fork-bomb pattern (NAME(){ NAME|NAME& })",
   },
   {
     pattern: /\bwhile\s+true\s*;\s*do\s*/i,
@@ -146,16 +152,19 @@ export interface DenylistEntry {
  * path. Patterns are matched against the full command string (case-insensitive).
  */
 export const SHELL_ASK_PATTERNS: readonly DenylistEntry[] = [
-  // Network egress — exfiltration / download risk
+  // Network egress — exfiltration / download risk.
+  // Pattern requires trailing whitespace so paths like `.ssh/known_hosts` or
+  // `~/.config/curl-config` don't false-positive on the substring match.
   {
-    pattern: /\b(curl|wget|httpie|ftp|scp|rsync|ssh|sftp|nc|netcat|ncat)\b/i,
+    pattern:
+      /(?:^|[\s;&|(])(curl|wget|httpie|ftp|scp|rsync|ssh|sftp|nc|netcat|ncat)(?=\s|$)/i,
     description:
       "Network egress command — can exfiltrate data or download payloads",
   },
-  // Package managers (can run install scripts)
+  // Package managers (can run install scripts). Same trailing-whitespace rule.
   {
     pattern:
-      /\b(npm|yarn|pnpm|npx|pip|pip3|gem|cargo|go|apt|apt-get|brew|yum|dnf)\b/i,
+      /(?:^|[\s;&|(])(npm|yarn|pnpm|npx|pip|pip3|gem|cargo|go|apt|apt-get|brew|yum|dnf)(?=\s|$)/i,
     description: "Package manager — install scripts can run arbitrary code",
   },
   // Publishing / pushing
