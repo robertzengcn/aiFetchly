@@ -1040,6 +1040,7 @@ export default {
     uploadfilemsg_title: "手动上传cookies文件",
     uploadfilemsg_content: "请从浏览器导出cookies并手动上传cookies文件",
     upload_cookies_button: "上传 cookies (Netscape .txt)",
+    upload_cookies_cancel: "上传cookies已取消",
     handleCookiesfileSuccess: "处理cookies文件成功",
     handleCookiesfileFailure: "处理cookies文件失败",
     insertCookiesFailure: "插入cookies失败",

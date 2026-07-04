@@ -1067,6 +1067,7 @@ export default {
     uploadfilemsg_content:
       "Please export cookies from your browser and upload cookies file manually",
     upload_cookies_button: "Importer les cookies (Netscape .txt)",
+    upload_cookies_cancel: "Importation des cookies annulée",
     handleCookiesfileSuccess: "handle cookies file success",
     handleCookiesfileFailure: "handle cookies file failure",
     insertCookiesFailure: "insert cookies failure",

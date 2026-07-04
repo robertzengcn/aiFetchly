@@ -1075,6 +1075,7 @@ export default {
     uploadfilemsg_content:
       "Bitte exportieren Sie die Cookies aus Ihrem Browser und laden Sie die Cookie-Datei manuell hoch",
     upload_cookies_button: "Cookies hochladen (Netscape .txt)",
+    upload_cookies_cancel: "Cookie-Upload abgebrochen",
     handleCookiesfileSuccess: "Cookie-Datei erfolgreich verarbeitet",
     handleCookiesfileFailure: "Cookie-Datei-Verarbeitung fehlgeschlagen",
     insertCookiesFailure: "Cookie-Einfügung fehlgeschlagen",

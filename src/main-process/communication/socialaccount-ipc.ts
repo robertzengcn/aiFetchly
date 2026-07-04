@@ -279,7 +279,11 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
       filters: [{ name: "Netscape Cookies", extensions: ["txt"] }],
     });
     if (canceled) {
-      const cmsg = { status: false, msg: "canceled" } as CommonDialogMsg;
+      const cmsg = {
+        status: false,
+        msg: "canceled",
+        data: { action: "uploadCanceled", title: "", content: "socialaccount.upload_cookies_cancel" },
+      } as CommonDialogMsg;
       (
         event as {
           sender: { send: (channel: string, message: string) => void };

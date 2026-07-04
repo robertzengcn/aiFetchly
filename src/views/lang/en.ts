@@ -1083,6 +1083,7 @@ export default {
     uploadfilemsg_content:
       "Please export cookies from your browser and upload cookies file manually",
     upload_cookies_button: "Upload cookies (Netscape .txt)",
+    upload_cookies_cancel: "Upload cookies cancelled",
     handleCookiesfileSuccess: "handle cookies file success",
     handleCookiesfileFailure: "handle cookies file failure",
     insertCookiesFailure: "insert cookies failure",

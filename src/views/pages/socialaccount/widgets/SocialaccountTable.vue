@@ -309,14 +309,15 @@ const receiveLoginMsg = (channel: string) => {
         console.log(value)
         const json_value = JSON.parse(value) as CommonDialogMsg
         if (!json_value.status) {
-            if(json_value.msg){
-                setAlert(t("socialaccount.login_account_error"), json_value.msg, "error")
-            }
-
             if (json_value.data) {
-                if (json_value.data.action == "error") {
+                if (json_value.data.action == "uploadCanceled") {
+                    const content = json_value.data.content ? t(json_value.data.content) : "";
+                    setAlert(t("socialaccount.upload_cookies_cancel"), content, "info");
+                    return;
+                } else if (json_value.data.action == "error") {
                     console.log(json_value.data.content)
                     setAlert(t("socialaccount.login_account_error"), json_value.data.content, "error")
+                    return;
                 } else if (json_value.data.action == "uploadfileMsg") {
                     if (json_value.code) {
                         tmpId.value = json_value.code
@@ -342,6 +343,8 @@ const receiveLoginMsg = (channel: string) => {
                     setAlert(t(json_value.data.title), t(json_value.data.content), "success")
                     loadItems({ page: options.page, itemsPerPage: itemsPerPage.value, sortBy: "" });
                 }
+            } else if (json_value.msg) {
+                setAlert(t("socialaccount.login_account_error"), json_value.msg, "error");
             }
         } else {//success
             if (json_value.data?.action === "handleCookiesfile") {

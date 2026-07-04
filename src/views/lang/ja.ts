@@ -1054,6 +1054,7 @@ export default {
     uploadfilemsg_content:
       "ブラウザからCookieをエクスポートし、Cookieファイルを手動でアップロードしてください",
     upload_cookies_button: "Cookieをアップロード (Netscape .txt)",
+    upload_cookies_cancel: "Cookieのアップロードがキャンセルされました",
     handleCookiesfileSuccess: "Cookieファイル処理成功",
     handleCookiesfileFailure: "Cookieファイル処理失敗",
     insertCookiesFailure: "Cookie挿入失敗",
