@@ -25,9 +25,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { CommandRegistry } from "@/service/slashCommands/CommandRegistry";
-import {
-  registerBuiltInSlashCommands,
-} from "@/service/slashCommands/builtinSlashCommands";
+import { registerBuiltInSlashCommands } from "@/service/slashCommands/builtinSlashCommands";
 import { SlashCommandDispatcher } from "@/service/slashCommands/SlashCommandDispatcher";
 import { SlashCommandModule } from "@/modules/SlashCommandModule";
 import { AIFetchlyConfigManager } from "@/service/aifetchlyConfig/AIFetchlyConfigManager";
@@ -49,9 +47,7 @@ function buildStack(): {
   module: SlashCommandModule;
   tmpRoot: string;
 } {
-  const tmpRoot = fs.mkdtempSync(
-    path.join(os.tmpdir(), "slash-dispatcher-")
-  );
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "slash-dispatcher-"));
   const manager = new AIFetchlyConfigManager({ rootPath: tmpRoot });
   const registry = manager.getCommandRegistry();
   registerBuiltInSlashCommands(registry);
@@ -61,10 +57,7 @@ function buildStack(): {
 }
 
 /** Disable a command in-place via re-registration (immutability-safe). */
-function disableCommand(
-  registry: CommandRegistry,
-  id: string
-): void {
+function disableCommand(registry: CommandRegistry, id: string): void {
   const cmd = registry.getById(id);
   if (!cmd) throw new Error(`fixture command not found: ${id}`);
   registry.register({ ...cmd, enabled: false });
@@ -99,20 +92,23 @@ describe("registerBuiltInSlashCommands (CMD-03)", () => {
       name: "reload-config",
       descMatch: /Rescan|reload/i,
     },
-  ])("built-in $id has stable shape (type=local, enabled, no trust)", ({ id, name, descMatch }) => {
-    const { registry } = buildStack();
-    const cmd = registry.getById(id);
-    expect(cmd, `expected ${id} to be registered`).not.toBeNull();
-    expect(cmd!.name).toBe(name);
-    expect(cmd!.type).toBe("local");
-    expect(cmd!.source).toBe("built-in");
-    expect(cmd!.sourceId).toBe("built-in");
-    expect(cmd!.sourceLabel).toBe("Built-in");
-    expect(cmd!.requiresTrust).toBe(false);
-    expect(cmd!.enabled).toBe(true);
-    expect(cmd!.aliases).toEqual([]);
-    expect(cmd!.description).toMatch(descMatch);
-  });
+  ])(
+    "built-in $id has stable shape (type=local, enabled, no trust)",
+    ({ id, name, descMatch }) => {
+      const { registry } = buildStack();
+      const cmd = registry.getById(id);
+      expect(cmd, `expected ${id} to be registered`).not.toBeNull();
+      expect(cmd!.name).toBe(name);
+      expect(cmd!.type).toBe("local");
+      expect(cmd!.source).toBe("built-in");
+      expect(cmd!.sourceId).toBe("built-in");
+      expect(cmd!.sourceLabel).toBe("Built-in");
+      expect(cmd!.requiresTrust).toBe(false);
+      expect(cmd!.enabled).toBe(true);
+      expect(cmd!.aliases).toEqual([]);
+      expect(cmd!.description).toMatch(descMatch);
+    }
+  );
 
   it("is idempotent (re-registering replaces, not duplicates)", () => {
     const { registry } = buildStack();
@@ -305,7 +301,10 @@ describe("SlashCommandDispatcher.dispatch (CMD-04, CMD-08, DX-02)", () => {
 describe("SlashCommandModule (three-layer Module)", () => {
   it("listCommands returns SlashCommandView[] with empty-diagnostics fallback", async () => {
     const { module } = buildStack();
-    const r = await module.listCommands({ conversationId: "conv-1", query: "" });
+    const r = await module.listCommands({
+      conversationId: "conv-1",
+      query: "",
+    });
     expect(r.status).toBe(true);
     if (!r.status) throw new Error("expected success");
     expect(Array.isArray(r.commands)).toBe(true);
@@ -342,7 +341,7 @@ describe("SlashCommandModule (three-layer Module)", () => {
   it("getStatus proxies manager.getStatus()", async () => {
     const { module, manager } = buildStack();
     const direct = manager.getStatus();
-    const via = await module.getStatus({ conversationId: "conv-1" });
+    const via = await module.getStatus();
     expect(via).toEqual(direct);
   });
 
@@ -354,7 +353,7 @@ describe("SlashCommandModule (three-layer Module)", () => {
       lastReloadAt: 12345,
       instructionsChanged: true,
     });
-    const r = await module.reloadConfig({ conversationId: "conv-1" });
+    const r = await module.reloadConfig();
     expect(spy).toHaveBeenCalledTimes(1);
     expect(r.commandCount).toBe(7);
     expect(r.diagnosticCount).toBe(1);

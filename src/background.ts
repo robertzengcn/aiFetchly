@@ -12,6 +12,7 @@ const session = require("electron").session;
 import installExtension, { VUEJS3_DEVTOOLS } from "electron-devtools-installer";
 import { registerCommunicationIpcHandlers } from "./main-process/communication/";
 import { SkillImportService } from "@/service/SkillImportService";
+import { getAIFetchlyConfigManager } from "@/service/aifetchlyConfig/AIFetchlyConfigManager";
 import { FileOperationTracker } from "@/service/FileOperationTracker";
 import { registerBuiltinHooks } from "@/service/hooks/builtinHooks";
 import * as path from "path";
@@ -357,6 +358,18 @@ function initialize() {
       SkillImportService.loadPersistedSkills().catch((err: unknown) => {
         console.warn("[Startup] Failed to load persisted skills:", err);
       });
+
+      // Phase 13 (Plan 03b): fire-and-forget the global ~/.aifetchly scan.
+      // Never blocks app launch (Pitfall 6) and never throws synchronously —
+      // manager.initialize() is idempotent and the scan degrades to an
+      // empty snapshot on any IO error. Built-in slash commands and the
+      // config-changed IPC handlers were registered above via
+      // registerCommunicationIpcHandlers -> registerSlashCommandHandlers.
+      getAIFetchlyConfigManager()
+        .initialize()
+        .catch((err: unknown) => {
+          console.warn("[Startup] AIFetchly config scan failed:", err);
+        });
       //}
     }
 

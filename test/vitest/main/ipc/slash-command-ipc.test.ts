@@ -199,9 +199,14 @@ describe("slash-command IPC handlers (TRS-05 Strategy A gating matrix)", () => {
       { conversationId: "conv-1" }
     );
     expect(sendSpy).toHaveBeenCalledTimes(1);
-    expect(sendSpy.mock.calls[0][0]).toBe(AIFETCHLY_CONFIG_CHANGED);
+    // Cast: MockBrowserWindow.webContents.send is typed as a no-arg no-op,
+    // but the IPC layer actually calls send(channel, payload). Access the
+    // recorded call args via an unknown[] cast so TS doesn't trip on the
+    // empty-tuple parameter signature.
+    const calls = sendSpy.mock.calls as unknown as [string, string][];
+    expect(calls[0][0]).toBe(AIFETCHLY_CONFIG_CHANGED);
     // Payload is a JSON string carrying source + summary metadata only.
-    const payload = JSON.parse(sendSpy.mock.calls[0][1] as string);
+    const payload = JSON.parse(calls[0][1]);
     expect(payload.source).toBe("user");
     expect(payload.summary).toBeDefined();
     expect(payload.summary.commandCount).toBe(0);

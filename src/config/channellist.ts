@@ -287,6 +287,29 @@ export const AI_CHAT_V2_GET_TOOL_APPROVAL_MODE =
 export const AI_CHAT_V2_SET_TOOL_APPROVAL_MODE =
   "ai-chat-v2:set-tool-approval-mode";
 
+// ==================== Slash Command + AiFetchly Config Channels ==============
+// Phase 13 (Plan 03b) — see docs/prd/aifetchly-local-extensibility-technical-design.md §17.1.
+//
+// TRS-05 Strategy A: every invoke handler below uses registerValidatedHandler
+// (NOT registerAiValidatedHandler). Built-in dispatch returns show_result
+// (no AI call); prompt commands return submit_prompt and the renderer submits
+// via AI_CHAT_V2_STREAM which already gates USER_AI_ENABLED FIRST (verified
+// at ai-chat-v2-ipc.ts handleStream lines 385-393).
+/** Renderer->Main: list renderer-safe slash commands (CMD-07 ranking). */
+export const SLASH_COMMAND_LIST = "slash-command:list";
+/** Renderer->Main: dispatch one composer submission (CMD-04). */
+export const SLASH_COMMAND_DISPATCH = "slash-command:dispatch";
+/** Renderer->Main: force a config rescan (DX-02 + success criterion 3). */
+export const AIFETCHLY_CONFIG_RELOAD = "aifetchly-config:reload";
+/** Renderer->Main: read config status counts (DX-02). */
+export const AIFETCHLY_CONFIG_STATUS = "aifetchly-config:status";
+/**
+ * Main->Renderer EVENT (NOT an invoke handler): emitted via
+ * win.webContents.send after a successful reload so the renderer refreshes
+ * its command cache. Payload is JSON-stringified {source, summary}.
+ */
+export const AIFETCHLY_CONFIG_CHANGED = "aifetchly-config:changed";
+
 // MCP Tool Management Channels
 export const MCP_TOOL_LIST = "mcp:tool:list";
 export const MCP_TOOL_ADD = "mcp:tool:add";
