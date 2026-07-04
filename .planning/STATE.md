@@ -6,14 +6,14 @@ current_phase: 13
 current_phase_name: Global Context and Built-in Slash Commands
 status: executing
 stopped_at: Milestone v2.0 initialized -- PROJECT/REQUIREMENTS/ROADMAP/STATE written; ready to plan Phase 13
-last_updated: "2026-07-04T22:14:01.487Z"
+last_updated: "2026-07-04T22:38:49.414Z"
 last_activity: 2026-07-04
 last_activity_desc: Phase 13 execution started
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 6
-  completed_plans: 3
+  completed_plans: 4
   percent: 0
 ---
 
@@ -46,7 +46,7 @@ Progress: ░░░░░░░░░░ 0%
 ## Current Position
 
 Phase: 13 (Global Context and Built-in Slash Commands) — EXECUTING
-Plan: 2 of 6
+Plan: 3 of 6
 Status: Ready to execute
 Last activity: 2026-07-04 — Phase 13 execution started
 
@@ -73,6 +73,9 @@ Last activity: 2026-07-04 — Phase 13 execution started
 - [Phase ?]: [13-03a]: Module-level singleton AIFetchlyContextStore shared between the assembler's field-initialized AIFetchlyContextLoader and the config manager — only way the assembler sees the manager-populated cache without breaking its constructor-less pattern.
 - [Phase ?]: [13-03a]: AGENTS.md injection lands AFTER active-workspace and BEFORE durable memory (CTX-01 ordinal), mirroring the existing custom-directive try/catch + console.error graceful-degradation shape (CTX-03).
 - [Phase ?]: [13-03a]: snapshot.commands cast to SlashCommandDefinition[] at the RuntimeRegistrySync boundary — phase 13 commands always empty; phase 15+ tightens the snapshot type and removes the cast.
+- [Phase 13]: [13-03b]: SlashCommandDispatcher depends on concrete CommandRegistry + AIFetchlyConfigManager (not abstract interfaces); tests construct real instances with empty tmpdir, production wires singleton — avoids mock indirection for a 3-method collaborator. — Plan 03a's manager constructor already supports option-injection for tests, so a real-instance test stack is cheaper than maintaining parallel mock interfaces.
+- [Phase 13]: [13-03b]: SlashCommandModule.reloadConfig() and getStatus() take NO params in phase 13 (forward-compat: phase 14+ adds conversationId when workspace trust actually needs it). — Dropped truly-unused optional param rather than carrying dead API surface; the eslint config flags unused args without an underscore-ignore pattern.
+- [Phase 13]: [13-03b]: TRS-05 Strategy A confirmed — slash-command IPC handlers all use registerValidatedHandler (non-AI-gated); prompt-submit gate is downstream in AI_CHAT_V2_STREAM (verified at ai-chat-v2-ipc.ts:385-393). ZERO registerAiValidatedHandler literals in slash-command-ipc.ts. — Strategy A is DRY — no duplicate gate. Strategy B (dispatcher gates type==='prompt') would have required importing Token into the dispatcher.
 
 ### Pending Todos
 
@@ -98,7 +101,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-04T22:13:37.042Z
+Last session: 2026-07-04T22:37:32.828Z
 Stopped at: Milestone v2.0 initialized -- PROJECT/REQUIREMENTS/ROADMAP/STATE written; ready to plan Phase 13
 Worktree: .claude/worktrees/merry-stirring-scroll (branch: dev)
 
@@ -108,3 +111,4 @@ Worktree: .claude/worktrees/merry-stirring-scroll (branch: dev)
 |-------|------|----------|-------|
 | Phase 13 P13-02-command-registry-parser | 12m | 2 tasks | 5 files |
 | Phase 13 P13-03a | 7m | 2 tasks | 7 files |
+| Phase 13 P13-03b | ~18min | 2 tasks | 10 files |
