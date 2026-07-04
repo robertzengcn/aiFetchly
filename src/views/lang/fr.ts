@@ -1125,22 +1125,27 @@ export default {
     chrome_path: "chrome path",
     firefox_path: "firefox path",
     embedding_group: "Modèles d'Embedding",
-    embedding_group_description: "Modèle d'embedding par défaut pour la recherche vectorielle.",
+    embedding_group_description:
+      "Modèle d'embedding par défaut pour la recherche vectorielle.",
     external_system: "Système Externe",
     user_preferences: "Préférences Utilisateur",
-    "user-preferences-group-description": "Préférences utilisateur pour le comportement de l'application.",
+    "user-preferences-group-description":
+      "Préférences utilisateur pour le comportement de l'application.",
     default_embedding_model: "Modèle d'Embedding par Défaut",
-    "default-embedding-model-description": "Sélectionnez le modèle d'embedding utilisé pour la recherche vectorielle et la correspondance de similarité.",
+    "default-embedding-model-description":
+      "Sélectionnez le modèle d'embedding utilisé pour la recherche vectorielle et la correspondance de similarité.",
     language_preference: "Langue",
     "language-preference-description": "Préférence de langue de l'interface.",
     ai_website_analysis_business_info: "Informations Commerciales",
-    "ai-website-analysis-business-info-description": "Informations commerciales utilisées lors de l'analyse IA du site web.",
+    "ai-website-analysis-business-info-description":
+      "Informations commerciales utilisées lors de l'analyse IA du site web.",
     "external-system-group-description": "external system group setting",
     mcp_tools: "MCP Tools",
     manage_mcp_tools: "Manage MCP Tools",
     manage_skills: "Gérer les compétences",
     ai_preferences: "Préférences IA",
-    "ai-preferences-group-description": "Paramètres contrôlant le comportement du chat IA, la mémoire et le contexte.",
+    "ai-preferences-group-description":
+      "Paramètres contrôlant le comportement du chat IA, la mémoire et le contexte.",
     user_ai_auto_dream: "Consolidation Auto-Rêve",
     "ai-auto-dream-description":
       "Résumer automatiquement les conversations passées en arrière-plan pour économiser les tokens de contexte IA.",
@@ -2030,5 +2035,23 @@ export default {
       pick: "Choisir un dossier",
       cancel: "Annuler",
     },
+  },
+  diagnostics: {
+    title: "Diagnostics",
+    storageUsage: "Stockage utilisé :",
+    refresh: "Actualiser",
+    enableDebug: "Activer les logs de débogage (désactivation auto après 24 h)",
+    debugExpiresAt: "Expiration des logs de débogage :",
+    allowUpload:
+      "Autoriser l'envoi de rapports de crash (envoi manuel uniquement)",
+    openFolder: "Ouvrir le dossier de diagnostics",
+    exportReport: "Exporter le rapport de diagnostic",
+    sendReport: "Envoyer le rapport de crash",
+    clearLocal: "Effacer les diagnostics locaux",
+    clearConfirm: "Effacer tous les diagnostics locaux ? Irréversible.",
+    selectCrash: "Sélectionnez un crash à envoyer",
+    exportFailed: "Exportation échouée ou annulée.",
+    sendSuccess: "Rapport envoyé. Merci !",
+    sendFailed: "Échec de l'envoi :",
   },
 };

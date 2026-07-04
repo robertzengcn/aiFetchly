@@ -1144,19 +1144,23 @@ export default {
     embedding_group_description: "Default embedding model for vector search.",
     external_system: "External System",
     user_preferences: "User Preferences",
-    "user-preferences-group-description": "User-level preferences for application behavior.",
+    "user-preferences-group-description":
+      "User-level preferences for application behavior.",
     default_embedding_model: "Default Embedding Model",
-    "default-embedding-model-description": "Select the embedding model used for vector search and similarity matching.",
+    "default-embedding-model-description":
+      "Select the embedding model used for vector search and similarity matching.",
     language_preference: "Language",
     "language-preference-description": "UI language preference.",
     ai_website_analysis_business_info: "Business Info",
-    "ai-website-analysis-business-info-description": "Business information used during website AI analysis.",
+    "ai-website-analysis-business-info-description":
+      "Business information used during website AI analysis.",
     "external-system-group-description": "external system group setting",
     mcp_tools: "MCP Tools",
     manage_mcp_tools: "Manage MCP Tools",
     manage_skills: "Manage Skills",
     ai_preferences: "AI Preferences",
-    "ai-preferences-group-description": "Settings that control AI chat behavior, memory, and context.",
+    "ai-preferences-group-description":
+      "Settings that control AI chat behavior, memory, and context.",
     user_ai_auto_dream: "Auto-Dream Consolidation",
     "ai-auto-dream-description":
       "Automatically summarize past conversations in the background to save AI context tokens.",
@@ -1885,8 +1889,7 @@ export default {
     tool_approval_mode_ask: "Ask for approval",
     tool_approval_mode_auto: "Approve for me",
     tool_approval_mode_full: "Full access",
-    tool_approval_mode_ask_desc:
-      "Ask before tools that need permission.",
+    tool_approval_mode_ask_desc: "Ask before tools that need permission.",
     tool_approval_mode_auto_desc:
       "Auto-approve trusted non-shell tools in this chat.",
     tool_approval_mode_full_desc:
@@ -2049,5 +2052,22 @@ export default {
       pick: "Pick folder",
       cancel: "Cancel",
     },
+  },
+  diagnostics: {
+    title: "Diagnostics",
+    storageUsage: "Storage used:",
+    refresh: "Refresh",
+    enableDebug: "Enable debug logging (auto-disables in 24h)",
+    debugExpiresAt: "Debug logging expires at:",
+    allowUpload: "Allow crash report uploads (manual send only)",
+    openFolder: "Open diagnostics folder",
+    exportReport: "Export diagnostic report",
+    sendReport: "Send crash report",
+    clearLocal: "Clear local diagnostics",
+    clearConfirm: "Clear all local diagnostics? This cannot be undone.",
+    selectCrash: "Select a crash to send",
+    exportFailed: "Export failed or cancelled.",
+    sendSuccess: "Report sent. Thank you!",
+    sendFailed: "Send failed:",
   },
 };
