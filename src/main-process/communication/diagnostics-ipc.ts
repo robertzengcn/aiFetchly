@@ -326,7 +326,21 @@ export async function exportLatestReport(crashId: string): Promise<void> {
 export function registerDiagnosticsIpcHandlers(): void {
   ipcMain.handle(DIAGNOSTICS_RENDERER_ERROR, async (event, raw: unknown) => {
     const parsed = rendererErrorPayloadSchema().parse(raw);
-    const wcId = (event as IpcInvokeEvent).sender.id;
+    const sender = (event as IpcInvokeEvent).sender;
+    const wcId = sender.id;
+    // GC: drop this webContents' entry when it's destroyed so the Map doesn't
+    // grow unbounded over long-running sessions with window recreations.
+    if (!(sender as { __diagGcRegistered?: boolean }).__diagGcRegistered) {
+      (sender as { __diagGcRegistered?: boolean }).__diagGcRegistered = true;
+      try {
+        (sender as { once?: (ev: string, cb: () => void) => void }).once?.(
+          "destroyed",
+          () => rendererErrorTimestamps.delete(wcId)
+        );
+      } catch {
+        /* sender missing once() — skip GC, leak is bounded by RATE_LIMIT_PER_MIN */
+      }
+    }
     const now = Date.now();
     // Keep only timestamps from the last 60s for this webContents.
     const ts = (rendererErrorTimestamps.get(wcId) ?? []).filter(
