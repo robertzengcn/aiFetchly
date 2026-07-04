@@ -6,14 +6,14 @@ current_phase: 13
 current_phase_name: Global Context and Built-in Slash Commands
 status: executing
 stopped_at: Milestone v2.0 initialized -- PROJECT/REQUIREMENTS/ROADMAP/STATE written; ready to plan Phase 13
-last_updated: "2026-07-04T22:02:10.428Z"
+last_updated: "2026-07-04T22:14:01.487Z"
 last_activity: 2026-07-04
 last_activity_desc: Phase 13 execution started
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 6
-  completed_plans: 2
+  completed_plans: 3
   percent: 0
 ---
 
@@ -70,6 +70,9 @@ Last activity: 2026-07-04 — Phase 13 execution started
 - [11-01 ipc]: Mirrored Google Maps IPC pattern without cookie/proxy/history code
 - [Phase 13]: [13-02 registry]: CommandRegistry enforces CMD-01 lookup order via SOURCE_RANK map applied in rebuildNameIndex on every mutation; built-ins cannot be shadowed. replaceSource atomically reconciles add/change/delete/rename so stale entries never survive (design §7.3/§10.1).
 - [Phase 13]: [13-02 parser]: SlashCommandParser is a pure function with zero registry dependency; argument-token substitution deferred to phase-15 dispatcher (TRS-06/CMD-06 boundary marked in source).
+- [Phase ?]: [13-03a]: Module-level singleton AIFetchlyContextStore shared between the assembler's field-initialized AIFetchlyContextLoader and the config manager — only way the assembler sees the manager-populated cache without breaking its constructor-less pattern.
+- [Phase ?]: [13-03a]: AGENTS.md injection lands AFTER active-workspace and BEFORE durable memory (CTX-01 ordinal), mirroring the existing custom-directive try/catch + console.error graceful-degradation shape (CTX-03).
+- [Phase ?]: [13-03a]: snapshot.commands cast to SlashCommandDefinition[] at the RuntimeRegistrySync boundary — phase 13 commands always empty; phase 15+ tightens the snapshot type and removes the cast.
 
 ### Pending Todos
 
@@ -95,7 +98,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-04T22:01:12.464Z
+Last session: 2026-07-04T22:13:37.042Z
 Stopped at: Milestone v2.0 initialized -- PROJECT/REQUIREMENTS/ROADMAP/STATE written; ready to plan Phase 13
 Worktree: .claude/worktrees/merry-stirring-scroll (branch: dev)
 
@@ -104,3 +107,4 @@ Worktree: .claude/worktrees/merry-stirring-scroll (branch: dev)
 | Phase | Plan | Duration | Notes |
 |-------|------|----------|-------|
 | Phase 13 P13-02-command-registry-parser | 12m | 2 tasks | 5 files |
+| Phase 13 P13-03a | 7m | 2 tasks | 7 files |

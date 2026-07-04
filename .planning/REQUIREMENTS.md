@@ -20,9 +20,9 @@ Requirements for the v2.0 milestone. Each maps to exactly one roadmap phase (13�
 
 ### Context Injection (CTX)
 
-- [ ] **CTX-01**: Global `~/.aifetchly/AGENTS.md` content injected into the AiChatV2 system message via `AIChatContextAssembler`, after the base system prompt and before durable memory
+- [x] **CTX-01**: Global `~/.aifetchly/AGENTS.md` content injected into the AiChatV2 system message via `AIChatContextAssembler`, after the base system prompt and before durable memory
 - [ ] **CTX-02**: Trusted workspace `.aifetchly/AGENTS.md` injected with a labeled block identifying the workspace path; untrusted workspace instructions are not injected
-- [ ] **CTX-03**: Instruction blocks labeled clearly (e.g. "User global AiFetchly instructions…") without implying priority over the app system prompt; an in-memory cache avoids per-request file reads; missing config / read failures degrade to no injection + warning (never block chat)
+- [x] **CTX-03**: Instruction blocks labeled clearly (e.g. "User global AiFetchly instructions…") without implying priority over the app system prompt; an in-memory cache avoids per-request file reads; missing config / read failures degrade to no injection + warning (never block chat)
 
 ### Slash Commands (CMD)
 
@@ -120,9 +120,9 @@ Each requirement maps to exactly one phase. Updated during roadmap creation.
 | CFG-05 | Phase 13 | Pending |
 | CFG-06 | Phase 13 | Pending |
 | CFG-07 | Phase 13 | Pending |
-| CTX-01 | Phase 13 | Pending |
+| CTX-01 | Phase 13 | Complete |
 | CTX-02 | Phase 14 | Pending |
-| CTX-03 | Phase 13 | Pending |
+| CTX-03 | Phase 13 | Complete |
 | CMD-01 | Phase 13 | Complete |
 | CMD-02 | Phase 13 | Complete |
 | CMD-03 | Phase 13 | Pending |

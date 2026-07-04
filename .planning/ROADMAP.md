@@ -80,7 +80,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 13-03a-context-pipeline-assembler-injection-PLAN.md — Context store + context loader + runtime registry sync + config manager singleton + AGENTS.md injection into AIChatContextAssembler
+- [x] 13-03a-context-pipeline-assembler-injection-PLAN.md — Context store + context loader + runtime registry sync + config manager singleton + AGENTS.md injection into AIChatContextAssembler
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
@@ -188,7 +188,7 @@ Plans:
 | 10. Module and Worker Implementation | v1.2 | 3/3 | Complete | 2026-05-26 |
 | 11. UI Page and Integration | v1.2 | 2/2 | Complete | 2026-05-26 |
 | 12. Translations and Validation | v1.2 | 1/1 | Complete | 2026-05-26 |
-| 13. Global Context and Built-in Slash Commands | v2.0 | 2/6 | In Progress|  |
+| 13. Global Context and Built-in Slash Commands | v2.0 | 3/6 | In Progress|  |
 | 14. Workspace Watcher Worker | v2.0 | 0/? | Not started | — |
 | 15. Prompt Command Files | v2.0 | 0/? | Not started | — |
 | 16. Dynamic Agents | v2.0 | 0/? | Not started | — |
