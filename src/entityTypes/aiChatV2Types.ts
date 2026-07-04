@@ -66,6 +66,10 @@ export interface ChatV2MessageMetadata {
     expectedCount?: number | null;
     updatedAt: number;
   };
+  // Slash-command result rows (Phase 13 — Plan 04). Present only on assistant
+  // messages rendered from a slash-command dispatch's `show_result` variant.
+  slashCommandResult?: boolean;
+  slashCommandName?: string;
 }
 
 /** Renderer request to start a streaming chat turn. */

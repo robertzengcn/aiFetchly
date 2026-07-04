@@ -196,6 +196,7 @@
         :is-streaming="chatIsRunning"
         @send="onSend"
         @stop="onStop"
+        @command-select="onCommandSelect"
       >
         <template #prepend>
           <AiChatV2ModeSelector v-model="mode" :disabled="chatIsRunning" />
@@ -370,7 +371,17 @@ import {
   getOpenAIChatModels,
   getChatV2ToolApprovalMode,
   setChatV2ToolApprovalMode,
+  clearChatV2Conversation,
 } from "@/views/api/aiChatV2";
+import {
+  listSlashCommands,
+  dispatchSlashCommand,
+  onAifetchlyConfigChanged,
+} from "@/views/api/slashCommands";
+import type {
+  SlashCommandView,
+  SlashCommandDispatchResponse,
+} from "@/entityTypes/slashCommandTypes";
 import AiChatV2Messages from "./AiChatV2Messages.vue";
 import AiChatV2Composer from "./AiChatV2Composer.vue";
 import AiChatV2ModeSelector from "./AiChatV2ModeSelector.vue";
@@ -796,6 +807,131 @@ const editCount = computed(
 const overwriteCount = computed(
   () => currentFileOps.value.filter((r) => r.type === "overwrite").length
 );
+
+// ---------------------------------------------------------------------------
+// Slash command cache + dispatch routing (Phase 13 — Plan 04, CMD-04/05)
+// ---------------------------------------------------------------------------
+// Local cache of the renderer-safe command views. Refreshed on mount and on
+// AIFETCHLY_CONFIG_CHANGED events. The composer fetches its own dropdown
+// contents via listSlashCommands (cheap; the manager holds the source of
+// truth); this cache exists so future status badges / tooltips can reflect
+// the current command count without re-fetching on every render.
+const slashCommandCache = ref<readonly SlashCommandView[]>([]);
+// Unsubscribe function for the AIFETCHLY_CONFIG_CHANGED subscription.
+// Null when no subscription is active (before mount / after unmount).
+let slashConfigUnsub: (() => void) | null = null;
+
+async function refreshSlashCommandCount(): Promise<void> {
+  try {
+    const resp = await listSlashCommands({});
+    slashCommandCache.value = [...resp.commands];
+  } catch {
+    // Non-fatal: leave the cache at its previous value. The user can still
+    // type slash commands; the dropdown will fetch fresh on '/'.
+  }
+}
+
+/**
+ * Append a slash-command result (or status/error message) to the active
+ * conversation as an assistant message tagged `slashCommandResult`. Mirrors
+ * how tool results render inline as assistant messages (design §18.2).
+ */
+function appendSlashResultMessage(content: string, commandName: string): void {
+  const nowIso = new Date().toISOString();
+  const resultMsg: ChatV2MessageView = {
+    id: `slash-result-${commandName}-${Date.now()}`,
+    conversationId: activeConversationId.value ?? "",
+    role: "assistant",
+    content,
+    timestamp: nowIso,
+    messageType: MessageType.MESSAGE,
+    metadata: {
+      source: "chat-v2",
+      slashCommandResult: true,
+      slashCommandName: commandName,
+    },
+  };
+  messages.value = [...messages.value, resultMsg];
+}
+
+/**
+ * Handle a command-select event from AiChatV2Composer. Resolves the chosen
+ * command through the main-process dispatcher (CMD-04) and routes the
+ * response by action (design §18.2).
+ *
+ *   - show_result: render the content inline as an assistant message
+ *     (system-result). Special-case /clear: shows the existing confirmation
+ *     dialog (reuses clear_confirm_title/clear_confirm_body i18n keys) and,
+ *     on user confirmation, invokes AI_CHAT_V2_CLEAR_CONVERSATION via the
+ *     existing clearChatV2Conversation wrapper. Phase 13 adds NO new clear
+ *     logic — the dispatcher's show_result is developer guidance; the
+ *     user-facing confirmation flow is the existing clear-confirm dialog.
+ *   - submit_prompt: route through the existing onSend path (which goes via
+ *     AI_CHAT_V2_STREAM — gated downstream by USER_AI_ENABLED; TRS-05
+ *     Strategy A). Unreachable in phase 13 (no prompt commands registered)
+ *     but the code path exists for phase 15+.
+ *   - {status:false, msg}: surface the localized error as an inline message.
+ */
+async function onCommandSelect(command: SlashCommandView): Promise<void> {
+  if (chatIsRunning.value) return; // do not race with an active stream
+  const conversationId =
+    activeConversationId.value ?? ensureWorkspaceConversationId();
+  const rawInput = `/${command.name}`;
+  try {
+    const resp: SlashCommandDispatchResponse = await dispatchSlashCommand({
+      conversationId,
+      rawInput,
+    });
+    if (resp.status === true && resp.action === "show_result") {
+      // /clear special-case: show the existing clear-confirm dialog instead
+      // of the developer-facing show_result content. On confirm, invoke the
+      // existing AI_CHAT_V2_CLEAR_CONVERSATION path (no new clear logic).
+      if (command.name === "clear") {
+        const title = t("aiChatV2.clear_confirm_title") || "Clear conversation?";
+        const body =
+          t("aiChatV2.clear_confirm_body") ||
+          "This removes all messages in this conversation.";
+        const confirmed = window.confirm(`${title}\n\n${body}`);
+        if (!confirmed) return;
+        try {
+          await clearChatV2Conversation(conversationId);
+          // Mirror onNewConversation's local clear (without resetting the
+          // conversation id, since the dispatcher may have just created it).
+          messages.value = [];
+          streamError.value = null;
+          applyPlanState(null);
+          pendingQuestion.value = null;
+          pendingPlanApproval.value = null;
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          streamError.value = errMsg;
+        }
+        return;
+      }
+      // All other built-ins (/help, /status, /reload-config): render the
+      // returned content as an assistant message tagged slashCommandResult.
+      appendSlashResultMessage(resp.content, command.name);
+      return;
+    }
+    if (resp.status === true && resp.action === "submit_prompt") {
+      // Phase 15+ path: submit the expanded prompt through the existing
+      // AI_CHAT_V2_STREAM flow (USER_AI_ENABLED is gated downstream at
+      // ai-chat-v2-ipc.ts handleStream — TRS-05 Strategy A).
+      await onSend(resp.prompt);
+      return;
+    }
+    // status === false: surface the localized failure message inline.
+    appendSlashResultMessage(
+      resp.msg ||
+        t("slashCommands.unknownCommand") ||
+        `Unknown slash command: /${command.name}`,
+      command.name
+    );
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    streamError.value = errMsg;
+  }
+}
 
 const applyPlanState = (state: AIChatPlanStateView | null): void => {
   planState.value = state;
@@ -1774,6 +1910,21 @@ onMounted(() => {
     next.set(convId, [...current, record]);
     fileOps.value = next;
   });
+  // Phase 13 (Plan 04): subscribe to AiFetchly config-changed events so the
+  // local command cache refreshes whenever the main process reloads
+  // ~/.aifetchly (design §16.3, §18.2). The subscriber returns an
+  // unsubscribe function that we invoke on unmount to avoid leaking
+  // listeners across AiChatV2 instance re-mounts.
+  slashConfigUnsub = onAifetchlyConfigChanged(() => {
+    // Refresh the local command count cache so any badge / status indicator
+    // reflects the latest config. Non-fatal on failure — the cache stays
+    // stale until the next event, which is acceptable (the user can also
+    // run /reload-config to force a refresh).
+    void refreshSlashCommandCount();
+  });
+  // Seed the initial cache quietly (no UI depends on it yet, but future
+  // status badges will).
+  void refreshSlashCommandCount();
 });
 
 onBeforeUnmount(() => {
@@ -1782,6 +1933,11 @@ onBeforeUnmount(() => {
   if (searchDebounceTimer) {
     clearTimeout(searchDebounceTimer);
     searchDebounceTimer = null;
+  }
+  // Phase 13 (Plan 04): clean up the config-changed subscription.
+  if (slashConfigUnsub) {
+    slashConfigUnsub();
+    slashConfigUnsub = null;
   }
 });
 </script>
