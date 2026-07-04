@@ -88,7 +88,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 13-04-renderer-suggestions-ui-PLAN.md — Preload whitelists + renderer API + AiChatV2SlashSuggestions dropdown + composer Enter/Tab intercept + config-changed subscription
+- [x] 13-04-renderer-suggestions-ui-PLAN.md — Preload whitelists + renderer API + AiChatV2SlashSuggestions dropdown + composer Enter/Tab intercept + config-changed subscription
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
@@ -188,7 +188,7 @@ Plans:
 | 10. Module and Worker Implementation | v1.2 | 3/3 | Complete | 2026-05-26 |
 | 11. UI Page and Integration | v1.2 | 2/2 | Complete | 2026-05-26 |
 | 12. Translations and Validation | v1.2 | 1/1 | Complete | 2026-05-26 |
-| 13. Global Context and Built-in Slash Commands | v2.0 | 4/6 | In Progress|  |
+| 13. Global Context and Built-in Slash Commands | v2.0 | 5/6 | In Progress|  |
 | 14. Workspace Watcher Worker | v2.0 | 0/? | Not started | — |
 | 15. Prompt Command Files | v2.0 | 0/? | Not started | — |
 | 16. Dynamic Agents | v2.0 | 0/? | Not started | — |
