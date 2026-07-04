@@ -1088,9 +1088,9 @@ export default {
     manuallogin_content:
       "Wir öffnen ein Popup-Fenster. Bitte melden Sie sich manuell bei der Social-Media-Plattform an. Nach der Anmeldung schließen Sie das Popup-Fenster. Das System speichert die Cookies des Kontos automatisch",
     saveCookiesSuccess: "Cookies erfolgreich gespeichert",
-    id: "ID",
-    type: "Typ",
-    user_name: "Benutzername",
+    col_id: "ID",
+    col_type: "Typ",
+    col_username: "Benutzername",
     cookies: "Cookies",
     proxy: "Proxy",
     status: "Status",

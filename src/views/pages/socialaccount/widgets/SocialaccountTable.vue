@@ -169,19 +169,19 @@ const FakeAPI = {
 
 const headers = computed(() => [
     {
-        title: t('socialaccount.id'),
+        title: t('socialaccount.col_id'),
         align: 'start' as const,
         sortable: false,
         key: 'id',
     },
     {
-        title: t('socialaccount.type'),
+        title: t('socialaccount.col_type'),
         align: 'start' as const,
         sortable: false,
         key: 'social_type',
     },
     {
-        title: t('socialaccount.user_name'),
+        title: t('socialaccount.col_username'),
         align: 'start' as const,
         sortable: false,
         key: 'user',

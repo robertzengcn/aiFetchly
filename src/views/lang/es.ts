@@ -1095,9 +1095,9 @@ export default {
     manuallogin_content:
       "Abriremos una ventana emergente, por favor inicie sesión en la plataforma de redes sociales manualmente, después de haber iniciado sesión, cierre la ventana emergente, el sistema guardará automáticamente las cookies de la cuenta",
     saveCookiesSuccess: "Cookies guardadas correctamente",
-    id: "ID",
-    type: "Tipo",
-    user_name: "Nombre de usuario",
+    col_id: "ID",
+    col_type: "Tipo",
+    col_username: "Nombre de usuario",
     cookies: "Cookies",
     proxy: "Proxy",
     status: "Estado",

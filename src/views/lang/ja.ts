@@ -1067,9 +1067,9 @@ export default {
     manuallogin_content:
       "ポップアップウィンドウを開きます。ソーシャルメディアプラットフォームに手動でログインしてください。ログイン後、ポップアップウィンドウを閉じると、システムが自動的にアカウントのCookieを保存します",
     saveCookiesSuccess: "Cookie保存成功",
-    id: "ID",
-    type: "タイプ",
-    user_name: "ユーザー名",
+    col_id: "ID",
+    col_type: "タイプ",
+    col_username: "ユーザー名",
     cookies: "Cookie",
     proxy: "プロキシ",
     status: "状態",

@@ -1081,9 +1081,9 @@ export default {
       "We will open a pop window, please login to the social media platform manually, after you have logged in, please close the pop up window, the system will automatically save account's cookies",
     saveCookiesSuccess: "save cookies success",
     // Form fields
-    id: "ID",
-    type: "Type",
-    user_name: "User Name",
+    col_id: "ID",
+    col_type: "Type",
+    col_username: "User Name",
     cookies: "Cookies",
     proxy: "Proxy",
     status: "Status",

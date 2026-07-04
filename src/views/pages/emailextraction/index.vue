@@ -123,6 +123,10 @@ import { CommonDialogMsg } from "@/entityTypes/commonType"
 import { UserInfoType } from "@/entityTypes/userType"
 import { windowInvoke } from "@/views/utils/apirequest"
 
+const { t } = useI18n({ useScope: 'global' });
+const router = useRouter();
+const route = useRoute();
+
 // Props for edit mode (for backward compatibility)
 const props = defineProps({
   editMode: {
@@ -151,10 +155,6 @@ const currentTaskId = computed(() => {
 const pageTitle = computed(() => {
   return isEditMode.value ? t('emailextraction.edit_task') : t('emailextraction.create_task');
 });
-
-const { t } = useI18n({ inheritLocale: true });
-const router = useRouter();
-const route = useRoute();
 
 const alert = ref(false);
 const alerttext = ref("");

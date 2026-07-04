@@ -1054,9 +1054,9 @@ export default {
       "我们将打开一个弹出窗口，请手动登录到社交媒体平台，登录后请关闭弹出窗口，系统将自动保存账户的cookies",
     saveCookiesSuccess: "保存cookies成功",
     // Form fields
-    id: "ID",
-    type: "类型",
-    user_name: "用户名",
+    col_id: "ID",
+    col_type: "类型",
+    col_username: "用户名",
     cookies: "Cookies",
     proxy: "代理",
     status: "状态",
