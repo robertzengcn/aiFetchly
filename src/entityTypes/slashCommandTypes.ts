@@ -97,3 +97,67 @@ export interface ParsedSlashCommandInput {
   readonly args?: string;
   readonly raw: string;
 }
+
+// --- Dispatch request / response (Plan 03b) ---------------------------------
+
+/**
+ * Renderer->main request to dispatch a single composer submission.
+ *
+ * `rawInput` is the full composer text (e.g. "/status", "/review Acme").
+ * The dispatcher parses it internally via {@link parseSlashCommandInput}
+ * and resolves the name through the CommandRegistry.
+ */
+export interface SlashCommandDispatchRequest {
+  readonly conversationId: string;
+  readonly rawInput: string;
+}
+
+/**
+ * Renderer-safe dispatch response. Discriminated union on `action`
+ * (CMD-04 / CMD-08):
+ *
+ * Variants:
+ *   - `submit_prompt`: the renderer submits the returned prompt via the
+ *      EXISTING AI_CHAT_V2_STREAM channel (which gates USER_AI_ENABLED
+ *      first — verified at ai-chat-v2-ipc.ts handleStream lines 385-393).
+ *      This is TRS-05 Strategy A: no duplicate gate in the dispatcher.
+ *   - `show_result`: built-in / local command result. The renderer renders
+ *      the content directly (no AI call).
+ *   - `{status:false, msg}`: unknown / disabled / invalid / boundary-case
+ *      failure (CMD-08). The renderer surfaces the localized message.
+ *
+ * Phase-13 boundary: phase 13 only ships `local` built-ins, so the
+ * `submit_prompt` branch is unreachable in production until phase 15
+ * registers prompt commands. The variant still exists in the union so
+ * the renderer can be written against the stable contract today.
+ */
+export type SlashCommandDispatchResponse =
+  | {
+      readonly status: true;
+      readonly action: "submit_prompt";
+      readonly prompt: string;
+      readonly commandId: string;
+    }
+  | {
+      readonly status: true;
+      readonly action: "show_result";
+      readonly content: string;
+      readonly commandId: string;
+    }
+  | { readonly status: false; readonly msg: string };
+
+/**
+ * Renderer-facing list response. `commands` is already a renderer-safe
+ * projection ({@link SlashCommandView} — body/metadata stripped per
+ * design §5.5 / §14.2).
+ *
+ * Envelope mirrors the project's `CommonMessage<T>` shape so the renderer's
+ * `windowInvoke` helper unwraps it consistently.
+ */
+export interface SlashCommandListResponse {
+  readonly status: true;
+  readonly commands: readonly SlashCommandView[];
+  /** May be empty in phase 13 (no per-command diagnostics surfaced yet). */
+  readonly diagnostics: readonly unknown[];
+  readonly msg: string;
+}
