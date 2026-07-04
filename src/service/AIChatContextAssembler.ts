@@ -10,6 +10,7 @@ import {
   ai_custom_context_directive,
 } from "@/config/settinggroupInit";
 import { WorkspaceResolver } from "@/service/WorkspaceResolver";
+import { AIFetchlyContextLoader } from "@/service/aifetchlyConfig/AIFetchlyContextLoader";
 import path from "node:path";
 import type { OpenAIChatMessage, OpenAIMessageRole } from "@/api/aiChatApi";
 import { MessageType } from "@/entityTypes/commonType";
@@ -61,6 +62,10 @@ export class AIChatContextAssembler {
   private readonly estimator = new AIChatTokenEstimator();
   private readonly durableMemory = new AIUserMemoryRetrievalService();
   private readonly systemSettings = new SystemSettingModule();
+  // AiFetchly ~/.aifetchly/AGENTS.md cache. Defaults to the module-level
+  // singleton store the config manager populates; reads from cache only,
+  // never the filesystem (CTX-03 / T-13-Cache).
+  private readonly aifetchlyContext = new AIFetchlyContextLoader();
 
   async assemble(
     input: AIChatContextAssembleInput
@@ -132,9 +137,7 @@ export class AIChatContextAssembler {
     // probing the filesystem. Gracefully degrade on lookup failure.
     try {
       const workspaceResolver = new WorkspaceResolver();
-      const resolved = await workspaceResolver.resolve(
-        input.conversationId
-      );
+      const resolved = await workspaceResolver.resolve(input.conversationId);
       if (resolved) {
         const displayName = path.basename(resolved.rootPath);
         messages.push({
@@ -145,6 +148,32 @@ export class AIChatContextAssembler {
     } catch (err) {
       console.error(
         "[ai-chat-context] failed to resolve active workspace:",
+        err
+      );
+    }
+
+    // AiFetchly global AGENTS.md injection (CTX-01). Reads from the in-memory
+    // cache populated by AIFetchlyConfigManager at startup; cache miss returns
+    // an empty list (CTX-03). Placed AFTER the base prompt + custom directive
+    // + active workspace, and BEFORE durable memory + compact + recent history
+    // — so static user-owned instructions sit closer to the system prompt than
+    // to retrieved memories (design §12.1). Read failures MUST never break the
+    // AI chat — degrade to no-injection + console.error (CTX-03, mirrors the
+    // custom-directive try/catch above).
+    try {
+      const blocks = await this.aifetchlyContext.getInstructionBlocks({
+        conversationId: input.conversationId,
+        mode: input.mode,
+      });
+      for (const block of blocks) {
+        messages.push({
+          role: "system",
+          content: AIFetchlyContextLoader.formatInstructionBlock(block),
+        });
+      }
+    } catch (err) {
+      console.error(
+        "[ai-chat-context] aifetchly instructions injection failed:",
         err
       );
     }
