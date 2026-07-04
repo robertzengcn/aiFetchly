@@ -64,7 +64,14 @@ Source: `docs/prd/aifetchly-local-extensibility-prd.md` + `docs/prd/aifetchly-lo
 3. `/reload-config` forces a rescan and reports current counts; `/status` shows global config + diagnostics state.
 4. Renderer never reads `~/.aifetchly` directly (verified by tests); AI-serving dispatch checks `USER_AI_ENABLED`.
 5. Invalid/oversized files produce diagnostics, not app crashes; all new UI text translated to 6 languages.
-**Plans:** TBD
+**Plans:** 5 plans
+Plans:
+- [ ] 13-01-config-loader-stack-PLAN.md — Pure types + constants + hand-rolled frontmatter parser + path safety + async bounded config loader + snapshot diff
+- [ ] 13-02-command-registry-parser-PLAN.md — Slash command types + CommandRegistry with source replacement + SlashCommandParser
+- [ ] 13-03-orchestrator-ipc-context-injection-PLAN.md — Config manager singleton + context store/loader + runtime sync + built-in commands + dispatcher + IPC handlers + AGENTS.md injection into AIChatContextAssembler
+- [ ] 13-04-renderer-suggestions-ui-PLAN.md — Preload whitelists + renderer API + AiChatV2SlashSuggestions dropdown + composer Enter/Tab intercept + config-changed subscription
+- [ ] 13-05-i18n-boundary-tests-PLAN.md — aifetchlyConfig + slashCommands groups in all 6 lang files + TRS-07 renderer boundary test + I18-01 keys-present test
+
 
 ### Phase 14: Workspace Watcher Worker
 **Goal:** Add the workspace config watcher child process with reference-counted lifecycle, workspace `AGENTS.md`/commands scanning, binary trust gating, and live-update renderer events.
@@ -144,7 +151,7 @@ Source: `docs/prd/aifetchly-local-extensibility-prd.md` + `docs/prd/aifetchly-lo
 | 10. Module and Worker Implementation | v1.2 | 3/3 | Complete | 2026-05-26 |
 | 11. UI Page and Integration | v1.2 | 2/2 | Complete | 2026-05-26 |
 | 12. Translations and Validation | v1.2 | 1/1 | Complete | 2026-05-26 |
-| 13. Global Context and Built-in Slash Commands | v2.0 | 0/? | Not started | — |
+| 13. Global Context and Built-in Slash Commands | v2.0 | 0/5 | Not started | — |
 | 14. Workspace Watcher Worker | v2.0 | 0/? | Not started | — |
 | 15. Prompt Command Files | v2.0 | 0/? | Not started | — |
 | 16. Dynamic Agents | v2.0 | 0/? | Not started | — |
