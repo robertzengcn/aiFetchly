@@ -3,6 +3,7 @@ import { AiChatApi, WebsiteAnalysisRequest } from "@/api/aiChatApi";
 import { SearchResultModule } from "@/modules/SearchResultModule";
 import * as path from "path";
 import * as fs from "fs";
+import { UrlGuard } from "@/service/UrlGuard";
 import { v4 as uuidv4 } from "uuid";
 import type { ModuleExecutionContext } from "@/entityTypes/skillTypes";
 import { ToolExecutor } from "@/service/ToolExecutor";
@@ -350,6 +351,15 @@ export class WebsiteAnalysisQueue {
   ): Promise<string | null> {
     if (!this.childProcessPath) {
       throw new Error("Child process path not initialized");
+    }
+
+    // F3 fix (chokepoint) — validate before spawning the worker. This is the
+    // single place all batch/direct-analysis paths funnel through, so gating
+    // here closes the SSRF bypass that existed when only the worker and
+    // getPageContentAsMarkdown validated.
+    const urlCheck = await UrlGuard.validateWithDns(url);
+    if (!urlCheck.safe) {
+      throw new Error(`URL rejected by SSRF guard: ${urlCheck.error}`);
     }
 
     return new Promise((resolve, reject) => {

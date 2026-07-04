@@ -15,7 +15,7 @@ import {
 import * as path from "path";
 import * as fs from "fs";
 import { EmailscFormdata, EmailsControldata } from "@/entityTypes/emailextraction-type";
-import { CommonDialogMsg } from "@/entityTypes/commonType";
+import { CommonDialogMsg, TaskStatus } from "@/entityTypes/commonType";
 import { isValidUrl } from "@/views/utils/function";
 import { EmailextractionController } from "@/controller/emailextractionController";
 import { EmailExtractionTypes } from "@/config/emailextraction";
@@ -200,7 +200,7 @@ export function registerEmailextractionIpcHandlers() {
       // Validate task status before allowing edit
       const task = await emailCon.getEmailSearchTask(input.id);
       if (!task) throw new Error("Task not found");
-      if (task.status !== "pending" && task.status !== "error") {
+      if (task.status !== TaskStatus.Notstart && task.status !== TaskStatus.Error) {
         throw new Error("Cannot edit task with current status");
       }
 

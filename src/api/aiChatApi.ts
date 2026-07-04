@@ -13,6 +13,17 @@ import {
   batchKeywordGenerationResponseSchema,
   chatApiResponseSchema,
 } from "@/schemas/api/aiChat";
+import {
+  AIChatRecoverableError,
+  type AIChatRecoveryReason,
+} from "@/service/AIChatRecoveryTypes";
+import { AIChatRecoveryClassifier } from "@/service/AIChatRecoveryClassifier";
+import {
+  AI_CHAT_RECOVERY_DEFAULTS,
+  AIChatRetryPolicy,
+  type AIChatRecoveryProfile,
+  type AIChatRetryProfile,
+} from "@/service/AIChatRetryPolicy";
 
 /**
  * Chat request interface
@@ -423,12 +434,47 @@ export interface OpenAIStreamToolCallDelta {
   };
 }
 
+/** OpenAI-compatible text content part */
+export type OpenAITextContentPart = {
+  type: "text";
+  text: string;
+};
+
+/** OpenAI-compatible image URL content part */
+export type OpenAIImageUrlContentPart = {
+  type: "image_url";
+  image_url: {
+    url: string;
+    detail?: "auto" | "low" | "high";
+  };
+};
+
+/** OpenAI-compatible message content: string (text-only) or content parts array (multimodal). */
+export type OpenAIMessageContent =
+  | string
+  | Array<OpenAITextContentPart | OpenAIImageUrlContentPart>;
+
 /** OpenAI-compatible chat message */
 export interface OpenAIChatMessage {
   role: OpenAIMessageRole;
-  content: string | null;
+  content: OpenAIMessageContent | null;
   tool_calls?: OpenAIToolCall[];
   tool_call_id?: string;
+}
+
+/** Safely convert OpenAIMessageContent to a display string. */
+export function openAIContentToString(
+  content: OpenAIMessageContent | null | undefined
+): string {
+  if (content == null) return "";
+  if (typeof content === "string") return content;
+  return content
+    .map((part) =>
+      part.type === "text"
+        ? part.text
+        : `[Image: ${part.image_url.url.slice(0, 60)}...]`
+    )
+    .join("\n");
 }
 
 /** OpenAI-compatible tool choice */
@@ -469,6 +515,11 @@ export interface OpenAIModel {
   context_size?: number;
   /** Max output tokens, when reported by the server. */
   max_tokens?: number;
+  /**
+   * Whether the model is free to use (no input/output cost). Reported by the
+   * AI server's `/api/ai/v1/models` endpoint as `is_free`.
+   */
+  is_free?: boolean;
 }
 
 /** OpenAI-compatible models list response */
@@ -641,6 +692,29 @@ export interface StreamRetryInfo {
 }
 
 /**
+ * Information passed to the onRecoveryStatus callback when a classified
+ * failure has been processed by the recovery policy and the API layer is
+ * about to retry or escalate. Mirrors AIChatQueryRecoveryStatusEvent at
+ * the API boundary.
+ */
+export interface StreamRecoveryInfo {
+  /** Layer reporting (Layer 1: api_retry, Layer 2: overload_retry). */
+  layer: "api_retry" | "overload_retry";
+  /** Classified reason for the failure. */
+  reason: AIChatRecoveryReason;
+  /** 1-based retry attempt within this layer. */
+  attempt: number;
+  /** Max retry attempts for this layer's profile. */
+  maxAttempts: number;
+  /** Delay (ms) before the next attempt. */
+  delayMs: number;
+  /** Cumulative consecutive 529 count (overload escalation tracker). */
+  consecutiveOverloadCount?: number;
+  /** Classified error message (redacted of user content). */
+  message: string;
+}
+
+/**
  * Maximum number of retry attempts for a streaming connection failure
  * (so up to maxAttempts + 1 total tries including the initial attempt).
  */
@@ -785,6 +859,9 @@ export class AiChatApi {
    */
   private _redactDebugPayload(data: unknown): unknown {
     if (data === null || typeof data !== "object") {
+      if (typeof data === "string" && data.startsWith("data:image/")) {
+        return `<image data url len=${data.length}>`;
+      }
       return data;
     }
     if (Array.isArray(data)) {
@@ -794,7 +871,9 @@ export class AiChatApi {
     for (const [key, value] of Object.entries(
       data as Record<string, unknown>
     )) {
-      if (
+      if (typeof value === "string" && value.startsWith("data:image/")) {
+        redacted[key] = `<image data url len=${value.length}>`;
+      } else if (
         (key === "screenshot" || key === "attachments") &&
         typeof value === "string" &&
         value.length > 200
@@ -1816,6 +1895,10 @@ export class AiChatApi {
       if (typeof maxTokens === "number" && maxTokens > 0) {
         model.max_tokens = maxTokens;
       }
+      const isFreeRaw = (entry as { is_free?: unknown }).is_free;
+      if (typeof isFreeRaw === "boolean") {
+        model.is_free = isFreeRaw;
+      }
       data.push(model);
     }
     const defaultModel = this.getStringField(response, "default_model");
@@ -1870,13 +1953,16 @@ export class AiChatApi {
    * Streaming chat completion using the OpenAI-compatible API.
    * POST /v1/chat/completions (stream: true)
    *
+   * Recovery behavior: classified failures (network, timeout, 429, 5xx,
+   * 529) are retried by `AIChatRetryPolicy` with exponential backoff and
+   * 25% jitter. The legacy `onRetry` callback keeps emitting for backward
+   * compatibility (the renderer's `retry_connect` badge). New callers can
+   * also pass `onRecoveryStatus` to receive structured Layer 1/Layer 2
+   * recovery events.
+   *
    * @param request - Chat completion request with messages and optional parameters
    * @param onChunk - Callback invoked for each parsed streaming chunk
-   * @param options - Optional abort signal and retry callback. When the
-   *   initial connection to the AI server fails (network error, 5xx, or
-   *   429), the client retries up to `STREAM_RETRY_MAX_ATTEMPTS` times with
-   *   exponential backoff. The `onRetry` callback is invoked before each
-   *   retry so callers can surface the reconnection attempt in the UI.
+   * @param options - Optional abort signal, retry callback, and recovery callback.
    */
   async openAIChatCompletionStream(
     request: OpenAIChatCompletionRequest,
@@ -1884,6 +1970,10 @@ export class AiChatApi {
     options?: {
       signal?: AbortSignal;
       onRetry?: (info: StreamRetryInfo) => void;
+      /** Recovery profile (default: foreground). Background = 1 retry, persistent = 6h. */
+      retryProfile?: AIChatRecoveryProfile;
+      /** Structured recovery status callback (Layer 1/2). */
+      onRecoveryStatus?: (info: StreamRecoveryInfo) => void;
     }
   ): Promise<void> {
     this.ensureAIEnabled();
@@ -1922,15 +2012,27 @@ export class AiChatApi {
       fetchOptions.signal = options.signal;
     }
 
+    const profileName: AIChatRecoveryProfile =
+      options?.retryProfile ?? "foreground";
+    const policy = new AIChatRetryPolicy(AI_CHAT_RECOVERY_DEFAULTS);
+    const classifier = new AIChatRecoveryClassifier();
+    const profile: AIChatRetryProfile = policy.profileOf(profileName);
+
     let response: Response | null = null;
     let lastError: unknown = null;
+    let attempt = 1;
+    let consecutiveOverload = 0;
+    // Turn start for the persistent-profile hard-cap check. Wall-clock
+    // epoch (Date.now()) would always exceed the 6h cap, so we anchor
+    // here and pass elapsed delta into the policy.
+    const turnStartedAt = Date.now();
 
-    for (let attempt = 0; attempt <= STREAM_RETRY_MAX_ATTEMPTS; attempt += 1) {
+    while (response === null) {
       let res: Response;
       try {
         this._debugLogRequest(
           `/api/ai/v1/chat/completions${
-            attempt > 0 ? ` (retry ${attempt})` : ""
+            attempt > 1 ? ` (retry ${attempt - 1})` : ""
           }`,
           data
         );
@@ -1948,44 +2050,101 @@ export class AiChatApi {
             fetchOptions
           );
         }
+        const classified = classifier.classifyThrown(error);
         // Never retry user-initiated aborts.
-        if (error instanceof Error && error.name === "AbortError") {
-          throw error;
+        if (classified.reason === "cancelled") {
+          throw classified.originalError instanceof Error
+            ? classified.originalError
+            : error;
         }
-        // Network errors (server unreachable, DNS failure, etc.) are retryable.
-        lastError = error;
-        if (attempt < STREAM_RETRY_MAX_ATTEMPTS) {
-          const delayMs = this.computeStreamRetryDelay(attempt);
-          options?.onRetry?.({
-            attempt: attempt + 1,
-            maxAttempts: STREAM_RETRY_MAX_ATTEMPTS,
-            delayMs,
-            error: error instanceof Error ? error.message : String(error),
-          });
-          await this.sleepWithAbort(delayMs, options?.signal);
-          continue;
+        lastError = classified;
+        const decision = policy.decide({
+          reason: classified.reason,
+          attempt,
+          profile: profileName,
+          retryAfterMs: classified.retryAfterMs,
+          rateLimitResetMs: classified.rateLimitResetMs,
+          consecutiveOverloadCount: consecutiveOverload,
+          hasFallback: false,
+          turnElapsedMs: Date.now() - turnStartedAt,
+        });
+        if (decision.type !== "retry") {
+          throw classified;
         }
-        throw error;
+        const layer = "api_retry";
+        options?.onRecoveryStatus?.({
+          layer,
+          reason: classified.reason,
+          attempt: decision.attempt,
+          maxAttempts: profile.maxAttempts,
+          delayMs: decision.delayMs,
+          consecutiveOverloadCount: consecutiveOverload,
+          message: classified.message,
+        });
+        options?.onRetry?.({
+          attempt: decision.attempt,
+          maxAttempts: profile.maxAttempts,
+          delayMs: decision.delayMs,
+          error: classified.message,
+        });
+        await this.sleepWithAbort(decision.delayMs, options?.signal);
+        attempt = decision.attempt;
+        continue;
       }
 
-      // Retryable HTTP status codes (server errors, rate limiting).
-      if (this.isRetryableStreamStatus(res.status)) {
-        lastError = new Error(`Server returned ${res.status}`);
-        if (attempt < STREAM_RETRY_MAX_ATTEMPTS) {
-          // Drain the body so the connection can be reused/closed cleanly.
-          await res.text().catch(() => undefined);
-          const delayMs = this.computeStreamRetryDelay(attempt);
-          options?.onRetry?.({
-            attempt: attempt + 1,
-            maxAttempts: STREAM_RETRY_MAX_ATTEMPTS,
-            delayMs,
-            error: `HTTP ${res.status}`,
-          });
-          await this.sleepWithAbort(delayMs, options?.signal);
-          continue;
+      // HTTP-level retryable classification.
+      if (!res.ok || res.status !== 200) {
+        const bodyText = await this.readErrorBody(res);
+        const classified = classifier.classifyHttpFailure({
+          status: res.status,
+          statusText: res.statusText,
+          responseBody: bodyText,
+          headers: res.headers,
+        });
+        // Drain the body so the connection can be reused/closed cleanly.
+        // (readErrorBody already consumed it.)
+
+        // Track consecutive overload even when we ultimately fall back.
+        if (classified.reason === "overload") {
+          consecutiveOverload += 1;
+        } else if (classified.reason !== "rate_limit") {
+          // Only overload/rate_limit are "consecutive" tracked; others reset.
+          consecutiveOverload = 0;
         }
-        const errorText = await res.text().catch(() => "Unknown error");
-        throw new Error(`Server returned ${res.status}: ${errorText}`);
+
+        const decision = policy.decide({
+          reason: classified.reason,
+          attempt,
+          profile: profileName,
+          retryAfterMs: classified.retryAfterMs,
+          rateLimitResetMs: classified.rateLimitResetMs,
+          consecutiveOverloadCount: consecutiveOverload,
+          hasFallback: false,
+        });
+        if (decision.type !== "retry") {
+          // Surface the typed error so the loop/coordinator can fall back.
+          throw classified;
+        }
+        const layer =
+          classified.reason === "overload" ? "overload_retry" : "api_retry";
+        options?.onRecoveryStatus?.({
+          layer,
+          reason: classified.reason,
+          attempt: decision.attempt,
+          maxAttempts: profile.maxAttempts,
+          delayMs: decision.delayMs,
+          consecutiveOverloadCount: consecutiveOverload,
+          message: classified.message,
+        });
+        options?.onRetry?.({
+          attempt: decision.attempt,
+          maxAttempts: profile.maxAttempts,
+          delayMs: decision.delayMs,
+          error: `HTTP ${res.status}`,
+        });
+        await this.sleepWithAbort(decision.delayMs, options?.signal);
+        attempt = decision.attempt;
+        continue;
       }
 
       // Non-retryable response — proceed with normal handling.
@@ -1994,14 +2153,10 @@ export class AiChatApi {
     }
 
     if (!response) {
+      // Unreachable — the while loop only exits via return/throw/break-with-assign.
       throw lastError instanceof Error
         ? lastError
         : new Error("Failed to connect to the AI server after retries");
-    }
-
-    if (!response.ok || response.status !== 200) {
-      const errorText = await response.text().catch(() => "Unknown error");
-      throw new Error(`Server returned ${response.status}: ${errorText}`);
     }
 
     if (!response.body) {
@@ -2009,6 +2164,22 @@ export class AiChatApi {
     }
 
     await this._consumeOpenAIStreamResponse(response, onChunk);
+  }
+
+  /**
+   * Read up to 8KB of an error response body as text. Bounded so a
+   * malicious or buggy server cannot OOM the client with a huge body.
+   */
+  private async readErrorBody(res: Response): Promise<string> {
+    try {
+      const buf = await res.arrayBuffer();
+      const text = new TextDecoder("utf-8", { fatal: false }).decode(
+        buf.slice(0, 8000)
+      );
+      return text;
+    } catch {
+      return "";
+    }
   }
 
   /**
@@ -2148,12 +2319,12 @@ export class AiChatApi {
     const conversationText = request.messages
       .filter((m) => m.role !== "system")
       .map((m) =>
-        `${this.getLegacyRoleLabel(m.role)}: ${m.content ?? ""}`.trim()
+        `${this.getLegacyRoleLabel(m.role)}: ${openAIContentToString(m.content)}`.trim()
       )
       .join("\n\n");
 
     return {
-      message: conversationText || request.messages.at(-1)?.content || "",
+      message: conversationText || openAIContentToString(request.messages.at(-1)?.content),
       model: request.model,
       system_prompt:
         typeof systemPrompt === "string" ? systemPrompt : undefined,
