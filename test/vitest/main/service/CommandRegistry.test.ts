@@ -258,12 +258,8 @@ describe("register / unregister", () => {
   it("register adds a command resolvable by id and name", () => {
     const r = new CommandRegistry();
     r.register(leadCmd);
-    expect(r.getById("user:command:lead-research")?.name).toBe(
-      "lead-research"
-    );
-    expect(r.getByName("lead-research")?.id).toBe(
-      "user:command:lead-research"
-    );
+    expect(r.getById("user:command:lead-research")?.name).toBe("lead-research");
+    expect(r.getByName("lead-research")?.id).toBe("user:command:lead-research");
   });
 
   it("unregister removes a command from both indexes", () => {
@@ -333,16 +329,17 @@ describe("rankSuggestions (CMD-07)", () => {
     name: string,
     extras: Partial<SlashCommandView> = {}
   ): SlashCommandView {
+    // Spread extras LAST so callers can override any base field
+    // (notably `description`, which the substring test relies on).
     return {
       id: `id:${name}`,
       name,
       description: `${name} description`,
-      aliases: extras.aliases ?? [],
+      aliases: [],
       source: "user",
-      sourceLabel: extras.sourceLabel ?? "User",
-      argumentHint: extras.argumentHint,
-      enabled: extras.enabled ?? true,
-      disabledReason: extras.disabledReason,
+      sourceLabel: "User",
+      enabled: true,
+      ...extras,
     };
   }
 
@@ -365,11 +362,13 @@ describe("rankSuggestions (CMD-07)", () => {
   });
 
   it("ranks prefix name higher than prefix alias", () => {
+    // Query "alph" is a PREFIX of "alphabet" (name) and "alphax" (alias),
+    // but NOT an exact match for any name or alias.
     const cmds = [
-      view("alpha", { aliases: ["alphax"] }), // prefix alias only
+      view("zzz", { aliases: ["alphax"] }), // prefix alias only
       view("alphabet"), // prefix name only
     ];
-    const ranked = rankSuggestions("alpha", cmds);
+    const ranked = rankSuggestions("alph", cmds);
     expect(ranked[0].name).toBe("alphabet");
   });
 
