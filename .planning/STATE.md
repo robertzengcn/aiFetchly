@@ -6,14 +6,14 @@ current_phase: 13
 current_phase_name: Global Context and Built-in Slash Commands
 status: executing
 stopped_at: Milestone v2.0 initialized -- PROJECT/REQUIREMENTS/ROADMAP/STATE written; ready to plan Phase 13
-last_updated: "2026-07-04T15:54:04.003Z"
+last_updated: "2026-07-04T22:02:10.428Z"
 last_activity: 2026-07-04
 last_activity_desc: Phase 13 execution started
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 6
-  completed_plans: 0
+  completed_plans: 2
   percent: 0
 ---
 
@@ -46,8 +46,8 @@ Progress: ░░░░░░░░░░ 0%
 ## Current Position
 
 Phase: 13 (Global Context and Built-in Slash Commands) — EXECUTING
-Plan: 1 of 6
-Status: Executing Phase 13
+Plan: 2 of 6
+Status: Ready to execute
 Last activity: 2026-07-04 — Phase 13 execution started
 
 ## Accumulated Context
@@ -68,6 +68,8 @@ Last activity: 2026-07-04 — Phase 13 execution started
 - [v1.2 planning]: No database persistence in v1.2 -- results returned directly
 - [09-01 types]: YandexMapsProgressStatus adds captcha, removes navigating
 - [11-01 ipc]: Mirrored Google Maps IPC pattern without cookie/proxy/history code
+- [Phase 13]: [13-02 registry]: CommandRegistry enforces CMD-01 lookup order via SOURCE_RANK map applied in rebuildNameIndex on every mutation; built-ins cannot be shadowed. replaceSource atomically reconciles add/change/delete/rename so stale entries never survive (design §7.3/§10.1).
+- [Phase 13]: [13-02 parser]: SlashCommandParser is a pure function with zero registry dependency; argument-token substitution deferred to phase-15 dispatcher (TRS-06/CMD-06 boundary marked in source).
 
 ### Pending Todos
 
@@ -93,6 +95,12 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-04
+Last session: 2026-07-04T22:01:12.464Z
 Stopped at: Milestone v2.0 initialized -- PROJECT/REQUIREMENTS/ROADMAP/STATE written; ready to plan Phase 13
 Worktree: .claude/worktrees/merry-stirring-scroll (branch: dev)
+
+## Performance Metrics
+
+| Phase | Plan | Duration | Notes |
+|-------|------|----------|-------|
+| Phase 13 P13-02-command-registry-parser | 12m | 2 tasks | 5 files |

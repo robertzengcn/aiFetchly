@@ -26,13 +26,13 @@ Requirements for the v2.0 milestone. Each maps to exactly one roadmap phase (13�
 
 ### Slash Commands (CMD)
 
-- [ ] **CMD-01**: `CommandRegistry` with scoped IDs (`built-in:command:`, `user:command:`, `workspace:<id>:command:`, `plugin:<name>:command:`), deterministic lookup order (built-in > workspace > user > plugin), and `replaceSource` for full-source reconciliation
-- [ ] **CMD-02**: `SlashCommandParser` detects command-leading input per rules: `/review src` is a command, ` /review` after left-trim is a command, `//review` is not, `/` opens suggestions but is not dispatchable, `/unknown args` parses and dispatch returns not-found
+- [x] **CMD-01**: `CommandRegistry` with scoped IDs (`built-in:command:`, `user:command:`, `workspace:<id>:command:`, `plugin:<name>:command:`), deterministic lookup order (built-in > workspace > user > plugin), and `replaceSource` for full-source reconciliation
+- [x] **CMD-02**: `SlashCommandParser` detects command-leading input per rules: `/review src` is a command, ` /review` after left-trim is a command, `//review` is not, `/` opens suggestions but is not dispatchable, `/unknown args` parses and dispatch returns not-found
 - [ ] **CMD-03**: Built-in commands registered at startup: `/help`, `/clear`, `/status`, `/reload-config` (`/agents`, `/skills`, `/plugins` added in later phases)
 - [ ] **CMD-04**: Dispatch returns typed `SlashCommandDispatchResponse` — prompt command → `submit_prompt`; local command (built-ins) → `show_result`; AI-enable gating occurs before actual AI submission in the stream IPC
 - [ ] **CMD-05**: Renderer slash-suggestions UI shows name/description/source badge (Built-in/User/Workspace/Plugin)/argument hint/disabled-or-trust state, with arrow-key navigation, Enter/Tab to choose, Shift+Enter newline preserved
 - [ ] **CMD-06**: Markdown file commands (`commands/*.md`) loaded from global + trusted-workspace sources; frontmatter validated (name `^[a-z][a-z0-9_-]*$`, description ≤500 chars, ≤10 aliases same regex, `argumentHint` ≤100, `type: prompt`, non-empty body); `$ARGUMENTS` expanded on dispatch; source replacement reconciles add/change/delete/rename
-- [ ] **CMD-07**: Suggestion ranking (exact name → exact alias → prefix name → prefix alias → substring in description); list responses expose metadata only, not full prompt body, except via explicit trust-guarded preview
+- [x] **CMD-07**: Suggestion ranking (exact name → exact alias → prefix name → prefix alias → substring in description); list responses expose metadata only, not full prompt body, except via explicit trust-guarded preview
 - [ ] **CMD-08**: Unknown command dispatch returns a clear "Unknown slash command" message; disabled (untrusted) command returns a trust message; invalid prompt expansion returns a check-diagnostics message
 
 ### Workspace Watcher (WAT)
@@ -123,13 +123,13 @@ Each requirement maps to exactly one phase. Updated during roadmap creation.
 | CTX-01 | Phase 13 | Pending |
 | CTX-02 | Phase 14 | Pending |
 | CTX-03 | Phase 13 | Pending |
-| CMD-01 | Phase 13 | Pending |
-| CMD-02 | Phase 13 | Pending |
+| CMD-01 | Phase 13 | Complete |
+| CMD-02 | Phase 13 | Complete |
 | CMD-03 | Phase 13 | Pending |
 | CMD-04 | Phase 13 | Pending |
 | CMD-05 | Phase 13 | Pending |
 | CMD-06 | Phase 15 | Pending |
-| CMD-07 | Phase 13 | Pending |
+| CMD-07 | Phase 13 | Complete |
 | CMD-08 | Phase 13 | Pending |
 | WAT-01 | Phase 14 | Pending |
 | WAT-02 | Phase 14 | Pending |
@@ -157,6 +157,7 @@ Each requirement maps to exactly one phase. Updated during roadmap creation.
 | I18-01 | Phase 13 | Pending |
 
 **Coverage:**
+
 - v1 requirements: 42 total
 - Mapped to phases: 42
 - Unmapped: 0 ✓
