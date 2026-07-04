@@ -1083,6 +1083,7 @@ export default {
     uploadfilemsg_content:
       "Please export cookies from your browser and upload cookies file manually",
     upload_cookies_button: "Upload cookies (Netscape .txt)",
+    upload_cookies_cancel: "Upload cookies cancelled",
     handleCookiesfileSuccess: "handle cookies file success",
     handleCookiesfileFailure: "handle cookies file failure",
     insertCookiesFailure: "insert cookies failure",
@@ -1096,9 +1097,9 @@ export default {
       "We will open a pop window, please login to the social media platform manually, after you have logged in, please close the pop up window, the system will automatically save account's cookies",
     saveCookiesSuccess: "save cookies success",
     // Form fields
-    id: "ID",
-    type: "Type",
-    user_name: "User Name",
+    col_id: "ID",
+    col_type: "Type",
+    col_username: "User Name",
     cookies: "Cookies",
     proxy: "Proxy",
     status: "Status",

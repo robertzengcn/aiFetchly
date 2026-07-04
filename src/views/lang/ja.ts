@@ -1054,6 +1054,7 @@ export default {
     uploadfilemsg_content:
       "ブラウザからCookieをエクスポートし、Cookieファイルを手動でアップロードしてください",
     upload_cookies_button: "Cookieをアップロード (Netscape .txt)",
+    upload_cookies_cancel: "Cookieのアップロードがキャンセルされました",
     handleCookiesfileSuccess: "Cookieファイル処理成功",
     handleCookiesfileFailure: "Cookieファイル処理失敗",
     insertCookiesFailure: "Cookie挿入失敗",
@@ -1066,9 +1067,9 @@ export default {
     manuallogin_content:
       "ポップアップウィンドウを開きます。ソーシャルメディアプラットフォームに手動でログインしてください。ログイン後、ポップアップウィンドウを閉じると、システムが自動的にアカウントのCookieを保存します",
     saveCookiesSuccess: "Cookie保存成功",
-    id: "ID",
-    type: "タイプ",
-    user_name: "ユーザー名",
+    col_id: "ID",
+    col_type: "タイプ",
+    col_username: "ユーザー名",
     cookies: "Cookie",
     proxy: "プロキシ",
     status: "状態",
