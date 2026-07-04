@@ -3,17 +3,19 @@
     <div class="search_bar mt-4 d-flex jsb">
         <div class="d-flex jsb search_tool">
             <div class="search_wrap mr-4">
-                <v-text-field rounded class="elevation-0" density="compact" variant="solo" label="Search sample"
+                <v-text-field
+rounded class="elevation-0" density="compact" variant="solo" label="Search sample"
                     append-inner-icon="mdi-magnify" single-line hide-details></v-text-field>
             </div>
             
             <v-btn class="btn ml-3" variant="flat" prepend-icon="mdi-plus" color="#5865f2" @click="createFilter()">
-                {{CapitalizeFirstLetter(t('emailfilter.create_filter'))}}
+                {{ CapitalizeFirstLetter(t('emailfilter.create_filter')) }}
              </v-btn> 
         </div>
    
     </div>
-    <v-data-table-server v-model="selected" :items-per-page="itemsPerPage" :search="search" :headers="computedHeaders"
+    <v-data-table-server
+v-model="selected" :items-per-page="itemsPerPage" :search="search" :headers="computedHeaders"
         :items-length="totalItems" :items="serverItems" :loading="loading"  item-value="id" @update:options="loadItems" 
         class="mt-5" :show-select="isSelectedtable"  return-object>
         <template v-slot:[`item.actions`]="{ item }" v-if="isSelectedtable!=true">
@@ -126,7 +128,7 @@ function loadItems({ page, itemsPerPage, sortBy }) {
     const fetchitem: Fetchparam = {
         page: page,
         itemsPerPage: itemsPerPage,
-        sortBy: sortBy,
+        sortBy: sortBy?.[0],
         search: search.value
     }
     FakeAPI.fetch(fetchitem).then(
