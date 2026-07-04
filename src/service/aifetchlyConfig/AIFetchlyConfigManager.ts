@@ -1,0 +1,240 @@
+/**
+ * AIFetchlyConfigManager — singleton orchestrator for the AiFetchly local
+ * extensibility config stack.
+ *
+ * Owns the lifecycle of the global ~/.aifetchly scan: at startup it triggers
+ * {@link AIFetchlyConfigLoader.scanGlobalRoot} (Plan 01), feeds the snapshot
+ * through {@link AIFetchlyRuntimeRegistrySync}, and exposes status / reload /
+ * instruction-block accessors consumed by the IPC layer (Plan 03b) and the
+ * AIChatContextAssembler (Plan 13-03a Task 2).
+ *
+ * Phase-13 boundary:
+ *   - Only the global source ("user") is scanned. The workspace watcher is
+ *     phase 14, so {@link getStatus}.watcherState is hardcoded "not-started"
+ *     (DX-02 placeholder).
+ *   - The startup scan is fire-and-forget safe: initialize() never throws
+ *     synchronously and any async error is caught + logged (the caller in
+ *     background.ts wires the actual .catch in Plan 03b — Pitfall 6).
+ *
+ * Design references: §8.1 (orchestrator responsibilities), §19.1 (startup
+ * sequence), §12.3 (cache miss / read failure never blocks chat).
+ */
+
+import type {
+  AIFetchlyConfigDiagnostic,
+  AIFetchlyConfigSnapshot,
+} from "@/entityTypes/aifetchlyConfigTypes";
+import { AIFetchlyConfigLoader } from "./AIFetchlyConfigLoader";
+import {
+  AIFetchlyContextStore,
+  getGlobalAIFetchlyContextStore,
+} from "./AIFetchlyContextStore";
+import {
+  AIFetchlyContextLoader,
+  type AIFetchlyContextInput,
+} from "./AIFetchlyContextLoader";
+import { AIFetchlyRuntimeRegistrySync } from "./AIFetchlyRuntimeRegistrySync";
+import { CommandRegistry } from "@/service/slashCommands/CommandRegistry";
+
+/** Result of {@link AIFetchlyConfigManager.reload}. */
+export interface AIFetchlyConfigReloadSummary {
+  readonly commandCount: number;
+  readonly diagnosticCount: number;
+  readonly lastReloadAt: number;
+  readonly instructionsChanged: boolean;
+}
+
+/** Shape returned by {@link AIFetchlyConfigManager.getStatus}. */
+export interface AIFetchlyConfigStatus {
+  readonly commandCount: number;
+  readonly agentCount: number;
+  readonly hookCount: number;
+  readonly skillCount: number;
+  readonly diagnosticCount: number;
+  readonly lastReloadAt: number;
+  /** DX-02 phase-14 placeholder — the watcher worker lands in phase 14. */
+  readonly watcherState: "not-started";
+  /** Active source for /status display. */
+  readonly source: "user";
+}
+
+/** Constructor options (all optional — defaults wire the real singletons). */
+export interface AIFetchlyConfigManagerOptions {
+  /** Override the ~/.aifetchly root for tests. */
+  readonly rootPath?: string;
+  /** Override the loader (tests inject a real loader pointed at tmpdir). */
+  readonly loader?: AIFetchlyConfigLoader;
+  readonly store?: AIFetchlyContextStore;
+  readonly registry?: CommandRegistry;
+  readonly sync?: AIFetchlyRuntimeRegistrySync;
+}
+
+/**
+ * Singleton orchestrator. Use {@link getAIFetchlyConfigManager} for production
+ * access; construct directly with options for tests.
+ */
+export class AIFetchlyConfigManager {
+  private readonly loader: AIFetchlyConfigLoader;
+  private readonly store: AIFetchlyContextStore;
+  private readonly registry: CommandRegistry;
+  private readonly sync: AIFetchlyRuntimeRegistrySync;
+  private readonly contextLoader: AIFetchlyContextLoader;
+  private readonly listeners = new Set<() => void>();
+
+  private initialized = false;
+  private lastSnapshot: AIFetchlyConfigSnapshot | null = null;
+  private lastReloadAt = 0;
+  private lastDiagnosticCount = 0;
+
+  constructor(options: AIFetchlyConfigManagerOptions = {}) {
+    this.loader =
+      options.loader ??
+      new AIFetchlyConfigLoader(options.rootPath);
+    this.store = options.store ?? getGlobalAIFetchlyContextStore();
+    this.registry = options.registry ?? new CommandRegistry();
+    this.sync =
+      options.sync ??
+      new AIFetchlyRuntimeRegistrySync(this.registry, this.store);
+    // The context loader reads from the SAME store the sync writes to.
+    this.contextLoader = new AIFetchlyContextLoader(this.store);
+  }
+
+  /**
+   * Trigger the initial scan + apply. Idempotent: a second call when already
+   * initialized returns immediately. Fire-and-forget safe — never throws
+   * synchronously; async errors are caught + logged (Pitfall 6).
+   */
+  async initialize(): Promise<void> {
+    if (this.initialized) return;
+    await this.scanAndApply();
+    this.initialized = true;
+  }
+
+  /**
+   * Force a re-scan and re-apply. Returns a summary of the new state and
+   * fires registered onConfigChanged listeners. Used by /reload-config.
+   */
+  async reload(): Promise<AIFetchlyConfigReloadSummary> {
+    const prev = this.lastSnapshot;
+    await this.scanAndApply();
+    const next = this.lastSnapshot!;
+    const instructionsChanged =
+      prev === null ? next.instructions.length > 0 : snapInstructionsDiffer(prev, next);
+    this.fireConfigChanged();
+    return {
+      commandCount: this.registry.list().length,
+      diagnosticCount: this.lastDiagnosticCount,
+      lastReloadAt: this.lastReloadAt,
+      instructionsChanged,
+    };
+  }
+
+  /**
+   * Synchronous status snapshot for /status display. watcherState is the
+   * DX-02 phase-14 placeholder ("not-started").
+   */
+  getStatus(): AIFetchlyConfigStatus {
+    return {
+      commandCount: this.registry.list().length,
+      agentCount: 0, // Phase 16 — no agents discovered yet.
+      hookCount: 0, // Phase 17 — no hooks discovered yet.
+      skillCount: 0, // Phase 18 — no skills discovered yet.
+      diagnosticCount: this.lastDiagnosticCount,
+      lastReloadAt: this.lastReloadAt,
+      watcherState: "not-started",
+      source: "user",
+    };
+  }
+
+  /**
+   * Delegate to the context loader so IPC consumers (e.g. /status rich
+   * preview) can read the cached blocks without depending on the loader
+   * class directly. The assembler uses {@link AIFetchlyContextLoader}
+   * directly (Plan 13-03a Task 2).
+   */
+  async getInstructionBlocks(
+    input: AIFetchlyContextInput
+  ): Promise<ReturnType<AIFetchlyContextLoader["getInstructionBlocks"]>> {
+    return this.contextLoader.getInstructionBlocks(input);
+  }
+
+  /**
+   * Register a listener fired after a successful reload. Returns an
+   * unsubscribe function. Plan 03b wires the actual BrowserWindow.send from
+   * here; phase 13 only exposes the registration surface.
+   */
+  onConfigChanged(callback: () => void): () => void {
+    this.listeners.add(callback);
+    return () => {
+      this.listeners.delete(callback);
+    };
+  }
+
+  /** Expose the CommandRegistry for Plan 03b's built-in registration. */
+  getCommandRegistry(): CommandRegistry {
+    return this.registry;
+  }
+
+  /** Expose the ContextStore (test-only convenience). */
+  getContextStore(): AIFetchlyContextStore {
+    return this.store;
+  }
+
+  private async scanAndApply(): Promise<void> {
+    const snapshot = await this.loader.scanGlobalRoot();
+    const result = this.sync.applySnapshot(snapshot);
+    this.lastSnapshot = snapshot;
+    this.lastDiagnosticAt = Date.now();
+    this.lastReloadAt = this.lastDiagnosticAt;
+    this.lastDiagnosticCount = result.diagnosticCount;
+  }
+
+  private lastDiagnosticAt = 0;
+
+  private fireConfigChanged(): void {
+    for (const listener of this.listeners) {
+      try {
+        listener();
+      } catch (err) {
+        console.error("[aifetchly-config] onConfigChanged listener threw:", err);
+      }
+    }
+  }
+}
+
+/**
+ * Module-level singleton accessor. The first call constructs the manager
+ * bound to the real ~/.aifetchly root; subsequent calls return the same
+ * instance.
+ */
+let singleton: AIFetchlyConfigManager | null = null;
+
+export function getAIFetchlyConfigManager(): AIFetchlyConfigManager {
+  if (!singleton) {
+    singleton = new AIFetchlyConfigManager();
+  }
+  return singleton;
+}
+
+/**
+ * Pure helper: detect whether the instruction set changed between snapshots.
+ * Used by reload() to populate the summary's instructionsChanged flag.
+ */
+function snapInstructionsDiffer(
+  prev: AIFetchlyConfigSnapshot,
+  next: AIFetchlyConfigSnapshot
+): boolean {
+  if (prev.instructions.length !== next.instructions.length) return true;
+  const prevHashes = new Map<string, string>();
+  for (const b of prev.instructions) prevHashes.set(b.id, b.contentHash);
+  for (const n of next.instructions) {
+    const h = prevHashes.get(n.id);
+    if (h === undefined) return true;
+    if (h !== n.contentHash) return true;
+  }
+  return false;
+}
+
+// Diagnostic type re-export for callers that want to typecheck diagnostics
+// surfaced via getStatus (currently surfaced as a count only).
+export type { AIFetchlyConfigDiagnostic };
