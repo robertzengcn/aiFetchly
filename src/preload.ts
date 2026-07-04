@@ -321,6 +321,12 @@ import {
   AI_WORKSPACE_APPROVE,
   AI_WORKSPACE_REVOKE,
   AI_WORKSPACE_LIST,
+  // Slash Command + AiFetchly Config Channels (Phase 13 — Plan 04)
+  SLASH_COMMAND_LIST,
+  SLASH_COMMAND_DISPATCH,
+  AIFETCHLY_CONFIG_RELOAD,
+  AIFETCHLY_CONFIG_STATUS,
+  AIFETCHLY_CONFIG_CHANGED,
   // Dialog Channels
   DIALOG_PICK_FOLDER,
 } from "@/config/channellist";
@@ -441,6 +447,8 @@ contextBridge.exposeInMainWorld("api", {
       // Yandex Maps Scraper Channels
       YANDEX_MAPS_SEARCH_RESULT,
       YANDEX_MAPS_SEARCH_PROGRESS,
+      // AiFetchly Config Changed Event (Phase 13 — main->renderer event only)
+      AIFETCHLY_CONFIG_CHANGED,
     ];
     const isSocialTaskLogChannel = /^socialtask:log:/.test(channel);
 
@@ -505,6 +513,8 @@ contextBridge.exposeInMainWorld("api", {
       // Yandex Maps Scraper Channels
       YANDEX_MAPS_SEARCH_RESULT,
       YANDEX_MAPS_SEARCH_PROGRESS,
+      // AiFetchly Config Changed Event (Phase 13 — must mirror receive whitelist)
+      AIFETCHLY_CONFIG_CHANGED,
     ];
     const isSocialTaskLogChannel = /^socialtask:log:/.test(channel);
 
@@ -532,6 +542,8 @@ contextBridge.exposeInMainWorld("api", {
       // Yandex Maps Scraper Channels
       YANDEX_MAPS_SEARCH_RESULT,
       YANDEX_MAPS_SEARCH_PROGRESS,
+      // AiFetchly Config Changed Event (Phase 13 — let renderer clean up on unmount)
+      AIFETCHLY_CONFIG_CHANGED,
     ];
     if (validChannels.includes(channel)) {
       ipcRenderer.removeAllListeners(channel);
@@ -820,6 +832,11 @@ contextBridge.exposeInMainWorld("api", {
       AI_WORKSPACE_APPROVE,
       AI_WORKSPACE_REVOKE,
       AI_WORKSPACE_LIST,
+      // Slash Command + AiFetchly Config Channels (Phase 13 — Plan 04)
+      SLASH_COMMAND_LIST,
+      SLASH_COMMAND_DISPATCH,
+      AIFETCHLY_CONFIG_RELOAD,
+      AIFETCHLY_CONFIG_STATUS,
       // Dialog Channels
       DIALOG_PICK_FOLDER,
     ];
