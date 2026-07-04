@@ -199,6 +199,11 @@ export const SHELL_CRITICAL_PATHS: readonly string[] = [
   path.join(HOME, ".config"),
   path.join(HOME, ".aws"),
   path.join(HOME, ".docker"),
+  path.join(HOME, ".kube"),
+  path.join(HOME, ".npmrc"),
+  path.join(HOME, ".netrc"),
+  path.join(HOME, ".pypirc"),
+  path.join(HOME, ".gitconfig"),
   path.join(HOME, ".bashrc"),
   path.join(HOME, ".bash_profile"),
   path.join(HOME, ".zshrc"),
@@ -214,6 +219,9 @@ export const SHELL_CRITICAL_PATHS: readonly string[] = [
   "/dev",
   "/root",
   "/tmp", // writable by everyone — often used in exploits
+  // macOS-only keychain — included unconditionally; on Linux/macOS the path
+  // simply won't exist, which is harmless for the FilePathGuard comparison.
+  path.join(HOME, "Library", "Keychains"),
 ];
 
 // ---------------------------------------------------------------------------

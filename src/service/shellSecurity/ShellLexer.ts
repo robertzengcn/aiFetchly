@@ -66,6 +66,46 @@ export interface LexResult {
 }
 
 // ---------------------------------------------------------------------------
+// Placeholder text for shell expansions
+// ---------------------------------------------------------------------------
+
+/**
+ * When the lexer encounters a non-literal expansion ($VAR, ${...}, $(...),
+ * backticks, arithmetic, ANSI-C quoting), it replaces the expanded source
+ * with one of these placeholder strings in the token's `text` field. This
+ * lets downstream consumers (pathValidation, semanticHazards) detect
+ * non-literal args via simple string checks instead of re-implementing
+ * expansion detection.
+ *
+ * IMPORTANT: keep this list in sync with `containsExpansion()` below.
+ */
+export const PLACEHOLDERS = {
+  /** Bare parameter expansion: $VAR, $1, $$, etc. */
+  DOLLAR_VAR: "$VAR",
+  /** Brace parameter expansion: ${VAR:-default}, ${VAR//x/y}, etc. */
+  PARAM_EXPANSION: "${...}",
+  /** Command substitution: $(cmd) */
+  COMMAND_SUBSTITUTION: "$(...)",
+  /** Backtick command substitution: `cmd` */
+  BACKTICK_SUBSTITUTION: "`...`",
+  /** Arithmetic expansion: $((expr)) */
+  ARITHMETIC_EXPANSION: "$((...))",
+  /** ANSI-C quoting: $'\n' (escapes interpreted by bash) */
+  ANSI_C_QUOTING: "$'...'",
+  /** Locale translation: $"..." (locale-dependent) */
+  LOCALE_QUOTING: '$"..."',
+} as const;
+
+/**
+ * Test whether a token's text contains any expansion placeholder. Used by
+ * pathValidation as the single source of truth for "is this path arg
+ * non-literal?" — replaces the old hand-rolled regex.
+ */
+export function containsExpansion(text: string): boolean {
+  return Object.values(PLACEHOLDERS).some((p) => text.includes(p));
+}
+
+// ---------------------------------------------------------------------------
 // Lexer
 // ---------------------------------------------------------------------------
 
@@ -153,14 +193,36 @@ export function lex(command: string): LexResult {
         i += 2;
         continue;
       }
+      if (src.slice(i, i + 3) === "<<<") {
+        // Here-string: `<<< word` feeds word as stdin. Treat as unanalyzable
+        // (same family as heredoc — content is bash-interpreted).
+        hasHeredoc = true;
+        unanalyzable.push("here-string (<<<)");
+        i += 3;
+        continue;
+      }
       if (two === "<<") {
         // Heredoc — the lexer does not consume the body; we just flag it.
         // Heredocs can hide arbitrary commands so we treat them as unanalyzable.
         hasHeredoc = true;
         unanalyzable.push("heredoc (<<)");
-        // Advance past the delimiter token (e.g., EOF or 'EOF')
+        // Advance past the delimiter token. Bash allows quoted delimiters
+        // (`<<'EOF'` or `<<"EOF"`) which suppress body expansion — making
+        // the body even harder to analyze statically. Strip surrounding
+        // quotes and the leading `-` (for `<<-` tab-stripped form), then
+        // the delimiter identifier.
         i += 2;
+        // Optional dash for `<<-`
+        if (src[i] === "-") i++;
+        // Skip opening quote if present
+        let closeQuote = "";
+        if (src[i] === "'" || src[i] === '"') {
+          closeQuote = src[i];
+          i++;
+        }
         while (i < len && /[A-Za-z0-9_-]/.test(src[i])) i++;
+        // Skip closing quote
+        if (closeQuote && src[i] === closeQuote) i++;
         continue;
       }
       if (ch === ">") {
@@ -169,6 +231,23 @@ export function lex(command: string): LexResult {
           unanalyzable.push("process substitution >( ... )");
           // Skip past the balanced parens
           i = skipBalancedParens(src, i + 1);
+          continue;
+        }
+        // >& form: `>&<digit>` (e.g. `>&2`) or `>&-` (close FD)
+        if (src[i + 1] === "&") {
+          const tgt = src[i + 2];
+          // Consume `>&N` or `>&-` as a single FD-redirect token so the `&`
+          // is not later mis-tokenized as background.
+          const consumed = tgt && /[0-9-]/.test(tgt) ? 3 : 2;
+          tokens.push({
+            kind: "op_redirect_fd",
+            text: src.slice(i, i + consumed),
+            quoted: false,
+            expanded: false,
+            literal: true,
+            start: i,
+          });
+          i += consumed;
           continue;
         }
         tokens.push({
@@ -180,14 +259,27 @@ export function lex(command: string): LexResult {
           start: i,
         });
         i++;
-        // FD prefix like 2> already captured as a separate token if leading;
-        // a trailing > with no space after `2` is handled below in word lex.
         continue;
       }
       if (ch === "<") {
         if (src[i + 1] === "(") {
           unanalyzable.push("process substitution <( ... )");
           i = skipBalancedParens(src, i + 1);
+          continue;
+        }
+        // <& form: `<&<digit>` (e.g. `<&0`) or `<&-` (close FD)
+        if (src[i + 1] === "&") {
+          const tgt = src[i + 2];
+          const consumed = tgt && /[0-9-]/.test(tgt) ? 3 : 2;
+          tokens.push({
+            kind: "op_redirect_fd",
+            text: src.slice(i, i + consumed),
+            quoted: false,
+            expanded: false,
+            literal: true,
+            start: i,
+          });
+          i += consumed;
           continue;
         }
         tokens.push({
@@ -263,14 +355,31 @@ export function lex(command: string): LexResult {
       }
     }
 
-    // FD-prefixed redirect like `2>` or `2>>` at the start of a token
+    // FD-prefixed redirect: `2>`, `2>>`, `2>&1`, `2>&-`, `2>&N`
     if (/[0-9]/.test(ch) && (src[i + 1] === ">" || src[i + 1] === "<")) {
       const fdLen = countLeadingDigits(src, i);
       const opStart = i + fdLen;
       const opChar = src[opStart];
       const nextChar = src[opStart + 1];
-      const isDouble = nextChar === opChar;
-      const opText = src.slice(i, opStart + (isDouble ? 2 : 1));
+      const thirdChar = src[opStart + 2];
+
+      let opText: string;
+      if (nextChar === "&") {
+        // `2>&N` or `2>&-` — consume FD + op + `&` + target digit/dash as
+        // a single token. If no target char follows, just consume `2>&`.
+        if (thirdChar && /[0-9-]/.test(thirdChar)) {
+          opText = src.slice(i, opStart + 3);
+        } else {
+          opText = src.slice(i, opStart + 2);
+        }
+      } else if (nextChar === opChar) {
+        // `2>>` or `2<<`
+        opText = src.slice(i, opStart + 2);
+      } else {
+        // `2>` or `2<`
+        opText = src.slice(i, opStart + 1);
+      }
+
       tokens.push({
         kind: "op_redirect_fd",
         text: opText,
@@ -280,11 +389,6 @@ export function lex(command: string): LexResult {
         start: i,
       });
       i += opText.length;
-      // Note: we don't treat `2>` itself as unanalyzable, but the target word
-      // will be validated downstream by the path layer.
-      // If the FD points into an expansion like `2>$1`, the target word lex
-      // will mark it non-literal and the path layer rejects.
-      void opChar;
       continue;
     }
 
@@ -366,7 +470,7 @@ function lexWord(
               "command substitution $(...) inside double quotes"
             );
             i = skipBalancedParens(src, i + 1);
-            text += "$(...)";
+            text += PLACEHOLDERS.COMMAND_SUBSTITUTION;
             continue;
           }
           text += dc;
@@ -383,7 +487,7 @@ function lexWord(
           i++;
           while (i < src.length && src[i] !== "`") i++;
           if (i < src.length) i++;
-          text += "`...`";
+          text += PLACEHOLDERS.BACKTICK_SUBSTITUTION;
           continue;
         }
         text += dc;
@@ -406,18 +510,53 @@ function lexWord(
       expanded = true;
       literal = false;
       const next = src[i + 1];
+      // ANSI-C quoting $'...' — bash interprets backslash escapes inside,
+      // so the resulting bytes are NOT statically predictable. Mark
+      // unanalyzable and skip the whole region.
+      if (next === "'") {
+        unanalyzable.push(
+          "ANSI-C quoting $'...' (escapes interpreted by bash)"
+        );
+        i += 2; // skip $'
+        while (i < src.length && src[i] !== "'") {
+          if (src[i] === "\\" && i + 1 < src.length) {
+            i += 2;
+            continue;
+          }
+          i++;
+        }
+        if (i < src.length) i++; // skip closing '
+        text += PLACEHOLDERS.ANSI_C_QUOTING;
+        continue;
+      }
+      // Locale translation $"..." — output is locale-dependent, mark
+      // unanalyzable.
+      if (next === '"') {
+        unanalyzable.push('locale translation $"..." (locale-dependent)');
+        i += 2; // skip $"
+        while (i < src.length && src[i] !== '"') {
+          if (src[i] === "\\" && i + 1 < src.length) {
+            i += 2;
+            continue;
+          }
+          i++;
+        }
+        if (i < src.length) i++; // skip closing "
+        text += PLACEHOLDERS.LOCALE_QUOTING;
+        continue;
+      }
       if (next === "(") {
         if (src[i + 2] === "(") {
           unanalyzable.push("arithmetic expansion $((...))");
           i = skipBalancedParens(src, i + 2);
           // skipBalancedParens consumed one paren; the second ")" remains
           if (src[i] === ")") i++;
-          text += "$((...))";
+          text += PLACEHOLDERS.ARITHMETIC_EXPANSION;
           continue;
         }
         unanalyzable.push("command substitution $(...)");
         i = skipBalancedParens(src, i + 1);
-        text += "$(...)";
+        text += PLACEHOLDERS.COMMAND_SUBSTITUTION;
         continue;
       }
       if (next === "{") {
@@ -425,7 +564,7 @@ function lexWord(
         i += 2;
         while (i < src.length && src[i] !== "}") i++;
         if (i < src.length) i++;
-        text += "${...}";
+        text += PLACEHOLDERS.PARAM_EXPANSION;
         continue;
       }
       // Bare $VAR — non-literal but analyzable
@@ -433,7 +572,7 @@ function lexWord(
       while (i < src.length && /[A-Za-z0-9_]/.test(src[i])) {
         i++;
       }
-      text += "$VAR";
+      text += PLACEHOLDERS.DOLLAR_VAR;
       continue;
     }
 
@@ -445,7 +584,7 @@ function lexWord(
       i++;
       while (i < src.length && src[i] !== "`") i++;
       if (i < src.length) i++;
-      text += "`...`";
+      text += PLACEHOLDERS.BACKTICK_SUBSTITUTION;
       continue;
     }
 

@@ -24,7 +24,6 @@ import {
   SHELL_MIN_TIMEOUT_MS,
   SHELL_STDOUT_MAX_CHARS,
   SHELL_STDERR_MAX_CHARS,
-  SHELL_DENYLIST_PATTERNS,
   SHELL_ENV_ALLOWLIST,
   SHELL_AUTO_BACKGROUND_DEFAULT,
 } from "@/config/shellToolConfig";
@@ -69,9 +68,10 @@ export async function executeShellCommand(
     );
   }
 
-  // 3. Layered permission check (parse → hazards → split → paths → rules)
-  //    This subsumes most of the legacy denylist; the denylist runs after as
-  //    a defense-in-depth backstop.
+  // 3. Layered permission check (parse → hazards → split → paths → rules).
+  //    This subsumes the legacy regex denylist — the same SHELL_DENYLIST_PATTERNS
+  //    are now applied inside checkShellPermission via tieredRegexRules, so
+  //    running them again here would be pure duplication.
   const guard = new FilePathGuard(getDefaultWorkspaceRoots(), []);
   const verdict = checkShellPermission(request.command, guard);
   if (verdict.tier !== "allow") {
@@ -84,19 +84,6 @@ export async function executeShellCommand(
       ),
       permission_verdict: verdict.tier,
       permission_code: verdict.code,
-    };
-  }
-
-  // 3b. Legacy denylist — backstop, kept for defense in depth
-  const denyResult = checkDenylist(request.command);
-  if (denyResult.blocked) {
-    return {
-      ...makeErrorResult(
-        `Command blocked by safety policy: ${denyResult.reason}`,
-        startTime
-      ),
-      permission_verdict: "deny",
-      permission_code: "LEGACY_DENYLIST",
     };
   }
 
@@ -133,24 +120,6 @@ export async function executeShellCommand(
     permission_verdict: "allow" as const,
     permission_code: "OK",
   };
-}
-
-// ---------------------------------------------------------------------------
-// Denylist check
-// ---------------------------------------------------------------------------
-
-interface DenylistResult {
-  readonly blocked: boolean;
-  readonly reason?: string;
-}
-
-function checkDenylist(command: string): DenylistResult {
-  for (const entry of SHELL_DENYLIST_PATTERNS) {
-    if (entry.pattern.test(command)) {
-      return { blocked: true, reason: entry.description };
-    }
-  }
-  return { blocked: false };
 }
 
 // ---------------------------------------------------------------------------

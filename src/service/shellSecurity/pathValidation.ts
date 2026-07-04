@@ -18,6 +18,7 @@ import type { FilePathGuard } from "@/service/FilePathGuard";
 import type { CommandSegment, Redirection } from "./compoundSplitter";
 import { deny, ask, type PermissionVerdict } from "./verdict";
 import { SHELL_CRITICAL_PATHS } from "@/config/shellToolConfig";
+import { containsExpansion } from "./ShellLexer";
 
 // ---------------------------------------------------------------------------
 // Command classification
@@ -27,60 +28,99 @@ export type PathOpKind = "read" | "create" | "write" | "none";
 
 interface CommandProfile {
   readonly kind: PathOpKind;
-  /** Indexes of argv positions that are path-like (skip flags). */
-  readonly pathArgIndexes: "all" | "tail";
   /** Minimum index where path args start (usually 1). */
   readonly pathStart: number;
 }
 
 const PROFILES: Record<string, CommandProfile> = {
   // Reads
-  cat: { kind: "read", pathArgIndexes: "all", pathStart: 1 },
-  less: { kind: "read", pathArgIndexes: "all", pathStart: 1 },
-  more: { kind: "read", pathArgIndexes: "all", pathStart: 1 },
-  head: { kind: "read", pathArgIndexes: "all", pathStart: 1 },
-  tail: { kind: "read", pathArgIndexes: "all", pathStart: 1 },
-  grep: { kind: "read", pathArgIndexes: "tail", pathStart: 2 },
-  rg: { kind: "read", pathArgIndexes: "tail", pathStart: 2 },
-  ack: { kind: "read", pathArgIndexes: "tail", pathStart: 2 },
-  wc: { kind: "read", pathArgIndexes: "all", pathStart: 1 },
-  stat: { kind: "read", pathArgIndexes: "all", pathStart: 1 },
-  ls: { kind: "read", pathArgIndexes: "all", pathStart: 1 },
-  find: { kind: "read", pathArgIndexes: "all", pathStart: 1 },
-  du: { kind: "read", pathArgIndexes: "all", pathStart: 1 },
-  df: { kind: "read", pathArgIndexes: "all", pathStart: 1 },
-  file: { kind: "read", pathArgIndexes: "all", pathStart: 1 },
-  diff: { kind: "read", pathArgIndexes: "all", pathStart: 1 },
-  md5sum: { kind: "read", pathArgIndexes: "all", pathStart: 1 },
-  sha256sum: { kind: "read", pathArgIndexes: "all", pathStart: 1 },
+  cat: { kind: "read", pathStart: 1 },
+  less: { kind: "read", pathStart: 1 },
+  more: { kind: "read", pathStart: 1 },
+  head: { kind: "read", pathStart: 1 },
+  tail: { kind: "read", pathStart: 1 },
+  grep: { kind: "read", pathStart: 2 },
+  rg: { kind: "read", pathStart: 2 },
+  ack: { kind: "read", pathStart: 2 },
+  wc: { kind: "read", pathStart: 1 },
+  stat: { kind: "read", pathStart: 1 },
+  ls: { kind: "read", pathStart: 1 },
+  du: { kind: "read", pathStart: 1 },
+  df: { kind: "read", pathStart: 1 },
+  file: { kind: "read", pathStart: 1 },
+  diff: { kind: "read", pathStart: 1 },
+  md5sum: { kind: "read", pathStart: 1 },
+  sha256sum: { kind: "read", pathStart: 1 },
 
   // Creates
-  touch: { kind: "create", pathArgIndexes: "all", pathStart: 1 },
-  mkdir: { kind: "create", pathArgIndexes: "all", pathStart: 1 },
+  touch: { kind: "create", pathStart: 1 },
+  mkdir: { kind: "create", pathStart: 1 },
 
   // Writes / destructive
-  rm: { kind: "write", pathArgIndexes: "all", pathStart: 1 },
-  rmdir: { kind: "write", pathArgIndexes: "all", pathStart: 1 },
-  mv: { kind: "write", pathArgIndexes: "all", pathStart: 1 },
-  cp: { kind: "write", pathArgIndexes: "all", pathStart: 1 },
-  install: { kind: "write", pathArgIndexes: "all", pathStart: 1 },
-  chmod: { kind: "write", pathArgIndexes: "all", pathStart: 1 },
-  chown: { kind: "write", pathArgIndexes: "all", pathStart: 1 },
-  chgrp: { kind: "write", pathArgIndexes: "all", pathStart: 1 },
-  ln: { kind: "write", pathArgIndexes: "all", pathStart: 1 },
-  truncate: { kind: "write", pathArgIndexes: "all", pathStart: 1 },
-  tee: { kind: "write", pathArgIndexes: "all", pathStart: 1 },
+  rm: { kind: "write", pathStart: 1 },
+  rmdir: { kind: "write", pathStart: 1 },
+  mv: { kind: "write", pathStart: 1 },
+  cp: { kind: "write", pathStart: 1 },
+  install: { kind: "write", pathStart: 1 },
+  chmod: { kind: "write", pathStart: 1 },
+  chown: { kind: "write", pathStart: 1 },
+  chgrp: { kind: "write", pathStart: 1 },
+  ln: { kind: "write", pathStart: 1 },
+  truncate: { kind: "write", pathStart: 1 },
+  tee: { kind: "write", pathStart: 1 },
+  shred: { kind: "write", pathStart: 1 },
+  unlink: { kind: "write", pathStart: 1 },
+  // Archivers — extraction can overwrite arbitrary files via path traversal
+  tar: { kind: "write", pathStart: 1 },
+  cpio: { kind: "write", pathStart: 1 },
+  unzip: { kind: "write", pathStart: 1 },
+  zip: { kind: "write", pathStart: 1 },
+  "7z": { kind: "write", pathStart: 1 },
+  gzip: { kind: "write", pathStart: 1 },
+  gunzip: { kind: "write", pathStart: 1 },
+  bzip2: { kind: "write", pathStart: 1 },
+  xz: { kind: "write", pathStart: 1 },
 
   // Editors / in-place mutations
-  sed: { kind: "write", pathArgIndexes: "tail", pathStart: 1 },
-  awk: { kind: "write", pathArgIndexes: "tail", pathStart: 1 },
-  perl: { kind: "write", pathArgIndexes: "tail", pathStart: 1 },
+  sed: { kind: "write", pathStart: 1 },
+  awk: { kind: "write", pathStart: 1 },
+  perl: { kind: "write", pathStart: 1 },
 };
 
+/**
+ * `find` is special: it is nominally a read but has destructive side-effect
+ * flags. Any of these flags triggers a deny regardless of path.
+ */
+const FIND_DESTRUCTIVE_FLAGS = new Set([
+  "-delete",
+  "-exec",
+  "-execdir",
+  "-ok",
+  "-okdir",
+  "-fls",
+  "-fprint",
+  "-fprint0",
+  "-fprintf",
+]);
+
+/**
+ * Commands too dangerous to ever auto-approve; always require approval even
+ * when their arguments look benign. `dd` is the canonical example.
+ */
+const ALWAYS_ASK_HEADS = new Set(["dd", "shred", "mkfs", "fdisk", "parted"]);
+
+/**
+ * Normalize a command head: strip a leading backslash so that `\rm`
+ * (alias-bypass form) classifies the same as `rm`.
+ */
+function normalizeHead(rawHead: string): string {
+  if (rawHead.startsWith("\\")) return rawHead.slice(1);
+  return rawHead;
+}
+
 function classify(head: string): CommandProfile | null {
-  // Strip leading "sudo"/"env" wrappers — those would have been flagged by
-  // the semantic layer already; here we look at the effective command.
-  if (PROFILES[head]) return PROFILES[head];
+  const normalized = normalizeHead(head);
+  if (PROFILES[normalized]) return PROFILES[normalized];
   return null;
 }
 
@@ -200,13 +240,32 @@ export function validateSegmentPaths(
 
   for (const seg of segments) {
     if (seg.empty) continue;
-    const head = seg.words[0];
+    const head = normalizeHead(seg.words[0] ?? "");
     if (!head) continue;
 
     // Validate redirects first — they apply to every command, classified or not
     for (const redirect of seg.redirects) {
       const v = validateRedirect(redirect, guard);
       if (v) return v;
+    }
+
+    // Always-ask heads (dd, shred, mkfs...) — too dangerous to auto-approve.
+    if (ALWAYS_ASK_HEADS.has(head)) {
+      return ask(
+        "DESTRUCTIVE_COMMAND",
+        `'${head}' is a high-risk operation; requires approval.`
+      );
+    }
+
+    // `find` with destructive flags — deny regardless of which paths are used.
+    if (head === "find") {
+      const hit = seg.words.find((w) => FIND_DESTRUCTIVE_FLAGS.has(w));
+      if (hit) {
+        return deny(
+          "FIND_DESTRUCTIVE",
+          `'find' with '${hit}' deletes files or executes arbitrary commands.`
+        );
+      }
     }
 
     const profile = classify(head);
@@ -229,7 +288,10 @@ export function validateSegmentPaths(
       // Reject non-literal path args for write/create ops — the final path
       // is unknowable at runtime (e.g. `rm $EVIL`). Reads of $VAR are
       // suspicious too but not destructive, so they fall to `ask`.
-      const isNonLiteral = seg.hasNonLiteral && /\$\{|\$[A-Za-z_]/.test(p);
+      //
+      // Detection uses the lexer's PLACEHOLDERS via containsExpansion() —
+      // single source of truth for "is this text an expansion placeholder".
+      const isNonLiteral = seg.hasNonLiteral && containsExpansion(p);
       if (isNonLiteral) {
         return profile.kind === "write" || profile.kind === "create"
           ? deny(
@@ -261,9 +323,12 @@ export function validateSegmentPaths(
             );
       }
 
-      // Critical-path protection: rm/rmdir against critical paths always denies
+      // Critical-path protection: write/create against critical paths always denies
       if (
-        (head === "rm" || head === "rmdir" || profile.kind === "write") &&
+        (head === "rm" ||
+          head === "rmdir" ||
+          profile.kind === "write" ||
+          profile.kind === "create") &&
         isCriticalPath(result.resolvedPath)
       ) {
         return deny(

@@ -58,8 +58,12 @@ const HAZARD_DENY_HEADS = new Set([
   "exec",
 ]);
 
-/** Subshell-style entry points that take a command string. */
+/**
+ * Subshell-style entry points that take a command string, spawn an
+ * interactive shell, or wrap an arbitrary child command.
+ */
 const HAZARD_ASK_HEADS = new Set([
+  // Interactive shells
   "bash",
   "sh",
   "zsh",
@@ -67,17 +71,47 @@ const HAZARD_ASK_HEADS = new Set([
   "fish",
   "powershell",
   "pwsh",
+  // Wrappers that take a command to run
   "env",
   "xargs",
   "timeout",
   "nohup",
   "stdbuf",
+  // Schedulers / nice-level wrappers (can wrap arbitrary commands)
+  "time",
+  "nice",
+  "ionice",
+  "chrt",
+  "taskset",
+  // Tracing wrappers (capture/inspect arbitrary commands)
+  "strace",
+  "ltrace",
+  // Bypass utilities
+  "command",
+  "builtin",
+  "setsid",
 ]);
 
-export function semanticHazards(segments: readonly CommandSegment[]): PermissionVerdict | null {
+/**
+ * Normalize a command head by stripping leading backslash.
+ *
+ * Bash treats `\rm` as "run rm bypassing aliases" — the backslash is purely
+ * an alias-bypass marker and the effective command is still `rm`. Without
+ * this normalization, `\rm` would evade the head-detection sets.
+ */
+function normalizeHead(rawHead: string): string {
+  // The lexer preserves `\rm` literally (backslash escape + literal chars).
+  // Strip a single leading backslash if present.
+  if (rawHead.startsWith("\\")) return rawHead.slice(1);
+  return rawHead;
+}
+
+export function semanticHazards(
+  segments: readonly CommandSegment[]
+): PermissionVerdict | null {
   for (const seg of segments) {
     if (seg.empty) continue;
-    const head = seg.words[0];
+    const head = normalizeHead(seg.words[0] ?? "");
     if (!head) continue;
 
     // Direct deny heads (eval, source, ., exec)
@@ -90,8 +124,19 @@ export function semanticHazards(segments: readonly CommandSegment[]): Permission
 
     // Shell invocations with -c: always ask (the inner command is opaque to us)
     if (HAZARD_ASK_HEADS.has(head)) {
-      // -c <command-string> form is the dangerous one
-      if (seg.words.slice(1).some((w) => w === "-c" || w === "/c")) {
+      // -c <command-string> form is the dangerous one. Also detect
+      // powershell's -Command / -Expression long-form flags.
+      const hasStringFlag = seg.words
+        .slice(1)
+        .some(
+          (w) =>
+            w === "-c" ||
+            w === "/c" ||
+            w === "-Command" ||
+            w === "--command" ||
+            w === "-Expression"
+        );
+      if (hasStringFlag) {
         return ask(
           "SHELL_INTERPRETER_STRING",
           `'${head} -c' evaluates an opaque command string; requires approval.`
@@ -105,10 +150,11 @@ export function semanticHazards(segments: readonly CommandSegment[]): Permission
       );
     }
 
-    // Fork bomb — naive but catches the canonical pattern `:(){ :|:& };:`
-    // and the bashbomb variant.
-    if (/:|\(\)\s*\{/.test(seg.raw) && seg.raw.includes(":|:")) {
-      return deny("FORK_BOMB", "Fork bomb pattern detected.");
+    // Fork bomb — catches `NAME(){ NAME|NAME& };NAME` family. Best-effort;
+    // not all variants match, but timeout + auto-background is the real
+    // defense against resource exhaustion.
+    if (/\(\)\s*\{/.test(seg.raw) && /\|.*&/.test(seg.raw)) {
+      return deny("FORK_BOMB", "Fork-bomb pattern detected.");
     }
   }
   return null;
