@@ -1,16 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.2
-milestone_name: Yandex Maps Business Scraper
-status: milestone_complete
-last_updated: "2026-05-26T10:30:00.000Z"
-last_activity: 2026-05-26
+milestone: v2.0
+milestone_name: Local Extensibility
+status: planning
+last_updated: "2026-07-04T14:14:39.031Z"
+last_activity: 2026-07-04
 progress:
-  total_phases: 4
-  completed_phases: 4
-  total_plans: 2
-  completed_plans: 1
-  percent: 50
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
@@ -39,10 +39,10 @@ Progress: █████░░░░░ 50%
 
 ## Current Position
 
-Phase: 11 of 12 (UI Page and Integration)
-Plan: 01 of 02 (completed)
-Status: Executing -- 11-01 complete, ready for 11-02
-Last activity: 2026-05-26 -- Completed 11-01 Backend IPC Wiring (UI-01)
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-07-04 — Milestone v2.0 started
 
 ## Accumulated Context
 
