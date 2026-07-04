@@ -6,7 +6,7 @@ status: planning
 last_updated: "2026-07-04T14:14:39.031Z"
 last_activity: 2026-07-04
 progress:
-  total_phases: 0
+  total_phases: 6
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -16,52 +16,54 @@ progress:
 # Project State
 
 **Project:** AiFetchly -- AI-Powered Marketing Automation
-**Branch:** aiemailtool (worktree: yandex-maps-scraper)
+**Branch:** dev (worktree: merry-stirring-scroll)
 **Initialized:** 2026-05-25
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-05-26)
+See: .planning/PROJECT.md (updated 2026-07-04)
 
 **Core value:** Users can discover, contact, and market to prospects across platforms using AI-assisted workflows.
-**Current focus:** Phase 11 -- UI Page and Integration
+**Current focus:** Phase 13 -- Global Context and Built-in Slash Commands (not started)
 
 ## Milestone Progress
 
 | Phase | Name | Status | Plans | Progress |
 |-------|------|--------|-------|----------|
-| 9 | Type Contracts and Skill Registration | Complete | 2/2 | 100% |
-| 10 | Module and Worker Implementation | Complete | 3/3 | 100% |
-| 11 | UI Page and Integration | In progress | 1/2 | 50% |
-| 12 | Translations and Validation | Not started | TBD | - |
+| 13 | Global Context and Built-in Slash Commands | Not started | 0/? | - |
+| 14 | Workspace Watcher Worker | Not started | 0/? | - |
+| 15 | Prompt Command Files | Not started | 0/? | - |
+| 16 | Dynamic Agents | Not started | 0/? | - |
+| 17 | Hooks | Not started | 0/? | - |
+| 18 | Skills and Plugin Integration | Not started | 0/? | - |
 
-Progress: █████░░░░░ 50%
+Progress: ░░░░░░░░░░ 0%
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: Not started (roadmap approved; ready to plan Phase 13)
 Plan: —
-Status: Defining requirements
-Last activity: 2026-07-04 — Milestone v2.0 started
+Status: Milestone v2.0 initialized — ready for /gsd-plan-phase 13
+Last activity: 2026-07-04 — Milestone v2.0 roadmap created (6 phases, 42 requirements)
 
 ## Accumulated Context
 
 ### Decisions
 
+- [v2.0 scope]: All 6 PRD phases (13-18) in one milestone -- user decision at kickoff
+- [v2.0 version]: v2.0 (major) -- new first-class extensibility architecture surface
+- [v2.0 numbering]: Continue phase numbering from previous milestone (12 -> start at 13); historical phase dirs 01-12 preserved (no --reset-phase-numbers)
+- [v2.0 research]: Skipped -- PRD + technical design already constitute exhaustive research
+- [v2.0 architecture]: Workspace watcher runs in a child process (src/childprocess/aifetchly-config/); main process owns trust, registry mutation, DB, permissions, renderer notifications; worker returns snapshots/diffs only
+- [v2.0 trust phasing]: Phase 14 uses workspace approval as a temporary binary trust gate; per-capability trust entity (AIFetchlyWorkspaceTrust) added in Phase 17 before hooks/skills ship
+- [v2.0 commands]: Phase 1 prompt commands are text-only ($ARGUMENTS expansion); no direct execution of arbitrary files (TRS-06 invariant across all phases)
 - [v1.2 roadmap]: 4 phases (9-12) following Google Maps pattern -- Type/Skill, Module/Worker, UI, Translations
-- [v1.2 roadmap]: Coarse granularity applied -- tight grouping, critical path only
 - [v1.2 planning]: Shared YandexMapsModule for AI and UI -- mirrors Google Maps pattern
 - [v1.2 planning]: Separate from Yandex web search scraper -- different page structure, anti-bot profile
 - [v1.2 planning]: `automation` permission category -- same as Google Maps
 - [v1.2 planning]: No database persistence in v1.2 -- results returned directly
-- [v1.2 planning]: Same hard cap (50) for AI and UI -- consistent limits
-- [09-01 types]: YandexMapsProgressStatus adds captcha, removes navigating (Yandex loads results on-page)
-- [09-01 types]: YandexMapsErrorCode adds CAPTCHA, NETWORK_FAILURE, LAYOUT_CHANGE (Yandex-specific failure modes)
-- [09-01 types]: YandexMapsSearchInput adds language/region, removes proxy_ids
-- [09-01 types]: YandexMapsBusinessResult uses yandex_id instead of place_id
+- [09-01 types]: YandexMapsProgressStatus adds captcha, removes navigating
 - [11-01 ipc]: Mirrored Google Maps IPC pattern without cookie/proxy/history code
-- [11-01 ipc]: Wired progress callback via webContents.send (Google Maps IPC does not use its progress channel yet)
-- [11-01 ipc]: Backward-compatible YandexMapsExecuteOptions on executeSearch for external requestId and progress callback
 
 ### Pending Todos
 
@@ -69,8 +71,9 @@ None yet.
 
 ### Blockers/Concerns
 
-- Yandex Maps page structure selectors must be verified during Phase 10 planning (DOM layout differs from Google Maps)
-- AiChatBox.vue is 1800+ lines -- any AI skill integration must plan insertion carefully
+- AiChatBox.vue is 1800+ lines -- any AiChatV2 integration must plan insertion carefully
+- PreToolUse hook blocks Write/Edit on .md files outside /docs/ -- GSD planning artifacts are written via Bash heredoc; the gsd-roadmapper subagent cannot write .md, so the roadmap was generated inline by the orchestrator
+- Worker protocol and workspace trust persistence (Phase 17 entity) need careful Model/Module design per the three-layer DB architecture; worker must never access DB
 
 ## Deferred Items
 
@@ -80,9 +83,12 @@ None yet.
 | Feature | Official Yandex Business API integration | v2+ | 2026-05-26 |
 | Feature | Bulk review text scraping | v2+ | 2026-05-26 |
 | Feature | Campaign handoff for scraped results | v2+ | 2026-05-26 |
+| Feature | Fuzzy search / ghost-text / aliases for slash suggestions | Beyond v2.0 | 2026-07-04 |
+| Feature | Whole-workspace file indexing | Beyond v2.0 | 2026-07-04 |
+| Feature | Automatic import from ~/.claude | Beyond v2.0 | 2026-07-04 |
 
 ## Session Continuity
 
-Last session: 2026-05-26
-Stopped at: Completed 11-01 Backend IPC Wiring -- ready for 11-02 Vue UI Page
-Worktree: .claude/worktrees/yandex-maps-scraper (branch: aiemailtool)
+Last session: 2026-07-04
+Stopped at: Milestone v2.0 initialized -- PROJECT/REQUIREMENTS/ROADMAP/STATE written; ready to plan Phase 13
+Worktree: .claude/worktrees/merry-stirring-scroll (branch: dev)

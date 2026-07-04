@@ -5,6 +5,7 @@
 - [x] **v1.0 Google Maps Business Scraper** - Phases 1-4 (shipped 2026-05-23)
 - [x] **v1.1 AI Chat File Operation Recording** - Phases 5-8 (shipped 2026-05-25)
 - [x] **v1.2 Yandex Maps Business Scraper** - Phases 9-12 (shipped 2026-05-26) — [Archive](.planning/milestones/v1.2-REQUIREMENTS.md)
+- [ ] **v2.0 Local Extensibility** - Phases 13-18 (started 2026-07-04)
 
 ## Phases
 
@@ -49,6 +50,73 @@
 
 </details>
 
+<details>
+<summary>v2.0 Local Extensibility (Phases 13-18) - STARTED 2026-07-04</summary>
+
+Source: `docs/prd/aifetchly-local-extensibility-prd.md` + `docs/prd/aifetchly-local-extensibility-technical-design.md`
+
+### Phase 13: Global Context and Built-in Slash Commands
+**Goal:** Establish the global `~/.aifetchly` config loader, inject `AGENTS.md` into AiChatV2 context, and ship the slash command registry with built-in commands and a suggestions UI.
+**Requirements:** CFG-01, CFG-03, CFG-04, CFG-05, CFG-06, CFG-07, CTX-01, CTX-03, CMD-01, CMD-02, CMD-03, CMD-04, CMD-05, CMD-07, CMD-08, TRS-05, TRS-06, TRS-07, DX-01, DX-02, I18-01
+**Success criteria:**
+1. App startup performs a full async scan of `~/.aifetchly`; adding `AGENTS.md` there changes the next AiChatV2 response without app restart.
+2. Typing `/` in the AiChatV2 composer shows built-in commands (`/help`, `/clear`, `/status`, `/reload-config`) with source badges; selecting one dispatches correctly (prompt submit or local result).
+3. `/reload-config` forces a rescan and reports current counts; `/status` shows global config + diagnostics state.
+4. Renderer never reads `~/.aifetchly` directly (verified by tests); AI-serving dispatch checks `USER_AI_ENABLED`.
+5. Invalid/oversized files produce diagnostics, not app crashes; all new UI text translated to 6 languages.
+**Plans:** TBD
+
+### Phase 14: Workspace Watcher Worker
+**Goal:** Add the workspace config watcher child process with reference-counted lifecycle, workspace `AGENTS.md`/commands scanning, binary trust gating, and live-update renderer events.
+**Requirements:** CFG-02, CTX-02, WAT-01, WAT-02, WAT-03, WAT-04, WAT-05, WAT-06, WAT-07, TRS-01, TRS-03, TRS-04
+**Success criteria:**
+1. Opening an existing chat with an approved workspace starts workspace watching; closing it stops watching only when no consumers remain.
+2. Switching workspace stops the old watch and starts the new one with an immediate snapshot + renderer refresh.
+3. Editing a trusted `<workspace>/.aifetchly/AGENTS.md` updates AiChatV2 context without app restart.
+4. Worker crash causes restart + full rescan within the restart cap; worker never touches DB/registries (verified by tests).
+5. Untrusted workspace `.aifetchly` is disabled until the trust prompt is accepted; a typical `.aifetchly` rescan completes under 500ms.
+**Plans:** TBD
+
+### Phase 15: Prompt Command Files
+**Goal:** Load markdown prompt commands (`commands/*.md`) from global and trusted-workspace sources with `$ARGUMENTS` expansion and source-replacement reconciliation.
+**Requirements:** CMD-06
+**Success criteria:**
+1. Adding `~/.aifetchly/commands/review.md` makes `/review` appear in suggestions; deleting it removes it without restart.
+2. `/review src/service` expands the body with `$ARGUMENTS = "src/service"` and submits through the normal Chat V2 path.
+3. Renaming or editing a command file reconciles correctly via source replacement (no stale entries, no missed events).
+4. Workspace commands require trust before appearing; invalid frontmatter produces a diagnostic and the command is ignored.
+**Plans:** TBD
+
+### Phase 16: Dynamic Agents
+**Goal:** Refactor `AgentDefinitionRegistry` for source-aware dynamic registration, parse `agents/*.md`, and enable `run_subagent` dispatch by scoped dynamic ID.
+**Requirements:** AGT-01, AGT-02, AGT-03
+**Success criteria:**
+1. Adding `~/.aifetchly/agents/lead-researcher.md` registers `user:agent:lead-researcher`; `/agents` lists it.
+2. `run_subagent` dispatches the dynamic agent; its tool allowlist is intersected with registered/permitted tools at runtime.
+3. Built-in agent IDs cannot be shadowed by dynamic ones; workspace agents require trust before registration.
+**Plans:** TBD
+
+### Phase 17: Hooks
+**Goal:** Parse `hooks/hooks.json`, register hooks by source with trust gating, dispatch only through safe existing boundaries, and add the per-capability workspace trust entity.
+**Requirements:** TRS-02, HOK-01, HOK-02
+**Success criteria:**
+1. Editing a trusted `<workspace>/.aifetchly/hooks/hooks.json` updates dispatch behavior via `HookRegistry.replaceSource`.
+2. Hooks never execute shell directly in the main process; actions route through worker/sandbox or a registered skill.
+3. The `AIFetchlyWorkspaceTrust` entity persists per-capability trust (instructions/commands/agents/hooks/skills) via Model/Module (no DB access from worker).
+4. Hook failures are non-fatal and surface as diagnostics; unsupported events produce diagnostics.
+**Plans:** TBD
+
+### Phase 18: Skills and Plugin Integration
+**Goal:** Register local skills via the existing SkillRegistry/permission flow and promote plugin `commands/`/`agents/` once the native registries are stable.
+**Requirements:** SKL-01, SKL-02
+**Success criteria:**
+1. A `~/.aifetchly/skills/<name>/manifest.json` is validated, registered, exposed as an OpenAI tool schema, executed via SkillExecutor, and permission-checked — never loaded as arbitrary code into the main process.
+2. Plugin `commands/*.md` become active slash commands; plugin `agents/*.md` become dynamic agents, once the native registries are stable.
+3. `~/.aifetchly/plugins/<name>/options.json` path is preserved without conflicting with installed plugin package roots under `userData/plugins/installed`.
+**Plans:** TBD
+
+</details>
+
 ## Backlog
 
 ### Phase 999.1: Follow-up — Phase 6 incomplete plans (BACKLOG)
@@ -76,3 +144,9 @@
 | 10. Module and Worker Implementation | v1.2 | 3/3 | Complete | 2026-05-26 |
 | 11. UI Page and Integration | v1.2 | 2/2 | Complete | 2026-05-26 |
 | 12. Translations and Validation | v1.2 | 1/1 | Complete | 2026-05-26 |
+| 13. Global Context and Built-in Slash Commands | v2.0 | 0/? | Not started | — |
+| 14. Workspace Watcher Worker | v2.0 | 0/? | Not started | — |
+| 15. Prompt Command Files | v2.0 | 0/? | Not started | — |
+| 16. Dynamic Agents | v2.0 | 0/? | Not started | — |
+| 17. Hooks | v2.0 | 0/? | Not started | — |
+| 18. Skills and Plugin Integration | v2.0 | 0/? | Not started | — |
