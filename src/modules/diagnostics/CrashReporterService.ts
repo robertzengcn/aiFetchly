@@ -4,6 +4,7 @@ import type { CrashRecord, DiagnosticBreadcrumb } from "./DiagnosticSchemas";
 import { CrashLogSink } from "./CrashLogSink";
 import { ErrorLogSink } from "./ErrorLogSink";
 import { DiagnosticBreadcrumbBuffer } from "./DiagnosticBreadcrumbBuffer";
+import { redactString } from "./DiagnosticRedactor";
 
 export interface CrashReporterServiceConfig {
   sessionId: string;
@@ -204,10 +205,16 @@ export class CrashReporterService {
       ...partial,
     };
     CrashLogSink.write(rec);
+    // Redact the breadcrumb message so tokens don't leak via the breadcrumb
+    // buffer into the upload package (CrashLogSink already redacts on disk,
+    // but breadcrumbs are embedded verbatim by DiagnosticReportBuilder).
+    const redactedMsg = redactString(
+      `${rec.crashType}: ${rec.message.slice(0, 200)}`
+    );
     this.buffer.addBreadcrumb({
       timestamp: rec.timestamp,
       category: "crash",
-      message: `${rec.crashType}: ${rec.message.slice(0, 200)}`,
+      message: redactedMsg,
       level: "error",
     });
   }
