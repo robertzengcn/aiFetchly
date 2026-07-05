@@ -94,6 +94,10 @@ export class ProxyController {
 
             const req = http.request(options);
             req.on('connect', (res, socket) => {
+                socket.on('error', (socketError) => {
+                    console.log(`HTTP proxy socket error after connect: ${socketError.message}`);
+                    resolve(false);
+                });
                 socket.end();
                 resolve(res.statusCode === 200);
             });
@@ -134,6 +138,10 @@ export class ProxyController {
 
             const req = http.request(options);
             req.on('connect', (res, socket) => {
+                socket.on('error', (socketError) => {
+                    console.log(`SOCKS proxy socket error after connect: ${socketError.message}`);
+                    resolve(false);
+                });
                 socket.end();
                 resolve(res.statusCode === 200);
             });
