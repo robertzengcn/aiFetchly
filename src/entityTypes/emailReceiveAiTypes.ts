@@ -34,6 +34,9 @@ export const fetchUnreadEmailsSchema = z.object({
 export const getEmailMessageSchema = z.object({
   message_id: emailReceiveId,
   include_body: z.coerce.boolean().default(true),
+  // Marking read is opt-in: a read tool should not mutate mailbox state as a
+  // side effect unless the caller asks for it.
+  mark_read: z.coerce.boolean().default(false),
 });
 
 export const createEmailReplyDraftSchema = z.object({

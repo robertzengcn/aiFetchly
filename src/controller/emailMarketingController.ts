@@ -204,6 +204,25 @@ export class EmailMarketingController {
   public async getEmailServiceDetail(
     id: number
   ): Promise<EmailServiceEntitydata | undefined> {
+    const entity = await this.emailServiceModule.getEmailService(id);
+    if (!entity) return undefined;
+    // Credentials never round-trip to the renderer. An empty string is the
+    // "unchanged" sentinel: on save, an empty password means keep existing.
+    return {
+      ...entity,
+      password: "",
+      receivePassword: "",
+    } as unknown as EmailServiceEntitydata;
+  }
+
+  /**
+   * Raw entity for internal main-process callers (receive sync, send reply).
+   * Carries credentials — MUST NOT be returned to the renderer or surfaced in
+   * an AI tool result.
+   */
+  public async getEmailServiceEntity(
+    id: number
+  ): Promise<EmailServiceEntity | undefined> {
     return await this.emailServiceModule.getEmailService(id);
   }
   //create or update email service
@@ -217,9 +236,36 @@ export class EmailMarketingController {
     entity.from = param.from;
     entity.password = param.password;
     entity.ssl = param.ssl;
+    // inbound receive fields
+    entity.receiveProtocol = param.receiveProtocol ?? "imap";
+    entity.imapHost = param.imapHost ?? null;
+    entity.imapPort = param.imapPort ?? null;
+    entity.imapSsl = param.imapSsl ?? 1;
+    entity.pop3Host = param.pop3Host ?? null;
+    entity.pop3Port = param.pop3Port ?? null;
+    entity.pop3Ssl = param.pop3Ssl ?? 1;
+    entity.receiveUsername = param.receiveUsername ?? null;
+    entity.receivePassword = param.receivePassword ?? null;
+    entity.receiveFolder = param.receiveFolder ?? "INBOX";
+    entity.receiveEnabled = param.receiveEnabled ?? 0;
+
+    // On update paths an empty password means "keep existing" (credentials
+    // are never returned to the form, so the form sends an empty sentinel).
+    const updatePreservingPasswords = async (id: number): Promise<void> => {
+      const existing = await this.emailServiceModule.getEmailService(id);
+      if (existing) {
+        if (!entity.password || entity.password.length === 0) {
+          entity.password = existing.password;
+        }
+        if (!entity.receivePassword || entity.receivePassword.length === 0) {
+          entity.receivePassword = existing.receivePassword;
+        }
+      }
+      await this.emailServiceModule.updateEmailService(id, entity);
+    };
 
     if (param.id && param.id > 0) {
-      await this.emailServiceModule.updateEmailService(param.id, entity);
+      await updatePreservingPasswords(param.id);
       return param.id;
     }
 
@@ -227,18 +273,17 @@ export class EmailMarketingController {
       param.name
     );
     if (existingByName?.id && existingByName.id > 0) {
-      await this.emailServiceModule.updateEmailService(existingByName.id, entity);
+      await updatePreservingPasswords(existingByName.id);
       return existingByName.id;
     }
 
-    const existingByHost = await this.emailServiceModule.findEmailServicesByHost(
-      param.host
-    );
+    const existingByHost =
+      await this.emailServiceModule.findEmailServicesByHost(param.host);
     const existingBySender = existingByHost.find(
       (service) => service.from === param.from
     );
     if (existingBySender?.id && existingBySender.id > 0) {
-      await this.emailServiceModule.updateEmailService(existingBySender.id, entity);
+      await updatePreservingPasswords(existingBySender.id);
       return existingBySender.id;
     }
 

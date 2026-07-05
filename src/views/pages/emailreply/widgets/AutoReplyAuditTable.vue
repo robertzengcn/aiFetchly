@@ -54,6 +54,9 @@
       <template #item.confidence="{ item }">
         {{ item.confidence != null ? (item.confidence * 100).toFixed(0) + "%" : "—" }}
       </template>
+      <template #item.generatedSubject="{ item }">
+        {{ displaySubject(item) }}
+      </template>
       <template #item.requiresUserApproval="{ item }">
         <v-icon :color="item.requiresUserApproval ? 'warning' : 'success'">
           {{ item.requiresUserApproval ? "mdi-account-check" : "mdi-flash" }}
@@ -160,6 +163,11 @@ function formatDate(iso: string): string {
   } catch {
     return iso;
   }
+}
+
+/** Sent rows carry the sent subject; draft rows carry the generated subject. */
+function displaySubject(item: AutoReplyAuditDto): string {
+  return item.sentSubject || item.generatedSubject || "(no subject)";
 }
 
 function statusColor(status: string): string {

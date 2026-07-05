@@ -152,7 +152,9 @@ export async function getEmailMessage(
       return { success: false, error: "Message not found" };
     }
 
-    if (input.include_body) {
+    // Marking read is opt-in (mark_read, default false) so a read tool does
+    // not mutate mailbox state unless explicitly requested.
+    if (input.mark_read) {
       await messageModule.markRead(input.message_id, false);
     }
 
