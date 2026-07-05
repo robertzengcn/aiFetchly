@@ -346,6 +346,23 @@
       </v-card>
     </v-dialog>
 
+    <!-- Subscription Required Dialog -->
+    <v-dialog v-model="showSubscriptionDialog" max-width="400" persistent>
+      <v-card>
+        <v-card-title class="text-h6">
+          <v-icon color="warning" class="mr-2">mdi-crown</v-icon>
+          {{ t('knowledge.subscription_required') }}
+        </v-card-title>
+        <v-card-text>
+          {{ t('knowledge.subscription_required_message') }}
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn color="primary" @click="closeSubscriptionDialog">{{ t('common.close') || 'Close' }}</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
     <!-- Loading Overlay -->
     <v-overlay
       v-model="isLoading"
@@ -367,9 +384,11 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { useRouter } from 'vue-router';
 
 // Expose t function to template
 const { t } = useI18n();
+const router = useRouter();
 
 // Type declaration for template
 //declare const t: (key: string, ...args: any[]) => string;
@@ -424,14 +443,23 @@ const showDuplicateDialog = ref(false);
 const duplicateFiles = ref<Array<{ fileName: string; fileSize: number; existingId: number; existingUploadedAt: string }>>([]);
 const pendingUploadAfterDuplicateCheck = ref<File[]>([]);
 
+// Subscription dialog
+const showSubscriptionDialog = ref(false);
+
 // Component refs
 const documentManagement = ref();
 const searchInterface = ref();
 
 // Lifecycle hooks
 onMounted(async () => {
+  showSubscriptionDialog.value = true;
   await initializeRAGSystem();
 });
+
+function closeSubscriptionDialog() {
+  showSubscriptionDialog.value = false;
+  router.back();
+}
 
 onUnmounted(() => {
   // Cleanup if needed
@@ -800,6 +828,9 @@ async function confirmUpload() {
     uploading.value = false;
     currentUploadingFile.value = '';
     uploadProgress.value.clear();
+    if (documentManagement.value) {
+      documentManagement.value.refreshDocuments();
+    }
   }
 }
 

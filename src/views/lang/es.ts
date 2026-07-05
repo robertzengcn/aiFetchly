@@ -155,6 +155,8 @@ export default {
     not_found: "No encontrado",
   },
   knowledge: {
+    subscription_required: "Suscripción Requerida",
+    subscription_required_message: "La biblioteca de conocimiento solo está disponible para usuarios suscriptores. Por favor, actualice su plan.",
     upload_document: "Subir documento",
     documents: "Documentos",
     chat: "Chat",
