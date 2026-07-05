@@ -36,6 +36,10 @@ const EXTERNAL_DEPENDENCIES = [
   "reflect-metadata",
   "@mixmark-io/domino",
   "electron-log",
+  "@xenova/transformers",
+  "onnxruntime-node",
+  "onnxruntime-common",
+  "sharp",
 ];
 //import { ForgeConfig } from '@electron-forge/shared-types';
 // import { AutoUnpackNativesPlugin } from "@electron-forge/plugin-auto-unpack-natives";
@@ -414,6 +418,10 @@ module.exports = {
           //   entry: 'src/buckEmail.ts',
           //   config: 'vite.buckEmail.config.mjs'
           // },
+          {
+            entry: "src/childprocess/embedding/LocalEmbeddingWorker.ts",
+            config: "vite.localEmbeddingWorker.config.mjs",
+          },
         ],
         renderer: [
           {
