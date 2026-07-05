@@ -8,21 +8,50 @@ import { convert } from "html-to-text";
  */
 const SANITIZE_OPTIONS: sanitizeHtml.IOptions = {
   allowedTags: [
-    "p", "br", "strong", "em", "u", "s", "a", "ul", "ol", "li",
-    "blockquote", "hr", "table", "thead", "tbody", "tr", "th", "td",
-    "h1", "h2", "h3", "h4", "h5", "h6", "img", "div", "span", "pre", "code",
+    "p",
+    "br",
+    "strong",
+    "em",
+    "u",
+    "s",
+    "a",
+    "ul",
+    "ol",
+    "li",
+    "blockquote",
+    "hr",
+    "table",
+    "thead",
+    "tbody",
+    "tr",
+    "th",
+    "td",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "img",
+    "div",
+    "span",
+    "pre",
+    "code",
   ],
   allowedAttributes: {
     a: ["href", "name", "target", "rel"],
     img: ["src", "alt", "title", "width", "height"],
-    "*": ["style"],
   },
   allowedSchemes: ["http", "https", "mailto"],
   disallowedTagsMode: "discard",
   transformTags: {
     a: (tagName, attribs) => ({
       tagName,
-      attribs: { ...attribs, target: "_blank", rel: "noopener noreferrer nofollow" },
+      attribs: {
+        ...attribs,
+        target: "_blank",
+        rel: "noopener noreferrer nofollow",
+      },
     }),
   },
   // Exclude 1x1 tracking pixels.
@@ -48,7 +77,9 @@ const TRACKING_PIXEL_MARKERS = [
 ];
 
 /** Sanitize untrusted inbound HTML for safe storage and display. */
-export function sanitizeEmailHtml(html: string | null | undefined): string | null {
+export function sanitizeEmailHtml(
+  html: string | null | undefined
+): string | null {
   if (!html || html.trim().length === 0) return null;
   try {
     return sanitizeHtml(html, SANITIZE_OPTIONS);
@@ -73,6 +104,9 @@ export function htmlToPlainText(html: string | null | undefined): string {
       ],
     }).trim();
   } catch {
-    return html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+    return html
+      .replace(/<[^>]*>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
   }
 }

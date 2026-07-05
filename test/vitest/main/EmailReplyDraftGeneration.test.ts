@@ -26,15 +26,23 @@ describe("parseReplyJson", () => {
   });
 
   it("tolerates stray text around the JSON object", () => {
-    const r = parseReplyJson('Here is your reply: {"subject":"Re:x","bodyText":"b","classification":"unknown","confidence":0.1} hope it helps');
+    const r = parseReplyJson(
+      'Here is your reply: {"subject":"Re:x","bodyText":"b","classification":"unknown","confidence":0.1} hope it helps'
+    );
     expect(r.subject).toBe("Re:x");
     expect(r.bodyText).toBe("b");
   });
 
-  it("falls back to unknown classification + raw text when no JSON", () => {
+  it("returns empty body when no JSON is present (no raw-text fallback)", () => {
     const r = parseReplyJson("no json at all");
     expect(r.classification).toBe("unknown");
-    expect(r.bodyText).toBe("no json at all");
+    expect(r.bodyText).toBe("");
     expect(r.confidence).toBe(0);
+  });
+
+  it("returns empty body when JSON is malformed", () => {
+    const r = parseReplyJson("{not valid json}");
+    expect(r.bodyText).toBe("");
+    expect(r.classification).toBe("unknown");
   });
 });

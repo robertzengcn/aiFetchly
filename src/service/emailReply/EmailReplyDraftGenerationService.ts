@@ -338,9 +338,11 @@ export function parseReplyJson(raw: string): {
   const start = fenced.indexOf("{");
   const end = fenced.lastIndexOf("}");
   if (start === -1 || end === -1 || end <= start) {
+    // No JSON object found — treat as a failed generation rather than using
+    // raw LLM prose (which may contain meta-commentary or fences) as the body.
     return {
       subject: "",
-      bodyText: fenced,
+      bodyText: "",
       classification: "unknown",
       confidence: 0,
     };
@@ -358,9 +360,10 @@ export function parseReplyJson(raw: string): {
       confidence: typeof obj.confidence === "number" ? obj.confidence : 0,
     };
   } catch {
+    // JSON present but malformed — same treatment: do not use raw text as body.
     return {
       subject: "",
-      bodyText: fenced,
+      bodyText: "",
       classification: "unknown",
       confidence: 0,
     };
