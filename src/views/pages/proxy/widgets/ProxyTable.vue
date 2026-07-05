@@ -510,11 +510,14 @@ function loadItems({ page, itemsPerPage, sortBy }) {
     loading.value = true
     options.page = page;
   options.itemsPerPage = itemsPerPage;
+    const sortValue = Array.isArray(sortBy)
+        ? (sortBy[0] ?? undefined)
+        : (sortBy || undefined);
     const fetchitem: Fetchparam = {
         // id:parseInt(campaignId),
         page: page,
         itemsPerPage: itemsPerPage,
-        sortBy: sortBy,
+        sortBy: sortValue,
         search: search.value
     }
     FakeAPI.fetch(fetchitem).then(
