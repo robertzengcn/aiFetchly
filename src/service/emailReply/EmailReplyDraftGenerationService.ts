@@ -2,6 +2,7 @@ import { Token } from "@/modules/token";
 import { USER_AI_ENABLED } from "@/config/usersetting";
 import { AiChatApi } from "@/api/aiChatApi";
 import type { OpenAIChatMessage } from "@/api/aiChatApi";
+import { openAIContentToString } from "@/api/aiChatApi";
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
 import { EmailReplyIdentityProfileModule } from "@/modules/EmailReplyIdentityProfileModule";
@@ -240,7 +241,7 @@ export class EmailReplyDraftGenerationService {
       temperature: 0.4,
       max_tokens: 700,
     });
-    const raw = resp.choices?.[0]?.message?.content ?? "";
+    const raw = openAIContentToString(resp.choices?.[0]?.message?.content);
     return parseReplyJson(raw);
   }
 
