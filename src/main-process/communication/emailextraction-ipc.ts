@@ -148,10 +148,11 @@ export function registerEmailextractionIpcHandlers() {
     emailExtractionListInputSchema,
     async (input) => {
       const emailCon = new EmailextractionController();
+      const sortby = Array.isArray(input.sortby) ? input.sortby[0] : input.sortby;
       const res = await emailCon.listEmailSearchtasks(
         input.page ?? 0,
         input.size ?? 100,
-        input.sortby,
+        sortby,
       );
       return { records: res.records, num: res.total };
     },
