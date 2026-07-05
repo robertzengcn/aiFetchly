@@ -8,6 +8,8 @@ This feature adds a local free embedding option powered by `@xenova/transformers
 
 The expected user-visible outcome is simple: users see a free local embedding model in the existing embedding model selector, can choose it for knowledge indexing/search, and have a resilient fallback when remote embedding generation fails.
 
+Technical design: `docs/prd/local-xenova-embedding-model-technical-design.md`
+
 ## 2. Goals
 
 - Add `Xenova/all-MiniLM-L6-v2` as a local embedding model option.
