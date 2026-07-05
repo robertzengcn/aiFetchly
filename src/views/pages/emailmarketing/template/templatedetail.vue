@@ -60,9 +60,11 @@ ref="textarea" v-model="tplcontent" :label="t('emailmarketing.content')"
             >
               {{ t('aiTemplateGeneration.title') || 'Generate with AI' }}
             </v-btn>
-            <span v-if="!aiEnabled" class="text-caption text-grey">
-              {{ t('aiTemplateGeneration.error.aiDisabled') || 'AI functionality is only available to subscribers.' }}
-            </span>
+            <v-tooltip v-if="!aiEnabled" location="top" :text="t('aiTemplateGeneration.error.aiDisabled') || 'AI functionality is only available to subscribers.'">
+              <template v-slot:activator="{ props }">
+                <v-icon v-bind="props" color="grey" size="small">mdi-information-outline</v-icon>
+              </template>
+            </v-tooltip>
           </div>
 
         </v-col>
