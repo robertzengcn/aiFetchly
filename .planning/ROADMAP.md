@@ -106,7 +106,28 @@ Plans:
 4. Worker crash causes restart + full rescan within the restart cap; worker never touches DB/registries (verified by tests).
 5. Untrusted workspace `.aifetchly` is disabled until the trust prompt is accepted; a typical `.aifetchly` rescan completes under 500ms.
 
-**Plans:** TBD
+**Plans:** 5 plans
+Plans:
+
+**Wave 1**
+
+- [ ] 14-01-worker-foundation-PLAN.md — Pure-Node worker (fork) + chokidar ^3.6.0 + scanner + zod protocol + WAT-02 grep gate + SC5 SLA log+assert
+
+**Wave 2** *(blocked on Wave 1)*
+
+- [ ] 14-02-manager-trust-filter-PLAN.md — WorkspaceWatchManager ref-counted lifecycle + crash-restart cap + applyWorkspaceSnapshot trust filter (TRS-01)
+
+**Wave 3** *(blocked on Wave 2)*
+
+- [ ] 14-03-main-ipc-integration-PLAN.md — WorkspaceWatchModule + 4 invoke-channel IPC + preload whitelists + manager singleton wiring + background.ts shutdown hook + D-04 additive workspaceId
+
+**Wave 4** *(blocked on Wave 3)*
+
+- [ ] 14-04-renderer-trust-card-PLAN.md — WorkspaceTrustCard.vue (4 TRS-03 options + main-supplied Preview) + AiChatV2 subscriber filter by workspaceId + acquire/release lifecycle
+
+**Wave 5** *(blocked on Wave 4)*
+
+- [ ] 14-05-i18n-boundary-tests-PLAN.md — workspaceTrust i18n group in all 6 lang files + TRS-07 renderer boundary test + SC5 perf-backstop
 
 ### Phase 15: Prompt Command Files
 
