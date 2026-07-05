@@ -230,6 +230,13 @@ export default {
     settings: "Settings",
     embedding_model: "Embedding Model",
     embedding_model_hint: "Choose the embedding model for document processing",
+    model_free: "Gratuit",
+    embedding_remote_failed_local_fallback:
+      "L'intégration distante a échoué. AiFetchly a utilisé le modèle d'intégration local gratuit à la place.",
+    embedding_failed_after_fallback:
+      "La génération d'embeddings a échoué après les nouvelles tentatives distantes et le repli local. Consultez le journal d'erreurs du document.",
+    embedding_partial_remote_search:
+      "Certains documents indexés à distance n'ont pas pu être recherchés car la génération de l'embedding de requête distant a échoué.",
     current_model: "Current Model",
     update_model: "Update Model",
     model_category_fast: "Fast",
@@ -1125,22 +1132,27 @@ export default {
     chrome_path: "chrome path",
     firefox_path: "firefox path",
     embedding_group: "Modèles d'Embedding",
-    embedding_group_description: "Modèle d'embedding par défaut pour la recherche vectorielle.",
+    embedding_group_description:
+      "Modèle d'embedding par défaut pour la recherche vectorielle.",
     external_system: "Système Externe",
     user_preferences: "Préférences Utilisateur",
-    "user-preferences-group-description": "Préférences utilisateur pour le comportement de l'application.",
+    "user-preferences-group-description":
+      "Préférences utilisateur pour le comportement de l'application.",
     default_embedding_model: "Modèle d'Embedding par Défaut",
-    "default-embedding-model-description": "Sélectionnez le modèle d'embedding utilisé pour la recherche vectorielle et la correspondance de similarité.",
+    "default-embedding-model-description":
+      "Sélectionnez le modèle d'embedding utilisé pour la recherche vectorielle et la correspondance de similarité.",
     language_preference: "Langue",
     "language-preference-description": "Préférence de langue de l'interface.",
     ai_website_analysis_business_info: "Informations Commerciales",
-    "ai-website-analysis-business-info-description": "Informations commerciales utilisées lors de l'analyse IA du site web.",
+    "ai-website-analysis-business-info-description":
+      "Informations commerciales utilisées lors de l'analyse IA du site web.",
     "external-system-group-description": "external system group setting",
     mcp_tools: "MCP Tools",
     manage_mcp_tools: "Manage MCP Tools",
     manage_skills: "Gérer les compétences",
     ai_preferences: "Préférences IA",
-    "ai-preferences-group-description": "Paramètres contrôlant le comportement du chat IA, la mémoire et le contexte.",
+    "ai-preferences-group-description":
+      "Paramètres contrôlant le comportement du chat IA, la mémoire et le contexte.",
     user_ai_auto_dream: "Consolidation Auto-Rêve",
     "ai-auto-dream-description":
       "Résumer automatiquement les conversations passées en arrière-plan pour économiser les tokens de contexte IA.",

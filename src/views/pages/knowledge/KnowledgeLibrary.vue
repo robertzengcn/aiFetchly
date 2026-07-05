@@ -281,7 +281,7 @@
               :items="availableModels"
               :label="t('knowledge.embedding_model')"
               :loading="loadingModels"
-              item-title="name"
+              item-title="displayName"
               item-value="name"
               :hint="t('knowledge.embedding_model_hint')"
               persistent-hint
@@ -289,11 +289,22 @@
               <template v-slot:item="{ props, item }">
                 <v-list-item v-bind="props">
                   <template v-slot:title>
-                    {{ item.raw.name }}
+                    {{ item.raw.displayName || item.raw.name }}
                   </template>
                   <template v-slot:subtitle>
-                    {{ item.raw.description }} - 
+                    {{ item.raw.description }} -
                     {{ t('knowledge.max_dimensions') }}: {{ item.raw.dimensions }}
+                  </template>
+                  <template v-slot:append>
+                    <v-chip
+                      v-if="item.raw.is_free"
+                      size="x-small"
+                      variant="tonal"
+                      color="success"
+                      class="ml-2"
+                    >
+                      {{ t('knowledge.model_free') }}
+                    </v-chip>
                   </template>
                 </v-list-item>
               </template>

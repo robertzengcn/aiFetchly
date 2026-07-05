@@ -230,6 +230,13 @@ export default {
     embedding_model: "Modelo de incrustación",
     embedding_model_hint:
       "Elija el modelo de incrustación para el procesamiento de documentos",
+    model_free: "Gratis",
+    embedding_remote_failed_local_fallback:
+      "El embedding remoto falló. AiFetchly usó el modelo de embedding local gratuito en su lugar.",
+    embedding_failed_after_fallback:
+      "La generación de embeddings falló tras el reintento remoto y el respaldo local. Consulte el registro de errores del documento.",
+    embedding_partial_remote_search:
+      "No se pudieron buscar algunos documentos indexados remotamente porque falló la generación del embedding de consulta remoto.",
     current_model: "Modelo actual",
     update_model: "Actualizar modelo",
     model_category_fast: "Rápido",
@@ -1139,23 +1146,28 @@ export default {
     chrome_path: "Ruta de Chrome",
     firefox_path: "Ruta de Firefox",
     embedding_group: "Modelos de Embedding",
-    embedding_group_description: "Modelo de embedding predeterminado para búsqueda vectorial.",
+    embedding_group_description:
+      "Modelo de embedding predeterminado para búsqueda vectorial.",
     external_system: "Sistema Externo",
     user_preferences: "Preferencias de Usuario",
-    "user-preferences-group-description": "Preferencias a nivel de usuario para el comportamiento de la aplicación.",
+    "user-preferences-group-description":
+      "Preferencias a nivel de usuario para el comportamiento de la aplicación.",
     default_embedding_model: "Modelo de Embedding Predeterminado",
-    "default-embedding-model-description": "Seleccione el modelo de embedding utilizado para la búsqueda vectorial y la coincidencia de similitud.",
+    "default-embedding-model-description":
+      "Seleccione el modelo de embedding utilizado para la búsqueda vectorial y la coincidencia de similitud.",
     language_preference: "Idioma",
     "language-preference-description": "Preferencia de idioma de la interfaz.",
     ai_website_analysis_business_info: "Información de Negocio",
-    "ai-website-analysis-business-info-description": "Información comercial utilizada durante el análisis de IA del sitio web.",
+    "ai-website-analysis-business-info-description":
+      "Información comercial utilizada durante el análisis de IA del sitio web.",
     "external-system-group-description":
       "Configuración del grupo de sistema externo",
     mcp_tools: "Herramientas MCP",
     manage_mcp_tools: "Gestionar herramientas MCP",
     manage_skills: "Gestionar habilidades",
     ai_preferences: "Preferencias de IA",
-    "ai-preferences-group-description": "Configuración que controla el comportamiento del chat de IA, la memoria y el contexto.",
+    "ai-preferences-group-description":
+      "Configuración que controla el comportamiento del chat de IA, la memoria y el contexto.",
     user_ai_auto_dream: "Consolidación Auto-Sueño",
     "ai-auto-dream-description":
       "Resumir automáticamente conversaciones pasadas en segundo plano para ahorrar tokens de contexto de IA.",

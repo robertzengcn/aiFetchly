@@ -231,6 +231,13 @@ export default {
     embedding_model: "Einbettungsmodell",
     embedding_model_hint:
       "Wählen Sie das Einbettungsmodell für die Dokumentverarbeitung",
+    model_free: "Kostenlos",
+    embedding_remote_failed_local_fallback:
+      "Remote-Embedding fehlgeschlagen. AiFetchly hat stattdessen das kostenlose lokale Embedding-Modell verwendet.",
+    embedding_failed_after_fallback:
+      "Die Embedding-Generierung ist nach Remote-Wiederholung und lokalem Fallback fehlgeschlagen. Siehe Fehlerprotokoll des Dokuments.",
+    embedding_partial_remote_search:
+      "Einige remote indizierte Dokumente konnten nicht durchsucht werden, da das Remote-Query-Embedding fehlgeschlagen ist.",
     current_model: "Aktuelles Modell",
     update_model: "Modell aktualisieren",
     model_category_fast: "Schnell",
@@ -1132,22 +1139,27 @@ export default {
     chrome_path: "Chrome-Pfad",
     firefox_path: "Firefox-Pfad",
     embedding_group: "Einbettungsmodelle",
-    embedding_group_description: "Standard-Einbettungsmodell für die Vektorsuche.",
+    embedding_group_description:
+      "Standard-Einbettungsmodell für die Vektorsuche.",
     external_system: "Externes System",
     user_preferences: "Benutzereinstellungen",
-    "user-preferences-group-description": "Benutzereinstellungen für das Anwendungsverhalten.",
+    "user-preferences-group-description":
+      "Benutzereinstellungen für das Anwendungsverhalten.",
     default_embedding_model: "Standard-Einbettungsmodell",
-    "default-embedding-model-description": "Wählen Sie das Einbettungsmodell für die Vektorsuche und Ähnlichkeitsermittlung.",
+    "default-embedding-model-description":
+      "Wählen Sie das Einbettungsmodell für die Vektorsuche und Ähnlichkeitsermittlung.",
     language_preference: "Sprache",
     "language-preference-description": "UI-Spracheinstellung.",
     ai_website_analysis_business_info: "Geschäftsinformationen",
-    "ai-website-analysis-business-info-description": "Geschäftsinformationen, die bei der KI-Analyse von Websites verwendet werden.",
+    "ai-website-analysis-business-info-description":
+      "Geschäftsinformationen, die bei der KI-Analyse von Websites verwendet werden.",
     "external-system-group-description": "Externe Systemgruppen-Einstellung",
     mcp_tools: "MCP-Tools",
     manage_mcp_tools: "MCP-Tools verwalten",
     manage_skills: "Fähigkeiten verwalten",
     ai_preferences: "KI-Einstellungen",
-    "ai-preferences-group-description": "Einstellungen zur Steuerung des KI-Chat-Verhaltens, des Speichers und des Kontexts.",
+    "ai-preferences-group-description":
+      "Einstellungen zur Steuerung des KI-Chat-Verhaltens, des Speichers und des Kontexts.",
     user_ai_auto_dream: "Auto-Traum-Konsolidierung",
     "ai-auto-dream-description":
       "Automatisches Zusammenfassen vergangener Konversationen im Hintergrund, um KI-Kontext-Token zu sparen.",

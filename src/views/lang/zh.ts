@@ -217,6 +217,13 @@ export default {
     settings: "设置",
     embedding_model: "嵌入模型",
     embedding_model_hint: "选择用于文档处理的嵌入模型",
+    model_free: "免费",
+    embedding_remote_failed_local_fallback:
+      "远程嵌入失败。AiFetchly 已改用本地免费嵌入模型。",
+    embedding_failed_after_fallback:
+      "远程重试和本地回退后嵌入生成仍然失败。请查看文档错误日志了解详情。",
+    embedding_partial_remote_search:
+      "由于远程查询嵌入失败，部分远程索引的文档无法进行搜索。",
     current_model: "当前模型",
     update_model: "更新模型",
     model_category_fast: "快速",
@@ -1102,17 +1109,20 @@ export default {
     user_preferences: "用户偏好",
     "user-preferences-group-description": "应用程序行为的用户级偏好设置。",
     default_embedding_model: "默认嵌入模型",
-    "default-embedding-model-description": "选择用于向量搜索和相似度匹配的嵌入模型。",
+    "default-embedding-model-description":
+      "选择用于向量搜索和相似度匹配的嵌入模型。",
     language_preference: "语言",
     "language-preference-description": "界面语言偏好。",
     ai_website_analysis_business_info: "业务信息",
-    "ai-website-analysis-business-info-description": "网站AI分析中使用的业务信息。",
+    "ai-website-analysis-business-info-description":
+      "网站AI分析中使用的业务信息。",
     "external-system-group-description": "外部系统组设置",
     mcp_tools: "MCP工具",
     manage_mcp_tools: "管理MCP工具",
     manage_skills: "管理技能",
     ai_preferences: "AI 偏好设置",
-    "ai-preferences-group-description": "控制 AI 聊天行为、记忆和上下文的设置。",
+    "ai-preferences-group-description":
+      "控制 AI 聊天行为、记忆和上下文的设置。",
     user_ai_auto_dream: "自动摘要整合",
     "ai-auto-dream-description":
       "在后台自动汇总过去的对话，以节省 AI 上下文令牌。",
@@ -1822,7 +1832,8 @@ export default {
     tool_approval_mode_full: "完全访问",
     tool_approval_mode_ask_desc: "在需要权限的工具运行前询问。",
     tool_approval_mode_auto_desc: "自动批准本对话中受信任的非 shell 工具。",
-    tool_approval_mode_full_desc: "自动批准本对话中注册的工具。安全限制仍然生效。",
+    tool_approval_mode_full_desc:
+      "自动批准本对话中注册的工具。安全限制仍然生效。",
     tool_approval_mode_full_confirm_title: "启用完全访问？",
     tool_approval_mode_full_confirm_text:
       "注册工具将在本对话中无需审批提示直接运行。依赖安装和硬安全限制仍需要您的批准。",
