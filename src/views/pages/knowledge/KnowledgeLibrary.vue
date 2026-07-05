@@ -346,6 +346,23 @@
       </v-card>
     </v-dialog>
 
+    <!-- Subscription Required Dialog -->
+    <v-dialog v-model="showSubscriptionDialog" max-width="400" persistent>
+      <v-card>
+        <v-card-title class="text-h6">
+          <v-icon color="warning" class="mr-2">mdi-crown</v-icon>
+          {{ t('knowledge.subscription_required') }}
+        </v-card-title>
+        <v-card-text>
+          {{ t('knowledge.subscription_required_message') }}
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn color="primary" @click="showSubscriptionDialog = false">{{ t('common.close') || 'Close' }}</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
     <!-- Loading Overlay -->
     <v-overlay
       v-model="isLoading"
@@ -424,12 +441,16 @@ const showDuplicateDialog = ref(false);
 const duplicateFiles = ref<Array<{ fileName: string; fileSize: number; existingId: number; existingUploadedAt: string }>>([]);
 const pendingUploadAfterDuplicateCheck = ref<File[]>([]);
 
+// Subscription dialog
+const showSubscriptionDialog = ref(false);
+
 // Component refs
 const documentManagement = ref();
 const searchInterface = ref();
 
 // Lifecycle hooks
 onMounted(async () => {
+  showSubscriptionDialog.value = true;
   await initializeRAGSystem();
 });
 

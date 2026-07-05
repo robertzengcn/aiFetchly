@@ -150,6 +150,8 @@ export default {
     map_scraper: "Local Business Finder",
   },
   knowledge: {
+    subscription_required: "Subscription Required",
+    subscription_required_message: "Knowledge Library is only available for subscription users. Please upgrade your plan.",
     upload_document: "Upload Document",
     documents: "Documents",
     chat: "Chat",

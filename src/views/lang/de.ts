@@ -151,6 +151,8 @@ export default {
     not_found: "Nicht gefunden",
   },
   knowledge: {
+    subscription_required: "Abonnement Erforderlich",
+    subscription_required_message: "Die Wissensbibliothek steht nur Abonnement-Benutzern zur Verfügung. Bitte upgraden Sie Ihren Plan.",
     upload_document: "Dokument hochladen",
     documents: "Dokumente",
     chat: "Chat",

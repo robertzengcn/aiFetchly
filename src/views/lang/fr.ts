@@ -151,6 +151,8 @@ export default {
     not_found: "Introuvable",
   },
   knowledge: {
+    subscription_required: "Abonnement Requis",
+    subscription_required_message: "La bibliothèque de connaissances est uniquement disponible pour les utilisateurs abonnés. Veuillez mettre à niveau votre forfait.",
     upload_document: "Upload Document",
     documents: "Documents",
     chat: "Chat",

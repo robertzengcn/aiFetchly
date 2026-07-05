@@ -151,6 +151,8 @@ export default {
     not_found: "見つかりません",
   },
   knowledge: {
+    subscription_required: "サブスクリプションが必要です",
+    subscription_required_message: "ナレッジライブラリはサブスクリプションユーザーのみ利用可能です。プランをアップグレードしてください。",
     upload_document: "ドキュメントをアップロード",
     documents: "ドキュメント",
     chat: "チャット",

@@ -141,6 +141,8 @@ export default {
     not_found: "未找到",
   },
   knowledge: {
+    subscription_required: "需要订阅",
+    subscription_required_message: "知识库仅限订阅用户使用。请升级您的套餐。",
     upload_document: "上传文档",
     documents: "文档",
     chat: "聊天",
