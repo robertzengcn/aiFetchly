@@ -64,9 +64,7 @@ describe("safeGoto", () => {
     const goto = vi.fn(async () => undefined);
     const page = makePage({ goto });
 
-    await expect(
-      safeGoto(page, "https://maps.test", { label: "init" })
-    ).resolves.toBeUndefined();
+    await expect(safeGoto(page, "https://maps.test")).resolves.toBeUndefined();
 
     expect(goto).toHaveBeenCalledWith("https://maps.test", {
       waitUntil: "domcontentloaded",

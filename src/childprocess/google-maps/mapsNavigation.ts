@@ -27,8 +27,6 @@ export interface SafeGotoOptions {
    * If omitted, only `document.readyState === "complete"` is required.
    */
   readySelector?: string;
-  /** Label used in debug logs to identify the call site. */
-  label?: string;
 }
 
 /**
@@ -56,36 +54,19 @@ export function isNavigationTimeoutError(err: unknown): boolean {
  * On a timeout, inspects `document.readyState` (and optionally `readySelector`);
  * if the page is actually loaded, the timeout is treated as spurious and the
  * function resolves. Otherwise the original timeout error is propagated.
- *
- * Always emits debug logs at the navigation boundary so the exact failure
- * point and page state are visible in worker stderr.
  */
 export async function safeGoto(
   page: Page,
   url: string,
   opts: SafeGotoOptions = {}
 ): Promise<void> {
-  const {
-    timeout = 30000,
-    waitUntil = "domcontentloaded",
-    readySelector,
-    label = "safeGoto",
-  } = opts;
+  const { timeout = 30000, waitUntil = "domcontentloaded", readySelector } =
+    opts;
 
-  const start = Date.now();
   try {
     await page.goto(url, { waitUntil, timeout });
-    console.log(
-      `[DEBUG] ${label}: navigated to ${url} (waitUntil=${waitUntil}, ${
-        Date.now() - start
-      }ms)`
-    );
   } catch (err) {
     if (!isNavigationTimeoutError(err)) {
-      console.error(
-        `[DEBUG] ${label}: non-timeout error for ${url}:`,
-        err instanceof Error ? err.message : err
-      );
       throw err;
     }
 
@@ -107,16 +88,9 @@ export async function safeGoto(
     }
 
     const pageLoaded = readyState === "complete";
-    console.log(
-      `[DEBUG] ${label}: timeout on ${url} (waitUntil=${waitUntil}, timeout=${timeout}ms). ` +
-        `readyState=${readyState}, readySelector=${readySelector ?? "(none)"}, ` +
-        `selectorPresent=${selectorPresent}, pageLoaded=${pageLoaded}`
-    );
-
     if (!(pageLoaded && selectorPresent)) {
       // Page genuinely not loaded — propagate the original timeout error.
       throw err;
     }
-    console.log(`[DEBUG] ${label}: page is loaded despite timeout — continuing.`);
   }
 }
