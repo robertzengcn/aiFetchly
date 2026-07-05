@@ -1,6 +1,6 @@
 import { Entity, PrimaryGeneratedColumn, Column, Index } from "typeorm";
 import AuditableEntity from "@/entity/Auditable.entity";
-import {
+import type {
   EmailReplyAuditAction,
   EmailReplyAuditActor,
 } from "@/entityTypes/emailReceiveTypes";

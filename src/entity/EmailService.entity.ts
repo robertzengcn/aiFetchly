@@ -1,6 +1,6 @@
 import { Entity, PrimaryGeneratedColumn, Column } from "typeorm";
 import AuditableEntity from "@/entity/Auditable.entity";
-import { EmailReceiveProtocol } from "@/entityTypes/emailReceiveTypes";
+import type { EmailReceiveProtocol } from "@/entityTypes/emailReceiveTypes";
 
 @Entity("email_service")
 export class EmailServiceEntity extends AuditableEntity {
