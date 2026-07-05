@@ -1,6 +1,6 @@
 <template>
     <div class="proxy-toolbar mt-4">
-        <div class="d-flex flex-wrap align-center gap-4 search_tool">
+        <div class="d-flex flex-wrap align-center search_tool" style="column-gap: 12px; row-gap: 24px">
             <div class="search_wrap flex-grow-1" style="min-width: 200px; max-width: 420px">
                 <v-text-field
 rounded class="elevation-0" density="compact" variant="solo" label="Search"
