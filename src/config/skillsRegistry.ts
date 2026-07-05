@@ -32,6 +32,12 @@ import {
   startBulkEmailSendTask,
 } from "@/service/EmailMarketingAiTools";
 import {
+  listEmailInboxes,
+  fetchUnreadEmails,
+  getEmailMessage,
+  markEmailProcessed,
+} from "@/service/EmailReceiveAiTools";
+import {
   listSchedulesForAi,
   getScheduleDetailsForAi,
   listScheduleExecutionsForAi,
@@ -1384,6 +1390,156 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     source: "built-in",
     execute: async (args) => {
       const result = await startBulkEmailSendTask(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "list_email_inboxes",
+    description:
+      "List email services that have inbound receive enabled. Returns inbox name, " +
+      "address, host, folder, sync status, and last sync error. Never exposes passwords or tokens.",
+    parameters: {
+      type: "object",
+      properties: {
+        page: {
+          type: "number",
+          description: "Zero-based page number.",
+          default: 0,
+        },
+        size: {
+          type: "number",
+          description: "Page size, from 1 to 100.",
+          default: 20,
+        },
+        search: {
+          type: "string",
+          description: "Optional name/address/host search text.",
+        },
+      },
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await listEmailInboxes(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "fetch_unread_emails",
+    description:
+      "Fetch a bounded set of unread (or recent) messages from a receive-enabled inbox and " +
+      "store them locally. Returns message summaries only (no bodies). Default unread_only is true; " +
+      "limit is capped at 50.",
+    parameters: {
+      type: "object",
+      properties: {
+        email_service_id: {
+          type: "number",
+          description: "Receive-enabled email service id.",
+        },
+        folder: {
+          type: "string",
+          description: "Folder to read. Defaults to the configured folder.",
+        },
+        limit: {
+          type: "number",
+          description: "Max messages to fetch (1-50).",
+          default: 10,
+        },
+        unread_only: {
+          type: "boolean",
+          description: "Fetch only unread messages.",
+          default: true,
+        },
+        since: {
+          type: "string",
+          description: "ISO 8601 lower bound on received date.",
+        },
+      },
+      required: ["email_service_id"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await fetchUnreadEmails(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "get_email_message",
+    description:
+      "Read one stored inbound message in detail, including a sanitized body (scripts, event " +
+      "handlers, and tracking pixels stripped). Does not return attachments. Marks the message read.",
+    parameters: {
+      type: "object",
+      properties: {
+        message_id: {
+          type: "number",
+          description: "Stored received message id.",
+        },
+        include_body: {
+          type: "boolean",
+          description: "Include sanitized body text/HTML.",
+          default: true,
+        },
+      },
+      required: ["message_id"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await getEmailMessage(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "mark_email_processed",
+    description:
+      "Mark a received message as handled without replying (skipped, blocked, failed, or " +
+      "needs_human_review). Does not delete the provider mailbox message. Writes an audit row.",
+    parameters: {
+      type: "object",
+      properties: {
+        message_id: {
+          type: "number",
+          description: "Stored received message id.",
+        },
+        status: {
+          type: "string",
+          enum: ["skipped", "blocked", "failed", "needs_human_review"],
+          description: "Processing outcome to record.",
+        },
+        reason: {
+          type: "string",
+          description: "Optional human-readable reason.",
+        },
+      },
+      required: ["message_id", "status"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await markEmailProcessed(args);
       return {
         success: result.success,
         result: result as unknown as Record<string, unknown>,
