@@ -264,23 +264,17 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
       );
     }
 
-    // Navigate to Google Maps search.
-    // NOTE: We deliberately use waitUntil="domcontentloaded" rather than
-    // "networkidle2". Google Maps keeps persistent network connections alive
-    // (websockets, telemetry, polling), so networkidle2 never resolves and
-    // page.goto times out after 30s with "Navigation timeout of 30000 ms
-    // exceeded" even though the page is fully rendered. safeGoto additionally
-    // recovers from a spurious timeout by inspecting document.readyState.
-    // The real readiness gate is the waitForSelector('[role="feed"]') below.
+    // Navigate to Google Maps search. Use waitUntil="domcontentloaded" — not
+    // "networkidle2", which never resolves on Google Maps and causes a spurious
+    // 30s navigation timeout. safeGoto additionally recovers from such a
+    // timeout. The real readiness gate is waitForSelector('[role="feed"]').
     sendProgress(requestId, "loading", 0, maxResults, "Loading Google Maps...");
     const searchUrl = `https://www.google.com/maps/search/${encodeURIComponent(
       query
     )}+${encodeURIComponent(location)}`;
-    console.log(`[DEBUG] Navigating to search URL: ${searchUrl}`);
     await safeGoto(page, searchUrl, {
       timeout: 30000,
       waitUntil: "domcontentloaded",
-      label: "initial-search",
     });
 
     // Wait for results feed to load
@@ -460,7 +454,6 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
           await safeGoto(page, searchUrl, {
             timeout: 30000,
             waitUntil: "domcontentloaded",
-            label: "renavigate-out-of-range",
           });
           await page
             .waitForSelector('[role="feed"]', { timeout: 15000 })
@@ -533,7 +526,6 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
             await safeGoto(page, searchUrl, {
               timeout: 30000,
               waitUntil: "domcontentloaded",
-              label: "goback-fallback",
             });
           });
         await randomDelay(800, 1500);
@@ -556,7 +548,6 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
         await safeGoto(page, searchUrl, {
           timeout: 30000,
           waitUntil: "domcontentloaded",
-          label: "error-recovery",
         }).catch(() => {
           /* re-navigation already attempted */
         });
