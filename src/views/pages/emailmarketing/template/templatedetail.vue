@@ -48,9 +48,22 @@ ref="textarea" v-model="tplcontent" :label="t('emailmarketing.content')"
           </v-btn>
 
           <!-- AI Email Template Generation Button - opens popup -->
-          <v-btn @click="aiDialogOpen = true" color="purple-darken-3" class="mb-2 ml-2 mt-4" rounded="lg" size="small" prepend-icon="mdi-robot">
-            {{ t('aiTemplateGeneration.title') || 'Generate with AI' }}
-          </v-btn>
+          <div class="d-flex align-center mb-2 ml-2 mt-4">
+            <v-btn
+              @click="aiDialogOpen = true"
+              :color="aiEnabled ? 'purple-darken-3' : 'grey'"
+              class="mr-2"
+              rounded="lg"
+              size="small"
+              prepend-icon="mdi-robot"
+              :disabled="!aiEnabled"
+            >
+              {{ t('aiTemplateGeneration.title') || 'Generate with AI' }}
+            </v-btn>
+            <span v-if="!aiEnabled" class="text-caption text-grey">
+              {{ t('aiTemplateGeneration.error.aiDisabled') || 'AI functionality is only available to subscribers.' }}
+            </span>
+          </div>
 
         </v-col>
       </v-row>
@@ -259,6 +272,9 @@ import { useI18n } from "vue-i18n";
 import { getEmailtemplatebyid, updateEmailtemplate, generateAIEmailTemplate, stopAIEmailTemplateGeneration } from "@/views/api/emailmarketing"
 import { EmailTemplateRespdata, EmailTemplatePreviewdata, AIEmailTemplateRequest } from "@/entityTypes/emailmarketingType"
 import { convertVariableInTemplate } from "@/views/utils/emailFun"
+import { QUERY_USER_INFO } from "@/config/channellist"
+import { windowInvoke } from "@/views/utils/apirequest"
+import { UserInfoType } from "@/entityTypes/userType"
 // import { VueEditor } from "vue2-editor";
 const { t } = useI18n({ inheritLocale: true });
 const templateId = ref<number>(0);
@@ -301,6 +317,7 @@ const useRAG = ref<boolean>(false);
 const isStreaming = ref<boolean>(false);
 const streamedContent = ref<string>("");
 const showRegenerateConfirm = ref<boolean>(false);
+const aiEnabled = ref<boolean>(true);
 // import { RefSymbol } from "@vue/reactivity";
 // const selectedProxy = ref<ProxyListEntity>();
 
@@ -588,9 +605,16 @@ function cancelRegenerate() {
   showRegenerateConfirm.value = false;
 }
 
-onMounted(() => {
+onMounted(async () => {
   initialize();
   document.addEventListener("focusin", handleFocus);
+  try {
+    const userInfo = await windowInvoke(QUERY_USER_INFO) as UserInfoType | undefined;
+    aiEnabled.value = userInfo?.aiEnabled === true;
+  } catch (e) {
+    console.error('Failed to check AI enabled status:', e);
+    aiEnabled.value = false;
+  }
 });
 onBeforeUnmount(() => {
   document.removeEventListener("focusin", handleFocus);
