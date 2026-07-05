@@ -358,7 +358,7 @@
         </v-card-text>
         <v-card-actions>
           <v-spacer />
-          <v-btn color="primary" @click="showSubscriptionDialog = false">{{ t('common.close') || 'Close' }}</v-btn>
+          <v-btn color="primary" @click="closeSubscriptionDialog">{{ t('common.close') || 'Close' }}</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -384,9 +384,11 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { useRouter } from 'vue-router';
 
 // Expose t function to template
 const { t } = useI18n();
+const router = useRouter();
 
 // Type declaration for template
 //declare const t: (key: string, ...args: any[]) => string;
@@ -453,6 +455,11 @@ onMounted(async () => {
   showSubscriptionDialog.value = true;
   await initializeRAGSystem();
 });
+
+function closeSubscriptionDialog() {
+  showSubscriptionDialog.value = false;
+  router.back();
+}
 
 onUnmounted(() => {
   // Cleanup if needed
