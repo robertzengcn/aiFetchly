@@ -21,6 +21,7 @@
 import type {
   AIFetchlyConfigDiagnostic,
   AIFetchlyConfigSnapshot,
+  AIFetchlySourceTrust,
 } from "@/entityTypes/aifetchlyConfigTypes";
 import type { SlashCommandDefinition } from "@/entityTypes/slashCommandTypes";
 import type { CommandRegistry } from "@/service/slashCommands/CommandRegistry";
@@ -56,7 +57,9 @@ export class AIFetchlyRuntimeRegistrySync {
    * and the source's instruction blocks in the context cache. Returns an
    * {@link AIFetchlySnapshotApplyResult} summarising what changed.
    */
-  applySnapshot(snapshot: AIFetchlyConfigSnapshot): AIFetchlySnapshotApplyResult {
+  applySnapshot(
+    snapshot: AIFetchlyConfigSnapshot
+  ): AIFetchlySnapshotApplyResult {
     // Phase-13 boundary: snapshot.commands is typed `readonly unknown[]`
     // (forward-compat for Plan 02's typed SlashCommandDefinition[]). Phase 13
     // snapshots always have empty commands, so the cast is safe; phase 15+
@@ -74,6 +77,42 @@ export class AIFetchlyRuntimeRegistrySync {
       instructionsChanged: snapshot.instructions.length > 0,
       diagnosticCount: countDiagnostics(snapshot.diagnostics),
     };
+  }
+
+  /**
+   * Apply a workspace snapshot through the TRS-01 trust filter.
+   *
+   * Untrusted instructions + commands are dropped BEFORE the existing
+   * {@link applySnapshot} mutates the registry or the instruction cache.
+   * The remaining capability arrays (agents/hooks/skills) are forced empty
+   * in Phase 14 (the per-capability trust entity lands in Phase 17), so a
+   * workspace snapshot never carries them regardless of the trust flags.
+   *
+   * Design references: §8.2 (trust filtering before registry mutation),
+   * §13.1 (Phase 14 binary gate vs Phase 17 per-capability). Research
+   * §Pitfall 8: the existing {@link applySnapshot} applies BLINDLY (no
+   * trust param). Callers MUST route every workspace snapshot through
+   * this method — NEVER call {@link applySnapshot} directly with a raw
+   * workspace snapshot. The global ~/.aifetchly path (user-owned, always
+   * trusted) still calls {@link applySnapshot} directly.
+   *
+   * Returns the same {@link AIFetchlySnapshotApplyResult} shape as
+   * {@link applySnapshot}; `commandsChanged`/`instructionsChanged` reflect
+   * the filtered arrays that actually reached the registry/cache.
+   */
+  applyWorkspaceSnapshot(
+    snapshot: AIFetchlyConfigSnapshot,
+    trust: AIFetchlySourceTrust
+  ): AIFetchlySnapshotApplyResult {
+    const filtered: AIFetchlyConfigSnapshot = {
+      ...snapshot,
+      // Drop untrusted capabilities at the boundary. The spread carries the
+      // rest of the snapshot (files, diagnostics, sourceId, workspaceId)
+      // through unchanged.
+      instructions: trust.instructions ? snapshot.instructions : [],
+      commands: trust.commands ? snapshot.commands : [],
+    };
+    return this.applySnapshot(filtered);
   }
 
   /**
