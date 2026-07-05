@@ -83,6 +83,13 @@ export interface AIFetchlyConfigSnapshot {
   readonly sourceId: string;
   readonly rootPath: string;
   readonly version: number;
+  /**
+   * Workspace ID for snapshots produced by the workspace scanner (Phase 14+).
+   * Absent for the global ~/.aifetchly snapshot (source="user"). The watch
+   * manager keys snapshots by this field; the event protocol carries it
+   * redundantly so the manager can route without parsing sourceId.
+   */
+  readonly workspaceId?: string;
   readonly files: readonly AIFetchlyConfigFileSnapshot[];
   readonly instructions: readonly AIFetchlyInstructionBlock[];
   // Phase 13 leaves these capability arrays as `readonly unknown[]`; Plans 02
