@@ -7,6 +7,7 @@ import type {
   OpenAIToolCall,
   OpenAIToolChoice,
   ToolExecutionResult,
+  StreamRecoveryInfo,
   StreamRetryInfo,
 } from "@/api/aiChatApi";
 import type {
@@ -26,6 +27,19 @@ import type {
 } from "@/service/AIChatQueryEvents";
 import { OpenAIStreamAccumulator } from "@/service/OpenAIStreamAccumulator";
 import { ToolExecutor } from "@/service/ToolExecutor";
+import {
+  AIChatRecoverableError,
+  buildRecoveryMetadata,
+  createRecoveryAttemptState,
+  isAIChatRecoverableError,
+  type AIChatRecoveryReason,
+} from "@/service/AIChatRecoveryTypes";
+import { AIChatRecoveryClassifier } from "@/service/AIChatRecoveryClassifier";
+import { AIChatRecoveryCoordinator } from "@/service/AIChatRecoveryCoordinator";
+import {
+  AI_CHAT_RECOVERY_DEFAULTS,
+  AIChatRetryPolicy,
+} from "@/service/AIChatRetryPolicy";
 import {
   checkPlanModeToolPolicy,
   isPlanToolName,
@@ -212,6 +226,7 @@ export interface AIChatQueryLoopDeps {
     options?: {
       signal?: AbortSignal;
       onRetry?: (info: StreamRetryInfo) => void;
+      onRecoveryStatus?: (info: StreamRecoveryInfo) => void;
     }
   ): Promise<void>;
 
@@ -222,6 +237,18 @@ export interface AIChatQueryLoopDeps {
   ): Promise<ToolExecutionResult>;
 
   getSkillDefinition(name: string): SkillDefinition | undefined;
+
+  /**
+   * Optional: resolves a fallback model id for Layer 6 recovery. When
+   * omitted, the loop records the failure reason but cannot auto-switch
+   * models (the badge stays dark). Production wires
+   * AIChatModelFallbackService here.
+   */
+  resolveFallbackModel?(input: {
+    originalModel?: string;
+    currentModel?: string;
+    reason: AIChatRecoveryReason;
+  }): Promise<{ model?: string; source: string }>;
 }
 
 /** Serialization helpers (moved from ai-chat-v2-ipc.ts). */
@@ -310,6 +337,11 @@ export class AIChatQueryLoop {
     // The frontend may or may not send maxTokens; default to 16384.
     let currentMaxTokens = input.request.maxTokens ?? 16384;
 
+    // Per-turn seven-layer recovery state. Tracks which layers have
+    // already been attempted so the coordinator doesn't loop forever.
+    // Imported fresh per run() to avoid cross-turn contamination.
+    let recoveryState = createRecoveryAttemptState(input.request.model);
+
     try {
       for (
         let round = input.startRound;
@@ -369,6 +401,19 @@ export class AIChatQueryLoop {
                 retryDelayMs: info.delayMs,
               });
             },
+            onRecoveryStatus: (info) => {
+              eventSink.emit({
+                type: "recovery_status",
+                conversationId: input.conversationId,
+                messageId: input.assistantMessageId,
+                layer: info.layer,
+                reason: info.reason,
+                attempt: info.attempt,
+                maxAttempts: info.maxAttempts,
+                delayMs: info.delayMs,
+                message: info.message,
+              });
+            },
           }
         );
 
@@ -409,9 +454,125 @@ export class AIChatQueryLoop {
         );
 
         if (accumulator.state.sawToolCallDelta && parsedCalls.length === 0) {
+          // Layer 3: the model started emitting tool_call deltas but the
+          // arguments were truncated. Try recovery before failing.
+          const coordinator = new AIChatRecoveryCoordinator();
+          const result = coordinator.recover({
+            reason: "output_limit",
+            state: recoveryState,
+            maxOutputTokensCap: AI_CHAT_RECOVERY_DEFAULTS.maxOutputTokensCap,
+          });
+          if (result.action.type === "escalate_output_tokens") {
+            currentMaxTokens = result.action.maxTokens;
+            // Capture any partial content before re-trying with a larger
+            // budget. The model may have produced useful text before
+            // hitting the limit.
+            const partialEsc = accumulator.state.fullContent || "";
+            recoveryState = {
+              ...result.updatedState,
+              recoveredContentPrefix:
+                recoveryState.recoveredContentPrefix + partialEsc,
+            };
+            eventSink.emit({
+              type: "recovery_status",
+              conversationId: input.conversationId,
+              messageId: input.assistantMessageId,
+              layer: "output_token_recovery",
+              reason: "output_limit",
+              message: "Escalating output token budget",
+            });
+            continue;
+          }
+          if (result.action.type === "continue_output") {
+            // Append a non-persisted continuation prompt so the model
+            // picks up where it left off. We must NOT emit a terminal
+            // event for the truncated partial content.
+            const partial = accumulator.state.fullContent || "";
+            recoveryState = {
+              ...result.updatedState,
+              recoveredContentPrefix:
+                recoveryState.recoveredContentPrefix + partial,
+            };
+            messages.push({
+              role: "assistant",
+              content: partial || null,
+            });
+            messages.push({
+              role: "user",
+              content: result.action.continuationMessage,
+            });
+            eventSink.emit({
+              type: "recovery_status",
+              conversationId: input.conversationId,
+              messageId: input.assistantMessageId,
+              layer: "output_token_recovery",
+              reason: "output_limit",
+              attempt: recoveryState.outputContinuationCount,
+              message: "Continuing truncated output",
+            });
+            continue;
+          }
           throw new Error(
             "AI server stream ended before returning a complete response."
           );
+        }
+
+        // Layer 3 also handles finish_reason=length on text responses.
+        if (accumulator.state.finishReason === "length") {
+          const coordinator = new AIChatRecoveryCoordinator();
+          const result = coordinator.recover({
+            reason: "output_limit",
+            state: recoveryState,
+            maxOutputTokensCap: AI_CHAT_RECOVERY_DEFAULTS.maxOutputTokensCap,
+          });
+          if (result.action.type === "escalate_output_tokens") {
+            currentMaxTokens = result.action.maxTokens;
+            // Capture any partial content before re-trying with a larger
+            // budget. The model may have produced useful text before
+            // hitting the limit.
+            const partialEsc = accumulator.state.fullContent || "";
+            recoveryState = {
+              ...result.updatedState,
+              recoveredContentPrefix:
+                recoveryState.recoveredContentPrefix + partialEsc,
+            };
+            eventSink.emit({
+              type: "recovery_status",
+              conversationId: input.conversationId,
+              messageId: input.assistantMessageId,
+              layer: "output_token_recovery",
+              reason: "output_limit",
+              message: "Escalating output token budget",
+            });
+            continue;
+          }
+          if (result.action.type === "continue_output") {
+            const partial = accumulator.state.fullContent || "";
+            recoveryState = {
+              ...result.updatedState,
+              recoveredContentPrefix:
+                recoveryState.recoveredContentPrefix + partial,
+            };
+            messages.push({
+              role: "assistant",
+              content: partial || null,
+            });
+            messages.push({
+              role: "user",
+              content: result.action.continuationMessage,
+            });
+            eventSink.emit({
+              type: "recovery_status",
+              conversationId: input.conversationId,
+              messageId: input.assistantMessageId,
+              layer: "output_token_recovery",
+              reason: "output_limit",
+              attempt: recoveryState.outputContinuationCount,
+              message: "Continuing truncated output",
+            });
+            continue;
+          }
+          // Else fall through; the round will complete with the partial.
         }
 
         // Detect explicit server-side errors: OpenAI-compatible servers can
@@ -809,6 +970,12 @@ export class AIChatQueryLoop {
       }
 
       let fullContent = finalAccumulator?.state.fullContent ?? "";
+      // Layer 3 recovery: prepend any prefix accumulated from prior
+      // truncated rounds so the persisted assistant message includes
+      // the recovered content from earlier in the turn.
+      if (recoveryState.recoveredContentPrefix) {
+        fullContent = recoveryState.recoveredContentPrefix + fullContent;
+      }
       if (fullContent.trim().length === 0 && immediatePlanSubmissionContent) {
         fullContent = immediatePlanSubmissionContent;
       }
@@ -864,6 +1031,7 @@ export class AIChatQueryLoop {
         totalTokens: lastReportedUsage?.totalTokens,
         promptTokens: lastReportedUsage?.promptTokens,
         completionTokens: lastReportedUsage?.completionTokens,
+        recoveryMetadata: buildRecoveryMetadata(recoveryState),
       };
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
@@ -874,7 +1042,62 @@ export class AIChatQueryLoop {
           partialContent: activeAccumulator?.state.fullContent ?? "",
           model: activeAccumulator?.state.model,
           responseId: activeAccumulator?.state.responseId,
+          recoveryMetadata: buildRecoveryMetadata(recoveryState),
         };
+      }
+      // Layer 6 (model fallback) observability: when the API exhausted
+      // its retries and surfaced an AIChatRecoverableError for overload
+      // or model_unavailable, record a fallback attempt and emit a
+      // recovery_status event so the UI badge reflects the escalation.
+      // (Full automatic model re-run is a follow-up enhancement; this
+      // path makes the failure observable and persists the attempt.)
+      if (isAIChatRecoverableError(err)) {
+        const classifier = new AIChatRecoveryClassifier();
+        const rec = classifier.classifyThrown(err);
+        const coordinator = new AIChatRecoveryCoordinator();
+        // Resolve a fallback model (Layer 6) when the deps provide a
+        // resolver. Without it, the coordinator cannot return a
+        // fallback_model action and the badge stays dark.
+        let fallbackModel: string | undefined;
+        if (
+          this.deps.resolveFallbackModel &&
+          (rec.reason === "overload" || rec.reason === "model_unavailable")
+        ) {
+          try {
+            const resolved = await this.deps.resolveFallbackModel({
+              originalModel: recoveryState.originalModel,
+              currentModel: recoveryState.currentModel,
+              reason: rec.reason,
+            });
+            fallbackModel = resolved.model;
+          } catch {
+            // Non-fatal: proceed without a fallback.
+          }
+        }
+        const result = coordinator.recover({
+          reason: rec.reason,
+          state: recoveryState,
+          maxOutputTokensCap: AI_CHAT_RECOVERY_DEFAULTS.maxOutputTokensCap,
+          fallbackModel,
+        });
+        // Only update state when the coordinator produced an action we
+        // actually act on (fallback_model). Recording persistent_retry
+        // or other actions without executing them would mislead the
+        // persisted recoveryMetadata.
+        if (result.action.type === "fallback_model") {
+          recoveryState = result.updatedState;
+          eventSink.emit({
+            type: "recovery_status",
+            conversationId: input.conversationId,
+            messageId: input.assistantMessageId,
+            layer: "model_fallback",
+            reason: rec.reason,
+            originalModel: recoveryState.originalModel,
+            currentModel: recoveryState.currentModel,
+            fallbackModel: result.action.fallbackModel,
+            message: "Switching to backup model",
+          });
+        }
       }
       return {
         type: "failed",
@@ -884,6 +1107,7 @@ export class AIChatQueryLoop {
         partialContent: activeAccumulator?.state.fullContent ?? "",
         model: activeAccumulator?.state.model,
         responseId: activeAccumulator?.state.responseId,
+        recoveryMetadata: buildRecoveryMetadata(recoveryState),
       };
     }
   }

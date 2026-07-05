@@ -9,6 +9,7 @@ import { PluginManifestService } from "@/service/PluginManifestService";
 import {
   parseServersJson,
   normalizeMcpDeclaration,
+  normalizeInlineMcpMap,
   type NormalizedMcpServer,
 } from "@/service/PluginMcpDeclaration";
 import { getPluginInstallRoot } from "@/service/pluginPaths";
@@ -20,6 +21,8 @@ import {
   type PluginSourceProvenance,
 } from "@/entityTypes/pluginTypes";
 import { SkillImportService } from "@/service/SkillImportService";
+import { ClaudeSkillFormatAdapter } from "@/service/pluginCompat/ClaudeSkillFormatAdapter";
+import { ClaudePluginAdapter } from "@/service/pluginCompat/ClaudePluginAdapter";
 import type { SkillManifest } from "@/entityTypes/skillTypes";
 
 /**
@@ -161,6 +164,145 @@ function readPluginSkillManifest(
   return { ok: true, manifest: validation.manifest, absPath };
 }
 
+/**
+ * Read Claude SKILL.md file(s) at a declared skill path.
+ *
+ * A Claude skills path may be:
+ *   - A directory (typically `skills/`): scan for `<name>/SKILL.md` (depth 1).
+ *     Each match is a separate skill.
+ *   - A direct path to a `SKILL.md` file.
+ *
+ * Returns one or more translated SkillManifest entries. Errors are
+ * collected per skill (one bad skill doesn't fail the rest).
+ *
+ * See tech design §6 / §7.3.
+ */
+function readPluginClaudeSkillsFromPath(
+  pluginRoot: string,
+  skillPath: string
+):
+  | {
+      ok: true;
+      skills: Array<{ manifest: SkillManifest; relManifestPath: string }>;
+    }
+  | { ok: false; errors: PluginError[] } {
+  let absPath: string;
+  try {
+    absPath = resolvePluginRelativePath(pluginRoot, skillPath);
+  } catch {
+    return {
+      ok: false,
+      errors: [
+        {
+          code: "path-outside-plugin",
+          componentType: "skill",
+          path: skillPath,
+          message: `Claude skill path "${skillPath}" escapes the plugin directory.`,
+          recoverable: false,
+        },
+      ],
+    };
+  }
+
+  // Build the list of SKILL.md files to translate.
+  const mdFiles: Array<{ abs: string; rel: string }> = [];
+  try {
+    const stat = fs.statSync(absPath);
+    if (stat.isDirectory()) {
+      // Depth-1 scan: <dir>/<skill-name>/SKILL.md
+      const entries = fs.readdirSync(absPath, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const candidateAbs = path.join(absPath, entry.name, "SKILL.md");
+        if (fs.existsSync(candidateAbs)) {
+          mdFiles.push({
+            abs: candidateAbs,
+            rel: `${skillPath.replace(/\/$/, "")}/${entry.name}/SKILL.md`,
+          });
+        }
+      }
+      // Also accept a SKILL.md directly inside the scanned directory
+      // (Claude plugins occasionally ship a single skill at skills/SKILL.md).
+      const direct = path.join(absPath, "SKILL.md");
+      if (fs.existsSync(direct)) {
+        mdFiles.push({
+          abs: direct,
+          rel: `${skillPath.replace(/\/$/, "")}/SKILL.md`,
+        });
+      }
+    } else {
+      mdFiles.push({ abs: absPath, rel: skillPath });
+    }
+  } catch (e: unknown) {
+    return {
+      ok: false,
+      errors: [
+        {
+          code: "component-not-found",
+          componentType: "skill",
+          componentName: skillPath,
+          path: absPath,
+          message:
+            e instanceof Error
+              ? `Claude skill path not accessible: ${e.message}`
+              : `Claude skill path not accessible: ${skillPath}`,
+          recoverable: false,
+        },
+      ],
+    };
+  }
+
+  if (mdFiles.length === 0) {
+    return {
+      ok: false,
+      errors: [
+        {
+          code: "component-not-found",
+          componentType: "skill",
+          componentName: skillPath,
+          path: absPath,
+          message: `No SKILL.md files found under Claude skill path: ${skillPath}`,
+          recoverable: false,
+        },
+      ],
+    };
+  }
+
+  const skills: Array<{ manifest: SkillManifest; relManifestPath: string }> =
+    [];
+  const errors: PluginError[] = [];
+
+  for (const mdFile of mdFiles) {
+    let content: string;
+    try {
+      content = fs.readFileSync(mdFile.abs, "utf-8");
+    } catch (e: unknown) {
+      errors.push({
+        code: "skill-manifest-invalid",
+        componentType: "skill",
+        componentName: mdFile.rel,
+        message:
+          e instanceof Error
+            ? `Failed to read SKILL.md: ${e.message}`
+            : "Failed to read SKILL.md",
+        recoverable: false,
+      });
+      continue;
+    }
+    const adapted = ClaudeSkillFormatAdapter.adapt(content, mdFile.rel);
+    if (!adapted.ok) {
+      errors.push(adapted.error);
+      continue;
+    }
+    skills.push({ manifest: adapted.manifest, relManifestPath: mdFile.rel });
+  }
+
+  if (skills.length === 0) {
+    return { ok: false, errors };
+  }
+  return { ok: true, skills };
+}
+
 /** Read and normalize an MCP servers.json declared by a plugin. */
 function readPluginMcpServers(
   pluginRoot: string,
@@ -221,10 +363,24 @@ function readPluginMcpServers(
   return { ok: true, servers: out };
 }
 
+/**
+ * Directories stripped from plugin copies at install time.
+ *
+ * `.git` is stripped because plugin archives fetched from git sources may
+ * contain a `.git/hooks/` directory with attacker-controlled hook scripts
+ * (post-checkout, etc.) that would execute on subsequent git operations.
+ * `.github` workflows similarly contain arbitrary shell. We never want
+ * this content on disk inside an installed plugin.
+ */
+const STRIPPED_DIR_NAMES: ReadonlySet<string> = new Set([".git", ".github"]);
+
 function copyDirSync(src: string, dest: string): void {
   fs.mkdirSync(dest, { recursive: true });
   const entries = fs.readdirSync(src, { withFileTypes: true });
   for (const entry of entries) {
+    if (entry.isDirectory() && STRIPPED_DIR_NAMES.has(entry.name)) {
+      continue;
+    }
     const s = path.join(src, entry.name);
     const d = path.join(dest, entry.name);
     if (entry.isDirectory()) {
@@ -341,15 +497,25 @@ export class PluginImportService {
       relManifestPath: string;
     }> = [];
     const skillErrors: PluginError[] = [];
+    const isClaudeFormat = manifest.format === "claude";
     for (const skillPath of skillPaths) {
-      const r = readPluginSkillManifest(localRoot, skillPath);
-      if (!r.ok) {
-        skillErrors.push(r.error);
+      if (isClaudeFormat) {
+        const r = readPluginClaudeSkillsFromPath(localRoot, skillPath);
+        if (!r.ok) {
+          skillErrors.push(...r.errors);
+        } else {
+          skills.push(...r.skills);
+        }
       } else {
-        skills.push({
-          manifest: r.manifest,
-          relManifestPath: skillPath,
-        });
+        const r = readPluginSkillManifest(localRoot, skillPath);
+        if (!r.ok) {
+          skillErrors.push(r.error);
+        } else {
+          skills.push({
+            manifest: r.manifest,
+            relManifestPath: skillPath,
+          });
+        }
       }
     }
     if (skillErrors.length > 0) {
@@ -360,16 +526,89 @@ export class PluginImportService {
     const mcpPaths = manifest.mcpServers ?? [];
     const mcpServers: NormalizedMcpServer[] = [];
     const mcpErrors: PluginError[] = [];
-    for (const mcpPath of mcpPaths) {
-      const r = readPluginMcpServers(localRoot, mcpPath);
-      if (!r.ok) {
-        mcpErrors.push(...r.errors);
+    const isClaudeMcp = manifest.format === "claude";
+
+    if (isClaudeMcp) {
+      // Claude plugins: prefer inline mcp map (alternative B); fall back to
+      // sibling .mcp.json (alternative A). Re-adapt here to recover the
+      // inlineMcp / mcpServersPaths context the adapter produced.
+      const claudeManifestPath = path.join(
+        localRoot,
+        ".claude-plugin",
+        "plugin.json"
+      );
+      let claudeRaw: unknown;
+      try {
+        claudeRaw = JSON.parse(fs.readFileSync(claudeManifestPath, "utf-8"));
+      } catch (e: unknown) {
+        return {
+          success: false,
+          errors: toErrors([
+            {
+              code: "manifest-invalid-json",
+              path: claudeManifestPath,
+              message:
+                e instanceof Error
+                  ? `Failed to re-read Claude manifest: ${e.message}`
+                  : "Failed to re-read Claude manifest",
+              recoverable: false,
+            },
+          ]),
+        };
+      }
+      const adapted = ClaudePluginAdapter.adapt(claudeRaw, {
+        pluginRoot: localRoot,
+      });
+      if (!adapted.ok) {
+        return { success: false, errors: toErrors([...adapted.errors]) };
+      }
+
+      if (adapted.adapted.inlineMcp) {
+        const r = normalizeInlineMcpMap(adapted.adapted.inlineMcp, localRoot);
+        if (!r.ok) mcpErrors.push(...r.errors);
+        else mcpServers.push(...r.servers);
       } else {
-        mcpServers.push(...r.servers);
+        // Try sibling .mcp.json at plugin root.
+        const siblingMcp = path.join(localRoot, ".mcp.json");
+        if (fs.existsSync(siblingMcp)) {
+          const r = readPluginMcpServers(localRoot, ".mcp.json");
+          if (!r.ok) mcpErrors.push(...r.errors);
+          else mcpServers.push(...r.servers);
+        }
+      }
+    } else {
+      // AiFetchly native path: each path is a servers.json file.
+      for (const mcpPath of mcpPaths) {
+        const r = readPluginMcpServers(localRoot, mcpPath);
+        if (!r.ok) {
+          mcpErrors.push(...r.errors);
+        } else {
+          mcpServers.push(...r.servers);
+        }
       }
     }
     if (mcpErrors.length > 0) {
       return { success: false, errors: toErrors(mcpErrors) };
+    }
+
+    // 6b. Apply name scoping for plugin-owned MCP servers. Two plugins with
+    // a server named "linkedin" become "plugin-a__linkedin" and
+    // "plugin-b__linkedin" to prevent collisions in the MCP client manager.
+    // The original (un-scoped) name is preserved in metadata.serverName.
+    if (isClaudeMcp || manifest.format === "aifetchly") {
+      for (let i = 0; i < mcpServers.length; i += 1) {
+        const s = mcpServers[i];
+        const scopedName = `${manifest.name}__${s.serverName}`;
+        mcpServers[i] = {
+          ...s,
+          serverName: scopedName,
+          metadata: {
+            ...s.metadata,
+            pluginServerName: s.serverName,
+            pluginOwner: manifest.name,
+          },
+        };
+      }
     }
 
     // 7. Resolve final install path + copy via sibling temp (atomic-ish rename)

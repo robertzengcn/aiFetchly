@@ -21,6 +21,19 @@
 v-model="enginer" :items="searchplatform" :label="t('search.search_enginer_name')" required
         :readonly="loading" :rules="[rules.required]" class="mt-3" item-title="name" item-value="key"></v-select>
 
+        <v-row>
+          <p class="mt-5">{{ capletter(t('search.use_search_enginer_account')) }}:</p>
+          <v-col cols="12" md="12">
+            <v-btn-toggle v-model="useAccount" mandatory class="mt-3">
+              <v-btn :value="false" color="primary">No</v-btn>
+              <v-btn :value="true" color="success">Yes</v-btn>
+            </v-btn-toggle>
+          </v-col>
+        </v-row>
+
+      <v-container v-if="useAccount == true">
+        <AccountSelectedTable :account-source="enginer" :pre-selected-accounts="accounts" @change="handleAccountChange" />
+      </v-container>
 
       <v-text-field v-model="page_number" :label="t('search.page_number')" clearable class="mt-3"></v-text-field>
 
@@ -54,21 +67,6 @@ v-model="localBrowser" :items="LocalBrowerList" :label="t('search.choose_local_b
               :readonly="loading" :rules="[rules.required]"></v-select>
           </v-col>
         </v-row>
-     
-        <v-row>
-          <p class="mt-5">{{ capletter(t('search.use_search_enginer_account')) }}:</p>
-          <v-col cols="12" md="12">
-            <v-btn-toggle v-model="useAccount" mandatory class="mt-3">
-              <v-btn :value="false" color="primary">No</v-btn>
-              <v-btn :value="true" color="success">Yes</v-btn>
-            </v-btn-toggle>
-          </v-col>
-        </v-row>
-    
-
-      <v-container v-if="useAccount == true">
-        <AccountSelectedTable :account-source="enginer" :pre-selected-accounts="accounts" @change="handleAccountChange" />
-      </v-container>
 
       <p class="mt-5">{{ capletter(t('search.show_in_Browser')) }}:</p>
       <v-btn-toggle v-model="showinbrwoser" mandatory class="mt-3">

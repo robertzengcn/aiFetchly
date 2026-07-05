@@ -45,6 +45,7 @@
                 <th>{{ t("plugins.column_plugin") }}</th>
                 <th>{{ t("plugins.column_version") }}</th>
                 <th>{{ t("plugins.column_source") }}</th>
+                <th>{{ t("plugins.column_format") }}</th>
                 <th>{{ t("plugins.column_status") }}</th>
                 <th>{{ t("plugins.column_skills") }}</th>
                 <th>{{ t("plugins.column_mcp_servers") }}</th>
@@ -62,6 +63,18 @@
                 <td>{{ p.version }}</td>
                 <td>
                   <v-chip size="small">{{ sourceLabel(p.source) }}</v-chip>
+                </td>
+                <td>
+                  <v-chip
+                    size="small"
+                    :color="p.format === 'claude' ? 'deep-purple-lighten-3' : 'grey-lighten-1'"
+                  >
+                    {{
+                      p.format === "claude"
+                        ? t("plugins.format_claude")
+                        : t("plugins.format_aifetchly")
+                    }}
+                  </v-chip>
                 </td>
                 <td>
                   <v-chip :color="healthColor(p)" size="small">

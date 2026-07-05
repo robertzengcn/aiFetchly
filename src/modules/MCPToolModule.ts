@@ -50,4 +50,18 @@ export class MCPToolModule extends BaseModule {
   ): Promise<MCPToolEntity[]> {
     return this.mcpToolModel.findByPluginName(pluginName);
   }
+
+  /**
+   * Find a plugin-owned MCP server by plugin name and scoped server name.
+   * Used by the dual-format MCP tool name parser to resolve
+   * `mcp__<plugin>__<server>__<tool>` calls. Returns null when no row
+   * matches.
+   */
+  public async findPluginMcpByScopedName(
+    pluginName: string,
+    scopedServerName: string
+  ): Promise<MCPToolEntity | null> {
+    const all = await this.mcpToolModel.findByPluginName(pluginName);
+    return all.find((m) => m.serverName === scopedServerName) ?? null;
+  }
 }

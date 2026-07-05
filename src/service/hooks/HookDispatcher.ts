@@ -9,6 +9,8 @@ import { aggregateResults, HookSingleResult } from "./HookResultAggregator";
 import { executeCallback } from "./executors/CallbackHookExecutor";
 import { executeCommand } from "./executors/CommandHookExecutor";
 import { buildAuditEntry, getHookAuditLogger } from "./HookAuditService";
+import { Token } from "@/modules/token";
+import { USER_HOOKS_ENABLED } from "@/config/usersetting";
 
 /**
  * Public dispatcher API. `executeHooks` is the single entry point
@@ -31,11 +33,21 @@ export interface HookDispatcherApi {
 }
 
 class HookDispatcherImpl implements HookDispatcherApi {
-  /** Toggles globally; future USER_HOOKS_ENABLED gate plugs in here. */
-  private enabled = true;
-
   async executeHooks(args: ExecuteHooksInput): Promise<AggregatedHookResult> {
-    if (!this.enabled) return EMPTY_AGGREGATE;
+    // Global enable gate — Token-backed so the System Settings UI
+    // can toggle the whole subsystem without touching dispatcher
+    // internals. Defaults to OFF when the Token value is unset,
+    // matching the PRD's "disabled by default" intent.
+    //
+    // Per-call Token construction is intentional: electron-store caches
+    // its JSON state in-memory per Store instance (loaded once on
+    // construction), so a cached Token field would hold a stale view
+    // that never sees writes from the IPC handler's separate Token.
+    // Every sibling gate (USER_AI_ENABLED: 8 call sites in src/) uses
+    // the same per-call pattern for this reason.
+    if (new Token().getValue(USER_HOOKS_ENABLED) !== "true") {
+      return EMPTY_AGGREGATE;
+    }
 
     const { eventName, input, matchQuery, abortSignal } = args;
     if (abortSignal?.aborted) return EMPTY_AGGREGATE;
@@ -109,13 +121,6 @@ class HookDispatcherImpl implements HookDispatcherApi {
 
     return aggregateResults(results);
   }
-
-  /** Test-only: flip the global enable. */
-  setEnabledForTests(value: boolean): void {
-    this.enabled = value;
-  }
 }
 
-export const HookDispatcher: HookDispatcherApi & {
-  setEnabledForTests(value: boolean): void;
-} = new HookDispatcherImpl();
+export const HookDispatcher: HookDispatcherApi = new HookDispatcherImpl();

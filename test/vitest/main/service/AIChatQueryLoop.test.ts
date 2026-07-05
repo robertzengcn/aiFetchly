@@ -554,7 +554,11 @@ describe("AIChatQueryLoop", () => {
       const truncated =
         '{"agentId":"agent-lead-researcher","prompt":"Research Stripe","taskPacket":' +
         '{"lead":{"companyName":"Stripe","contacts":[{"name":"John"';
-      const truncChunk = makeToolCallChunk("call-trunc", "run_subagent", truncated);
+      const truncChunk = makeToolCallChunk(
+        "call-trunc",
+        "run_subagent",
+        truncated
+      );
 
       const eventSink = { emit: vi.fn() };
 
@@ -591,14 +595,22 @@ describe("AIChatQueryLoop", () => {
 
       // Check that at least one tool_result event carried the compact-payload
       // guidance message (emitted before the retry limit was exhausted)
-      const toolResultEvents = (eventSink.emit as ReturnType<typeof vi.fn>).mock.calls
-        .filter((call: unknown[]) => (call[0] as { type?: string }).type === "tool_result")
-        .map((call: unknown[]) => (call[0] as { toolResult?: { error?: string } }).toolResult?.error ?? "");
+      const toolResultEvents = (
+        eventSink.emit as ReturnType<typeof vi.fn>
+      ).mock.calls
+        .filter(
+          (call: unknown[]) =>
+            (call[0] as { type?: string }).type === "tool_result"
+        )
+        .map(
+          (call: unknown[]) =>
+            (call[0] as { toolResult?: { error?: string } }).toolResult
+              ?.error ?? ""
+        );
 
       expect(toolResultEvents.length).toBeGreaterThan(0);
       const hasTruncationGuidance = toolResultEvents.some(
-        (msg: string) =>
-          msg.includes("cut off") && msg.includes("incomplete")
+        (msg: string) => msg.includes("cut off") && msg.includes("incomplete")
       );
       expect(hasTruncationGuidance).toBe(true);
     });
@@ -643,6 +655,104 @@ describe("AIChatQueryLoop", () => {
         const msg = (result.error as Error).message;
         expect(msg).toMatch(/finish_reason=error/i);
         expect(msg).toMatch(/transient server/i);
+      }
+    });
+  });
+
+  describe("seven-layer recovery", () => {
+    it("Layer 3: escalates max_tokens on finish_reason=length then completes", async () => {
+      const events: Array<{ type: string; layer?: string }> = [];
+      let callCount = 0;
+      const fakeStream = vi.fn(
+        async (
+          req: unknown,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          callCount += 1;
+          if (callCount === 1) {
+            // Truncated response.
+            onChunk(makeChunk("partial", "length"));
+          } else {
+            // After escalation, the model finishes cleanly.
+            onChunk(makeChunk(" full", "stop"));
+          }
+          void req;
+        }
+      );
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: vi.fn(),
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const input: AIChatQueryLoopInput = {
+        conversationId: "v2-test",
+        assistantMessageId: "a1",
+        messages: [],
+        request: { message: "hi" },
+        openAITools: [],
+        abortController: new AbortController(),
+        eventSink: {
+          emit: (e) => {
+            events.push({
+              type: e.type,
+              layer: "layer" in e ? (e as { layer?: string }).layer : undefined,
+            });
+          },
+        },
+        startRound: 0,
+        isActiveTurn: () => true,
+      };
+      const result = await loop.run(input);
+      expect(result.type).toBe("completed");
+      const recoveryEvents = events.filter((e) => e.type === "recovery_status");
+      expect(recoveryEvents.length).toBeGreaterThan(0);
+      expect(recoveryEvents[0]?.layer).toBe("output_token_recovery");
+    });
+
+    it("Layer 3: continuation preserves the truncated prefix in fullContent", async () => {
+      // Force escalation first (round 1), then continuation (round 2),
+      // then a clean stop (round 3). Verifies the prefix is concatenated
+      // rather than lost when the accumulator resets each round.
+      let callCount = 0;
+      const fakeStream = vi.fn(
+        async (
+          _req: unknown,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          callCount += 1;
+          if (callCount === 1) {
+            onChunk(makeChunk("alpha", "length")); // triggers escalation
+          } else if (callCount === 2) {
+            onChunk(makeChunk("beta", "length")); // triggers continuation
+          } else {
+            onChunk(makeChunk("gamma", "stop")); // clean completion
+          }
+        }
+      );
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: vi.fn(),
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const result = await loop.run({
+        conversationId: "v2-test",
+        assistantMessageId: "a-prefix",
+        messages: [],
+        request: { message: "hi" },
+        openAITools: [],
+        abortController: new AbortController(),
+        eventSink: { emit: () => undefined },
+        startRound: 0,
+        isActiveTurn: () => true,
+      });
+      expect(result.type).toBe("completed");
+      if (result.type === "completed") {
+        // alpha was followed by continuation; beta by continuation;
+        // gamma was the final clean tail. All three must be present.
+        expect(result.fullContent).toContain("alpha");
+        expect(result.fullContent).toContain("beta");
+        expect(result.fullContent).toContain("gamma");
+        expect(result.fullContent).toBe("alphabetagamma");
       }
     });
   });

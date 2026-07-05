@@ -67,7 +67,12 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "scrape_urls_from_search_engine",
     description:
-      "Scrape search result URLs from a supported engine (Google, Bing, Yandex, or Baidu) using a query string. Returns titles, snippets, and URLs. This tool is for collecting URLs from a SERP, not for answering questions from page text.",
+      "Scrape search result URLs from a supported engine (Google, Bing, Yandex, or Baidu) using a query string. Returns titles, snippets, and URLs. This tool is for collecting URLs from a SERP, not for answering questions from page text.\n\n" +
+      "MANDATORY WORKFLOW for google or yandex (these engines require login cookies):\n" +
+      '  1. FIRST call `list_social_accounts` with platform="google" (or platform="yandex") to obtain a valid account ID. Only accounts with `cookies: true` and a successful `status` are usable.\n' +
+      "  2. THEN call this tool with that account ID in the `account` field.\n" +
+      'Do NOT call this tool with search_engine "google" or "yandex" unless you already have a valid `account` ID obtained from `list_social_accounts`. Calls without a valid account ID will fail.\n' +
+      'For "bing" or "baidu": NO account is needed and NO login cookies are required. Do NOT call `list_social_accounts` and do NOT pass `account` when search_engine is "bing" or "baidu" — proceed directly with just the query.',
     parameters: {
       type: "object",
       properties: {
@@ -101,10 +106,11 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         account: {
           type: "number",
           description:
-            "Social account ID to use for authenticated scraping. " +
-            "REQUIRED when search_engine is 'google' or 'yandex' (these engines require login cookies). " +
-            "Ignored for 'bing' and 'baidu'. The account must have valid cookies stored; " +
-            "otherwise the call fails and the user must add account cookies first.",
+            "Social account ID used for authenticated scraping. " +
+            "MANDATORY (no default) when search_engine is 'google' or 'yandex' — these engines require login cookies. " +
+            "You MUST obtain this ID by calling `list_social_accounts` first (filter by platform) and pick an account whose `cookies` field is true. " +
+            "Never invent or guess an account ID. " +
+            "DO NOT call `list_social_accounts` and DO NOT pass `account` when search_engine is 'bing' or 'baidu' — those engines need no account.",
         },
       },
       required: ["search_engine", "query"],
@@ -2263,6 +2269,109 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       }
       const result = reg.cancel(jobId);
       return { success: true, result };
+    },
+  },
+  {
+    name: "list_social_accounts",
+    description:
+      "List social/sender accounts that can be used as the `account` parameter for tools requiring authenticated scraping (e.g. scrape_urls_from_search_engine with google or yandex). " +
+      "Returns each account's id, platform (social_type), status, and whether login cookies are stored (cookies: true|false). " +
+      'Always call this BEFORE scrape_urls_from_search_engine when search_engine is "google" or "yandex" — you must pick an account with cookies=true and a valid status, then pass its id as the `account` argument.',
+    parameters: {
+      type: "object",
+      properties: {
+        platform: {
+          type: "string",
+          description:
+            'Optional platform filter (case-insensitive). Examples: "google", "yandex", "bing", "facebook". Use "google" before calling scrape_urls_from_search_engine with search_engine="google", and "yandex" for search_engine="yandex".',
+        },
+        search: {
+          type: "string",
+          description: "Optional free-text filter on account user/name fields.",
+        },
+        page: {
+          type: "number",
+          description: "Zero-based page number (default: 0).",
+          default: 0,
+        },
+        size: {
+          type: "number",
+          description: "Page size, 1 to 100 (default: 20).",
+          default: 20,
+        },
+      },
+      required: [],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (
+      args
+    ): Promise<{ success: boolean; result: Record<string, unknown> }> => {
+      const { SocialAccountModule } = await import(
+        "@/modules/socialAccountModule"
+      );
+      const { SocialPlatformList } = await import("@/config/generate");
+
+      const platformRaw =
+        typeof args.platform === "string"
+          ? args.platform.trim().toLowerCase()
+          : "";
+      const searchRaw =
+        typeof args.search === "string" ? args.search : undefined;
+      const page =
+        typeof args.page === "number" && args.page >= 0
+          ? Math.floor(args.page)
+          : 0;
+      const size =
+        typeof args.size === "number" && args.size > 0
+          ? Math.min(100, Math.floor(args.size))
+          : 20;
+
+      // Resolve platform name → numeric social_type_id used by the model.
+      let platformId: number | undefined;
+      if (platformRaw) {
+        const match = SocialPlatformList.find(
+          (p) => p.name.toLowerCase() === platformRaw
+        );
+        if (!match) {
+          return {
+            success: false,
+            result: {
+              error: `Unknown platform "${args.platform}".`,
+              known_platforms: SocialPlatformList.map((p) => p.name),
+            },
+          };
+        }
+        platformId = match.id;
+      }
+
+      const mod = new SocialAccountModule();
+      const resp = await mod.getSocialAccountList(
+        page,
+        size,
+        searchRaw ?? "",
+        platformId
+      );
+
+      // Surface the fields the LLM actually needs to choose an account.
+      const records = (resp.data?.records ?? []).map((r) => ({
+        id: r.id,
+        platform: r.social_type,
+        user: r.user,
+        status: r.status,
+        cookies: r.cookies === true,
+      }));
+
+      return {
+        success: resp.status === "success",
+        result: {
+          total: resp.data?.total ?? 0,
+          records,
+          hint: "Pick an account whose cookies=true. Pass its id as the `account` argument of scrape_urls_from_search_engine.",
+        },
+      };
     },
   },
   RUN_SUBAGENT_TOOL,

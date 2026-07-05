@@ -8,6 +8,7 @@ import {
   mcpToolDiscoverInputSchema,
   mcpToolToggleServerInputSchema,
   mcpToolToggleToolInputSchema,
+  mcpToolTrustInputSchema,
 } from "@/schemas/ipc/mcpTool";
 import {
   MCP_TOOL_LIST,
@@ -18,6 +19,7 @@ import {
   MCP_TOOL_TOGGLE_SERVER,
   MCP_TOOL_TOGGLE_TOOL,
   MCP_TOOL_TEST_CONNECTION,
+  MCP_TOOL_TRUST,
 } from "@/config/channellist";
 
 /**
@@ -29,29 +31,25 @@ import {
 export function registerMCPToolIpcHandlers(): void {
   console.log("MCP Tool IPC handlers registered");
 
-  registerValidatedHandler(
-    MCP_TOOL_LIST,
-    mcpToolListInputSchema,
-    async () => {
-      const service = new MCPToolService();
-      const servers = await service.getAllMCPTools();
-      return servers.map((server) => ({
-        id: server.id,
-        serverName: server.serverName,
-        host: server.host,
-        port: server.port,
-        transport: server.transport,
-        enabled: server.enabled,
-        authType: server.authType,
-        timeout: server.timeout,
-        tools: server.tools ? JSON.parse(server.tools) : undefined,
-        toolConfig: server.toolConfig ? JSON.parse(server.toolConfig) : undefined,
-        metadata: server.metadata ? JSON.parse(server.metadata) : undefined,
-        pluginName: server.pluginName ?? undefined,
-        origin: server.origin,
-      }));
-    },
-  );
+  registerValidatedHandler(MCP_TOOL_LIST, mcpToolListInputSchema, async () => {
+    const service = new MCPToolService();
+    const servers = await service.getAllMCPTools();
+    return servers.map((server) => ({
+      id: server.id,
+      serverName: server.serverName,
+      host: server.host,
+      port: server.port,
+      transport: server.transport,
+      enabled: server.enabled,
+      authType: server.authType,
+      timeout: server.timeout,
+      tools: server.tools ? JSON.parse(server.tools) : undefined,
+      toolConfig: server.toolConfig ? JSON.parse(server.toolConfig) : undefined,
+      metadata: server.metadata ? JSON.parse(server.metadata) : undefined,
+      pluginName: server.pluginName ?? undefined,
+      origin: server.origin,
+    }));
+  });
 
   registerValidatedHandler(
     MCP_TOOL_ADD,
@@ -59,7 +57,7 @@ export function registerMCPToolIpcHandlers(): void {
     async (input) => {
       const service = new MCPToolService();
       return service.addMCPServer(input as unknown as MCPServerConfig);
-    },
+    }
   );
 
   registerValidatedHandler(
@@ -69,10 +67,10 @@ export function registerMCPToolIpcHandlers(): void {
       const service = new MCPToolService();
       await service.updateMCPServer(
         input.id,
-        input.config as Partial<MCPServerConfig>,
+        input.config as Partial<MCPServerConfig>
       );
       return null;
-    },
+    }
   );
 
   registerValidatedHandler(
@@ -82,7 +80,7 @@ export function registerMCPToolIpcHandlers(): void {
       const service = new MCPToolService();
       await service.deleteMCPServer(input.id);
       return null;
-    },
+    }
   );
 
   registerValidatedHandler(
@@ -91,7 +89,7 @@ export function registerMCPToolIpcHandlers(): void {
     async (input) => {
       const service = new MCPToolService();
       return service.discoverTools(input.serverId);
-    },
+    }
   );
 
   registerValidatedHandler(
@@ -101,7 +99,7 @@ export function registerMCPToolIpcHandlers(): void {
       const service = new MCPToolService();
       await service.toggleServerEnabled(input.id, input.enabled);
       return { action: input.enabled ? "enabled" : "disabled" };
-    },
+    }
   );
 
   registerValidatedHandler(
@@ -112,10 +110,10 @@ export function registerMCPToolIpcHandlers(): void {
       await service.toggleToolEnabled(
         input.serverId,
         input.toolName,
-        input.enabled,
+        input.enabled
       );
       return { action: input.enabled ? "enabled" : "disabled" };
-    },
+    }
   );
 
   registerValidatedHandler(
@@ -124,6 +122,18 @@ export function registerMCPToolIpcHandlers(): void {
     async (input) => {
       const service = new MCPToolService();
       return service.testConnection(input.serverId);
-    },
+    }
+  );
+
+  // F1 fix — explicit trust grant for MCP stdio servers. Without this, the
+  // service-layer assertStdioTrusted gate refuses to spawn any stdio child.
+  registerValidatedHandler(
+    MCP_TOOL_TRUST,
+    mcpToolTrustInputSchema,
+    async (input) => {
+      const service = new MCPToolService();
+      service.setTrust(input.serverId, input.trusted);
+      return { trusted: input.trusted };
+    }
   );
 }
