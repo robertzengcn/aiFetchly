@@ -1125,22 +1125,27 @@ export default {
     chrome_path: "chrome path",
     firefox_path: "firefox path",
     embedding_group: "Modèles d'Embedding",
-    embedding_group_description: "Modèle d'embedding par défaut pour la recherche vectorielle.",
+    embedding_group_description:
+      "Modèle d'embedding par défaut pour la recherche vectorielle.",
     external_system: "Système Externe",
     user_preferences: "Préférences Utilisateur",
-    "user-preferences-group-description": "Préférences utilisateur pour le comportement de l'application.",
+    "user-preferences-group-description":
+      "Préférences utilisateur pour le comportement de l'application.",
     default_embedding_model: "Modèle d'Embedding par Défaut",
-    "default-embedding-model-description": "Sélectionnez le modèle d'embedding utilisé pour la recherche vectorielle et la correspondance de similarité.",
+    "default-embedding-model-description":
+      "Sélectionnez le modèle d'embedding utilisé pour la recherche vectorielle et la correspondance de similarité.",
     language_preference: "Langue",
     "language-preference-description": "Préférence de langue de l'interface.",
     ai_website_analysis_business_info: "Informations Commerciales",
-    "ai-website-analysis-business-info-description": "Informations commerciales utilisées lors de l'analyse IA du site web.",
+    "ai-website-analysis-business-info-description":
+      "Informations commerciales utilisées lors de l'analyse IA du site web.",
     "external-system-group-description": "external system group setting",
     mcp_tools: "MCP Tools",
     manage_mcp_tools: "Manage MCP Tools",
     manage_skills: "Gérer les compétences",
     ai_preferences: "Préférences IA",
-    "ai-preferences-group-description": "Paramètres contrôlant le comportement du chat IA, la mémoire et le contexte.",
+    "ai-preferences-group-description":
+      "Paramètres contrôlant le comportement du chat IA, la mémoire et le contexte.",
     user_ai_auto_dream: "Consolidation Auto-Rêve",
     "ai-auto-dream-description":
       "Résumer automatiquement les conversations passées en arrière-plan pour économiser les tokens de contexte IA.",
@@ -1880,6 +1885,45 @@ export default {
     tool_approval_waiting: "En attente d'approbation",
     tool_approval_blocked: "Bloqué par la politique de sécurité",
     agent_task_list: "Agents en arrière-plan",
+  },
+  aifetchlyConfig: {
+    title: "Configuration AiFetchly",
+    reload: "Recharger la configuration",
+    reloadStarted: "Rechargement de la configuration AiFetchly...",
+    reloadResult:
+      "Configuration AiFetchly rechargée :\n- Commandes : {commandCount}\n- Diagnostics : {diagnosticCount}",
+    reloadFailed: "Échec du rechargement de la configuration AiFetchly.",
+    status: "État de la configuration",
+    statusResult:
+      "État de la configuration AiFetchly :\n- Commandes : {commandCount}\n- Agents : {agentCount}\n- Hooks : {hookCount}\n- Skills : {skillCount}\n- Diagnostics : {diagnosticCount}\n- Dernier rechargement : {lastReloadAt}\n- Watcher : {watcherState}",
+    statusEmpty: "Aucune configuration globale chargée.",
+    watcherNotStarted: "non démarré (phase 14)",
+    diagnosticWarning: "Avertissement",
+    diagnosticError: "Erreur",
+    diagnosticInfo: "Information",
+    workspaceTrustTitle: "Configuration AiFetchly du workspace",
+    workspaceTrustBody:
+      "Ce workspace définit une configuration AiFetchly. Vérifiez-la et approuvez-la avant d'activer les commandes.",
+    commandDisabledUntrusted:
+      "La commande {name} est désactivée car la configuration du workspace n'est pas approuvée.",
+  },
+  slashCommands: {
+    help: "Aide",
+    clear: "Effacer la conversation",
+    reloadConfig: "Recharger la config",
+    status: "État",
+    helpResultTitle: "Commandes disponibles",
+    noMatches: "Aucune commande correspondante",
+    unknownCommand: "Commande slash inconnue : /{name}",
+    notDispatchable: "Saisissez un nom de commande après / pour l'exécuter.",
+    notACommand: "Ce message n'est pas une commande slash.",
+    disabledCommand: "La commande /{name} est désactivée.",
+    sourceBuiltin: "Intégré",
+    sourceUser: "Utilisateur",
+    sourceWorkspace: "Workspace",
+    sourcePlugin: "Plugin",
+    argumentHint: "Arguments",
+    argumentHintNone: "aucun",
   },
   agentTaskList: {
     title: "Agents en arrière-plan",

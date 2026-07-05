@@ -1139,23 +1139,28 @@ export default {
     chrome_path: "Ruta de Chrome",
     firefox_path: "Ruta de Firefox",
     embedding_group: "Modelos de Embedding",
-    embedding_group_description: "Modelo de embedding predeterminado para búsqueda vectorial.",
+    embedding_group_description:
+      "Modelo de embedding predeterminado para búsqueda vectorial.",
     external_system: "Sistema Externo",
     user_preferences: "Preferencias de Usuario",
-    "user-preferences-group-description": "Preferencias a nivel de usuario para el comportamiento de la aplicación.",
+    "user-preferences-group-description":
+      "Preferencias a nivel de usuario para el comportamiento de la aplicación.",
     default_embedding_model: "Modelo de Embedding Predeterminado",
-    "default-embedding-model-description": "Seleccione el modelo de embedding utilizado para la búsqueda vectorial y la coincidencia de similitud.",
+    "default-embedding-model-description":
+      "Seleccione el modelo de embedding utilizado para la búsqueda vectorial y la coincidencia de similitud.",
     language_preference: "Idioma",
     "language-preference-description": "Preferencia de idioma de la interfaz.",
     ai_website_analysis_business_info: "Información de Negocio",
-    "ai-website-analysis-business-info-description": "Información comercial utilizada durante el análisis de IA del sitio web.",
+    "ai-website-analysis-business-info-description":
+      "Información comercial utilizada durante el análisis de IA del sitio web.",
     "external-system-group-description":
       "Configuración del grupo de sistema externo",
     mcp_tools: "Herramientas MCP",
     manage_mcp_tools: "Gestionar herramientas MCP",
     manage_skills: "Gestionar habilidades",
     ai_preferences: "Preferencias de IA",
-    "ai-preferences-group-description": "Configuración que controla el comportamiento del chat de IA, la memoria y el contexto.",
+    "ai-preferences-group-description":
+      "Configuración que controla el comportamiento del chat de IA, la memoria y el contexto.",
     user_ai_auto_dream: "Consolidación Auto-Sueño",
     "ai-auto-dream-description":
       "Resumir automáticamente conversaciones pasadas en segundo plano para ahorrar tokens de contexto de IA.",
@@ -1898,6 +1903,46 @@ export default {
     tool_approval_waiting: "Esperando aprobación",
     tool_approval_blocked: "Bloqueado por política de seguridad",
     agent_task_list: "Agentes en segundo plano",
+  },
+  aifetchlyConfig: {
+    title: "Configuración de AiFetchly",
+    reload: "Recargar configuración",
+    reloadStarted: "Recargando la configuración de AiFetchly...",
+    reloadResult:
+      "Configuración de AiFetchly recargada:\n- Comandos: {commandCount}\n- Diagnósticos: {diagnosticCount}",
+    reloadFailed: "Error al recargar la configuración de AiFetchly.",
+    status: "Estado de la configuración",
+    statusResult:
+      "Estado de la configuración de AiFetchly:\n- Comandos: {commandCount}\n- Agentes: {agentCount}\n- Hooks: {hookCount}\n- Skills: {skillCount}\n- Diagnósticos: {diagnosticCount}\n- Última recarga: {lastReloadAt}\n- Watcher: {watcherState}",
+    statusEmpty: "No hay configuración global cargada.",
+    watcherNotStarted: "no iniciado (fase 14)",
+    diagnosticWarning: "Advertencia",
+    diagnosticError: "Error",
+    diagnosticInfo: "Información",
+    workspaceTrustTitle: "Configuración de AiFetchly del workspace",
+    workspaceTrustBody:
+      "Este workspace define configuración de AiFetchly. Revísala y confía en ella antes de habilitar comandos.",
+    commandDisabledUntrusted:
+      "El comando {name} está deshabilitado porque la configuración del workspace no es de confianza.",
+  },
+  slashCommands: {
+    help: "Ayuda",
+    clear: "Borrar conversación",
+    reloadConfig: "Recargar config",
+    status: "Estado",
+    helpResultTitle: "Comandos disponibles",
+    noMatches: "Sin comandos coincidentes",
+    unknownCommand: "Comando slash desconocido: /{name}",
+    notDispatchable:
+      "Escribe un nombre de comando después de / para ejecutarlo.",
+    notACommand: "Este mensaje no es un comando slash.",
+    disabledCommand: "El comando /{name} está deshabilitado.",
+    sourceBuiltin: "Integrado",
+    sourceUser: "Usuario",
+    sourceWorkspace: "Workspace",
+    sourcePlugin: "Plugin",
+    argumentHint: "Argumentos",
+    argumentHintNone: "ninguno",
   },
   agentTaskList: {
     title: "Agentes en segundo plano",

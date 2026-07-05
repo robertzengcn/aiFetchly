@@ -1113,19 +1113,23 @@ export default {
     embedding_group_description: "ベクトル検索のデフォルト埋め込みモデル。",
     external_system: "外部システム",
     user_preferences: "ユーザー設定",
-    "user-preferences-group-description": "アプリケーション動作のユーザーレベル設定。",
+    "user-preferences-group-description":
+      "アプリケーション動作のユーザーレベル設定。",
     default_embedding_model: "デフォルト埋め込みモデル",
-    "default-embedding-model-description": "ベクトル検索と類似性マッチングに使用する埋め込みモデルを選択します。",
+    "default-embedding-model-description":
+      "ベクトル検索と類似性マッチングに使用する埋め込みモデルを選択します。",
     language_preference: "言語",
     "language-preference-description": "UIの言語設定。",
     ai_website_analysis_business_info: "ビジネス情報",
-    "ai-website-analysis-business-info-description": "ウェブサイトのAI分析で使用されるビジネス情報。",
+    "ai-website-analysis-business-info-description":
+      "ウェブサイトのAI分析で使用されるビジネス情報。",
     "external-system-group-description": "外部システムグループ設定",
     mcp_tools: "MCPツール",
     manage_mcp_tools: "MCPツールを管理",
     manage_skills: "スキルを管理",
     ai_preferences: "AI 設定",
-    "ai-preferences-group-description": "AIチャットの動作、メモリー、コンテキストを制御する設定。",
+    "ai-preferences-group-description":
+      "AIチャットの動作、メモリー、コンテキストを制御する設定。",
     user_ai_auto_dream: "自動要約統合",
     "ai-auto-dream-description":
       "バックグラウンドで過去の会話を自動的に要約し、AIコンテキストトークンを節約します。",
@@ -1854,6 +1858,45 @@ export default {
     tool_approval_waiting: "承認待ち",
     tool_approval_blocked: "セキュリティポリシーによりブロックされました",
     agent_task_list: "バックグラウンドエージェント",
+  },
+  aifetchlyConfig: {
+    title: "AiFetchly 設定",
+    reload: "設定を再読み込み",
+    reloadStarted: "AiFetchly 設定を再読み込み中…",
+    reloadResult:
+      "AiFetchly 設定を再読み込みしました:\n- コマンド: {commandCount}\n- 診断: {diagnosticCount}",
+    reloadFailed: "AiFetchly 設定の再読み込みに失敗しました。",
+    status: "設定ステータス",
+    statusResult:
+      "AiFetchly 設定ステータス:\n- コマンド: {commandCount}\n- エージェント: {agentCount}\n- フック: {hookCount}\n- スキル: {skillCount}\n- 診断: {diagnosticCount}\n- 最終読み込み: {lastReloadAt}\n- ウォッチャー: {watcherState}",
+    statusEmpty: "グローバル設定が読み込まれていません。",
+    watcherNotStarted: "未開始（フェーズ 14）",
+    diagnosticWarning: "警告",
+    diagnosticError: "エラー",
+    diagnosticInfo: "情報",
+    workspaceTrustTitle: "ワークスペース AiFetchly 設定",
+    workspaceTrustBody:
+      "このワークスペースは AiFetchly 設定を定義しています。コマンドを有効化する前に内容を確認して信頼してください。",
+    commandDisabledUntrusted:
+      "ワークスペース設定が信頼されていないため、コマンド {name} は無効です。",
+  },
+  slashCommands: {
+    help: "ヘルプ",
+    clear: "会話をクリア",
+    reloadConfig: "設定を再読み込み",
+    status: "ステータス",
+    helpResultTitle: "利用可能なコマンド",
+    noMatches: "一致するコマンドはありません",
+    unknownCommand: "不明なスラッシュコマンド: /{name}",
+    notDispatchable: "実行するには / の後にコマンド名を入力してください。",
+    notACommand: "このメッセージはスラッシュコマンドではありません。",
+    disabledCommand: "コマンド /{name} は無効です。",
+    sourceBuiltin: "組み込み",
+    sourceUser: "ユーザー",
+    sourceWorkspace: "ワークスペース",
+    sourcePlugin: "プラグイン",
+    argumentHint: "引数",
+    argumentHintNone: "なし",
   },
   agentTaskList: {
     title: "バックグラウンドエージェント",

@@ -1911,8 +1911,8 @@ onMounted(() => {
     fileOps.value = next;
   });
   // Phase 13 (Plan 04): subscribe to AiFetchly config-changed events so the
-  // local command cache refreshes whenever the main process reloads
-  // ~/.aifetchly (design §16.3, §18.2). The subscriber returns an
+  // local command cache refreshes whenever the main process reloads the
+  // global config (design §16.3, §18.2). The subscriber returns an
   // unsubscribe function that we invoke on unmount to avoid leaking
   // listeners across AiChatV2 instance re-mounts.
   slashConfigUnsub = onAifetchlyConfigChanged(() => {
