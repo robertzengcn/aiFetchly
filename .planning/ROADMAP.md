@@ -92,7 +92,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 13-05-i18n-boundary-tests-PLAN.md — aifetchlyConfig + slashCommands groups in all 6 lang files + TRS-07 renderer boundary test + I18-01 keys-present test
+- [x] 13-05-i18n-boundary-tests-PLAN.md — aifetchlyConfig + slashCommands groups in all 6 lang files + TRS-07 renderer boundary test + I18-01 keys-present test
 
 ### Phase 14: Workspace Watcher Worker
 
@@ -188,7 +188,7 @@ Plans:
 | 10. Module and Worker Implementation | v1.2 | 3/3 | Complete | 2026-05-26 |
 | 11. UI Page and Integration | v1.2 | 2/2 | Complete | 2026-05-26 |
 | 12. Translations and Validation | v1.2 | 1/1 | Complete | 2026-05-26 |
-| 13. Global Context and Built-in Slash Commands | v2.0 | 5/6 | In Progress|  |
+| 13. Global Context and Built-in Slash Commands | v2.0 | 6/6 | Complete   | 2026-07-05 |
 | 14. Workspace Watcher Worker | v2.0 | 0/? | Not started | — |
 | 15. Prompt Command Files | v2.0 | 0/? | Not started | — |
 | 16. Dynamic Agents | v2.0 | 0/? | Not started | — |
