@@ -800,6 +800,9 @@ async function confirmUpload() {
     uploading.value = false;
     currentUploadingFile.value = '';
     uploadProgress.value.clear();
+    if (documentManagement.value) {
+      documentManagement.value.refreshDocuments();
+    }
   }
 }
 
