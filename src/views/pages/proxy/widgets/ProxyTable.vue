@@ -486,7 +486,7 @@ const parsedProxies = ref<Array<ProxyParseItem>>([]);
 const checkUploadLoading = ref(false);
 const importUploadLoading = ref(false);
 /** Seconds; used for main list check and batch-upload dialog check. */
-const proxyCheckTimeoutSeconds = ref(10);
+const proxyCheckTimeoutSeconds = ref(60);
 const showUploadAlert = ref(false);
 const uploadAlertText = ref('');
 const uploadAlertTitle = ref('');
