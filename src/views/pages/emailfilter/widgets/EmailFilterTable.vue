@@ -51,10 +51,11 @@ import { ref,computed,watch } from 'vue'
 import { SearchResult } from '@/views/api/types'
 import {CapitalizeFirstLetter} from "@/views/utils/function"
 // import type { VDataTable } from 'vuetify/lib/components/index.mjs'
-import router from '@/views/router';
+import { useRouter } from 'vue-router';
 import {Header} from "@/entityTypes/commonType"
 import DeleteDialog from '@/views/components/widgets/deleteDialog.vue';
 const {t} = useI18n({inheritLocale: true});
+const router = useRouter();
 
 // const campaignId = i18n.t("campaignId");
 type Fetchparam = {
@@ -165,8 +166,11 @@ const deleteitem=(item:EmailFilterdata)=>{
     showDeleteModal.value = true;
   }
 function createFilter(){
+    console.log("create email filter")
     router.push({
         name: 'Email_Marketing_Filter_Create'
+    }).catch((err) => {
+        console.warn('Navigation to create filter failed:', err);
     });
 }
 const handleDelete=async ()=>{
