@@ -403,6 +403,11 @@ module.exports = {
             config: "vite.contactExtractionWorker.config.mjs",
           },
           {
+            entry:
+              "src/childprocess/aifetchly-config/WorkspaceConfigWatchWorker.ts",
+            config: "vite.aifetchlyConfigWorker.config.mjs",
+          },
+          {
             entry: "src/childprocess/google-maps/GoogleMapsWorker.ts",
             config: "vite.googleMapsWorker.config.mjs",
           },

@@ -114,3 +114,24 @@ export interface AIFetchlyConfigSettings {
   readonly workspaceConfigEnabled: boolean;
   readonly watchEnabled: boolean;
 }
+
+/**
+ * Per-capability trust flags for a config source (design §8.2 / TRS-01).
+ *
+ * The watcher manager applies workspace snapshots through
+ * `AIFetchlyRuntimeRegistrySync.applyWorkspaceSnapshot(snapshot, trust)`
+ * which DROPS untrusted capabilities before registry mutation. Phase 14
+ * populates only `instructions` and `commands` from the binary workspace
+ * approval state; `agents` (Phase 16), `hooks` (Phase 17), and `skills`
+ * (Phase 18) stay false until those phases ship their own trust gates.
+ *
+ * The global user-owned path (~/.aifetchly) always calls `applySnapshot`
+ * directly with every flag true — user-owned content is trusted by default.
+ */
+export interface AIFetchlySourceTrust {
+  readonly instructions: boolean;
+  readonly commands: boolean;
+  readonly agents: boolean;
+  readonly hooks: boolean;
+  readonly skills: boolean;
+}
