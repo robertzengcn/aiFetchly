@@ -13,6 +13,8 @@ files_modified:
   - src/modules/WorkspaceWatchModule.ts
   - src/service/aifetchlyConfig/AIFetchlyConfigManager.ts
   - src/background.ts
+  - src/views/api/slashCommands.ts
+  - test/vitest/main/service/AIFetchlyConfigManager.watcher.test.ts
 autonomous: true
 requirements: [CFG-02, CTX-02, WAT-07]
 tags: [typescript, electron, ipc, preload-whitelist, registerValidatedHandler, lifecycle-hook]
