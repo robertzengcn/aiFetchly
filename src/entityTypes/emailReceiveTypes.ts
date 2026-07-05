@@ -32,6 +32,73 @@ export interface EmailReceiveFetchOptions {
   readonly since?: Date;
 }
 
+// ---- Renderer-safe DTOs (no secrets, no raw credentials) ----
+
+/** List-row DTO for received messages. No body content. */
+export interface ReceivedMessageListDto {
+  id: number;
+  emailServiceId: number;
+  fromAddress: string;
+  fromName: string | null;
+  subject: string;
+  snippet: string | null;
+  receivedAt: string;
+  isUnread: boolean;
+  classification: EmailMessageClassification | null;
+  classificationConfidence: number | null;
+  replyStatus: EmailReplyStatus;
+  processedAt: string | null;
+}
+
+/** Detail DTO for one received message, including sanitized body. */
+export interface ReceivedMessageDetailDto extends ReceivedMessageListDto {
+  messageId: string | null;
+  threadKey: string | null;
+  replyToAddress: string | null;
+  toAddresses: string[];
+  ccAddresses: string[];
+  bodyText: string | null;
+  bodyHtmlSanitized: string | null;
+}
+
+/** Reply identity profile DTO (no secrets). */
+export interface ReplyIdentityProfileDto {
+  id: number;
+  emailServiceId: number;
+  ownerName: string;
+  ownerRole: string | null;
+  companyName: string | null;
+  preferredTone: string | null;
+  signature: string | null;
+  styleNotes: string | null;
+  forbiddenPhrases: string[];
+  discloseAutomation: boolean;
+}
+
+/** AI auto-reply audit row DTO. Previews are truncated; no full bodies. */
+export interface AutoReplyAuditDto {
+  id: number;
+  emailServiceId: number;
+  messageId: number;
+  draftId: number | null;
+  ruleId: number | null;
+  action: string;
+  decisionStatus: string;
+  classification: EmailMessageClassification | null;
+  confidence: number | null;
+  reason: string | null;
+  knowledgeQuery: string | null;
+  knowledgeSourceCount: number;
+  generatedSubject: string | null;
+  generatedBodyPreview: string | null;
+  sentSubject: string | null;
+  sentBodyPreview: string | null;
+  requiresUserApproval: boolean;
+  approvedByUser: boolean;
+  errorMessage: string | null;
+  createdAt: string;
+}
+
 /** AI classification of a received message intent. */
 export type EmailMessageClassification =
   | "interested"
