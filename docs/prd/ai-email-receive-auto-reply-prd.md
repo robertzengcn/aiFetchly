@@ -45,11 +45,13 @@ The outbound task tool already requires confirmation before sending. That safety
 
 AiFetchly already has a built-in knowledge library backed by RAG documents, chunks, embeddings, and vector search. `src/service/VectorSearchService.ts` provides:
 
-- `search(query, options)` for vector retrieval over embedded documents.
-- `searchCandidates(query, options)` for hybrid vector and keyword retrieval.
+- The built-in AI tool `knowledge_library_search`, registered in `SkillRegistry`.
+- `RagSearchModule.searchKnowledgeForTool()` for the tool execution pipeline.
+- `VectorSearchService.search(query, options)` for vector retrieval over embedded documents.
+- `VectorSearchService.searchCandidates(query, options)` for hybrid vector and keyword retrieval.
 - `searchWithFilters(query, filters, options)` for filtered retrieval.
 
-Email reply generation must use this knowledge library before asking the LLM to write a reply. The retrieved snippets become factual context for the reply, while the inbound email body remains untrusted customer content.
+Email reply generation must use the existing `knowledge_library_search` tool contract before asking the LLM to write a reply. The retrieved snippets become factual context for the reply, while the inbound email body remains untrusted customer content.
 
 ### 2.3 Existing AI tool architecture
 
@@ -78,9 +80,10 @@ The app does not yet have:
 - Knowledge-library retrieval for reply generation.
 - Reply draft records.
 - Reply send audit logs tied to inbound messages.
+- Auto-reply audit logs that show every AI auto-reply decision and send attempt.
 - Owner-like reply style controls that make the reply sound like the real email account owner rather than an AI assistant.
 - Auto-reply rules and safety policy.
-- UI for reviewing unread emails, drafts, and auto-reply decisions.
+- UI for reviewing unread emails, drafts, and AI auto-reply history.
 
 ## 3. Problem Statement
 
@@ -117,11 +120,12 @@ Receive email
 7. Link receive settings and outbound SMTP settings under the same email service record where practical.
 8. Prevent direct database access from worker processes.
 9. Keep AI feature IPC handlers gated by `USER_AI_ENABLED`.
-10. Use `VectorSearchService` and the built-in knowledge library to ground AI-generated replies.
+10. Use the built-in `knowledge_library_search` tool and knowledge library to ground AI-generated replies.
 11. Make generated replies sound like the actual mailbox owner, not like an AI system.
-12. Add audit logs for message reads, knowledge retrieval, draft generation, reply sends, skipped auto-replies, and policy blocks.
-13. Provide a safe path to future rule-based auto-reply.
-14. Support all required UI translations when UI is added.
+12. Add audit logs for message reads, knowledge retrieval, draft generation, auto-reply decisions, reply sends, skipped auto-replies, and policy blocks.
+13. Provide a UI where users can view AI-created drafts, AI-sent replies, skipped replies, blocked replies, and the reason for each decision.
+14. Provide a safe path to future rule-based auto-reply.
+15. Support all required UI translations when UI is added.
 
 ## 5. Non-Goals
 
@@ -169,7 +173,7 @@ Build this as a core built-in email receive and reply feature:
 - New built-in AI tools registered in `SkillRegistry`.
 - New UI pages or tabs for receive-enabled email services, received messages, reply drafts, and automation settings.
 - Reuse and extend the existing email service configuration for SMTP sending, IMAP receiving, and optional POP3 receiving.
-- Use the built-in knowledge library through `VectorSearchService` to ground replies in business-specific facts.
+- Use the existing `knowledge_library_search` built-in tool to ground replies in business-specific facts.
 
 Do not implement the main capability as an imported external skill. Imported skills are useful for optional workflows, but inbound mail needs first-party security, data storage, permissions, and audit behavior.
 
@@ -244,7 +248,43 @@ Recommended filters:
 - Blocked.
 - Human review.
 
-### 8.3 Message detail and AI draft
+### 8.3 AI auto-reply audit UI
+
+Add a dedicated UI view or tab where users can audit emails handled by AI.
+
+Recommended placement:
+
+- Email marketing submenu, as `AI Auto Replies`.
+- Or a tab under the receive-enabled email service detail page.
+
+The view must show:
+
+- Received message subject.
+- Sender email and sender name.
+- Email service / mailbox.
+- AI classification.
+- Decision status: `draft_created`, `auto_sent`, `blocked`, `skipped`, `failed`, or `needs_human_review`.
+- Decision reason.
+- Knowledge-library search query used.
+- Knowledge-library source count.
+- Draft preview.
+- Sent reply preview when sent.
+- Send time or decision time.
+- Whether user approval was required.
+- Error message when failed.
+
+Required actions:
+
+- Open original received message.
+- Open generated draft.
+- Open sent reply.
+- Filter by status, date range, email service, classification, and sender.
+- Search by subject, sender, or decision reason.
+- Export audit rows to CSV in a later phase.
+
+The UI must read from module/model APIs. It must not query SQLite directly from the renderer.
+
+### 8.4 Message detail and AI draft
 
 The message detail view should show:
 
@@ -320,7 +360,7 @@ The LLM should be able to use tools in a safe sequence:
 list_email_inboxes
   -> fetch_unread_emails
   -> get_email_message
-  -> search_email_reply_knowledge
+  -> knowledge_library_search
   -> create_email_reply_draft
   -> send_email_reply
 ```
@@ -476,7 +516,7 @@ Rules:
 - Must create a persisted draft.
 - Must not send.
 - Must include the original message context, user instructions, and any selected template guidance.
-- Must search the built-in knowledge library through `VectorSearchService` by default.
+- Must use the existing built-in `knowledge_library_search` tool contract by default.
 - Must include retrieved knowledge snippets in the LLM context when relevant results exist.
 - Must record which knowledge chunks were used.
 - Must not expose knowledge-library source names, internal context, or retrieval scores in the email body unless the user explicitly asks to cite public material.
@@ -501,27 +541,34 @@ interface AiEmailReplyDraftResult {
 }
 ```
 
-### 9.5 Tool: `search_email_reply_knowledge`
+### 9.5 Tool: `knowledge_library_search`
 
-Purpose: explicitly search the built-in knowledge library for facts that may help answer an inbound email.
+Purpose: search the built-in knowledge library for facts that may help answer an inbound email.
+
+This is an existing built-in skill and should be reused. Do not create a duplicate email-specific search tool unless a later technical design proves a wrapper is necessary.
 
 Parameters:
 
 ```json
 {
-  "message_id": 123,
   "query": "pricing and onboarding questions from prospect",
-  "limit": 5
+  "limit": 5,
+  "documentIds": [1, 2],
+  "documentTypes": ["pdf", "txt"],
+  "tags": ["sales", "support"],
+  "includeNeighborChunks": true
 }
 ```
 
 Rules:
 
-- Uses `VectorSearchService.searchCandidates()` or `VectorSearchService.search()` from `src/service/VectorSearchService.ts`.
+- Registered in `SkillRegistry` as `knowledge_library_search`.
+- Executes through `RagSearchModule.searchKnowledgeForTool()`.
+- Uses the knowledge library search pipeline, including hybrid retrieval and citations.
 - `limit` must be capped, recommended max 10.
 - Returns snippets, document identity, and scores suitable for user review and LLM context.
 - Does not return full documents unless a later feature explicitly allows it.
-- Logs the retrieval action for audit.
+- Email reply generation must store the tool query and returned source IDs in the reply audit log or draft metadata.
 
 Returns:
 
@@ -804,7 +851,6 @@ interface EmailAutoReplyRule {
   confidenceThreshold: number;
   quietHoursJson: string | null;
   requireApprovalBelowThreshold: number;
-  emailServiceId: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -839,6 +885,63 @@ interface EmailReplyAuditLog {
 }
 ```
 
+### 10.8 `EmailAutoReplyAuditLog`
+
+Stores the audit trail for the AI auto-reply function. This is the data source for the user-facing AI auto-reply audit UI.
+
+Recommended fields:
+
+```typescript
+type EmailAutoReplyDecisionStatus =
+  | "draft_created"
+  | "approval_required"
+  | "auto_sent"
+  | "blocked"
+  | "skipped"
+  | "failed"
+  | "needs_human_review";
+
+interface EmailAutoReplyAuditLog {
+  id: number;
+  emailServiceId: number;
+  messageId: number;
+  draftId: number | null;
+  ruleId: number | null;
+  action:
+    | "auto_reply_evaluated"
+    | "knowledge_library_searched"
+    | "draft_created"
+    | "approval_required"
+    | "auto_reply_sent"
+    | "auto_reply_blocked"
+    | "auto_reply_skipped"
+    | "auto_reply_failed";
+  decisionStatus: EmailAutoReplyDecisionStatus;
+  classification: EmailMessageClassification | null;
+  confidence: number | null;
+  reason: string | null;
+  knowledgeQuery: string | null;
+  knowledgeSourcesJson: string | null;
+  generatedSubject: string | null;
+  generatedBodyPreview: string | null;
+  sentSubject: string | null;
+  sentBodyPreview: string | null;
+  requiresUserApproval: number;
+  approvedByUser: number;
+  errorMessage: string | null;
+  metadataJson: string | null;
+  createdAt: string;
+}
+```
+
+Rules:
+
+- Every AI auto-reply evaluation must create at least one audit log row.
+- Every `knowledge_library_search` call used for reply generation must be represented in the audit metadata or its own `knowledge_library_searched` row.
+- Every AI-created draft, user-approved send, auto-send, block, skip, and failure must be logged.
+- Body previews must be truncated and sanitized. Full message bodies should remain in message/draft tables, not duplicated in audit logs.
+- Audit rows must not store secrets, raw prompts, raw credentials, access tokens, or full internal chain-of-thought.
+
 ## 11. Architecture Requirements
 
 ### 11.1 Layering
@@ -860,8 +963,9 @@ Required modules:
 - `EmailReplyIdentityProfileModule`
 - `EmailAutoReplyRuleModule`
 - `EmailReplyAuditLogModule`
+- `EmailAutoReplyAuditLogModule`
 - `EmailReceiveAiTools` service, equivalent in shape to `EmailMarketingAiTools`
-- `EmailReplyKnowledgeService` for `VectorSearchService` integration
+- `EmailReplyKnowledgeService` for `knowledge_library_search` integration
 
 Required models:
 
@@ -871,6 +975,7 @@ Required models:
 - `EmailReplyIdentityProfile.model.ts`
 - `EmailAutoReplyRule.model.ts`
 - `EmailReplyAuditLog.model.ts`
+- `EmailAutoReplyAuditLog.model.ts`
 
 ### 11.2 Worker boundary
 
@@ -929,10 +1034,11 @@ create_email_reply_draft
   -> EmailReceiveAiTools validates input
   -> EmailReceivedMessageModule loads message
   -> EmailReplyKnowledgeService builds retrieval query
-  -> VectorSearchService.searchCandidates() or search()
+  -> calls existing built-in `knowledge_library_search` tool contract
   -> top snippets are sanitized and ranked
   -> LLM prompt receives trusted knowledge context + untrusted email content
   -> EmailReplyDraftModule stores draft and knowledgeSourcesJson
+  -> EmailAutoReplyAuditLogModule stores search and decision audit rows
 ```
 
 Rules:
@@ -941,6 +1047,7 @@ Rules:
 - Default limit should be small, recommended 5 snippets.
 - Retrieved snippets must be trimmed before prompt insertion.
 - The draft record must store source IDs and document names for auditability.
+- The auto-reply audit log must store the retrieval query and source summary.
 - The email body must not reveal internal document names or source snippets unless explicitly requested.
 - If retrieval fails, draft generation may continue only with a warning and an audit record.
 
@@ -1094,8 +1201,9 @@ AI chat or message detail UI can generate a knowledge-grounded, owner-like reply
 Acceptance criteria:
 
 - AI enable gate is checked before generation.
-- `VectorSearchService` is used by default before the LLM writes the draft.
+- `knowledge_library_search` is used by default before the LLM writes the draft.
 - Retrieved knowledge source IDs are persisted with the draft.
+- Knowledge-library search query and source summary are persisted in the auto-reply audit log.
 - The draft uses the configured reply identity profile.
 - The email body does not mention AI, automation, retrieval, internal documents, or confidence.
 - Draft is persisted before being returned.
@@ -1134,8 +1242,21 @@ Acceptance criteria:
 - Auto-reply rules can be represented without schema redesign.
 - Send policy can be evaluated independently of the LLM.
 - Policy failures produce user-readable reasons.
+- Every policy evaluation creates an `EmailAutoReplyAuditLog` row.
 
-### FR-008 Internationalization
+### FR-008 AI auto-reply audit UI
+
+Users can view emails handled by the AI auto-reply function.
+
+Acceptance criteria:
+
+- A list view shows AI-created drafts, approval-required replies, auto-sent replies, blocked replies, skipped replies, and failed replies.
+- The list can filter by email service, status, classification, sender, and date range.
+- A detail view shows original message metadata, generated draft preview, sent reply preview, knowledge search query, knowledge source summary, decision reason, approval status, and error message.
+- The UI reads through IPC handlers and Module methods. It does not query the database directly.
+- Audit entries are append-only from the UI perspective. Users may filter and inspect logs but not edit historical audit rows.
+
+### FR-009 Internationalization
 
 All user-facing UI text added by this feature must be translated.
 
@@ -1158,7 +1279,7 @@ Acceptance criteria:
 6. Attachment parsing is out of MVP unless explicitly scoped.
 7. Reply sending must require confirmation in Phase 1.
 8. Auto-reply must have per-inbox and global limits before release.
-9. All reads and sends must be audit logged.
+9. All reads, knowledge searches, draft decisions, approval decisions, skips, blocks, failures, and sends must be audit logged.
 10. Worker processes must not access the database.
 11. IPC handlers must validate inputs with schemas.
 12. AI handlers must check `USER_AI_ENABLED` before work.
@@ -1210,6 +1331,9 @@ Recommended local audit events:
 - Message classified.
 - Draft created.
 - Draft edited.
+- Auto-reply evaluated.
+- Auto-reply approval required.
+- Auto-reply sent.
 - Reply sent.
 - Reply skipped.
 - Auto-reply blocked.
@@ -1230,6 +1354,8 @@ Phase 1 success:
 | Reply drafts that accidentally disclose AI/tool usage | 0 |
 | Send confirmation bypass incidents | 0 |
 | Reply send audit coverage | 100% of send attempts |
+| Auto-reply audit coverage | 100% of AI auto-reply evaluations |
+| Auto-reply UI visibility | 100% of audit rows visible through UI filters |
 
 Later auto-reply success:
 
@@ -1252,16 +1378,17 @@ Later auto-reply success:
   - `list_email_inboxes`
   - `fetch_unread_emails`
   - `get_email_message`
-  - `search_email_reply_knowledge`
+  - `knowledge_library_search`
   - `create_email_reply_draft`
   - `send_email_reply`
   - `mark_email_processed`
 - Reply draft persistence.
-- Knowledge-library retrieval through `VectorSearchService` during draft generation.
+- Knowledge-library retrieval through the existing `knowledge_library_search` built-in tool during draft generation.
 - Reply identity profile support or a minimum owner-style prompt policy.
 - Confirmed reply send through existing outbound service.
-- Audit log for read/draft/send.
-- Basic inbox and message UI.
+- Audit log for read, knowledge search, draft decision, send decision, skip, block, failure, and send.
+- AI auto-reply audit UI for viewing AI-created drafts, AI-sent replies, skipped replies, blocked replies, and failures.
+- Basic receive-enabled email service and message UI.
 - AI enable gate for draft generation.
 - i18n updates for new UI text.
 
@@ -1317,8 +1444,8 @@ Later auto-reply success:
 
 - Add inbound email schemas and `EmailReceiveAiTools`.
 - Register built-in tools in `SkillRegistry`.
-- Add `EmailReplyKnowledgeService` backed by `VectorSearchService`.
-- Register `search_email_reply_knowledge`.
+- Add `EmailReplyKnowledgeService` backed by the existing `knowledge_library_search` tool contract.
+- Reuse the existing `knowledge_library_search` tool rather than registering a duplicate email-specific search tool.
 - Add permission, validation, and audit logging.
 - Add tests for tool contracts and failure paths.
 
@@ -1336,6 +1463,7 @@ Later auto-reply success:
 - Add receive settings UI for email services.
 - Add received message list/detail UI.
 - Add draft review/edit/send UI.
+- Add AI auto-reply audit UI with filters and detail view.
 - Add all translations.
 
 ### Milestone 5: Auto-reply policy foundation
@@ -1353,8 +1481,10 @@ Later auto-reply success:
 - [ ] Worker processes do not access SQLite directly.
 - [ ] All database logic lives in Model and Module classes.
 - [ ] AI-serving IPC handlers check `USER_AI_ENABLED` first.
-- [ ] Reply draft generation uses `VectorSearchService` by default.
+- [ ] Reply draft generation uses `knowledge_library_search` by default.
 - [ ] Draft records store knowledge source IDs used for generation.
+- [ ] Auto-reply audit records are created for every AI auto-reply evaluation.
+- [ ] Users can view AI auto-reply audit records in the UI.
 - [ ] Replies do not disclose AI, tool, prompt, confidence, or retrieval details.
 - [ ] Replies follow the configured email owner identity and style.
 - [ ] `send_email_reply` requires confirmation in Phase 1.
