@@ -10,7 +10,7 @@ import {
   RagStatsResponse,
 } from "@/entityTypes/commonType";
 import { DocumentInfo } from "@/views/api/rag";
-import { RagConfigApi, AvailableModelsResponse } from "@/api/ragConfigApi";
+import { EmbeddingModelCatalogService } from "@/service/embedding/EmbeddingModelCatalogService";
 import * as fs from "fs";
 import * as path from "path";
 import {
@@ -547,14 +547,14 @@ export function registerRagIpcHandlers(): void {
     RAG_UPDATE_EMBEDDING_MODEL,
     ragUpdateEmbeddingModelInputSchema,
     async (input) => {
-      const ragConfigApi = new RagConfigApi();
-      const modelsResponse = await ragConfigApi.getAvailableEmbeddingModels();
-      if (!modelsResponse.status || !modelsResponse.data) {
-        throw new Error("Failed to fetch available models for validation");
-      }
-      const modelInfo = modelsResponse.data.models[input.model];
+      // Validate against the merged catalog (remote + local). listModels()
+      // tolerates remote failure, so selecting the local free model still
+      // validates when the remote AI server is offline.
+      const catalog = new EmbeddingModelCatalogService();
+      const list = await catalog.listModels();
+      const modelInfo = list.models[input.model];
       if (!modelInfo) {
-        const names = Object.keys(modelsResponse.data.models).join(", ");
+        const names = Object.keys(list.models).join(", ");
         throw new Error(
           `Invalid model name "${input.model}". Available models: ${names}`
         );
@@ -570,18 +570,10 @@ export function registerRagIpcHandlers(): void {
     RAG_GET_AVAILABLE_MODELS,
     ragNoInputSchema,
     async () => {
-      const ragConfigApi = new RagConfigApi();
-      const response = await ragConfigApi.getAvailableEmbeddingModels();
-      if (!response.status || !response.data) {
-        throw new Error(response.msg || "Failed to retrieve available models");
-      }
-      const ragController = await createRagController();
-      const defaultModelFromSettings =
-        await ragController.getDefaultEmbeddingModel();
-      if (defaultModelFromSettings) {
-        response.data.default_model = defaultModelFromSettings.modelName;
-      }
-      return response.data satisfies AvailableModelsResponse;
+      // The catalog merges remote + local models and never throws on remote
+      // failure — the local free model is always offered to the UI.
+      const catalog = new EmbeddingModelCatalogService();
+      return await catalog.listModels();
     }
   );
 
