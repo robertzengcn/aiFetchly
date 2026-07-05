@@ -1,4 +1,7 @@
-import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
+import {
+  registerValidatedHandler,
+  registerAiValidatedHandler,
+} from "@/main-process/communication/_shared/registerValidatedHandler";
 import {
   EMAIL_RECEIVE_SYNC,
   EMAIL_RECEIVE_CONNECTION_TEST,
@@ -7,6 +10,10 @@ import {
   EMAIL_REPLY_MARK_PROCESSED,
   EMAIL_REPLY_IDENTITY_GET,
   EMAIL_REPLY_IDENTITY_UPDATE,
+  EMAIL_REPLY_DRAFT_CREATE,
+  EMAIL_REPLY_DRAFT_DETAIL,
+  EMAIL_REPLY_DRAFT_UPDATE,
+  EMAIL_REPLY_SEND,
   EMAIL_AUTO_REPLY_AUDIT_LIST,
   EMAIL_AUTO_REPLY_AUDIT_DETAIL,
 } from "@/config/channellist";
@@ -20,12 +27,18 @@ import {
 import {
   emailReplyIdentityGetInputSchema,
   emailReplyIdentityUpdateInputSchema,
+  emailReplyDraftCreateInputSchema,
+  emailReplyDraftDetailInputSchema,
+  emailReplyDraftUpdateInputSchema,
+  emailReplySendInputSchema,
   emailAutoReplyAuditListInputSchema,
   emailAutoReplyAuditDetailInputSchema,
 } from "@/schemas/ipc/emailReply";
 import { EmailReceiveSyncService } from "@/service/emailReceive/EmailReceiveSyncService";
+import { EmailReplyDraftGenerationService } from "@/service/emailReply/EmailReplyDraftGenerationService";
 import { EmailServiceModule } from "@/modules/emailServiceModule";
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
+import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
 import { EmailReplyAuditLogModule } from "@/modules/EmailReplyAuditLogModule";
 import { EmailReplyIdentityProfileModule } from "@/modules/EmailReplyIdentityProfileModule";
 import { EmailAutoReplyAuditLogModule } from "@/modules/EmailAutoReplyAuditLogModule";
@@ -244,6 +257,93 @@ export function registerEmailReceiveIpcHandlers(): void {
       const row = await module.readWithRelations(input.id);
       if (!row) throw new Error("emailreceive.audit_not_found");
       return toAutoReplyAuditDto(row);
+    }
+  );
+
+  // ---- AI draft generation (AI-gated at the boundary) ----
+  registerAiValidatedHandler(
+    EMAIL_REPLY_DRAFT_CREATE,
+    emailReplyDraftCreateInputSchema,
+    async (input) => {
+      const genService = new EmailReplyDraftGenerationService();
+      const result = await genService.createDraft(input);
+      if (!result.success) {
+        // Surface the failure reason via the standard envelope.
+        throw new Error(result.error);
+      }
+      const { success: _ignored, ...dto } = result;
+      return dto;
+    }
+  );
+
+  // ---- Reply draft detail ----
+  registerValidatedHandler(
+    EMAIL_REPLY_DRAFT_DETAIL,
+    emailReplyDraftDetailInputSchema,
+    async (input) => {
+      const module = new EmailReplyDraftModule();
+      const draft = await module.read(input.id);
+      if (!draft) throw new Error("emailreceive.draft_not_found");
+      return {
+        id: draft.id,
+        messageId: draft.messageId,
+        emailServiceId: draft.emailServiceId,
+        subject: draft.subject,
+        bodyText: draft.bodyText,
+        bodyHtml: draft.bodyHtml,
+        status: draft.status,
+        generationSource: draft.generationSource,
+        confidence: draft.confidence,
+        knowledgeSourcesJson: draft.knowledgeSourcesJson,
+        warningsJson: draft.warningsJson,
+        sentAt: draft.sentAt ? new Date(draft.sentAt).toISOString() : null,
+        sendError: draft.sendError,
+        createdAt: draft.createdAt
+          ? new Date(draft.createdAt).toISOString()
+          : "",
+      };
+    }
+  );
+
+  // ---- Reply draft body edit (user reviews/edits an AI draft) ----
+  registerValidatedHandler(
+    EMAIL_REPLY_DRAFT_UPDATE,
+    emailReplyDraftUpdateInputSchema,
+    async (input) => {
+      const module = new EmailReplyDraftModule();
+      const existing = await module.read(input.id);
+      if (!existing) throw new Error("emailreceive.draft_not_found");
+      await module.updateBody(input.id, input.bodyText, input.bodyHtml ?? null);
+      // Best-effort audit of the human edit.
+      try {
+        const audit = new EmailReplyAuditLogEntity();
+        audit.emailServiceId = existing.emailServiceId ?? 0;
+        audit.messageId = existing.messageId;
+        audit.draftId = existing.id;
+        audit.action = "draft_edited";
+        audit.actor = "user";
+        audit.reason = "User edited reply draft";
+        await new EmailReplyAuditLogModule().create(audit);
+      } catch (e) {
+        console.error("Failed to write draft_edited audit:", e);
+      }
+      return { id: input.id };
+    }
+  );
+
+  // ---- Confirmed reply send (UI Send button) ----
+  registerValidatedHandler(
+    EMAIL_REPLY_SEND,
+    emailReplySendInputSchema,
+    async (input) => {
+      // Delegate to the AI tool implementation so the send path, header
+      // preservation, and dual audit writes stay in one place.
+      const { sendEmailReply } = await import("@/service/EmailReceiveAiTools");
+      const result = await sendEmailReply(input);
+      if (!result.success) {
+        throw new Error(result.error);
+      }
+      return result;
     }
   );
 }

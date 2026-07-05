@@ -36,6 +36,8 @@ import {
   fetchUnreadEmails,
   getEmailMessage,
   markEmailProcessed,
+  createEmailReplyDraft,
+  sendEmailReply,
 } from "@/service/EmailReceiveAiTools";
 import {
   listSchedulesForAi,
@@ -1540,6 +1542,87 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     source: "built-in",
     execute: async (args) => {
       const result = await markEmailProcessed(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "create_email_reply_draft",
+    description:
+      "Create a knowledge-grounded reply draft for one inbound message. Searches the " +
+      "knowledge library by default, then writes the draft in the mailbox owner's voice. " +
+      "Does NOT send the reply and does NOT mention AI, retrieval, or confidence in the body. " +
+      "AI must be enabled. Returns the persisted draft for human review.",
+    parameters: {
+      type: "object",
+      properties: {
+        message_id: {
+          type: "number",
+          description: "Stored received message id to reply to.",
+        },
+        tone: {
+          type: "string",
+          description: "Optional tone hint (e.g. professional, friendly).",
+        },
+        goal: {
+          type: "string",
+          description:
+            "Optional reply goal (e.g. 'answer pricing and book a call').",
+        },
+        extra_instructions: {
+          type: "string",
+          description: "Optional extra instructions for the draft.",
+        },
+        use_knowledge_library: {
+          type: "boolean",
+          description:
+            "Whether to ground the reply in knowledge-library context.",
+          default: true,
+        },
+      },
+      required: ["message_id"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await createEmailReplyDraft(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "send_email_reply",
+    description:
+      "Send a persisted reply draft as an email. Requires user confirmation because it sends " +
+      "email. Verifies the draft and outbound service, preserves reply threading headers " +
+      "(In-Reply-To, References), updates draft/message state, and writes a send audit record.",
+    parameters: {
+      type: "object",
+      properties: {
+        draft_id: {
+          type: "number",
+          description: "Persisted reply draft id to send.",
+        },
+        email_service_id: {
+          type: "number",
+          description:
+            "Optional outbound email service id. Defaults to the draft's service.",
+        },
+      },
+      required: ["draft_id"],
+    },
+    tier: "main",
+    requiresConfirmation: true,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await sendEmailReply(args);
       return {
         success: result.success,
         result: result as unknown as Record<string, unknown>,

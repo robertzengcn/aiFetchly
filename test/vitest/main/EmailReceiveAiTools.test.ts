@@ -61,3 +61,23 @@ describe("Email receive AI tools registration", () => {
     expect(skill.parameters.required).toContain("status");
   });
 });
+
+describe("Email reply draft/send AI tools", () => {
+  it("create_email_reply_draft does NOT require confirmation (draft only)", () => {
+    const skill = SkillRegistry.getSkill("create_email_reply_draft");
+    expect(skill).not.toBeNull();
+    expect(skill!.source).toBe("built-in");
+    expect(skill!.permissionCategory).toBe("automation");
+    expect(skill!.requiresConfirmation).toBe(false);
+    expect(skill!.parameters.required).toContain("message_id");
+  });
+
+  it("send_email_reply REQUIRES confirmation (it sends email)", () => {
+    const skill = SkillRegistry.getSkill("send_email_reply");
+    expect(skill).not.toBeNull();
+    expect(skill!.source).toBe("built-in");
+    expect(skill!.permissionCategory).toBe("automation");
+    expect(skill!.requiresConfirmation).toBe(true);
+    expect(skill!.parameters.required).toContain("draft_id");
+  });
+});
