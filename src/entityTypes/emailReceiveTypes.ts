@@ -9,6 +9,29 @@
 /** Inbound mailbox receive protocol. MVP is IMAP-first; POP3 is supported for compatibility. */
 export type EmailReceiveProtocol = "imap" | "pop3";
 
+/**
+ * Connection configuration handed to an {@link EmailReceiveClient}.
+ * Main-process only — carries the receive password and must NEVER be returned
+ * to the renderer or surfaced in an AI tool result.
+ */
+export interface EmailReceiveConnectionConfig {
+  readonly emailServiceId: number;
+  readonly protocol: EmailReceiveProtocol;
+  readonly host: string;
+  readonly port: number;
+  readonly ssl: boolean;
+  readonly username: string;
+  readonly password: string;
+  readonly folder: string;
+}
+
+/** Bounded fetch options for a receive sync. */
+export interface EmailReceiveFetchOptions {
+  readonly limit: number;
+  readonly unreadOnly: boolean;
+  readonly since?: Date;
+}
+
 /** AI classification of a received message intent. */
 export type EmailMessageClassification =
   | "interested"
