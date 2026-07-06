@@ -167,10 +167,16 @@ src/
    - Temporary debug code or console.log statements
    - Files with compilation errors
 
-5. **Example**:
+5. **Each fix task MUST be committed immediately upon completion**:
+   - After fixing TypeScript errors, lint issues, or any code defects, stage and commit right away.
+   - Do not batch multiple fixes into one commit unless they form a single logical unit.
+   - The commit message must reference what was fixed (e.g., `fix: resolve TS2339 in PluginManager.vue`).
+
+6. **Example**:
    - Implement `SystemDependencyCatalog.getDependencies()` → stage and commit
    - Implement `SystemDependencyRetryService.retry()` → stage and commit
    - Add entity `DependencyInstallAudit` → stage and commit
+   - Fix TypeScript error in `PluginManager.vue` → stage and commit
 
 ### AI Feature IPC Handlers - MANDATORY RULE
 **When adding or modifying IPC handlers that serve AI functions (e.g. AI chat, keyword generation, AI tools):**
