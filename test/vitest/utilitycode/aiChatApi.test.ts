@@ -1154,6 +1154,40 @@ describe("AiChatApi - OpenAI compatibility fallback", () => {
       { content: undefined, finishReason: "stop" },
     ]);
   });
+
+  it("surfaces non-SSE JSON API envelope errors instead of ignoring them", async () => {
+    const encoder = new TextEncoder();
+    const body = JSON.stringify({
+      status: false,
+      code: 500,
+      msg: "database connection is not open",
+      data: null,
+    });
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(body));
+          controller.close();
+        },
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }
+    );
+
+    mockPostStreamShared.mockResolvedValueOnce(response);
+
+    await expect(
+      api.openAIChatCompletionStream(
+        {
+          model: "gpt-test",
+          messages: [{ role: "user", content: "Hi" }],
+        },
+        vi.fn()
+      )
+    ).rejects.toThrow("AI server error code=500: database connection is not open");
+  });
 });
 
 describe("AiChatApi - Recovery-driven streaming retry", () => {
@@ -1355,8 +1389,9 @@ describe("AiChatApi - Recovery-driven streaming retry", () => {
         () => undefined,
         { retryProfile: "foreground" }
       );
+      const assertion = expect(p).rejects.toThrow(/HTTP 500/);
       await vi.runAllTimersAsync();
-      await expect(p).rejects.toThrow(/HTTP 500/);
+      await assertion;
     } finally {
       vi.useRealTimers();
     }

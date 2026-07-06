@@ -2568,6 +2568,60 @@ export class AiChatApi {
     return null;
   }
 
+  private buildApiEnvelopeError(payload: unknown): Error | null {
+    if (!this.isRecord(payload)) {
+      return null;
+    }
+
+    const hasEnvelopeShape =
+      "status" in payload ||
+      "code" in payload ||
+      "msg" in payload ||
+      "message" in payload;
+    if (!hasEnvelopeShape || Array.isArray(payload.choices)) {
+      return null;
+    }
+
+    const status = payload.status;
+    const code = payload.code;
+    const msg =
+      this.getStringField(payload, "msg") ??
+      this.getStringField(payload, "message") ??
+      this.getStringField(payload, "error");
+    const isErrorStatus = status === false;
+    const numericCode = typeof code === "number" ? code : undefined;
+    const stringCode = typeof code === "string" ? code : undefined;
+    const isErrorCode =
+      numericCode !== undefined
+        ? numericCode >= 400
+        : stringCode !== undefined && !["0", "200", "ok"].includes(stringCode);
+
+    if (!isErrorStatus && !isErrorCode) {
+      return null;
+    }
+
+    const codeText =
+      numericCode !== undefined
+        ? String(numericCode)
+        : stringCode ?? "unknown";
+    const safeMessage = this.truncateForLog(msg ?? "AI server returned an error");
+    const data = payload.data;
+    const dataType = Array.isArray(data) ? "array" : typeof data;
+    console.error(
+      `[ai-chat-v2] openai-stream server envelope error status=${String(
+        status
+      )} code=${codeText} msg="${safeMessage}" dataType=${dataType}`
+    );
+    return new Error(`AI server error code=${codeText}: ${safeMessage}`);
+  }
+
+  private truncateForLog(value: string, maxLength = 500): string {
+    if (value.length <= maxLength) {
+      return value;
+    }
+    return `${value.slice(0, maxLength)}...`;
+  }
+
   private describeOpenAIStreamPayload(
     payload: unknown,
     eventType?: string
@@ -2650,6 +2704,10 @@ export class AiChatApi {
             : "AI server returned a stream error";
         throw new Error(message);
       }
+      const envelopeError = this.buildApiEnvelopeError(payload);
+      if (envelopeError) {
+        throw envelopeError;
+      }
       const chunk = this.normalizeOpenAIStreamPayload(payload, eventType);
       if (!chunk) {
         console.warn(
@@ -2713,15 +2771,17 @@ export class AiChatApi {
               streamActive = false;
               break;
             }
+            let payload: unknown;
             try {
-              const payload: unknown = JSON.parse(jsonStr);
-              emitPayload(payload, currentEventType);
+              payload = JSON.parse(jsonStr);
             } catch (err) {
               console.warn(
                 `[ai-chat-v2] openai-stream failed to parse payload length=${jsonStr.length}:`,
                 err
               );
+              continue;
             }
+            emitPayload(payload, currentEventType);
           }
         }
       }
@@ -2735,14 +2795,18 @@ export class AiChatApi {
         trimmedBuffer.startsWith("data:")
       ) {
         const jsonStr = trimmedBuffer.substring(5).trim();
+        let payload: unknown;
         try {
-          const payload: unknown = JSON.parse(jsonStr);
-          emitPayload(payload, currentEventType);
+          payload = JSON.parse(jsonStr);
         } catch (err) {
           console.warn(
             `[ai-chat-v2] openai-stream failed to parse final payload length=${jsonStr.length}:`,
             err
           );
+          payload = undefined;
+        }
+        if (payload !== undefined) {
+          emitPayload(payload, currentEventType);
         }
       }
 
@@ -2761,17 +2825,21 @@ export class AiChatApi {
           trimmedBody !== "data:[DONE]" &&
           !trimmedBody.startsWith("data:")
         ) {
+          let payload: unknown;
           try {
-            const payload: unknown = JSON.parse(trimmedBody);
+            payload = JSON.parse(trimmedBody);
             console.warn(
               `[ai-chat-v2] openai-stream recovered non-SSE JSON body (length=${trimmedBody.length}); treating as single payload.`
             );
-            emitPayload(payload, currentEventType);
           } catch (err) {
             console.warn(
               `[ai-chat-v2] openai-stream body was not valid JSON and emitted no SSE chunks (length=${trimmedBody.length}):`,
               err
             );
+            payload = undefined;
+          }
+          if (payload !== undefined) {
+            emitPayload(payload, currentEventType);
           }
         }
       }

@@ -43,7 +43,7 @@ export function userSafeError(err: unknown): string {
     // after a short wait, so surface a clear, actionable message instead of
     // the generic "unexpected error" fallback.
     if (
-      /finish_reason=error|empty response|no finish reason|transient server|rate limit|timeout|\b502\b/i.test(
+      /finish_reason=error|empty response|no finish reason|transient server|rate limit|timeout|\b502\b|AI server error code=5\d\d|database connection is not open/i.test(
         msg
       )
     ) {

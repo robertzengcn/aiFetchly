@@ -187,6 +187,14 @@ export class AIChatRecoveryClassifier {
           originalError: error,
         });
       }
+      const fromServerEnvelope = this.classifyServerEnvelopeText(text);
+      if (fromServerEnvelope) {
+        return new AIChatRecoverableError({
+          reason: fromServerEnvelope,
+          message: error.message || text,
+          originalError: error,
+        });
+      }
       return new AIChatRecoverableError({
         reason: "non_recoverable",
         message: error.message || "Unknown error",
@@ -355,6 +363,20 @@ export class AIChatRecoveryClassifier {
     if (/timeout\b/.test(text)) return "timeout";
     if (/socket\s+hang\s+up/.test(text)) return "network";
     return undefined;
+  }
+
+  private classifyServerEnvelopeText(
+    text: string
+  ): AIChatRecoveryReason | undefined {
+    const match = text.match(/ai server error code=(\d{3})/i);
+    if (!match) {
+      return undefined;
+    }
+    const status = Number(match[1]);
+    if (!Number.isFinite(status)) {
+      return undefined;
+    }
+    return this.classifyHttpStatus(status, text);
   }
 
   private composeHttpMessage(

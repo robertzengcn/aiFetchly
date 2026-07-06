@@ -188,6 +188,13 @@ describe("AIChatRecoveryClassifier", () => {
       expect(classifier.classifyThrown(err).reason).toBe("timeout");
     });
 
+    it("classifies AI server JSON envelope 500 errors as server_error", () => {
+      const err = new Error(
+        "AI server error code=500: database connection is not open"
+      );
+      expect(classifier.classifyThrown(err).reason).toBe("server_error");
+    });
+
     it("classifies unknown errors as non_recoverable", () => {
       const err = new Error("something unusual");
       expect(classifier.classifyThrown(err).reason).toBe("non_recoverable");
