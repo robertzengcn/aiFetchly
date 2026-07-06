@@ -156,7 +156,8 @@ export default {
   },
   knowledge: {
     subscription_required: "サブスクリプションが必要です",
-    subscription_required_message: "ナレッジライブラリはサブスクリプションユーザーのみ利用可能です。プランをアップグレードしてください。",
+    subscription_required_message:
+      "ナレッジライブラリはサブスクリプションユーザーのみ利用可能です。プランをアップグレードしてください。",
     upload_document: "ドキュメントをアップロード",
     documents: "ドキュメント",
     chat: "チャット",
@@ -183,6 +184,10 @@ export default {
       "ファイル「{name}」は{maxSize}の制限を超えています。",
     upload_failed_unsupported_type:
       "ファイル「{name}」の形式はサポートされていません。対応形式：画像、CSV、PDF、DOCX、XLS、XLSX。",
+    embedding_billing_denied:
+      "リモート埋め込みのクォータまたは課金上限に達しました",
+    embedding_billing_denied_detail:
+      "アカウントのリモート埋め込みクォータが枯渇している可能性があります。サーバー側でプランを補充するか、管理者に連絡してから、もう一度アップロードをお試しください。",
     error: "エラー",
     document_management: "ドキュメント管理",
     search_by_name: "名前で検索",

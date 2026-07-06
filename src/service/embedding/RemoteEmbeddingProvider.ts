@@ -6,6 +6,10 @@ import type {
   EmbeddingResult,
 } from "@/entityTypes/embeddingTypes";
 import type { EmbeddingProvider } from "@/service/embedding/EmbeddingProvider";
+import {
+  EmbeddingBillingError,
+  isBillingDeniedMessage,
+} from "@/modules/rag/embeddingErrors";
 
 /**
  * Embedding provider that delegates to the remote AI server via
@@ -34,9 +38,17 @@ export class RemoteEmbeddingProvider implements EmbeddingProvider {
       this.modelName
     );
     if (!response.status || !response.data) {
-      throw new Error(
-        response.msg || "Remote embedding request failed"
-      );
+      const backendMsg = response.msg || "Remote embedding request failed";
+      // Surface billing/quota denials as a typed error so the UI can present a
+      // clear, translated message and retry/local-fallback layers know not to
+      // mask the failure.
+      if (isBillingDeniedMessage(backendMsg)) {
+        throw new EmbeddingBillingError(
+          backendMsg,
+          "embedding_error_billing_denied"
+        );
+      }
+      throw new Error(backendMsg);
     }
     return response.data.map(
       (item: ApiEmbeddingResult): EmbeddingResult => ({

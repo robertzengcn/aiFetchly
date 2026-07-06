@@ -248,7 +248,7 @@ async function buildAndUploadCrash(crashId: string): Promise<UploadResult> {
     return { reportId: null, error: "Crash record not found." };
   }
   const client = new DiagnosticUploadClient({
-    endpoint: `${base}/api/crash-reports`,
+    endpoint: `${base}/apis/api/crash-reports`,
     http: fetchHttp,
     authToken: getAuthToken(),
   });
@@ -388,7 +388,7 @@ export function registerDiagnosticsIpcHandlers(): void {
       return { reportId: null, error: "Crash record not found." };
     }
     const client = new DiagnosticUploadClient({
-      endpoint: `${base}/api/crash-reports`,
+      endpoint: `${base}/apis/api/crash-reports`,
       http: fetchHttp,
       authToken: getAuthToken(),
     });

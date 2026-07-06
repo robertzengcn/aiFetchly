@@ -155,7 +155,8 @@ export default {
   },
   knowledge: {
     subscription_required: "Subscription Required",
-    subscription_required_message: "Knowledge Library is only available for subscription users. Please upgrade your plan.",
+    subscription_required_message:
+      "Knowledge Library is only available for subscription users. Please upgrade your plan.",
     upload_document: "Upload Document",
     documents: "Documents",
     chat: "Chat",
@@ -181,6 +182,9 @@ export default {
       'File "{name}" exceeds the {maxSize} size limit.',
     upload_failed_unsupported_type:
       'File "{name}" type is not supported. Allowed: images, CSV, PDF, DOCX, XLS, XLSX.',
+    embedding_billing_denied: "Remote embedding quota or billing limit reached",
+    embedding_billing_denied_detail:
+      "Your account's remote embedding quota appears to be exhausted. Please top up your plan on the server side, or ask an admin to do so, then try uploading again.",
     error: "Error",
     // Document Management translations
     document_management: "Document Management",

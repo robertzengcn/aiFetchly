@@ -43,6 +43,11 @@ import {
 } from "@/service/RagSearchTypes";
 import { RagRerankService } from "@/service/RagRerankService";
 import { RAGChunkModule } from "@/modules/RAGChunkModule";
+import {
+  EmbeddingBillingError,
+  isBillingDeniedMessage,
+  isEmbeddingBillingError,
+} from "@/modules/rag/embeddingErrors";
 // import { Token } from "./token";
 // import { USERSDBPATH } from "@/config/usersetting";
 export interface SearchRequest {
@@ -224,6 +229,30 @@ export class RagSearchModule extends BaseModule {
         throw error;
       }
 
+      // Preserve the billing-denied signal so the UI can present a clear,
+      // translated message instead of the raw backend string.
+      if (error instanceof EmbeddingBillingError) {
+        // Still try to mark the document as failed before propagating.
+        try {
+          const existingDoc =
+            createdDocument ||
+            (await this.documentService.findDocumentByPath(options.filePath));
+          if (existingDoc) {
+            await this.documentService.updateDocumentStatus(
+              existingDoc.id,
+              "active",
+              "failed"
+            );
+          }
+        } catch (updateError) {
+          console.error(
+            "Failed to update document status to error:",
+            updateError
+          );
+        }
+        throw error;
+      }
+
       // Try to update the created document status. Upload staging changes the
       // persisted filePath, so prefer the captured document id over path lookup.
       try {
@@ -326,6 +355,12 @@ export class RagSearchModule extends BaseModule {
           dimensions: provider.dimensions,
         };
       } catch (remoteError) {
+        // Billing/quota denials must surface to the UI as a typed error so the
+        // user sees a clear, translated message. Do NOT silently fall back to
+        // the local model — the user needs to know their plan limit was hit.
+        if (isEmbeddingBillingError(remoteError)) {
+          throw remoteError;
+        }
         return await this.fallbackToLocalEmbedding(
           chunks,
           documentId,
@@ -334,6 +369,11 @@ export class RagSearchModule extends BaseModule {
         );
       }
     } catch (error) {
+      // Preserve the billing-denied signal unchanged so uploadDocument (and
+      // ultimately the UI) can branch on the typed error.
+      if (isEmbeddingBillingError(error)) {
+        throw error;
+      }
       console.error("Error generating embeddings:", error);
       try {
         await this.documentService.saveErrorLog(
@@ -360,6 +400,9 @@ export class RagSearchModule extends BaseModule {
    * remote vectors for the document, then re-embeds every chunk with the local
    * free model. If the local provider also fails, the error propagates so the
    * caller marks the document as errored.
+   *
+   * Note: billing-denied errors are NOT routed here — they surface directly so
+   * the UI can present a clear, translated message (see generateChunkEmbeddings).
    */
   private async fallbackToLocalEmbedding(
     chunks: RAGChunkEntity[],

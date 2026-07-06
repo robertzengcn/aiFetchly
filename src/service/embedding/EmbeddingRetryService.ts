@@ -1,6 +1,7 @@
 "use strict";
 import type { EmbeddingResult } from "@/entityTypes/embeddingTypes";
 import type { EmbeddingProvider } from "@/service/embedding/EmbeddingProvider";
+import { isEmbeddingBillingError } from "@/modules/rag/embeddingErrors";
 
 /**
  * Retry profile for a remote embedding provider. The first release uses a small
@@ -33,8 +34,9 @@ const NON_RETRYABLE_KEYWORDS = [
  * are worth retrying.
  *
  * Retryable: network failures, timeouts, 429/5xx-class errors, malformed
- * responses. Not retryable: invalid model, auth/entitlement rejection, or a
- * local model ID mistakenly routed to the remote provider.
+ * responses. Not retryable: invalid model, auth/entitlement rejection,
+ * billing/quota denials, or a local model ID mistakenly routed to the remote
+ * provider.
  */
 export class EmbeddingRetryService {
   constructor(
@@ -45,8 +47,14 @@ export class EmbeddingRetryService {
 
   /** True when the error looks transient and worth another attempt. */
   isRetryable(error: unknown): boolean {
+    // Billing/quota denials are permanent — never retry, just surface them.
+    if (isEmbeddingBillingError(error)) {
+      return false;
+    }
     const message =
-      error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+      error instanceof Error
+        ? error.message.toLowerCase()
+        : String(error).toLowerCase();
     return !NON_RETRYABLE_KEYWORDS.some((keyword) => message.includes(keyword));
   }
 
