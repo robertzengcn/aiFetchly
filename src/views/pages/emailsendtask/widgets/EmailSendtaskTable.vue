@@ -8,13 +8,14 @@
            
             <div class="ml-auto">
             <v-btn class="btn" variant="flat" prepend-icon="mdi-plus" color="#5865f2" @click="createTask()">
-                {{CapitalizeFirstLetter(t('buckemailtask.create_task'))}}
+                {{ CapitalizeFirstLetter(t('buckemailtask.create_task')) }}
             </v-btn>
         </div>
         </div>
 
     </div>
-    <v-data-table-server v-model="selected" :items-per-page="itemsPerPage" :search="search" :headers="computedHeaders"
+    <v-data-table-server
+v-model="selected" :items-per-page="itemsPerPage" :search="search" :headers="computedHeaders"
         :items-length="totalItems" :items="serverItems" :loading="loading" item-value="id" @update:options="loadItems" return-object
         class="mt-5" :show-select="isSelectedtable">
         <template v-slot:[`item.actions`]="{ item }" v-if="isSelectedtable!=true">
@@ -119,7 +120,7 @@ function loadItems({ page, itemsPerPage, sortBy }) {
     const fetchitem: Fetchparam = {
         page: page,
         itemsPerPage: itemsPerPage,
-        sortBy: sortBy,
+        sortBy: sortBy?.[0],
         search: search.value
     }
     FakeAPI.fetch(fetchitem).then(

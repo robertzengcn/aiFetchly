@@ -68,11 +68,6 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
                     <v-btn
 @click="mainStore.onTheme" variant="text" :icon="mainStore.theme === 'light' ? 'mdi-weather-sunny' : 'mdi-weather-night'
         " />
-                    <v-btn variant="text" icon="mdi-bell-outline">
-                        <v-badge content="2" color="error">
-                            <v-icon size="small"></v-icon>
-                        </v-badge>
-                    </v-btn>
                     <v-menu :location="location">
                         <template v-slot:activator="{ props }">
                             <v-btn variant="text" icon="mdi-translate" v-bind="props">

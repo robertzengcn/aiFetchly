@@ -17,7 +17,9 @@
       "cwd": "${workspaceFolder}",
       "env": {
         "DISPLAY": ":0",
-        "AICHAT_DEBUG_REQUEST": "1"
+        "AICHAT_DEBUG_REQUEST": "1",
+        "CHOKIDAR_USEPOLLING": "1",
+        "CHOKIDAR_INTERVAL": "1000"
       },
       "outFiles": [
         "${workspaceFolder}/.vite/build/**/*.js"

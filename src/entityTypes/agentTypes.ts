@@ -119,6 +119,11 @@ export interface AgentResult {
   sourceUrls: string[];
   confidence?: number;
   errorMessage?: string;
+  /** Set when the agent's final text failed schema validation and the
+   * runtime salvaged it into a low-confidence partial result. Empty/undefined
+   * means the output parsed cleanly. Surface this to callers for observability.
+   */
+  parseWarning?: string;
 }
 
 /** Snapshot returned by getTask / tool polling. */

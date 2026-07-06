@@ -144,6 +144,7 @@ export class RagSearchModule extends BaseModule {
     options: DocumentUploadOptions
   ): Promise<DocumentUploadResponse> {
     const startTime = Date.now();
+    let createdDocument: RAGDocumentEntity | null = null;
 
     // Ensure we always have a valid default model before uploading.
     await this.checkAndSetDefaultEmbeddingModel();
@@ -168,6 +169,7 @@ export class RagSearchModule extends BaseModule {
     try {
       // Upload document to database
       const document = await this.documentService.uploadDocument(options);
+      createdDocument = document;
 
       // Update processing status to processing
       await this.documentService.updateDocumentStatus(
@@ -222,11 +224,12 @@ export class RagSearchModule extends BaseModule {
         throw error;
       }
 
-      // Try to find the document and update its status
+      // Try to update the created document status. Upload staging changes the
+      // persisted filePath, so prefer the captured document id over path lookup.
       try {
-        const existingDoc = await this.documentService.findDocumentByPath(
-          options.filePath
-        );
+        const existingDoc =
+          createdDocument ||
+          (await this.documentService.findDocumentByPath(options.filePath));
         if (existingDoc) {
           // Save error log for the document
           try {
@@ -242,7 +245,7 @@ export class RagSearchModule extends BaseModule {
           await this.documentService.updateDocumentStatus(
             existingDoc.id,
             "active",
-            "error"
+            "failed"
           );
         }
       } catch (updateError) {

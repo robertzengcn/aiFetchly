@@ -6,6 +6,9 @@
  * has a single source of truth for all security controls.
  */
 
+import * as os from "os";
+import * as path from "path";
+
 // ---------------------------------------------------------------------------
 // Timeout defaults
 // ---------------------------------------------------------------------------
@@ -84,7 +87,13 @@ export const SHELL_DENYLIST_PATTERNS: readonly DenylistEntry[] = [
   // Fork bombs and resource exhaustion
   {
     pattern: /:\(\)\{\s*:\|:&\s*\}/,
-    description: "Bash fork bomb pattern",
+    description: "Bash fork bomb pattern (canonical :(){ :|:& };: form)",
+  },
+  {
+    // Generic fork-bomb: NAME(){ NAME|NAME& } — catches the f(){ f|f& };f
+    // family that the canonical :() pattern misses.
+    pattern: /\w+\(\)\s*\{[^}]*\|[^}]*&/,
+    description: "Generic fork-bomb pattern (NAME(){ NAME|NAME& })",
   },
   {
     pattern: /\bwhile\s+true\s*;\s*do\s*/i,
@@ -119,15 +128,10 @@ export const SHELL_DENYLIST_PATTERNS: readonly DenylistEntry[] = [
     description: "Privilege escalation via sudo",
   },
 
-  // Indirection and eval (bypass vectors)
-  {
-    pattern: /\beval\s+/i,
-    description: "eval command (can bypass denylist via string construction)",
-  },
-  {
-    pattern: /\bexec\s+/i,
-    description: "exec command (process replacement bypass)",
-  },
+  // Note: eval/exec/source/./bash -c are NOT in this regex list because
+  // regex matching on raw strings false-positives on quoted text like
+  // echo 'eval is just a word'. They are caught structurally by the
+  // semantic-hazard layer (semanticHazards.ts) which checks argv[0].
 ];
 
 /** A single denylist entry with pattern and description. */
@@ -135,6 +139,99 @@ export interface DenylistEntry {
   readonly pattern: RegExp;
   readonly description: string;
 }
+
+// ---------------------------------------------------------------------------
+// Ask-list patterns (tiered rules)
+// ---------------------------------------------------------------------------
+
+/**
+ * Regex patterns for commands that are *suspicious but not blocked*.
+ *
+ * These surface as a `ask` verdict — execution is blocked with a structured
+ * reason, distinct from `deny` so the UI can later offer an elevated-approval
+ * path. Patterns are matched against the full command string (case-insensitive).
+ */
+export const SHELL_ASK_PATTERNS: readonly DenylistEntry[] = [
+  // Network egress — exfiltration / download risk.
+  // Pattern requires trailing whitespace so paths like `.ssh/known_hosts` or
+  // `~/.config/curl-config` don't false-positive on the substring match.
+  {
+    pattern:
+      /(?:^|[\s;&|(])(curl|wget|httpie|ftp|scp|rsync|ssh|sftp|nc|netcat|ncat)(?=\s|$)/i,
+    description:
+      "Network egress command — can exfiltrate data or download payloads",
+  },
+  // Package managers (can run install scripts). Same trailing-whitespace rule.
+  {
+    pattern:
+      /(?:^|[\s;&|(])(npm|yarn|pnpm|npx|pip|pip3|gem|cargo|go|apt|apt-get|brew|yum|dnf)(?=\s|$)/i,
+    description: "Package manager — install scripts can run arbitrary code",
+  },
+  // Publishing / pushing
+  {
+    pattern: /\b(git\s+push|npm\s+publish|docker\s+push)\b/i,
+    description:
+      "Publish / push operation — visible to others, hard to reverse",
+  },
+  // Base64 / hex decoding then execution is a classic bypass
+  {
+    pattern: /\bbase64\s+.*\|\s*(bash|sh|zsh)\b/i,
+    description: "Decoded payload piped to shell — classic denylist bypass",
+  },
+  // In-place sed with execute/write command
+  {
+    pattern: /\bsed\s+.*[-/][a-zA-Z]*[ew]/i,
+    description:
+      "sed with execute (e) or write (w) command — can run/emit arbitrary data",
+  },
+];
+
+// ---------------------------------------------------------------------------
+// Critical paths — hard-deny for destructive commands
+// ---------------------------------------------------------------------------
+
+/**
+ * Filesystem paths that are ALWAYS blocked for destructive commands (rm,
+ * rmdir, mv-into, chmod, etc.) even if an allow rule would otherwise permit.
+ *
+ * Uses os.homedir() so user-specific paths resolve correctly per platform.
+ */
+
+const HOME = os.homedir();
+
+export const SHELL_CRITICAL_PATHS: readonly string[] = [
+  // NOTE: HOME itself is intentionally NOT critical — workspaces commonly
+  // live under $HOME and we don't want to block all `rm`/`mv` inside a
+  // project. Specific sensitive subpaths under HOME are listed below.
+  path.join(HOME, ".ssh"),
+  path.join(HOME, ".gnupg"),
+  path.join(HOME, ".config"),
+  path.join(HOME, ".aws"),
+  path.join(HOME, ".docker"),
+  path.join(HOME, ".kube"),
+  path.join(HOME, ".npmrc"),
+  path.join(HOME, ".netrc"),
+  path.join(HOME, ".pypirc"),
+  path.join(HOME, ".gitconfig"),
+  path.join(HOME, ".bashrc"),
+  path.join(HOME, ".bash_profile"),
+  path.join(HOME, ".zshrc"),
+  path.join(HOME, ".profile"),
+  "/etc",
+  "/usr",
+  "/var",
+  "/bin",
+  "/sbin",
+  "/boot",
+  "/sys",
+  "/proc",
+  "/dev",
+  "/root",
+  "/tmp", // writable by everyone — often used in exploits
+  // macOS-only keychain — included unconditionally; on Linux/macOS the path
+  // simply won't exist, which is harmless for the FilePathGuard comparison.
+  path.join(HOME, "Library", "Keychains"),
+];
 
 // ---------------------------------------------------------------------------
 // Environment allowlist

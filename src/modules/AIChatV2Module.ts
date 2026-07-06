@@ -51,6 +51,7 @@ export class AIChatV2Module extends BaseModule {
     content: string;
     messageId?: string;
     timestamp?: Date;
+    metadata?: ChatV2MessageMetadata;
   }): Promise<AIChatMessageEntity> {
     return this.chatModule.saveMessage({
       messageId: params.messageId ?? `user-${uuid()}`,
@@ -58,7 +59,7 @@ export class AIChatV2Module extends BaseModule {
       role: "user",
       content: params.content,
       timestamp: params.timestamp,
-      metadata: { source: "chat-v2" } as ChatV2MessageMetadata,
+      metadata: { source: "chat-v2", ...(params.metadata ?? {}) } as ChatV2MessageMetadata,
       messageType: MessageType.MESSAGE,
     });
   }

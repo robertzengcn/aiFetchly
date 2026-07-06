@@ -5,8 +5,10 @@ import {
   PLUGIN_SEMVER_REGEX,
   resolvePluginRelativePath,
   type PluginError,
+  type PluginFormat,
   type PluginManifest,
 } from "@/entityTypes/pluginTypes";
+import { ClaudePluginAdapter } from "@/service/pluginCompat/ClaudePluginAdapter";
 
 /**
  * Loads and validates plugin manifests from disk.
@@ -203,18 +205,27 @@ function validateManifest(
 
 /**
  * Locate the plugin manifest file inside `pluginRoot`.
- * Prefers `.aifetchly-plugin/plugin.json`, falls back to root `plugin.json`.
- * Returns the absolute path or null when no manifest is found.
+ *
+ * Probe order (first hit wins):
+ *   1. .aifetchly-plugin/plugin.json   → native AiFetchly format
+ *   2. .claude-plugin/plugin.json      → Claude compat format
+ *   3. plugin.json (root)              → legacy (treated as aifetchly)
+ *
+ * Returns the absolute path plus the detected format, or null when no
+ * manifest is found.
  */
-function locateManifestFile(pluginRoot: string): string | null {
-  const preferred = path.join(pluginRoot, ".aifetchly-plugin", "plugin.json");
-  if (fs.existsSync(preferred)) {
-    return preferred;
-  }
-  const fallback = path.join(pluginRoot, "plugin.json");
-  if (fs.existsSync(fallback)) {
-    return fallback;
-  }
+function locateManifestFile(
+  pluginRoot: string
+): { path: string; format: PluginFormat } | null {
+  const ai = path.join(pluginRoot, ".aifetchly-plugin", "plugin.json");
+  if (fs.existsSync(ai)) return { path: ai, format: "aifetchly" };
+
+  const cc = path.join(pluginRoot, ".claude-plugin", "plugin.json");
+  if (fs.existsSync(cc)) return { path: cc, format: "claude" };
+
+  const root = path.join(pluginRoot, "plugin.json");
+  if (fs.existsSync(root)) return { path: root, format: "aifetchly" };
+
   return null;
 }
 
@@ -227,18 +238,20 @@ export class PluginManifestService {
   static async loadFromDirectory(
     pluginRoot: string
   ): Promise<PluginManifestLoadResult> {
-    const manifestPath = locateManifestFile(pluginRoot);
-    if (!manifestPath) {
+    const located = locateManifestFile(pluginRoot);
+    if (!located) {
       return fail([
         {
           code: "manifest-not-found",
           path: pluginRoot,
           message:
-            "No plugin manifest found. Expected .aifetchly-plugin/plugin.json (or root plugin.json).",
+            "No plugin manifest found. Expected .aifetchly-plugin/plugin.json, .claude-plugin/plugin.json, or root plugin.json.",
           recoverable: false,
         },
       ]);
     }
+
+    const manifestPath = located.path;
 
     let rawContent: string;
     try {
@@ -272,6 +285,16 @@ export class PluginManifestService {
           recoverable: false,
         },
       ]);
+    }
+
+    // Claude-format plugins skip validateManifest() because that function
+    // enforces AiFetchly-specific rules (description non-empty, semver-strict
+    // version) that do not apply to Claude. The adapter performs its own
+    // validation appropriate to Claude semantics. See tech design §5.
+    if (located.format === "claude") {
+      const adapted = ClaudePluginAdapter.adapt(parsed, { pluginRoot });
+      if (!adapted.ok) return fail(adapted.errors);
+      return ok(adapted.adapted.manifest, manifestPath);
     }
 
     const validation = validateManifest(parsed, pluginRoot);

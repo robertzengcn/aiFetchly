@@ -59,7 +59,7 @@
             :label="t('knowledge.search_by_name')"
             prepend-inner-icon="mdi-magnify"
             clearable
-            @update:modelValue="applyFilters"
+            @update:model-value="applyFilters"
           />
         </v-col>
         <v-col cols="12" md="3">
@@ -120,8 +120,8 @@
         <v-chip
           :color="getProcessingStatusColor(item.processingStatus)"
           small
-          :clickable="item.processingStatus === 'error'"
-          @click="item.processingStatus === 'error' ? showErrorLog(item) : null"
+          :clickable="isDocumentFailure(item)"
+          @click="isDocumentFailure(item) ? showErrorLog(item) : null"
         >
           {{ translateProcessingStatus(item.processingStatus) }}
         </v-chip>
@@ -267,6 +267,7 @@ import { ref, onMounted, onUnmounted, computed } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { getDocuments, type DocumentInfo, chunkAndEmbedDocument, getRAGStats, downloadDocument, deleteDocument as deleteDocumentAPI, uploadDocument as uploadDocumentAPI, getDocumentErrorLog } from '@/views/api/rag';
 import { Header } from "@/entityTypes/commonType"
+import { isDocumentFailure, isDocumentProcessing } from "@/views/pages/knowledge/documentStatus";
 const headers = ref<Array<Header>>([])
 // i18n setup
 const { t } = useI18n();
@@ -300,6 +301,7 @@ const { t } = useI18n();
     const refreshInterval = ref(5000); // 5 seconds default
     const lastRefreshTime = ref<Date | null>(null);
     const refreshTimer = ref<NodeJS.Timeout | null>(null);
+    const processingRefreshTimer = ref<NodeJS.Timeout | null>(null);
     const isTabVisible = ref(true);
 
     // Refresh interval options (in milliseconds)
@@ -343,7 +345,13 @@ const { t } = useI18n();
         return;
       }
 
-      loading.value = true;
+      if (isAutoRefresh && loading.value) {
+        return;
+      }
+
+      if (!isAutoRefresh) {
+        loading.value = true;
+      }
       try {
         // Get documents using IPC method
         const documentsList = await getDocuments(filters.value);
@@ -352,16 +360,21 @@ const { t } = useI18n();
         if (documentsList && Array.isArray(documentsList)) {
           documents.value = documentsList;
           lastRefreshTime.value = new Date();
+          syncProcessingRefresh();
           console.log('✅ Documents loaded successfully:', documents.value.length);
         } else {
           console.error('❌ Failed to load documents: Invalid response format');
           documents.value = [];
+          stopProcessingRefresh();
         }
       } catch (error) {
         console.error('❌ Error loading documents:', error);
         documents.value = [];
+        stopProcessingRefresh();
       } finally {
-        loading.value = false;
+        if (!isAutoRefresh) {
+          loading.value = false;
+        }
       }
     };
 
@@ -397,6 +410,31 @@ const { t } = useI18n();
       }
     };
 
+    const startProcessingRefresh = () => {
+      if (processingRefreshTimer.value) {
+        return;
+      }
+
+      processingRefreshTimer.value = setInterval(() => {
+        loadDocuments(true);
+      }, refreshInterval.value);
+    };
+
+    const stopProcessingRefresh = () => {
+      if (processingRefreshTimer.value) {
+        clearInterval(processingRefreshTimer.value);
+        processingRefreshTimer.value = null;
+      }
+    };
+
+    const syncProcessingRefresh = () => {
+      if (documents.value.some(isDocumentProcessing)) {
+        startProcessingRefresh();
+      } else {
+        stopProcessingRefresh();
+      }
+    };
+
     const toggleAutoRefresh = () => {
       if (autoRefreshEnabled.value) {
         startAutoRefresh();
@@ -415,6 +453,9 @@ const { t } = useI18n();
     const handleVisibilityChange = () => {
       isTabVisible.value = !document.hidden;
       console.log('👁️ Tab visibility changed:', isTabVisible.value ? 'visible' : 'hidden');
+      if (isTabVisible.value && documents.value.some(isDocumentProcessing)) {
+        loadDocuments(true);
+      }
     };
 
     // Format last refresh time
@@ -469,8 +510,6 @@ const { t } = useI18n();
           uploadFile.value = undefined;
           uploadData.value = { title: '', description: '', tags: [] };
           
-          // Refresh documents list immediately
-          await loadDocuments();
         } else {
           console.error('❌ Document upload failed:', result.message);
           alert(t('knowledge.upload_failed') + ': ' + (result.message || 'Unknown error'));
@@ -480,6 +519,7 @@ const { t } = useI18n();
         alert(t('knowledge.upload_failed') + ': ' + (error instanceof Error ? error.message : 'Unknown error'));
       } finally {
         uploading.value = false;
+        await loadDocuments();
       }
     };
 
@@ -774,6 +814,7 @@ const { t } = useI18n();
     onUnmounted(() => {
       // Clean up auto-refresh timer
       stopAutoRefresh();
+      stopProcessingRefresh();
       
       // Remove event listeners
       document.removeEventListener('visibilitychange', handleVisibilityChange);
