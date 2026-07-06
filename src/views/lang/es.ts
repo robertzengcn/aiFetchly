@@ -152,7 +152,8 @@ export default {
   },
   knowledge: {
     subscription_required: "Suscripción Requerida",
-    subscription_required_message: "La biblioteca de conocimiento solo está disponible para usuarios suscriptores. Por favor, actualice su plan.",
+    subscription_required_message:
+      "La biblioteca de conocimiento solo está disponible para usuarios suscriptores. Por favor, actualice su plan.",
     upload_document: "Subir documento",
     documents: "Documentos",
     chat: "Chat",
@@ -179,6 +180,10 @@ export default {
       'El archivo "{name}" excede el límite de {maxSize}.',
     upload_failed_unsupported_type:
       'El tipo de archivo "{name}" no es compatible. Formatos permitidos: imágenes, CSV, PDF, DOCX, XLS, XLSX.',
+    embedding_billing_denied:
+      "Cuota de embeddings remota o límite de facturación alcanzado",
+    embedding_billing_denied_detail:
+      "Parece que la cuota de embeddings remotos de su cuenta está agotada. Recargue su plan en el servidor o contacte a un administrador e intente subir el documento de nuevo.",
     error: "Error",
     document_management: "Gestión de documentos",
     search_by_name: "Buscar por nombre",

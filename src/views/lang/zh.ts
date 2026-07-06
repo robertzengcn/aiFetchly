@@ -166,6 +166,9 @@ export default {
     upload_failed_file_too_large: '文件 "{name}" 超过了 {maxSize} 的限制。',
     upload_failed_unsupported_type:
       '文件 "{name}" 的类型不支持。支持格式：图片、CSV、PDF、DOCX、XLS、XLSX。',
+    embedding_billing_denied: "远程嵌入配额或计费额度已用尽",
+    embedding_billing_denied_detail:
+      "您账户的远程嵌入配额似乎已耗尽。请在服务端充值或更换套餐后重试，或联系管理员处理。",
     error: "错误",
     // Document Management translations
     document_management: "文档管理",

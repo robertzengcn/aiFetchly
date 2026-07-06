@@ -504,19 +504,39 @@ const { t } = useI18n();
         if (result.success) {
           console.log('✅ Document uploaded successfully:', file.name);
           alert(t('knowledge.document_uploaded_successfully', { name: file.name }));
-          
+
           // Close dialog and reset form
           showUploadDialog.value = false;
           uploadFile.value = undefined;
           uploadData.value = { title: '', description: '', tags: [] };
-          
+
         } else {
           console.error('❌ Document upload failed:', result.message);
-          alert(t('knowledge.upload_failed') + ': ' + (result.message || 'Unknown error'));
+          // Remote embedding API can deny uploads on billing/quota grounds;
+          // surface a clear, translated message in that case instead of the
+          // raw backend string (e.g. "Billing reserve failed").
+          if (result.message === 'embedding_error_billing_denied') {
+            alert(
+              t('knowledge.embedding_billing_denied') +
+                '\n\n' +
+                t('knowledge.embedding_billing_denied_detail')
+            );
+          } else {
+            alert(t('knowledge.upload_failed') + ': ' + (result.message || 'Unknown error'));
+          }
         }
       } catch (error) {
         console.error('Upload error:', error);
-        alert(t('knowledge.upload_failed') + ': ' + (error instanceof Error ? error.message : 'Unknown error'));
+        const errMsg = error instanceof Error ? error.message : 'Unknown error';
+        if (errMsg === 'embedding_error_billing_denied') {
+          alert(
+            t('knowledge.embedding_billing_denied') +
+              '\n\n' +
+              t('knowledge.embedding_billing_denied_detail')
+          );
+        } else {
+          alert(t('knowledge.upload_failed') + ': ' + errMsg);
+        }
       } finally {
         uploading.value = false;
         await loadDocuments();

@@ -34,6 +34,10 @@ import {
 } from "@/service/RagSearchTypes";
 import { RagRerankService } from "@/service/RagRerankService";
 import { RAGChunkModule } from "@/modules/RAGChunkModule";
+import {
+  EmbeddingBillingError,
+  isBillingDeniedMessage,
+} from "@/modules/rag/embeddingErrors";
 // import { Token } from "./token";
 // import { USERSDBPATH } from "@/config/usersetting";
 export interface SearchRequest {
@@ -213,6 +217,30 @@ export class RagSearchModule extends BaseModule {
         throw error;
       }
 
+      // Preserve the billing-denied signal so the UI can present a clear,
+      // translated message instead of the raw backend string.
+      if (error instanceof EmbeddingBillingError) {
+        // Still try to mark the document as failed before propagating.
+        try {
+          const existingDoc =
+            createdDocument ||
+            (await this.documentService.findDocumentByPath(options.filePath));
+          if (existingDoc) {
+            await this.documentService.updateDocumentStatus(
+              existingDoc.id,
+              "active",
+              "failed"
+            );
+          }
+        } catch (updateError) {
+          console.error(
+            "Failed to update document status to error:",
+            updateError
+          );
+        }
+        throw error;
+      }
+
       // Try to update the created document status. Upload staging changes the
       // persisted filePath, so prefer the captured document id over path lookup.
       try {
@@ -283,9 +311,17 @@ export class RagSearchModule extends BaseModule {
         );
 
         if (!response.status || !response.data) {
-          throw new Error(
-            `Failed to get embedding: ${response.msg || "Unknown error"}`
-          );
+          const backendMsg = response.msg || "Unknown error";
+          // Surface a clear, actionable error when the remote backend refuses
+          // embedding generation for billing/quota reasons. The raw message
+          // (e.g. "Billing reserve failed") is meaningless to end users.
+          if (isBillingDeniedMessage(backendMsg)) {
+            throw new EmbeddingBillingError(
+              backendMsg,
+              "embedding_error_billing_denied"
+            );
+          }
+          throw new Error(`Failed to get embedding: ${backendMsg}`);
         }
 
         const embeddingResult = response.data[0];
@@ -331,6 +367,12 @@ export class RagSearchModule extends BaseModule {
           "Failed to save error log during embedding generation:",
           logError
         );
+      }
+
+      // Preserve the billing-denied signal so the UI can present a clear,
+      // translated message instead of the raw backend string.
+      if (error instanceof EmbeddingBillingError) {
+        throw error;
       }
 
       throw new Error(

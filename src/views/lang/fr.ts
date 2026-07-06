@@ -152,7 +152,8 @@ export default {
   },
   knowledge: {
     subscription_required: "Abonnement Requis",
-    subscription_required_message: "La bibliothèque de connaissances est uniquement disponible pour les utilisateurs abonnés. Veuillez mettre à niveau votre forfait.",
+    subscription_required_message:
+      "La bibliothèque de connaissances est uniquement disponible pour les utilisateurs abonnés. Veuillez mettre à niveau votre forfait.",
     upload_document: "Upload Document",
     documents: "Documents",
     chat: "Chat",
@@ -178,6 +179,10 @@ export default {
       'Le fichier "{name}" dépasse la limite de {maxSize}.',
     upload_failed_unsupported_type:
       'Le type de fichier "{name}" n\'est pas pris en charge. Formats acceptés : images, CSV, PDF, DOCX, XLS, XLSX.',
+    embedding_billing_denied:
+      "Quota d'embeddings distant ou limite de facturation atteint",
+    embedding_billing_denied_detail:
+      "Le quota d'embeddings distant de votre compte semble épuisé. Rechargez votre offre côté serveur, ou contactez un administrateur, puis réessayez l'envoi.",
     error: "Error",
     // Document Management translations
     document_management: "Document Management",

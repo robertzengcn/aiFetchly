@@ -152,7 +152,8 @@ export default {
   },
   knowledge: {
     subscription_required: "Abonnement Erforderlich",
-    subscription_required_message: "Die Wissensbibliothek steht nur Abonnement-Benutzern zur Verfügung. Bitte upgraden Sie Ihren Plan.",
+    subscription_required_message:
+      "Die Wissensbibliothek steht nur Abonnement-Benutzern zur Verfügung. Bitte upgraden Sie Ihren Plan.",
     upload_document: "Dokument hochladen",
     documents: "Dokumente",
     chat: "Chat",
@@ -179,6 +180,10 @@ export default {
       'Datei "{name}" überschreitet das {maxSize} Limit.',
     upload_failed_unsupported_type:
       'Dateityp von "{name}" wird nicht unterstützt. Erlaubt: Bilder, CSV, PDF, DOCX, XLS, XLSX.',
+    embedding_billing_denied:
+      "Remote-Einbettungskontingent oder Abrechnungslimit erreicht",
+    embedding_billing_denied_detail:
+      "Das Remote-Einbettungskontingent Ihres Kontos scheint erschöpft zu sein. Bitte laden Sie Ihr Kontingent serverseitig auf oder wenden Sie sich an einen Administrator und versuchen Sie den Upload erneut.",
     error: "Fehler",
     document_management: "Dokumentenverwaltung",
     search_by_name: "Nach Name suchen",
