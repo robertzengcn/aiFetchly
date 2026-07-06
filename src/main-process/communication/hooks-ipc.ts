@@ -61,7 +61,15 @@ export function registerHooksIpcHandlers(): void {
         includeSession,
         eventName,
       });
-      return ok(all);
+      return ok(
+        all.map((h) => {
+          if (h.type === "callback") {
+            const { callback: _, ...rest } = h;
+            return rest;
+          }
+          return h;
+        })
+      );
     } catch (err: unknown) {
       return fail(`hooks:list failed: ${String(err)}`);
     }
