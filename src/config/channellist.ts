@@ -71,6 +71,21 @@ export const BUCKEMAILTASKLIST = "buck:email:task:list";
 export const SENDTESTEMAIL = "send:test:email";
 export const RECEIVESENDTESTEMAILMESSAGE = "receive:send:test:email:message";
 export const BUCKEMAILTASKSENDLOG = "buck:email:task:sendlog";
+
+// ======== Email receive + AI auto-reply ========
+export const EMAIL_RECEIVE_SYNC = "email:receive:sync";
+export const EMAIL_RECEIVE_CONNECTION_TEST = "email:receive:connection:test";
+export const EMAIL_RECEIVE_MESSAGE_LIST = "email:receive:message:list";
+export const EMAIL_RECEIVE_MESSAGE_DETAIL = "email:receive:message:detail";
+export const EMAIL_REPLY_MARK_PROCESSED = "email:reply:mark:processed";
+export const EMAIL_REPLY_IDENTITY_GET = "email:reply:identity:get";
+export const EMAIL_REPLY_IDENTITY_UPDATE = "email:reply:identity:update";
+export const EMAIL_REPLY_DRAFT_CREATE = "email:reply:draft:create";
+export const EMAIL_REPLY_DRAFT_DETAIL = "email:reply:draft:detail";
+export const EMAIL_REPLY_DRAFT_UPDATE = "email:reply:draft:update";
+export const EMAIL_REPLY_SEND = "email:reply:send";
+export const EMAIL_AUTO_REPLY_AUDIT_LIST = "email:autoreply:audit:list";
+export const EMAIL_AUTO_REPLY_AUDIT_DETAIL = "email:autoreply:audit:detail";
 export const SOCIALACCOUNTlIST = "socialaccount:list";
 export const SOCIALACCOUNTDETAIL = "socialaccount:detail";
 export const SOCIALACCOUNTSAVE = "socialaccount:save";

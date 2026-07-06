@@ -652,6 +652,58 @@ export const constantRoutes: RouteRecordRaw[] = [
             /* webpackChunkName: "staff-list" */ "@/views/pages/emailservice/servicedetail.vue"
           ),
       },
+      {
+        path: "emailreceive/list",
+        name: "Email_Receive_List",
+        meta: {
+          visible: true,
+          title: "route.email_receive",
+          icon: "mdi-inbox-arrow-down",
+        },
+        component: () =>
+          import(
+            /* webpackChunkName: "email-receive" */ "@/views/pages/emailreceive/list.vue"
+          ),
+      },
+      {
+        path: "emailreceive/detail/:id(\\d+)",
+        name: "Email_Receive_Detail",
+        meta: {
+          visible: false,
+          title: "route.email_receive_detail",
+          icon: "mdi-email-open",
+        },
+        component: () =>
+          import(
+            /* webpackChunkName: "email-receive" */ "@/views/pages/emailreceive/detail.vue"
+          ),
+      },
+      {
+        path: "emailreply/audit/list",
+        name: "AI_Auto_Reply_Audit_List",
+        meta: {
+          visible: true,
+          title: "route.ai_auto_replies",
+          icon: "mdi-robot-outline",
+        },
+        component: () =>
+          import(
+            /* webpackChunkName: "email-reply-audit" */ "@/views/pages/emailreply/auditlist.vue"
+          ),
+      },
+      {
+        path: "emailreply/audit/detail/:id(\\d+)",
+        name: "AI_Auto_Reply_Audit_Detail",
+        meta: {
+          visible: false,
+          title: "route.ai_auto_reply_detail",
+          icon: "mdi-robot-outline",
+        },
+        component: () =>
+          import(
+            /* webpackChunkName: "email-reply-audit" */ "@/views/pages/emailreply/auditdetail.vue"
+          ),
+      },
     ],
   },
   {

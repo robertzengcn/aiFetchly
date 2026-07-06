@@ -281,7 +281,7 @@
               :items="availableModels"
               :label="t('knowledge.embedding_model')"
               :loading="loadingModels"
-              item-title="name"
+              item-title="displayName"
               item-value="name"
               :hint="t('knowledge.embedding_model_hint')"
               persistent-hint
@@ -289,11 +289,22 @@
               <template v-slot:item="{ props, item }">
                 <v-list-item v-bind="props">
                   <template v-slot:title>
-                    {{ item.raw.name }}
+                    {{ item.raw.displayName || item.raw.name }}
                   </template>
                   <template v-slot:subtitle>
-                    {{ item.raw.description }} - 
+                    {{ item.raw.description }} -
                     {{ t('knowledge.max_dimensions') }}: {{ item.raw.dimensions }}
+                  </template>
+                  <template v-slot:append>
+                    <v-chip
+                      v-if="item.raw.is_free"
+                      size="x-small"
+                      variant="tonal"
+                      color="success"
+                      class="ml-2"
+                    >
+                      {{ t('knowledge.model_free') }}
+                    </v-chip>
                   </template>
                 </v-list-item>
               </template>
@@ -385,6 +396,9 @@
 import { ref, onMounted, onUnmounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';
+import { QUERY_USER_INFO } from '@/config/channellist'
+import { windowInvoke } from '@/views/utils/apirequest'
+import { UserInfoType } from '@/entityTypes/userType'
 
 // Expose t function to template
 const { t } = useI18n();
@@ -452,7 +466,10 @@ const searchInterface = ref();
 
 // Lifecycle hooks
 onMounted(async () => {
-  showSubscriptionDialog.value = true;
+  const userInfo = await windowInvoke(QUERY_USER_INFO) as UserInfoType | undefined;
+  if (userInfo?.aiEnabled !== true) {
+    showSubscriptionDialog.value = true;
+  }
   await initializeRAGSystem();
 });
 

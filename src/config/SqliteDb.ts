@@ -74,6 +74,12 @@ import { GoogleMapsSearchRecordEntity } from "@/entity/GoogleMapsSearchRecord.en
 import { YandexMapsSearchRecordEntity } from "@/entity/YandexMapsSearchRecord.entity";
 import { AiMessageTaskEntity } from "@/entity/AiMessageTask.entity";
 import { AiMessageTaskRunEntity } from "@/entity/AiMessageTaskRun.entity";
+import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
+import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
+import { EmailReplyIdentityProfileEntity } from "@/entity/EmailReplyIdentityProfile.entity";
+import { EmailAutoReplyRuleEntity } from "@/entity/EmailAutoReplyRule.entity";
+import { EmailReplyAuditLogEntity } from "@/entity/EmailReplyAuditLog.entity";
+import { EmailAutoReplyAuditLogEntity } from "@/entity/EmailAutoReplyAuditLog.entity";
 // import sqlite3 from "sqlite3";
 import Database from "better-sqlite3";
 import { app } from "electron";
@@ -485,6 +491,12 @@ export class SqliteDb {
           YandexMapsSearchRecordEntity,
           AiMessageTaskEntity,
           AiMessageTaskRunEntity,
+          EmailReceivedMessageEntity,
+          EmailReplyDraftEntity,
+          EmailReplyIdentityProfileEntity,
+          EmailAutoReplyRuleEntity,
+          EmailReplyAuditLogEntity,
+          EmailAutoReplyAuditLogEntity,
           AIChatPlanEntity,
           AIChatPlanVersionEntity,
           AIChatPlanQuestionEntity,

@@ -36,6 +36,7 @@ import { registerAgentRuntimeIpcHandlers } from "@/main-process/communication/ag
 import { registerPluginIpcHandlers } from "@/main-process/communication/plugin-ipc";
 import { registerAIUserMemoryIpcHandlers } from "@/main-process/communication/ai-user-memory-ipc";
 import { registerAIWorkspaceIpcHandlers } from "@/main-process/communication/ai-workspace-ipc";
+import { registerEmailReceiveIpcHandlers } from "@/main-process/communication/emailReceive-ipc";
 import { registerDiagnosticsIpcHandlers } from "@/main-process/communication/diagnostics-ipc";
 import { registerHooksIpcHandlers } from "@/main-process/communication/hooks-ipc";
 
@@ -85,6 +86,7 @@ export function registerCommunicationIpcHandlers(win: BrowserWindow) {
     registerPluginIpcHandlers();
     registerAIUserMemoryIpcHandlers();
     registerAIWorkspaceIpcHandlers(win);
+    registerEmailReceiveIpcHandlers();
     registerDiagnosticsIpcHandlers();
     registerHooksIpcHandlers();
     AsyncMsg();

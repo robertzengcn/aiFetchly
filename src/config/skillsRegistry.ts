@@ -32,6 +32,14 @@ import {
   startBulkEmailSendTask,
 } from "@/service/EmailMarketingAiTools";
 import {
+  listEmailInboxes,
+  fetchUnreadEmails,
+  getEmailMessage,
+  markEmailProcessed,
+  createEmailReplyDraft,
+  sendEmailReply,
+} from "@/service/EmailReceiveAiTools";
+import {
   listSchedulesForAi,
   getScheduleDetailsForAi,
   listScheduleExecutionsForAi,
@@ -1390,6 +1398,237 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     source: "built-in",
     execute: async (args) => {
       const result = await startBulkEmailSendTask(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "list_email_inboxes",
+    description:
+      "List email services that have inbound receive enabled. Returns inbox name, " +
+      "address, host, folder, sync status, and last sync error. Never exposes passwords or tokens.",
+    parameters: {
+      type: "object",
+      properties: {
+        page: {
+          type: "number",
+          description: "Zero-based page number.",
+          default: 0,
+        },
+        size: {
+          type: "number",
+          description: "Page size, from 1 to 100.",
+          default: 20,
+        },
+        search: {
+          type: "string",
+          description: "Optional name/address/host search text.",
+        },
+      },
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await listEmailInboxes(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "fetch_unread_emails",
+    description:
+      "Fetch a bounded set of unread (or recent) messages from a receive-enabled inbox and " +
+      "store them locally. Returns message summaries only (no bodies). Default unread_only is true; " +
+      "limit is capped at 50.",
+    parameters: {
+      type: "object",
+      properties: {
+        email_service_id: {
+          type: "number",
+          description: "Receive-enabled email service id.",
+        },
+        folder: {
+          type: "string",
+          description: "Folder to read. Defaults to the configured folder.",
+        },
+        limit: {
+          type: "number",
+          description: "Max messages to fetch (1-50).",
+          default: 10,
+        },
+        unread_only: {
+          type: "boolean",
+          description: "Fetch only unread messages.",
+          default: true,
+        },
+        since: {
+          type: "string",
+          description: "ISO 8601 lower bound on received date.",
+        },
+      },
+      required: ["email_service_id"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await fetchUnreadEmails(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "get_email_message",
+    description:
+      "Read one stored inbound message in detail, including a sanitized body (scripts, event " +
+      "handlers, and tracking pixels stripped). Does not return attachments. Marks the message read.",
+    parameters: {
+      type: "object",
+      properties: {
+        message_id: {
+          type: "number",
+          description: "Stored received message id.",
+        },
+        include_body: {
+          type: "boolean",
+          description: "Include sanitized body text/HTML.",
+          default: true,
+        },
+      },
+      required: ["message_id"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await getEmailMessage(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "mark_email_processed",
+    description:
+      "Mark a received message as handled without replying (skipped, blocked, failed, or " +
+      "needs_human_review). Does not delete the provider mailbox message. Writes an audit row.",
+    parameters: {
+      type: "object",
+      properties: {
+        message_id: {
+          type: "number",
+          description: "Stored received message id.",
+        },
+        status: {
+          type: "string",
+          enum: ["skipped", "blocked", "failed", "needs_human_review"],
+          description: "Processing outcome to record.",
+        },
+        reason: {
+          type: "string",
+          description: "Optional human-readable reason.",
+        },
+      },
+      required: ["message_id", "status"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await markEmailProcessed(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "create_email_reply_draft",
+    description:
+      "Create a knowledge-grounded reply draft for one inbound message. Searches the " +
+      "knowledge library by default, then writes the draft in the mailbox owner's voice. " +
+      "Does NOT send the reply and does NOT mention AI, retrieval, or confidence in the body. " +
+      "AI must be enabled. Returns the persisted draft for human review.",
+    parameters: {
+      type: "object",
+      properties: {
+        message_id: {
+          type: "number",
+          description: "Stored received message id to reply to.",
+        },
+        tone: {
+          type: "string",
+          description: "Optional tone hint (e.g. professional, friendly).",
+        },
+        goal: {
+          type: "string",
+          description:
+            "Optional reply goal (e.g. 'answer pricing and book a call').",
+        },
+        extra_instructions: {
+          type: "string",
+          description: "Optional extra instructions for the draft.",
+        },
+        use_knowledge_library: {
+          type: "boolean",
+          description:
+            "Whether to ground the reply in knowledge-library context.",
+          default: true,
+        },
+      },
+      required: ["message_id"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await createEmailReplyDraft(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "send_email_reply",
+    description:
+      "Send a persisted reply draft as an email. Requires user confirmation because it sends " +
+      "email. Verifies the draft and outbound service, preserves reply threading headers " +
+      "(In-Reply-To, References), updates draft/message state, and writes a send audit record.",
+    parameters: {
+      type: "object",
+      properties: {
+        draft_id: {
+          type: "number",
+          description: "Persisted reply draft id to send.",
+        },
+        email_service_id: {
+          type: "number",
+          description:
+            "Optional outbound email service id. Defaults to the draft's service.",
+        },
+      },
+      required: ["draft_id"],
+    },
+    tier: "main",
+    requiresConfirmation: true,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await sendEmailReply(args);
       return {
         success: result.success,
         result: result as unknown as Record<string, unknown>,

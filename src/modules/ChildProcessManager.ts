@@ -556,7 +556,7 @@ export class ChildProcessManager extends BaseModule {
    */
   private async waitForProcessReady(
     processId: string,
-    timeout: number = 30000
+    timeout = 30000
   ): Promise<void> {
     return new Promise((resolve, reject) => {
       const startTime = Date.now();
