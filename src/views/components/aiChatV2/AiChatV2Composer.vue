@@ -1,5 +1,13 @@
 <template>
   <div class="v2-composer">
+    <!-- File notice (error/warning inline) -->
+    <v-slide-y-reverse-transition>
+      <div v-if="fileNotice" class="v2-composer__notice">
+        <v-icon size="x-small" color="warning" class="mr-1">mdi-alert-circle-outline</v-icon>
+        {{ fileNotice }}
+      </div>
+    </v-slide-y-reverse-transition>
+
     <!-- Selected file chips -->
     <div v-if="selectedFiles.length > 0" class="v2-composer__files">
       <v-chip
@@ -95,13 +103,20 @@ const props = defineProps<{ isStreaming: boolean; isProcessing?: boolean }>();
 const emit = defineEmits<{
   (e: "send", text: string, files: File[]): void;
   (e: "stop"): void;
-  (e: "notice", message: string): void;
 }>();
 const { t } = useI18n();
 
 const draft = ref("");
 const selectedFiles = ref<File[]>([]);
+const fileNotice = ref("");
 const fileInputRef = ref<HTMLInputElement | null>(null);
+
+let noticeTimer: ReturnType<typeof setTimeout> | null = null;
+function showNotice(msg: string): void {
+  fileNotice.value = msg;
+  if (noticeTimer) clearTimeout(noticeTimer);
+  noticeTimer = setTimeout(() => { fileNotice.value = ""; }, 4000);
+}
 
 function isImageFile(file: File): boolean {
   if (file.type.startsWith("image/")) return true;
@@ -140,11 +155,11 @@ function onFileSelected(event: Event): void {
   const newFiles: File[] = [];
   for (const file of input.files) {
     if (!isSupportedFile(file)) {
-      emit("notice", t("aiChatV2.attachments.unsupported", { name: file.name }) || `${file.name} is not a supported file type.`);
+      showNotice(t("aiChatV2.attachments.unsupported", { name: file.name }) || `${file.name} is not a supported file type.`);
       continue;
     }
     if (file.size > MAX_UPLOAD_FILE_BYTES) {
-      emit("notice", t("aiChatV2.attachments.too_large", { name: file.name, maxSize: formatBytes(MAX_UPLOAD_FILE_BYTES) }) || `${file.name} exceeds the ${formatBytes(MAX_UPLOAD_FILE_BYTES)} limit.`);
+      showNotice(t("aiChatV2.attachments.too_large", { name: file.name, maxSize: formatBytes(MAX_UPLOAD_FILE_BYTES) }) || `${file.name} exceeds the ${formatBytes(MAX_UPLOAD_FILE_BYTES)} limit.`);
       continue;
     }
     newFiles.push(file);
@@ -186,6 +201,15 @@ const onKeydown = (event: KeyboardEvent): void => {
   gap: 4px;
   padding: 8px 12px 10px;
   border-top: 1px solid rgba(0, 0, 0, 0.08);
+}
+.v2-composer__notice {
+  display: flex;
+  align-items: center;
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: rgba(255, 152, 0, 0.1);
+  color: rgba(0, 0, 0, 0.7);
 }
 .v2-composer__files {
   display: flex;

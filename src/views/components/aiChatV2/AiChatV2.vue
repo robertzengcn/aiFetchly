@@ -198,7 +198,6 @@
         :is-processing="isPreparingAttachments"
         @send="onSend"
         @stop="onStop"
-        @notice="onFileNotice"
       >
         <template #prepend>
           <AiChatV2ModeSelector v-model="mode" :disabled="chatIsRunning" />
@@ -230,10 +229,6 @@
         t("aiChatV2.compact_completed") ||
         "Conversation compacted into memory."
       }}
-    </v-snackbar>
-
-    <v-snackbar v-model="showFileNotice" timeout="4000" location="bottom" color="warning">
-      {{ fileNoticeMessage }}
     </v-snackbar>
 
     <!-- Conversation history dialog -->
@@ -472,8 +467,6 @@ const stoppedPendingToolConversationIds = ref<Set<string>>(new Set());
 // ---------------------------------------------------------------------------
 const isPreparingAttachments = ref(false);
 const attachmentError = ref<string | null>(null);
-const showFileNotice = ref(false);
-const fileNoticeMessage = ref("");
 
 const MAX_UPLOAD_FILE_BYTES = 5 * 1024 * 1024;
 
@@ -525,11 +518,6 @@ function resolveMimeType(file: File): string {
   if (name.endsWith(".webp")) return "image/webp";
   if (name.endsWith(".gif")) return "image/gif";
   return file.type || "application/octet-stream";
-}
-
-function onFileNotice(message: string): void {
-  fileNoticeMessage.value = message;
-  showFileNotice.value = true;
 }
 
 async function buildUploadedAttachments(files: File[]): Promise<ChatV2UploadedAttachment[]> {
