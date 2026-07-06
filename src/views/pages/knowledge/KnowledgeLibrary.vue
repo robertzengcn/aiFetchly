@@ -385,6 +385,9 @@
 import { ref, onMounted, onUnmounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';
+import { QUERY_USER_INFO } from '@/config/channellist'
+import { windowInvoke } from '@/views/utils/apirequest'
+import { UserInfoType } from '@/entityTypes/userType'
 
 // Expose t function to template
 const { t } = useI18n();
@@ -452,7 +455,10 @@ const searchInterface = ref();
 
 // Lifecycle hooks
 onMounted(async () => {
-  showSubscriptionDialog.value = true;
+  const userInfo = await windowInvoke(QUERY_USER_INFO) as UserInfoType | undefined;
+  if (userInfo?.aiEnabled !== true) {
+    showSubscriptionDialog.value = true;
+  }
   await initializeRAGSystem();
 });
 
