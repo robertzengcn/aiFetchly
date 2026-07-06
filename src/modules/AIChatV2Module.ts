@@ -13,7 +13,7 @@ import type {
 } from "@/entityTypes/aiChatV2Types";
 
 const V2_CONVERSATION_PREFIX = "v2-";
-const V2_DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant.";
+const V2_DEFAULT_SYSTEM_PROMPT = "You are aiFetchly's built-in helpful assistant.";
 
 function uuid(): string {
   // Crypto.randomUUID is available in Electron (Node 16+ / Chromium).
