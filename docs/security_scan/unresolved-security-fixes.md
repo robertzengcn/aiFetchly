@@ -1,185 +1,230 @@
 # Unresolved Security Fix Validation
 
-Validation date: 2026-07-04
-Validated revision: `04ba23e3f4fe55893a24ddb81733dc73da502ebc`
+Original validation date: 2026-07-04
+Original validated revision: `04ba23e3f4fe55893a24ddb81733dc73da502ebc`
 Baseline security scan revision: `9c89de894df6e966034c4dd8a11aae4595782e5c`
 Source report: `docs/security_scan/report.md`
 
-This file records the prior Codex Security findings that remain either partially fixed or not fixed after the latest code update. The assessment is based on targeted static validation of the original source-control-sink paths, not a full runtime test of the Electron app.
+Resolution validation date: 2026-07-06
+Resolved-at commits (branch `worktree-remindsecurity`):
+- `0a581180` — F2 follow-up (RAG upload grant)
+- `bfb6b2a3` — F1 follow-up (MCP stdio trust hardening)
+- `8aef310a` — F3/F7 follow-up (DNS-aware SSRF interception)
+- `c9a8f713` — F6 follow-up (remaining RAG AI gating)
+
+This file previously recorded prior Codex Security findings that remained
+either partially fixed or not fixed after the baseline round of security
+commits. All five "remaining gaps" listed below have since been closed; each
+section keeps the original gap description for history and adds a
+**Resolution** block describing the follow-up fix and its tests.
 
 ## Summary
 
-| Prior finding | Current status | Main remaining gap |
-| --- | --- | --- |
-| MCP stdio server configuration can spawn arbitrary local processes | Partially fixed | Stdio execution is trust-gated, but renderer IPC can set the trust flag directly. |
-| RAG upload trusts renderer-supplied file paths and can embed arbitrary local files | Not fixed | The app still reads a renderer-supplied source path before staging it. |
-| Website content scraper accepts arbitrary URL schemes and returns fetched content | Partially fixed | Redirect and subresource interception does not perform DNS-range validation before fetch. |
-| RAG AI IPC handlers bypass `USER_AI_ENABLED` | Partially fixed | Several RAG remote/AI paths still use the generic handler or streaming `ipcMain.on`. |
-| Contact extraction worker can fetch internal HTTP(S) URLs | Partially fixed | Initial URL validation exists, but browser redirects are not guarded per request. |
+| Prior finding | Original status | Current status | Follow-up fix |
+| --- | --- | --- | --- |
+| MCP stdio server configuration can spawn arbitrary local processes | Partially fixed | **Resolved** | `MCP_TOOL_TRUST` now requires a trusted sender origin + native confirmation dialog (`bfb6b2a3`) |
+| RAG upload trusts renderer-supplied file paths and can embed arbitrary local files | Not fixed | **Resolved** | Upload-grant mechanism; `SHOW_OPEN_DIALOG` issues, `RAG_UPLOAD_DOCUMENT` consumes (`0a581180`) |
+| Website content scraper accepts arbitrary URL schemes and returns fetched content | Partially fixed | **Resolved** | DNS-aware request interception via shared `PuppeteerSsrfGuard` (`8aef310a`) |
+| RAG AI IPC handlers bypass `USER_AI_ENABLED` | Partially fixed | **Resolved** | `SAVE_TEMP_FILE` + model handlers gated via `AiFeatureGate` (`c9a8f713`) |
+| Contact extraction worker can fetch internal HTTP(S) URLs | Partially fixed | **Resolved** | Shared DNS-aware interception + post-navigation revalidation (`8aef310a`) |
 
 ## 1. MCP stdio server configuration can spawn arbitrary local processes
 
-Status: Partially fixed
+Original status: Partially fixed
 Original severity: High
+**Current status: Resolved (`bfb6b2a3`)**
 
-### Current Fix Evidence
+### Original Fix Evidence (baseline)
 
-- `src/service/MCPToolService.ts:155` adds `assertStdioTrusted(server)` and fails closed unless `MCP_TRUST_<server.id>` is set to `"true"`.
-- `src/service/MCPToolService.ts:408`, `src/service/MCPToolService.ts:548`, and `src/service/MCPToolService.ts:613` call the trust check before discovery, execution, and connection tests.
-- `src/modules/MCPClient.ts:217` builds a minimal child process environment instead of inheriting all of `process.env`.
-- `src/modules/MCPClient.ts:223` filters caller-supplied env values and blocks dangerous names such as `LD_PRELOAD`, `DYLD_INSERT_LIBRARIES`, `NODE_OPTIONS`, and `ELECTRON_*`.
+- `src/service/MCPToolService.ts` adds `assertStdioTrusted(server)` and fails closed unless `MCP_TRUST_<server.id>` is set to `"true"`.
+- `assertStdioTrusted` is called before discovery, execution, and connection tests.
+- `src/modules/MCPClient.ts` builds a minimal child process environment and filters dangerous env names (`LD_PRELOAD`, `NODE_OPTIONS`, `ELECTRON_*`, …).
 
-### Remaining Gap
+### Original Remaining Gap (now closed)
 
-The trust flag can still be set through renderer-accessible IPC:
+The trust flag could be set through renderer-accessible IPC (`MCP_TOOL_TRUST`
+was a plain `registerValidatedHandler` with no sender-origin or user-gesture
+check), so the spawn path moved from "spawn immediately" to "set trust, then
+spawn".
 
-- `src/main-process/communication/mcp-tool-ipc.ts:130` registers `MCP_TOOL_TRUST`.
-- `src/main-process/communication/mcp-tool-ipc.ts:135` calls `service.setTrust(input.serverId, input.trusted)`.
-- `src/preload.ts:749` through `src/preload.ts:758` includes `MCP_TOOL_TRUST` in the generic invoke whitelist.
-- `src/main-process/communication/_shared/registerValidatedHandler.ts:24` validates shape but does not verify sender origin, privileged UI state, or a user gesture.
+### Resolution
 
-That means the dangerous spawn path has moved from "spawn immediately" to "set trust, then spawn". If a renderer is compromised, or if a privileged preload bridge is exposed through another window issue, the renderer can likely trust a stdio MCP server before invoking discovery or execution.
+Trust is now treated like a shell-tool approval, not a settings update:
 
-### Required Follow-Up
-
-- Treat `MCP_TOOL_TRUST` like a shell approval, not a normal settings update.
-- Require an explicit user-confirmation flow that is bound to one server id and one pending action.
-- Reject trust changes from untrusted sender frames or non-app origins.
-- Consider one-shot trust for discovery/test execution and a separate persistent trust flow for user-installed MCP servers.
-- Keep the env allowlist and env denylist; those parts address secret leakage and process-hijack bypasses.
+- Extracted `src/service/OriginTrust.ts` → `isAppTrustedOrigin(url)`, the
+  single source of truth for the F9 trusted-origin set (about/file/app
+  schemes + the Vite dev-server origin). `background.ts` F9
+  `setWindowOpenHandler` now uses the same helper.
+- `MCP_TOOL_TRUST` (`src/main-process/communication/mcp-tool-ipc.ts`):
+  - rejects any sender frame whose origin (`event.senderFrame.url`) is not
+    trusted;
+  - when granting trust, shows a native `dialog.showMessageBox` confirmation
+    labelled with the exact server id+name (`MCPToolService.getServerName`)
+    and only grants on an explicit "Trust" click — i.e. a real user gesture
+    bound to one server;
+  - revocation stays confirmation-free (revoking is always safe).
+- Tests: `test/vitest/main/service/OriginTrust.test.ts` (10 cases).
+- Type-check mock: `BrowserWindow.fromWebContents` added to
+  `test/mocks/electron.ts`.
 
 ## 2. RAG upload trusts renderer-supplied file paths and can embed arbitrary local files
 
-Status: Not fixed
+Original status: Not fixed
 Original severity: High
+**Current status: Resolved (`0a581180`)**
 
-### Current Fix Evidence
+### Original Fix Evidence (baseline)
 
-- `src/modules/RAGDocumentModule.ts:76` stages uploaded files into `app.getPath("userData")/rag_uploads`.
-- `src/modules/RAGDocumentModule.ts:96` persists the staged path as `document.filePath`.
-- `src/modules/RAGDocumentModule.ts:462` only deletes paths that resolve under the upload staging directory.
+- Uploaded files are staged into `app.getPath("userData")/rag_uploads`.
+- `deleteDocument` only unlinks paths that resolve under the staging dir.
 
-### Remaining Gap
+### Original Remaining Gap (now closed)
 
-The app still reads the renderer-supplied source path before staging:
+The pipeline still read the renderer-supplied source path
+(`fs.realpathSync` + `fs.copyFileSync`) before staging it, so any local file
+whose path the renderer supplied could be read and embedded.
 
-- `src/modules/RAGDocumentModule.ts:69` validates `options.filePath`.
-- `src/modules/RAGDocumentModule.ts:82` passes the same renderer-supplied path into `stageUploadFile`.
-- `src/modules/RAGDocumentModule.ts:136` resolves the external path with `fs.realpathSync(sourcePath)`.
-- `src/modules/RAGDocumentModule.ts:153` copies the external path with `fs.copyFileSync(resolvedSource, destPath)`.
-- `src/main-process/communication/rag-ipc.ts:410` exposes `RAG_UPLOAD_DOCUMENT` as an AI-gated handler, but gating AI does not prove that `filePath` came from an approved file picker or app-owned temp upload.
+### Resolution
 
-The original security issue was local file read and embedding from a known path supplied by the renderer. Copying the file into `rag_uploads` after accepting that path prevents later delete/read problems, but it does not stop the initial arbitrary file read.
+Arbitrary renderer-supplied paths are no longer accepted. `RAG_UPLOAD_DOCUMENT`
+(`src/main-process/communication/rag-ipc.ts`) now permits a `filePath` only if
+it is:
 
-### Required Follow-Up
+- **app-owned** — resolves under `userData/uploads` (the `SAVE_TEMP_FILE`
+  streaming destination), or
+- **grant-backed** — backed by a short-lived, one-shot grant issued by
+  `SHOW_OPEN_DIALOG` (the native file picker).
 
-- Do not accept arbitrary renderer-supplied filesystem paths for RAG upload.
-- Accept only paths produced by `SHOW_OPEN_DIALOG`, `SAVE_TEMP_FILE`, or another app-owned grant mechanism.
-- Store a short-lived upload grant keyed by canonical path, expiry time, and operation.
-- Consume the grant when `RAG_UPLOAD_DOCUMENT` starts.
-- Reject direct path strings that do not have a matching grant, even if they exist and have a supported extension.
+Otherwise it throws `Upload rejected: file path was not selected through the
+app's file dialog.`
+
+- New `src/service/UploadGrantService.ts`: grants are canonicalized via
+  `realpath` (symlink-equivalent paths collapse to one key), scoped by
+  operation, one-shot, and short-lived (5 min default). `getUploadGrantService()`
+  is a process-wide singleton shared between the dialog issuer and the upload
+  consumer.
+- `SHOW_OPEN_DIALOG` issues a grant for every path the native dialog returns.
+- The frontend's primary path (buffer streaming via `SAVE_TEMP_FILE`) is
+  unaffected; the dialog-based flow is covered by grants.
+- Tests: `test/vitest/main/service/UploadGrantService.test.ts` (12 cases
+  covering issue/consume/expiry/one-shot/operation-scoping/canonicalization
+  and `isPathUnderDir` traversal protection).
 
 ## 3. Website content scraper accepts arbitrary URL schemes and returns fetched content
 
-Status: Partially fixed
+Original status: Partially fixed
 Original severity: High
+**Current status: Resolved (`8aef310a`)**
 
-### Current Fix Evidence
+### Original Fix Evidence (baseline)
 
-- `src/childprocess/websiteContentScraper.ts:66` calls `UrlGuard.validateWithDns(url)` before browser navigation.
-- `src/service/UrlGuard.ts:161` rejects non-`http` and non-`https` schemes.
-- `src/service/UrlGuard.ts:174` blocks internal hostnames such as `localhost` and metadata aliases.
-- `src/service/UrlGuard.ts:183` blocks private, loopback, link-local, and metadata IP literals.
-- `src/service/UrlGuard.ts:217` resolves DNS and rejects hosts with private or internal resolved addresses.
-- `src/childprocess/websiteContentScraper.ts:93` validates the final post-redirect URL before returning page content.
+- `UrlGuard.validateWithDns(url)` before navigation; bad schemes, IP literals,
+  and DNS-rebinding hosts rejected.
+- Final post-redirect URL revalidated before returning content.
 
-### Remaining Gap
+### Original Remaining Gap (now closed)
 
-The request interception path does not perform DNS-range validation before continuing browser requests:
+The request interceptor called the **synchronous** `UrlGuard.validate()`,
+which blocks bad schemes and IP literals but does **not** resolve DNS. A
+public URL that redirected (or embedded subresources pointing) to a host
+resolving to an internal range could still be fetched.
 
-- `src/childprocess/websiteContentScraper.ts:126` enables request interception.
-- `src/childprocess/websiteContentScraper.ts:129` calls synchronous `UrlGuard.validate(req.url())`.
-- `UrlGuard.validate()` blocks bad schemes and IP literals, but it does not resolve DNS.
+### Resolution
 
-Because Puppeteer follows redirects and loads subresources, an attacker-controlled public URL can redirect to a hostname that resolves to an internal address. The final post-redirect `validateWithDns(page.url())` may reject before content is returned, but the request may already have been issued to the internal destination. That keeps SSRF side effects and internal request reachability in scope.
-
-### Required Follow-Up
-
-- Make request interception async and call `UrlGuard.validateWithDns(req.url())` before `req.continue()`.
-- Abort requests when DNS validation fails.
-- Keep the final post-navigation validation as defense in depth.
-- Consider restricting scraping to main-frame documents only or blocking subresources entirely unless required.
-- Add tests for redirects from public hosts to `127.0.0.1`, `169.254.169.254`, RFC1918 ranges, and DNS names resolving to those ranges.
+- New shared `src/service/PuppeteerSsrfGuard.ts` →
+  `applySsrfNavigationGuard(page, options?)` calls `UrlGuard.validateWithDns`
+  on **every** outgoing request (main frame, redirect targets, subresources)
+  and aborts blocked destinations; fail-closed if validation itself throws.
+  Optional `blockResourceTypes` preserves per-worker perf optimizations.
+- `src/childprocess/websiteContentScraper.ts`: the local sync interceptor was
+  replaced with the shared DNS-aware guard. The final post-navigation
+  `validateWithDns(page.url())` check remains as defense in depth.
+- Tests: `test/vitest/main/service/PuppeteerSsrfGuard.test.ts` (13 cases with
+  mocked DNS covering loopback/private/metadata IP literals, bad schemes,
+  DNS-rebinding hosts, public passes, and resource-type blocking).
 
 ## 4. RAG AI IPC handlers bypass `USER_AI_ENABLED`
 
-Status: Partially fixed
+Original status: Partially fixed
 Original severity: Medium
+**Current status: Resolved (`c9a8f713`)**
 
-### Current Fix Evidence
+### Original Fix Evidence (baseline)
 
-These RAG handlers now use `registerAiValidatedHandler`, which checks `USER_AI_ENABLED` before parsing or doing work:
+- `RAG_QUERY`, `RAG_UPLOAD_DOCUMENT`, `RAG_SEARCH`, `RAG_TEST_EMBEDDING_SERVICE`,
+  and `RAG_CHUNK_AND_EMBED_DOCUMENT` use `registerAiValidatedHandler`.
 
-- `src/main-process/communication/rag-ipc.ts:400` gates `RAG_QUERY`.
-- `src/main-process/communication/rag-ipc.ts:410` gates `RAG_UPLOAD_DOCUMENT`.
-- `src/main-process/communication/rag-ipc.ts:555` gates `RAG_SEARCH`.
-- `src/main-process/communication/rag-ipc.ts:630` gates `RAG_TEST_EMBEDDING_SERVICE`.
-- `src/main-process/communication/rag-ipc.ts:646` gates `RAG_CHUNK_AND_EMBED_DOCUMENT`.
+### Original Remaining Gap (now closed)
 
-### Remaining Gap
+Several RAG paths that call remote AI/model services still bypassed the AI
+gate: `SAVE_TEMP_FILE` (streaming `ipcMain.on`), `RAG_UPDATE_EMBEDDING_MODEL`,
+and `RAG_GET_AVAILABLE_MODELS`.
 
-Some RAG paths that call remote AI/model services still bypass the AI gate:
+### Resolution
 
-- `src/main-process/communication/rag-ipc.ts:87` registers streaming `SAVE_TEMP_FILE` with `ipcMain.on`, not `registerAiValidatedHandler`.
-- `src/main-process/communication/rag-ipc.ts:231` calls `ragController.uploadDocument(uploadOptions)` from that streaming path.
-- `src/main-process/communication/rag-ipc.ts:587` registers `RAG_UPDATE_EMBEDDING_MODEL` with `registerValidatedHandler`.
-- `src/main-process/communication/rag-ipc.ts:592` calls `RagConfigApi.getAvailableEmbeddingModels()` before updating the embedding model.
-- `src/main-process/communication/rag-ipc.ts:610` registers `RAG_GET_AVAILABLE_MODELS` with `registerValidatedHandler`.
-- `src/main-process/communication/rag-ipc.ts:615` calls `RagConfigApi.getAvailableEmbeddingModels()`.
-
-If the project rule is "AI feature requests must check AI enable first", these still violate it because they perform RAG upload/model work or remote model API calls before verifying `USER_AI_ENABLED`.
-
-### Required Follow-Up
-
-- Add an AI-enabled fail-closed check at the top of the `SAVE_TEMP_FILE` `ipcMain.on` handler before parsing metadata or writing/processing upload data.
-- Convert `RAG_UPDATE_EMBEDDING_MODEL` to `registerAiValidatedHandler`.
-- Convert `RAG_GET_AVAILABLE_MODELS` to `registerAiValidatedHandler` if model catalog access is considered part of the AI feature surface.
-- Audit `RAG_TEST_PIPELINE`, `RAG_GET_STATS`, `RAG_GET_SUGGESTIONS`, and analytics endpoints to decide whether they trigger embeddings, remote model calls, or paid AI work.
-- Add targeted tests that set `USER_AI_ENABLED` to disabled and assert no RAG upload, embedding, model-list, or model-update work occurs.
+- New `src/service/AiFeatureGate.ts` → `isAiEnabled()`, the single fail-closed
+  source of truth for the `USER_AI_ENABLED` check (returns false when the flag
+  is off **or** the Token store is unreachable). `registerAiValidatedHandler`
+  now delegates to it.
+- `SAVE_TEMP_FILE` (`src/main-process/communication/rag-ipc.ts`) checks
+  `isAiEnabled()` at the top and sends a fail-closed `SAVE_TEMP_FILE_COMPLETE`
+  response before parsing metadata or writing/processing upload data.
+- `RAG_UPDATE_EMBEDDING_MODEL` and `RAG_GET_AVAILABLE_MODELS` converted to
+  `registerAiValidatedHandler`.
+- Other no-remote-work handlers (`RAG_TEST_PIPELINE` is a mock; `RAG_GET_STATS`,
+  `RAG_GET_SUGGESTIONS`, analytics are DB-only) were audited and intentionally
+  left ungated — they do not trigger embeddings or remote model calls.
+- Tests: `test/vitest/main/service/AiFeatureGate.test.ts` (5 cases covering
+  enabled/disabled/unset/garbage values and fail-closed-on-Token-throw).
 
 ## 5. Contact extraction worker can fetch internal HTTP(S) URLs
 
-Status: Partially fixed
+Original status: Partially fixed
 Original severity: Medium
+**Current status: Resolved (`8aef310a`)**
 
-### Current Fix Evidence
+### Original Fix Evidence (baseline)
 
-- `src/childprocess/contact-extraction/ContactDiscovery.ts:285` calls `validateUrlAsync(url)` before launching browser navigation.
-- `src/childprocess/contact-extraction/ContactDiscovery.ts:388` validates DOM-derived contact page URLs before navigating to them.
-- `src/childprocess/contact-extraction/ContactDiscovery.ts:433` validates fallback URLs before navigating to them.
-- `src/service/UrlGuard.ts:217` performs DNS resolution and blocks private, loopback, link-local, and metadata destinations.
+- `validateUrlAsync(url)` (DNS-aware) before the initial navigation and before
+  each DOM-derived/fallback contact-page navigation.
 
-### Remaining Gap
+### Original Remaining Gap (now closed)
 
-The browser navigation itself does not apply a redirect-aware SSRF guard:
+The browser navigation itself did not apply a redirect-aware SSRF guard: the
+request interceptor only blocked resource types and `continue()`d every other
+request without URL validation, so an attacker-controlled public site could
+redirect the browser to an internal HTTP(S) destination after the initial URL
+passed validation.
 
-- `src/childprocess/contact-extraction/ContactDiscovery.ts:305` enables request interception only to block resource types.
-- `src/childprocess/contact-extraction/ContactDiscovery.ts:306` continues most requests without URL validation.
-- `src/childprocess/contact-extraction/ContactDiscovery.ts:325`, `src/childprocess/contact-extraction/ContactDiscovery.ts:340`, `src/childprocess/contact-extraction/ContactDiscovery.ts:396`, `src/childprocess/contact-extraction/ContactDiscovery.ts:441`, and `src/childprocess/contact-extraction/ContactDiscovery.ts:487` call `page.goto(...)` after pre-validation, but redirects during those navigations are not checked before fetch.
+### Resolution
 
-An attacker-controlled public site can still redirect the browser to an internal HTTP(S) destination after the initial URL has passed validation. Even if later extraction fails, the internal request may already have been sent.
+- `src/childprocess/contact-extraction/ContactDiscovery.ts` replaces the
+  resource-type-only interceptor with the shared
+  `applySsrfNavigationGuard(page, { blockResourceTypes: ["stylesheet","font","media"] })`
+  — preserving the perf optimization while validating every request (including
+  redirect targets and subresources) with `UrlGuard.validateWithDns`.
+- Added `assertPageUrlSafe(page)` and call it after each external navigation
+  (initial, contact-page, fallback) as defense in depth, so extraction never
+  runs against an internal page even if a request were to slip through.
+- Tests: shared guard covered by `PuppeteerSsrfGuard.test.ts` (13 cases).
 
-### Required Follow-Up
+## Recommended Fix Order — completed
 
-- Reuse the website scraper's interception pattern, but make it DNS-aware before continuing each request.
-- Validate every main-frame navigation, redirect, and DOM-derived URL with `UrlGuard.validateWithDns`.
-- Abort internal/private/link-local/metadata destinations before the browser fetches them.
-- Revalidate `page.url()` after each `page.goto`.
-- Add tests or a small local harness for public-to-private redirects and private subresource loads.
+1. ~~Fix the RAG arbitrary file read first.~~ Done — `0a581180`.
+2. ~~Lock down `MCP_TOOL_TRUST`.~~ Done — `bfb6b2a3`.
+3. ~~Add DNS-aware request interception to both Puppeteer worker paths.~~
+   Done — `8aef310a` (website scraper + contact extraction).
+4. ~~Finish AI gating for the remaining RAG model and streaming upload paths.~~
+   Done — `c9a8f713`.
 
-## Recommended Fix Order
+## Verification notes
 
-1. Fix the RAG arbitrary file read first. It is still not fixed and can expose local files through embeddings.
-2. Lock down `MCP_TOOL_TRUST` so the stdio spawn approval cannot be self-granted by a compromised renderer.
-3. Add DNS-aware request interception to both Puppeteer worker paths.
-4. Finish AI gating for the remaining RAG model and streaming upload paths.
+- `npx tsc --noEmit -p tsconfig.json` passes with 0 errors at `c9a8f713`.
+- New unit suites all green (40 tests across the four new service modules):
+  `UploadGrantService`, `OriginTrust`, `PuppeteerSsrfGuard`, `AiFeatureGate`.
+- Pre-existing failures in the broader vitest/main suite (task IPC mocks,
+  sqlite-vec-backed AI-memory DB tests, yellow-pages selector tests) were
+  confirmed unrelated by reproducing them against the pre-fix revision; they
+  stem from the worktree environment (missing `sqlite-vec-linux-x64` native
+  extension, missing local `node_modules/.bin/tsc`) and stale fixtures, not
+  from these security changes.
