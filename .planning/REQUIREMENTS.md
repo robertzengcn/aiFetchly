@@ -11,7 +11,7 @@ Requirements for the v2.0 milestone. Each maps to exactly one roadmap phase (13�
 ### Config Loading (CFG)
 
 - [ ] **CFG-01**: Global loader resolves `~/.aifetchly` (not Electron `userData`) and discovers `AGENTS.md`, `settings.json`, and `commands/*.md` via async bounded reads
-- [ ] **CFG-02**: Workspace loader discovers `<workspace>/.aifetchly/{AGENTS.md,settings.json,commands/*.md}` and optional root `<workspace>/AGENTS.md` for an approved workspace, after confirming the root against the stored approved workspace (never trusts renderer-provided paths)
+- [x] **CFG-02**: Workspace loader discovers `<workspace>/.aifetchly/{AGENTS.md,settings.json,commands/*.md}` and optional root `<workspace>/AGENTS.md` for an approved workspace, after confirming the root against the stored approved workspace (never trusts renderer-provided paths)
 - [ ] **CFG-03**: `settings.json` parsed with schema (`commandsEnabled`/`agentsEnabled`/`hooksEnabled`/`workspaceConfigEnabled`/`watchEnabled`); unknown fields ignored, invalid known fields fall back to defaults with warnings
 - [ ] **CFG-04**: Size limits enforced (`AGENTS.md` 256KB, command 64KB, agent 128KB, hooks 128KB, settings 32KB; ≤200 commands / ≤100 agents per source); oversized files ignored with diagnostics
 - [ ] **CFG-05**: Path-safety helper rejects absolute relative paths, `..` traversal, and symlinks escaping the trusted root, returning structured `{ ok: false, reason }` errors
@@ -21,7 +21,7 @@ Requirements for the v2.0 milestone. Each maps to exactly one roadmap phase (13�
 ### Context Injection (CTX)
 
 - [x] **CTX-01**: Global `~/.aifetchly/AGENTS.md` content injected into the AiChatV2 system message via `AIChatContextAssembler`, after the base system prompt and before durable memory
-- [ ] **CTX-02**: Trusted workspace `.aifetchly/AGENTS.md` injected with a labeled block identifying the workspace path; untrusted workspace instructions are not injected
+- [x] **CTX-02**: Trusted workspace `.aifetchly/AGENTS.md` injected with a labeled block identifying the workspace path; untrusted workspace instructions are not injected
 - [x] **CTX-03**: Instruction blocks labeled clearly (e.g. "User global AiFetchly instructions…") without implying priority over the app system prompt; an in-memory cache avoids per-request file reads; missing config / read failures degrade to no injection + warning (never block chat)
 
 ### Slash Commands (CMD)
@@ -43,7 +43,7 @@ Requirements for the v2.0 milestone. Each maps to exactly one roadmap phase (13�
 - [ ] **WAT-04**: Watching starts on chat open / workspace approval, continues during active streams/agent/tool runs, and stops only when all consumers release; workspace switch releases old and acquires new with immediate snapshot + source replacement + renderer notification
 - [ ] **WAT-05**: File events debounced per-workspace (300–800ms) and reconciled from a fresh full snapshot (handles delete/rename/atomic save/git checkout/missed events); scan generations discard stale out-of-order scans
 - [ ] **WAT-06**: Worker protocol (main→worker commands; worker→main snapshot/changed/diagnostic/error events) validated in the main process; malformed messages terminate and restart the worker
-- [ ] **WAT-07**: Worker crash triggers restart (max 3 within 60s) + full rescan of all watched workspaces; cap exceeded → stop auto-watch and surface error, with `/reload-config` as manual retry; app shutdown sends shutdown then force-kills after a short timeout (no orphan workers)
+- [x] **WAT-07**: Worker crash triggers restart (max 3 within 60s) + full rescan of all watched workspaces; cap exceeded → stop auto-watch and surface error, with `/reload-config` as manual retry; app shutdown sends shutdown then force-kills after a short timeout (no orphan workers)
 
 ### Trust & Security (TRS)
 
@@ -114,14 +114,14 @@ Each requirement maps to exactly one phase. Updated during roadmap creation.
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | CFG-01 | Phase 13 | Pending |
-| CFG-02 | Phase 14 | Pending |
+| CFG-02 | Phase 14 | Complete |
 | CFG-03 | Phase 13 | Pending |
 | CFG-04 | Phase 13 | Pending |
 | CFG-05 | Phase 13 | Pending |
 | CFG-06 | Phase 13 | Pending |
 | CFG-07 | Phase 13 | Pending |
 | CTX-01 | Phase 13 | Complete |
-| CTX-02 | Phase 14 | Pending |
+| CTX-02 | Phase 14 | Complete |
 | CTX-03 | Phase 13 | Complete |
 | CMD-01 | Phase 13 | Complete |
 | CMD-02 | Phase 13 | Complete |
@@ -137,7 +137,7 @@ Each requirement maps to exactly one phase. Updated during roadmap creation.
 | WAT-04 | Phase 14 | Pending |
 | WAT-05 | Phase 14 | Pending |
 | WAT-06 | Phase 14 | Pending |
-| WAT-07 | Phase 14 | Pending |
+| WAT-07 | Phase 14 | Complete |
 | TRS-01 | Phase 14 | Pending |
 | TRS-02 | Phase 17 | Pending |
 | TRS-03 | Phase 14 | Pending |

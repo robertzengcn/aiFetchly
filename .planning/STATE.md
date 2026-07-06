@@ -6,14 +6,14 @@ current_phase: 14
 current_phase_name: workspace-watcher-worker
 status: executing
 stopped_at: Phase 14 context gathered
-last_updated: "2026-07-05T22:35:29.122Z"
+last_updated: "2026-07-06T04:34:47.353Z"
 last_activity: 2026-07-05
 last_activity_desc: Phase 14 execution started
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 11
-  completed_plans: 8
+  completed_plans: 9
   percent: 17
 ---
 
@@ -46,7 +46,7 @@ Progress: ░░░░░░░░░░ 0%
 ## Current Position
 
 Phase: 14 (workspace-watcher-worker) — EXECUTING
-Plan: 3 of 5
+Plan: 4 of 5
 Status: 14-01 complete — ready for 14-02 (manager + trust filter)
 Last activity: 2026-07-05 — Phase 14 execution started
 
@@ -76,6 +76,10 @@ Last activity: 2026-07-05 — Phase 14 execution started
 - [Phase 13]: [13-03b]: SlashCommandDispatcher depends on concrete CommandRegistry + AIFetchlyConfigManager (not abstract interfaces); tests construct real instances with empty tmpdir, production wires singleton — avoids mock indirection for a 3-method collaborator. — Plan 03a's manager constructor already supports option-injection for tests, so a real-instance test stack is cheaper than maintaining parallel mock interfaces.
 - [Phase 13]: [13-03b]: SlashCommandModule.reloadConfig() and getStatus() take NO params in phase 13 (forward-compat: phase 14+ adds conversationId when workspace trust actually needs it). — Dropped truly-unused optional param rather than carrying dead API surface; the eslint config flags unused args without an underscore-ignore pattern.
 - [Phase 13]: [13-03b]: TRS-05 Strategy A confirmed — slash-command IPC handlers all use registerValidatedHandler (non-AI-gated); prompt-submit gate is downstream in AI_CHAT_V2_STREAM (verified at ai-chat-v2-ipc.ts:385-393). ZERO registerAiValidatedHandler literals in slash-command-ipc.ts. — Strategy A is DRY — no duplicate gate. Strategy B (dispatcher gates type==='prompt') would have required importing Token into the dispatcher.
+- [Phase ?]: 14-03: WorkspaceWatchModule is a plain class (NOT extending BaseModule) — mirrors SlashCommandModule pattern; delegates trust writes to WorkspaceModule and root resolution to WorkspaceResolver
+- [Phase ?]: 14-03: 4 invoke channels use registerValidatedHandler (NON-AI wrapper) — the watcher is not AI-serving; same rationale as Phase 13-03b slash-command-ipc.ts
+- [Phase ?]: 14-03: Sync approval cache bridges async WorkspaceResolver.resolve to sync trustResolver signature required by WorkspaceWatchManager; Phase 17 replaces with per-capability entity
+- [Phase ?]: 14-03: AifetchlyConfigChangedEvent extended STRICTLY additively (workspaceId + diff + diagnostic + message); bare-string source preserved
 
 ### Pending Todos
 
@@ -103,7 +107,7 @@ None yet.
 
 **Resume file:** .planning/phases/14-workspace-watcher-worker/14-CONTEXT.md
 
-Last session: 2026-07-05T22:35:29.118Z
+Last session: 2026-07-06T04:34:09.624Z
 Stopped at: Phase 14 context gathered
 Worktree: .claude/worktrees/merry-stirring-scroll (branch: dev)
 
@@ -114,3 +118,4 @@ Worktree: .claude/worktrees/merry-stirring-scroll (branch: dev)
 | Phase 13 P13-02-command-registry-parser | 12m | 2 tasks | 5 files |
 | Phase 13 P13-03a | 7m | 2 tasks | 7 files |
 | Phase 13 P13-03b | ~18min | 2 tasks | 10 files |
+| Phase 14 P03 | 8m | 2 tasks | 12 files |

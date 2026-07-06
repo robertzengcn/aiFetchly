@@ -111,15 +111,15 @@ Plans:
 
 **Wave 1**
 
-- [ ] 14-01-worker-foundation-PLAN.md — Pure-Node worker (fork) + chokidar ^3.6.0 + scanner + zod protocol + WAT-02 grep gate + SC5 SLA log+assert
+- [x] 14-01-worker-foundation-PLAN.md — Pure-Node worker (fork) + chokidar ^3.6.0 + scanner + zod protocol + WAT-02 grep gate + SC5 SLA log+assert
 
 **Wave 2** *(blocked on Wave 1)*
 
-- [ ] 14-02-manager-trust-filter-PLAN.md — WorkspaceWatchManager ref-counted lifecycle + crash-restart cap + applyWorkspaceSnapshot trust filter (TRS-01)
+- [x] 14-02-manager-trust-filter-PLAN.md — WorkspaceWatchManager ref-counted lifecycle + crash-restart cap + applyWorkspaceSnapshot trust filter (TRS-01)
 
 **Wave 3** *(blocked on Wave 2)*
 
-- [ ] 14-03-main-ipc-integration-PLAN.md — WorkspaceWatchModule + 4 invoke-channel IPC + preload whitelists + manager singleton wiring + background.ts shutdown hook + D-04 additive workspaceId
+- [x] 14-03-main-ipc-integration-PLAN.md — WorkspaceWatchModule + 4 invoke-channel IPC + preload whitelists + manager singleton wiring + background.ts shutdown hook + D-04 additive workspaceId
 
 **Wave 4** *(blocked on Wave 3)*
 
@@ -210,7 +210,7 @@ Plans:
 | 11. UI Page and Integration | v1.2 | 2/2 | Complete | 2026-05-26 |
 | 12. Translations and Validation | v1.2 | 1/1 | Complete | 2026-05-26 |
 | 13. Global Context and Built-in Slash Commands | v2.0 | 6/6 | Complete   | 2026-07-05 |
-| 14. Workspace Watcher Worker | v2.0 | 0/? | Not started | — |
+| 14. Workspace Watcher Worker | v2.0 | 3/5 | In Progress|  |
 | 15. Prompt Command Files | v2.0 | 0/? | Not started | — |
 | 16. Dynamic Agents | v2.0 | 0/? | Not started | — |
 | 17. Hooks | v2.0 | 0/? | Not started | — |
