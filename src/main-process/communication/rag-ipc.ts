@@ -50,6 +50,7 @@ import {
   registerValidatedHandler,
   registerAiValidatedHandler,
 } from "@/main-process/communication/_shared/registerValidatedHandler";
+import { isAiEnabled } from "@/service/AiFeatureGate";
 import {
   ragShowOpenDialogInputSchema,
   ragFileStatsInputSchema,
@@ -89,6 +90,26 @@ export function registerRagIpcHandlers(): void {
 
   // ── Out-of-scope: streaming on handler ───────────────────────────────
   ipcMain.on(SAVE_TEMP_FILE, async (event, data): Promise<void> => {
+    // F6 follow-up — the streaming upload path also triggers chunking +
+    // remote embedding work. It cannot use registerAiValidatedHandler
+    // (it pushes progress over event.sender.send), so check the AI gate
+    // explicitly and fail-closed before parsing metadata or writing.
+    if (!isAiEnabled()) {
+      const disabled: CommonMessage<SaveTempFileResponse> = {
+        status: false,
+        msg: "AI feature is not enabled",
+        data: {
+          tempFilePath: "",
+          databaseSaved: false,
+          databaseError: "AI feature is not enabled",
+        },
+      };
+      (
+        event as { sender: { send: (c: string, m: string) => void } }
+      ).sender.send(SAVE_TEMP_FILE_COMPLETE, JSON.stringify(disabled));
+      return;
+    }
+
     let documentInfo: UploadedDocument | null = null;
     let databaseSaved = false;
     let databaseError: string | null = null;
@@ -613,7 +634,9 @@ export function registerRagIpcHandlers(): void {
     }
   );
 
-  registerValidatedHandler(
+  // F6 follow-up — embedding-model update may issue a remote model-list call
+  // before persisting; gate on the AI flag.
+  registerAiValidatedHandler(
     RAG_UPDATE_EMBEDDING_MODEL,
     ragUpdateEmbeddingModelInputSchema,
     async (input) => {
@@ -636,7 +659,9 @@ export function registerRagIpcHandlers(): void {
     }
   );
 
-  registerValidatedHandler(
+  // F6 follow-up — the model catalog merges remote + local model lists and
+  // may call the remote AI server; gate on the AI flag.
+  registerAiValidatedHandler(
     RAG_GET_AVAILABLE_MODELS,
     ragNoInputSchema,
     async () => {
