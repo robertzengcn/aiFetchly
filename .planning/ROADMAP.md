@@ -123,11 +123,11 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3)*
 
-- [ ] 14-04-renderer-trust-card-PLAN.md — WorkspaceTrustCard.vue (4 TRS-03 options + main-supplied Preview) + AiChatV2 subscriber filter by workspaceId + acquire/release lifecycle
+- [x] 14-04-renderer-trust-card-PLAN.md — WorkspaceTrustCard.vue (4 TRS-03 options + main-supplied Preview) + AiChatV2 subscriber filter by workspaceId + acquire/release lifecycle
 
 **Wave 5** *(blocked on Wave 4)*
 
-- [ ] 14-05-i18n-boundary-tests-PLAN.md — workspaceTrust i18n group in all 6 lang files + TRS-07 renderer boundary test + SC5 perf-backstop
+- [x] 14-05-i18n-boundary-tests-PLAN.md — workspaceTrust i18n group in all 6 lang files + TRS-07 renderer boundary test + SC5 perf-backstop
 
 ### Phase 15: Prompt Command Files
 
