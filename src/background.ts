@@ -16,6 +16,7 @@ import { registerCommunicationIpcHandlers } from "./main-process/communication/"
 import { SkillImportService } from "@/service/SkillImportService";
 import { FileOperationTracker } from "@/service/FileOperationTracker";
 import { registerBuiltinHooks } from "@/service/hooks/builtinHooks";
+import { isAppTrustedOrigin } from "@/service/OriginTrust";
 import * as path from "path";
 import { Token } from "@/modules/token";
 import { MenuManager } from "@/main-process/menu/MenuManager";
@@ -426,28 +427,12 @@ function initialize() {
       // surface, otherwise they can read or delete AI chat history, drive
       // shell/file tools, etc.
       //
-      // Trusted set:
-      //   - the Vite dev server origin (development)
-      //   - the app://, file://, about:blank schemes (production / scaffolding)
-      // Anything else is forwarded to the OS browser via shell.openExternal
-      // and the in-app child BrowserWindow is denied.
-      const isTrustedOrigin = (() => {
-        try {
-          const parsed = new URL(url);
-          if (parsed.protocol === "about:") return true; // blank/sandboxed
-          if (parsed.protocol === "file:") return true;
-          if (parsed.protocol === "app:") return true;
-          if (
-            MAIN_WINDOW_VITE_DEV_SERVER_URL &&
-            parsed.origin === new URL(MAIN_WINDOW_VITE_DEV_SERVER_URL).origin
-          ) {
-            return true;
-          }
-          return false;
-        } catch {
-          return false;
-        }
-      })();
+      // The trusted set (about:/file:/app: schemes + the Vite dev-server
+      // origin) is defined once in OriginTrust and shared with privileged
+      // IPC handlers (e.g. MCP_TOOL_TRUST). Anything else is forwarded to
+      // the OS browser via shell.openExternal and the in-app child
+      // BrowserWindow is denied.
+      const isTrustedOrigin = isAppTrustedOrigin(url);
 
       if (!isTrustedOrigin) {
         // Open externally WITHOUT preload. Never expose the IPC bridge to

@@ -223,6 +223,16 @@ export class MCPToolService {
   }
 
   /**
+   * Returns the human-readable server name for a given id, or null when the
+   * server does not exist. Used by the trust-approval IPC handler to label
+   * the native confirmation dialog with the exact server being approved.
+   */
+  async getServerName(serverId: number): Promise<string | null> {
+    const server = await this.mcpToolModule.getMCPToolById(serverId);
+    return server?.serverName ?? null;
+  }
+
+  /**
    * Get all MCP servers with their tools
    */
   async getAllMCPTools(): Promise<MCPToolEntity[]> {

@@ -1,4 +1,6 @@
+import { BrowserWindow, dialog } from "electron";
 import { MCPToolService, MCPServerConfig } from "@/service/MCPToolService";
+import { isAppTrustedOrigin } from "@/service/OriginTrust";
 import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
 import {
   mcpToolListInputSchema,
@@ -127,13 +129,53 @@ export function registerMCPToolIpcHandlers(): void {
 
   // F1 fix — explicit trust grant for MCP stdio servers. Without this, the
   // service-layer assertStdioTrusted gate refuses to spawn any stdio child.
+  //
+  // F1 follow-up — treat trust like a shell-tool approval, not a normal
+  // settings update. Granting trust authorizes the server to spawn a local
+  // child process, so it requires BOTH:
+  //   1. a trusted app sender frame (rejects compromised/external frames that
+  //      would otherwise self-grant trust then spawn), AND
+  //   2. an explicit native confirmation dialog bound to this server id+name,
+  //      so the approval is the result of a real user gesture.
+  // Revocation is always safe and needs no confirmation.
   registerValidatedHandler(
     MCP_TOOL_TRUST,
     mcpToolTrustInputSchema,
-    async (input) => {
+    async (input, event) => {
+      const senderUrl = event?.senderFrame?.url;
+      if (!isAppTrustedOrigin(senderUrl)) {
+        throw new Error(
+          "MCP trust request from an untrusted origin was denied."
+        );
+      }
+
       const service = new MCPToolService();
-      service.setTrust(input.serverId, input.trusted);
-      return { trusted: input.trusted };
+
+      if (!input.trusted) {
+        service.setTrust(input.serverId, false);
+        return { trusted: false };
+      }
+
+      const serverName = await service.getServerName(input.serverId);
+      const parent = BrowserWindow.fromWebContents(event?.sender);
+      const choice = await dialog.showMessageBox(parent, {
+        type: "warning",
+        title: "Trust MCP stdio server?",
+        message: "Allow this MCP stdio server to run a local process?",
+        detail:
+          `Server: ${serverName ?? `#${input.serverId}`}\n\n` +
+          "Only approve servers you trust — a stdio MCP server can execute " +
+          "arbitrary local commands on your machine.",
+        buttons: ["Cancel", "Trust"],
+        defaultId: 0,
+        cancelId: 0,
+      });
+
+      if (choice.response !== 1) {
+        return { trusted: false };
+      }
+      service.setTrust(input.serverId, true);
+      return { trusted: true };
     }
   );
 }
