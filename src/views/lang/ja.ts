@@ -1010,6 +1010,7 @@ export default {
   test_connection_success: "受信接続に成功しました。",
   test_connection_failed: "受信接続に失敗しました",
   messages_title: "受信メッセージ",
+  email_service_id_required: "メッセージを表示するにはメールサービスIDを入力してください。",
   email_service_id: "サービス ID",
   sync: "同期",
   reply_status: "返信ステータス",
@@ -1022,6 +1023,14 @@ export default {
   reply_to: "返信先",
   body_html: "本文 (HTML)",
   body_text: "本文 (テキスト)",
+  status: {
+    not_started: "未開始",
+    draft_created: "下書き作成",
+    sent: "送信済み",
+    skipped: "スキップ",
+    blocked: "ブロック",
+    failed: "失敗",
+  },
 },
 emailReply: {
   drafts_title: "返信下書き",

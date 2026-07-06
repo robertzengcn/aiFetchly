@@ -997,6 +997,7 @@ export default {
   test_connection_success: "收件连接成功。",
   test_connection_failed: "收件连接失败",
   messages_title: "收到的邮件",
+  email_service_id_required: "请输入邮箱服务 ID 以查看邮件。",
   email_service_id: "邮箱服务 ID",
   sync: "同步",
   reply_status: "回复状态",
@@ -1009,6 +1010,14 @@ export default {
   reply_to: "回复至",
   body_html: "正文 (HTML)",
   body_text: "正文 (文本)",
+  status: {
+    not_started: "未开始",
+    draft_created: "已生成草稿",
+    sent: "已发送",
+    skipped: "已跳过",
+    blocked: "已拦截",
+    failed: "失败",
+  },
 },
 emailReply: {
   drafts_title: "回复草稿",

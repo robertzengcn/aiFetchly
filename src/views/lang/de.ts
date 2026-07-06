@@ -1030,6 +1030,7 @@ export default {
   test_connection_success: "Empfangsverbindung erfolgreich.",
   test_connection_failed: "Empfangsverbindung fehlgeschlagen",
   messages_title: "Empfangene Nachrichten",
+  email_service_id_required: "Bitte geben Sie eine E-Mail-Dienst-ID ein, um Nachrichten anzuzeigen.",
   email_service_id: "Dienst-ID",
   sync: "Synchronisieren",
   reply_status: "Antwortstatus",
@@ -1042,6 +1043,14 @@ export default {
   reply_to: "Antwort an",
   body_html: "Text (HTML)",
   body_text: "Text (Plain)",
+  status: {
+    not_started: "Nicht Gestartet",
+    draft_created: "Entwurf Erstellt",
+    sent: "Gesendet",
+    skipped: "Übersprungen",
+    blocked: "Blockiert",
+    failed: "Fehlgeschlagen",
+  },
 },
 emailReply: {
   drafts_title: "Antwortentwürfe",

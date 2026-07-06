@@ -1038,6 +1038,7 @@ export default {
   test_connection_success: "Receive connection succeeded.",
   test_connection_failed: "Receive connection failed",
   messages_title: "Received Messages",
+  email_service_id_required: "Please enter an Email Service ID to view messages.",
   email_service_id: "Email Service ID",
   sync: "Sync",
   reply_status: "Reply Status",
@@ -1050,6 +1051,14 @@ export default {
   reply_to: "Reply-To",
   body_html: "Body (HTML)",
   body_text: "Body (Text)",
+  status: {
+    not_started: "Not Started",
+    draft_created: "Draft Created",
+    sent: "Sent",
+    skipped: "Skipped",
+    blocked: "Blocked",
+    failed: "Failed",
+  },
 },
 emailReply: {
   drafts_title: "Reply Drafts",

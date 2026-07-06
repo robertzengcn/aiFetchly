@@ -1035,6 +1035,7 @@ export default {
   test_connection_success: "Conexión de recepción correcta.",
   test_connection_failed: "Conexión de recepción fallida",
   messages_title: "Mensajes Recibidos",
+  email_service_id_required: "Ingrese un ID de servicio de correo para ver los mensajes.",
   email_service_id: "ID del Servicio",
   sync: "Sincronizar",
   reply_status: "Estado de Respuesta",
@@ -1047,6 +1048,14 @@ export default {
   reply_to: "Responder A",
   body_html: "Cuerpo (HTML)",
   body_text: "Cuerpo (Texto)",
+  status: {
+    not_started: "No Iniciado",
+    draft_created: "Borrador Creado",
+    sent: "Enviado",
+    skipped: "Omitido",
+    blocked: "Bloqueado",
+    failed: "Fallido",
+  },
 },
 emailReply: {
   drafts_title: "Borradores de Respuesta",

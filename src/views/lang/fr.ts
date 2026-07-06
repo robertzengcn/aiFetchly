@@ -1022,6 +1022,7 @@ export default {
   test_connection_success: "Connexion de réception réussie.",
   test_connection_failed: "Échec de la connexion de réception",
   messages_title: "Messages Reçus",
+  email_service_id_required: "Veuillez saisir un ID de service de messagerie pour voir les messages.",
   email_service_id: "ID du Service",
   sync: "Synchroniser",
   reply_status: "Statut de Réponse",
@@ -1034,6 +1035,14 @@ export default {
   reply_to: "Répondre à",
   body_html: "Corps (HTML)",
   body_text: "Corps (Texte)",
+  status: {
+    not_started: "Non Démarré",
+    draft_created: "Brouillon Créé",
+    sent: "Envoyé",
+    skipped: "Ignoré",
+    blocked: "Bloqué",
+    failed: "Échec",
+  },
 },
 emailReply: {
   drafts_title: "Brouillons de Réponse",

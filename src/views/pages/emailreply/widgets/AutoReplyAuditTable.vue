@@ -5,13 +5,15 @@
     </div>
 
     <!-- Filters -->
-    <div class="d-flex flex-wrap gap-3 ml-2 mr-2 mb-2">
+    <div class="d-flex flex-wrap align-center ml-2 mr-2 mb-2">
       <v-select
         v-model="filters.decisionStatus"
         :items="decisionStatusOptions"
         :label="t('emailAutoReplyAudit.decision_status')"
         clearable
         density="compact"
+        hide-details
+        class="mr-2"
         style="max-width: 220px"
       ></v-select>
       <v-select
@@ -20,6 +22,8 @@
         :label="t('emailAutoReplyAudit.classification')"
         clearable
         density="compact"
+        hide-details
+        class="mr-2"
         style="max-width: 220px"
       ></v-select>
       <v-text-field
@@ -27,6 +31,8 @@
         :label="t('emailAutoReplyAudit.search')"
         density="compact"
         clearable
+        hide-details
+        class="mr-2"
         style="max-width: 260px"
         @keyup.enter="reload"
       ></v-text-field>
@@ -63,7 +69,7 @@
         </v-icon>
       </template>
       <template #item.actions="{ item }">
-        <v-icon small class="mr-2" @click="openDetail(item.id)">mdi-eye</v-icon>
+        <v-icon size="small" @click="openDetail(item.id)">mdi-eye</v-icon>
       </template>
     </v-data-table-server>
   </div>
@@ -120,7 +126,7 @@ const headers = computed<Array<Header>>(() => [
   { title: CapitalizeFirstLetter(t("emailAutoReplyAudit.classification")), key: "classification", sortable: false },
   { title: CapitalizeFirstLetter(t("emailAutoReplyAudit.confidence")), key: "confidence", sortable: true },
   { title: CapitalizeFirstLetter(t("emailAutoReplyAudit.requires_approval")), key: "requiresUserApproval", sortable: false },
-  { title: CapitalizeFirstLetter(t("common.action")), key: "actions", sortable: false },
+  { title: CapitalizeFirstLetter(t("common.actions")), key: "actions", sortable: false },
 ]);
 
 function reload() {
