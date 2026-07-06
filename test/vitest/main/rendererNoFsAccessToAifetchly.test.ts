@@ -26,6 +26,21 @@ const FORBIDDEN_IMPORT_RE =
 const FORBIDDEN_REQUIRE_RE =
   /require\(['"](fs|node:fs|path|node:path|os|node:os|child_process|node:child_process)['"]\)/;
 
+// Filesystem / path / os call patterns. Combined with the config-root literal
+// on the SAME line, these indicate an actual TRS-07 read violation (reading
+// config bytes off disk) — as opposed to a mere comment / UI-string mention,
+// which cannot read anything. Mirrors the contract in
+// rendererNoFsAccessToWorkspaceConfig.test.ts (Phase 14).
+const FS_CALL_PATTERNS: readonly RegExp[] = [
+  /\breadFile(Sync)?\s*\(/,
+  /\bfs\.promises\.readFile\s*\(/,
+  /\bcreateReadStream\s*\(/,
+  /\bpath\.join\s*\(/,
+  /\bpath\.resolve\s*\(/,
+  /\bos\.homedir\s*\(/,
+  /\bos\.tmpdir\s*\(/,
+];
+
 /**
  * Files in this allowlist are exempt from the forbidden-import check. Each
  * entry MUST link to a justification. Keep this list empty by default — every
@@ -63,20 +78,37 @@ describe("TRS-07 — renderer isolation (src/views/**)", () => {
   const files = walk(RENDERER_ROOT);
 
   it("renderer tree was walked (found .ts/.vue files)", () => {
-    expect(files.length, "expected to find renderer source files under src/views").toBeGreaterThan(0);
+    expect(
+      files.length,
+      "expected to find renderer source files under src/views"
+    ).toBeGreaterThan(0);
   });
 
-  it("no renderer file references the config-root folder literal", () => {
+  // Phase 14 refinement: a mere mention of the config-root literal in a
+  // comment / UI string is NOT a TRS-07 violation — the renderer cannot read
+  // the file without an fs/path/os call, and the import check below already
+  // bans those. The ACTUAL violation is a line that COMBINES the config
+  // literal with a filesystem/path/os call on the same line. Pure comment
+  // mentions (e.g., Phase 14's WorkspaceTrustCard.vue / AiChatV2.vue docs
+  // describing the workspace-trust UX) are permitted. This matches the
+  // contract in rendererNoFsAccessToWorkspaceConfig.test.ts (Phase 14).
+  it("no renderer file COMBINES the config-root literal with an fs/path/os call on one line", () => {
     const offenders: string[] = [];
     for (const f of files) {
       const src = readFileSync(f, "utf8");
-      if (src.includes(FORBIDDEN_FOLDER_LITERAL)) {
-        offenders.push(relative(RENDERER_ROOT, f));
+      const rel = relative(RENDERER_ROOT, f);
+      for (const line of src.split("\n")) {
+        if (!line.includes(FORBIDDEN_FOLDER_LITERAL)) continue;
+        if (FS_CALL_PATTERNS.some((re) => re.test(line))) {
+          offenders.push(`${rel}: \`${line.trim()}\``);
+        }
       }
     }
     expect(
       offenders,
-      `renderer files reference the config-root folder literal: ${offenders.join(", ")}`
+      `renderer files combine the config-root literal with an fs/path/os call (TRS-07 read violation): ${offenders.join(
+        ", "
+      )}`
     ).toEqual([]);
   });
 
@@ -92,7 +124,9 @@ describe("TRS-07 — renderer isolation (src/views/**)", () => {
     }
     expect(
       offenders,
-      `renderer files import forbidden node built-ins (fs/path/os/child_process): ${offenders.join(", ")}` +
+      `renderer files import forbidden node built-ins (fs/path/os/child_process): ${offenders.join(
+        ", "
+      )}` +
         (LEGACY_ALLOWLIST.length
           ? `\n  allowlist: ${LEGACY_ALLOWLIST.join(", ")}`
           : "")
