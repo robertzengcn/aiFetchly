@@ -28,6 +28,7 @@ import type {
   AIFetchlyConfigReloadSummary,
   AIFetchlyConfigStatus,
 } from "@/service/aifetchlyConfig/AIFetchlyConfigManager";
+import type { AIFetchlyConfigDiff } from "@/entityTypes/aifetchlyConfigTypes";
 
 /**
  * Optional filters accepted by {@link listSlashCommands}. Both fields are
@@ -52,10 +53,41 @@ export interface AifetchlyConfigContextRequest {
  * the JSON-stringified shape emitted by slash-command-ipc.ts emitConfigChanged
  * (counts + diff metadata only — never raw file bodies or prompt content;
  * T-13-Leak mitigation).
+ *
+ * Phase 14 (Plan 14-03 D-04): the payload is additively extended with
+ * optional `workspaceId` + `diff` for workspace-originated changes. The
+ * existing `{source: "user", summary}` shape is preserved; the `source`
+ * field stays a bare string so the Phase 13-04 subscriber that ignores
+ * the payload arg (AiChatV2.vue onAifetchlyConfigChanged callback) keeps
+ * working without modification. Plan 14-04's renderer filters on
+ * `workspaceId` to scope refreshes to the active conversation.
  */
 export interface AifetchlyConfigChangedEvent {
+  /** Bare string — backward compatible with Phase 13. */
   readonly source: string;
   readonly summary: AIFetchlyConfigReloadSummary;
+  /**
+   * Present when `source === "workspace"`. The active conversation filters
+   * on this id to decide whether to refresh its local cache.
+   */
+  readonly workspaceId?: string;
+  /**
+   * Forward-compat diff payload. The Phase-13 path leaves this absent; the
+   * workspace event may carry it once Plan 14-04 consumes it for selective
+   * invalidation. Optional on the wire — subscribers MUST treat absence as
+   * "no diff available, refresh everything".
+   */
+  readonly diff?: AIFetchlyConfigDiff;
+  /**
+   * Forwarded diagnostic (workspace events only). Absent on the user-reload
+   * path and on workspace `changed` events.
+   */
+  readonly diagnostic?: unknown;
+  /**
+   * Forwarded error message (workspace `error` events only — restart cap
+   * exceeded, etc.). Absent on the normal paths.
+   */
+  readonly message?: string;
 }
 
 /**
@@ -67,7 +99,10 @@ export interface AifetchlyConfigChangedEvent {
 export async function listSlashCommands(
   req: ListSlashCommandsRequest = {}
 ): Promise<SlashCommandListResponse> {
-  return windowInvoke(SLASH_COMMAND_LIST, req) as Promise<SlashCommandListResponse>;
+  return windowInvoke(
+    SLASH_COMMAND_LIST,
+    req
+  ) as Promise<SlashCommandListResponse>;
 }
 
 /**

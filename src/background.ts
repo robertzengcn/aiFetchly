@@ -13,6 +13,7 @@ import installExtension, { VUEJS3_DEVTOOLS } from "electron-devtools-installer";
 import { registerCommunicationIpcHandlers } from "./main-process/communication/";
 import { SkillImportService } from "@/service/SkillImportService";
 import { getAIFetchlyConfigManager } from "@/service/aifetchlyConfig/AIFetchlyConfigManager";
+import { getWorkspaceWatchManager } from "@/service/workspaceWatch/WorkspaceWatchManagerSingleton";
 import { FileOperationTracker } from "@/service/FileOperationTracker";
 import { registerBuiltinHooks } from "@/service/hooks/builtinHooks";
 import * as path from "path";
@@ -365,11 +366,19 @@ function initialize() {
       // empty snapshot on any IO error. Built-in slash commands and the
       // config-changed IPC handlers were registered above via
       // registerCommunicationIpcHandlers -> registerSlashCommandHandlers.
-      getAIFetchlyConfigManager()
-        .initialize()
-        .catch((err: unknown) => {
-          console.warn("[Startup] AIFetchly config scan failed:", err);
-        });
+      //
+      // Phase 14 (Plan 14-03): the watcher manager singleton was constructed
+      // inside registerCommunicationIpcHandlers → initWorkspaceWatchManager.
+      // Wire it into the config manager so /status reflects real watcher
+      // state (DX-02). Non-fatal if the watcher is absent (defensive).
+      const phase14ConfigManager = getAIFetchlyConfigManager();
+      const phase14WatcherManager = getWorkspaceWatchManager();
+      if (phase14WatcherManager) {
+        phase14ConfigManager.setWorkspaceWatchManager(phase14WatcherManager);
+      }
+      phase14ConfigManager.initialize().catch((err: unknown) => {
+        console.warn("[Startup] AIFetchly config scan failed:", err);
+      });
       //}
     }
 
@@ -562,6 +571,21 @@ function initialize() {
       log.info("WebSocket connection cleanup completed");
     } catch (error) {
       log.error("Failed to cleanup WebSocket connection:", error);
+    }
+
+    // Phase 14 (Plan 14-03 WAT-07): gracefully shut down the workspace
+    // watcher worker. The manager sends the shutdown command, awaits up to
+    // 2s for clean exit, then SIGKILLs the worker if still alive — no
+    // orphan workers persist after Electron exits. Non-fatal if the manager
+    // was never constructed (defensive — early-shutdown edge case).
+    try {
+      const watcherManager = getWorkspaceWatchManager();
+      if (watcherManager) {
+        await watcherManager.shutdown();
+        log.info("WorkspaceWatchManager shutdown completed");
+      }
+    } catch (error) {
+      log.error("Failed to shutdown WorkspaceWatchManager:", error);
     }
 
     // Stop log cleanup interval

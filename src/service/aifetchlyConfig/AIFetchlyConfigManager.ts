@@ -8,10 +8,13 @@
  * instruction-block accessors consumed by the IPC layer (Plan 03b) and the
  * AIChatContextAssembler (Plan 13-03a Task 2).
  *
- * Phase-13 boundary:
- *   - Only the global source ("user") is scanned. The workspace watcher is
- *     phase 14, so {@link getStatus}.watcherState is hardcoded "not-started"
- *     (DX-02 placeholder).
+ * Phase-14 (Plan 14-03) integration:
+ *   - {@link setWorkspaceWatchManager} wires the watcher singleton (called
+ *     once at startup after the watcher manager is constructed). When wired,
+ *     {@link getStatus}.watcherState reflects the real manager state
+ *     (DX-02): "not-started" | "watching" | "failed".
+ *   - Only the global source ("user") is scanned directly here; workspace
+ *     snapshots flow through the watcher → applyWorkspaceSnapshot.
  *   - The startup scan is fire-and-forget safe: initialize() never throws
  *     synchronously and any async error is caught + logged (the caller in
  *     background.ts wires the actual .catch in Plan 03b — Pitfall 6).
@@ -35,6 +38,7 @@ import {
 } from "./AIFetchlyContextLoader";
 import { AIFetchlyRuntimeRegistrySync } from "./AIFetchlyRuntimeRegistrySync";
 import { CommandRegistry } from "@/service/slashCommands/CommandRegistry";
+import type { WorkspaceWatchManager } from "@/service/workspaceWatch/WorkspaceWatchManager";
 
 /** Result of {@link AIFetchlyConfigManager.reload}. */
 export interface AIFetchlyConfigReloadSummary {
@@ -52,8 +56,18 @@ export interface AIFetchlyConfigStatus {
   readonly skillCount: number;
   readonly diagnosticCount: number;
   readonly lastReloadAt: number;
-  /** DX-02 phase-14 placeholder — the watcher worker lands in phase 14. */
-  readonly watcherState: "not-started";
+  /**
+   * Runtime state of the workspace watcher (DX-02). Plan 14-03 widened
+   * this from the Phase-13 literal `"not-started"` to a union reflecting
+   * the injected {@link WorkspaceWatchManager}'s state:
+   *   - `"not-started"`: no manager wired OR manager.workerState is
+   *     `"not-started"` (0 watched workspaces).
+   *   - `"watching"`: manager.workerState is `"running"` or `"restarting"`
+   *     — at least one workspace is being observed (worker forked).
+   *   - `"failed"`: manager.workerState is `"failed"` — restart cap
+   *     exceeded; /reload-config required to recover.
+   */
+  readonly watcherState: "not-started" | "watching" | "failed";
   /** Active source for /status display. */
   readonly source: "user";
 }
@@ -80,6 +94,14 @@ export class AIFetchlyConfigManager {
   private readonly sync: AIFetchlyRuntimeRegistrySync;
   private readonly contextLoader: AIFetchlyContextLoader;
   private readonly listeners = new Set<() => void>();
+
+  /**
+   * Watcher manager reference injected by Plan 14-03's startup wiring.
+   * Null until {@link setWorkspaceWatchManager} is called (or never set in
+   * tests that don't exercise the watcher). getStatus() degrades to
+   * "not-started" when null.
+   */
+  private watcherManager: WorkspaceWatchManager | null = null;
 
   private initialized = false;
   private lastSnapshot: AIFetchlyConfigSnapshot | null = null;
@@ -130,8 +152,9 @@ export class AIFetchlyConfigManager {
   }
 
   /**
-   * Synchronous status snapshot for /status display. watcherState is the
-   * DX-02 phase-14 placeholder ("not-started").
+   * Synchronous status snapshot for /status display. watcherState reflects
+   * the injected {@link WorkspaceWatchManager} (DX-02); absent manager →
+   * "not-started".
    */
   getStatus(): AIFetchlyConfigStatus {
     return {
@@ -141,9 +164,37 @@ export class AIFetchlyConfigManager {
       skillCount: 0, // Phase 18 — no skills discovered yet.
       diagnosticCount: this.lastDiagnosticCount,
       lastReloadAt: this.lastReloadAt,
-      watcherState: "not-started",
+      watcherState: this.computeWatcherState(),
       source: "user",
     };
+  }
+
+  /**
+   * Wire the {@link WorkspaceWatchManager} singleton. Called once during
+   * main-process startup (Plan 14-03 background.ts) AFTER the manager is
+   * constructed. After this call, getStatus().watcherState reflects the
+   * real watcher state (DX-02).
+   */
+  setWorkspaceWatchManager(manager: WorkspaceWatchManager): void {
+    this.watcherManager = manager;
+  }
+
+  /**
+   * Map the manager's workerState ("not-started" | "running" |
+   * "restarting" | "failed") onto the public watcherState union
+   * ("not-started" | "watching" | "failed"). The "restarting" state is
+   * folded into "watching" — the worker is bouncing but the watch is
+   * still active from the user's perspective.
+   */
+  private computeWatcherState(): "not-started" | "watching" | "failed" {
+    const m = this.watcherManager;
+    if (!m) return "not-started";
+    const workerState = m.getStatus().workerState;
+    if (workerState === "failed") return "failed";
+    if (workerState === "running" || workerState === "restarting") {
+      return "watching";
+    }
+    return "not-started";
   }
 
   /**
