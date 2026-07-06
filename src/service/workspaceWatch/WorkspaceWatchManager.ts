@@ -154,7 +154,11 @@ function defaultLogger(
 ): void {
   // eslint-disable-next-line no-console
   const sink =
-    level === "error" ? console.error : level === "warn" ? console.warn : console.info;
+    level === "error"
+      ? console.error
+      : level === "warn"
+      ? console.warn
+      : console.info;
   if (meta !== undefined) sink(`[workspace-watch] ${msg}`, meta);
   else sink(`[workspace-watch] ${msg}`);
 }
@@ -190,7 +194,9 @@ export class WorkspaceWatchManager {
     s: AIFetchlyConfigSnapshot,
     t: AIFetchlySourceTrust
   ) => void;
-  private readonly configChangedEmitter: (e: WorkspaceWatchManagerEvent) => void;
+  private readonly configChangedEmitter: (
+    e: WorkspaceWatchManagerEvent
+  ) => void;
   private readonly trustResolver: (workspaceId: string) => boolean;
   private readonly forkFn: ForkFn;
   private readonly workerEntry: string;
@@ -334,6 +340,21 @@ export class WorkspaceWatchManager {
         hasSnapshot: Boolean(s.lastSnapshot),
       })),
     };
+  }
+
+  /**
+   * Return the most recent cached snapshot for {@link workspaceId}, or null
+   * when the workspace is not currently watched (or no snapshot has arrived
+   * yet — the worker emits asynchronously after acquire).
+   *
+   * Plan 14-03's IPC layer uses this to satisfy the AGENTS.md preview
+   * request (TRS-07) without re-reading the file from the renderer side.
+   * The snapshot was produced by the worker; main forwards its instruction
+   * blocks' content rather than the path.
+   */
+  getWorkspaceSnapshot(workspaceId: string): AIFetchlyConfigSnapshot | null {
+    const state = this.watched.get(workspaceId);
+    return state?.lastSnapshot ?? null;
   }
 
   // --- Internals -------------------------------------------------------------

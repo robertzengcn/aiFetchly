@@ -307,8 +307,39 @@ export const AIFETCHLY_CONFIG_STATUS = "aifetchly-config:status";
  * Main->Renderer EVENT (NOT an invoke handler): emitted via
  * win.webContents.send after a successful reload so the renderer refreshes
  * its command cache. Payload is JSON-stringified {source, summary}.
+ *
+ * Phase 14 (Plan 14-03 D-04): the payload is additively extended with
+ * optional `workspaceId` + `diff` for workspace-originated changes. The
+ * existing `{source: "user", summary}` shape is preserved; subscribers
+ * that ignore the payload (Phase 13-04 AiChatV2 subscriber) keep working.
  */
 export const AIFETCHLY_CONFIG_CHANGED = "aifetchly-config:changed";
+
+// ==================== Workspace Watcher Channels (Phase 14 — Plan 03) =======
+// Renderer->Main invoke handlers that drive the workspace-config watcher
+// lifecycle. See docs/prd/aifetchly-local-extensibility-technical-design.md
+// §10.1 (chat-open acquire flow), §10.4 (switch flow), §13 (trust prompt IPC).
+//
+// Trust boundary (CFG-02): the handlers NEVER trust a renderer-provided
+// workspaceRoot — WorkspaceResolver.resolve(conversationId) is the sole
+// source of truth for the watched path. The renderer may pass a workspaceId
+// hint (the string returned by acquire), but main always re-resolves the
+// root from the approved WorkspaceRecord before forwarding to the manager.
+/** Renderer->Main: acquire a watch for the active workspace (chat-open). */
+export const AIFETCHLY_WORKSPACE_WATCH_ACQUIRE =
+  "aifetchly-workspace-watch:acquire";
+/** Renderer->Main: release a watch consumer (chat-close / unmount). */
+export const AIFETCHLY_WORKSPACE_WATCH_RELEASE =
+  "aifetchly-workspace-watch:release";
+/**
+ * Renderer->Main: read the trusted workspace AGENTS.md content body for the
+ * trust-prompt preview (TRS-07 — renderer never reads the file directly;
+ * main returns the content string, never a path).
+ */
+export const AIFETCHLY_WORKSPACE_TRUST_PREVIEW =
+  "aifetchly-workspace-trust:preview";
+/** Renderer->Main: set workspace trust scope (TRS-03 prompt actions). */
+export const AIFETCHLY_WORKSPACE_TRUST_SET = "aifetchly-workspace-trust:set";
 
 // MCP Tool Management Channels
 export const MCP_TOOL_LIST = "mcp:tool:list";

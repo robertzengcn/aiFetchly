@@ -327,6 +327,14 @@ import {
   AIFETCHLY_CONFIG_RELOAD,
   AIFETCHLY_CONFIG_STATUS,
   AIFETCHLY_CONFIG_CHANGED,
+  // Workspace Watcher Channels (Phase 14 — Plan 03). Invoke-only: acquire,
+  // release, trust-preview, trust-set. The reuse of AIFETCHLY_CONFIG_CHANGED
+  // for main->renderer events means NO new event-channel whitelist entries
+  // are needed (D-04 — verified in receive/removeListener/removeAllListeners).
+  AIFETCHLY_WORKSPACE_WATCH_ACQUIRE,
+  AIFETCHLY_WORKSPACE_WATCH_RELEASE,
+  AIFETCHLY_WORKSPACE_TRUST_PREVIEW,
+  AIFETCHLY_WORKSPACE_TRUST_SET,
   // Dialog Channels
   DIALOG_PICK_FOLDER,
 } from "@/config/channellist";
@@ -837,6 +845,11 @@ contextBridge.exposeInMainWorld("api", {
       SLASH_COMMAND_DISPATCH,
       AIFETCHLY_CONFIG_RELOAD,
       AIFETCHLY_CONFIG_STATUS,
+      // Workspace Watcher Channels (Phase 14 — Plan 03, invoke-only)
+      AIFETCHLY_WORKSPACE_WATCH_ACQUIRE,
+      AIFETCHLY_WORKSPACE_WATCH_RELEASE,
+      AIFETCHLY_WORKSPACE_TRUST_PREVIEW,
+      AIFETCHLY_WORKSPACE_TRUST_SET,
       // Dialog Channels
       DIALOG_PICK_FOLDER,
     ];

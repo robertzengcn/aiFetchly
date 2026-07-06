@@ -87,9 +87,7 @@ export class AIFetchlyConfigManager {
   private lastDiagnosticCount = 0;
 
   constructor(options: AIFetchlyConfigManagerOptions = {}) {
-    this.loader =
-      options.loader ??
-      new AIFetchlyConfigLoader(options.rootPath);
+    this.loader = options.loader ?? new AIFetchlyConfigLoader(options.rootPath);
     this.store = options.store ?? getGlobalAIFetchlyContextStore();
     this.registry = options.registry ?? new CommandRegistry();
     this.sync =
@@ -119,7 +117,9 @@ export class AIFetchlyConfigManager {
     await this.scanAndApply();
     const next = this.lastSnapshot!;
     const instructionsChanged =
-      prev === null ? next.instructions.length > 0 : snapInstructionsDiffer(prev, next);
+      prev === null
+        ? next.instructions.length > 0
+        : snapInstructionsDiffer(prev, next);
     this.fireConfigChanged();
     return {
       commandCount: this.registry.list().length,
@@ -180,6 +180,17 @@ export class AIFetchlyConfigManager {
     return this.store;
   }
 
+  /**
+   * Expose the runtime-registry-sync. Plan 14-03's WorkspaceWatchManager
+   * singleton uses this to wire its applySnapshotCallback to
+   * {@link AIFetchlyRuntimeRegistrySync.applyWorkspaceSnapshot} so workspace
+   * snapshots flow through the SAME trust-filtered apply path as the global
+   * scan. Sharing the instance keeps the registry + cache targets consistent.
+   */
+  getRegistrySync(): AIFetchlyRuntimeRegistrySync {
+    return this.sync;
+  }
+
   private async scanAndApply(): Promise<void> {
     const snapshot = await this.loader.scanGlobalRoot();
     const result = this.sync.applySnapshot(snapshot);
@@ -196,7 +207,10 @@ export class AIFetchlyConfigManager {
       try {
         listener();
       } catch (err) {
-        console.error("[aifetchly-config] onConfigChanged listener threw:", err);
+        console.error(
+          "[aifetchly-config] onConfigChanged listener threw:",
+          err
+        );
       }
     }
   }

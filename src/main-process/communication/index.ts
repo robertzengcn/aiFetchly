@@ -37,6 +37,8 @@ import { registerPluginIpcHandlers } from "@/main-process/communication/plugin-i
 import { registerAIUserMemoryIpcHandlers } from "@/main-process/communication/ai-user-memory-ipc";
 import { registerAIWorkspaceIpcHandlers } from "@/main-process/communication/ai-workspace-ipc";
 import { registerSlashCommandHandlers } from "@/main-process/communication/slash-command-ipc";
+import { registerWorkspaceWatchHandlers } from "@/main-process/communication/workspace-watch-ipc";
+import { initWorkspaceWatchManager } from "@/service/workspaceWatch/WorkspaceWatchManagerSingleton";
 
 type GlobalIpcState = typeof globalThis & {
   __aifetchlyIpcHandlersRegistered?: boolean;
@@ -85,6 +87,13 @@ export function registerCommunicationIpcHandlers(win: BrowserWindow) {
     registerAIUserMemoryIpcHandlers();
     registerAIWorkspaceIpcHandlers(win);
     registerSlashCommandHandlers(win);
+    // Phase 14 (Plan 14-03): construct the watcher manager singleton (lazy
+    // — worker forks on first acquire, never blocks app launch) and register
+    // the four workspace-watch invoke handlers. The emitter closure captures
+    // `win` so worker changed/diagnostic/error events route to the renderer
+    // via AIFETCHLY_CONFIG_CHANGED (D-04 — additive, no new event channel).
+    const workspaceWatchManager = initWorkspaceWatchManager(win);
+    registerWorkspaceWatchHandlers(win, workspaceWatchManager);
     AsyncMsg();
   } catch (e) {
     console.log("registerCommunicationIpcHandlers error:");
