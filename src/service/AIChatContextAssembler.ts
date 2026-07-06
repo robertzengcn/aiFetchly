@@ -11,6 +11,7 @@ import {
 } from "@/config/settinggroupInit";
 import { WorkspaceResolver } from "@/service/WorkspaceResolver";
 import path from "node:path";
+import os from "node:os";
 import type {
   OpenAIChatMessage,
   OpenAIMessageRole,
@@ -155,6 +156,19 @@ export class AIChatContextAssembler {
       );
     }
 
+    // Environment & system context. Informs the model of the OS, app
+    // version, and local date/time so OS-specific advice, file-path
+    // lookups, and time-relative queries work correctly.
+    try {
+      const envBlock = await this.buildEnvironmentContext();
+      messages.push({ role: "system", content: envBlock });
+    } catch (err) {
+      console.error(
+        "[ai-chat-context] failed to build environment context:",
+        err
+      );
+    }
+
     // Durable user memory injection. Reads the user-controllable toggle from
     // the system_setting table (default-on when absent). Placed before compact
     // context so recent conversation history wins when they conflict.
@@ -227,5 +241,31 @@ export class AIChatContextAssembler {
       compactTriggered: false,
       warnings,
     };
+  }
+
+  private async buildEnvironmentContext(): Promise<string> {
+    const platform = os.type();
+    const release = os.release();
+    const arch = process.arch;
+
+    let appVersion = "unknown";
+    try {
+      const { app } = await import("electron");
+      const fn = (
+        app as unknown as { getVersion?: () => string }
+      ).getVersion;
+      appVersion = typeof fn === "function" ? fn.call(app) : "unknown";
+    } catch {
+      // Not running inside Electron (e.g. test runner) — leave as "unknown".
+    }
+
+    const now = new Date().toISOString().replace("T", " ").replace(/\.\d+Z$/, " UTC");
+
+    return [
+      "# Environment & System Context",
+      `- Operating System: ${platform} ${release} (${arch})`,
+      `- App Version: ${appVersion}`,
+      `- Local Date & Time: ${now}`,
+    ].join("\n");
   }
 }
