@@ -95,6 +95,7 @@ const props = defineProps<{ isStreaming: boolean; isProcessing?: boolean }>();
 const emit = defineEmits<{
   (e: "send", text: string, files: File[]): void;
   (e: "stop"): void;
+  (e: "notice", message: string): void;
 }>();
 const { t } = useI18n();
 
@@ -139,11 +140,11 @@ function onFileSelected(event: Event): void {
   const newFiles: File[] = [];
   for (const file of input.files) {
     if (!isSupportedFile(file)) {
-      console.warn(`[AiChatV2Composer] unsupported file type: ${file.name}`);
+      emit("notice", t("aiChatV2.attachments.unsupported", { name: file.name }) || `${file.name} is not a supported file type.`);
       continue;
     }
     if (file.size > MAX_UPLOAD_FILE_BYTES) {
-      console.warn(`[AiChatV2Composer] file too large: ${file.name} (${file.size} bytes)`);
+      emit("notice", t("aiChatV2.attachments.too_large", { name: file.name, maxSize: formatBytes(MAX_UPLOAD_FILE_BYTES) }) || `${file.name} exceeds the ${formatBytes(MAX_UPLOAD_FILE_BYTES)} limit.`);
       continue;
     }
     newFiles.push(file);
