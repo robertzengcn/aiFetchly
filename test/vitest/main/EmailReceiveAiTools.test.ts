@@ -43,7 +43,7 @@ describe("Email receive AI tools registration", () => {
     const skill = SkillRegistry.getSkill("fetch_unread_emails")!;
     const props = skill.parameters.properties as Record<
       string,
-      { type: string }
+      { type: string; default?: unknown }
     >;
     expect(props.email_service_id).toBeDefined();
     expect(skill.parameters.required).toContain("email_service_id");

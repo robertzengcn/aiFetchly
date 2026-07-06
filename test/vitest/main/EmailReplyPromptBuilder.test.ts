@@ -59,11 +59,12 @@ function fakeProfile(
 describe("buildReplySystemMessage", () => {
   it("enforces owner-voice + no-AI-disclosure policy", () => {
     const sys = buildReplySystemMessage(fakeProfile());
-    expect(sys.content).toContain("mailbox owner");
-    expect(sys.content.toLowerCase()).toContain("do not mention");
-    expect(sys.content).toContain("UNTRUSTED customer content");
-    expect(sys.content).toContain("Jane Doe");
-    expect(sys.content).toContain("— Jane");
+    const content = sys.content as string;
+    expect(content).toContain("mailbox owner");
+    expect(content.toLowerCase()).toContain("do not mention");
+    expect(content).toContain("UNTRUSTED customer content");
+    expect(content).toContain("Jane Doe");
+    expect(content).toContain("— Jane");
   });
 
   it("forbids configured forbidden phrases", () => {
