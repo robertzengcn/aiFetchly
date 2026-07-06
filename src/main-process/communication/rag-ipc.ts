@@ -11,6 +11,10 @@ import {
 } from "@/entityTypes/commonType";
 import { DocumentInfo } from "@/views/api/rag";
 import { EmbeddingModelCatalogService } from "@/service/embedding/EmbeddingModelCatalogService";
+import {
+  getUploadGrantService,
+  isPathUnderDir,
+} from "@/service/UploadGrantService";
 import * as fs from "fs";
 import * as path from "path";
 import {
@@ -331,9 +335,18 @@ export function registerRagIpcHandlers(): void {
     SHOW_OPEN_DIALOG,
     ragShowOpenDialogInputSchema,
     async (input) => {
-      return dialog.showOpenDialog(
+      const result = await dialog.showOpenDialog(
         input as Parameters<typeof dialog.showOpenDialog>[0]
       );
+      // F2 follow-up — every path the native dialog returns is authorized
+      // for a subsequent RAG upload. Issue a one-shot, short-lived grant for
+      // each so RAG_UPLOAD_DOCUMENT can accept these user-selected paths
+      // while still rejecting arbitrary renderer-supplied paths (which would
+      // otherwise let a compromised renderer read & embed any local file).
+      if (result && !result.canceled && result.filePaths.length > 0) {
+        getUploadGrantService().issueForPaths(result.filePaths, "rag-upload");
+      }
+      return result;
     }
   );
 
@@ -411,6 +424,22 @@ export function registerRagIpcHandlers(): void {
     RAG_UPLOAD_DOCUMENT,
     ragUploadDocumentInputSchema,
     async (input): Promise<DocumentUploadResponse> => {
+      // F2 follow-up — refuse arbitrary renderer-supplied file paths. Only
+      // paths under the app-owned uploads dir (SAVE_TEMP_FILE destination)
+      // or paths backed by a grant issued by SHOW_OPEN_DIALOG may be read,
+      // closing the arbitrary-local-file-read -> embedding vector.
+      const uploadsDir = path.join(app.getPath("userData"), "uploads");
+      const isAppOwned = isPathUnderDir(input.filePath, uploadsDir);
+      const granted = getUploadGrantService().consume(
+        input.filePath,
+        "rag-upload"
+      );
+      if (!isAppOwned && !granted) {
+        throw new Error(
+          "Upload rejected: file path was not selected through the app's file dialog."
+        );
+      }
+
       const ragSearchController = await createRagController();
       const uploadResult = await ragSearchController.uploadDocument(input);
       return {
