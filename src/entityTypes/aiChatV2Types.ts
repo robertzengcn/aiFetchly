@@ -187,3 +187,61 @@ export interface ChatV2StreamChunk {
   completionTokens?: number;
   totalTokens?: number;
 }
+
+// ---------------------------------------------------------------------------
+// Phase 14 (Plan 14-04) — Workspace Watch renderer surface types
+// ---------------------------------------------------------------------------
+// These mirror the main-process types in src/modules/WorkspaceWatchModule.ts
+// but live here so the renderer can import them WITHOUT pulling main-process
+// collaborators (WorkspaceWatchManager / WorkspaceResolver / WorkspaceModule)
+// into the renderer bundle. The shapes are deliberately structurally equal.
+//
+// Trust boundary (TRS-07): these types carry NO filesystem paths. The renderer
+// never receives a workspace root — only the workspaceId token returned by
+// acquire and the AGENTS.md content body returned by preview.
+// ---------------------------------------------------------------------------
+
+/**
+ * Phase 14 trust scope (TRS-03). Forward-compatible: Phase 17 swaps the body
+ * of WorkspaceTrustFilter for a per-capability AIFetchlyWorkspaceTrust lookup,
+ * at which point "all" vs "instructions" branch into different trust flags.
+ */
+export type WorkspaceTrustScope = "instructions" | "all";
+
+/** Renderer->main acquire request (chat-open). */
+export interface WorkspaceWatchAcquireRequest {
+  readonly conversationId: string;
+  /**
+   * Optional renderer hint (the id returned by a previous acquire). Main
+   * ALWAYS re-resolves the approved root via WorkspaceResolver — the renderer
+   * NEVER supplies a workspaceRoot (CFG-02).
+   */
+  readonly workspaceId?: string;
+}
+
+/** Renderer->main release request (chat-close / unmount). */
+export interface WorkspaceWatchReleaseRequest {
+  readonly conversationId: string;
+  readonly workspaceId?: string;
+}
+
+/** Renderer->main trust-set request (TRS-03 prompt actions). */
+export interface WorkspaceTrustSetRequest {
+  readonly workspaceId: string;
+  readonly scope: WorkspaceTrustScope;
+}
+
+/** Successful acquire response — the workspaceId token to pass back. */
+export interface WorkspaceWatchAcquireResponse {
+  readonly workspaceId: string;
+}
+
+/** Successful preview response — AGENTS.md body string (never a path). */
+export interface WorkspaceTrustPreviewResponse {
+  readonly content: string;
+}
+
+/** Successful setTrust response. */
+export interface WorkspaceTrustSetResponse {
+  readonly ok: boolean;
+}
