@@ -4,6 +4,7 @@
 **Status:** Draft
 **Owner:** AiFetchly AI Chat
 **Related areas:** AI Chat V2, workspace-aware file tools, durable user memory, auto-dream, agent runtime
+**Technical design:** `docs/prd/workspace-memory-technical-design.md`
 **Builds on:**
 
 - `docs/superpowers/specs/2026-06-22-auto-dream-user-memory-prd.md`
@@ -945,4 +946,3 @@ Do not send memory content in telemetry.
 6. Inject workspace memory before global user memory.
 7. Keep auto-dream conservative and scope-aware.
 8. Expose manual controls before enabling broad automatic extraction.
-
