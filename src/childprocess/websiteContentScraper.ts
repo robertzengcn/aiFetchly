@@ -12,10 +12,11 @@
  * - Returns markdown content via IPC message
  */
 
-import { Page, Browser } from "puppeteer";
+import { Browser } from "puppeteer";
 import { BrowserManager } from "@/modules/browserManager";
 import { HtmlConversionService } from "@/service/HtmlConversionService";
 import { UrlGuard } from "@/service/UrlGuard";
+import { applySsrfNavigationGuard } from "@/service/PuppeteerSsrfGuard";
 
 interface ScrapeWebsiteMessage {
   type: "SCRAPE_WEBSITE";
@@ -81,6 +82,10 @@ async function scrapeWebsite(url: string): Promise<string> {
 
       // F3 fix — intercept every outgoing request so redirects and
       // subresources targeting private/internal destinations are blocked.
+      // F3 follow-up — the interceptor is DNS-aware (shared guard), so a
+      // public URL that redirects or embeds subresources pointing at a host
+      // resolving to loopback / RFC1918 / link-local / metadata is aborted
+      // before the browser issues the request, not just after navigation.
       await applySsrfNavigationGuard(page);
 
       // Navigate to URL with timeout
@@ -115,24 +120,6 @@ async function scrapeWebsite(url: string): Promise<string> {
     console.error("Error scraping website:", error);
     throw error;
   }
-}
-
-/**
- * F3 fix — block any request whose URL (after redirects) targets a
- * loopback / link-local / RFC1918 / cloud-metadata destination. UrlGuard
- * performs the structural + DNS-range check; this interceptor applies the
- * same rule to every subrequest and redirect the browser issues.
- */
-async function applySsrfNavigationGuard(page: Page): Promise<void> {
-  await page.setRequestInterception(true);
-  page.on("request", (req) => {
-    const verdict = UrlGuard.validate(req.url());
-    if (!verdict.safe) {
-      req.abort("accessdenied");
-      return;
-    }
-    req.continue();
-  });
 }
 
 /**

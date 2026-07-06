@@ -6,6 +6,7 @@ import {
 } from "@/entityTypes/contactExtractionTypes";
 import { browserManager } from "@/modules/browserManager";
 import { UrlGuard } from "@/service/UrlGuard";
+import { applySsrfNavigationGuard } from "@/service/PuppeteerSsrfGuard";
 
 /**
  * Contact Discovery - 4-Stage Pipeline
@@ -301,15 +302,14 @@ export async function discoverAndExtractContactInfo(
   const viewport = browserManager.getRandomViewport();
   await page.setViewport(viewport);
 
-  // Block unnecessary resources to speed up loading (but allow images for screenshots)
-  await page.setRequestInterception(true);
-  page.on("request", (req) => {
-    const resourceType = req.resourceType();
-    if (["stylesheet", "font", "media"].includes(resourceType)) {
-      req.abort();
-    } else {
-      req.continue();
-    }
+  // F7 follow-up — install the shared DNS-aware SSRF guard so EVERY request
+  // the browser issues (main frame, redirect targets, subresources) is
+  // validated with UrlGuard.validateWithDns before continuing. Preserves the
+  // original perf optimization (abort stylesheet/font/media) but now also
+  // blocks public→internal redirects and metadata-endpoint subresource loads
+  // — the exact gap left by the previous resource-type-only interception.
+  await applySsrfNavigationGuard(page, {
+    blockResourceTypes: ["stylesheet", "font", "media"],
   });
 
   try {
@@ -342,6 +342,10 @@ export async function discoverAndExtractContactInfo(
         throw navError;
       }
     }
+
+    // F7 follow-up (defense in depth) — confirm the post-navigation URL is
+    // still safe before extracting from the page.
+    await assertPageUrlSafe(page);
 
     const pageTitle = await page.title();
 
@@ -398,6 +402,10 @@ export async function discoverAndExtractContactInfo(
             timeout: 30000,
           });
 
+          // F7 follow-up (defense in depth) — revalidate after navigating to
+          // the DOM-derived contact page URL.
+          await assertPageUrlSafe(page);
+
           // Use AI on the contact page (not just regex)
           const stage2Result = await extractWithAI(page, url, pageTitle, true);
           if (stage2Result.success && stage2Result.data) {
@@ -442,6 +450,9 @@ export async function discoverAndExtractContactInfo(
               waitUntil: "networkidle0",
               timeout: 30000,
             });
+
+            // F7 follow-up (defense in depth) — revalidate the fallback URL.
+            await assertPageUrlSafe(page);
 
             // Use AI on fallback page
             const stage3Result = await extractWithAI(
@@ -556,4 +567,18 @@ export function validateUrl(url: string): boolean {
 /** Async URL validation that includes DNS-range checking. */
 export async function validateUrlAsync(url: string): Promise<boolean> {
   return (await UrlGuard.validateWithDns(url)).safe;
+}
+
+/**
+ * F7 follow-up (defense in depth) — revalidate the page's current URL after a
+ * navigation. The request interceptor already aborts blocked requests
+ * (including redirect targets), so navigating to a private/internal/metadata
+ * destination makes page.goto reject; this check is a second line of defense
+ * ensuring extraction never runs against an internal page.
+ */
+async function assertPageUrlSafe(page: Page): Promise<void> {
+  const current = page.url();
+  if (!(await validateUrlAsync(current))) {
+    throw new Error(`Navigation landed on a blocked URL: ${current}`);
+  }
 }
