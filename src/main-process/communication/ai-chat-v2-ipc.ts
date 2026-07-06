@@ -1,6 +1,6 @@
 import { ipcMain } from "electron";
 import { Token } from "@/modules/token";
-import { USER_AI_ENABLED } from "@/config/usersetting";
+import { USER_AI_ENABLED, USERSDBPATH } from "@/config/usersetting";
 import { AiChatApi } from "@/api/aiChatApi";
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { AIChatPlanModule } from "@/modules/AIChatPlanModule";
@@ -11,7 +11,10 @@ import type { AIChatQueryLoopDeps } from "@/service/AIChatQueryLoop";
 import { AIChatQueryEngine } from "@/service/AIChatQueryEngine";
 import { AIChatCompactAgentService } from "@/service/AIChatCompactAgentService";
 import { AIChatModelFallbackService } from "@/service/AIChatModelFallbackService";
-import { getSharedAutoDreamService } from "@/service/AIAutoDreamFactory";
+import {
+  getSharedAutoDreamService,
+  resetSharedAutoDreamService,
+} from "@/service/AIAutoDreamFactory";
 import { AIChatToolApprovalModule } from "@/modules/AIChatToolApprovalModule";
 import { evaluateToolApproval } from "@/service/AIChatToolApprovalPolicyService";
 import { userSafeError } from "@/service/AIChatErrorMapper";
@@ -73,6 +76,8 @@ type IpcEventLike = {
 
 let queryEngine: AIChatQueryEngine | null = null;
 let compactAgent: AIChatCompactAgentService | null = null;
+let queryEngineDbPath: string | null = null;
+let compactAgentDbPath: string | null = null;
 
 /** Build the production AIChatQueryLoop with real service deps. */
 function createQueryLoop(): AIChatQueryLoop {
@@ -123,24 +128,52 @@ function createQueryLoop(): AIChatQueryLoop {
   return new AIChatQueryLoop(deps);
 }
 
+function getCurrentUserDbPath(): string | null {
+  const tokenService = new Token();
+  return tokenService.getValue(USERSDBPATH) || null;
+}
+
+export function resetAiChatV2RuntimeForDatabaseSwitch(): void {
+  if (queryEngine) {
+    queryEngine.stopActiveTurn();
+  }
+  queryEngine = null;
+  compactAgent = null;
+  queryEngineDbPath = null;
+  compactAgentDbPath = null;
+  resetSharedAutoDreamService();
+}
+
 function getCompactAgent(): AIChatCompactAgentService {
+  const dbPath = getCurrentUserDbPath();
+  if (compactAgent && compactAgentDbPath !== dbPath) {
+    compactAgent = null;
+    compactAgentDbPath = null;
+    resetSharedAutoDreamService();
+  }
   if (!compactAgent) {
     const tokenService = new Token();
     compactAgent = new AIChatCompactAgentService(tokenService, {
       completeChat: (request) => new AiChatApi().openAIChatCompletion(request),
       isEnabled: () => tokenService.getValue(USER_AI_ENABLED) === "true",
     });
+    compactAgentDbPath = dbPath;
   }
   return compactAgent;
 }
 
 function getQueryEngine(): AIChatQueryEngine {
+  const dbPath = getCurrentUserDbPath();
+  if (queryEngine && queryEngineDbPath !== dbPath) {
+    resetAiChatV2RuntimeForDatabaseSwitch();
+  }
   if (!queryEngine) {
     const loop = createQueryLoop();
     queryEngine = new AIChatQueryEngine(loop, {
       compactAgent: getCompactAgent(),
       autoDreamService: getSharedAutoDreamService(),
     });
+    queryEngineDbPath = dbPath;
   }
   return queryEngine;
 }

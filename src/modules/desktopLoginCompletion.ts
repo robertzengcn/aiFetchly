@@ -33,6 +33,7 @@ import { ScheduleManager } from "@/modules/ScheduleManager";
 import { SearchController } from "@/controller/SearchController";
 import { YellowPagesController } from "@/controller/YellowPagesController";
 import { initializeWebSocketConnection } from "@/main-process/communication/websocket-ipc";
+import { resetAiChatV2RuntimeForDatabaseSwitch } from "@/main-process/communication/ai-chat-v2-ipc";
 import { TokenRefreshService } from "@/modules/tokenRefresh";
 import { NATIVATECOMMAND } from "@/config/channellist";
 import { NativateDatatype } from "@/entityTypes/commonType";
@@ -199,6 +200,7 @@ export async function completeDesktopLogin(
 
       SearchController.resetInstance();
       YellowPagesController.resetInstance();
+      resetAiChatV2RuntimeForDatabaseSwitch();
       log.info("Controller singletons reset after SqliteDb path change");
 
       if (!newDbInstance.connection.isInitialized) {
