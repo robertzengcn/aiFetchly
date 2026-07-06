@@ -223,9 +223,9 @@ function buildAttachmentReferenceBlock(
       ref.fileName
     )}" attachment_ref="${
       ref.refId
-    }" → call ${suggestedTool} with attachment_ref="${
+    }" file_path="${ref.filePath}" → call ${suggestedTool} with attachment_ref="${
       ref.refId
-    }" to load this file`;
+    }" to load this file. For local shell tools, use file_path to access the file directly on disk.`;
   });
 
   return [
@@ -266,6 +266,7 @@ async function buildMessageWithAttachmentReferences(
           .createHash("sha256")
           .update(Buffer.from(file.contentBase64, "base64"))
           .digest("hex"),
+        originalContentBase64: file.contentBase64,
       }
     );
     stagedReferences.push(staged);

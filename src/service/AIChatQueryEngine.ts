@@ -230,7 +230,7 @@ export class AIChatQueryEngine {
         "A `read_attachment_content` tool is available to load their contents.",
         ...stagedRefs.map(
           (ref, i) =>
-            `${i + 1}. file_name="${ref.fileName}" attachment_ref="${ref.refId}" → call \`read_attachment_content\` with attachment_ref="${ref.refId}" to load this file`
+            `${i + 1}. file_name="${ref.fileName}" attachment_ref="${ref.refId}" file_path="${ref.filePath}" → call \`read_attachment_content\` with attachment_ref="${ref.refId}" to load this file. For local shell tools, use file_path to access the file directly on disk.`
         ),
       ];
       enrichedMessage = enrichedMessage
@@ -276,7 +276,8 @@ export class AIChatQueryEngine {
         const ref = await docService.stageAttachmentMarkdown(
           conversationId,
           file.fileName,
-          markdown
+          markdown,
+          { originalContentBase64: file.contentBase64 }
         );
         staged.push(ref);
       } catch (err) {
