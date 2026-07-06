@@ -1857,6 +1857,16 @@ export default {
       "此工作区定义了 AiFetchly 配置。启用命令前请先审查并信任该配置。",
     commandDisabledUntrusted: "命令 {name} 已禁用，因为工作区配置未被信任。",
   },
+  workspaceTrust: {
+    title: "工作区 AiFetchly 配置",
+    body: "此工作区定义了 AiFetchly 配置。在启用其指令和命令之前，请先审查并信任该配置。",
+    preview: "预览",
+    trustInstructions: "仅信任指令",
+    trustAll: "信任所有工作区 AI 配置",
+    keepDisabled: "保持禁用",
+    previewEmpty: "没有可预览的 AGENTS.md 内容。",
+    trustFailed: "更新信任状态失败，请重试。",
+  },
   slashCommands: {
     help: "帮助",
     clear: "清空对话",

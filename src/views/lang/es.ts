@@ -1925,6 +1925,16 @@ export default {
     commandDisabledUntrusted:
       "El comando {name} está deshabilitado porque la configuración del workspace no es de confianza.",
   },
+  workspaceTrust: {
+    title: "Configuración de AiFetchly del workspace",
+    body: "Este workspace define configuración de AiFetchly. Revísala y confía en ella antes de habilitar sus instrucciones y comandos.",
+    preview: "Vista previa",
+    trustInstructions: "Confiar solo en las instrucciones",
+    trustAll: "Confiar en toda la configuración de IA del workspace",
+    keepDisabled: "Mantener deshabilitado",
+    previewEmpty: "No hay contenido AGENTS.md para previsualizar.",
+    trustFailed: "Error al actualizar la confianza. Inténtalo de nuevo.",
+  },
   slashCommands: {
     help: "Ayuda",
     clear: "Borrar conversación",

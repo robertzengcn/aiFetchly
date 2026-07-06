@@ -1907,6 +1907,17 @@ export default {
     commandDisabledUntrusted:
       "La commande {name} est désactivée car la configuration du workspace n'est pas approuvée.",
   },
+  workspaceTrust: {
+    title: "Configuration AiFetchly du workspace",
+    body: "Ce workspace définit une configuration AiFetchly. Vérifiez-la et approuvez-la avant d'activer ses instructions et commandes.",
+    preview: "Aperçu",
+    trustInstructions: "Approuver uniquement les instructions",
+    trustAll: "Approuver toute la configuration IA du workspace",
+    keepDisabled: "Maintenir désactivé",
+    previewEmpty: "Aucun contenu AGENTS.md à prévisualiser.",
+    trustFailed:
+      "Échec de la mise à jour de l'approbation. Veuillez réessayer.",
+  },
   slashCommands: {
     help: "Aide",
     clear: "Effacer la conversation",

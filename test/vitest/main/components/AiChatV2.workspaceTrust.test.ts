@@ -23,6 +23,7 @@ import { flushPromises, mount } from "@vue/test-utils";
 import { createI18n } from "vue-i18n";
 import type { AifetchlyConfigChangedEvent } from "@/views/api/slashCommands";
 import type { WorkspaceSummary } from "@/entityTypes/workspaceTypes";
+import AiChatV2 from "@/views/components/aiChatV2/AiChatV2.vue";
 
 // --- Mocks ---------------------------------------------------------------
 
@@ -58,8 +59,9 @@ vi.mock("@/views/api/slashCommands", () => ({
   dispatchSlashCommand: vi.fn(),
   reloadAifetchlyConfig: vi.fn(),
   getAifetchlyConfigStatus: vi.fn(),
-  onAifetchlyConfigChanged: (...a: unknown[]) =>
-    onAifetchlyConfigChangedMock(...a),
+  onAifetchlyConfigChanged: (
+    cb: (event: AifetchlyConfigChangedEvent) => void
+  ) => onAifetchlyConfigChangedMock(cb),
 }));
 
 vi.mock("@/views/api/aiChatV2", () => ({
@@ -87,11 +89,9 @@ vi.mock("@/views/api/aiChat", () => ({
   unsubscribeFromFileOperations: vi.fn(),
 }));
 
-// Lazy-import AiChatV2 AFTER mocks are registered so its setup wiring
-// resolves the mocked modules.
-const AiChatV2 = await import("@/views/components/aiChatV2/AiChatV2.vue").then(
-  (m) => m.default
-);
+// AiChatV2 is statically imported above. vitest hoists vi.mock calls above
+// all static imports, so the mocked modules are in place before AiChatV2's
+// setup wiring runs.
 
 const i18n = createI18n({
   legacy: false,
@@ -298,10 +298,9 @@ describe("AiChatV2 workspace-trust integration (Plan 14-04 Task 2)", () => {
         source: "user",
         summary: {
           commandCount: 0,
-          agentCount: 0,
-          hookCount: 0,
-          skillCount: 0,
           diagnosticCount: 0,
+          lastReloadAt: 0,
+          instructionsChanged: false,
         },
       });
       expect(delta).toBeGreaterThan(0);
@@ -316,10 +315,9 @@ describe("AiChatV2 workspace-trust integration (Plan 14-04 Task 2)", () => {
         workspaceId: "42",
         summary: {
           commandCount: 1,
-          agentCount: 0,
-          hookCount: 0,
-          skillCount: 0,
           diagnosticCount: 0,
+          lastReloadAt: 0,
+          instructionsChanged: false,
         },
       });
       expect(delta).toBeGreaterThan(0);
@@ -334,10 +332,9 @@ describe("AiChatV2 workspace-trust integration (Plan 14-04 Task 2)", () => {
         workspaceId: "999-other-workspace",
         summary: {
           commandCount: 1,
-          agentCount: 0,
-          hookCount: 0,
-          skillCount: 0,
           diagnosticCount: 0,
+          lastReloadAt: 0,
+          instructionsChanged: false,
         },
       });
       expect(delta).toBe(0);

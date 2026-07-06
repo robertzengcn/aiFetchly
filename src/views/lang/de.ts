@@ -1919,6 +1919,17 @@ export default {
     commandDisabledUntrusted:
       "Befehl {name} ist deaktiviert, da die Workspace-Konfiguration nicht genehmigt ist.",
   },
+  workspaceTrust: {
+    title: "Workspace-AiFetchly-Konfiguration",
+    body: "Dieser Workspace definiert eine AiFetchly-Konfiguration. Prüfen und genehmigen Sie diese, bevor Sie dessen Anweisungen und Befehle aktivieren.",
+    preview: "Vorschau",
+    trustInstructions: "Nur Anweisungen genehmigen",
+    trustAll: "Alle Workspace-KI-Konfiguration genehmigen",
+    keepDisabled: "Deaktiviert lassen",
+    previewEmpty: "Kein AGENTS.md-Inhalt zur Vorschau.",
+    trustFailed:
+      "Aktualisierung der Genehmigung fehlgeschlagen. Bitte versuchen Sie es erneut.",
+  },
   slashCommands: {
     help: "Hilfe",
     clear: "Unterhaltung löschen",

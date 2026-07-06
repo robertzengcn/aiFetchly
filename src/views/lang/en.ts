@@ -1925,6 +1925,16 @@ export default {
     commandDisabledUntrusted:
       "Command {name} is disabled because workspace config is not trusted.",
   },
+  workspaceTrust: {
+    title: "Workspace AiFetchly config",
+    body: "This workspace defines AiFetchly configuration. Review and trust it before enabling its instructions and commands.",
+    preview: "Preview",
+    trustInstructions: "Trust instructions only",
+    trustAll: "Trust all workspace AI config",
+    keepDisabled: "Keep disabled",
+    previewEmpty: "No AGENTS.md content to preview.",
+    trustFailed: "Failed to update trust. Please try again.",
+  },
   slashCommands: {
     help: "Help",
     clear: "Clear conversation",

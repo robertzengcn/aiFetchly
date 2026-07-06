@@ -1880,6 +1880,16 @@ export default {
     commandDisabledUntrusted:
       "ワークスペース設定が信頼されていないため、コマンド {name} は無効です。",
   },
+  workspaceTrust: {
+    title: "ワークスペース AiFetchly 設定",
+    body: "このワークスペースは AiFetchly 設定を定義しています。その指示とコマンドを有効化する前に、内容を確認して信頼してください。",
+    preview: "プレビュー",
+    trustInstructions: "指示のみ信頼",
+    trustAll: "ワークスペースのすべての AI 設定を信頼",
+    keepDisabled: "無効のままにする",
+    previewEmpty: "プレビューする AGENTS.md の内容がありません。",
+    trustFailed: "信頼状態の更新に失敗しました。もう一度お試しください。",
+  },
   slashCommands: {
     help: "ヘルプ",
     clear: "会話をクリア",
