@@ -33,7 +33,12 @@
       @mouseenter="onItemHover(idx)"
     >
       <div class="slash-suggestions__row">
-        <span class="slash-suggestions__name">/{{ cmd.name }}</span>
+        <span class="slash-suggestions__name-group">
+          <span class="slash-suggestions__name">/{{ cmd.name }}</span>
+          <span v-if="cmd.argumentHint" class="slash-suggestions__arg-hint">{{
+            cmd.argumentHint
+          }}</span>
+        </span>
         <span
           class="slash-suggestions__badge"
           :class="`slash-suggestions__badge--${badgeClass(cmd.source)}`"
@@ -45,10 +50,6 @@
         <span v-if="cmd.description" class="slash-suggestions__desc">{{
           cmd.description
         }}</span>
-        <span
-          v-if="cmd.argumentHint"
-          class="slash-suggestions__arg-hint"
-        >{{ cmd.argumentHint }}</span>
       </div>
       <div
         v-if="!cmd.enabled && cmd.disabledReason"
@@ -206,6 +207,12 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+}
+.slash-suggestions__name-group {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
 }
 .slash-suggestions__name {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
