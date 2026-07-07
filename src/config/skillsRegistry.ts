@@ -55,8 +55,11 @@ import {
 // Internal state
 // ---------------------------------------------------------------------------
 
-/** Map of skill name → full definition. */
-const registry = new Map<string, SkillDefinition>();
+/** Map of skill name → full definition. Stored in globalThis to survive HMR. */
+const registry: Map<string, SkillDefinition> =
+  ((globalThis as any).__aifetchlySkillRegistry as Map<string, SkillDefinition>) ??
+  new Map();
+(globalThis as any).__aifetchlySkillRegistry = registry;
 
 // ---------------------------------------------------------------------------
 // Built-in skill definitions (statically imported)

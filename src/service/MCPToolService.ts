@@ -15,6 +15,7 @@ import {
   mcpServerConfigUpdateSchema,
 } from "@/schemas/config/mcpServer";
 import { Token } from "@/modules/token";
+import { getPluginInstallRoot } from "@/service/pluginPaths";
 
 export interface MCPServerConfig {
   serverName: string;
@@ -62,6 +63,7 @@ function buildClientConfig(server: MCPToolEntity): {
   command?: string;
   args?: string[];
   env?: Record<string, string>;
+  cwd?: string;
 } {
   const base: {
     host?: string;
@@ -73,6 +75,7 @@ function buildClientConfig(server: MCPToolEntity): {
     command?: string;
     args?: string[];
     env?: Record<string, string>;
+    cwd?: string;
   } = {
     transport: server.transport,
     authType: server.authType,
@@ -89,6 +92,11 @@ function buildClientConfig(server: MCPToolEntity): {
       ? safeJsonParseStringArray(server.argsJson)
       : [];
     base.env = server.envJson ? safeJsonParseRecord(server.envJson) : undefined;
+    // Set working directory to the plugin install root so relative paths
+    // in command args (e.g., "servers/echo.js") resolve correctly.
+    if (server.pluginName && server.origin === "plugin") {
+      base.cwd = getPluginInstallRoot(server.pluginName);
+    }
     // Plugin-owned MCP servers may declare ${VAR} placeholders in env.
     // Resolve them against the per-plugin options store before spawn.
     if (base.env && server.pluginName && server.origin === "plugin") {

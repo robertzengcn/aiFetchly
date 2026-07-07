@@ -75,6 +75,8 @@ export interface MCPClientConfig {
   args?: string[];
   /** Env vars for the spawned stdio process. */
   env?: Record<string, string>;
+  /** Working directory for the spawned process (plugin-owned servers). */
+  cwd?: string;
 }
 
 export interface MCPToolInfo {
@@ -245,6 +247,7 @@ export class MCPClient {
       const child = spawn(command, args, {
         stdio: ["pipe", "pipe", "pipe"],
         env: childEnv,
+        cwd: this.config.cwd,
       });
 
       this.connection = child;
