@@ -214,23 +214,37 @@ watch(
 );
 
 async function pickZip(): Promise<void> {
-  const picked = await windowInvoke(CHOOSEFILEDIALOG, {
-    title: t("plugins.install_source.zip_label") || "Choose .zip",
-    filters: [{ name: "Zip", extensions: ["zip"] }],
-    properties: ["openFile"],
-  });
-  if (typeof picked === "string" && picked.length > 0) {
-    form.zipPath = picked;
+  try {
+    const picked = await windowInvoke(CHOOSEFILEDIALOG, {
+      title: t("plugins.install_source.zip_label") || "Choose .zip",
+      filters: [{ name: "Zip", extensions: ["zip"] }],
+      properties: ["openFile"],
+    });
+    if (typeof picked === "string" && picked.length > 0) {
+      form.zipPath = picked;
+    }
+  } catch (e: unknown) {
+    // The dialog rejects with "canceled" when the user closes it without
+    // picking anything — that is expected, not an error.
+    if (e instanceof Error && e.message === "canceled") return;
+    errorMsg.value = e instanceof Error ? e.message : String(e);
   }
 }
 
 async function pickFolder(): Promise<void> {
-  const picked = await windowInvoke(CHOOSEFILEDIALOG, {
-    title: t("plugins.install_source.folder_label") || "Choose folder",
-    properties: ["openDirectory"],
-  });
-  if (typeof picked === "string" && picked.length > 0) {
-    form.folderPath = picked;
+  try {
+    const picked = await windowInvoke(CHOOSEFILEDIALOG, {
+      title: t("plugins.install_source.folder_label") || "Choose folder",
+      properties: ["openDirectory"],
+    });
+    if (typeof picked === "string" && picked.length > 0) {
+      form.folderPath = picked;
+    }
+  } catch (e: unknown) {
+    // The dialog rejects with "canceled" when the user closes it without
+    // picking anything — that is expected, not an error.
+    if (e instanceof Error && e.message === "canceled") return;
+    errorMsg.value = e instanceof Error ? e.message : String(e);
   }
 }
 

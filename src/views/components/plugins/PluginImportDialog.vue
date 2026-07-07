@@ -82,14 +82,25 @@ watch(
 );
 
 async function pickZip(): Promise<void> {
-  const picked = await windowInvoke(CHOOSEFILEDIALOG, {
-    title: t("plugins.select_zip"),
-    filters: [{ name: "Zip", extensions: ["zip"] }],
-    properties: ["openFile"],
-  });
-  if (typeof picked === "string" && picked.length > 0) {
-    zipPath.value = picked;
-    validation.value = await validatePluginPackage(picked);
+  try {
+    const picked = await windowInvoke(CHOOSEFILEDIALOG, {
+      title: t("plugins.select_zip"),
+      filters: [{ name: "Zip", extensions: ["zip"] }],
+      properties: ["openFile"],
+    });
+    if (typeof picked === "string" && picked.length > 0) {
+      zipPath.value = picked;
+      validation.value = await validatePluginPackage(picked);
+    }
+  } catch (e: unknown) {
+    // The dialog rejects with "canceled" when the user closes it without
+    // picking anything — that is expected, not an error.
+    if (e instanceof Error && e.message === "canceled") return;
+    const message = e instanceof Error ? e.message : String(e);
+    validation.value = {
+      valid: false,
+      errors: [{ code: "pick_failed", message }],
+    };
   }
 }
 
