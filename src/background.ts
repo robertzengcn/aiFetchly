@@ -322,15 +322,25 @@ function initialize() {
   let createWindowInFlight: Promise<void> | null = null;
 
   async function createWindow(): Promise<void> {
-    if (win && !(win as any).isDestroyed()) {
-      console.log("Window already exists and is valid, focusing...");
-      (win as any).focus();
-      return;
+    const existingWindows = BrowserWindow.getAllWindows();
+    if (existingWindows.length > 0) {
+      const existing = existingWindows[0];
+      if (!(existing as any).isDestroyed()) {
+        console.log("Window already exists and is valid, focusing...");
+        if (!win) win = existing;
+        (existing as any).focus();
+        return;
+      }
     }
     if (createWindowInFlight) {
       await createWindowInFlight;
-      if (win && !(win as any).isDestroyed()) {
-        (win as any).focus();
+      const existingWindows2 = BrowserWindow.getAllWindows();
+      if (existingWindows2.length > 0) {
+        const existing = existingWindows2[0];
+        if (!(existing as any).isDestroyed()) {
+          if (!win) win = existing;
+          (existing as any).focus();
+        }
       }
       return;
     }
