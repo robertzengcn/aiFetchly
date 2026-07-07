@@ -6,19 +6,22 @@
 //   1. parseSlashCommandInput(rawInput) classifies the text.
 //   2. Non-slash / bare-slash / unknown-name / disabled -> {status:false,msg}.
 //   3. Built-in (type "local") -> switch on cmd.id, return show_result.
-//   4. Prompt (phase 15+) -> not-yet-supported (no prompt commands exist
-//      in phase 13 production).
+//   4. Prompt (phase 15) -> expandPrompt(body, args) -> submit_prompt.
 //   5. Skill (phase 18) -> not-yet-supported.
 //
 // SECURITY (TRS-06): this file MUST NOT import any process-spawning
 // module, MUST NOT call eval-like or dynamic-function constructors, and
 // MUST NOT spawn anything. The dispatch path is pure logic + registry +
-// manager calls only. Verified by a grep gate in the plan acceptance
-// criteria (the forbidden literals do not appear anywhere in this file).
+// manager calls + a pure string-only argument-token substitution
+// (expandPrompt). Verified by a grep gate in the plan acceptance criteria
+// (the forbidden literals do not appear anywhere in this file).
 //
-// Phase-15 boundary (TRS-06 / CMD-06): argument-token substitution will
-// land in the DISPATCHER for prompt-type commands in phase 15. It is NOT
-// implemented here — phase 13 built-ins take no arguments.
+// Phase-15 boundary (TRS-06 / CMD-06): argument-token substitution NOW
+// lives in the DISPATCHER for prompt-type commands (Plan 15-01, SC2).
+// The substitution is text-only via expandPrompt (split-and-join); no
+// dynamic code execution. The Phase-13 boundary marker is therefore
+// CROSSED for the dispatcher only — the parser file SlashCommandParser.ts
+// stays pure and free of the argument-token literal (region-scoped).
 
 import type {
   SlashCommandDispatchRequest,
@@ -26,6 +29,7 @@ import type {
 } from "@/entityTypes/slashCommandTypes";
 import { parseSlashCommandInput } from "./SlashCommandParser";
 import { CommandRegistry } from "./CommandRegistry";
+import { expandPrompt } from "./expandPrompt";
 import type {
   AIFetchlyConfigManager,
   AIFetchlyConfigReloadSummary,
@@ -97,15 +101,28 @@ export class SlashCommandDispatcher {
       case "local":
         return this.dispatchLocal(cmd.id, parsed.name);
 
-      case "prompt":
-        // Phase-15 boundary (TRS-06 / CMD-06): prompt-type commands with
-        // argument-token substitution land in phase 15. Phase 13 has NO
-        // registered prompt commands, so this branch is unreachable in
-        // production but must fail closed for type-contract safety.
+      case "prompt": {
+        // Phase-15 (Plan 15-01, SC2 + CMD-04): prompt-type commands now
+        // expand their body via expandPrompt and return a submit_prompt
+        // response. The renderer submits the returned prompt through the
+        // existing AI_CHAT_V2_STREAM IPC which gates USER_AI_ENABLED
+        // (TRS-05 Strategy A — verified, no duplicate gate here).
+        //
+        // cmd.body is defensively coerced to "" when undefined: the CMD-06
+        // frontmatter validator (promptCommandFrontmatter.ts) rejects empty
+        // bodies, but a defensively-registered prompt command (e.g. a
+        // future code path that bypasses validation) must not crash the
+        // dispatch with a TypeError. parsed.args is undefined when the
+        // user supplied no args; expandPrompt treats it as the empty
+        // string per its (string, string) contract.
+        const rendered = expandPrompt(cmd.body ?? "", parsed.args ?? "");
         return {
-          status: false,
-          msg: `Prompt commands are not yet supported. Command /${parsed.name} will be available in a future release.`,
+          status: true,
+          action: "submit_prompt",
+          prompt: rendered,
+          commandId: cmd.id,
         };
+      }
 
       case "skill":
         // Phase 18 — SkillRegistry integration.
