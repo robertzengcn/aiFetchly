@@ -229,6 +229,41 @@ function locateManifestFile(
   return null;
 }
 
+/**
+ * Resolve the effective plugin root directory when the given `dir` might be
+ * wrapped inside a single top-level folder — a common pattern when a plugin
+ * author zips their plugin folder directly (e.g. `my-plugin/` becomes
+ * `my-plugin.zip` and extracting produces `/tmp/xxx/my-plugin/...`).
+ *
+ * Returns the deepest directory that contains a manifest, preferring the
+ * original dir if the manifest is already at the root.
+ */
+export function resolvePluginRoot(dir: string): string {
+  if (locateManifestFile(dir)) return dir;
+
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(dir);
+  } catch {
+    return dir;
+  }
+
+  const subdirs = entries.filter((e) => {
+    try {
+      return fs.statSync(path.join(dir, e)).isDirectory();
+    } catch {
+      return false;
+    }
+  });
+
+  if (subdirs.length === 1) {
+    const nested = path.join(dir, subdirs[0]);
+    if (locateManifestFile(nested)) return nested;
+  }
+
+  return dir;
+}
+
 export class PluginManifestService {
   /**
    * Load and validate the manifest from a plugin directory on disk.

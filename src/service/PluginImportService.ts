@@ -5,7 +5,7 @@ import { SkillManagementModule } from "@/modules/SkillManagementModule";
 import { MCPToolModule } from "@/modules/MCPToolModule";
 import { MCPToolEntity } from "@/entity/MCPTool.entity";
 import { PluginArchiveService } from "@/service/PluginArchiveService";
-import { PluginManifestService } from "@/service/PluginManifestService";
+import { PluginManifestService, resolvePluginRoot } from "@/service/PluginManifestService";
 import {
   parseServersJson,
   normalizeMcpDeclaration,
@@ -466,7 +466,10 @@ export class PluginImportService {
   ): Promise<PluginImportResult> {
     const { overwrite = false, provenance } = opts;
 
-    // 3. Load + validate plugin manifest
+    // 3. Resolve effective root (unwrap single-wrapper-directory zips)
+    localRoot = resolvePluginRoot(localRoot);
+
+    // 4. Load + validate plugin manifest
     const manifestResult = await PluginManifestService.loadFromDirectory(
       localRoot
     );

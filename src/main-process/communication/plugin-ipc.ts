@@ -251,15 +251,16 @@ export function registerPluginIpcHandlers(): void {
       const { PluginArchiveService } = await import(
         "@/service/PluginArchiveService"
       );
-      const { PluginManifestService } = await import(
+      const { PluginManifestService, resolvePluginRoot } = await import(
         "@/service/PluginManifestService"
       );
       const extract = await PluginArchiveService.extractZip(input.zipPath);
       if (!extract.success) {
         return { valid: false, errors: extract.errors };
       }
+      const effectiveRoot = resolvePluginRoot(extract.tempRoot);
       const manifest = await PluginManifestService.loadFromDirectory(
-        extract.tempRoot
+        effectiveRoot
       );
       await extract.cleanup();
       if (!manifest.success) {
