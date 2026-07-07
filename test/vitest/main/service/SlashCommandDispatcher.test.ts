@@ -243,33 +243,11 @@ describe("SlashCommandDispatcher.dispatch (CMD-04, CMD-08, DX-02)", () => {
     expect(r.msg).toMatch(/disabled/i);
   });
 
-  it("prompt-type command returns a not-yet-supported message (phase 15 boundary)", async () => {
-    const { registry, dispatcher } = buildStack();
-    const promptCmd: SlashCommandDefinition = {
-      id: "user:command:lead-research",
-      name: "lead-research",
-      description: "Lead research prompt",
-      aliases: [],
-      type: "prompt",
-      source: "user",
-      sourceId: "user",
-      sourceLabel: "User",
-      requiresTrust: false,
-      enabled: true,
-      body: "Research this lead: $ARGUMENTS", // body uses token syntax; dispatcher MUST NOT expand it
-    };
-    registry.register(promptCmd);
-    const r = await dispatcher.dispatch({
-      conversationId: "conv-1",
-      rawInput: "/lead-research Acme Corp",
-    });
-    // Phase 13 has NO registered prompt commands in production. The type
-    // contract still requires this branch to fail closed rather than
-    // silently expand the prompt body.
-    expect(r.status).toBe(false);
-    if (r.status) throw new Error("expected failure envelope");
-    expect(r.msg).toMatch(/not yet supported|not supported/i);
-  });
+  // Note: the Phase-13 placeholder that returned a not-yet-supported
+  // message for prompt-type commands has been superseded by Phase 15
+  // (Plan 15-01 / SC2). The prompt dispatch contract is now exercised
+  // in the dedicated describe block below ("SlashCommandDispatcher
+  // prompt commands (Phase 15 / SC2)").
 
   it("skill-type command returns a not-yet-supported message (phase 18 boundary)", async () => {
     const { registry, dispatcher } = buildStack();
@@ -374,5 +352,122 @@ describe("TRS-06 no-execution-path boundary", () => {
     for (const k of keys) {
       expect(k).not.toMatch(/spawn|exec|child_process/i);
     }
+  });
+});
+
+// --- Phase 15 / SC2: prompt commands -----------------------------------------
+
+describe("SlashCommandDispatcher prompt commands (Phase 15 / SC2)", () => {
+  /** Register a prompt-type command directly (no loader dependency). */
+  function registerPrompt(
+    registry: CommandRegistry,
+    overrides: Partial<SlashCommandDefinition> = {}
+  ): SlashCommandDefinition {
+    const cmd: SlashCommandDefinition = {
+      id: "user:command:review",
+      name: "review",
+      description: "Review code",
+      aliases: [],
+      type: "prompt",
+      source: "user",
+      sourceId: "user",
+      sourceLabel: "User",
+      requiresTrust: false,
+      enabled: true,
+      body: "Review $ARGUMENTS please",
+      ...overrides,
+    };
+    registry.register(cmd);
+    return cmd;
+  }
+
+  it("dispatching /review src/service returns submit_prompt with the token replaced", async () => {
+    const { registry, dispatcher } = buildStack();
+    registerPrompt(registry, {
+      body: "Review $ARGUMENTS please",
+    });
+    const r = await dispatcher.dispatch({
+      conversationId: "conv-1",
+      rawInput: "/review src/service",
+    });
+    expect(r.status).toBe(true);
+    if (!r.status || r.action !== "submit_prompt") {
+      throw new Error("expected submit_prompt");
+    }
+    expect(r.commandId).toBe("user:command:review");
+    expect(r.prompt).toBe("Review src/service please");
+  });
+
+  it("body without the token + non-empty args returns submit_prompt with args appended after a blank line (D-02)", async () => {
+    const { registry, dispatcher } = buildStack();
+    registerPrompt(registry, {
+      body: "Review this", // no $ARGUMENTS token
+    });
+    const r = await dispatcher.dispatch({
+      conversationId: "conv-1",
+      rawInput: "/review src/a",
+    });
+    expect(r.status).toBe(true);
+    if (!r.status || r.action !== "submit_prompt") {
+      throw new Error("expected submit_prompt");
+    }
+    expect(r.commandId).toBe("user:command:review");
+    expect(r.prompt).toBe("Review this\n\nsrc/a");
+  });
+
+  it("dispatching with no args returns submit_prompt with the token replaced by empty string (or body unchanged when no token)", async () => {
+    const { registry, dispatcher } = buildStack();
+    registerPrompt(registry, {
+      body: "Review $ARGUMENTS now",
+    });
+    const r = await dispatcher.dispatch({
+      conversationId: "conv-1",
+      rawInput: "/review",
+    });
+    expect(r.status).toBe(true);
+    if (!r.status || r.action !== "submit_prompt") {
+      throw new Error("expected submit_prompt");
+    }
+    expect(r.commandId).toBe("user:command:review");
+    // Token replaced with empty string — no append path.
+    expect(r.prompt).toBe("Review  now");
+  });
+
+  it("defensively treats cmd.body === undefined as empty string (no TypeError)", async () => {
+    // The CMD-06 frontmatter validator rejects empty bodies before they
+    // reach the registry, but the dispatcher must remain total — a
+    // defensively-registered prompt command without a body must NOT
+    // crash the dispatch path.
+    const { registry, dispatcher } = buildStack();
+    registerPrompt(registry, { body: undefined });
+    const r = await dispatcher.dispatch({
+      conversationId: "conv-1",
+      rawInput: "/review hello",
+    });
+    expect(r.status).toBe(true);
+    if (!r.status || r.action !== "submit_prompt") {
+      throw new Error("expected submit_prompt");
+    }
+    // No token in the empty body -> D-02 append path kicks in.
+    expect(r.prompt).toBe("\n\nhello");
+  });
+
+  it("prompt is NEVER submitted to the AI by the dispatcher — response is returned to the renderer (TRS-05 Strategy A)", async () => {
+    const { registry, dispatcher } = buildStack();
+    registerPrompt(registry);
+    const r = await dispatcher.dispatch({
+      conversationId: "conv-1",
+      rawInput: "/review src/service",
+    });
+    expect(r.status).toBe(true);
+    if (!r.status || r.action !== "submit_prompt") {
+      throw new Error("expected submit_prompt");
+    }
+    // The response carries only the rendered prompt + commandId. The
+    // downstream AI_CHAT_V2_STREAM IPC (unchanged by Phase 15) gates
+    // USER_AI_ENABLED before the prompt is actually sent to the model.
+    // The dispatcher does not import Token or any AI client.
+    expect(typeof r.prompt).toBe("string");
+    expect(r.prompt.length).toBeGreaterThan(0);
   });
 });
