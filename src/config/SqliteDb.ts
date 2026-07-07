@@ -53,6 +53,7 @@ import { AgentToolCallEntity } from "@/entity/AgentToolCall.entity";
 import { AIUserMemoryEntity } from "@/entity/AIUserMemory.entity";
 import { AIMemoryConsolidationRunEntity } from "@/entity/AIMemoryConsolidationRun.entity";
 import { AIWorkspaceMemoryEntity } from "@/entity/AIWorkspaceMemory.entity";
+import { AIWorkspaceMemoryConsolidationRunEntity } from "@/entity/AIWorkspaceMemoryConsolidationRun.entity";
 import { WorkspaceEntity } from "@/entity/Workspace.entity";
 import { AIChatPlanEntity } from "@/entity/AIChatPlan.entity";
 import { AIChatPlanVersionEntity } from "@/entity/AIChatPlanVersion.entity";
@@ -497,6 +498,7 @@ export class SqliteDb {
           AIUserMemoryEntity,
           AIMemoryConsolidationRunEntity,
           AIWorkspaceMemoryEntity,
+          AIWorkspaceMemoryConsolidationRunEntity,
           WorkspaceEntity,
         ],
         synchronize: true,

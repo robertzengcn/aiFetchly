@@ -14,6 +14,7 @@ import { AgentOutputParser } from "@/service/AgentOutputParser";
 import { AgentTranscriptService } from "@/service/AgentTranscriptService";
 import { AgentToolPolicyService } from "@/service/AgentToolPolicyService";
 import type { AIAutoDreamService } from "@/service/AIAutoDreamService";
+import type { AIWorkspaceAutoDreamService } from "@/service/AIWorkspaceAutoDreamService";
 import type {
   AgentDefinitionView,
   AgentResult,
@@ -48,6 +49,10 @@ export interface AgentRuntimeDeps {
   /** Optional. When provided, the runtime triggers auto-dream consolidation
    * after a completed task. Failures are logged and swallowed. */
   autoDreamService?: AIAutoDreamService;
+  /** Optional. When provided, the runtime triggers workspace-scoped auto-dream
+   * consolidation after a completed task. Runs independently of the user-memory
+   * service. Failures are logged and swallowed. */
+  workspaceAutoDreamService?: AIWorkspaceAutoDreamService;
 }
 
 /**
@@ -377,6 +382,16 @@ export class AgentRuntime {
         })
         .catch((err) =>
           console.error("[ai-auto-dream] agent trigger failed:", err)
+        );
+    }
+    if (deps?.workspaceAutoDreamService) {
+      deps.workspaceAutoDreamService
+        .evaluateAfterAgentTask({
+          agentTaskId,
+          reason: "agent_task_completed",
+        })
+        .catch((err) =>
+          console.error("[workspace-auto-dream] agent trigger failed:", err)
         );
     }
     return result;

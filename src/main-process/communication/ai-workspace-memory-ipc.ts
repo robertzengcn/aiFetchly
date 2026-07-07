@@ -2,6 +2,7 @@ import { ipcMain } from "electron";
 import { Token } from "@/modules/token";
 import { USER_AI_ENABLED } from "@/config/usersetting";
 import { AIWorkspaceMemoryService } from "@/service/AIWorkspaceMemoryService";
+import { getSharedWorkspaceAutoDreamService } from "@/service/AIAutoDreamFactory";
 import {
   AI_WORKSPACE_MEMORY_LIST,
   AI_WORKSPACE_MEMORY_CREATE,
@@ -83,11 +84,11 @@ export function registerAIWorkspaceMemoryIpcHandlers(): void {
         !input.content ||
         !input.type
       ) {
-        return denied(
-          "conversationId, title, content, and type are required"
-        );
+        return denied("conversationId, title, content, and type are required");
       }
-      const result = await getWorkspaceMemoryService().createManualMemory(input);
+      const result = await getWorkspaceMemoryService().createManualMemory(
+        input
+      );
       return ok(result);
     } catch (err) {
       return denied(err instanceof Error ? err.message : "create failed");
@@ -150,17 +151,35 @@ export function registerAIWorkspaceMemoryIpcHandlers(): void {
     }
   });
 
-  // NOTE: Phase 4 wires these two to the shared workspace auto-dream service.
-  // Until then they return a clear "not available" response so the channels
-  // remain valid and the UI degrades gracefully.
-  ipcMain.handle(AI_WORKSPACE_MEMORY_RUN_AUTO_DREAM, async () => {
-    if (!isAIEnabled()) {
-      return denied("AI functionality is only available to subscribers.");
+  // Manual workspace auto-dream run. AI-gated. Resolves + consolidates per
+  // workspace group; failures mark the run failed but never throw to the UI.
+  ipcMain.handle(
+    AI_WORKSPACE_MEMORY_RUN_AUTO_DREAM,
+    async (_e, data: unknown) => {
+      if (!isAIEnabled()) {
+        return denied("AI functionality is only available to subscribers.");
+      }
+      try {
+        const req = (safeParse<{ force?: boolean }>(data) ?? {}) as {
+          force?: boolean;
+        };
+        const result = await getSharedWorkspaceAutoDreamService().runNow({
+          force: req.force === true,
+          reason: "manual_ipc",
+        });
+        return ok(result);
+      } catch (err) {
+        return denied(err instanceof Error ? err.message : "auto-dream failed");
+      }
     }
-    return denied("Workspace auto-dream is not available yet.");
-  });
+  );
 
   ipcMain.handle(AI_WORKSPACE_MEMORY_AUTO_DREAM_STATUS, async () => {
-    return ok({ aiEnabled: isAIEnabled(), autoDreamEnabled: false });
+    try {
+      const result = await getSharedWorkspaceAutoDreamService().getStatus();
+      return ok(result);
+    } catch (err) {
+      return denied(err instanceof Error ? err.message : "status failed");
+    }
   });
 }

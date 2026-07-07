@@ -11,6 +11,7 @@ import { SkillExecutor } from "@/service/SkillExecutor";
 import { AIChatContextAssembler } from "@/service/AIChatContextAssembler";
 import type { AIChatCompactAgentService } from "@/service/AIChatCompactAgentService";
 import type { AIAutoDreamService } from "@/service/AIAutoDreamService";
+import type { AIWorkspaceAutoDreamService } from "@/service/AIWorkspaceAutoDreamService";
 import { PlanModeToolRegistry } from "@/service/PlanModeToolRegistry";
 import type { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
 import {
@@ -72,11 +73,7 @@ function isTypedPlanApproval(message: string): boolean {
     return true;
   }
 
-  const looksGoodSignals = [
-    "looks good",
-    "looks fine",
-    "looks correct",
-  ];
+  const looksGoodSignals = ["looks good", "looks fine", "looks correct"];
   const executionSignals = [
     "begin executing",
     "start executing",
@@ -117,6 +114,10 @@ export interface AIChatQueryEngineDeps {
   /** Optional. When provided, the engine triggers auto-dream consolidation
    * after each completed assistant turn. Failures are logged and swallowed. */
   autoDreamService?: AIAutoDreamService;
+  /** Optional. When provided, the engine triggers workspace-scoped auto-dream
+   * consolidation after each completed assistant turn. Runs independently of
+   * the user-memory auto-dream service. Failures are logged and swallowed. */
+  workspaceAutoDreamService?: AIWorkspaceAutoDreamService;
 }
 
 /**
@@ -133,6 +134,7 @@ export class AIChatQueryEngine {
   private readonly contextAssembler: AIChatContextAssembler;
   private readonly compactAgent?: AIChatCompactAgentService;
   private readonly autoDreamService?: AIAutoDreamService;
+  private readonly workspaceAutoDreamService?: AIWorkspaceAutoDreamService;
   private readonly pendingEventSaves = new WeakMap<
     AIChatQueryEventSink,
     Promise<unknown>[]
@@ -146,6 +148,7 @@ export class AIChatQueryEngine {
       deps?.contextAssembler ?? new AIChatContextAssembler();
     this.compactAgent = deps?.compactAgent;
     this.autoDreamService = deps?.autoDreamService;
+    this.workspaceAutoDreamService = deps?.workspaceAutoDreamService;
   }
 
   /**
@@ -702,6 +705,16 @@ export class AIChatQueryEngine {
             })
             .catch((err) =>
               console.error("[ai-auto-dream] chat trigger failed:", err)
+            );
+        }
+        if (this.workspaceAutoDreamService) {
+          this.workspaceAutoDreamService
+            .evaluateAfterChatTurn({
+              conversationId,
+              reason: "assistant_turn_completed",
+            })
+            .catch((err) =>
+              console.error("[workspace-auto-dream] chat trigger failed:", err)
             );
         }
         this.clearActiveTurnState();

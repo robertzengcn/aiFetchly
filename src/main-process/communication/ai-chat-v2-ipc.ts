@@ -11,6 +11,7 @@ import type { AIChatQueryLoopDeps } from "@/service/AIChatQueryLoop";
 import { AIChatQueryEngine } from "@/service/AIChatQueryEngine";
 import { AIChatCompactAgentService } from "@/service/AIChatCompactAgentService";
 import { getSharedAutoDreamService } from "@/service/AIAutoDreamFactory";
+import { getSharedWorkspaceAutoDreamService } from "@/service/AIAutoDreamFactory";
 import { AIChatToolApprovalModule } from "@/modules/AIChatToolApprovalModule";
 import { evaluateToolApproval } from "@/service/AIChatToolApprovalPolicyService";
 import { userSafeError } from "@/service/AIChatErrorMapper";
@@ -131,6 +132,7 @@ function getQueryEngine(): AIChatQueryEngine {
     queryEngine = new AIChatQueryEngine(loop, {
       compactAgent: getCompactAgent(),
       autoDreamService: getSharedAutoDreamService(),
+      workspaceAutoDreamService: getSharedWorkspaceAutoDreamService(),
     });
   }
   return queryEngine;
