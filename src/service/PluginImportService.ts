@@ -12,7 +12,7 @@ import {
   normalizeInlineMcpMap,
   type NormalizedMcpServer,
 } from "@/service/PluginMcpDeclaration";
-import { getPluginInstallRoot } from "@/service/pluginPaths";
+import { getPluginInstallRoot, getPluginOwnedSkillRoot } from "@/service/pluginPaths";
 import {
   resolvePluginRelativePath,
   type PluginError,
@@ -20,10 +20,17 @@ import {
   type PluginSource,
   type PluginSourceProvenance,
 } from "@/entityTypes/pluginTypes";
+import { MCPToolService } from "@/service/MCPToolService";
 import { SkillImportService } from "@/service/SkillImportService";
 import { ClaudeSkillFormatAdapter } from "@/service/pluginCompat/ClaudeSkillFormatAdapter";
 import { ClaudePluginAdapter } from "@/service/pluginCompat/ClaudePluginAdapter";
-import type { SkillManifest } from "@/entityTypes/skillTypes";
+import { SkillRegistry } from "@/config/skillsRegistry";
+import type {
+  SkillDefinition,
+  SkillExecutionContext,
+  SkillExecutionResult,
+  SkillManifest,
+} from "@/entityTypes/skillTypes";
 
 /**
  * Atomic plugin import from a local zip package.
@@ -731,8 +738,56 @@ export class PluginImportService {
       };
     }
 
+    // 9b. Hot-register plugin skills in SkillRegistry so they're available
+    // immediately without requiring an app restart. Also write the
+    // __skill_md_wrapper__.js file so loadPersistedSkills() can find it
+    // on restart.
+    for (const { manifest: skillManifest, relManifestPath } of skills) {
+      try {
+        const skillDir = path.join(installPath, path.dirname(relManifestPath));
+        const skillMdPath = path.join(skillDir, "SKILL.md");
+        const execute = buildDocSkillExecuteHandler(skillMdPath);
+
+        // Write the wrapper JS so registerImportedSkill() works on restart
+        let skillMdContent = "";
+        try {
+          skillMdContent = fs.readFileSync(skillMdPath, "utf-8");
+        } catch { /* best-effort */ }
+        const wrapperCode = `setResult({
+  success: true,
+  mode: "documentation_skill",
+  skillName: ${JSON.stringify(skillManifest.name)},
+  skillFile: ${JSON.stringify(skillMdPath)},
+  guidance: ${JSON.stringify(skillMdContent)},
+  message: "This skill was imported from SKILL.md and runs in documentation-only mode.",
+});`;
+        const wrapperPath = path.join(skillDir, "__skill_md_wrapper__.js");
+        fs.writeFileSync(wrapperPath, wrapperCode, "utf-8");
+
+        SkillRegistry.registerSkill({
+          name: skillManifest.name,
+          description: skillManifest.description,
+          parameters: skillManifest.parameters ?? {},
+          tier: "sandboxed",
+          permissionCategory: "pure",
+          requiresConfirmation: false,
+          source: "user",
+          documentationOnly: true,
+          supportedFileTypes: skillManifest.supportedFileTypes,
+          pluginOwner: manifest.name,
+          execute,
+        });
+      } catch (e) {
+        console.warn(
+          `[PluginImport] Failed to hot-register skill "${skillManifest.name}":`,
+          e
+        );
+      }
+    }
+
     // 10. Persist plugin-owned MCP rows
     const mcpModule = new MCPToolModule();
+    const mcpServerIds: Array<{ id: number; isStdio: boolean }> = [];
     try {
       for (const server of mcpServers) {
         const entity = new MCPToolEntity();
@@ -753,7 +808,8 @@ export class PluginImportService {
         if (server.url) entity.url = server.url;
         if (server.host) entity.host = server.host;
         if (server.port) entity.port = server.port;
-        await mcpModule.saveMCPTool(entity);
+        const id = await mcpModule.saveMCPTool(entity);
+        mcpServerIds.push({ id, isStdio: server.transport === "stdio" });
       }
     } catch (e: unknown) {
       await rollbackRowsAndFiles(manifest.name, installPath);
@@ -770,6 +826,21 @@ export class PluginImportService {
           },
         ],
       };
+    }
+
+    // 10b. Auto-trust and discover MCP tools so they're available immediately.
+    for (const { id, isStdio } of mcpServerIds) {
+      try {
+        if (isStdio) {
+          new MCPToolService().setTrust(id, true);
+        }
+        await new MCPToolService().discoverTools(id);
+      } catch (e) {
+        console.warn(
+          `[PluginImport] Failed to discover MCP tools for server ${id}:`,
+          e
+        );
+      }
     }
 
     // 11. Cache invalidation (best-effort).
@@ -816,6 +887,37 @@ export class PluginImportService {
     };
     return { success: true, plugin: summary };
   }
+}
+
+/**
+ * Build an execute handler for a documentation-only (SKILL.md) skill.
+ * Reads the SKILL.md on each invocation to pick up live edits.
+ */
+function buildDocSkillExecuteHandler(
+  skillMdPath: string
+): (
+  args: Record<string, unknown>,
+  context: SkillExecutionContext
+) => Promise<SkillExecutionResult> {
+  return async (): Promise<SkillExecutionResult> => {
+    let guidance = "";
+    try {
+      const content = fs.readFileSync(skillMdPath, "utf-8");
+      guidance = content.length > 8000
+        ? `${content.slice(0, 8000)}\n...[skill guidance truncated]`
+        : content;
+    } catch {
+      // SKILL.md not readable; return empty guidance
+    }
+    return {
+      success: true,
+      result: {
+        mode: "documentation_skill",
+        skillFile: skillMdPath,
+        guidance,
+      },
+    };
+  };
 }
 
 /** Best-effort rollback of files only. */

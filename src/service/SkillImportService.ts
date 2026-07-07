@@ -15,6 +15,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { SkillManagementModule } from "@/modules/SkillManagementModule";
 import { SkillRegistry } from "@/config/skillsRegistry";
+import { getPluginInstallRoot } from "@/service/pluginPaths";
 import type {
   SkillExecutionContext,
   SkillExecutionResult,
@@ -1290,8 +1291,19 @@ async function loadPersistedSkills(): Promise<void> {
   for (const skill of skills) {
     try {
       const manifest = JSON.parse(skill.manifest_json) as SkillManifest;
-      const skillsDir = getInstalledSkillsDir();
-      const skillDir = path.join(skillsDir, skill.name);
+
+      // Plugin-owned skills live under the plugin install root, not
+      // under userData/installed_skills/.
+      let skillDir: string;
+      if (skill.pluginName && skill.pluginComponentPath) {
+        skillDir = path.join(
+          getPluginInstallRoot(skill.pluginName),
+          path.dirname(skill.pluginComponentPath)
+        );
+      } else {
+        const skillsDir = getInstalledSkillsDir();
+        skillDir = path.join(skillsDir, skill.name);
+      }
 
       if (!fs.existsSync(skillDir)) {
         console.warn(
