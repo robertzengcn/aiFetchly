@@ -1028,6 +1028,11 @@ function registerImportedSkill(
     }
   }
 
+  // Idempotent: unregister first if already registered (handles
+  // reinstall-in-same-session where HMR preserved the registry Map).
+  if (SkillRegistry.isRegistered(resolvedManifest.name)) {
+    SkillRegistry.unregisterSkill(resolvedManifest.name);
+  }
   SkillRegistry.registerSkill({
     name: resolvedManifest.name,
     description: resolvedManifest.description,

@@ -779,6 +779,16 @@ export class PluginImportService {
         fs.writeFileSync(wrapperPath, wrapperCode, "utf-8");
         console.log(`[PluginImport]   wrapper written to "${wrapperPath}"`);
 
+        // Idempotent: if the plugin-owned skill is already registered
+        // (e.g. from a prior install in the same session, because
+        // globalThis.__aifetchlySkillRegistry survives HMR), unregister
+        // it first so the reinstall doesn't throw.
+        if (SkillRegistry.isRegistered(skillManifest.name)) {
+          SkillRegistry.unregisterSkill(skillManifest.name);
+          console.log(
+            `[PluginImport]   unregistered stale skill "${skillManifest.name}" before re-register`
+          );
+        }
         SkillRegistry.registerSkill({
           name: skillManifest.name,
           description: skillManifest.description,
