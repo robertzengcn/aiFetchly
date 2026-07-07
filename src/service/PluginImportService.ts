@@ -742,25 +742,16 @@ export class PluginImportService {
     // immediately without requiring an app restart. Also write the
     // __skill_md_wrapper__.js file so loadPersistedSkills() can find it
     // on restart.
-    console.log(
-      `[PluginImport] Step 9b: hot-registering ${skills.length} plugin skills`
-    );
     for (const { manifest: skillManifest, relManifestPath } of skills) {
       try {
         const skillDir = path.join(installPath, path.dirname(relManifestPath));
         const skillMdPath = path.join(skillDir, "SKILL.md");
-        console.log(
-          `[PluginImport]   skill="${skillManifest.name}", skillDir="${skillDir}", skillMdPath="${skillMdPath}", installPath="${installPath}"`
-        );
         const execute = buildDocSkillExecuteHandler(skillMdPath);
 
         // Write the wrapper JS so registerImportedSkill() works on restart
         let skillMdContent = "";
         try {
           skillMdContent = fs.readFileSync(skillMdPath, "utf-8");
-          console.log(
-            `[PluginImport]   SKILL.md read OK, ${skillMdContent.length} chars`
-          );
         } catch (e) {
           console.warn(
             `[PluginImport]   SKILL.md not readable:`,
@@ -777,7 +768,6 @@ export class PluginImportService {
 });`;
         const wrapperPath = path.join(skillDir, "__skill_md_wrapper__.js");
         fs.writeFileSync(wrapperPath, wrapperCode, "utf-8");
-        console.log(`[PluginImport]   wrapper written to "${wrapperPath}"`);
 
         // Idempotent: if the plugin-owned skill is already registered
         // (e.g. from a prior install in the same session, because
@@ -785,9 +775,6 @@ export class PluginImportService {
         // it first so the reinstall doesn't throw.
         if (SkillRegistry.isRegistered(skillManifest.name)) {
           SkillRegistry.unregisterSkill(skillManifest.name);
-          console.log(
-            `[PluginImport]   unregistered stale skill "${skillManifest.name}" before re-register`
-          );
         }
         SkillRegistry.registerSkill({
           name: skillManifest.name,
@@ -802,12 +789,9 @@ export class PluginImportService {
           pluginOwner: manifest.name,
           execute,
         });
-        console.log(
-          `[PluginImport]   skill "${skillManifest.name}" registered in SkillRegistry OK`
-        );
       } catch (e) {
         console.warn(
-          `[PluginImport] Failed to hot-register skill "${skillManifest.name}":`,
+          `Failed to hot-register skill "${skillManifest.name}":`,
           e
         );
       }
@@ -865,7 +849,7 @@ export class PluginImportService {
         await new MCPToolService().discoverTools(id);
       } catch (e) {
         console.warn(
-          `[PluginImport] Failed to discover MCP tools for server ${id}:`,
+          `Failed to discover MCP tools for server ${id}:`,
           e
         );
       }
