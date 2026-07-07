@@ -269,7 +269,7 @@ export const PLUGIN_PACKAGE_LIMITS = {
 // Validation regexes (Design §4.2 validation constraints)
 // ---------------------------------------------------------------------------
 
-export const PLUGIN_NAME_REGEX = /^[a-z][a-z0-9_-]*$/;
+export const PLUGIN_NAME_REGEX = /^[a-z0-9][a-z0-9_-]*$/;
 export const PLUGIN_SEMVER_REGEX = /^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.]+)?$/;
 
 // ---------------------------------------------------------------------------

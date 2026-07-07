@@ -109,7 +109,7 @@ export class ClaudePluginAdapter {
       errors.push({
         code: "manifest-schema-invalid",
         message:
-          'Invalid or missing "name". Must match /^[a-z][a-z0-9_-]*$/ (e.g. "lead-tools").',
+          'Invalid or missing "name". Must match /^[a-z0-9][a-z0-9_-]*$/ (e.g. "lead-tools" or "2-commit-fast").',
         recoverable: false,
       });
     }

@@ -31,7 +31,7 @@ export type ClaudeSkillAdaptResult =
   | ClaudeSkillAdaptSuccess
   | ClaudeSkillAdaptFailure;
 
-const NAME_REGEX = /^[a-z][a-z0-9_-]*$/;
+const NAME_REGEX = /^[a-z0-9][a-z0-9_-]*$/;
 
 /** Derive a skill name from the SKILL.md file path when frontmatter omits "name".
  *  For "skills/hello/SKILL.md" → "hello"; for "skills/SKILL.md" → "skills". */

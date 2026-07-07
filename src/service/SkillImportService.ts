@@ -57,7 +57,7 @@ interface SkillMarkdownMetadata {
 const VALID_PERMISSIONS = new Set(["network", "filesystem", "automation"]);
 const VALID_RUNTIMES = new Set(["javascript", "python"]);
 const SEMVER_REGEX = /^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.]+)?$/;
-const NAME_REGEX = /^[a-z][a-z0-9_-]*$/;
+const NAME_REGEX = /^[a-z0-9][a-z0-9_-]*$/;
 
 function resolvePermissionCategory(
   permissions: readonly string[] | undefined

@@ -15,7 +15,7 @@ export interface ParsedPluginIdentifier {
   readonly marketplace?: string;
 }
 
-const NAME_REGEX = /^[a-z][a-z0-9_-]*$/;
+const NAME_REGEX = /^[a-z0-9][a-z0-9_-]*$/;
 
 export function parsePluginIdentifier(
   id: string
@@ -50,7 +50,7 @@ export function parsePluginIdentifier(
       ok: false,
       error: {
         code: "plugin-identifier-invalid",
-        message: `Plugin name "${name}" must match /^[a-z][a-z0-9_-]*$/.`,
+        message: `Plugin name "${name}" must match /^[a-z0-9][a-z0-9_-]*$/.`,
         recoverable: false,
       },
     };
@@ -72,7 +72,7 @@ export function parsePluginIdentifier(
         ok: false,
         error: {
           code: "plugin-identifier-invalid",
-          message: `Plugin marketplace "${marketplace}" must match /^[a-z][a-z0-9_-]*$/.`,
+          message: `Plugin marketplace "${marketplace}" must match /^[a-z0-9][a-z0-9_-]*$/.`,
           recoverable: false,
         },
       };

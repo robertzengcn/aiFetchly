@@ -86,7 +86,7 @@ export const pluginGetMcpOptionsInputSchema = lazySchema(() =>
     pluginName: z
       .string()
       .min(1)
-      .regex(/^[a-z][a-z0-9_-]*$/, "Invalid plugin name"),
+      .regex(/^[a-z0-9][a-z0-9_-]*$/, "Invalid plugin name"),
   })
 );
 
@@ -96,7 +96,7 @@ export const pluginSetMcpOptionInputSchema = lazySchema(() =>
     pluginName: z
       .string()
       .min(1)
-      .regex(/^[a-z][a-z0-9_-]*$/, "Invalid plugin name"),
+      .regex(/^[a-z0-9][a-z0-9_-]*$/, "Invalid plugin name"),
     scopedServerName: z.string().min(1),
     varName: z
       .string()
