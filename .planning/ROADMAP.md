@@ -145,7 +145,7 @@ Plans:
 
 **Wave 1**
 
-- [ ] 15-01-expansion-validator-dispatcher-PLAN.md — Pure `$ARGUMENTS` expander (D-01/D-02) + CMD-06 frontmatter validator/builder + dispatcher `case "prompt":` wiring to `submit_prompt`
+- [x] 15-01-expansion-validator-dispatcher-PLAN.md — Pure `$ARGUMENTS` expander (D-01/D-02) + CMD-06 frontmatter validator/builder + dispatcher `case "prompt":` wiring to `submit_prompt`
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -220,7 +220,7 @@ Plans:
 | 12. Translations and Validation | v1.2 | 1/1 | Complete | 2026-05-26 |
 | 13. Global Context and Built-in Slash Commands | v2.0 | 6/6 | Complete   | 2026-07-05 |
 | 14. Workspace Watcher Worker | v2.0 | 3/5 | In Progress|  |
-| 15. Prompt Command Files | v2.0 | 0/2 | Not started | — |
+| 15. Prompt Command Files | v2.0 | 1/2 | In Progress|  |
 | 16. Dynamic Agents | v2.0 | 0/? | Not started | — |
 | 17. Hooks | v2.0 | 0/? | Not started | — |
 | 18. Skills and Plugin Integration | v2.0 | 0/? | Not started | — |

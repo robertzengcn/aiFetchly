@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Local Extensibility
-current_phase: 14
-current_phase_name: workspace-watcher-worker
+current_phase: 15
+current_phase_name: prompt-command-files
 status: executing
-stopped_at: Phase 15 context gathered
-last_updated: "2026-07-06T20:29:59.510Z"
-last_activity: 2026-07-05
-last_activity_desc: Phase 14 execution started
+stopped_at: Plan 15-01 complete (CMD-06 core: expander + validator + dispatcher wiring)
+last_updated: "2026-07-07T02:53:27.656Z"
+last_activity: 2026-07-07
+last_activity_desc: Plan 15-01 executed — expandPrompt + buildPromptCommandDefinition + dispatcher prompt branch LIVE
 progress:
   total_phases: 6
   completed_phases: 2
-  total_plans: 11
-  completed_plans: 11
+  total_plans: 13
+  completed_plans: 12
   percent: 33
 ---
 
@@ -28,7 +28,7 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-04)
 
 **Core value:** Users can discover, contact, and market to prospects across platforms using AI-assisted workflows.
-**Current focus:** Phase 14 — workspace-watcher-worker
+**Current focus:** Phase 15 — prompt-command-files
 
 ## Milestone Progress
 
@@ -45,10 +45,12 @@ Progress: ░░░░░░░░░░ 0%
 
 ## Current Position
 
-Phase: 14 (workspace-watcher-worker) — EXECUTING
+Phase: 15 (prompt-command-files) — EXECUTING
+Plan 15-01 (expansion-validator-dispatcher): COMPLETE — 3/3 tasks, 6 commits, 60 tests GREEN, tsc clean
+Plan 15-02 (global-workspace-command-loaders): READY — Wave 2, consumes expandPrompt + buildPromptCommandDefinition
 Phase 14: 5/5 plans executed — ready for /gsd-verify-work 14 + 14-04 Task 3 live-app checklist
-Status: 14-01 complete — ready for 14-02 (manager + trust filter)
-Last activity: 2026-07-05 — Phase 14 execution started
+Status: Executing Phase 15 (1/2 plans done in this phase)
+Last activity: 2026-07-07 — Plan 15-01 executed
 
 ## Accumulated Context
 
@@ -80,6 +82,13 @@ Last activity: 2026-07-05 — Phase 14 execution started
 - [Phase ?]: 14-03: 4 invoke channels use registerValidatedHandler (NON-AI wrapper) — the watcher is not AI-serving; same rationale as Phase 13-03b slash-command-ipc.ts
 - [Phase ?]: 14-03: Sync approval cache bridges async WorkspaceResolver.resolve to sync trustResolver signature required by WorkspaceWatchManager; Phase 17 replaces with per-capability entity
 - [Phase ?]: 14-03: AifetchlyConfigChangedEvent extended STRICTLY additively (workspaceId + diff + diagnostic + message); bare-string source preserved
+- [Phase 15]: [15-01 expander]: expandPrompt uses literal split(token).join(args) replace-all instead of a regex — sidesteps the dollar-sign regex-meta escaping pitfall and is robust to mid-word/multiple-occurrence/adjacent placement (D-01 all-occurrences).
+- [Phase 15]: [15-01 expander]: expandPrompt is a TRUE pure leaf — ZERO imports, runtime typeof guards coerce non-string inputs to "" rather than throwing; contract is "never throws, always returns a string".
+- [Phase 15]: [15-01 expander]: D-02 fail-safe append fires ONLY when the body contains no token AND args are non-empty. When the token IS present, args substitute only at the token positions — they are NOT also appended (explicit test guards against the double-insertion bug).
+- [Phase 15]: [15-01 validator]: buildPromptCommandDefinition is the SINGLE owner of the CMD-06 schema. Fixed validation order (name → description presence → description length → argumentHint length → aliases count+pattern → type === "prompt" → body non-empty); FIRST violation wins. Plan 15-02 routes both global and workspace drafts through this function.
+- [Phase 15]: [15-01 validator]: Stable id format `${sourceMeta.sourceId}:command:${name}` mirrors existing conventions exactly (user:command:review, workspace:<id>:command:review).
+- [Phase 15]: [15-01 dispatcher]: Phase-13 "not yet supported" placeholder for case "prompt" is GONE; branch now returns {status:true, action:'submit_prompt', prompt, commandId} via expandPrompt. cmd.body ?? '' is a one-line insurance policy against bypassed validation.
+- [Phase 15]: [15-01 boundary]: Phase-15 boundary marker crossed for the DISPATCHER ONLY; SlashCommandParser.ts and CommandRegistry.ts UNCHANGED (zero expansion logic leaked — region-scoped invariant verified by git diff).
 
 ### Pending Todos
 
@@ -107,8 +116,8 @@ None yet.
 
 **Resume file:** .planning/phases/15-prompt-command-files/15-CONTEXT.md
 
-Last session: 2026-07-06T20:29:59.505Z
-Stopped at: Phase 15 context gathered
+Last session: 2026-07-07T02:53:27.651Z
+Stopped at: Plan 15-01 complete (CMD-06 core: expander + validator + dispatcher wiring)
 Worktree: .claude/worktrees/merry-stirring-scroll (branch: dev)
 
 ## Performance Metrics
@@ -119,3 +128,4 @@ Worktree: .claude/worktrees/merry-stirring-scroll (branch: dev)
 | Phase 13 P13-03a | 7m | 2 tasks | 7 files |
 | Phase 13 P13-03b | ~18min | 2 tasks | 10 files |
 | Phase 14 P03 | 8m | 2 tasks | 12 files |
+| Phase 15 P15-01-expansion-validator-dispatcher | ~35min | 3 tasks | 7 files |

@@ -31,7 +31,7 @@ Requirements for the v2.0 milestone. Each maps to exactly one roadmap phase (13�
 - [x] **CMD-03**: Built-in commands registered at startup: `/help`, `/clear`, `/status`, `/reload-config` (`/agents`, `/skills`, `/plugins` added in later phases)
 - [x] **CMD-04**: Dispatch returns typed `SlashCommandDispatchResponse` — prompt command → `submit_prompt`; local command (built-ins) → `show_result`; AI-enable gating occurs before actual AI submission in the stream IPC
 - [ ] **CMD-05**: Renderer slash-suggestions UI shows name/description/source badge (Built-in/User/Workspace/Plugin)/argument hint/disabled-or-trust state, with arrow-key navigation, Enter/Tab to choose, Shift+Enter newline preserved
-- [ ] **CMD-06**: Markdown file commands (`commands/*.md`) loaded from global + trusted-workspace sources; frontmatter validated (name `^[a-z][a-z0-9_-]*$`, description ≤500 chars, ≤10 aliases same regex, `argumentHint` ≤100, `type: prompt`, non-empty body); `$ARGUMENTS` expanded on dispatch; source replacement reconciles add/change/delete/rename
+- [x] **CMD-06**: Markdown file commands (`commands/*.md`) loaded from global + trusted-workspace sources; frontmatter validated (name `^[a-z][a-z0-9_-]*$`, description ≤500 chars, ≤10 aliases same regex, `argumentHint` ≤100, `type: prompt`, non-empty body); `$ARGUMENTS` expanded on dispatch; source replacement reconciles add/change/delete/rename
 - [x] **CMD-07**: Suggestion ranking (exact name → exact alias → prefix name → prefix alias → substring in description); list responses expose metadata only, not full prompt body, except via explicit trust-guarded preview
 - [x] **CMD-08**: Unknown command dispatch returns a clear "Unknown slash command" message; disabled (untrusted) command returns a trust message; invalid prompt expansion returns a check-diagnostics message
 
@@ -128,7 +128,7 @@ Each requirement maps to exactly one phase. Updated during roadmap creation.
 | CMD-03 | Phase 13 | Complete |
 | CMD-04 | Phase 13 | Complete |
 | CMD-05 | Phase 13 | Pending |
-| CMD-06 | Phase 15 | Pending |
+| CMD-06 | Phase 15 | Complete |
 | CMD-07 | Phase 13 | Complete |
 | CMD-08 | Phase 13 | Complete |
 | WAT-01 | Phase 14 | Pending |
