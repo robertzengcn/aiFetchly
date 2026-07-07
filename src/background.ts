@@ -177,6 +177,12 @@ function registerMenuBarShortcuts(mainWindow: BrowserWindow): void {
 }
 
 function initialize() {
+  // HMR guard: prevent re-initialization on Vite hot reload
+  if ((globalThis as any).__aifetchlyAppInitialized) {
+    log.info("[HMR] App already initialized, skipping re-init");
+    return;
+  }
+  (globalThis as any).__aifetchlyAppInitialized = true;
   // protocol.registerSchemesAsPrivileged([
 
   //   { scheme: appName, privileges: { secure: true,
