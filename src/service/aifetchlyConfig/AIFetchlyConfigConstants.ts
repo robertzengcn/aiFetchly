@@ -42,7 +42,28 @@ export const AIFETCHLY_CONFIG_LIMITS = {
   maxCommandsPerSource: 200,
   /** Cap on agents accepted from a single source (DoS hygiene). */
   maxAgentsPerSource: 100,
+  /** CMD-06 (Phase 15): max length of a command frontmatter `description`. */
+  commandDescriptionLength: 500,
+  /** CMD-06 (Phase 15): max number of aliases accepted on one command. */
+  commandAliases: 10,
+  /** CMD-06 (Phase 15): max length of a command frontmatter `argumentHint`. */
+  commandArgumentHintLength: 100,
 } as const;
+
+/**
+ * CMD-06 (Phase 15) — command-name pattern.
+ *
+ * A valid command name is one lowercase letter followed by any number of
+ * lowercase letters, digits, hyphens, or underscores (design §11 / Carry-Forward
+ * in 15-CONTEXT.md). Applied to both the primary `name` and each alias.
+ *
+ * Two equivalent forms are exported:
+ *   - {@link COMMAND_NAME_PATTERN} — the source regex literal as a string
+ *     (useful for embedding in error messages, docs, or re-compilation).
+ *   - {@link COMMAND_NAME_REGEX} — the compiled RegExp (use this for `.test()`).
+ */
+export const COMMAND_NAME_PATTERN = "^[a-z][a-z0-9_-]*$";
+export const COMMAND_NAME_REGEX = /^[a-z][a-z0-9_-]*$/;
 
 /**
  * Default settings used when settings.json is missing, unreadable, or fails

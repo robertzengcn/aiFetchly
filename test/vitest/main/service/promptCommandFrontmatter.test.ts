@@ -38,7 +38,9 @@ const baseSourceMeta: PromptCommandSourceMeta = {
   requiresTrust: false,
 };
 
-function draft(overrides: Partial<PromptCommandDraft> = {}): PromptCommandDraft {
+function draft(
+  overrides: Partial<PromptCommandDraft> = {}
+): PromptCommandDraft {
   return {
     frontmatter: {
       name: "review",
@@ -116,26 +118,25 @@ describe("buildPromptCommandDefinition — valid CMD-06 drafts", () => {
     expect(result.definition.argumentHint).toBe("<path>");
   });
 
-  it.each([
-    ["review-v2"],
-    ["code_review"],
-    ["review2"],
-  ])("accepts name %s (pattern allows lowercase + digits/hyphens/underscores)", (name) => {
-    const result = buildPromptCommandDefinition(
-      draft({
-        frontmatter: {
-          name,
-          description: "Review",
-          type: "prompt",
-        },
-        body: "Body",
-      }),
-      baseSourceMeta
-    );
-    expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error("expected ok");
-    expect(result.definition.name).toBe(name);
-  });
+  it.each([["review-v2"], ["code_review"], ["review2"]])(
+    "accepts name %s (pattern allows lowercase + digits/hyphens/underscores)",
+    (name) => {
+      const result = buildPromptCommandDefinition(
+        draft({
+          frontmatter: {
+            name,
+            description: "Review",
+            type: "prompt",
+          },
+          body: "Body",
+        }),
+        baseSourceMeta
+      );
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error("expected ok");
+      expect(result.definition.name).toBe(name);
+    }
+  );
 
   it("builds a stable id derived from sourceMeta.sourceId + name", () => {
     const result = buildPromptCommandDefinition(
@@ -147,7 +148,12 @@ describe("buildPromptCommandDefinition — valid CMD-06 drafts", () => {
         },
         body: "Body",
       }),
-      { source: "workspace", sourceId: "workspace:ws-1", sourceLabel: "Workspace", requiresTrust: true }
+      {
+        source: "workspace",
+        sourceId: "workspace:ws-1",
+        sourceLabel: "Workspace",
+        requiresTrust: true,
+      }
     );
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("expected ok");
@@ -379,13 +385,16 @@ describe("buildPromptCommandDefinition — invariants", () => {
     if (!result.ok) throw new Error("expected ok");
     const snapshot = result.definition;
 
-    // Mutate the input draft AFTER the call.
+    // Mutate the input draft AFTER the call. Casts sidestep the readonly
+    // contract on PromptCommandDraft deliberately — the whole point of this
+    // test is to verify that even an adversarial caller who DOES mutate the
+    // input cannot affect a previously-returned defensive snapshot.
     if (Array.isArray(d.frontmatter.aliases)) {
       (d.frontmatter.aliases as string[]).push("new-alias");
     }
     (d.frontmatter as Record<string, unknown>).description = "TAMPERED";
     (d.frontmatter as Record<string, unknown>).argumentHint = "TAMPERED";
-    d.body = "TAMPERED";
+    (d as { body: string }).body = "TAMPERED";
 
     // The previously-returned definition is unaffected.
     expect(snapshot.aliases).toEqual(["rev"]);
