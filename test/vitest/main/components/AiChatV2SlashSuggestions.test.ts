@@ -21,7 +21,9 @@ const i18n = createI18n({
   },
 });
 
-function makeCommand(overrides: Partial<SlashCommandView> = {}): SlashCommandView {
+function makeCommand(
+  overrides: Partial<SlashCommandView> = {}
+): SlashCommandView {
   return {
     id: "built-in:command:status",
     name: "status",
@@ -113,7 +115,9 @@ describe("AiChatV2SlashSuggestions", () => {
     const items = wrapper.findAll(".slash-suggestions__item");
     expect(items[0].attributes("aria-selected")).toBe("false");
     expect(items[1].attributes("aria-selected")).toBe("true");
-    expect(items[1].classes()).toContain("slash-suggestions__item--highlighted");
+    expect(items[1].classes()).toContain(
+      "slash-suggestions__item--highlighted"
+    );
   });
 
   it("emits 'highlight' with the index on mouseenter", async () => {
@@ -153,5 +157,58 @@ describe("AiChatV2SlashSuggestions", () => {
     expect(wrapper.text()).toContain("Workspace not trusted");
     // Workspace source badge label.
     expect(wrapper.text()).toContain("Workspace");
+  });
+
+  it("renders the argumentHint inline in the name row when present (D-04)", () => {
+    const wrapper = mountSuggestions({
+      commands: [
+        makeCommand({
+          id: "user:command:review",
+          name: "review",
+          source: "user",
+          sourceLabel: "User",
+          argumentHint: "<path>",
+          description: "Review code",
+        }),
+      ],
+    });
+
+    const row = wrapper.find(".slash-suggestions__row");
+    // The hint appears in the SAME row as /review (D-04 inline)...
+    expect(row.text()).toContain("/review");
+    expect(row.text()).toContain("<path>");
+    // ...and is no longer in the meta row (it moved out of meta).
+    const meta = wrapper.find(".slash-suggestions__meta");
+    expect(meta.text()).not.toContain("<path>");
+  });
+
+  it("renders NO argumentHint placeholder when the hint is absent (D-04)", () => {
+    const wrapper = mountSuggestions({
+      commands: [
+        makeCommand({
+          id: "built-in:command:status",
+          name: "status",
+          argumentHint: undefined,
+        }),
+      ],
+    });
+
+    expect(wrapper.find(".slash-suggestions__arg-hint").exists()).toBe(false);
+    const row = wrapper.find(".slash-suggestions__row");
+    expect(row.text()).toContain("/status");
+  });
+
+  it("treats an empty-string argumentHint the same as absent (no placeholder)", () => {
+    const wrapper = mountSuggestions({
+      commands: [
+        makeCommand({
+          id: "built-in:command:status",
+          name: "status",
+          argumentHint: "",
+        }),
+      ],
+    });
+
+    expect(wrapper.find(".slash-suggestions__arg-hint").exists()).toBe(false);
   });
 });
