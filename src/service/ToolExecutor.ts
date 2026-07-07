@@ -336,14 +336,51 @@ export class ToolExecutor {
 
   /**
    * Execute MCP tool
-   * Tool name format: mcp_<serverId>_<toolName>
+   * Tool name formats:
+   *   Legacy:  mcp_<serverId>_<toolName>
+   *   Plugin:  mcp__<plugin>__<server>__<toolName>
    */
   private static async executeMCPTool(
     toolName: string,
     toolParams: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
     try {
-      // Parse tool name: mcp_<serverId>_<toolName>
+      const mcpService = new MCPToolService();
+
+      if (toolName.startsWith("mcp__")) {
+        // Plugin format: mcp__<plugin>__<server>__<toolName>
+        const parsed = parseMcpToolName(toolName);
+        if (!parsed.ok) {
+          return { success: false, error: parsed.error };
+        }
+        if (parsed.kind !== "plugin") {
+          return { success: false, error: `Expected plugin format MCP tool name: ${toolName}` };
+        }
+
+        const module = new MCPToolModule();
+        // The scoped server name includes the <plugin>__ prefix.
+        const scopedName = `${parsed.pluginName}__${parsed.unscopedServerName}`;
+        const server = await module.findPluginMcpByScopedName(
+          parsed.pluginName,
+          scopedName
+        );
+
+        if (!server) {
+          return {
+            success: false,
+            error: `MCP server "${parsed.unscopedServerName}" not found for plugin "${parsed.pluginName}"`,
+          };
+        }
+
+        const result = await mcpService.executeMCPTool(
+          server.id,
+          parsed.toolName,
+          toolParams
+        );
+        return { success: true, result };
+      }
+
+      // Legacy format: mcp_<serverId>_<toolName>
       const parts = toolName.split("_");
       if (parts.length < 3 || parts[0] !== "mcp") {
         return {
@@ -362,7 +399,6 @@ export class ToolExecutor {
         };
       }
 
-      const mcpService = new MCPToolService();
       const result = await mcpService.executeMCPTool(
         serverId,
         actualToolName,
