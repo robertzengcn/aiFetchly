@@ -4,7 +4,7 @@ import {
 } from "@/service/PluginLoaderService";
 import { PluginRuntimeCache } from "@/service/PluginRuntimeCache";
 import { PluginHookRegistrar } from "@/service/pluginCompat/PluginHookRegistrar";
-
+import { SkillRegistry } from "@/config/skillsRegistry";
 /**
  * Adapts loaded plugin data into the existing skill and MCP runtime systems.
  * Source of truth: Design §7.5.
@@ -43,6 +43,7 @@ export class PluginComponentRegistryService {
    */
   static async unregisterPluginCapabilities(pluginName: string): Promise<void> {
     PluginRuntimeCache.clear(`unregister-${pluginName}`);
+    SkillRegistry.unregisterSkillsByPlugin(pluginName);
   }
 
   /**

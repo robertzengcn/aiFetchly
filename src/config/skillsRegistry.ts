@@ -2494,6 +2494,14 @@ function unregisterSkill(name: string): void {
   registry.delete(name);
 }
 
+function unregisterSkillsByPlugin(pluginName: string): void {
+  for (const [name, skill] of registry) {
+    if (skill.pluginOwner === pluginName) {
+      registry.delete(name);
+    }
+  }
+}
+
 /**
  * Find a user-installed skill that declares support for the given file extension.
  *
@@ -2565,6 +2573,7 @@ export const SkillRegistry = {
   isRegistered,
   registerSkill,
   unregisterSkill,
+  unregisterSkillsByPlugin,
   findSkillForFileExtension,
   listBuiltInSkillDefinitions,
 } as const;
