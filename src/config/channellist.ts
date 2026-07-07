@@ -423,5 +423,16 @@ export const AI_WORKSPACE_APPROVE = "ai-workspace:approve";
 export const AI_WORKSPACE_REVOKE = "ai-workspace:revoke";
 export const AI_WORKSPACE_LIST = "ai-workspace:list";
 
+// Workspace Memory (durable, workspace-scoped memory)
+export const AI_WORKSPACE_MEMORY_LIST = "ai:workspace-memory:list";
+export const AI_WORKSPACE_MEMORY_CREATE = "ai:workspace-memory:create";
+export const AI_WORKSPACE_MEMORY_UPDATE = "ai:workspace-memory:update";
+export const AI_WORKSPACE_MEMORY_ARCHIVE = "ai:workspace-memory:archive";
+export const AI_WORKSPACE_MEMORY_DELETE = "ai:workspace-memory:delete";
+export const AI_WORKSPACE_MEMORY_RUN_AUTO_DREAM =
+  "ai:workspace-memory:auto-dream:run";
+export const AI_WORKSPACE_MEMORY_AUTO_DREAM_STATUS =
+  "ai:workspace-memory:auto-dream:status";
+
 // Dialog Channels
 export const DIALOG_PICK_FOLDER = "dialog:pick-folder";

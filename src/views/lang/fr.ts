@@ -1125,22 +1125,27 @@ export default {
     chrome_path: "chrome path",
     firefox_path: "firefox path",
     embedding_group: "Modèles d'Embedding",
-    embedding_group_description: "Modèle d'embedding par défaut pour la recherche vectorielle.",
+    embedding_group_description:
+      "Modèle d'embedding par défaut pour la recherche vectorielle.",
     external_system: "Système Externe",
     user_preferences: "Préférences Utilisateur",
-    "user-preferences-group-description": "Préférences utilisateur pour le comportement de l'application.",
+    "user-preferences-group-description":
+      "Préférences utilisateur pour le comportement de l'application.",
     default_embedding_model: "Modèle d'Embedding par Défaut",
-    "default-embedding-model-description": "Sélectionnez le modèle d'embedding utilisé pour la recherche vectorielle et la correspondance de similarité.",
+    "default-embedding-model-description":
+      "Sélectionnez le modèle d'embedding utilisé pour la recherche vectorielle et la correspondance de similarité.",
     language_preference: "Langue",
     "language-preference-description": "Préférence de langue de l'interface.",
     ai_website_analysis_business_info: "Informations Commerciales",
-    "ai-website-analysis-business-info-description": "Informations commerciales utilisées lors de l'analyse IA du site web.",
+    "ai-website-analysis-business-info-description":
+      "Informations commerciales utilisées lors de l'analyse IA du site web.",
     "external-system-group-description": "external system group setting",
     mcp_tools: "MCP Tools",
     manage_mcp_tools: "Manage MCP Tools",
     manage_skills: "Gérer les compétences",
     ai_preferences: "Préférences IA",
-    "ai-preferences-group-description": "Paramètres contrôlant le comportement du chat IA, la mémoire et le contexte.",
+    "ai-preferences-group-description":
+      "Paramètres contrôlant le comportement du chat IA, la mémoire et le contexte.",
     user_ai_auto_dream: "Consolidation Auto-Rêve",
     "ai-auto-dream-description":
       "Résumer automatiquement les conversations passées en arrière-plan pour économiser les tokens de contexte IA.",
@@ -1152,6 +1157,16 @@ export default {
       "Texte statique injecté dans chaque requête de chat IA, après le prompt système. Videz le champ pour désactiver.",
     "ai-custom-context-directive-placeholder":
       "ex. Réponds toujours concis. Préfère les puces. Nous vendons des chaussures aux clients américains.",
+    user_ai_workspace_memory_injection:
+      "Injection de mémoire d'espace de travail",
+    "ai-workspace-memory-injection-description":
+      "Injecte les mémoires d'espace de travail pertinentes (décisions, commandes, conventions) dans le contexte du chat IA pour l'espace de travail actif.",
+    user_ai_workspace_auto_dream: "Auto-Dream d'espace de travail",
+    "ai-workspace-auto-dream-description":
+      "Consolide en arrière-plan les mémoires spécifiques à l'espace de travail à partir des conversations et des tâches d'agent.",
+    user_ai_workspace_manual_memory: "Mémoire d'espace de travail manuelle",
+    "ai-workspace-manual-memory-description":
+      "Autorise la création, modification et suppression manuelles des mémoires d'espace de travail. La désactivation ne supprime pas les mémoires stockées.",
   },
   skills: {
     title: "Gestion des Compétences",

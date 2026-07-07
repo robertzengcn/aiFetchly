@@ -1132,22 +1132,27 @@ export default {
     chrome_path: "Chrome-Pfad",
     firefox_path: "Firefox-Pfad",
     embedding_group: "Einbettungsmodelle",
-    embedding_group_description: "Standard-Einbettungsmodell für die Vektorsuche.",
+    embedding_group_description:
+      "Standard-Einbettungsmodell für die Vektorsuche.",
     external_system: "Externes System",
     user_preferences: "Benutzereinstellungen",
-    "user-preferences-group-description": "Benutzereinstellungen für das Anwendungsverhalten.",
+    "user-preferences-group-description":
+      "Benutzereinstellungen für das Anwendungsverhalten.",
     default_embedding_model: "Standard-Einbettungsmodell",
-    "default-embedding-model-description": "Wählen Sie das Einbettungsmodell für die Vektorsuche und Ähnlichkeitsermittlung.",
+    "default-embedding-model-description":
+      "Wählen Sie das Einbettungsmodell für die Vektorsuche und Ähnlichkeitsermittlung.",
     language_preference: "Sprache",
     "language-preference-description": "UI-Spracheinstellung.",
     ai_website_analysis_business_info: "Geschäftsinformationen",
-    "ai-website-analysis-business-info-description": "Geschäftsinformationen, die bei der KI-Analyse von Websites verwendet werden.",
+    "ai-website-analysis-business-info-description":
+      "Geschäftsinformationen, die bei der KI-Analyse von Websites verwendet werden.",
     "external-system-group-description": "Externe Systemgruppen-Einstellung",
     mcp_tools: "MCP-Tools",
     manage_mcp_tools: "MCP-Tools verwalten",
     manage_skills: "Fähigkeiten verwalten",
     ai_preferences: "KI-Einstellungen",
-    "ai-preferences-group-description": "Einstellungen zur Steuerung des KI-Chat-Verhaltens, des Speichers und des Kontexts.",
+    "ai-preferences-group-description":
+      "Einstellungen zur Steuerung des KI-Chat-Verhaltens, des Speichers und des Kontexts.",
     user_ai_auto_dream: "Auto-Traum-Konsolidierung",
     "ai-auto-dream-description":
       "Automatisches Zusammenfassen vergangener Konversationen im Hintergrund, um KI-Kontext-Token zu sparen.",
@@ -1159,6 +1164,15 @@ export default {
       "Statischer Text, der in jede KI-Chat-Anfrage eingefügt wird, nach dem System-Prompt. Feld leeren, um zu deaktivieren.",
     "ai-custom-context-directive-placeholder":
       "z.B. Antworte immer prägnant. Bevorzuge Aufzählungspunkte. Wir verkaufen Schuhe an US-Kunden.",
+    user_ai_workspace_memory_injection: "Workspace-Memory-Injection",
+    "ai-workspace-memory-injection-description":
+      "Injectet relevante Workspace-Memories (Projektentscheidungen, Befehle, Konventionen) in den KI-Chat-Kontext für den aktiven Workspace.",
+    user_ai_workspace_auto_dream: "Workspace-Auto-Dream",
+    "ai-workspace-auto-dream-description":
+      "Konsolidiert Workspace-spezifische Memories aus Konversationen und Agenten-Aufgaben im Hintergrund.",
+    user_ai_workspace_manual_memory: "Manuelles Workspace-Memory",
+    "ai-workspace-manual-memory-description":
+      "Erlaubt manuelles Erstellen, Bearbeiten und Löschen von Workspace-Memories. Deaktivieren löscht keine gespeicherten Memories.",
   },
   skills: {
     title: "Fähigkeiten verwalten",
