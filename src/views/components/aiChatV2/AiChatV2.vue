@@ -405,6 +405,10 @@ import {
   DEFAULT_CONTEXT_WINDOW,
 } from "./contextUsageUtil";
 import { hasPendingToolExecution } from "./toolExecutionStateUtil";
+import {
+  downscaleImageAttachment,
+  arrayBufferToBase64,
+} from "./imageScaleUtil";
 import { QUOTA_EXHAUSTED_SENTINEL } from "@/service/AIChatErrorMapper";
 
 /**
@@ -486,15 +490,6 @@ function classifyAttachment(fileName: string, mimeType: string): ChatV2Attachmen
   return null;
 }
 
-function arrayBufferToBase64(buffer: ArrayBuffer): string {
-  const bytes = new Uint8Array(buffer);
-  let binary = "";
-  for (let i = 0; i < bytes.byteLength; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary);
-}
-
 function defaultPromptForAttachments(files: File[]): string {
   const images = files.filter((f) => classifyAttachment(f.name, f.type) === "image");
   if (images.length > 0 && files.every((f) => classifyAttachment(f.name, f.type) === "image")) {
@@ -527,14 +522,29 @@ async function buildUploadedAttachments(files: File[]): Promise<ChatV2UploadedAt
     if (!kind) throw new Error(`Unsupported file type: ${file.name}`);
     if (file.size > MAX_UPLOAD_FILE_BYTES) throw new Error(`File too large: ${file.name}`);
 
-    const buffer = await file.arrayBuffer();
-    out.push({
-      fileName: file.name,
-      mimeType: resolveMimeType(file),
-      sizeBytes: file.size,
-      contentBase64: arrayBufferToBase64(buffer),
-      kind,
-    });
+    if (kind === "image") {
+      // Downscale + recompress before base64 so the inline data URL stays
+      // small enough for the AI server's request-body limit (large photos
+      // otherwise trip HTTP 413 "Request Entity Too Large"). Falls back to
+      // the original bytes if canvas processing fails.
+      const processed = await downscaleImageAttachment(file);
+      out.push({
+        fileName: file.name,
+        mimeType: processed.mimeType,
+        sizeBytes: processed.sizeBytes,
+        contentBase64: processed.contentBase64,
+        kind,
+      });
+    } else {
+      const buffer = await file.arrayBuffer();
+      out.push({
+        fileName: file.name,
+        mimeType: resolveMimeType(file),
+        sizeBytes: file.size,
+        contentBase64: arrayBufferToBase64(buffer),
+        kind,
+      });
+    }
   }
   return out;
 }
