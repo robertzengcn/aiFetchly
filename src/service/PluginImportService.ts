@@ -241,6 +241,9 @@ function readPluginClaudeSkillsFromPath(
       mdFiles.push({ abs: absPath, rel: skillPath });
     }
   } catch (e: unknown) {
+    if (e instanceof Error && "code" in e && (e as { code: string }).code === "ENOENT") {
+      return { ok: true, skills: [] };
+    }
     return {
       ok: false,
       errors: [
