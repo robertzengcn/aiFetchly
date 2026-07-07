@@ -181,8 +181,10 @@
       <div class="v2-shell__workspace-panel">
         <WorkspaceBadge
           :workspace="activeWorkspace"
+          :memory-count="workspaceMemoryCount"
           class="mb-1"
           @request-set-workspace="handleWorkspaceSetupRequest"
+          @request-open-memory="openWorkspaceMemory"
         />
         <WorkspaceRequiredCard
           v-if="showWorkspaceRequired && activeConversationId"
@@ -191,6 +193,26 @@
           @cancel="showWorkspaceRequired = false"
         />
       </div>
+
+      <v-dialog v-model="showWorkspaceMemory" max-width="760">
+        <v-card>
+          <v-card-title class="d-flex align-center">
+            <v-icon class="mr-2">mdi-brain</v-icon>
+            <span>{{
+              t("workspaceMemory.panelTitle") || "Workspace memory"
+            }}</span>
+            <v-spacer />
+            <v-btn icon="mdi-close" variant="text" size="small" @click="showWorkspaceMemory = false" />
+          </v-card-title>
+          <v-divider />
+          <WorkspaceMemoryPanel
+            v-if="activeConversationId"
+            :conversation-id="activeConversationId"
+            :workspace="activeWorkspace"
+            @change="refreshWorkspaceMemoryCount"
+          />
+        </v-card>
+      </v-dialog>
 
       <AiChatV2Composer
         :is-streaming="chatIsRunning"
@@ -385,7 +407,9 @@ import MCPToolManager from "../aiChat/MCPToolManager.vue";
 import AgentTaskListDialog from "./AgentTaskListDialog.vue";
 import WorkspaceBadge from "./WorkspaceBadge.vue";
 import WorkspaceRequiredCard from "./WorkspaceRequiredCard.vue";
+import WorkspaceMemoryPanel from "./WorkspaceMemoryPanel.vue";
 import { getWorkspace } from "@/views/api/workspace";
+import { workspaceMemoryApi } from "@/views/api/aiWorkspaceMemory";
 import type { WorkspaceSummary } from "@/entityTypes/workspaceTypes";
 import type { FileOperationRecord } from "@/entityTypes/fileOperationTypes";
 import {
@@ -485,6 +509,57 @@ const activeWorkspace = ref<WorkspaceSummary | null>(null);
 // True when the active conversation has no workspace — shows the pick card.
 const showWorkspaceRequired = ref(false);
 
+// Workspace memory panel + count for the active approved workspace.
+const showWorkspaceMemory = ref(false);
+const workspaceMemoryCount = ref(0);
+
+function openWorkspaceMemory(): void {
+  if (!activeWorkspace.value || activeWorkspace.value.approvalState !== "approved") {
+    showWorkspaceMemory.value = false;
+    return;
+  }
+  showWorkspaceMemory.value = true;
+}
+
+async function refreshWorkspaceMemoryCount(): Promise<void> {
+  if (!activeConversationId.value || !activeWorkspace.value || activeWorkspace.value.approvalState !== "approved") {
+    workspaceMemoryCount.value = 0;
+    return;
+  }
+  try {
+    const resp = await workspaceMemoryApi.list({
+      conversationId: activeConversationId.value,
+      status: "active",
+      limit: 1,
+    });
+    if (resp.status && Array.isArray(resp.data)) {
+      // The list endpoint caps at the requested limit; for an accurate count
+      // we re-request without the limit-1 optimization only when needed.
+      // For the badge we treat any non-empty result as "has memory" and fetch
+      // the real count lazily.
+      workspaceMemoryCount.value = resp.data.length > 0 ? await fetchWorkspaceMemoryTotal() : 0;
+    } else {
+      workspaceMemoryCount.value = 0;
+    }
+  } catch {
+    workspaceMemoryCount.value = 0;
+  }
+}
+
+async function fetchWorkspaceMemoryTotal(): Promise<number> {
+  if (!activeConversationId.value) return 0;
+  try {
+    const resp = await workspaceMemoryApi.list({
+      conversationId: activeConversationId.value,
+      status: "active",
+      limit: 200,
+    });
+    return resp.status && Array.isArray(resp.data) ? resp.data.length : 0;
+  } catch {
+    return 0;
+  }
+}
+
 function createLocalConversationId(): string {
   const randomId =
     typeof globalThis.crypto?.randomUUID === "function"
@@ -522,6 +597,7 @@ async function refreshWorkspace(conversationId: string | null): Promise<void> {
   if (!conversationId) {
     activeWorkspace.value = null;
     showWorkspaceRequired.value = false;
+    void refreshWorkspaceMemoryCount();
     return;
   }
   try {
@@ -541,6 +617,7 @@ async function refreshWorkspace(conversationId: string | null): Promise<void> {
     activeWorkspace.value = null;
     showWorkspaceRequired.value = false;
   }
+  void refreshWorkspaceMemoryCount();
 }
 
 /**
