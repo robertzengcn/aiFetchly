@@ -2404,11 +2404,26 @@ async function getAllToolFunctions(): Promise<ToolFunction[]> {
     const mod = new PluginManagementModule();
     const enabledPlugins = await mod.listEnabledPlugins();
     enabledPluginNames = new Set(enabledPlugins.map((p) => p.name));
-  } catch {
-    // Plugin module unavailable (e.g. during early boot / tests) — treat as
-    // no enabled plugins, which suppresses plugin-owned skills safely.
+    console.log(
+      `[SkillRegistry] listEnabledPlugins returned: [${Array.from(
+        enabledPluginNames
+      ).join(", ")}]`
+    );
+  } catch (e) {
+    console.warn(
+      `[SkillRegistry] listEnabledPlugins failed, suppressing all plugin-owned skills:`,
+      e
+    );
     enabledPluginNames = new Set();
   }
+
+  console.log(
+    `[SkillRegistry] getAllToolFunctions: registry has ${registry.size} skills: [${Array.from(
+      registry.values()
+    )
+      .map((s) => `${s.name}(pluginOwner=${s.pluginOwner ?? "none"})`)
+      .join(", ")}]`
+  );
 
   const builtInTools: ToolFunction[] = [];
   for (const skill of registry.values()) {
@@ -2417,6 +2432,9 @@ async function getAllToolFunctions(): Promise<ToolFunction[]> {
       enabledPluginNames &&
       !enabledPluginNames.has(skill.pluginOwner)
     ) {
+      console.log(
+        `[SkillRegistry]   SKIP "${skill.name}" — pluginOwner "${skill.pluginOwner}" not in enabled plugin list`
+      );
       continue; // owning plugin is disabled — hide from catalog
     }
     builtInTools.push(skillDefinitionToToolFunction(skill));
@@ -2455,9 +2473,15 @@ function isRegistered(name: string): boolean {
  */
 function registerSkill(skill: SkillDefinition): void {
   if (registry.has(skill.name)) {
+    console.warn(
+      `[SkillRegistry] registerSkill FAILED: "${skill.name}" already registered`
+    );
     throw new Error(`Skill already registered: ${skill.name}`);
   }
   registry.set(skill.name, skill);
+  console.log(
+    `[SkillRegistry] registerSkill OK: "${skill.name}" (docOnly=${skill.documentationOnly}, pluginOwner=${skill.pluginOwner ?? "none"})`
+  );
 }
 
 /**

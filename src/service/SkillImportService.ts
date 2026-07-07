@@ -1287,6 +1287,9 @@ function buildImportedSkillExecuteHandler(
 async function loadPersistedSkills(): Promise<void> {
   const module = new SkillManagementModule();
   const skills = await module.listEnabledSkills();
+  console.log(
+    `[SkillImport] loadPersistedSkills: ${skills.length} enabled skills in DB`
+  );
 
   for (const skill of skills) {
     try {
@@ -1300,6 +1303,9 @@ async function loadPersistedSkills(): Promise<void> {
           getPluginInstallRoot(skill.pluginName),
           path.dirname(skill.pluginComponentPath)
         );
+        console.log(
+          `[SkillImport] plugin-owned skill "${skill.name}": resolved dir="${skillDir}" (pluginName="${skill.pluginName}", componentPath="${skill.pluginComponentPath}")`
+        );
       } else {
         const skillsDir = getInstalledSkillsDir();
         skillDir = path.join(skillsDir, skill.name);
@@ -1307,13 +1313,13 @@ async function loadPersistedSkills(): Promise<void> {
 
       if (!fs.existsSync(skillDir)) {
         console.warn(
-          `[SkillImport] Skill directory missing for "${skill.name}", skipping`
+          `[SkillImport] Skill directory missing for "${skill.name}" at "${skillDir}", skipping`
         );
         continue;
       }
 
       registerImportedSkill(manifest, skillDir);
-      console.log(`[SkillImport] Loaded persisted skill: ${skill.name}`);
+      console.log(`[SkillImport] Loaded persisted skill: "${skill.name}" from "${skillDir}"`);
     } catch (error) {
       console.warn(
         `[SkillImport] Failed to load skill "${skill.name}": ${
