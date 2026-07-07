@@ -220,9 +220,9 @@ const chatPanelOpen = ref(false);
 const v2ChatPanelOpen = ref(false);
 const V2_FLAG_KEY = 'aifetchly:aiChatV2Enabled';
 const aiChatV2Enabled = ref(localStorage.getItem(V2_FLAG_KEY) !== 'false');
-const chatPanelWidth = ref(420);
-const CHAT_PANEL_MIN_WIDTH = 320;
-const CHAT_PANEL_MAX_WIDTH = 900;
+const chatPanelWidth = ref(600);
+const CHAT_PANEL_MIN_WIDTH = 400;
+const CHAT_PANEL_MAX_WIDTH = 1200;
 const mainStore = useMainStore();
 const router = useRouter();
 const navState = reactive({
