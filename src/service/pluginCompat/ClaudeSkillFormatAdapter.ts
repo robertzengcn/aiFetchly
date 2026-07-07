@@ -33,6 +33,19 @@ export type ClaudeSkillAdaptResult =
 
 const NAME_REGEX = /^[a-z][a-z0-9_-]*$/;
 
+/** Derive a skill name from the SKILL.md file path when frontmatter omits "name".
+ *  For "skills/hello/SKILL.md" → "hello"; for "skills/SKILL.md" → "skills". */
+function deriveSkillNameFromPath(sourcePath: string): string {
+  const normalized = sourcePath.replace(/\\/g, "/");
+  const trimmed = normalized.replace(/\/$/, "");
+  const lastSlash = trimmed.lastIndexOf("/");
+  if (lastSlash === -1) return "imported-skill";
+  const parent = trimmed.substring(0, lastSlash);
+  const slashBeforeParent = parent.lastIndexOf("/");
+  const dirName = slashBeforeParent === -1 ? parent : parent.substring(slashBeforeParent + 1);
+  return dirName || "imported-skill";
+}
+
 function sanitizeSkillName(raw: string): string {
   const normalized = raw
     .toLowerCase()
@@ -61,9 +74,10 @@ function normalizeFileExtensions(values: unknown): string[] | undefined {
 export class ClaudeSkillFormatAdapter {
   /**
    * Adapt a SKILL.md file's content into a SkillManifest.
+   * Skill name is derived from the parent directory name when frontmatter omits "name".
    *
    * Errors:
-   *   - claude-frontmatter-missing-field: required field `name` or `description` absent.
+   *   - claude-frontmatter-missing-field: required field `description` absent.
    */
   static adapt(
     skillMdContent: string,
@@ -74,18 +88,10 @@ export class ClaudeSkillFormatAdapter {
     const rawName = frontmatter.name;
     const rawDescription = frontmatter.description;
 
-    if (typeof rawName !== "string" || rawName.length === 0) {
-      return {
-        ok: false,
-        error: {
-          code: "claude-frontmatter-missing-field",
-          componentType: "skill",
-          path: sourcePath,
-          message: `Claude skill at "${sourcePath}" is missing required frontmatter field "name".`,
-          recoverable: false,
-        },
-      };
-    }
+    const name =
+      typeof rawName === "string" && rawName.length > 0
+        ? sanitizeSkillName(rawName)
+        : sanitizeSkillName(deriveSkillNameFromPath(sourcePath));
 
     if (typeof rawDescription !== "string" || rawDescription.length === 0) {
       return {
@@ -99,8 +105,6 @@ export class ClaudeSkillFormatAdapter {
         },
       };
     }
-
-    const name = sanitizeSkillName(rawName);
     const version =
       typeof frontmatter.version === "string" ? frontmatter.version : "0.0.0";
 
