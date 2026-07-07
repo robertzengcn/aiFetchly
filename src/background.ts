@@ -322,7 +322,7 @@ function initialize() {
   let createWindowInFlight: Promise<void> | null = null;
 
   async function createWindow(): Promise<void> {
-    const existingWindows = BrowserWindow.getAllWindows() as BrowserWindow[];
+    const existingWindows = BrowserWindow.getAllWindows() as any[];
     if (existingWindows.length > 0) {
       const existing = existingWindows[0];
       if (!existing.isDestroyed()) {
@@ -334,7 +334,7 @@ function initialize() {
     }
     if (createWindowInFlight) {
       await createWindowInFlight;
-      const existingWindows2 = BrowserWindow.getAllWindows() as BrowserWindow[];
+      const existingWindows2 = BrowserWindow.getAllWindows() as any[];
       if (existingWindows2.length > 0) {
         const existing = existingWindows2[0];
         if (!existing.isDestroyed()) {
