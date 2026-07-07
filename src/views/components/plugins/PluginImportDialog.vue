@@ -85,6 +85,7 @@ async function pickZip(): Promise<void> {
   const picked = await windowInvoke(CHOOSEFILEDIALOG, {
     title: t("plugins.select_zip"),
     filters: [{ name: "Zip", extensions: ["zip"] }],
+    properties: ["openFile"],
   });
   if (typeof picked === "string" && picked.length > 0) {
     zipPath.value = picked;
