@@ -5,8 +5,8 @@ milestone_name: Local Extensibility
 current_phase: 16
 current_phase_name: Dynamic Agents
 status: executing
-stopped_at: "Plan 15-01 complete (CMD-06 core: expander + validator + dispatcher wiring)"
-last_updated: "2026-07-07T19:40:25.936Z"
+stopped_at: Phase 16 context gathered
+last_updated: "2026-07-07T22:34:44.590Z"
 last_activity: 2026-07-07
 last_activity_desc: Phase 15 complete, transitioned to Phase 16
 progress:
@@ -114,10 +114,10 @@ None yet.
 
 ## Session Continuity
 
-**Resume file:** .planning/phases/15-prompt-command-files/15-CONTEXT.md
+**Resume file:** .planning/phases/16-dynamic-agents/16-CONTEXT.md
 
-Last session: 2026-07-07T02:53:27.651Z
-Stopped at: Plan 15-01 complete (CMD-06 core: expander + validator + dispatcher wiring)
+Last session: 2026-07-07T22:34:44.584Z
+Stopped at: Phase 16 context gathered
 Worktree: .claude/worktrees/merry-stirring-scroll (branch: dev)
 
 ## Performance Metrics
