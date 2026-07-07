@@ -3,10 +3,12 @@ import { AIChatCompactModule } from "@/modules/AIChatCompactModule";
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { AIChatTokenEstimator } from "@/service/AIChatTokenEstimator";
 import { AIUserMemoryRetrievalService } from "@/service/AIUserMemoryRetrievalService";
+import { AIWorkspaceMemoryRetrievalService } from "@/service/AIWorkspaceMemoryRetrievalService";
 import { buildPlanModeSystemPrompt } from "@/service/PlanModePromptBuilder";
 import { SystemSettingModule } from "@/modules/SystemSettingModule";
 import {
   ai_memory_injection_enabled,
+  ai_workspace_memory_injection_enabled,
   ai_custom_context_directive,
 } from "@/config/settinggroupInit";
 import { WorkspaceResolver } from "@/service/WorkspaceResolver";
@@ -37,6 +39,8 @@ export interface AIChatContextAssembleResult {
   readonly tokenEstimate: number;
   readonly usedSessionMemory: boolean;
   readonly usedFullCompact: boolean;
+  readonly usedWorkspaceMemory: boolean;
+  readonly workspaceMemoryCount: number;
   readonly usedDurableMemory: boolean;
   readonly durableMemoryCount: number;
   readonly compactTriggered: boolean;
@@ -60,6 +64,7 @@ export class AIChatContextAssembler {
   private readonly v2 = new AIChatV2Module();
   private readonly estimator = new AIChatTokenEstimator();
   private readonly durableMemory = new AIUserMemoryRetrievalService();
+  private readonly workspaceMemory = new AIWorkspaceMemoryRetrievalService();
   private readonly systemSettings = new SystemSettingModule();
 
   async assemble(
@@ -132,9 +137,7 @@ export class AIChatContextAssembler {
     // probing the filesystem. Gracefully degrade on lookup failure.
     try {
       const workspaceResolver = new WorkspaceResolver();
-      const resolved = await workspaceResolver.resolve(
-        input.conversationId
-      );
+      const resolved = await workspaceResolver.resolve(input.conversationId);
       if (resolved) {
         const displayName = path.basename(resolved.rootPath);
         messages.push({
@@ -153,6 +156,50 @@ export class AIChatContextAssembler {
     // the system_setting table (default-on when absent). Placed before compact
     // context so recent conversation history wins when they conflict.
     let injectionEnabled = true;
+
+    // Workspace memory injection. Project-scoped memories for the active
+    // approved workspace. Resolves the workspace (and its key) in the main
+    // process; returns an empty block when no workspace is approved or the
+    // toggle is off. Placed AFTER the active-workspace block and BEFORE durable
+    // user memory so workspace memory wins over global memory for
+    // project-specific behavior. Retrieval failure must never break chat —
+    // degrade to no-injection (do NOT fall back to global user memory).
+    let workspaceInjectionEnabled = true;
+    try {
+      const wv = await this.systemSettings.getSettingValue(
+        ai_workspace_memory_injection_enabled
+      );
+      workspaceInjectionEnabled = wv !== "false";
+    } catch (err) {
+      console.error(
+        "[ai-chat-context] failed to read workspace memory injection toggle:",
+        err
+      );
+    }
+    let workspaceContextBlock = "";
+    let workspaceMemoryCount = 0;
+    if (workspaceInjectionEnabled) {
+      try {
+        const workspaceMem = await this.workspaceMemory.retrieve({
+          currentUserMessage: input.currentUserMessage,
+          conversationId: input.conversationId,
+          mode: input.mode,
+          maxMemories: 8,
+          maxTokens: 1800,
+        });
+        workspaceContextBlock = workspaceMem.contextBlock;
+        workspaceMemoryCount = workspaceMem.memories.length;
+      } catch (err) {
+        console.error(
+          "[ai-chat-context] workspace memory retrieval failed:",
+          err
+        );
+      }
+    }
+    if (workspaceContextBlock.length > 0) {
+      messages.push({ role: "system", content: workspaceContextBlock });
+    }
+
     try {
       const v = await this.systemSettings.getSettingValue(
         ai_memory_injection_enabled
@@ -213,6 +260,8 @@ export class AIChatContextAssembler {
       tokenEstimate,
       usedSessionMemory: !fullCompact && !!sessionMemory,
       usedFullCompact: !!fullCompact,
+      usedWorkspaceMemory: workspaceMemoryCount > 0,
+      workspaceMemoryCount,
       usedDurableMemory: durableMemoryCount > 0,
       durableMemoryCount,
       compactTriggered: false,

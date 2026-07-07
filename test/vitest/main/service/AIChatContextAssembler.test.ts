@@ -8,10 +8,17 @@ const mockGetByConversation = vi.fn();
 const mockGetActiveSummary = vi.fn();
 const mockGetConversationMessages = vi.fn();
 const mockDurableRetrieve = vi.fn();
+const mockWorkspaceRetrieve = vi.fn();
 
 vi.mock("@/modules/AIChatSessionMemoryModule", () => ({
   AIChatSessionMemoryModule: vi.fn().mockImplementation(() => ({
     getByConversation: mockGetByConversation,
+  })),
+}));
+
+vi.mock("@/service/AIWorkspaceMemoryRetrievalService", () => ({
+  AIWorkspaceMemoryRetrievalService: vi.fn().mockImplementation(() => ({
+    retrieve: mockWorkspaceRetrieve,
   })),
 }));
 
@@ -60,6 +67,11 @@ describe("AIChatContextAssembler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockDurableRetrieve.mockResolvedValue({
+      memories: [],
+      tokenEstimate: 0,
+      contextBlock: "",
+    });
+    mockWorkspaceRetrieve.mockResolvedValue({
       memories: [],
       tokenEstimate: 0,
       contextBlock: "",
@@ -309,6 +321,11 @@ describe("AIChatContextAssembler — custom context directive", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockDurableRetrieve.mockResolvedValue({
+      memories: [],
+      tokenEstimate: 0,
+      contextBlock: "",
+    });
+    mockWorkspaceRetrieve.mockResolvedValue({
       memories: [],
       tokenEstimate: 0,
       contextBlock: "",
