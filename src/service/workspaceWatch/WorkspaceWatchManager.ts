@@ -51,6 +51,8 @@ import {
   MAX_RESTARTS,
 } from "@/service/workspaceWatch/WorkspaceWatchRestarter";
 import { derivePhase14Trust } from "@/service/workspaceWatch/WorkspaceTrustFilter";
+import type { WorkspaceCommandDraft } from "@/service/workspaceWatch/WorkspaceConfigScanner";
+import { buildWorkspaceCommandDefinitions } from "@/service/workspaceWatch/buildWorkspaceCommandDefinitions";
 
 /**
  * Internal mutable variant of WatchedWorkspaceState. The public type
@@ -447,7 +449,31 @@ export class WorkspaceWatchManager {
     switch (event.type) {
       case "snapshot":
       case "changed": {
-        state.lastSnapshot = event.snapshot;
+        // Phase 15 (Plan 02): the worker ships opaque WorkspaceCommandDraft[]
+        // in snapshot.commands. Convert them IN THE MAIN PROCESS into
+        // validated SlashCommandDefinition[] before the snapshot reaches the
+        // registry. The Phase-14 trust filter still runs unchanged inside
+        // applyWorkspaceSnapshotCallback (this adds validation, not a new
+        // trust surface). Validation diagnostics merge into the snapshot so
+        // they surface in /status and the renderer event.
+        const converted = buildWorkspaceCommandDefinitions(
+          event.snapshot
+            .commands as unknown as readonly WorkspaceCommandDraft[],
+          {
+            sourceId: event.snapshot.sourceId,
+            sourceLabel: "Workspace",
+            requiresTrust: true,
+          }
+        );
+        const snapshot: AIFetchlyConfigSnapshot = {
+          ...event.snapshot,
+          commands: converted.definitions,
+          diagnostics: [
+            ...event.snapshot.diagnostics,
+            ...converted.diagnostics,
+          ],
+        };
+        state.lastSnapshot = snapshot;
         // Trust resolver is injected — fail closed on exception (Rule 2).
         let approved: boolean;
         try {
@@ -462,7 +488,7 @@ export class WorkspaceWatchManager {
         }
         const trust = derivePhase14Trust(approved);
         try {
-          this.applySnapshotCallback(event.snapshot, trust);
+          this.applySnapshotCallback(snapshot, trust);
         } catch (err) {
           this.logger(
             "error",
@@ -474,11 +500,11 @@ export class WorkspaceWatchManager {
           type: "changed",
           source: "workspace",
           workspaceId: event.workspaceId,
-          sourceId: event.snapshot.sourceId,
+          sourceId: snapshot.sourceId,
           summary: {
-            commandCount: event.snapshot.commands.length,
-            instructionCount: event.snapshot.instructions.length,
-            diagnosticCount: event.snapshot.diagnostics.length,
+            commandCount: snapshot.commands.length,
+            instructionCount: snapshot.instructions.length,
+            diagnosticCount: snapshot.diagnostics.length,
           },
         });
         return;

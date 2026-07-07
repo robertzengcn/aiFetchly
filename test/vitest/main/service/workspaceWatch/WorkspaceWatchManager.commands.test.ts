@@ -15,7 +15,10 @@
  */
 import { EventEmitter } from "events";
 import { describe, expect, it, vi } from "vitest";
-import type { AIFetchlyConfigSnapshot } from "@/entityTypes/aifetchlyConfigTypes";
+import type {
+  AIFetchlyConfigDiagnostic,
+  AIFetchlyConfigSnapshot,
+} from "@/entityTypes/aifetchlyConfigTypes";
 import type { SlashCommandDefinition } from "@/entityTypes/slashCommandTypes";
 import { CommandRegistry } from "@/service/slashCommands/CommandRegistry";
 import type { WorkspaceWatchCommand } from "@/service/workspaceWatch/WorkspaceWatchProtocol";
@@ -78,7 +81,7 @@ function draftReview(): WorkspaceCommandDraft {
 
 function snapshotWith(
   commands: readonly WorkspaceCommandDraft[],
-  diagnostics: readonly never[] = []
+  diagnostics: readonly AIFetchlyConfigDiagnostic[] = []
 ): AIFetchlyConfigSnapshot {
   return {
     source: "workspace",

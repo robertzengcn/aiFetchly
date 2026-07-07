@@ -1,18 +1,21 @@
 /**
- * AIFetchlyConfigLoader — CFG-01 / CFG-03 / CFG-04 / CFG-06 / DX-01.
+ * AIFetchlyConfigLoader — CFG-01 / CFG-03 / CFG-04 / CFG-05 / CFG-06 / CFG-07 / CMD-06 / DX-01.
  *
  * Async bounded scanner for the global ~/.aifetchly config folder. Resolves
  * the root via os.homedir() + AIFETCHLY_CONFIG_DIR_NAME (NEVER Electron
  * userData — CFG-01), enforces per-file-type size limits before reading
  * (CFG-04, T-13-DoS), hashes content with SHA-256 (CFG-06), validates
  * settings.json against a zod schema with graceful fallback to defaults
- * (CFG-03), and emits diagnostics using the stable code tuple (DX-01).
+ * (CFG-03), scans commands/*.md through the restricted frontmatter parser
+ * (CFG-07) + buildPromptCommandDefinition (CMD-06, Plan 15-01), and emits
+ * diagnostics using the stable code tuple (DX-01).
  *
- * Pipeline (per design §6.4 phase-1 list):
+ * Pipeline (design §6.4):
  *   fs.readdir -> for each well-known file:
  *     fs.stat (size limit) -> fs.readFile (bounded) ->
  *       AGENTS.md: crypto.createHash('sha256') + AIFetchlyInstructionBlock
  *       settings.json: JSON.parse + zod safeParse + merge over defaults
+ *       commands/*.md: frontmatter parse + buildPromptCommandDefinition
  *
  * Hard invariants:
  *   - All filesystem operations use fs.promises (async). The acceptance grep
@@ -21,8 +24,8 @@
  *     recoverable "scanner-io-error" diagnostics and the scan continues.
  *   - Missing global folder is the happy path on a fresh install: empty
  *     snapshot, NO diagnostic.
- *   - The commands/agents/hooks/skills arrays are EMPTY in phase 13 (phase
- *     15+ populates commands; phase 16 agents; etc.). The type is stable.
+ *   - The commands array carries validated SlashCommandDefinition objects
+ *     (Phase 15, Plan 02); agents/hooks/skills stay EMPTY until phase 16/17/18.
  */
 
 import * as crypto from "crypto";
@@ -37,18 +40,25 @@ import type {
   AIFetchlyConfigSnapshot,
   AIFetchlyInstructionBlock,
 } from "@/entityTypes/aifetchlyConfigTypes";
+import type { SlashCommandDefinition } from "@/entityTypes/slashCommandTypes";
+import { buildPromptCommandDefinition } from "@/service/slashCommands/promptCommandFrontmatter";
 import { lazySchema } from "@/utils/lazySchema";
 import {
   AIFETCHLY_CONFIG_DIR_NAME,
   AIFETCHLY_CONFIG_LIMITS,
   DEFAULT_AIFETCHLY_CONFIG_SETTINGS,
 } from "./AIFetchlyConfigConstants";
+import { parseRestrictedFrontmatter } from "./AIFetchlyConfigMarkdown";
+import { resolveConfigRelativePath } from "./resolveConfigRelativePath";
 
-// Phase-13 discovery list (design §6.4). Workspace-scanned files (phase 14+)
-// will route through resolveConfigRelativePath + parseRestrictedFrontmatter;
-// the global loader only needs the two well-known literals below.
+// Phase-13/15 discovery list (design §6.4). The global loader reads the two
+// well-known literals plus the commands/ directory (Phase 15). Workspace-
+// scanned files route through resolveConfigRelativePath +
+// parseRestrictedFrontmatter in the Phase-14 scanner; the global loader
+// mirrors that path for commands/*.md here.
 const AGENTS_MD = "AGENTS.md";
 const SETTINGS_JSON = "settings.json";
+const COMMANDS_DIR = "commands";
 
 const settingsSchema = lazySchema(() =>
   z
@@ -88,6 +98,7 @@ export class AIFetchlyConfigLoader {
 
     const files: AIFetchlyConfigFileSnapshot[] = [];
     const instructions: AIFetchlyInstructionBlock[] = [];
+    const commands: SlashCommandDefinition[] = [];
     const diagnostics: AIFetchlyConfigDiagnostic[] = [];
 
     let entries: readonly string[];
@@ -102,6 +113,7 @@ export class AIFetchlyConfigLoader {
           sourceId,
           files,
           instructions,
+          commands,
           diagnostics
         );
       }
@@ -112,6 +124,7 @@ export class AIFetchlyConfigLoader {
         sourceId,
         files,
         instructions,
+        commands,
         diagnostics
       );
     }
@@ -181,11 +194,17 @@ export class AIFetchlyConfigLoader {
       }
     }
 
+    // Phase 15 (Plan 02): scan commands/*.md through the restricted frontmatter
+    // parser (CFG-07) + buildPromptCommandDefinition (CMD-06). Mirrors the
+    // Phase-14 WorkspaceConfigScanner.tryReadCommandFiles structure.
+    await this.tryReadCommandFiles(files, commands, diagnostics);
+
     return this.buildSnapshot(
       source,
       sourceId,
       files,
       instructions,
+      commands,
       diagnostics
     );
   }
@@ -239,6 +258,155 @@ export class AIFetchlyConfigLoader {
     this.settings = { ...DEFAULT_AIFETCHLY_CONFIG_SETTINGS, ...parsed.data };
   }
 
+  /**
+   * CMD-06 (Phase 15 / Plan 02): read `<rootPath>/commands/*.md`, parse each
+   * with the restricted frontmatter parser (CFG-07), apply CFG-05 path safety
+   * + CFG-04 size/count caps, validate via buildPromptCommandDefinition (the
+   * single CMD-06 schema owner), and push successful definitions into
+   * `commands` with failures into `diagnostics`. Mirrors Phase-14
+   * WorkspaceConfigScanner.tryReadCommandFiles. Missing commands/ dir is the
+   * happy path — no diagnostic.
+   */
+  private async tryReadCommandFiles(
+    files: AIFetchlyConfigFileSnapshot[],
+    commands: SlashCommandDefinition[],
+    diagnostics: AIFetchlyConfigDiagnostic[]
+  ): Promise<void> {
+    const source = "user" as const;
+    const sourceId = "user";
+    const commandsDir = path.join(this.rootPath, COMMANDS_DIR);
+
+    let entries: readonly (string | fs.Dirent)[];
+    try {
+      entries = await fs.promises.readdir(commandsDir, { withFileTypes: true });
+    } catch (err) {
+      // Missing commands/ dir is the happy path (most installs have none).
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+      diagnostics.push(this.ioError(`${COMMANDS_DIR}/`, err));
+      return;
+    }
+
+    const sourceMeta = {
+      source,
+      sourceId,
+      sourceLabel: "User",
+      requiresTrust: false,
+    };
+
+    for (const entry of entries) {
+      const name = typeof entry === "string" ? entry : entry.name;
+      if (!name.endsWith(".md")) continue;
+      const relativePath = `${COMMANDS_DIR}/${name}`;
+      const safeRel = resolveConfigRelativePath(commandsDir, name);
+      // CFG-05: reject absolute or `..`-traversing names.
+      if (!safeRel.ok) {
+        diagnostics.push({
+          severity: "warning",
+          source,
+          sourceId,
+          filePath: relativePath,
+          code: "path-outside-root",
+          message: `rejected command path: ${safeRel.reason}`,
+          recoverable: true,
+        });
+        continue;
+      }
+      try {
+        // Skip subdirectories (withFileTypes returns Dirent).
+        if (
+          typeof entry !== "string" &&
+          typeof entry.isDirectory === "function" &&
+          entry.isDirectory()
+        ) {
+          continue;
+        }
+
+        // CFG-04: count cap — once maxCommandsPerSource files have been added,
+        // skip the rest with a single diagnostic.
+        if (commands.length >= AIFETCHLY_CONFIG_LIMITS.maxCommandsPerSource) {
+          diagnostics.push({
+            severity: "warning",
+            source,
+            sourceId,
+            filePath: relativePath,
+            code: "file-too-large",
+            message: `command count reached the ${AIFETCHLY_CONFIG_LIMITS.maxCommandsPerSource}-file cap; skipping remaining files`,
+            recoverable: true,
+          });
+          break;
+        }
+
+        const abs = safeRel.absolutePath;
+        const stat = await fs.promises.stat(abs);
+        if (stat.size > AIFETCHLY_CONFIG_LIMITS.commandMdBytes) {
+          diagnostics.push({
+            severity: "warning",
+            source,
+            sourceId,
+            filePath: relativePath,
+            code: "file-too-large",
+            message: `${name} is ${stat.size} bytes which exceeds the ${AIFETCHLY_CONFIG_LIMITS.commandMdBytes}-byte limit; skipped`,
+            recoverable: true,
+          });
+          continue;
+        }
+
+        const content = await fs.promises.readFile(abs);
+        const contentHash = crypto
+          .createHash("sha256")
+          .update(content)
+          .digest("hex");
+        files.push({
+          relativePath,
+          kind: "command",
+          mtimeMs: stat.mtimeMs,
+          sizeBytes: stat.size,
+          contentHash,
+        });
+
+        // CFG-07 restricted frontmatter parse. On failure, surface a
+        // diagnostic and skip — the file is still counted in files[].
+        const text = content.toString("utf8");
+        const parsed = parseRestrictedFrontmatter(text);
+        if (parsed === null) {
+          diagnostics.push({
+            severity: "warning",
+            source,
+            sourceId,
+            filePath: relativePath,
+            code: "frontmatter-invalid",
+            message: `${name} frontmatter failed restricted parse; skipped`,
+            recoverable: true,
+          });
+          continue;
+        }
+
+        const scalars: Record<string, string> = {};
+        const arrays: Record<string, readonly string[]> = {};
+        for (const [k, v] of parsed.scalars) scalars[k] = v;
+        for (const [k, v] of parsed.arrays) arrays[k] = v;
+
+        // CMD-06 validation via the single schema owner (Plan 15-01).
+        const result = buildPromptCommandDefinition(
+          {
+            frontmatter: { ...scalars, ...arrays },
+            body: parsed.body,
+            relativePath,
+          },
+          sourceMeta
+        );
+        if (result.ok) {
+          commands.push(result.definition);
+        } else {
+          diagnostics.push(result.diagnostic);
+        }
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
+        diagnostics.push(this.ioError(relativePath, err));
+      }
+    }
+  }
+
   private ioError(filePath: string, err: unknown): AIFetchlyConfigDiagnostic {
     return {
       severity: "warning",
@@ -258,6 +426,7 @@ export class AIFetchlyConfigLoader {
     sourceId: string,
     files: readonly AIFetchlyConfigFileSnapshot[],
     instructions: readonly AIFetchlyInstructionBlock[],
+    commands: readonly SlashCommandDefinition[],
     diagnostics: readonly AIFetchlyConfigDiagnostic[]
   ): AIFetchlyConfigSnapshot {
     return {
@@ -267,7 +436,7 @@ export class AIFetchlyConfigLoader {
       version: 1,
       files,
       instructions,
-      commands: [],
+      commands,
       agents: [],
       hooks: [],
       skills: [],
