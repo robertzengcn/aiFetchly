@@ -1,6 +1,11 @@
 // src/service/AIChatQueryEngine.ts
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { AIChatPlanModule } from "@/modules/AIChatPlanModule";
+import { AIChatAttachmentModule } from "@/modules/AIChatAttachmentModule";
+import {
+  DocumentService,
+  StagedAttachmentReference,
+} from "@/service/DocumentService";
 import type {
   OpenAIChatMessage,
   OpenAITool,
@@ -34,7 +39,17 @@ import type {
   ResumeToolAfterPermissionRequest,
   ResumeTurnResult,
 } from "@/service/AIChatQueryEvents";
-import type { ChatV2StreamRequest } from "@/entityTypes/aiChatV2Types";
+import type {
+  ChatV2StreamRequest,
+  ChatV2UploadedAttachment,
+  ChatV2AttachmentKind,
+  ChatV2AttachmentMetadata,
+} from "@/entityTypes/aiChatV2Types";
+import type {
+  OpenAITextContentPart,
+  OpenAIImageUrlContentPart,
+  OpenAIMessageContent,
+} from "@/api/aiChatApi";
 import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
 
 function isActivePlanState(plan?: AIChatPlanStateView | null): boolean {
@@ -100,6 +115,14 @@ function toOpenAITools(toolFunctions: ToolFunction[]): OpenAITool[] {
     }));
 }
 
+interface AttachmentPrepResult {
+  enrichedMessage: string;
+  contentParts: Array<OpenAITextContentPart | OpenAIImageUrlContentPart>;
+  displayMetadata: ChatV2AttachmentMetadata[];
+  attachmentRefs: string[];
+  docFileNames: string[];
+}
+
 export interface AIChatQuerySubmitInput {
   eventSink: AIChatQueryEventSink;
   request: ChatV2StreamRequest;
@@ -149,6 +172,150 @@ export class AIChatQueryEngine {
     this.compactAgent = deps?.compactAgent;
     this.autoDreamService = deps?.autoDreamService;
     this.workspaceAutoDreamService = deps?.workspaceAutoDreamService;
+  }
+
+  /**
+   * Prepare attachment content enrichment (no DB writes).
+   * Returns enriched message text, content parts (for images), and metadata.
+   *
+   * @param files       All uploaded files (images + documents).
+   * @param stagedRefs  Already-staged document references (with refId from
+   *                    stageAttachmentMarkdown). Images have no refId.
+   * @param originalMessage  The user's original text message.
+   */
+  private prepareAttachmentContent(
+    files: ChatV2UploadedAttachment[],
+    stagedRefs: StagedAttachmentReference[],
+    originalMessage: string
+  ): AttachmentPrepResult {
+    const displayMetadata: ChatV2AttachmentMetadata[] = [];
+    const contentParts: Array<OpenAITextContentPart | OpenAIImageUrlContentPart> = [];
+    const attachmentRefs: string[] = [];
+    const docFileNames: string[] = [];
+
+    // Build a set of filenames that were successfully staged (for enrichment).
+    const stagedFileNames = new Set(stagedRefs.map((r) => r.fileName));
+
+    for (const file of files) {
+      if (file.kind === "image") {
+        const dataUrl = `data:${file.mimeType};base64,${file.contentBase64}`;
+        contentParts.push({
+          type: "image_url",
+          image_url: { url: dataUrl, detail: "auto" },
+        });
+        displayMetadata.push({
+          fileName: file.fileName,
+          mimeType: file.mimeType,
+          sizeBytes: file.sizeBytes,
+          kind: "image",
+          processingMode: "image_url",
+        });
+      } else if (stagedFileNames.has(file.fileName)) {
+        // Only include documents that were successfully staged
+        docFileNames.push(file.fileName);
+        displayMetadata.push({
+          fileName: file.fileName,
+          mimeType: file.mimeType,
+          sizeBytes: file.sizeBytes,
+          kind: "document",
+          processingMode: "staged_markdown",
+        });
+      } else {
+        // Document was too large or staging failed — skip enrichment
+        console.log(
+          `[ai-chat-v2] document ${file.fileName} not staged — skipping enrichment`
+        );
+      }
+    }
+
+    // Build enriched user message with attachment reference block for documents
+    let enrichedMessage = originalMessage || "";
+    if (stagedRefs.length > 0) {
+      const blockLines = [
+        "",
+        `Attached ${stagedRefs.length} file(s) are staged locally and available below.`,
+        "A `read_attachment_content` tool is available to load their contents.",
+        ...stagedRefs.map(
+          (ref, i) =>
+            `${i + 1}. file_name="${ref.fileName}" attachment_ref="${ref.refId}" file_path="${ref.filePath}" → call \`read_attachment_content\` with attachment_ref="${ref.refId}" to load this file. For local shell tools, use file_path to access the file directly on disk.`
+        ),
+      ];
+      enrichedMessage = enrichedMessage
+        ? `${enrichedMessage}\n\n${blockLines.join("\n")}`
+        : blockLines.join("\n");
+    }
+
+    return {
+      enrichedMessage,
+      contentParts,
+      displayMetadata,
+      attachmentRefs,
+      docFileNames,
+    };
+  }
+
+  /**
+   * Convert small documents to markdown and stage them on disk.
+   * Returns the list of successfully staged attachment references (with refId)
+   * so they can be injected into the enriched user message before sending.
+   */
+  private async stageDocumentMarkdowns(
+    files: ChatV2UploadedAttachment[],
+    conversationId: string
+  ): Promise<StagedAttachmentReference[]> {
+    const docService = new DocumentService();
+    const SMALL_DOC_THRESHOLD = 1 * 1024 * 1024; // 1 MB
+    const staged: StagedAttachmentReference[] = [];
+
+    for (const file of files) {
+      if (file.sizeBytes > SMALL_DOC_THRESHOLD) {
+        console.log(
+          `[ai-chat-v2] large document ${file.fileName} (${file.sizeBytes}b) — staging skipped`
+        );
+        continue;
+      }
+      try {
+        const markdown = await docService.convertUploadedAttachmentToMarkdown(
+          file.fileName,
+          file.mimeType,
+          file.contentBase64
+        );
+        const ref = await docService.stageAttachmentMarkdown(
+          conversationId,
+          file.fileName,
+          markdown,
+          { originalContentBase64: file.contentBase64 }
+        );
+        staged.push(ref);
+      } catch (err) {
+        console.error(
+          `[ai-chat-v2] failed to stage document ${file.fileName}:`,
+          err
+        );
+      }
+    }
+    return staged;
+  }
+
+  /**
+   * Persist attachment bytes to DB.
+   */
+  private async persistAttachmentBytes(
+    files: ChatV2UploadedAttachment[],
+    conversationId: string,
+    messageId: string
+  ): Promise<void> {
+    const attachmentModule = new AIChatAttachmentModule();
+    await attachmentModule.saveUploadedFiles(
+      conversationId,
+      messageId,
+      files.map((f) => ({
+        fileName: f.fileName,
+        mimeType: f.mimeType,
+        sizeBytes: f.sizeBytes,
+        contentBase64: f.contentBase64,
+      }))
+    );
   }
 
   /**
@@ -212,24 +379,75 @@ export class AIChatQueryEngine {
         }
       }
 
-      // Save user message before remote call.
+      // Handle uploaded attachments:
+      //   1. Stage documents FIRST (convert to markdown, write to disk), capture refIds.
+      //   2. Build the enriched message WITH the correct attachment_ref values so the
+      //      LLM can call read_attachment_content with a valid refId — not a filename.
+      //   3. Persist attachment bytes to the database.
+      const hasFiles =
+        Array.isArray(request.uploadedFiles) && request.uploadedFiles.length > 0;
+      let messageToSave = request.message || "";
+      let attachmentMetadata: ChatV2AttachmentMetadata[] | undefined;
+      let currentUserContentParts:
+        | Array<OpenAITextContentPart | OpenAIImageUrlContentPart>
+        | undefined;
+
+      if (hasFiles) {
+        // Stage documents *before* building the enrichment so refIds are available.
+        const docFiles = request.uploadedFiles!.filter(
+          (f) => f.kind === "document"
+        );
+        const stagedRefs: StagedAttachmentReference[] =
+          docFiles.length > 0
+            ? await this.stageDocumentMarkdowns(docFiles, conversationId)
+            : [];
+
+        const prep = this.prepareAttachmentContent(
+          request.uploadedFiles!,
+          stagedRefs,
+          request.message || ""
+        );
+        messageToSave = prep.enrichedMessage;
+        attachmentMetadata = prep.displayMetadata;
+        if (prep.contentParts.length > 0) {
+          currentUserContentParts = [
+            { type: "text", text: prep.enrichedMessage },
+            ...prep.contentParts,
+          ];
+        }
+      }
+
+      // Save user message with enriched text + attachment metadata.
       const savedUser = await module.saveUserMessage({
         conversationId,
-        content: request.message,
+        content: messageToSave,
+        metadata: attachmentMetadata
+          ? { source: "chat-v2", attachments: attachmentMetadata }
+          : undefined,
       });
+
+      // Persist attachment bytes to DB (original file bytes, not the staged markdown).
+      if (hasFiles) {
+        await this.persistAttachmentBytes(
+          request.uploadedFiles!,
+          conversationId,
+          savedUser.messageId
+        );
+      }
 
       // Load history and build transcript.
       const basePrompt =
         request.systemPrompt ?? module.getDefaultSystemPrompt();
       const assembled = await this.contextAssembler.assemble({
         conversationId,
-        currentUserMessage: request.message,
+        currentUserMessage: messageToSave,
         currentUserMessageId: savedUser.messageId,
         baseSystemPrompt: basePrompt,
         mode: isPlanMode ? "plan" : "chat",
         model: request.model,
         maxTokens: request.maxTokens,
         planState,
+        currentUserContentParts,
       });
 
       assistantMessageId = `assistant-${Date.now()}-${Math.random()
@@ -668,6 +886,7 @@ export class AIChatQueryEngine {
               source: "chat-v2",
               openaiResponseId: result.responseId,
               finishReason: result.finishReason,
+              recovery: result.recoveryMetadata,
             },
           });
         }

@@ -43,9 +43,13 @@ export function getSharedAutoDreamService(): AIAutoDreamService {
   return sharedAutoDreamService;
 }
 
+export function resetSharedAutoDreamService(): void {
+  sharedAutoDreamService = null;
+}
+
 /** Test-only: reset the cached singleton so mocks take effect. */
 export function _resetSharedAutoDreamServiceForTesting(): void {
-  sharedAutoDreamService = null;
+  resetSharedAutoDreamService();
 }
 
 /**
@@ -81,7 +85,11 @@ export function getSharedWorkspaceAutoDreamService(): AIWorkspaceAutoDreamServic
   return sharedWorkspaceAutoDreamService;
 }
 
+export function resetSharedWorkspaceAutoDreamService(): void {
+  sharedWorkspaceAutoDreamService = null;
+}
+
 /** Test-only: reset the cached workspace auto-dream singleton. */
 export function _resetSharedWorkspaceAutoDreamServiceForTesting(): void {
-  sharedWorkspaceAutoDreamService = null;
+  resetSharedWorkspaceAutoDreamService();
 }

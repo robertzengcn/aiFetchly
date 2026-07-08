@@ -7,6 +7,20 @@ host VARCHAR(255),
 port VARCHAR(10),
 ssl INTEGER DEFAULT 1,
 status INTEGER DEFAULT 1,
+-- inbound receive settings (new)
+receiveProtocol VARCHAR(10) DEFAULT 'imap',
+imapHost VARCHAR(255),
+imapPort VARCHAR(10),
+imapSsl INTEGER DEFAULT 1,
+pop3Host VARCHAR(255),
+pop3Port VARCHAR(10),
+pop3Ssl INTEGER DEFAULT 1,
+receiveUsername VARCHAR(255),
+receivePassword VARCHAR(255),
+receiveFolder VARCHAR(255) DEFAULT 'INBOX',
+receiveEnabled INTEGER DEFAULT 0,
+lastReceiveSyncAt DATETIME,
+lastReceiveSyncError TEXT,
 createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
 updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP
-) 
+)

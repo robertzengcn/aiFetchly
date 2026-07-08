@@ -118,11 +118,11 @@ src/
 - Database operations must use TypeORM entities
 
 ### Auto-Commit After Completing Functions - MANDATORY RULE
-**CRITICAL: After completing each function or logical unit of work, you MUST automatically stage and commit the changes to git.**
+**CRITICAL: After fixing a bug, completing a requirement, or finishing each function/logical unit of work, you MUST automatically stage and commit the changes to git.**
 
 #### Workflow
 
-1. **After completing a function**, immediately:
+1. **After completing the work**, immediately:
    - Stage the changed files: `git add <specific-files>`
    - Commit with a descriptive message following conventional commits format
    - Do NOT wait for the user to ask — do it automatically
@@ -131,9 +131,10 @@ src/
    - Types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf`, `ci`
    - Description should explain *what* and *why*, not just *what changed*
 
-3. **What counts as a "completed function"**:
+3. **What counts as a unit of work**:
    - A new function/method that is fully implemented
    - A bug fix that resolves a specific issue
+   - A completed user requirement or feature
    - A refactoring of an existing function
    - A new test that covers a specific case
    - A set of related changes that form one logical unit (e.g., entity + model + module for one feature)

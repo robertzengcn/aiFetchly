@@ -19,6 +19,7 @@ import type {
   OpenAIChatCompletionRequest,
   OpenAIChatCompletionResponse,
 } from "@/api/aiChatApi";
+import { openAIContentToString } from "@/api/aiChatApi";
 
 const MIN_HOURS_BETWEEN_RUNS = 24;
 const MIN_CHANGED_SOURCES_PER_WORKSPACE = 3;
@@ -243,7 +244,7 @@ export class AIWorkspaceAutoDreamService {
         ],
       };
       const resp = await this.deps.completeChat(req);
-      const raw = resp.choices?.[0]?.message?.content ?? "";
+      const raw = openAIContentToString(resp.choices?.[0]?.message?.content);
       const parsed = parseWorkspaceAutoDreamModelOutput(
         raw,
         validWorkspaceKeys,

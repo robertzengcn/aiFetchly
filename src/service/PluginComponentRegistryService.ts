@@ -3,7 +3,8 @@ import {
   type PluginLoadResult,
 } from "@/service/PluginLoaderService";
 import { PluginRuntimeCache } from "@/service/PluginRuntimeCache";
-
+import { PluginHookRegistrar } from "@/service/pluginCompat/PluginHookRegistrar";
+import { SkillRegistry } from "@/config/skillsRegistry";
 /**
  * Adapts loaded plugin data into the existing skill and MCP runtime systems.
  * Source of truth: Design §7.5.
@@ -30,6 +31,10 @@ export class PluginComponentRegistryService {
    */
   static async applyLoadedPlugins(): Promise<void> {
     PluginRuntimeCache.clear("apply-loaded-plugins");
+    // Register plugin-declared hooks (Phase 3 plumbing). Re-registration
+    // is idempotent per hook id, so calling this on every apply is safe.
+    const loaded = await PluginLoaderService.loadAllPlugins();
+    PluginHookRegistrar.registerFromLoadedPlugins(loaded.enabled);
   }
 
   /**
@@ -38,6 +43,7 @@ export class PluginComponentRegistryService {
    */
   static async unregisterPluginCapabilities(pluginName: string): Promise<void> {
     PluginRuntimeCache.clear(`unregister-${pluginName}`);
+    SkillRegistry.unregisterSkillsByPlugin(pluginName);
   }
 
   /**

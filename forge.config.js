@@ -36,6 +36,10 @@ const EXTERNAL_DEPENDENCIES = [
   "reflect-metadata",
   "@mixmark-io/domino",
   "electron-log",
+  "@xenova/transformers",
+  "onnxruntime-node",
+  "onnxruntime-common",
+  "sharp",
 ];
 //import { ForgeConfig } from '@electron-forge/shared-types';
 // import { AutoUnpackNativesPlugin } from "@electron-forge/plugin-auto-unpack-natives";
@@ -53,9 +57,11 @@ module.exports = {
 
     // },
     asar: {
-      // .vite/build holds vec0.* copied by Vite; node_modules holds native deps — both must be real disk
+      // .vite/build holds vec0.* copied by Vite; node_modules holds native deps — both must be real disk.
+      // @xenova/transformers + onnxruntime-* + sharp ship native/WASM/.so artifacts that cannot load
+      // from inside app.asar, so they must be unpacked alongside better-sqlite3/sqlite-vec.
       unpackDir:
-        "**/{.vite,node_modules/better-sqlite3,node_modules/sqlite3,node_modules/sqlite-vec}/**",
+        "**/{.vite,node_modules/better-sqlite3,node_modules/sqlite3,node_modules/sqlite-vec,node_modules/@xenova/transformers,node_modules/onnxruntime-node,node_modules/onnxruntime-common,node_modules/sharp}/**",
       unpack: "**/vec0.*",
     },
     ignore: (file) => {
@@ -414,6 +420,10 @@ module.exports = {
           //   entry: 'src/buckEmail.ts',
           //   config: 'vite.buckEmail.config.mjs'
           // },
+          {
+            entry: "src/childprocess/embedding/LocalEmbeddingWorker.ts",
+            config: "vite.localEmbeddingWorker.config.mjs",
+          },
         ],
         renderer: [
           {

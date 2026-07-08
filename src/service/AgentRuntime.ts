@@ -317,45 +317,75 @@ export class AgentRuntime {
 
     // 6. Parse output.
     await transcript.appendAssistantText(agentTaskId, finalText);
-    const parseResult = this.outputParser.parse(
-      finalText,
-      definition.outputSchema as { required?: string[] }
-    );
-    if (!parseResult.ok) {
-      await this.taskModule.setStatus(agentTaskId, "failed", {
-        finishedAt: new Date(),
-        errorMessage: parseResult.error,
-      });
-      return this.buildResult(
-        agentTaskId,
-        definition,
-        "failed",
-        finalText,
-        parseResult.error
-      );
-    }
 
-    const outputObj = parseResult.output;
+    // Caller-supplied narrower schema takes precedence over the agent default.
+    // (Fixes a bug where outputSchemaOverride was plumbed through RunAgentRequest
+    // but silently ignored here — callers could not actually narrow the schema.)
+    const effectiveSchema =
+      (request.outputSchemaOverride as { required?: string[] } | undefined) ??
+      (definition.outputSchema as { required?: string[] });
+    const parseResult = this.outputParser.parse(finalText, effectiveSchema);
+
     // Trust boundary: validate LLM-generated values before persistence.
     // sourceUrls must be http(s) URLs (PRD §14.4 + SSRF defense for later
     // milestones that may resolve them). confidence must be a finite number.
-    const rawUrls = Array.isArray(outputObj.sourceUrls)
-      ? (outputObj.sourceUrls as unknown[])
-      : [];
-    const sourceUrls = rawUrls.filter((u): u is string => {
-      if (typeof u !== "string") return false;
-      try {
-        const parsed = new URL(u);
-        return parsed.protocol === "http:" || parsed.protocol === "https:";
-      } catch {
-        return false;
-      }
-    });
-    const rawConfidence = outputObj.confidence;
-    const confidence =
-      typeof rawConfidence === "number" && Number.isFinite(rawConfidence)
-        ? rawConfidence
-        : undefined;
+    const extractSourceUrls = (obj: Record<string, unknown>): string[] => {
+      const raw = Array.isArray(obj.sourceUrls)
+        ? (obj.sourceUrls as unknown[])
+        : [];
+      return raw.filter((u): u is string => {
+        if (typeof u !== "string") return false;
+        try {
+          const parsed = new URL(u);
+          return parsed.protocol === "http:" || parsed.protocol === "https:";
+        } catch {
+          return false;
+        }
+      });
+    };
+    const extractConfidence = (
+      obj: Record<string, unknown>
+    ): number | undefined => {
+      const v = obj.confidence;
+      return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+    };
+
+    let outputObj: Record<string, unknown>;
+    let sourceUrls: string[];
+    let confidence: number | undefined;
+    let parseWarning: string | undefined;
+
+    if (parseResult.ok) {
+      outputObj = parseResult.output;
+      sourceUrls = extractSourceUrls(outputObj);
+      confidence = extractConfidence(outputObj);
+    } else {
+      // Lenient fallback: the agent finished its loop but its final text
+      // wasn't valid JSON matching the schema (a common failure when a model
+      // hits an "I can't complete this" state and writes a prose summary
+      // instead). Salvage the work as a low-confidence partial result rather
+      // than failing the whole task — callers already handle low confidence,
+      // and the agent's research is often still useful in the text body.
+      parseWarning = parseResult.error;
+      const base = parseResult.partial ?? {};
+      const fallbackSummary =
+        typeof base.businessSummary === "string" &&
+        base.businessSummary.trim().length > 0
+          ? base.businessSummary
+          : finalText.trim().slice(0, 4000);
+      outputObj = {
+        ...base,
+        businessSummary: fallbackSummary,
+        sourceUrls: Array.isArray(base.sourceUrls) ? base.sourceUrls : [],
+        confidence:
+          typeof base.confidence === "number" &&
+          Number.isFinite(base.confidence)
+            ? base.confidence
+            : 0,
+      };
+      sourceUrls = extractSourceUrls(outputObj);
+      confidence = extractConfidence(outputObj) ?? 0;
+    }
 
     const result: AgentResult = {
       agentTaskId,
@@ -367,6 +397,7 @@ export class AgentRuntime {
       toolCallsCount: 0,
       sourceUrls,
       confidence,
+      ...(parseWarning ? { parseWarning } : {}),
     };
     await this.taskModule.saveResult(agentTaskId, result);
     await this.taskModule.setStatus(agentTaskId, "completed", {
