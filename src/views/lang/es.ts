@@ -1298,6 +1298,7 @@ emailAutoReplyAudit: {
       audit_duration: "Duración",
       audit_reason: "Razón",
       field: {
+        id: "ID del Hook",
         event: "Evento",
         matcher: "Matcher",
         type: "Tipo",

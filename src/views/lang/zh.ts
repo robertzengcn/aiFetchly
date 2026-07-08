@@ -1250,6 +1250,7 @@ emailAutoReplyAudit: {
       audit_duration: "耗时",
       audit_reason: "原因",
       field: {
+        id: "钩子ID",
         event: "事件",
         matcher: "匹配器",
         type: "类型",

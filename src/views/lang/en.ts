@@ -1296,6 +1296,7 @@ emailAutoReplyAudit: {
       audit_duration: "Duration",
       audit_reason: "Reason",
       field: {
+        id: "Hook ID",
         event: "Event",
         matcher: "Matcher",
         type: "Type",

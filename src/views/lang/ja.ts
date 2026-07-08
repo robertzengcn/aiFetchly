@@ -1267,6 +1267,7 @@ emailAutoReplyAudit: {
       audit_duration: "所要時間",
       audit_reason: "理由",
       field: {
+        id: "フックID",
         event: "イベント",
         matcher: "マッチャー",
         type: "型",

@@ -97,7 +97,7 @@
           <v-card-text v-else>
             <v-text-field
               v-model="form.id"
-              :label="t('system_settings.hooks.field.event') || 'Hook ID'"
+              :label="t('system_settings.hooks.field.id') || 'Hook ID'"
               :disabled="!creating"
               density="compact"
               class="mb-2"

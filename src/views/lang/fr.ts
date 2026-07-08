@@ -1283,6 +1283,7 @@ emailAutoReplyAudit: {
       audit_duration: "Durée",
       audit_reason: "Raison",
       field: {
+        id: "ID du Hook",
         event: "Événement",
         matcher: "Matcher",
         type: "Type",
