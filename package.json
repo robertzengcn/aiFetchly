@@ -121,7 +121,7 @@
     "isbinaryfile": "^5.0.4",
     "isolated-vm": "^6.1.2",
     "js-cookie": "^3.0.5",
-    "js-yaml": "^4.1.0",
+    "js-yaml": "^5.2.1",
     "jshint": "^2.13.6",
     "jwt-decode": "3.1.2",
     "keytar": "^7.9.0",
