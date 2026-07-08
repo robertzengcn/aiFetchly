@@ -117,11 +117,13 @@
               density="compact"
               class="mb-2"
             />
-            <v-text-field
+            <v-textarea
               v-model="form.command"
               :label="t('system_settings.hooks.field.command') || 'Command'"
               :disabled="!isUserSource"
               density="compact"
+              auto-grow
+              rows="3"
               class="mb-2"
             />
             <v-text-field
