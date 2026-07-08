@@ -2,7 +2,27 @@
   <v-card class="wm-panel" flat>
     <div class="wm-panel__header">
       <span class="wm-panel__title">{{ panelTitle }}</span>
+      <WorkspaceMemoryStatusBadge
+        v-if="hasWorkspace"
+        :count="activeCount"
+        :running="autoDreamRunning"
+        :failed="autoDreamFailed"
+        class="ml-2"
+      />
+      <span v-if="autoDreamLastRunText" class="wm-panel__lastrun">{{
+        autoDreamLastRunText
+      }}</span>
       <v-spacer />
+      <v-btn
+        v-if="hasWorkspace"
+        size="small"
+        variant="tonal"
+        :loading="autoDreamRunning"
+        :disabled="autoDreamRunning"
+        @click="onRunAutoDream"
+      >
+        {{ runAutoDreamText }}
+      </v-btn>
       <v-btn
         v-if="hasWorkspace"
         size="small"
@@ -138,6 +158,7 @@ import type {
 } from "@/entityTypes/aiWorkspaceMemoryTypes";
 import { workspaceMemoryApi } from "@/views/api/aiWorkspaceMemory";
 import WorkspaceMemoryEditorDialog from "./WorkspaceMemoryEditorDialog.vue";
+import WorkspaceMemoryStatusBadge from "./WorkspaceMemoryStatusBadge.vue";
 
 const props = defineProps<{
   conversationId: string;
@@ -166,6 +187,11 @@ const snackbar = ref(false);
 const snackbarText = ref("");
 const snackbarColor = ref<"success" | "error">("success");
 
+// Auto-dream status for the active workspace (drives the status badge + run-now button).
+const autoDreamRunning = ref(false);
+const autoDreamFailed = ref(false);
+const autoDreamLastRun = ref<string | undefined>(undefined);
+
 const hasWorkspace = computed(
   () => !!props.workspace && props.workspace.approvalState === "approved"
 );
@@ -180,6 +206,10 @@ const visibleMemories = computed(() => {
     );
   });
 });
+
+const activeCount = computed(
+  () => memories.value.filter((m) => m.status === "active").length
+);
 
 function notify(text: string, color: "success" | "error" = "success"): void {
   snackbarText.value = text;
@@ -213,10 +243,59 @@ async function refresh(): Promise<void> {
   }
 }
 
+async function refreshAutoDreamStatus(): Promise<void> {
+  if (!hasWorkspace.value) {
+    autoDreamRunning.value = false;
+    autoDreamFailed.value = false;
+    autoDreamLastRun.value = undefined;
+    return;
+  }
+  try {
+    const resp = await workspaceMemoryApi.autoDreamStatus();
+    if (resp.status && resp.data) {
+      autoDreamRunning.value = !!resp.data.runningRun;
+      const last = resp.data.latestRun;
+      autoDreamFailed.value = !!last && last.status === "failed";
+      autoDreamLastRun.value = last?.finishedAt;
+    }
+  } catch {
+    // non-fatal — status is advisory
+  }
+}
+
+async function onRunAutoDream(): Promise<void> {
+  if (!props.conversationId || autoDreamRunning.value) return;
+  autoDreamRunning.value = true;
+  try {
+    const resp = await workspaceMemoryApi.runAutoDream({
+      conversationId: props.conversationId,
+      force: true,
+    });
+    if (resp.status) {
+      // Success feedback is the refreshed list + status badge; no snackbar.
+      await refresh();
+      emit("change");
+    } else {
+      notify(resp.msg || "Error", "error");
+    }
+  } catch (err) {
+    notify(
+      err instanceof Error
+        ? err.message
+        : t("workspaceMemory.autoDreamFailed") || "Error",
+      "error"
+    );
+  } finally {
+    // refreshAutoDreamStatus sets autoDreamRunning from the live run record.
+    await refreshAutoDreamStatus();
+  }
+}
+
 watch(
   () => [props.conversationId, hasWorkspace.value, showArchived.value] as const,
   () => {
     void refresh();
+    void refreshAutoDreamStatus();
   },
   { immediate: true }
 );
@@ -386,6 +465,16 @@ const showArchivedText = computed(
   () => t("workspaceMemory.showArchived") || "Show archived"
 );
 const loadingText = computed(() => t("common.loading") || "Loading...");
+const runAutoDreamText = computed(
+  () => t("workspaceMemory.runAutoDream") || "Run auto-dream now"
+);
+const autoDreamLastRunText = computed(() => {
+  if (!autoDreamLastRun.value) return "";
+  const d = new Date(autoDreamLastRun.value);
+  if (!Number.isFinite(d.getTime())) return "";
+  const tpl = t("workspaceMemory.autoDreamLastRun") || "Last run: {time}";
+  return tpl.replace("{time}", d.toLocaleString());
+});
 const editText = computed(() => t("workspaceMemory.edit") || "Edit");
 const archiveText = computed(() => t("workspaceMemory.archive") || "Archive");
 const deleteText = computed(() => t("workspaceMemory.delete") || "Delete");
@@ -411,6 +500,11 @@ const confidenceText = computed(() => t("workspaceMemory.confidence") || "Confid
 .wm-panel__title {
   font-weight: 600;
   font-size: 14px;
+}
+.wm-panel__lastrun {
+  font-size: 11px;
+  opacity: 0.6;
+  align-self: center;
 }
 .wm-panel__toolbar {
   display: flex;
