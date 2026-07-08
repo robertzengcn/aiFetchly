@@ -1,5 +1,27 @@
 // src/service/AgentDefinitionRegistry.ts
-import type { AgentDefinitionView } from "@/entityTypes/agentTypes";
+// Phase 16 (AGT-01) — source-aware dynamic agent registry.
+//
+// REFACTOR NOTE: this module was an object literal over a fixed BUILT_INS
+// array. It is now an AgentDefinitionRegistryImpl class (a structural clone
+// of Phase 13-02 CommandRegistry) with source-aware registration, atomic
+// replaceSource reconciliation, and a precedence-aware lookup. The legacy
+// `AgentDefinitionRegistry` import symbol is preserved as a ready-made
+// singleton instance of the class so existing consumers
+// (AgentDefinitionModule.ensureBuiltIns + the agentToolPolicyService /
+// ToolTimeoutPolicy tests) keep compiling untouched.
+//
+// Pure logic — NO IPC, NO Electron, NO TypeORM, NO fs. Plan 02 attaches the
+// global + workspace file sources; Plan 03 wires the dispatch path. See
+// docs/prd/aifetchly-local-extensibility-technical-design.md §7.4.
+//
+// TRS-06 boundary: the registry stores AgentDefinitions and NEVER executes
+// them. run_subagent (Plan 03) resolves an id via getById and hands the
+// definition to the existing AgentRuntime.
+
+import type {
+  AgentDefinitionView,
+  AgentSource,
+} from "@/entityTypes/agentTypes";
 
 const LEAD_RESEARCHER_PROMPT = `You are the Lead Researcher specialist.
 Your single responsibility is to gather public business context for a lead.
@@ -28,7 +50,7 @@ const LEAD_RESEARCHER_OUTPUT_SCHEMA = {
   },
 };
 
-const BUILT_INS: AgentDefinitionView[] = [
+const BUILT_INS: readonly AgentDefinitionView[] = [
   {
     id: "agent-lead-researcher",
     name: "Lead Researcher",
@@ -45,7 +67,8 @@ const BUILT_INS: AgentDefinitionView[] = [
     allowedTools: [
       // Stale "google_search" reference removed — no skill by that name
       // exists in the registry. The actual search tool is
-      // scrape_urls_from_search_engine, listed next.
+      // scrape_urls_from_search_engine, listed next. (This is the concrete
+      // case D-ToolDiagnostic exists to catch at parse time going forward.)
       "scrape_urls_from_search_engine",
       "knowledge_library_search",
     ],
@@ -58,12 +81,204 @@ const BUILT_INS: AgentDefinitionView[] = [
   },
 ];
 
-export const AgentDefinitionRegistry = {
+/**
+ * Lookup-order ranks. Lower rank wins. Enforces AGT-01:
+ *   built-in (0) > user (1) > workspace (2) > plugin (3).
+ *
+ * ###########################################################################
+ * # DELIBERATELY DIVERGES from CommandRegistry.SOURCE_RANK. Commands rank    #
+ * # workspace (1) ABOVE user (2); agents rank USER (1) above workspace (2).  #
+ * # Agents follow AGT-01 / tech-design §7.4, which mandates this order       #
+ * # explicitly. DO NOT "normalize" this map to match CommandRegistry — the   #
+ * # agent tests in AgentDefinitionRegistry.test.ts assert the user-wins-over- #
+ * # workspace order. A future reader who "fixes" the divergence here will    #
+ * # silently invert agent resolution priority. (AGT-01)                      #
+ * ###########################################################################
+ *
+ * The `plugin` rank is reserved for Phase 18 (PRD §7.4: "plugin agents only
+ * after dynamic registration is stable"). Phase 16 ships built-in + user +
+ * trusted-workspace only.
+ */
+const SOURCE_RANK: Readonly<Record<AgentSource, number>> = Object.freeze({
+  "built-in": 0,
+  user: 1,
+  workspace: 2,
+  plugin: 3,
+});
+
+/**
+ * Derive the {@link AgentSource} kind from a sourceId string.
+ *
+ * sourceId conventions (mirror the scoped-ID prefixes used across the
+ * aifetchly-config stack):
+ *   - "built-in"                 -> built-in
+ *   - "user"                     -> user
+ *   - "workspace:<workspaceId>"  -> workspace
+ *   - "plugin:<pluginName>"      -> plugin
+ *
+ * Unknown prefixes default to the lowest-priority rank (plugin) so they can
+ * never accidentally shadow a known source.
+ */
+function sourceFromSourceId(sourceId: string): AgentSource {
+  if (sourceId === "built-in") return "built-in";
+  if (sourceId === "user") return "user";
+  if (sourceId.startsWith("workspace:")) return "workspace";
+  if (sourceId.startsWith("plugin:")) return "plugin";
+  return "plugin";
+}
+
+/**
+ * In-memory source-aware registry for {@link AgentDefinitionView}s (AGT-01).
+ *
+ * Structural clone of {@link CommandRegistry} with the divergent
+ * {@link SOURCE_RANK} order (D-Precedence). Four indexes are maintained:
+ *   - byId:        id -> definition (defensive copy stored)
+ *   - idToSource:  id -> AgentSource (parallel to byId; needed because
+ *                  AgentDefinitionView does not carry its own source field)
+ *   - byName:      name -> winning definition (lookup-order applied)
+ *   - sourceIndex: sourceId -> set of agent ids (for replaceSource)
+ *
+ * All public mutators call {@link AgentDefinitionRegistryImpl.rebuildNameIndex}
+ * so the name index is always consistent with the lookup order. All public
+ * accessors return defensive copies (CLAUDE.md immutability rule).
+ */
+export class AgentDefinitionRegistryImpl {
+  private readonly byId = new Map<string, AgentDefinitionView>();
+  private readonly idToSource = new Map<string, AgentSource>();
+  private readonly byName = new Map<string, AgentDefinitionView>();
+  private readonly sourceIndex = new Map<string, Set<string>>();
+
+  constructor() {
+    // Built-ins are registered into the registry itself so a registry-first
+    // getById finds agent-lead-researcher WITHOUT hitting the DB (RESEARCH
+    // Pitfall 1). AgentRuntime (Plan 03) resolves from this in-memory index
+    // before falling back to the DB-seeded path.
+    this.registerBuiltIns();
+  }
+
+  /**
+   * Seed the built-in catalog into this registry under the "built-in" source.
+   * Called once at construction; safe to call again to reset built-in state.
+   */
+  registerBuiltIns(): void {
+    this.replaceSource("built-in", BUILT_INS);
+  }
+
+  /**
+   * The fixed built-in catalog. Returns defensive copies — the same contract
+   * {@link AgentDefinitionModule.ensureBuiltIns} has always consumed at
+   * startup to seed the AgentDefinition DB table. This method is INDEPENDENT
+   * of {@link replaceSource} mutations: it always reflects the hardcoded
+   * built-ins, not the current registry contents.
+   */
   listBuiltIns(): AgentDefinitionView[] {
     return BUILT_INS.map((d) => ({ ...d }));
-  },
+  }
+
+  /**
+   * Resolve an agent by scoped id, falling back to a bare-name precedence
+   * lookup if no exact id match exists.
+   *
+   * Resolution order:
+   *   1. Exact id match in byId (e.g. "user:agent:lead-researcher").
+   *   2. Bare-name match via the precedence-aware name index (e.g.
+   *      "Lead Researcher" -> highest-precedence entry with that name).
+   *
+   * Returns null if neither resolves. Always returns a defensive copy.
+   */
   getById(id: string): AgentDefinitionView | null {
-    const found = BUILT_INS.find((d) => d.id === id);
-    return found ? { ...found } : null;
-  },
-} as const;
+    const exact = this.byId.get(id);
+    if (exact) return { ...exact };
+    const byName = this.byName.get(id);
+    return byName ? { ...byName } : null;
+  }
+
+  /**
+   * All registered agents (built-in + user + workspace + plugin), sorted by
+   * precedence (SOURCE_RANK asc, then id asc for determinism). Returns
+   * defensive copies.
+   */
+  list(): AgentDefinitionView[] {
+    const entries = [...this.byId.values()];
+    entries.sort((a, b) => {
+      const ra = SOURCE_RANK[this.idToSource.get(a.id) ?? "plugin"];
+      const rb = SOURCE_RANK[this.idToSource.get(b.id) ?? "plugin"];
+      if (ra !== rb) return ra - rb;
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    });
+    return entries.map((d) => ({ ...d }));
+  }
+
+  /**
+   * Atomically reconcile an entire source. Removes every agent previously
+   * registered under this sourceId, then inserts defensive copies of the
+   * new agents, then rebuilds the name index. Handles delete/rename/
+   * missed-events correctly (design §7.3, §10.1 — never patch individual
+   * agents on file events). Mirrors CommandRegistry.replaceSource.
+   */
+  replaceSource(
+    sourceId: string,
+    agents: readonly AgentDefinitionView[]
+  ): void {
+    const source = sourceFromSourceId(sourceId);
+    // 1. Remove all old entries belonging to this sourceId.
+    const existing = this.sourceIndex.get(sourceId);
+    if (existing) {
+      for (const id of existing) {
+        this.byId.delete(id);
+        this.idToSource.delete(id);
+      }
+    }
+    // 2. Insert fresh defensive copies of the new agents.
+    const next = new Set<string>();
+    for (const a of agents) {
+      const copy: AgentDefinitionView = { ...a };
+      this.byId.set(copy.id, copy);
+      this.idToSource.set(copy.id, source);
+      next.add(copy.id);
+    }
+    this.sourceIndex.set(sourceId, next);
+    // 3. Rebuild the name index so winners reflect the new state.
+    this.rebuildNameIndex();
+  }
+
+  /**
+   * Rebuild the name index from byId, applying the D-Precedence lookup order.
+   * For each name, the winner is the candidate with the lowest
+   * {@link SOURCE_RANK}; ties are broken by first-registered (Map iteration
+   * preserves insertion order, and we only replace on a strictly-lower rank).
+   */
+  private rebuildNameIndex(): void {
+    this.byName.clear();
+    for (const agent of this.byId.values()) {
+      const source = this.idToSource.get(agent.id);
+      if (!source) continue; // defensive — should never happen
+      const current = this.byName.get(agent.name);
+      if (!current) {
+        this.byName.set(agent.name, agent);
+        continue;
+      }
+      const currentSource = this.idToSource.get(current.id);
+      if (
+        currentSource &&
+        SOURCE_RANK[source] < SOURCE_RANK[currentSource]
+      ) {
+        this.byName.set(agent.name, agent);
+      }
+    }
+  }
+}
+
+/**
+ * Ready-made singleton instance of {@link AgentDefinitionRegistryImpl} with
+ * built-ins already seeded. Preserved for backward compatibility with the
+ * pre-Phase-16 object-literal export so existing importers
+ * (AgentDefinitionModule.ensureBuiltIns, agentToolPolicyService.test,
+ * ToolTimeoutPolicy.test) keep compiling untouched — they call
+ * `.listBuiltIns()` / `.getById()` on this symbol directly.
+ *
+ * New callers that need an isolated registry (tests, per-workspace managers)
+ * should construct `new AgentDefinitionRegistryImpl()` instead.
+ */
+export const AgentDefinitionRegistry: AgentDefinitionRegistryImpl =
+  new AgentDefinitionRegistryImpl();

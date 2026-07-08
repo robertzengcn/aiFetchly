@@ -244,7 +244,9 @@ describe("AgentDefinitionRegistry replaceSource atomic reconciliation", () => {
     const input = { ...userDup };
     r.replaceSource("user", [input]);
     (input as { systemPrompt?: string }).systemPrompt = "TAMPERED";
-    expect(r.getById("user:agent:dup")?.systemPrompt).toBe("prompt for user:agent:dup");
+    expect(r.getById("user:agent:dup")?.systemPrompt).toBe(
+      "prompt for user:agent:dup"
+    );
   });
 });
 
@@ -265,7 +267,10 @@ describe("AgentDefinitionRegistry defensive copies", () => {
     r.replaceSource("user", [userDup]);
     const list1 = r.list();
     const userEntry = list1.find((d) => d.id === "user:agent:dup");
-    (userEntry as { systemPrompt?: string } | undefined).systemPrompt = "EVIL";
+    // find() returns possibly-undefined; we know userDup is registered, so
+    // assert non-undefined before mutating to keep tsc strict happy.
+    expect(userEntry).toBeDefined();
+    (userEntry as { systemPrompt?: string }).systemPrompt = "EVIL";
     const list2 = r.list();
     const again = list2.find((d) => d.id === "user:agent:dup");
     expect(again?.systemPrompt).toBe("prompt for user:agent:dup");
@@ -286,7 +291,9 @@ describe("AgentDefinitionRegistry defensive copies", () => {
     // Mutate the input array + entry after registration.
     input.push({ ...userLead });
     (input[0] as { name?: string }).name = "tampered";
-    expect(r.list().filter((d) => d.id === "user:agent:lead-research")).toHaveLength(0);
+    expect(
+      r.list().filter((d) => d.id === "user:agent:lead-research")
+    ).toHaveLength(0);
     expect(r.getById("user:agent:dup")?.name).toBe("dup");
   });
 });
@@ -297,6 +304,8 @@ describe("AgentDefinitionRegistry singleton (backward-compat)", () => {
   it("exports a ready-made singleton with built-ins seeded (legacy import path)", () => {
     // AgentDefinitionModule.ensureBuiltIns consumes this exact symbol.
     expect(AgentDefinitionRegistry.listBuiltIns().length).toBeGreaterThan(0);
-    expect(AgentDefinitionRegistry.getById("agent-lead-researcher")).not.toBeNull();
+    expect(
+      AgentDefinitionRegistry.getById("agent-lead-researcher")
+    ).not.toBeNull();
   });
 });
