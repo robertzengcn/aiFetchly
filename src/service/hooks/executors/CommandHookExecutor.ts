@@ -7,7 +7,10 @@ import {
   HOOK_LIMITS,
 } from "@/entityTypes/hookTypes";
 import { validateHookOutput } from "../HookOutputValidator";
+import debug from "debug";
 import { HookSingleResult } from "../HookResultAggregator";
+
+const _debug = debug("hook:command");
 
 /**
  * Runs a trusted local command as a hook. The command receives the
@@ -81,7 +84,7 @@ function parseCommand(command: string): string[] {
       inDouble = !inDouble;
       continue;
     }
-    if (c === "'" && !inSingle) {
+    if (c === "'" && !inDouble) {
       inSingle = !inSingle;
       continue;
     }
@@ -118,6 +121,7 @@ export async function executeCommand(
   let argv: string[];
   try {
     argv = parseCommand(hook.command);
+    _debug("parsed command %o → argv %j", hook.command, argv);
   } catch (err) {
     return {
       stdout: "",
@@ -226,7 +230,9 @@ export async function executeCommand(
         let parsed: unknown;
         try {
           parsed = stdoutBuf.length === 0 ? {} : JSON.parse(stdoutBuf);
+          _debug("hook stdout (%d bytes) parsed: %j", stdoutBuf.length, parsed);
         } catch (err) {
+          _debug("hook stdout (%d bytes) not JSON: %s", stdoutBuf.length, stdoutBuf.slice(0, 500));
           return failureResult(
             resultHook,
             `Command hook stdout was not valid JSON: ${errorMessage(err)}`,
@@ -248,6 +254,9 @@ export async function executeCommand(
         };
       })();
 
+      if (stderrBuf) {
+        _debug("hook stderr (%d bytes): %s", stderrBuf.length, stderrBuf.slice(0, 500));
+      }
       return { stdout: stdoutBuf, stderr: stderrBuf, durationMs, result };
     };
 
