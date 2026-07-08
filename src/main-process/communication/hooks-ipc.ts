@@ -149,6 +149,8 @@ export function registerHooksIpcHandlers(): void {
       }
       map[data.id] = { enabled: data.enabled as boolean };
       t.setValue(USER_HOOKS_BUILTIN_OVERRIDES, JSON.stringify(map));
+      // Sync the in-memory registry so hooks:list reflects the change immediately
+      HookRegistry.setBuiltinEnabled(data.id, data.enabled as boolean);
       return ok({
         id: data.id,
         enabled: data.enabled as boolean,

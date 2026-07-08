@@ -148,6 +148,16 @@
               class="mb-2"
             />
 
+            <v-switch
+              v-if="selectedHook"
+              :model-value="selectedHook.enabled"
+              :label="t('system_settings.hooks.field.enabled') || 'Enabled'"
+              color="primary"
+              density="compact"
+              hide-details
+              class="mb-2"
+              @update:model-value="onToggleEnabled"
+            />
             <div class="mt-2">
               <v-btn
                 v-if="isUserSource"
@@ -300,7 +310,7 @@ import { ref, computed, onMounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import {
   listHooks, createHook, updateHook, deleteHook,
-  setHookTrusted,
+  setHookEnabled, setHookTrusted,
   getHooksGlobalEnable, setHooksGlobalEnable,
   listHookAudit,
   type NewHookInput,
@@ -428,6 +438,18 @@ async function onGlobalToggle(value: boolean | null) {
   } catch (err) {
     console.error(err);
     globalEnabled.value = !enabled; // revert
+  }
+}
+
+async function onToggleEnabled(value: boolean | null) {
+  if (!selectedHook.value) return;
+  const enabled = value === null ? false : value;
+  try {
+    await setHookEnabled(selectedHook.value.id, enabled);
+    await loadAll();
+  } catch (err) {
+    console.error(err);
+    await loadAll();
   }
 }
 
