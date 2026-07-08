@@ -161,7 +161,12 @@ Plans:
 2. `run_subagent` dispatches the dynamic agent; its tool allowlist is intersected with registered/permitted tools at runtime.
 3. Built-in agent IDs cannot be shadowed by dynamic ones; workspace agents require trust before registration.
 
-**Plans:** TBD
+**Plans:** 3 plans
+
+Plans:
+- [ ] 16-01-registry-validator-frontmatter-PLAN.md — refactor AgentDefinitionRegistry into a source-aware class with D-Precedence rank + atomic replaceSource (AGT-01); pure buildAgentDefinition validator + non-fatal agent-tool-invalid diagnostic (AGT-02)
+- [ ] 16-02-loaders-trust-scanner-PLAN.md — global ~/.aifetchly/agents loader + manager-owned registry; workspace scanner raw drafts (worker-no-DB); workspace draft→definition converter + applyWorkspaceSnapshot trust filter (TRS-01) (AGT-02)
+- [ ] 16-03-dispatch-list-context-PLAN.md — AgentRuntime.runSync registry-first resolution with DB fallback (AGT-03); /agents built-in command; "Available agents" system-message block (D-Discovery); i18n chrome
 
 ### Phase 17: Hooks
 
