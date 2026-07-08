@@ -1322,6 +1322,7 @@ emailAutoReplyAudit: {
         load_failed: "Échec du chargement des hooks",
         create_failed: "Échec de la création du hook",
       },
+      scraping_compliance_warning: "Activer ce hook injecte un contexte de conformité dans l'invite de l'IA après chaque appel d'outil de scraping, ce qui peut affecter les résultats.",
     },
     ai_preferences: "Préférences IA",
     "ai-preferences-group-description":

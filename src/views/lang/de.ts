@@ -1329,6 +1329,7 @@ emailAutoReplyAudit: {
         load_failed: "Hooks konnten nicht geladen werden",
         create_failed: "Hook konnte nicht erstellt werden",
       },
+      scraping_compliance_warning: "Die Aktivierung dieses Hook fügt nach jedem Scrape-Tool-Aufruf Compliance-Kontext in den AI-Prompt ein, was die Scrape-Ergebnisse beeinflussen kann.",
     },
     ai_preferences: "KI-Einstellungen",
     "ai-preferences-group-description":

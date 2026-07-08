@@ -1306,6 +1306,7 @@ emailAutoReplyAudit: {
         load_failed: "Hookの読み込みに失敗しました",
         create_failed: "Hookの作成に失敗しました",
       },
+      scraping_compliance_warning: "このフックを有効にすると、スクレイプツール呼び出しのたびにAIプロンプトにコンプライアンスコンテキストが挿入され、スクレイプ結果に影響を与える可能性があります。",
     },
     ai_preferences: "AI 設定",
     "ai-preferences-group-description":

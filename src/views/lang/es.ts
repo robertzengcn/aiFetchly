@@ -1337,6 +1337,7 @@ emailAutoReplyAudit: {
         load_failed: "Error al cargar hooks",
         create_failed: "Error al crear hook",
       },
+      scraping_compliance_warning: "Habilitar este gancho inyecta contexto de cumplimiento en el prompt de IA después de cada llamada de scraper, lo que puede afectar los resultados.",
     },
     ai_preferences: "Preferencias de IA",
     "ai-preferences-group-description":
