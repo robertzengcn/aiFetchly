@@ -52,6 +52,7 @@ Plan 16-03 (dispatch-list-context): PENDING — Wave 3
 Phase 16: 1/3 plans executed — Wave 1 complete; Waves 2-3 pending (quota-limited: 5h usage limit reached, resets 2026-07-09 02:42 +0800)
 Status: Executing Phase 16 (paused on quota — resume with /gsd-execute-phase 16)
 Last activity: 2026-07-08 — Plan 16-01 complete; Waves 2-3 awaiting quota reset
+Resume note (Waves 2-3 executors): do NOT run bare `yarn testmain` for Self-Check — it hangs 20+ min on a pre-existing Electron/DB integration test unrelated to these plans. Use targeted runs: `AIFETCHLY_SKIP_TSC=1 npx vitest run --config vite.main.config.mjs <new test files>` (+ utilityCode config variant) + a standalone `npx tsc --noEmit`. 16-01 used this and got 104/104 regression + 65 new tests green, tsc 0 errors.
 
 ## Accumulated Context
 
