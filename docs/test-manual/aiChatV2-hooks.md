@@ -157,11 +157,14 @@ Command hooks execute a local process, receive hook input JSON on stdin, and ret
 
 ### 6.2 Hook blocks via stdout JSON
 
-| Test | Steps | Expected |
-|---|---|---|
-| **6.2a — Hook returns `continue: false`** | 1. Create a command hook that returns `{ continue: false, reason: "Blocked by policy" }`<br>2. Send matching tool prompt | Tool result shows the hook's `reason` as error message; tool not executed |
-| **6.2b — Hook returns `continue: true`** | 1. Create a command hook that always returns `{ continue: true }`<br>2. Send matching tool prompt | Tool executes normally |
-| **6.2c — Hook returns invalid JSON** | 1. Create a command that writes `not json` to stdout<br>2. Send matching tool prompt | Hook marked as failed; tool continues (failure mode: warn); console shows parse error |
+The hook's command receives JSON on stdin and must print a JSON result to stdout.
+The table below gives concrete commands to paste for each scenario.
+
+| Test | Command to paste | Prompt to send | Expected |
+|---|---|---|---|
+| **6.2a — Block** | `node -e "process.stdin.resume();let b='';process.stdin.on('data',c=>b+=c);process.stdin.on('end',()=>{console.log(JSON.stringify({continue:false,reason:'Blocked by manual test'}))})"` | `run shell command echo hello` | Tool result shows error "Blocked by manual test"; tool not executed |
+| **6.2b — Allow** | `node -e "process.stdin.resume();let b='';process.stdin.on('data',c=>b+=c);process.stdin.on('end',()=>{console.log(JSON.stringify({continue:true}))})"` | `run shell command echo hello` | Tool executes normally; no error |
+| **6.2c — Invalid JSON** | `node -e "console.log('not json')"` | `run shell command echo hello` | Hook fails (parse error); tool continues (failure mode: warn); error logged to console |
 
 ### 6.3 Timeout behavior
 
@@ -172,9 +175,11 @@ Command hooks execute a local process, receive hook input JSON on stdin, and ret
 
 ### 6.4 Input forwarded correctly
 
-| Test | Steps | Expected |
-|---|---|---|
-| **6.4a — Hook receives tool name** | Create a command hook: `node -e "process.stdin.resume();let b='';process.stdin.on('data',c=>b+=c);process.stdin.on('end',()=>{const i=JSON.parse(b);console.log(JSON.stringify({continue:true,reason:'saw:'+i.tool.name}))})"`<br>Send: `run shell command echo hello` | Tool executes; check console or reason to confirm hook received `tool.name = "shell_execute"` |
+| Test | Command to paste | Prompt to send | Expected |
+|---|---|---|---|
+| **6.4a — Hook receives tool name** | `node -e "process.stdin.resume();let b='';process.stdin.on('data',c=>b+=c);process.stdin.on('end',()=>{const i=JSON.parse(b);console.log(JSON.stringify({continue:true,additionalContext:'tool.name='+i.tool.name}))})"` | `run shell command echo hello` | Tool executes. The AI's next response includes "tool.name=shell_execute" (injected via `additionalContext`) |
+| **6.4b — Hook receives command arguments** | `node -e "process.stdin.resume();let b='';process.stdin.on('data',c=>b+=c);process.stdin.on('end',()=>{const i=JSON.parse(b);console.log(JSON.stringify({continue:true,additionalContext:'cmd='+i.input.command}))})"` | `run shell command echo hello` | AI response includes "cmd=echo hello" |
+| **6.4c — Hook sees the event name** | `node -e "process.stdin.resume();let b='';process.stdin.on('data',c=>b+=c);process.stdin.on('end',()=>{const i=JSON.parse(b);console.log(JSON.stringify({continue:true,additionalContext:'event='+i.eventName}))})"` | `run shell command echo hello` | AI response includes "event=PreToolUse" |
 
 ---
 
