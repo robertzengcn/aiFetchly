@@ -419,6 +419,10 @@ function formatTime(ts: string | Date): string {
   return d.toLocaleString();
 }
 
+function generateHookId(): string {
+  return `hook-${Math.random().toString(36).substring(2, 8)}`;
+}
+
 async function loadAll() {
   try {
     allHooks.value = await listHooks({
@@ -492,7 +496,7 @@ function onAddNew() {
   creating.value = true;
   selectedId.value = null;
   form.value = {
-    id: "",
+    id: generateHookId(),
     eventName: "PreToolUse",
     matcher: "*",
     command: "",
