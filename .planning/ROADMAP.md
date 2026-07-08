@@ -166,7 +166,7 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 16-01-registry-validator-frontmatter-PLAN.md — refactor AgentDefinitionRegistry into a source-aware class with D-Precedence rank + atomic replaceSource (AGT-01); pure buildAgentDefinition validator + non-fatal agent-tool-invalid diagnostic (AGT-02)
+- [x] 16-01-registry-validator-frontmatter-PLAN.md — refactor AgentDefinitionRegistry into a source-aware class with D-Precedence rank + atomic replaceSource (AGT-01); pure buildAgentDefinition validator + non-fatal agent-tool-invalid diagnostic (AGT-02)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -234,6 +234,6 @@ Plans:
 | 13. Global Context and Built-in Slash Commands | v2.0 | 6/6 | Complete   | 2026-07-05 |
 | 14. Workspace Watcher Worker | v2.0 | 3/5 | In Progress|  |
 | 15. Prompt Command Files | v2.0 | 2/2 | Complete    | 2026-07-07 |
-| 16. Dynamic Agents | v2.0 | 0/? | Not started | — |
+| 16. Dynamic Agents | v2.0 | 1/3 | In Progress|  |
 | 17. Hooks | v2.0 | 0/? | Not started | — |
 | 18. Skills and Plugin Integration | v2.0 | 0/? | Not started | — |
