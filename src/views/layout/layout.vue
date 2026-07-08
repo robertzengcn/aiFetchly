@@ -614,18 +614,7 @@ const showDialog=(status:boolean, content:string)=>{
     }
 }
 
-:deep(.v-theme--dark) {
-    .ai-chat-panel {
-        background-color: #1e1e1e;
-        box-shadow: -2px 0 16px rgba(0, 0, 0, 0.5);
-    }
 
-    .ai-chat-dock {
-        background-color: #1e1e1e;
-        border-left-color: rgba(255, 255, 255, 0.12);
-        box-shadow: -2px 0 16px rgba(0, 0, 0, 0.5);
-    }
-}
 
 @media (max-width: 768px) {
     .ai-chat-panel {
@@ -671,5 +660,18 @@ const showDialog=(status:boolean, content:string)=>{
 
 .chat-resize-handle:hover {
     background-color: rgba(var(--v-theme-primary), 0.3);
+}
+</style>
+
+<style>
+:root[theme="dark"] .ai-chat-panel {
+    background-color: #1e1e1e;
+    box-shadow: -2px 0 16px rgba(0, 0, 0, 0.5);
+}
+
+:root[theme="dark"] .ai-chat-dock {
+    background-color: #1e1e1e;
+    border-left-color: rgba(255, 255, 255, 0.12);
+    box-shadow: -2px 0 16px rgba(0, 0, 0, 0.5);
 }
 </style>
