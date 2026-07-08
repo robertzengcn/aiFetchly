@@ -314,12 +314,15 @@
         </v-card-actions>
       </v-card>
     </v-dialog>
+
+    <NoticeSnackbar v-model="snackbar.show" :message="snackbar.message" :type="snackbar.type" />
   </v-container>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import NoticeSnackbar from "@/views/components/widgets/noticeSnackbar.vue";
 import {
   listHooks, createHook, updateHook, deleteHook,
   setHookEnabled, setHookTrusted,
@@ -362,6 +365,8 @@ const form = ref({
 
 const trustDialog = ref(false);
 const deleteDialog = ref(false);
+
+const snackbar = ref({ show: false, message: "", type: "success" as "success" | "error" });
 
 // Audit
 const auditRows = ref<HookAuditEntry[]>([]);
@@ -537,9 +542,10 @@ async function onSave() {
     }
     creating.value = false;
     await loadAll();
+    snackbar.value = { show: true, message: t('system_settings.hooks.toast.saved') || "Hook saved", type: "success" };
   } catch (err) {
     console.error("save failed", err);
-    alert(String(err));
+    snackbar.value = { show: true, message: String(err), type: "error" };
   }
 }
 

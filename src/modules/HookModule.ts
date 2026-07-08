@@ -130,7 +130,7 @@ export class HookModule extends BaseModule {
         HookCommandTrustService.setTrusted(r.id, true);
       }
     }
-    const defs = rows.filter((r) => r.enabled).map((r) => this.toDefinition(r));
+    const defs = rows.map((r) => this.toDefinition(r));
     HookRegistry.replaceUserHooks(defs);
   }
 
