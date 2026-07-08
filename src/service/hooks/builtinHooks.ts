@@ -18,7 +18,6 @@ const BLOCK_DANGEROUS_SHELL: CallbackHookDefinition = {
   matcher: "shell_execute",
   source: "builtin",
   enabled: true,
-  trusted: true,
   failureMode: "block",
   statusMessage: "Checking shell command policy",
   type: "callback",
@@ -44,7 +43,6 @@ const SCRAPING_COMPLIANCE: CallbackHookDefinition = {
   matcher: "scrape_*",
   source: "builtin",
   enabled: false,
-  trusted: true,
   type: "callback",
   callback: () => ({
     additionalContext:

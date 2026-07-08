@@ -53,7 +53,6 @@ describe("registerBuiltinHooks", () => {
       matcher: "shell_execute",
       source: "builtin",
       enabled: true,
-      trusted: true,
       failureMode: "block",
       type: "callback",
       callback: (input) => {

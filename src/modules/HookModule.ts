@@ -2,7 +2,6 @@ import { BaseModule } from "./baseModule";
 import { HookModel, NewHookRow, HookPatch } from "@/model/Hook.model";
 import { HookConfigEntity } from "@/entity/HookConfig.entity";
 import { HookRegistry } from "@/service/hooks/HookRegistry";
-import { HookCommandTrustService } from "@/service/hooks/HookCommandTrustService";
 import { Token } from "@/modules/token";
 import { USER_HOOKS_BUILTIN_OVERRIDES } from "@/config/usersetting";
 import { HOOK_LIMITS } from "@/entityTypes/hookTypes";
@@ -22,7 +21,6 @@ export interface CreateHookInput {
   statusMessage?: string;
   envAllowlist?: string[];
   enabled?: boolean;
-  trusted?: boolean;
 }
 
 /**
@@ -58,7 +56,6 @@ export class HookModule extends BaseModule {
         : null,
       source: "user",
       enabled: input.enabled ?? false,
-      trusted: input.trusted ?? false,
     };
 
     const saved = await this.model.create(row);
@@ -91,19 +88,11 @@ export class HookModule extends BaseModule {
       throw new Error(`Only user hooks can be deleted (id=${id})`);
     }
     await this.model.deleteById(id);
-    HookCommandTrustService.setTrusted(id, false);
     await this.reloadUserHooksInRegistry();
   }
 
   async setEnabled(id: string, enabled: boolean): Promise<HookConfigEntity> {
     return this.update(id, { enabled });
-  }
-
-  async setTrusted(id: string, trusted: boolean): Promise<HookConfigEntity> {
-    const updated = await this.model.update(id, { trusted });
-    HookCommandTrustService.setTrusted(id, trusted);
-    await this.reloadUserHooksInRegistry();
-    return updated;
   }
 
   async listUserHooks(): Promise<HookConfigEntity[]> {
@@ -125,11 +114,6 @@ export class HookModule extends BaseModule {
   async loadUserHooksIntoRegistry(): Promise<void> {
     await this.applyBuiltinOverrides();
     const rows = await this.model.listBySource("user");
-    for (const r of rows) {
-      if (r.trusted) {
-        HookCommandTrustService.setTrusted(r.id, true);
-      }
-    }
     const defs = rows.map((r) => this.toDefinition(r));
     HookRegistry.replaceUserHooks(defs);
   }
@@ -191,7 +175,6 @@ export class HookModule extends BaseModule {
       matcher: row.matcher ?? undefined,
       source: "user",
       enabled: row.enabled,
-      trusted: row.trusted,
       type: "command",
       command: row.command,
       cwd: row.cwd ?? undefined,

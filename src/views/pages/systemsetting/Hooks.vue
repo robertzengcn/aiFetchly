@@ -74,7 +74,6 @@
               </v-list-item-title>
               <v-list-item-subtitle>
                 {{ hook.eventName }} · {{ hook.source }}
-                <span v-if="isUntrustedCommand(hook)"> · ⚠ {{ t('system_settings.hooks.trust_required') || 'Trust required' }}</span>
               </v-list-item-subtitle>
             </v-list-item>
             <v-list-item v-if="visibleHooks.length === 0">
@@ -170,15 +169,6 @@
               {{ t('system_settings.hooks.scraping_compliance_warning') || 'Enabling this hook injects compliance context into the AI prompt after every scrape tool call, which may affect scrape results.' }}
             </v-alert>
 
-            <v-alert
-              v-if="showUntrustedWarning"
-              type="warning"
-              density="compact"
-              class="mb-2"
-            >
-              {{ t('system_settings.hooks.untrusted_warning') || 'This hook is not trusted and will not run. Click Trust to allow it to execute.' }}
-            </v-alert>
-
             <div class="mt-2">
               <v-btn
                 v-if="isUserSource"
@@ -188,23 +178,6 @@
                 @click="onSave"
               >
                 {{ t('system_settings.hooks.button.save') || 'Save' }}
-              </v-btn>
-              <v-btn
-                v-if="canTrust"
-                color="warning"
-                variant="outlined"
-                class="mr-2"
-                @click="onTrust"
-              >
-                {{ t('system_settings.hooks.button.trust') || 'Trust' }}
-              </v-btn>
-              <v-btn
-                v-if="canUntrust"
-                variant="outlined"
-                class="mr-2"
-                @click="onUntrust"
-              >
-                {{ t('system_settings.hooks.button.untrust') || 'Untrust' }}
               </v-btn>
               <v-btn
                 v-if="isUserSource && !creating"
@@ -280,28 +253,6 @@
       </v-col>
     </v-row>
 
-    <!-- Trust confirm dialog -->
-    <v-dialog v-model="trustDialog" max-width="500">
-      <v-card>
-        <v-card-title>
-          {{ t('system_settings.hooks.trust_confirm_title') || 'Trust this command hook?' }}
-        </v-card-title>
-        <v-card-text>
-          {{ t('system_settings.hooks.trust_confirm_body') || 'Trusting means the local process will run on every matching event.' }}
-          <br /><code>{{ form.command }}</code>
-        </v-card-text>
-        <v-card-actions>
-          <v-spacer />
-          <v-btn @click="trustDialog = false">
-            {{ t('system_settings.hooks.button.cancel') || 'Cancel' }}
-          </v-btn>
-          <v-btn color="warning" @click="confirmTrust">
-            {{ t('system_settings.hooks.button.trust') || 'Trust' }}
-          </v-btn>
-        </v-card-actions>
-      </v-card>
-    </v-dialog>
-
     <!-- Delete confirm dialog -->
     <v-dialog v-model="deleteDialog" max-width="500">
       <v-card>
@@ -334,7 +285,7 @@ import { useI18n } from "vue-i18n";
 import NoticeSnackbar from "@/views/components/widgets/noticeSnackbar.vue";
 import {
   listHooks, createHook, updateHook, deleteHook,
-  setHookEnabled, setHookTrusted,
+  setHookEnabled,
   getHooksGlobalEnable, setHooksGlobalEnable,
   listHookAudit,
   type NewHookInput,
@@ -372,7 +323,6 @@ const form = ref({
   statusMessage: "",
 });
 
-const trustDialog = ref(false);
 const deleteDialog = ref(false);
 
 const snackbar = ref({ show: false, message: "", type: "success" as "success" | "error" });
@@ -398,18 +348,6 @@ const selectedHook = computed(() =>
 const isUserSource = computed(() =>
   creating.value || selectedHook.value?.source === "user"
 );
-const canTrust = computed(() =>
-  !creating.value &&
-  selectedHook.value?.source === "user" &&
-  selectedHook.value?.type === "command" &&
-  selectedHook.value?.trusted !== true
-);
-const canUntrust = computed(() =>
-  !creating.value &&
-  selectedHook.value?.source === "user" &&
-  selectedHook.value?.type === "command" &&
-  selectedHook.value?.trusted === true
-);
 const editorTitle = computed(() => {
   if (creating.value) return t("system_settings.hooks.add_command") || "+ Add command hook";
   if (selectedHook.value) return selectedHook.value.id;
@@ -420,17 +358,8 @@ const showScrapingWarning = computed(() =>
   selectedHook.value?.id === "builtin-scraping-compliance-context" &&
   selectedHook.value?.enabled === true
 );
-const showUntrustedWarning = computed(() =>
-  selectedHook.value !== null &&
-  isUntrustedCommand(selectedHook.value)
-);
-
-function isUntrustedCommand(hook: HookDefinition): boolean {
-  return hook.source === "user" && hook.type === "command" && !hook.trusted;
-}
 function iconFor(hook: HookDefinition): string {
   if (hook.source === "builtin") return hook.enabled ? "mdi-check" : "mdi-pause";
-  if (isUntrustedCommand(hook)) return "mdi-alert";
   return hook.enabled ? "mdi-check" : "mdi-pause";
 }
 
@@ -542,7 +471,6 @@ async function onSave() {
         failureMode: form.value.failureMode,
         statusMessage: form.value.statusMessage || undefined,
         enabled: false, // user must explicitly enable after create
-        trusted: false,
       };
       await createHook(input);
     } else if (selectedHook.value?.source === "user") {
@@ -561,28 +489,6 @@ async function onSave() {
   } catch (err) {
     console.error("save failed", err);
     snackbar.value = { show: true, message: String(err), type: "error" };
-  }
-}
-
-function onTrust() { trustDialog.value = true; }
-function onUntrust() { void doUntrust(); }
-async function doUntrust() {
-  if (!selectedHook.value) return;
-  try {
-    await setHookTrusted(selectedHook.value.id, false);
-    await loadAll();
-  } catch (err) {
-    console.error(err);
-  }
-}
-async function confirmTrust() {
-  trustDialog.value = false;
-  if (!selectedHook.value) return;
-  try {
-    await setHookTrusted(selectedHook.value.id, true);
-    await loadAll();
-  } catch (err) {
-    console.error(err);
   }
 }
 

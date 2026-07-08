@@ -126,7 +126,6 @@ function buildCallbackHook(
     type: "callback",
     source: "plugin",
     enabled: true,
-    trusted: false, // never trust plugin hooks implicitly
     matcher: matcher.matcher,
     failureMode: "warn", // hook errors don't block tool calls
     callback,

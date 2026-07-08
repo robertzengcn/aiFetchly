@@ -11,7 +11,6 @@ function cb(id: string): CallbackHookDefinition {
     eventName: "PreToolUse",
     source: "builtin",
     enabled: true,
-    trusted: true,
     type: "callback",
     callback: () => ({}),
   };
@@ -25,7 +24,6 @@ function cmd(
     eventName: "PreToolUse",
     source,
     enabled: true,
-    trusted: true,
     type: "command",
     command: "node -e 'process.stdin.resume()'",
   };

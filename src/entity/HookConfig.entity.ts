@@ -21,7 +21,7 @@ import {
 @Entity("hook_config")
 @Index(["source"])
 @Index(["eventName"])
-@Index(["enabled", "trusted"])
+@Index(["enabled"])
 export class HookConfigEntity {
   @PrimaryColumn({ type: "text" })
   id: string;
@@ -62,9 +62,6 @@ export class HookConfigEntity {
 
   @Column({ type: "boolean", default: false })
   enabled: boolean;
-
-  @Column({ type: "boolean", default: false })
-  trusted: boolean;
 
   @Column({ name: "last_run_at", type: "datetime", nullable: true })
   lastRunAt: Date | null;

@@ -8,7 +8,6 @@ import {
 } from "@/entityTypes/hookTypes";
 import { validateHookOutput } from "../HookOutputValidator";
 import { HookSingleResult } from "../HookResultAggregator";
-import { HookCommandTrustService } from "../HookCommandTrustService";
 
 /**
  * Runs a trusted local command as a hook. The command receives the
@@ -78,16 +77,6 @@ export async function executeCommand(
 ): Promise<CommandHookExecutionResult> {
   const { hook, input, abortSignal } = args;
   const start = Date.now();
-
-  // Trust gate.
-  if (!hook.trusted || !HookCommandTrustService.isTrusted(hook.id)) {
-    return {
-      stdout: "",
-      stderr: "",
-      durationMs: Date.now() - start,
-      result: untrustedResult(hook, start),
-    };
-  }
 
   // Reject if already aborted.
   if (abortSignal?.aborted) {
@@ -268,10 +257,6 @@ export async function executeCommand(
       // If stdin write fails, fall through to close handler.
     }
   });
-}
-
-function untrustedResult(hook: CommandHookDefinition, start: number): HookSingleResult {
-  return failureResult(hook, "Command hook is not trusted", start);
 }
 
 function abortedResult(hook: CommandHookDefinition, durationMs = 0): HookSingleResult {
