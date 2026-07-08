@@ -23,6 +23,61 @@ export interface TokenRefreshData {
 }
 
 /**
+ * Thrown by {@link TokenRefreshService.refreshAccessToken} when the refresh
+ * token is genuinely missing, rejected (HTTP 401/403), or expired — the ONLY
+ * situation in which signing the user out is the correct response.
+ *
+ * Network errors and HTTP 5xx (backend unreachable / erroring) are thrown as
+ * plain `Error` instead, because the user must STAY logged in and retry. This
+ * distinction is what prevents a temporary backend outage from forcing a
+ * re-login.
+ */
+export class RefreshTokenInvalidError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RefreshTokenInvalidError";
+  }
+}
+
+/**
+ * Returns `true` when a refresh failure is caused by the backend being
+ * unreachable or misbehaving — a transient condition that must NOT log the
+ * user out.
+ *
+ * Covers:
+ *  - Node `fetch` network failures (`TypeError: fetch failed`, optionally with
+ *    a system-error `cause` such as ECONNREFUSED / ETIMEDOUT / EAI_AGAIN).
+ *  - HTTP 5xx server errors (thrown by `refreshAccessToken` as
+ *    `HTTP error: <status> ...`).
+ */
+export function isTransientBackendError(error: unknown): boolean {
+  const msg = error instanceof Error ? error.message : String(error);
+
+  // Node's undici fetch throws `TypeError: fetch failed` for any network issue.
+  if (msg.includes("fetch failed")) {
+    return true;
+  }
+
+  // HTTP 5xx surfaced as "HTTP error: 5xx ...".
+  if (/HTTP error:\s*5\d\d/.test(msg)) {
+    return true;
+  }
+
+  // Belt-and-suspenders: inspect the undici `cause` for system-level errors.
+  const cause = (error as Error & { cause?: unknown }).cause;
+  const causeMsg = cause instanceof Error ? cause.message : "";
+  if (
+    /ECONN|ENOTFOUND|ETIMEDOUT|EAI_AGAIN|ECONNRESET|ECONNREFUSED|EHOSTUNREACH|ENETUNREACH|socket hang up|UND_ERR|network/i.test(
+      causeMsg
+    )
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
  * Service for refreshing access tokens using refresh tokens.
  *
  * Supports both on-demand refresh (called by HttpClient on 401) and
@@ -51,7 +106,6 @@ export interface TokenRefreshData {
 export class TokenRefreshService {
   private _baseUrl: string;
   private _tokenService: Token;
-  private _userService: User;
   private _isRefreshing = false;
 
   // --- Singleton background auto-refresh state ---
@@ -87,7 +141,6 @@ export class TokenRefreshService {
 
     this._baseUrl = loginUrl + "/apis";
     this._tokenService = new Token();
-    this._userService = new User();
   }
 
   // =========================================================================
@@ -158,10 +211,21 @@ export class TokenRefreshService {
    *    If expired → stop auto-refresh and sign out.
    * 2. Check if the access token is about to expire.
    *    If yes → call refreshAccessToken().
-   * 3. Track consecutive failures. After MAX_CONSECUTIVE_FAILURES
-   *    the timer is stopped to avoid hammering the server.
+   * 3. Handle the refresh result:
+   *    - Success → reset the failure counter.
+   *    - Refresh token genuinely invalid/expired ({@link RefreshTokenInvalidError})
+   *      → stop auto-refresh and sign out.
+   *    - Backend unreachable / HTTP 5xx (transient, {@link isTransientBackendError})
+   *      → KEEP the user logged in and keep the timer running so it retries on
+   *      the next cycle. A temporary backend outage must NOT force a re-login.
+   *    - Any other unexpected error → count toward MAX_CONSECUTIVE_FAILURES;
+   *      after the threshold the timer is stopped (but the user is NOT signed
+   *      out, since persistent failures are most likely backend issues).
+   *
+   * Exposed as public (rather than private) so it can be invoked directly in
+   * tests without relying on the 60s background timer.
    */
-  private static async performAutoRefreshCheck(): Promise<void> {
+  static async performAutoRefreshCheck(): Promise<void> {
     const tokenService = new Token();
     const now = Date.now();
 
@@ -238,45 +302,57 @@ export class TokenRefreshService {
         throw new Error(result.msg || "Refresh returned unsuccessful status");
       }
     } catch (error) {
-      TokenRefreshService._consecutiveFailures++;
       const errorMsg = error instanceof Error ? error.message : String(error);
-      log.error(
-        `[TokenRefresh] Background refresh failed (${TokenRefreshService._consecutiveFailures}/${TokenRefreshService.MAX_CONSECUTIVE_FAILURES}):`,
-        errorMsg
-      );
 
-      // If the error indicates an invalid/expired refresh token, stop immediately
-      if (
-        errorMsg.includes("Invalid or expired refresh token") ||
-        errorMsg.includes("Refresh token not found")
-      ) {
+      // Case A: the refresh token is genuinely invalid/expired/missing. This is
+      // the ONLY situation where signing the user out is correct.
+      if (error instanceof RefreshTokenInvalidError) {
         log.warn(
-          "[TokenRefresh] Refresh token is invalid, stopping auto-refresh"
+          `[TokenRefresh] Refresh token is invalid/expired (${errorMsg}), stopping auto-refresh and signing out`
         );
         TokenRefreshService.stopAutoRefresh();
-        return;
-      }
-
-      // Stop after too many consecutive failures
-      if (
-        TokenRefreshService._consecutiveFailures >=
-        TokenRefreshService.MAX_CONSECUTIVE_FAILURES
-      ) {
-        log.error(
-          "[TokenRefresh] Max consecutive failures reached, stopping auto-refresh"
-        );
-        TokenRefreshService.stopAutoRefresh();
-
-        // Sign out user as the session is likely invalid
         try {
           const userService = new User();
           await userService.Signout();
         } catch (signoutError) {
           log.error(
-            "[TokenRefresh] Error during signout after max failures:",
+            "[TokenRefresh] Error during signout after invalid refresh token:",
             signoutError
           );
         }
+        return;
+      }
+
+      // Case B: the backend is unreachable or erroring (network down, DNS,
+      // timeout, HTTP 5xx). Keep the user logged in and keep the timer running
+      // so the next cycle retries automatically once the backend is reachable.
+      // Do NOT increment the failure counter and do NOT sign out.
+      if (isTransientBackendError(error)) {
+        log.warn(
+          `[TokenRefresh] Backend unreachable (${errorMsg}). User remains logged in; will retry next cycle.`
+        );
+        return;
+      }
+
+      // Case C: any other unexpected failure. Count toward the threshold; once
+      // it is reached, stop the timer to avoid hammering the server. The user
+      // is intentionally NOT signed out — persistent failures are far more
+      // likely to be backend issues than invalid credentials, and only an
+      // explicit auth error (Case A) should end the session.
+      TokenRefreshService._consecutiveFailures++;
+      log.error(
+        `[TokenRefresh] Background refresh failed (${TokenRefreshService._consecutiveFailures}/${TokenRefreshService.MAX_CONSECUTIVE_FAILURES}):`,
+        errorMsg
+      );
+
+      if (
+        TokenRefreshService._consecutiveFailures >=
+        TokenRefreshService.MAX_CONSECUTIVE_FAILURES
+      ) {
+        log.error(
+          "[TokenRefresh] Max consecutive failures reached, stopping auto-refresh. User remains logged in."
+        );
+        TokenRefreshService.stopAutoRefresh();
       }
     }
   }
@@ -291,7 +367,10 @@ export class TokenRefreshService {
    * Uses raw fetch() to avoid circular dependency with HttpClient.
    *
    * @returns Promise resolving to token refresh response with new tokens
-   * @throws {Error} When refresh token is missing, invalid, or expired
+   * @throws {RefreshTokenInvalidError} When the refresh token is missing,
+   *   rejected (HTTP 401/403), or expired — callers should sign the user out.
+   * @throws {Error} For transient failures (network unreachable, HTTP 5xx) —
+   *   callers should keep the user logged in and retry.
    *
    * @example
    * ```typescript
@@ -311,7 +390,7 @@ export class TokenRefreshService {
       const refreshToken = this._tokenService.getValue(REFRESHTOKEN);
 
       if (!refreshToken || refreshToken.trim().length === 0) {
-        throw new Error("Refresh token not found");
+        throw new RefreshTokenInvalidError("Refresh token not found");
       }
 
       // Check if refresh token has expired before making the request
@@ -319,17 +398,8 @@ export class TokenRefreshService {
       if (refreshExpiryStr) {
         const refreshExpiry = parseInt(refreshExpiryStr, 10);
         if (!isNaN(refreshExpiry) && Date.now() >= refreshExpiry) {
-          // Stop auto-refresh if running
-          TokenRefreshService.stopAutoRefresh();
-
-          // Sign out user
-          try {
-            await this._userService.Signout();
-          } catch (signoutError) {
-            console.error("Error during signout:", signoutError);
-          }
-
-          throw new Error("Refresh token has expired");
+          // Genuine auth failure — the caller decides whether to sign out.
+          throw new RefreshTokenInvalidError("Refresh token has expired");
         }
       }
 
@@ -348,6 +418,14 @@ export class TokenRefreshService {
       });
 
       if (!res.ok) {
+        // 401/403 means the refresh token was rejected — a genuine auth
+        // failure. Everything else (5xx, etc.) stays a plain Error so callers
+        // can treat it as a transient/backend issue.
+        if (res.status === 401 || res.status === 403) {
+          throw new RefreshTokenInvalidError(
+            `Refresh token rejected (HTTP ${res.status})`
+          );
+        }
         throw new Error(`HTTP error: ${res.status} ${res.statusText}`);
       }
 
@@ -357,19 +435,10 @@ export class TokenRefreshService {
       if (!response.status) {
         // Check for specific error codes
         if (response.code === 401) {
-          const errorMsg = response.msg || "Invalid or expired refresh token";
-
-          // Stop auto-refresh if running
-          TokenRefreshService.stopAutoRefresh();
-
-          // Sign out user on authentication failure
-          try {
-            await this._userService.Signout();
-          } catch (signoutError) {
-            console.error("Error during signout:", signoutError);
-          }
-
-          throw new Error(errorMsg);
+          // Genuine auth failure — the caller decides whether to sign out.
+          throw new RefreshTokenInvalidError(
+            response.msg || "Invalid or expired refresh token"
+          );
         } else {
           throw new Error(response.msg || "Token refresh failed");
         }

@@ -1,0 +1,274 @@
+"use strict";
+import { describe, expect, test, vi, beforeEach, afterEach } from "vitest";
+
+// ---------------------------------------------------------------------------
+// Hoisted shared mocks (must be created inside vi.hoisted so vi.mock factories
+// can reference them — factory runs before top-level imports resolve).
+// ---------------------------------------------------------------------------
+const mockSignout = vi.hoisted(() => vi.fn());
+const mockRemoveToken = vi.hoisted(() => vi.fn());
+const mockFetch = vi.hoisted(() => vi.fn());
+
+const mockGetValue = vi.hoisted(() => vi.fn());
+const mockSetValue = vi.hoisted(() => vi.fn());
+
+// Mutable token store keyed by the real usersetting key strings.
+const tokenState = vi.hoisted(() => ({ values: {} as Record<string, string> }));
+
+vi.mock("electron", () => ({
+  BrowserWindow: { getAllWindows: () => [] },
+}));
+
+vi.mock("@/modules/user", () => ({
+  User: vi.fn().mockImplementation(() => ({
+    Signout: mockSignout,
+    removeToken: mockRemoveToken,
+  })),
+}));
+
+vi.mock("@/modules/token", () => ({
+  Token: vi.fn().mockImplementation(() => ({
+    getValue: mockGetValue,
+    setValue: mockSetValue,
+  })),
+}));
+
+vi.mock("@/modules/remotesource", () => ({
+  RemoteSource: vi.fn().mockImplementation(() => ({
+    removeRemoteToken: vi.fn().mockResolvedValue(undefined),
+  })),
+}));
+
+vi.mock("@/modules/Logger", () => ({
+  log: {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  },
+}));
+
+vi.mock("@/config/viteLoginUrl", () => ({
+  resolveViteLoginBase: vi.fn(() => ({
+    value: "http://localhost:3000",
+    source: "process.env.VITE_LOGIN_URL",
+  })),
+}));
+
+import {
+  TokenRefreshService,
+  RefreshTokenInvalidError,
+  isTransientBackendError,
+} from "@/modules/tokenRefresh";
+import {
+  TOKENNAME,
+  TOKENEXPIRY,
+  REFRESHTOKEN,
+  REFRESHTOKENEXPIRY,
+} from "@/config/usersetting";
+
+// Helper: build a fake fetch Response-like object.
+function fakeResponse(
+  body: unknown,
+  init: { ok?: boolean; status?: number; statusText?: string } = {}
+): Response {
+  const ok = init.ok ?? true;
+  return {
+    ok,
+    status: init.status ?? (ok ? 200 : 500),
+    statusText: init.statusText ?? "",
+    json: async () => body,
+  } as unknown as Response;
+}
+
+describe("isTransientBackendError", () => {
+  test("TypeError 'fetch failed' is transient (backend unreachable)", () => {
+    expect(isTransientBackendError(new TypeError("fetch failed"))).toBe(true);
+  });
+
+  test("Error whose cause is a system network error is transient", () => {
+    const e = new TypeError("fetch failed");
+    (e as Error & { cause?: unknown }).cause = new Error(
+      "connect ECONNREFUSED 127.0.0.1:3000"
+    );
+    expect(isTransientBackendError(e)).toBe(true);
+  });
+
+  test("DNS failure carried on cause is transient", () => {
+    const e = new Error("request failed");
+    (e as Error & { cause?: unknown }).cause = new Error(
+      "getaddrinfo EAI_AGAIN api.example.com"
+    );
+    expect(isTransientBackendError(e)).toBe(true);
+  });
+
+  test("HTTP 5xx is transient (backend up but erroring)", () => {
+    expect(
+      isTransientBackendError(
+        new Error("HTTP error: 500 Internal Server Error")
+      )
+    ).toBe(true);
+    expect(
+      isTransientBackendError(new Error("HTTP error: 503 Service Unavailable"))
+    ).toBe(true);
+    expect(
+      isTransientBackendError(new Error("HTTP error: 502 Bad Gateway"))
+    ).toBe(true);
+  });
+
+  test("RefreshTokenInvalidError is NOT transient", () => {
+    expect(
+      isTransientBackendError(new RefreshTokenInvalidError("expired"))
+    ).toBe(false);
+  });
+
+  test("HTTP 401 is NOT transient (it is an auth failure)", () => {
+    expect(
+      isTransientBackendError(new Error("HTTP error: 401 Unauthorized"))
+    ).toBe(false);
+  });
+
+  test("Generic unexpected error is NOT transient", () => {
+    expect(isTransientBackendError(new Error("something weird"))).toBe(false);
+  });
+});
+
+describe("RefreshTokenInvalidError", () => {
+  test("is an Error subclass carrying its message", () => {
+    const e = new RefreshTokenInvalidError("Refresh token not found");
+    expect(e).toBeInstanceOf(Error);
+    expect(e).toBeInstanceOf(RefreshTokenInvalidError);
+    expect(e.message).toBe("Refresh token not found");
+  });
+});
+
+describe("TokenRefreshService.performAutoRefreshCheck", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", mockFetch);
+    mockSignout.mockClear();
+    mockRemoveToken.mockClear();
+    mockGetValue.mockClear();
+    mockSetValue.mockClear();
+    mockFetch.mockReset();
+
+    // Valid refresh token, expired access token → forces a refresh attempt.
+    tokenState.values = {
+      [TOKENNAME]: "access-token-value",
+      [TOKENEXPIRY]: String(Date.now() - 100_000), // already expired
+      [REFRESHTOKEN]: "refresh-token-value",
+      [REFRESHTOKENEXPIRY]: String(Date.now() + 10_000_000), // valid
+    };
+    mockGetValue.mockImplementation(
+      (key: string) => tokenState.values[key] ?? ""
+    );
+    mockSetValue.mockImplementation((key: string, val: string) => {
+      tokenState.values[key] = val;
+    });
+
+    // Ensure a clean singleton state between tests.
+    TokenRefreshService.stopAutoRefresh();
+  });
+
+  afterEach(() => {
+    TokenRefreshService.stopAutoRefresh();
+    vi.unstubAllGlobals();
+  });
+
+  test("network error (fetch failed) does NOT sign out and keeps auto-refresh running", async () => {
+    mockFetch.mockRejectedValue(new TypeError("fetch failed"));
+
+    TokenRefreshService.startAutoRefresh();
+    // Drive a deterministic check (also lets startAutoRefresh's immediate
+    // fire-and-forget check settle, since both consume the same sync mock).
+    await TokenRefreshService.performAutoRefreshCheck();
+
+    expect(mockFetch).toHaveBeenCalled();
+    expect(mockSignout).not.toHaveBeenCalled();
+    expect(mockRemoveToken).not.toHaveBeenCalled();
+    // Auto-refresh must still be running so it retries on the next cycle.
+    expect(TokenRefreshService.isAutoRefreshRunning()).toBe(true);
+  });
+
+  test("HTTP 5xx from refresh endpoint does NOT sign out and keeps running", async () => {
+    mockFetch.mockResolvedValue(
+      fakeResponse(null, {
+        ok: false,
+        status: 503,
+        statusText: "Service Unavailable",
+      })
+    );
+
+    TokenRefreshService.startAutoRefresh();
+    await TokenRefreshService.performAutoRefreshCheck();
+
+    expect(mockFetch).toHaveBeenCalled();
+    expect(mockSignout).not.toHaveBeenCalled();
+    expect(TokenRefreshService.isAutoRefreshRunning()).toBe(true);
+  });
+
+  test("repeated network errors never sign out, even after many cycles", async () => {
+    mockFetch.mockRejectedValue(new TypeError("fetch failed"));
+
+    for (let i = 0; i < 6; i++) {
+      await TokenRefreshService.performAutoRefreshCheck();
+    }
+
+    expect(mockSignout).not.toHaveBeenCalled();
+    expect(mockRemoveToken).not.toHaveBeenCalled();
+  });
+
+  test("refresh token genuinely invalid (API code 401) DOES sign out and stops auto-refresh", async () => {
+    mockFetch.mockResolvedValue(
+      fakeResponse(
+        {
+          status: false,
+          code: 401,
+          msg: "Invalid or expired refresh token",
+          data: null,
+        },
+        { ok: true, status: 200 }
+      )
+    );
+
+    TokenRefreshService.startAutoRefresh();
+    await TokenRefreshService.performAutoRefreshCheck();
+
+    expect(mockSignout).toHaveBeenCalled();
+    expect(TokenRefreshService.isAutoRefreshRunning()).toBe(false);
+  });
+
+  test("expired refresh token DOES sign out (detected before hitting the network)", async () => {
+    tokenState.values[REFRESHTOKENEXPIRY] = String(Date.now() - 1_000); // refresh token expired
+
+    TokenRefreshService.startAutoRefresh();
+    await TokenRefreshService.performAutoRefreshCheck();
+
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(mockSignout).toHaveBeenCalled();
+    expect(TokenRefreshService.isAutoRefreshRunning()).toBe(false);
+  });
+
+  test("successful refresh updates tokens and does NOT sign out", async () => {
+    mockFetch.mockResolvedValue(
+      fakeResponse(
+        {
+          status: true,
+          code: 200,
+          msg: "ok",
+          data: {
+            accessToken: "new-access-token",
+            refreshToken: "new-refresh-token",
+            expiresIn: 3600,
+          },
+        },
+        { ok: true, status: 200 }
+      )
+    );
+
+    await TokenRefreshService.performAutoRefreshCheck();
+
+    expect(mockSignout).not.toHaveBeenCalled();
+    // New access token persisted.
+    expect(mockSetValue).toHaveBeenCalledWith(TOKENNAME, "new-access-token");
+  });
+});
